@@ -99,13 +99,13 @@ A cutting-edge WiFi-based human pose estimation system that leverages Channel St
 WiFi DensePose consists of several key components working together:
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   WiFi Router   │    │   WiFi Router   │    │   WiFi Router   │
-│   (CSI Source)  │    │   (CSI Source)  │    │   (CSI Source)  │
-└─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
-          │                      │                      │
-          └──────────────────────┼──────────────────────┘
-                                 │
+ ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+ │   WiFi Router   │    │   WiFi Router   │    │   WiFi Router   │
+ │   (CSI Source)  │    │   (CSI Source)  │    │   (CSI Source)  │
+ └─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
+           │                      │                      │
+           └──────────────────────┼──────────────────────┘
+                                  │
                     ┌─────────────▼─────────────┐
                     │     CSI Data Collector    │
                     │   (Hardware Interface)    │
