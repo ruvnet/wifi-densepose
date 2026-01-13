@@ -21,12 +21,13 @@
       "lastRun": "2026-01-13T03:37:55.480Z"
     },
     "optimize": {
-      "runCount": 0,
+      "runCount": 1,
       "successCount": 0,
-      "failureCount": 0,
+      "failureCount": 1,
       "averageDurationMs": 0,
-      "isRunning": true,
-      "nextRun": "2026-01-13T03:34:55.475Z"
+      "isRunning": false,
+      "nextRun": "2026-01-13T03:34:55.475Z",
+      "lastRun": "2026-01-13T03:39:55.480Z"
     },
     "consolidate": {
       "runCount": 1,
@@ -42,7 +43,7 @@
       "successCount": 0,
       "failureCount": 0,
       "averageDurationMs": 0,
-      "isRunning": false,
+      "isRunning": true,
       "nextRun": "2026-01-13T03:38:55.475Z"
     },
     "predict": {
@@ -129,5 +130,5 @@
       }
     ]
   },
-  "savedAt": "2026-01-13T03:37:55.485Z"
+  "savedAt": "2026-01-13T03:39:55.480Z"
 }
