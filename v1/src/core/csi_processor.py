@@ -385,13 +385,69 @@ class CSIProcessor:
         return correlation_matrix
     
     def _extract_doppler_features(self, csi_data: CSIData) -> tuple:
-        """Extract Doppler and frequency domain features."""
-        # Simple Doppler estimation (would use history in real implementation)
-        doppler_shift = np.random.rand(10)  # Placeholder
-        
-        # Power spectral density
+        """Extract Doppler and frequency domain features.
+
+        Doppler shift estimation from CSI phase changes:
+        - Phase change rate indicates velocity of moving objects
+        - Frequency analysis reveals movement speed and direction
+
+        The Doppler frequency shift is: f_d = (2 * v * f_c) / c
+        Where v = velocity, f_c = carrier frequency, c = speed of light
+        """
+        # Power spectral density of amplitude
         psd = np.abs(scipy.fft.fft(csi_data.amplitude.flatten(), n=128))**2
-        
+
+        # Doppler estimation from phase history
+        if len(self.csi_history) < 2:
+            # Not enough history, return zeros
+            doppler_shift = np.zeros(min(csi_data.num_subcarriers, 10))
+            return doppler_shift, psd
+
+        # Get phase from current and previous samples
+        current_phase = csi_data.phase.flatten()
+        prev_data = self.csi_history[-1]
+
+        # Handle if prev_data is tuple (CSIData, features) or just CSIData
+        if isinstance(prev_data, tuple):
+            prev_phase = prev_data[0].phase.flatten()
+            time_delta = (csi_data.timestamp - prev_data[0].timestamp).total_seconds()
+        else:
+            prev_phase = prev_data.phase.flatten()
+            time_delta = 1.0 / self.sampling_rate  # Default to sampling interval
+
+        if time_delta <= 0:
+            time_delta = 1.0 / self.sampling_rate
+
+        # Ensure same length
+        min_len = min(len(current_phase), len(prev_phase))
+        current_phase = current_phase[:min_len]
+        prev_phase = prev_phase[:min_len]
+
+        # Calculate phase difference (unwrap to handle wrapping)
+        phase_diff = np.unwrap(current_phase) - np.unwrap(prev_phase)
+
+        # Phase rate of change (rad/s)
+        phase_rate = phase_diff / time_delta
+
+        # Convert to Doppler frequency (Hz)
+        # f_d = (d_phi/dt) / (2 * pi)
+        doppler_freq = phase_rate / (2 * np.pi)
+
+        # Aggregate Doppler per subcarrier group (reduce to ~10 values)
+        num_groups = min(10, len(doppler_freq))
+        group_size = max(1, len(doppler_freq) // num_groups)
+
+        doppler_shift = np.array([
+            np.mean(doppler_freq[i*group_size:(i+1)*group_size])
+            for i in range(num_groups)
+        ])
+
+        # Apply smoothing to reduce noise
+        if len(doppler_shift) > 3:
+            # Simple moving average
+            kernel = np.ones(3) / 3
+            doppler_shift = np.convolve(doppler_shift, kernel, mode='same')
+
         return doppler_shift, psd
     
     def _analyze_motion_patterns(self, features: CSIFeatures) -> float:

@@ -265,30 +265,371 @@ class PoseService:
             self.logger.error(f"Error in pose estimation: {e}")
             return []
     
-    def _parse_pose_outputs(self, outputs: torch.Tensor) -> List[Dict[str, Any]]:
-        """Parse neural network outputs into pose detections."""
+    def _parse_pose_outputs(self, outputs: Dict[str, torch.Tensor]) -> List[Dict[str, Any]]:
+        """Parse neural network outputs into pose detections.
+
+        The DensePose model outputs:
+        - segmentation: (batch, num_parts+1, H, W) - body part segmentation
+        - uv_coords: (batch, 2, H, W) - UV coordinates for surface mapping
+
+        Returns list of detected persons with keypoints and body parts.
+        """
         poses = []
-        
-        # This is a simplified parsing - in reality, this would depend on the model architecture
-        # For now, generate mock poses based on the output shape
+
+        # Handle different output formats
+        if isinstance(outputs, torch.Tensor):
+            # Simple tensor output - use legacy parsing
+            return self._parse_simple_outputs(outputs)
+
+        # DensePose structured output
+        segmentation = outputs.get('segmentation')
+        uv_coords = outputs.get('uv_coords')
+
+        if segmentation is None:
+            return []
+
+        batch_size = segmentation.shape[0]
+
+        for batch_idx in range(batch_size):
+            # Get segmentation for this sample
+            seg = segmentation[batch_idx]  # (num_parts+1, H, W)
+
+            # Find persons by analyzing body part segmentation
+            # Background is class 0, body parts are 1-24
+            body_mask = seg[1:].sum(dim=0) > seg[0]  # Any body part vs background
+
+            if not body_mask.any():
+                continue
+
+            # Find connected components (persons)
+            person_regions = self._find_person_regions(body_mask)
+
+            for person_idx, region in enumerate(person_regions):
+                # Extract keypoints from body part segmentation
+                keypoints = self._extract_keypoints_from_segmentation(seg, region)
+
+                # Calculate bounding box from region
+                bbox = self._calculate_bounding_box(region)
+
+                # Calculate confidence from segmentation probabilities
+                seg_probs = torch.softmax(seg, dim=0)
+                region_mask = region['mask']
+                confidence = float(seg_probs[1:, region_mask].max().item())
+
+                # Classify activity from pose keypoints
+                activity = self._classify_activity_from_keypoints(keypoints)
+
+                pose = {
+                    "person_id": person_idx,
+                    "confidence": confidence,
+                    "keypoints": keypoints,
+                    "bounding_box": bbox,
+                    "activity": activity,
+                    "timestamp": datetime.now().isoformat(),
+                    "body_parts": self._extract_body_parts(seg, region) if uv_coords is not None else None
+                }
+
+                poses.append(pose)
+
+        return poses
+
+    def _parse_simple_outputs(self, outputs: torch.Tensor) -> List[Dict[str, Any]]:
+        """Parse simple tensor outputs (fallback for non-DensePose models)."""
+        poses = []
         batch_size = outputs.shape[0]
-        
+
         for i in range(batch_size):
-            # Extract pose information (mock implementation)
-            confidence = float(torch.sigmoid(outputs[i, 0]).item()) if outputs.shape[1] > 0 else 0.5
-            
+            output = outputs[i]
+
+            # Extract confidence from first channel
+            confidence = float(torch.sigmoid(output[0]).mean().item()) if output.numel() > 0 else 0.0
+
+            if confidence < 0.1:
+                continue
+
+            # Try to extract keypoints from output tensor
+            keypoints = self._extract_keypoints_from_tensor(output)
+            bbox = self._estimate_bbox_from_keypoints(keypoints)
+            activity = self._classify_activity_from_keypoints(keypoints)
+
             pose = {
                 "person_id": i,
                 "confidence": confidence,
-                "keypoints": self._generate_keypoints(),
-                "bounding_box": self._generate_bounding_box(),
-                "activity": self._classify_activity(outputs[i] if len(outputs.shape) > 1 else outputs),
+                "keypoints": keypoints,
+                "bounding_box": bbox,
+                "activity": activity,
                 "timestamp": datetime.now().isoformat()
             }
-            
+
             poses.append(pose)
-        
+
         return poses
+
+    def _find_person_regions(self, body_mask: torch.Tensor) -> List[Dict[str, Any]]:
+        """Find distinct person regions in body mask using connected components."""
+        # Convert to numpy for connected component analysis
+        mask_np = body_mask.cpu().numpy().astype(np.uint8)
+
+        # Simple connected component labeling
+        from scipy import ndimage
+        labeled, num_features = ndimage.label(mask_np)
+
+        regions = []
+        for label_id in range(1, num_features + 1):
+            region_mask = labeled == label_id
+            if region_mask.sum() < 100:  # Minimum region size
+                continue
+
+            # Find bounding coordinates
+            coords = np.where(region_mask)
+            regions.append({
+                'mask': torch.from_numpy(region_mask),
+                'y_min': int(coords[0].min()),
+                'y_max': int(coords[0].max()),
+                'x_min': int(coords[1].min()),
+                'x_max': int(coords[1].max()),
+                'area': int(region_mask.sum())
+            })
+
+        return regions
+
+    def _extract_keypoints_from_segmentation(
+        self, segmentation: torch.Tensor, region: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Extract keypoints from body part segmentation."""
+        keypoint_names = [
+            "nose", "left_eye", "right_eye", "left_ear", "right_ear",
+            "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+            "left_wrist", "right_wrist", "left_hip", "right_hip",
+            "left_knee", "right_knee", "left_ankle", "right_ankle"
+        ]
+
+        # Mapping from body parts to keypoints
+        # DensePose has 24 body parts, we map to COCO keypoints
+        part_to_keypoint = {
+            14: "nose",  # Head -> nose
+            10: "left_shoulder", 11: "right_shoulder",
+            12: "left_elbow", 13: "right_elbow",
+            2: "left_wrist", 3: "right_wrist",  # Hands approximate wrists
+            7: "left_hip", 6: "right_hip",  # Upper legs
+            9: "left_knee", 8: "right_knee",  # Lower legs
+            4: "left_ankle", 5: "right_ankle",  # Feet approximate ankles
+        }
+
+        h, w = segmentation.shape[1], segmentation.shape[2]
+        keypoints = []
+
+        # Get softmax probabilities
+        seg_probs = torch.softmax(segmentation, dim=0)
+
+        for kp_name in keypoint_names:
+            # Find which body part corresponds to this keypoint
+            part_idx = None
+            for part, name in part_to_keypoint.items():
+                if name == kp_name:
+                    part_idx = part
+                    break
+
+            if part_idx is not None and part_idx < seg_probs.shape[0]:
+                # Get probability map for this part within the region
+                part_prob = seg_probs[part_idx] * region['mask'].float()
+
+                if part_prob.max() > 0.1:
+                    # Find location of maximum probability
+                    max_idx = part_prob.argmax()
+                    y = int(max_idx // w)
+                    x = int(max_idx % w)
+
+                    keypoints.append({
+                        "name": kp_name,
+                        "x": float(x) / w,
+                        "y": float(y) / h,
+                        "confidence": float(part_prob.max().item())
+                    })
+                else:
+                    # Keypoint not visible
+                    keypoints.append({
+                        "name": kp_name,
+                        "x": 0.0,
+                        "y": 0.0,
+                        "confidence": 0.0
+                    })
+            else:
+                # Estimate position based on body region
+                cx = (region['x_min'] + region['x_max']) / 2 / w
+                cy = (region['y_min'] + region['y_max']) / 2 / h
+                keypoints.append({
+                    "name": kp_name,
+                    "x": float(cx),
+                    "y": float(cy),
+                    "confidence": 0.1
+                })
+
+        return keypoints
+
+    def _calculate_bounding_box(self, region: Dict[str, Any]) -> Dict[str, float]:
+        """Calculate normalized bounding box from region."""
+        # Assume region contains mask shape info
+        mask = region['mask']
+        h, w = mask.shape
+
+        return {
+            "x": float(region['x_min']) / w,
+            "y": float(region['y_min']) / h,
+            "width": float(region['x_max'] - region['x_min']) / w,
+            "height": float(region['y_max'] - region['y_min']) / h
+        }
+
+    def _extract_body_parts(
+        self, segmentation: torch.Tensor, region: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Extract body part information from segmentation."""
+        part_names = [
+            "background", "torso", "right_hand", "left_hand", "left_foot", "right_foot",
+            "upper_leg_right", "upper_leg_left", "lower_leg_right", "lower_leg_left",
+            "upper_arm_left", "upper_arm_right", "lower_arm_left", "lower_arm_right", "head"
+        ]
+
+        seg_probs = torch.softmax(segmentation, dim=0)
+        region_mask = region['mask']
+
+        parts = {}
+        for i, name in enumerate(part_names):
+            if i < seg_probs.shape[0]:
+                part_prob = seg_probs[i] * region_mask.float()
+                parts[name] = {
+                    "present": bool(part_prob.max() > 0.3),
+                    "confidence": float(part_prob.max().item()),
+                    "coverage": float((part_prob > 0.3).sum().item() / max(1, region_mask.sum().item()))
+                }
+
+        return parts
+
+    def _extract_keypoints_from_tensor(self, output: torch.Tensor) -> List[Dict[str, Any]]:
+        """Extract keypoints from a generic output tensor."""
+        keypoint_names = [
+            "nose", "left_eye", "right_eye", "left_ear", "right_ear",
+            "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+            "left_wrist", "right_wrist", "left_hip", "right_hip",
+            "left_knee", "right_knee", "left_ankle", "right_ankle"
+        ]
+
+        keypoints = []
+
+        # Try to interpret output as heatmaps
+        if output.dim() >= 2:
+            flat = output.flatten()
+            num_kp = len(keypoint_names)
+
+            # Divide output evenly for each keypoint
+            chunk_size = len(flat) // num_kp if num_kp > 0 else 1
+
+            for i, name in enumerate(keypoint_names):
+                start = i * chunk_size
+                end = min(start + chunk_size, len(flat))
+
+                if start < len(flat):
+                    chunk = flat[start:end]
+                    # Find max location in chunk
+                    max_val = chunk.max().item()
+                    max_idx = chunk.argmax().item()
+
+                    # Convert to x, y (assume square spatial layout)
+                    side = int(np.sqrt(chunk_size))
+                    if side > 0:
+                        x = (max_idx % side) / side
+                        y = (max_idx // side) / side
+                    else:
+                        x, y = 0.5, 0.5
+
+                    keypoints.append({
+                        "name": name,
+                        "x": float(x),
+                        "y": float(y),
+                        "confidence": float(torch.sigmoid(torch.tensor(max_val)).item())
+                    })
+                else:
+                    keypoints.append({
+                        "name": name, "x": 0.5, "y": 0.5, "confidence": 0.0
+                    })
+        else:
+            # Fallback
+            for name in keypoint_names:
+                keypoints.append({"name": name, "x": 0.5, "y": 0.5, "confidence": 0.1})
+
+        return keypoints
+
+    def _estimate_bbox_from_keypoints(self, keypoints: List[Dict[str, Any]]) -> Dict[str, float]:
+        """Estimate bounding box from keypoint positions."""
+        valid_kps = [kp for kp in keypoints if kp['confidence'] > 0.1]
+
+        if not valid_kps:
+            return {"x": 0.3, "y": 0.2, "width": 0.4, "height": 0.6}
+
+        xs = [kp['x'] for kp in valid_kps]
+        ys = [kp['y'] for kp in valid_kps]
+
+        x_min, x_max = min(xs), max(xs)
+        y_min, y_max = min(ys), max(ys)
+
+        # Add padding
+        padding = 0.05
+        x_min = max(0, x_min - padding)
+        y_min = max(0, y_min - padding)
+        x_max = min(1, x_max + padding)
+        y_max = min(1, y_max + padding)
+
+        return {
+            "x": x_min,
+            "y": y_min,
+            "width": x_max - x_min,
+            "height": y_max - y_min
+        }
+
+    def _classify_activity_from_keypoints(self, keypoints: List[Dict[str, Any]]) -> str:
+        """Classify activity based on keypoint positions."""
+        # Get key body parts
+        kp_dict = {kp['name']: kp for kp in keypoints}
+
+        # Check if enough keypoints are detected
+        valid_count = sum(1 for kp in keypoints if kp['confidence'] > 0.3)
+        if valid_count < 5:
+            return "unknown"
+
+        # Get relevant keypoints
+        nose = kp_dict.get('nose', {})
+        l_hip = kp_dict.get('left_hip', {})
+        r_hip = kp_dict.get('right_hip', {})
+        l_ankle = kp_dict.get('left_ankle', {})
+        r_ankle = kp_dict.get('right_ankle', {})
+        l_shoulder = kp_dict.get('left_shoulder', {})
+        r_shoulder = kp_dict.get('right_shoulder', {})
+
+        # Calculate body metrics
+        hip_y = (l_hip.get('y', 0.5) + r_hip.get('y', 0.5)) / 2
+        ankle_y = (l_ankle.get('y', 0.8) + r_ankle.get('y', 0.8)) / 2
+        shoulder_y = (l_shoulder.get('y', 0.3) + r_shoulder.get('y', 0.3)) / 2
+        nose_y = nose.get('y', 0.2)
+
+        # Leg spread (horizontal distance between ankles)
+        leg_spread = abs(l_ankle.get('x', 0.5) - r_ankle.get('x', 0.5))
+
+        # Vertical compression (how "tall" the pose is)
+        vertical_span = ankle_y - nose_y if ankle_y > nose_y else 0.6
+
+        # Classification logic
+        if vertical_span < 0.3:
+            # Very compressed vertically - likely lying down
+            return "lying"
+        elif vertical_span < 0.45 and hip_y > 0.5:
+            # Medium compression with low hips - sitting
+            return "sitting"
+        elif leg_spread > 0.15:
+            # Legs apart - likely walking
+            return "walking"
+        else:
+            # Default upright pose
+            return "standing"
     
     def _generate_mock_poses(self) -> List[Dict[str, Any]]:
         """Generate mock pose data for development."""
