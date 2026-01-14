@@ -266,7 +266,7 @@ impl Tensor {
     }
 
     /// Apply softmax along axis
-    pub fn softmax(&self, axis: usize) -> NnResult<Tensor> {
+    pub fn softmax(&self, _axis: usize) -> NnResult<Tensor> {
         match self {
             Tensor::Float4D(a) => {
                 let max = a.fold(f32::NEG_INFINITY, |acc, &x| acc.max(x));

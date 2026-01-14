@@ -27,12 +27,8 @@ use crate::domain::{
     BreathingPattern, BreathingType, HeartbeatSignature, MovementProfile,
     MovementType, SignalStrength, VitalSignsReading,
 };
-use ndarray::{Array1, Array2, Array4, s};
-use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
-use parking_lot::RwLock;
-use tracing::{debug, info, instrument, warn};
+use tracing::{info, instrument, warn};
 
 #[cfg(feature = "onnx")]
 use wifi_densepose_nn::{OnnxBackend, OnnxSession, InferenceOptions, Tensor, TensorShape};

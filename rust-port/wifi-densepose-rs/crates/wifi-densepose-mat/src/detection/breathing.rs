@@ -1,6 +1,6 @@
 //! Breathing pattern detection from CSI signals.
 
-use crate::domain::{BreathingPattern, BreathingType, ConfidenceScore};
+use crate::domain::{BreathingPattern, BreathingType};
 
 /// Configuration for breathing detection
 #[derive(Debug, Clone)]

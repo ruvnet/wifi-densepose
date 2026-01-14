@@ -342,7 +342,7 @@ impl ModalityTranslator {
         })?;
 
         let input_arr = input.as_array4()?;
-        let (batch, _channels, height, width) = input_arr.dim();
+        let (_batch, _channels, _height, _width) = input_arr.dim();
 
         // Encode
         let mut encoder_outputs = Vec::new();
@@ -461,7 +461,7 @@ impl ModalityTranslator {
         weights: &ConvBlockWeights,
     ) -> NnResult<Array4<f32>> {
         let (batch, in_channels, in_height, in_width) = input.dim();
-        let (out_channels, _, kernel_h, kernel_w) = weights.conv_weight.dim();
+        let (out_channels, _, _kernel_h, _kernel_w) = weights.conv_weight.dim();
 
         // Upsample 2x
         let out_height = in_height * 2;
@@ -536,7 +536,7 @@ impl ModalityTranslator {
     fn apply_attention(
         &self,
         input: &Array4<f32>,
-        weights: &AttentionWeights,
+        _weights: &AttentionWeights,
     ) -> NnResult<(Array4<f32>, Array4<f32>)> {
         let (batch, channels, height, width) = input.dim();
         let seq_len = height * width;

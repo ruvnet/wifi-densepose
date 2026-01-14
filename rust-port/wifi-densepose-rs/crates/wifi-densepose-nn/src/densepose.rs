@@ -252,7 +252,7 @@ impl DensePoseHead {
         })?;
 
         let input_arr = input.as_array4()?;
-        let (batch, _channels, height, width) = input_arr.dim();
+        let (_batch, _channels, _height, _width) = input_arr.dim();
 
         // Apply shared convolutions
         let mut current = input_arr.clone();

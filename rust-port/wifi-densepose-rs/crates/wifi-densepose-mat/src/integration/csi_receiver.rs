@@ -28,8 +28,6 @@ use chrono::{DateTime, Utc};
 use std::collections::VecDeque;
 use std::io::{BufReader, Read};
 use std::path::Path;
-use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
 
 /// Configuration for CSI receivers
 #[derive(Debug, Clone)]

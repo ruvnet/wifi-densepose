@@ -206,7 +206,7 @@ impl Backend for MockBackend {
         self.output_shapes.get(name).cloned()
     }
 
-    fn run(&self, inputs: HashMap<String, Tensor>) -> NnResult<HashMap<String, Tensor>> {
+    fn run(&self, _inputs: HashMap<String, Tensor>) -> NnResult<HashMap<String, Tensor>> {
         let mut outputs = HashMap::new();
 
         for (name, shape) in &self.output_shapes {
