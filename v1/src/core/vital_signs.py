@@ -175,15 +175,22 @@ class BreathingDetector:
         max_freq: float
     ) -> Optional[Tuple[float, float]]:
         """Find the dominant frequency in a given range."""
-        n = len(spectrum) * 2  # Original signal length
+        # rfft output length is n//2 + 1 for input of length n
+        # So original length n = (len(spectrum) - 1) * 2
+        n = (len(spectrum) - 1) * 2
         freqs = scipy.fft.rfftfreq(n, 1.0 / sample_rate)
+
+        # Ensure freqs and spectrum have same length
+        min_len = min(len(freqs), len(spectrum))
+        freqs = freqs[:min_len]
+        spectrum_trimmed = spectrum[:min_len]
 
         # Find indices in the frequency range
         mask = (freqs >= min_freq) & (freqs <= max_freq)
         if not np.any(mask):
             return None
 
-        masked_spectrum = spectrum.copy()
+        masked_spectrum = spectrum_trimmed.copy()
         masked_spectrum[~mask] = 0
 
         # Find peak
@@ -191,7 +198,7 @@ class BreathingDetector:
         if masked_spectrum[peak_idx] == 0:
             return None
 
-        return freqs[peak_idx], spectrum[peak_idx]
+        return freqs[peak_idx], spectrum_trimmed[peak_idx]
 
     def _calculate_regularity(
         self,
@@ -200,7 +207,7 @@ class BreathingDetector:
         sample_rate: float
     ) -> float:
         """Calculate how regular the breathing pattern is."""
-        n = len(spectrum) * 2
+        n = (len(spectrum) - 1) * 2
         freqs = scipy.fft.rfftfreq(n, 1.0 / sample_rate)
 
         # Look at energy concentration around dominant frequency
@@ -395,15 +402,22 @@ class HeartbeatDetector:
         max_freq: float
     ) -> Optional[Tuple[float, float]]:
         """Find heartbeat frequency in the spectrum."""
-        n = len(spectrum) * 2
+        # rfft output length is n//2 + 1 for input of length n
+        # So original length n = (len(spectrum) - 1) * 2
+        n = (len(spectrum) - 1) * 2
         freqs = scipy.fft.rfftfreq(n, 1.0 / sample_rate)
+
+        # Ensure freqs and spectrum have same length
+        min_len = min(len(freqs), len(spectrum))
+        freqs = freqs[:min_len]
+        spectrum_trimmed = spectrum[:min_len]
 
         # Find indices in the frequency range
         mask = (freqs >= min_freq) & (freqs <= max_freq)
         if not np.any(mask):
             return None
 
-        masked_spectrum = spectrum.copy()
+        masked_spectrum = spectrum_trimmed.copy()
         masked_spectrum[~mask] = 0
 
         # Find peak
@@ -411,7 +425,7 @@ class HeartbeatDetector:
         if masked_spectrum[peak_idx] == 0:
             return None
 
-        return freqs[peak_idx], spectrum[peak_idx]
+        return freqs[peak_idx], spectrum_trimmed[peak_idx]
 
     def _classify_signal_strength(self, strength: float) -> SignalStrength:
         """Classify signal strength level."""
