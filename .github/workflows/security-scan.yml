@@ -24,12 +24,12 @@ jobs:
       contents: read
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         fetch-depth: 0
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v6
       with:
         python-version: ${{ env.PYTHON_VERSION }}
         cache: 'pip'
@@ -86,10 +86,10 @@ jobs:
       contents: read
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v6
       with:
         python-version: ${{ env.PYTHON_VERSION }}
         cache: 'pip'
@@ -126,7 +126,7 @@ jobs:
         category: snyk
 
     - name: Upload vulnerability reports
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v6
       if: always()
       with:
         name: vulnerability-reports
@@ -147,7 +147,7 @@ jobs:
       contents: read
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -218,7 +218,7 @@ jobs:
       contents: read
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Run Checkov IaC scan
       uses: bridgecrewio/checkov-action@master
@@ -272,7 +272,7 @@ jobs:
       contents: read
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         fetch-depth: 0
 
@@ -303,10 +303,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v6
       with:
         python-version: ${{ env.PYTHON_VERSION }}
         cache: 'pip'
@@ -323,7 +323,7 @@ jobs:
         licensecheck --zero
 
     - name: Upload license report
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v6
       with:
         name: license-report
         path: licenses.json
@@ -334,7 +334,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Check security policy files
       run: |
@@ -376,7 +376,7 @@ jobs:
     if: always()
     steps:
     - name: Download all artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v7
 
     - name: Generate security summary
       run: |
@@ -394,7 +394,7 @@ jobs:
         echo "Generated on: $(date)" >> security-summary.md
 
     - name: Upload security summary
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v6
       with:
         name: security-summary
         path: security-summary.md
@@ -416,7 +416,7 @@ jobs:
 
     - name: Create security issue on critical findings
       if: needs.sast.result == 'failure' || needs.dependency-scan.result == 'failure'
-      uses: actions/github-script@v6
+      uses: actions/github-script@v8
       with:
         script: |
           github.rest.issues.create({
