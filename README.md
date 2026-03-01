@@ -275,13 +275,13 @@ cargo test --package wifi-densepose-mat
 WiFi DensePose consists of several key components working together:
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   WiFi Router   │    │   WiFi Router   │    │   WiFi Router   │
-│   (CSI Source)  │    │   (CSI Source)  │    │   (CSI Source)  │
-└─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
-          │                      │                      │
-          └──────────────────────┼──────────────────────┘
-                                 │
+ ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+ │   WiFi Router   │    │   WiFi Router   │    │   WiFi Router   │
+ │   (CSI Source)  │    │   (CSI Source)  │    │   (CSI Source)  │
+ └─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
+           │                      │                      │
+           └──────────────────────┼──────────────────────┘
+                                  │
                     ┌─────────────▼─────────────┐
                     │     CSI Data Collector    │
                     │   (Hardware Interface)    │
