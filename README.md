@@ -18,7 +18,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/wifi-densepose.svg)](https://pypi.org/project/wifi-densepose/)
 [![PyPI downloads](https://img.shields.io/pypi/dm/wifi-densepose.svg)](https://pypi.org/project/wifi-densepose/)
 [![Test Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)](https://github.com/ruvnet/wifi-densepose)
-[![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://hub.docker.com/r/ruvnet/wifi-densepose)
+[![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://github.com/ruvnet/wifi-densepose/pkgs/container/wifi-densepose)
 
 A cutting-edge WiFi-based human pose estimation system that leverages Channel State Information (CSI) data and advanced machine learning to provide real-time, privacy-preserving pose detection without cameras.
 
@@ -410,8 +410,8 @@ pip install wifi-densepose[all]  # All optional dependencies
 ### Using Docker
 
 ```bash
-docker pull ruvnet/wifi-densepose:latest
-docker run -p 8000:8000 ruvnet/wifi-densepose:latest
+docker pull ghcr.io/ruvnet/wifi-densepose:latest
+docker run -p 8000:8000 ghcr.io/ruvnet/wifi-densepose:latest
 ```
 
 ### System Requirements
