@@ -41,7 +41,7 @@ jobs:
       image_tag: ${{ steps.determine-tag.outputs.tag }}
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Determine deployment environment
       id: determine-env
@@ -85,7 +85,7 @@ jobs:
       url: https://staging.wifi-densepose.com
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Set up kubectl
       uses: azure/setup-kubectl@v3
@@ -131,7 +131,7 @@ jobs:
       url: https://wifi-densepose.com
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Set up kubectl
       uses: azure/setup-kubectl@v3
@@ -204,7 +204,7 @@ jobs:
         # kubectl scale rs -n wifi-densepose -l app=wifi-densepose,version!=green --replicas=0
 
     - name: Upload deployment artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v6
       with:
         name: production-deployment-${{ github.run_number }}
         path: |
@@ -275,7 +275,7 @@ jobs:
         done
 
     - name: Update deployment status
-      uses: actions/github-script@v6
+      uses: actions/github-script@v8
       with:
         script: |
           const deployEnv = '${{ needs.pre-deployment.outputs.deploy_env }}';
@@ -326,7 +326,7 @@ jobs:
 
     - name: Create deployment issue on failure
       if: needs.deploy-production.result == 'failure'
-      uses: actions/github-script@v6
+      uses: actions/github-script@v8
       with:
         script: |
           github.rest.issues.create({
