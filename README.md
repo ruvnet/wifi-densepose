@@ -1458,7 +1458,6 @@ SOFTWARE.
 ## 📞 Support
 
 - **Documentation**:
-  - [User Guide](docs/user_guide.md) - Complete setup and usage guide
   - [API Reference](docs/api_reference.md) - Detailed API documentation
   - [Deployment Guide](docs/deployment.md) - Production deployment instructions
   - [Troubleshooting Guide](docs/troubleshooting.md) - Common issues and solutions
