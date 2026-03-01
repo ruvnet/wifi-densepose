@@ -37,6 +37,8 @@ const SEG_META: u8 = 0x07;
 const SEG_WITNESS: u8 = 0x0A;
 /// Domain profile declarations.
 const SEG_PROFILE: u8 = 0x0B;
+/// Contrastive embedding model weights and configuration (ADR-024).
+pub const SEG_EMBED: u8 = 0x0C;
 
 // ── Pure-Rust CRC32 (IEEE 802.3 polynomial) ────────────────────────────────
 
@@ -304,6 +306,20 @@ impl RvfBuilder {
         self.push_segment(seg_type, payload);
     }
 
+    /// Add contrastive embedding config and projection head weights (ADR-024).
+    /// Serializes embedding config as JSON followed by projection weights as f32 LE.
+    pub fn add_embedding(&mut self, config_json: &serde_json::Value, proj_weights: &[f32]) {
+        let config_bytes = serde_json::to_vec(config_json).unwrap_or_default();
+        let config_len = config_bytes.len() as u32;
+        let mut payload = Vec::with_capacity(4 + config_bytes.len() + proj_weights.len() * 4);
+        payload.extend_from_slice(&config_len.to_le_bytes());
+        payload.extend_from_slice(&config_bytes);
+        for &w in proj_weights {
+            payload.extend_from_slice(&w.to_le_bytes());
+        }
+        self.push_segment(SEG_EMBED, &payload);
+    }
+
     /// Add witness/proof data as a Witness segment.
     pub fn add_witness(&mut self, training_hash: &str, metrics: &serde_json::Value) {
         let witness = serde_json::json!({
@@ -526,6 +542,28 @@ impl RvfReader {
     pub fn witness(&self) -> Option<serde_json::Value> {
         self.find_segment(SEG_WITNESS)
             .and_then(|data| serde_json::from_slice(data).ok())
+    }
+
+    /// Parse and return the embedding config JSON and projection weights, if present.
+    pub fn embedding(&self) -> Option<(serde_json::Value, Vec<f32>)> {
+        let data = self.find_segment(SEG_EMBED)?;
+        if data.len() < 4 {
+            return None;
+        }
+        let config_len = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+        if 4 + config_len > data.len() {
+            return None;
+        }
+        let config: serde_json::Value = serde_json::from_slice(&data[4..4 + config_len]).ok()?;
+        let weight_data = &data[4 + config_len..];
+        if weight_data.len() % 4 != 0 {
+            return None;
+        }
+        let weights: Vec<f32> = weight_data
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        Some((config, weights))
     }
 
     /// Number of segments in the container.
@@ -910,5 +948,34 @@ mod tests {
         assert!(!info.has_vital_config);
         assert!(!info.has_quant_info);
         assert!(!info.has_witness);
+    }
+
+    #[test]
+    fn test_rvf_embedding_segment_roundtrip() {
+        let config = serde_json::json!({
+            "d_model": 64,
+            "d_proj": 128,
+            "temperature": 0.07,
+            "normalize": true,
+        });
+        let weights: Vec<f32> = (0..256).map(|i| (i as f32 * 0.13).sin()).collect();
+
+        let mut builder = RvfBuilder::new();
+        builder.add_manifest("embed-test", "1.0", "embedding test");
+        builder.add_embedding(&config, &weights);
+        let data = builder.build();
+
+        let reader = RvfReader::from_bytes(&data).unwrap();
+        assert_eq!(reader.segment_count(), 2);
+
+        let (decoded_config, decoded_weights) = reader.embedding()
+            .expect("embedding segment should be present");
+        assert_eq!(decoded_config["d_model"], 64);
+        assert_eq!(decoded_config["d_proj"], 128);
+        assert!((decoded_config["temperature"].as_f64().unwrap() - 0.07).abs() < 1e-4);
+        assert_eq!(decoded_weights.len(), weights.len());
+        for (a, b) in decoded_weights.iter().zip(weights.iter()) {
+            assert_eq!(a.to_bits(), b.to_bits(), "weight mismatch");
+        }
     }
 }
