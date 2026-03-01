@@ -11,6 +11,7 @@
 //! All arithmetic uses `f32`. No external ML dependencies.
 
 use crate::graph_transformer::{CsiToPoseTransformer, TransformerConfig, Linear};
+use crate::sona::{LoraAdapter, EnvironmentDetector, DriftInfo};
 
 // ── SimpleRng (xorshift64) ──────────────────────────────────────────────────
 
@@ -72,6 +73,10 @@ pub struct ProjectionHead {
     pub proj_1: Linear,
     pub proj_2: Linear,
     pub config: EmbeddingConfig,
+    /// Optional rank-4 LoRA adapter for proj_1 (environment-specific fine-tuning).
+    pub lora_1: Option<LoraAdapter>,
+    /// Optional rank-4 LoRA adapter for proj_2 (environment-specific fine-tuning).
+    pub lora_2: Option<LoraAdapter>,
 }
 
 impl ProjectionHead {
@@ -81,6 +86,8 @@ impl ProjectionHead {
             proj_1: Linear::with_seed(config.d_model, config.d_proj, 2024),
             proj_2: Linear::with_seed(config.d_proj, config.d_proj, 2025),
             config,
+            lora_1: None,
+            lora_2: None,
         }
     }
 
@@ -90,15 +97,45 @@ impl ProjectionHead {
             proj_1: Linear::zeros(config.d_model, config.d_proj),
             proj_2: Linear::zeros(config.d_proj, config.d_proj),
             config,
+            lora_1: None,
+            lora_2: None,
+        }
+    }
+
+    /// Construct a projection head with LoRA adapters enabled at the given rank.
+    pub fn with_lora(config: EmbeddingConfig, rank: usize) -> Self {
+        let alpha = rank as f32 * 2.0;
+        Self {
+            proj_1: Linear::with_seed(config.d_model, config.d_proj, 2024),
+            proj_2: Linear::with_seed(config.d_proj, config.d_proj, 2025),
+            lora_1: Some(LoraAdapter::new(config.d_model, config.d_proj, rank, alpha)),
+            lora_2: Some(LoraAdapter::new(config.d_proj, config.d_proj, rank, alpha)),
+            config,
         }
     }
 
     /// Forward pass: ReLU between layers, optional L2-normalize output.
+    /// When LoRA adapters are present, their output is added to the base
+    /// linear output before the activation.
     pub fn forward(&self, x: &[f32]) -> Vec<f32> {
-        let h: Vec<f32> = self.proj_1.forward(x).into_iter()
-            .map(|v| if v > 0.0 { v } else { 0.0 })
-            .collect();
+        let mut h = self.proj_1.forward(x);
+        if let Some(ref lora) = self.lora_1 {
+            let delta = lora.forward(x);
+            for (h_i, &d_i) in h.iter_mut().zip(delta.iter()) {
+                *h_i += d_i;
+            }
+        }
+        // ReLU
+        for v in h.iter_mut() {
+            if *v < 0.0 { *v = 0.0; }
+        }
         let mut out = self.proj_2.forward(&h);
+        if let Some(ref lora) = self.lora_2 {
+            let delta = lora.forward(&h);
+            for (o_i, &d_i) in out.iter_mut().zip(delta.iter()) {
+                *o_i += d_i;
+            }
+        }
         if self.config.normalize {
             l2_normalize(&mut out);
         }
@@ -118,12 +155,142 @@ impl ProjectionHead {
         offset += n;
         let (p2, n) = Linear::unflatten_from(&data[offset..], config.d_proj, config.d_proj);
         offset += n;
-        (Self { proj_1: p1, proj_2: p2, config: config.clone() }, offset)
+        (Self { proj_1: p1, proj_2: p2, config: config.clone(), lora_1: None, lora_2: None }, offset)
     }
 
     /// Total trainable parameters.
     pub fn param_count(&self) -> usize {
         self.proj_1.param_count() + self.proj_2.param_count()
+    }
+
+    /// Merge LoRA deltas into the base Linear weights for fast inference.
+    /// After merging, the LoRA adapters remain but are effectively accounted for.
+    pub fn merge_lora(&mut self) {
+        if let Some(ref lora) = self.lora_1 {
+            let delta = lora.delta_weights(); // (in_features, out_features)
+            let mut w = self.proj_1.weights().to_vec(); // (out_features, in_features)
+            for i in 0..delta.len() {
+                for j in 0..delta[i].len() {
+                    if j < w.len() && i < w[j].len() {
+                        w[j][i] += delta[i][j];
+                    }
+                }
+            }
+            self.proj_1.set_weights(w);
+        }
+        if let Some(ref lora) = self.lora_2 {
+            let delta = lora.delta_weights();
+            let mut w = self.proj_2.weights().to_vec();
+            for i in 0..delta.len() {
+                for j in 0..delta[i].len() {
+                    if j < w.len() && i < w[j].len() {
+                        w[j][i] += delta[i][j];
+                    }
+                }
+            }
+            self.proj_2.set_weights(w);
+        }
+    }
+
+    /// Reverse the LoRA merge to restore original base weights for continued training.
+    pub fn unmerge_lora(&mut self) {
+        if let Some(ref lora) = self.lora_1 {
+            let delta = lora.delta_weights();
+            let mut w = self.proj_1.weights().to_vec();
+            for i in 0..delta.len() {
+                for j in 0..delta[i].len() {
+                    if j < w.len() && i < w[j].len() {
+                        w[j][i] -= delta[i][j];
+                    }
+                }
+            }
+            self.proj_1.set_weights(w);
+        }
+        if let Some(ref lora) = self.lora_2 {
+            let delta = lora.delta_weights();
+            let mut w = self.proj_2.weights().to_vec();
+            for i in 0..delta.len() {
+                for j in 0..delta[i].len() {
+                    if j < w.len() && i < w[j].len() {
+                        w[j][i] -= delta[i][j];
+                    }
+                }
+            }
+            self.proj_2.set_weights(w);
+        }
+    }
+
+    /// Forward using only the LoRA path (base weights frozen), for LoRA-only training.
+    /// Returns zero vector if no LoRA adapters are set.
+    pub fn freeze_base_train_lora(&self, input: &[f32]) -> Vec<f32> {
+        let d_proj = self.config.d_proj;
+        // Layer 1: only LoRA contribution + ReLU
+        let h = match self.lora_1 {
+            Some(ref lora) => {
+                let delta = lora.forward(input);
+                delta.into_iter().map(|v| if v > 0.0 { v } else { 0.0 }).collect::<Vec<_>>()
+            }
+            None => vec![0.0f32; d_proj],
+        };
+        // Layer 2: only LoRA contribution
+        let mut out = match self.lora_2 {
+            Some(ref lora) => lora.forward(&h),
+            None => vec![0.0f32; d_proj],
+        };
+        if self.config.normalize {
+            l2_normalize(&mut out);
+        }
+        out
+    }
+
+    /// Count only the LoRA parameters (not the base weights).
+    pub fn lora_param_count(&self) -> usize {
+        let c1 = self.lora_1.as_ref().map_or(0, |l| l.n_params());
+        let c2 = self.lora_2.as_ref().map_or(0, |l| l.n_params());
+        c1 + c2
+    }
+
+    /// Flatten only the LoRA weights into a flat vector (A then B for each adapter).
+    pub fn flatten_lora(&self) -> Vec<f32> {
+        let mut out = Vec::new();
+        if let Some(ref lora) = self.lora_1 {
+            for row in &lora.a { out.extend_from_slice(row); }
+            for row in &lora.b { out.extend_from_slice(row); }
+        }
+        if let Some(ref lora) = self.lora_2 {
+            for row in &lora.a { out.extend_from_slice(row); }
+            for row in &lora.b { out.extend_from_slice(row); }
+        }
+        out
+    }
+
+    /// Restore LoRA weights from a flat slice (must match flatten_lora layout).
+    pub fn unflatten_lora(&mut self, data: &[f32]) {
+        let mut offset = 0;
+        if let Some(ref mut lora) = self.lora_1 {
+            for row in lora.a.iter_mut() {
+                let n = row.len();
+                row.copy_from_slice(&data[offset..offset + n]);
+                offset += n;
+            }
+            for row in lora.b.iter_mut() {
+                let n = row.len();
+                row.copy_from_slice(&data[offset..offset + n]);
+                offset += n;
+            }
+        }
+        if let Some(ref mut lora) = self.lora_2 {
+            for row in lora.a.iter_mut() {
+                let n = row.len();
+                row.copy_from_slice(&data[offset..offset + n]);
+                offset += n;
+            }
+            for row in lora.b.iter_mut() {
+                let n = row.len();
+                row.copy_from_slice(&data[offset..offset + n]);
+                offset += n;
+            }
+        }
     }
 }
 
@@ -316,6 +483,8 @@ pub struct IndexEntry {
     pub metadata: String,
     pub timestamp_ms: u64,
     pub index_type: IndexType,
+    /// Whether this entry was inserted during a detected environment drift.
+    pub anomalous: bool,
 }
 
 /// Search result from the fingerprint index.
@@ -349,7 +518,31 @@ impl FingerprintIndex {
             metadata,
             timestamp_ms,
             index_type: self.index_type,
+            anomalous: false,
         });
+    }
+
+    /// Insert an embedding with drift-awareness: marks the entry as anomalous
+    /// if the provided drift flag is true.
+    pub fn insert_with_drift(
+        &mut self,
+        embedding: Vec<f32>,
+        metadata: String,
+        timestamp_ms: u64,
+        drift_detected: bool,
+    ) {
+        self.entries.push(IndexEntry {
+            embedding,
+            metadata,
+            timestamp_ms,
+            index_type: self.index_type,
+            anomalous: drift_detected,
+        });
+    }
+
+    /// Count the number of entries marked as anomalous.
+    pub fn anomalous_count(&self) -> usize {
+        self.entries.iter().filter(|e| e.anomalous).count()
     }
 
     /// Search for the top-k nearest embeddings by cosine distance.
@@ -452,6 +645,8 @@ pub struct EmbeddingExtractor {
     pub transformer: CsiToPoseTransformer,
     pub projection: ProjectionHead,
     pub config: EmbeddingConfig,
+    /// Optional drift detector for environment change detection.
+    pub drift_detector: Option<EnvironmentDetector>,
 }
 
 impl EmbeddingExtractor {
@@ -461,13 +656,34 @@ impl EmbeddingExtractor {
             transformer: CsiToPoseTransformer::new(t_config),
             projection: ProjectionHead::new(e_config.clone()),
             config: e_config,
+            drift_detector: None,
+        }
+    }
+
+    /// Create an embedding extractor with environment drift detection enabled.
+    pub fn with_drift_detection(
+        t_config: TransformerConfig,
+        e_config: EmbeddingConfig,
+        window_size: usize,
+    ) -> Self {
+        Self {
+            transformer: CsiToPoseTransformer::new(t_config),
+            projection: ProjectionHead::new(e_config.clone()),
+            config: e_config,
+            drift_detector: Some(EnvironmentDetector::new(window_size)),
         }
     }
 
     /// Extract embedding from CSI features.
     /// Mean-pools the 17 body_part_features from the transformer backbone,
     /// then projects through the ProjectionHead.
-    pub fn extract(&self, csi_features: &[Vec<f32>]) -> Vec<f32> {
+    /// When a drift detector is present, updates it with CSI statistics.
+    pub fn extract(&mut self, csi_features: &[Vec<f32>]) -> Vec<f32> {
+        // Feed drift detector with CSI statistics if present
+        if let Some(ref mut detector) = self.drift_detector {
+            let (mean, var) = csi_feature_stats(csi_features);
+            detector.update(mean, var);
+        }
         let body_feats = self.transformer.embed(csi_features);
         let d = self.config.d_model;
         // Mean-pool across 17 keypoints
@@ -487,8 +703,22 @@ impl EmbeddingExtractor {
     }
 
     /// Batch extract embeddings.
-    pub fn extract_batch(&self, batch: &[Vec<Vec<f32>>]) -> Vec<Vec<f32>> {
-        batch.iter().map(|csi| self.extract(csi)).collect()
+    pub fn extract_batch(&mut self, batch: &[Vec<Vec<f32>>]) -> Vec<Vec<f32>> {
+        let mut results = Vec::with_capacity(batch.len());
+        for csi in batch {
+            results.push(self.extract(csi));
+        }
+        results
+    }
+
+    /// Whether an environment drift has been detected.
+    pub fn drift_detected(&self) -> bool {
+        self.drift_detector.as_ref().map_or(false, |d| d.drift_detected())
+    }
+
+    /// Get drift information if a detector is present.
+    pub fn drift_info(&self) -> Option<DriftInfo> {
+        self.drift_detector.as_ref().map(|d| d.drift_info())
     }
 
     /// Total parameter count (transformer + projection).
@@ -524,6 +754,153 @@ impl EmbeddingExtractor {
         self.projection = proj;
         Ok(())
     }
+}
+
+// ── CSI feature statistics ─────────────────────────────────────────────────
+
+/// Compute mean and variance of all values in a CSI feature matrix.
+fn csi_feature_stats(features: &[Vec<f32>]) -> (f32, f32) {
+    let mut sum = 0.0f32;
+    let mut sum_sq = 0.0f32;
+    let mut count = 0usize;
+    for row in features {
+        for &v in row {
+            sum += v;
+            sum_sq += v * v;
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return (0.0, 0.0);
+    }
+    let mean = sum / count as f32;
+    let var = sum_sq / count as f32 - mean * mean;
+    (mean, var.max(0.0))
+}
+
+// ── Hard-Negative Mining ──────────────────────────────────────────────────
+
+/// Selects the hardest negative pairs from a similarity matrix to improve
+/// contrastive training efficiency. During warmup epochs, all negatives
+/// are used to ensure stable early training.
+pub struct HardNegativeMiner {
+    /// Ratio of hardest negatives to select (0.5 = top 50%).
+    pub ratio: f32,
+    /// Number of epochs to use all negatives before mining.
+    pub warmup_epochs: usize,
+}
+
+impl HardNegativeMiner {
+    pub fn new(ratio: f32, warmup_epochs: usize) -> Self {
+        Self {
+            ratio: ratio.clamp(0.01, 1.0),
+            warmup_epochs,
+        }
+    }
+
+    /// From a cosine similarity matrix (N x N), select the hardest negative pairs.
+    /// Returns indices of selected negative pairs (i, j) where i != j.
+    /// During warmup, returns all negative pairs.
+    pub fn mine(&self, sim_matrix: &[Vec<f32>], epoch: usize) -> Vec<(usize, usize)> {
+        let n = sim_matrix.len();
+        if n <= 1 {
+            return Vec::new();
+        }
+
+        // Collect all negative pairs with their similarity
+        let mut neg_pairs: Vec<(usize, usize, f32)> = Vec::new();
+        for i in 0..n {
+            for j in 0..n {
+                if i != j {
+                    let sim = if j < sim_matrix[i].len() { sim_matrix[i][j] } else { 0.0 };
+                    neg_pairs.push((i, j, sim));
+                }
+            }
+        }
+
+        if epoch < self.warmup_epochs {
+            // During warmup, return all negative pairs
+            return neg_pairs.into_iter().map(|(i, j, _)| (i, j)).collect();
+        }
+
+        // Sort by similarity descending (hardest negatives have highest similarity)
+        neg_pairs.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Take the top ratio fraction
+        let k = ((neg_pairs.len() as f32 * self.ratio).ceil() as usize).max(1);
+        neg_pairs.truncate(k);
+        neg_pairs.into_iter().map(|(i, j, _)| (i, j)).collect()
+    }
+}
+
+/// InfoNCE loss with optional hard-negative mining support.
+/// When a miner is provided and past warmup, only the hardest negatives
+/// contribute to the denominator.
+pub fn info_nce_loss_mined(
+    embeddings_a: &[Vec<f32>],
+    embeddings_b: &[Vec<f32>],
+    temperature: f32,
+    miner: Option<&HardNegativeMiner>,
+    epoch: usize,
+) -> f32 {
+    let n = embeddings_a.len().min(embeddings_b.len());
+    if n == 0 {
+        return 0.0;
+    }
+    let t = temperature.max(1e-6);
+
+    // If no miner or in warmup, delegate to standard InfoNCE
+    let use_mining = match miner {
+        Some(m) => epoch >= m.warmup_epochs,
+        None => false,
+    };
+
+    if !use_mining {
+        return info_nce_loss(embeddings_a, embeddings_b, temperature);
+    }
+
+    let miner = miner.unwrap();
+
+    // Build similarity matrix for mining
+    let mut sim_matrix = vec![vec![0.0f32; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            sim_matrix[i][j] = cosine_similarity(&embeddings_a[i], &embeddings_b[j]);
+        }
+    }
+
+    let mined_pairs = miner.mine(&sim_matrix, epoch);
+
+    // Build per-anchor set of active negative indices
+    let mut neg_indices: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for &(i, j) in &mined_pairs {
+        if i < n && j < n {
+            neg_indices[i].push(j);
+        }
+    }
+
+    let mut total_loss = 0.0f32;
+    for i in 0..n {
+        let pos_sim = sim_matrix[i][i] / t;
+
+        // Build logits: positive + selected hard negatives
+        let mut logits = vec![pos_sim];
+        for &j in &neg_indices[i] {
+            if j != i {
+                logits.push(sim_matrix[i][j] / t);
+            }
+        }
+
+        // Log-softmax for the positive (index 0)
+        let max_logit = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let log_sum_exp = logits.iter()
+            .map(|&l| (l - max_logit).exp())
+            .sum::<f32>()
+            .ln() + max_logit;
+        total_loss += -pos_sim + log_sum_exp;
+    }
+
+    total_loss / n as f32
 }
 
 // ── Quantized embedding validation ─────────────────────────────────────────
@@ -748,7 +1125,7 @@ mod tests {
 
     #[test]
     fn test_embedding_extractor_output_shape() {
-        let ext = EmbeddingExtractor::new(small_config(), small_embed_config());
+        let mut ext = EmbeddingExtractor::new(small_config(), small_embed_config());
         let csi = make_csi(4, 16, 42);
         let emb = ext.extract(&csi);
         assert_eq!(emb.len(), 128);
@@ -756,7 +1133,7 @@ mod tests {
 
     #[test]
     fn test_embedding_extractor_weight_roundtrip() {
-        let ext = EmbeddingExtractor::new(small_config(), small_embed_config());
+        let mut ext = EmbeddingExtractor::new(small_config(), small_embed_config());
         let weights = ext.flatten_weights();
         assert_eq!(weights.len(), ext.param_count());
 
@@ -905,5 +1282,214 @@ mod tests {
         for f in &body_feats {
             assert_eq!(f.len(), 8); // d_model = 8
         }
+    }
+
+    // ── Phase 7: LoRA on ProjectionHead tests ─────────────────────────
+
+    #[test]
+    fn test_projection_head_with_lora_changes_output() {
+        let config = EmbeddingConfig {
+            d_model: 64, d_proj: 128, temperature: 0.07, normalize: true,
+        };
+        let base = ProjectionHead::new(config.clone());
+        let mut lora = ProjectionHead::with_lora(config, 4);
+        // Set some non-zero LoRA weights so output differs
+        if let Some(ref mut l) = lora.lora_1 {
+            for i in 0..l.in_features.min(l.a.len()) {
+                for r in 0..l.rank.min(l.a[i].len()) {
+                    l.a[i][r] = (i as f32 * 0.01 + r as f32 * 0.02).sin();
+                }
+            }
+            for r in 0..l.rank.min(l.b.len()) {
+                for j in 0..l.out_features.min(l.b[r].len()) {
+                    l.b[r][j] = (r as f32 * 0.03 + j as f32 * 0.01).cos() * 0.1;
+                }
+            }
+        }
+        let input = vec![0.5f32; 64];
+        let out_base = base.forward(&input);
+        let out_lora = lora.forward(&input);
+        let mut any_diff = false;
+        for (a, b) in out_base.iter().zip(out_lora.iter()) {
+            if (a - b).abs() > 1e-6 { any_diff = true; break; }
+        }
+        assert!(any_diff, "LoRA should change the output");
+    }
+
+    #[test]
+    fn test_projection_head_merge_unmerge_roundtrip() {
+        let config = EmbeddingConfig {
+            d_model: 64, d_proj: 128, temperature: 0.07, normalize: false,
+        };
+        let mut proj = ProjectionHead::with_lora(config, 4);
+        // Set non-zero LoRA weights
+        if let Some(ref mut l) = proj.lora_1 {
+            l.a[0][0] = 1.0; l.b[0][0] = 0.5;
+        }
+        if let Some(ref mut l) = proj.lora_2 {
+            l.a[0][0] = 0.3; l.b[0][0] = 0.2;
+        }
+        let input = vec![0.3f32; 64];
+        let out_before = proj.forward(&input);
+
+        // Merge, then unmerge -- output should match original (with LoRA still in forward)
+        proj.merge_lora();
+        proj.unmerge_lora();
+        let out_after = proj.forward(&input);
+
+        for (a, b) in out_before.iter().zip(out_after.iter()) {
+            assert!(
+                (a - b).abs() < 1e-4,
+                "merge/unmerge roundtrip failed: {a} vs {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_projection_head_lora_param_count() {
+        let config = EmbeddingConfig {
+            d_model: 64, d_proj: 128, temperature: 0.07, normalize: true,
+        };
+        let proj = ProjectionHead::with_lora(config, 4);
+        // lora_1: rank=4, in=64, out=128 => 4*(64+128) = 768
+        // lora_2: rank=4, in=128, out=128 => 4*(128+128) = 1024
+        // Total = 768 + 1024 = 1792
+        assert_eq!(proj.lora_param_count(), 1792);
+    }
+
+    #[test]
+    fn test_projection_head_flatten_unflatten_lora() {
+        let config = EmbeddingConfig {
+            d_model: 64, d_proj: 128, temperature: 0.07, normalize: true,
+        };
+        let mut proj = ProjectionHead::with_lora(config.clone(), 4);
+        // Set recognizable LoRA weights
+        if let Some(ref mut l) = proj.lora_1 {
+            l.a[0][0] = 1.5; l.a[1][1] = -0.3;
+            l.b[0][0] = 2.0; l.b[1][5] = -1.0;
+        }
+        if let Some(ref mut l) = proj.lora_2 {
+            l.a[3][2] = 0.7;
+            l.b[2][10] = 0.42;
+        }
+        let flat = proj.flatten_lora();
+        assert_eq!(flat.len(), 1792);
+
+        // Restore into a fresh LoRA-enabled projection head
+        let mut proj2 = ProjectionHead::with_lora(config, 4);
+        proj2.unflatten_lora(&flat);
+
+        // Verify round-trip by re-flattening
+        let flat2 = proj2.flatten_lora();
+        for (a, b) in flat.iter().zip(flat2.iter()) {
+            assert!((a - b).abs() < 1e-6, "flatten/unflatten mismatch: {a} vs {b}");
+        }
+    }
+
+    // ── Phase 7: Hard-Negative Mining tests ───────────────────────────
+
+    #[test]
+    fn test_hard_negative_miner_warmup() {
+        let miner = HardNegativeMiner::new(0.5, 5);
+        let sim = vec![
+            vec![1.0, 0.8, 0.2],
+            vec![0.8, 1.0, 0.3],
+            vec![0.2, 0.3, 1.0],
+        ];
+        // During warmup (epoch 0 < 5), all negative pairs should be returned
+        let pairs = miner.mine(&sim, 0);
+        // 3 anchors * 2 negatives each = 6 negative pairs
+        assert_eq!(pairs.len(), 6, "warmup should return all negative pairs");
+    }
+
+    #[test]
+    fn test_hard_negative_miner_selects_hardest() {
+        let miner = HardNegativeMiner::new(0.5, 0); // no warmup, 50% ratio
+        let sim = vec![
+            vec![1.0, 0.9, 0.1, 0.05],
+            vec![0.9, 1.0, 0.8, 0.2],
+            vec![0.1, 0.8, 1.0, 0.3],
+            vec![0.05, 0.2, 0.3, 1.0],
+        ];
+        let pairs = miner.mine(&sim, 10);
+        // 4*3 = 12 total negative pairs, 50% => 6
+        assert_eq!(pairs.len(), 6, "should select top 50% hardest negatives");
+        // The hardest negatives should have high similarity values
+        // (0,1)=0.9, (1,0)=0.9, (1,2)=0.8, (2,1)=0.8 should be among the selected
+        assert!(pairs.contains(&(0, 1)), "should contain (0,1) sim=0.9");
+        assert!(pairs.contains(&(1, 0)), "should contain (1,0) sim=0.9");
+    }
+
+    #[test]
+    fn test_info_nce_loss_mined_equals_standard_during_warmup() {
+        let emb_a = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ];
+        let emb_b = vec![
+            vec![0.9, 0.1, 0.0],
+            vec![0.1, 0.9, 0.0],
+            vec![0.0, 0.1, 0.9],
+        ];
+        let miner = HardNegativeMiner::new(0.5, 10); // warmup=10
+        let loss_std = info_nce_loss(&emb_a, &emb_b, 0.5);
+        let loss_mined = info_nce_loss_mined(&emb_a, &emb_b, 0.5, Some(&miner), 0);
+        assert!(
+            (loss_std - loss_mined).abs() < 1e-6,
+            "during warmup, mined loss should equal standard: {loss_std} vs {loss_mined}"
+        );
+    }
+
+    // ── Phase 7: Drift detection tests ────────────────────────────────
+
+    #[test]
+    fn test_embedding_extractor_drift_detection() {
+        let mut ext = EmbeddingExtractor::with_drift_detection(
+            small_config(), small_embed_config(), 10,
+        );
+        // Feed stable CSI for baseline
+        for _ in 0..10 {
+            let csi = vec![vec![1.0f32; 16]; 4];
+            let _ = ext.extract(&csi);
+        }
+        assert!(!ext.drift_detected(), "stable input should not trigger drift");
+
+        // Feed shifted CSI
+        for _ in 0..10 {
+            let csi = vec![vec![100.0f32; 16]; 4];
+            let _ = ext.extract(&csi);
+        }
+        assert!(ext.drift_detected(), "large shift should trigger drift");
+        let info = ext.drift_info().expect("drift_info should be Some");
+        assert!(info.magnitude > 3.0, "drift magnitude should be > 3 sigma");
+    }
+
+    #[test]
+    fn test_fingerprint_index_anomalous_flag() {
+        let mut idx = FingerprintIndex::new(IndexType::EnvironmentFingerprint);
+        // Insert normal entries
+        idx.insert(vec![1.0, 0.0], "normal".into(), 0);
+        idx.insert_with_drift(vec![0.0, 1.0], "drifted".into(), 1, true);
+        idx.insert_with_drift(vec![1.0, 1.0], "stable".into(), 2, false);
+
+        assert_eq!(idx.len(), 3);
+        assert_eq!(idx.anomalous_count(), 1);
+        assert!(!idx.entries[0].anomalous);
+        assert!(idx.entries[1].anomalous);
+        assert!(!idx.entries[2].anomalous);
+    }
+
+    #[test]
+    fn test_drift_detector_stable_input_no_drift() {
+        let mut ext = EmbeddingExtractor::with_drift_detection(
+            small_config(), small_embed_config(), 10,
+        );
+        // All inputs are the same -- no drift should ever be detected
+        for _ in 0..30 {
+            let csi = vec![vec![0.5f32; 16]; 4];
+            let _ = ext.extract(&csi);
+        }
+        assert!(!ext.drift_detected(), "constant input should never trigger drift");
     }
 }

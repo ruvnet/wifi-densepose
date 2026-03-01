@@ -1739,7 +1739,7 @@ async fn main() {
 
         let tf_config = graph_transformer::TransformerConfig::default();
         let e_config = embedding::EmbeddingConfig::default();
-        let extractor = embedding::EmbeddingExtractor::new(tf_config, e_config);
+        let mut extractor = embedding::EmbeddingExtractor::new(tf_config, e_config);
 
         // Generate synthetic CSI windows for demo
         let csi_windows: Vec<Vec<Vec<f32>>> = (0..20).map(|i| {
