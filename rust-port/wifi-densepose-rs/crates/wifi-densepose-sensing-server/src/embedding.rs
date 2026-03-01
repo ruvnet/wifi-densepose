@@ -859,7 +859,10 @@ pub fn info_nce_loss_mined(
         return info_nce_loss(embeddings_a, embeddings_b, temperature);
     }
 
-    let miner = miner.unwrap();
+    let miner = match miner {
+        Some(m) => m,
+        None => return info_nce_loss(embeddings_a, embeddings_b, temperature),
+    };
 
     // Build similarity matrix for mining
     let mut sim_matrix = vec![vec![0.0f32; n]; n];
