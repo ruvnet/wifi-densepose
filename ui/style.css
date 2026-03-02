@@ -1956,3 +1956,355 @@ canvas {
   font-family: var(--font-family-mono);
   font-weight: var(--font-weight-medium);
 }
+
+/* ===== Training Tab Styles ===== */
+
+#training .tab-header {
+  margin-bottom: 20px;
+}
+
+#training .tab-header h2 {
+  color: var(--color-text);
+  margin: 0 0 8px 0;
+}
+
+#training .tab-header p {
+  color: var(--color-text-secondary);
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+
+/* Training Panel */
+.training-panel {
+  background: var(--color-surface);
+  border: 1px solid var(--color-card-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-16);
+}
+
+.training-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-16);
+  padding-bottom: var(--space-12);
+  border-bottom: 1px solid var(--color-card-border-inner);
+}
+
+.training-panel-header h3 {
+  color: var(--color-text);
+  margin: 0;
+  font-size: var(--font-size-base);
+}
+
+.training-status-badge {
+  padding: var(--space-2) 10px;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+}
+
+.training-status-idle {
+  background: var(--color-secondary);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+}
+
+.training-status-active {
+  background: rgba(var(--color-error-rgb), 0.15);
+  color: var(--color-error);
+  border: 1px solid rgba(var(--color-error-rgb), var(--status-border-opacity));
+  animation: pulse-training 2s infinite;
+}
+
+.training-status-completed {
+  background: rgba(var(--color-success-rgb), 0.15);
+  color: var(--color-success);
+  border: 1px solid rgba(var(--color-success-rgb), var(--status-border-opacity));
+}
+
+@keyframes pulse-training {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* Recording list */
+.recording-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px var(--space-12);
+  background: var(--color-secondary);
+  border: 1px solid var(--color-card-border-inner);
+  border-radius: var(--radius-base);
+  margin-bottom: var(--space-8);
+}
+
+.recording-item-info {
+  flex: 1;
+}
+
+.recording-item-name {
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.recording-item-meta {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  margin-top: var(--space-2);
+}
+
+/* Model cards */
+.model-card {
+  padding: var(--space-12);
+  background: var(--color-secondary);
+  border: 1px solid var(--color-card-border-inner);
+  border-radius: var(--radius-base);
+  margin-bottom: var(--space-8);
+  transition: border-color 0.2s;
+}
+
+.model-card:hover {
+  border-color: var(--color-border);
+}
+
+.model-card-active {
+  border-left: 3px solid var(--color-success);
+}
+
+.model-card-name {
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.model-card-meta {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  margin-top: var(--space-4);
+}
+
+.model-card-stats {
+  display: flex;
+  gap: var(--space-12);
+  margin-top: var(--space-8);
+}
+
+.model-card-stat {
+  font-size: var(--font-size-xs);
+}
+
+.model-card-stat-label {
+  color: var(--color-text-secondary);
+}
+
+.model-card-stat-value {
+  color: var(--color-text);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* Training chart */
+.training-chart-container {
+  background: var(--color-secondary);
+  border: 1px solid var(--color-card-border-inner);
+  border-radius: var(--radius-base);
+  padding: var(--space-12);
+  margin: var(--space-12) 0;
+}
+
+.training-chart-label {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: var(--space-8);
+}
+
+/* Training config form */
+.training-config-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-12);
+}
+
+.training-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.training-form-label {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.training-form-input {
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-base);
+  color: var(--color-text);
+  padding: var(--space-8) 10px;
+  font-size: var(--font-size-sm);
+  font-family: inherit;
+}
+
+.training-form-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: var(--focus-ring);
+}
+
+.training-form-select {
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-base);
+  color: var(--color-text);
+  padding: var(--space-8) 10px;
+  font-size: var(--font-size-sm);
+}
+
+/* Training buttons */
+.training-btn {
+  padding: var(--space-8) var(--space-16);
+  border-radius: var(--radius-base);
+  border: 1px solid transparent;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.training-btn-primary {
+  background: rgba(var(--color-success-rgb), 0.15);
+  color: var(--color-success);
+  border-color: rgba(var(--color-success-rgb), var(--status-border-opacity));
+}
+
+.training-btn-primary:hover {
+  background: rgba(var(--color-success-rgb), 0.25);
+}
+
+.training-btn-danger {
+  background: rgba(var(--color-error-rgb), 0.15);
+  color: var(--color-error);
+  border-color: rgba(var(--color-error-rgb), var(--status-border-opacity));
+}
+
+.training-btn-danger:hover {
+  background: rgba(var(--color-error-rgb), 0.25);
+}
+
+.training-btn-secondary {
+  background: rgba(var(--color-primary-rgb), 0.15);
+  color: var(--color-primary);
+  border-color: rgba(var(--color-primary-rgb), var(--status-border-opacity));
+}
+
+.training-btn-secondary:hover {
+  background: rgba(var(--color-primary-rgb), 0.25);
+}
+
+.training-btn-muted {
+  background: var(--color-secondary);
+  color: var(--color-text-secondary);
+  border-color: var(--color-border);
+}
+
+.training-btn-muted:hover {
+  background: var(--color-secondary-hover);
+}
+
+/* Progress bar */
+.training-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--color-secondary);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  margin: var(--space-8) 0;
+}
+
+.training-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-primary), var(--color-success));
+  border-radius: var(--radius-full);
+  transition: width 0.3s ease;
+}
+
+/* Metrics grid */
+.training-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-8);
+  margin: var(--space-12) 0;
+}
+
+.training-metric {
+  text-align: center;
+  padding: var(--space-8);
+  background: var(--color-secondary);
+  border-radius: var(--radius-base);
+}
+
+.training-metric-value {
+  color: var(--color-text);
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-bold);
+  font-family: var(--font-family-mono);
+}
+
+.training-metric-label {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: var(--space-2);
+}
+
+/* Collapsible section */
+.training-collapsible-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  cursor: pointer;
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  border-bottom: 1px solid var(--color-card-border-inner);
+}
+
+.training-collapsible-header:hover {
+  color: var(--color-primary);
+}
+
+.training-collapsible-content {
+  padding: var(--space-12) 0;
+}
+
+/* Pose trail toggle in toolbar */
+.pose-trail-btn {
+  padding: var(--space-6) 14px;
+  border-radius: var(--radius-base);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition: all 0.2s;
+  background: rgba(var(--color-primary-rgb), 0.1);
+  color: var(--color-primary);
+  border: 1px solid rgba(var(--color-primary-rgb), 0.3);
+}
+
+.pose-trail-btn.active {
+  background: rgba(var(--color-primary-rgb), 0.25);
+  border-color: rgba(var(--color-primary-rgb), 0.6);
+}
+
+.pose-trail-btn:hover {
+  background: rgba(var(--color-primary-rgb), 0.2);
+}

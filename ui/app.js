@@ -5,6 +5,8 @@ import { DashboardTab } from './components/DashboardTab.js';
 import { HardwareTab } from './components/HardwareTab.js';
 import { LiveDemoTab } from './components/LiveDemoTab.js';
 import { SensingTab } from './components/SensingTab.js';
+import ModelPanel from './components/ModelPanel.js';
+import TrainingPanel from './components/TrainingPanel.js';
 import { apiService } from './services/api.service.js';
 import { wsService } from './services/websocket.service.js';
 import { healthService } from './services/health.service.js';
@@ -130,6 +132,17 @@ class WiFiDensePoseApp {
       this.components.sensing = new SensingTab(sensingContainer);
     }
 
+    // Training tab
+    const trainingPanelContainer = document.getElementById('training-panel-container');
+    if (trainingPanelContainer) {
+      this.components.trainingPanel = new TrainingPanel(trainingPanelContainer);
+    }
+
+    const modelPanelContainer = document.getElementById('model-panel-container');
+    if (modelPanelContainer) {
+      this.components.modelPanel = new ModelPanel(modelPanelContainer);
+    }
+
     // Architecture tab - static content, no component needed
 
     // Performance tab - static content, no component needed
@@ -166,6 +179,16 @@ class WiFiDensePoseApp {
           this.components.sensing.init().catch(error => {
             console.error('Failed to initialize sensing tab:', error);
           });
+        }
+        break;
+
+      case 'training':
+        // Refresh panels when training tab becomes visible
+        if (this.components.trainingPanel && typeof this.components.trainingPanel.refresh === 'function') {
+          this.components.trainingPanel.refresh();
+        }
+        if (this.components.modelPanel && typeof this.components.modelPanel.refresh === 'function') {
+          this.components.modelPanel.refresh();
         }
         break;
     }

@@ -11,6 +11,9 @@
 mod rvf_container;
 mod rvf_pipeline;
 mod vital_signs;
+mod recording;
+mod model_manager;
+mod training_api;
 
 // Training pipeline modules (exposed via lib.rs)
 use wifi_densepose_sensing_server::{graph_transformer, trainer, dataset, embedding};
@@ -289,6 +292,14 @@ struct AppStateInner {
     active_sona_profile: Option<String>,
     /// Whether a trained model is loaded.
     model_loaded: bool,
+    /// CSI frame recording state (ADR-036).
+    recording_state: recording::RecordingState,
+    /// Currently loaded model via model_manager API (ADR-036).
+    loaded_model: Option<model_manager::LoadedModelState>,
+    /// Training pipeline state (ADR-036).
+    training_state: training_api::TrainingState,
+    /// Broadcast channel for training progress WebSocket (ADR-036).
+    training_progress_tx: tokio::sync::broadcast::Sender<String>,
 }
 
 /// Number of frames retained in `frame_history` for temporal analysis.
@@ -889,6 +900,17 @@ async fn windows_wifi_task(state: SharedState, tick_ms: u64) {
         s.latest_vitals = vitals.clone();
 
         let feat_variance = features.variance;
+
+        // ADR-036: Capture data for recording before values are moved.
+        let rec_amps = multi_ap_frame.amplitudes.clone();
+        let rec_rssi = first_rssi;
+        let rec_features = serde_json::json!({
+            "variance": feat_variance,
+            "motion_band_power": features.motion_band_power,
+            "breathing_band_power": features.breathing_band_power,
+            "spectral_power": features.spectral_power,
+        });
+
         let update = SensingUpdate {
             msg_type: "sensing_update".to_string(),
             timestamp: chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
@@ -921,7 +943,14 @@ async fn windows_wifi_task(state: SharedState, tick_ms: u64) {
         if let Ok(json) = serde_json::to_string(&update) {
             let _ = s.tx.send(json);
         }
+
         s.latest_update = Some(update);
+        drop(s);
+
+        // ADR-036: Record frame if recording is active.
+        recording::maybe_record_frame(
+            &state, &rec_amps, rec_rssi, -90.0, &rec_features,
+        ).await;
 
         debug!(
             "Multi-BSSID tick #{tick}: {obs_count} BSSIDs, quality={:.2}, verdict={:?}",
@@ -998,6 +1027,16 @@ async fn windows_wifi_fallback_tick(state: &SharedState, seq: u32) {
     s.latest_vitals = vitals.clone();
 
     let feat_variance = features.variance;
+
+    // ADR-036: Capture data for recording before values are moved.
+    let rec_amps = vec![signal_pct];
+    let rec_features = serde_json::json!({
+        "variance": feat_variance,
+        "motion_band_power": features.motion_band_power,
+        "breathing_band_power": features.breathing_band_power,
+        "spectral_power": features.spectral_power,
+    });
+
     let update = SensingUpdate {
         msg_type: "sensing_update".to_string(),
         timestamp: chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
@@ -1030,7 +1069,14 @@ async fn windows_wifi_fallback_tick(state: &SharedState, seq: u32) {
     if let Ok(json) = serde_json::to_string(&update) {
         let _ = s.tx.send(json);
     }
+
     s.latest_update = Some(update);
+    drop(s);
+
+    // ADR-036: Record frame if recording is active.
+    recording::maybe_record_frame(
+        state, &rec_amps, rssi_dbm, -90.0, &rec_features,
+    ).await;
 }
 
 /// Probe if Windows WiFi is connected
@@ -1829,7 +1875,25 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     if let Ok(json) = serde_json::to_string(&update) {
                         let _ = s.tx.send(json);
                     }
+
+                    // Capture data for recording before storing.
+                    let rec_amps = frame.amplitudes.iter().take(56).cloned().collect::<Vec<_>>();
+                    let rec_rssi = features.mean_rssi;
+                    let rec_features = serde_json::json!({
+                        "variance": features.variance,
+                        "motion_band_power": features.motion_band_power,
+                        "breathing_band_power": features.breathing_band_power,
+                        "spectral_power": features.spectral_power,
+                    });
+
                     s.latest_update = Some(update);
+                    drop(s);
+
+                    // ADR-036: Record frame if recording is active.
+                    recording::maybe_record_frame(
+                        &state, &rec_amps, rec_rssi,
+                        frame.noise_floor as f64, &rec_features,
+                    ).await;
                 }
             }
             Err(e) => {
@@ -1928,7 +1992,24 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
         if let Ok(json) = serde_json::to_string(&update) {
             let _ = s.tx.send(json);
         }
+
+        // Capture data for recording before storing.
+        let rec_amps = frame.amplitudes.clone();
+        let rec_rssi = features.mean_rssi;
+        let rec_features = serde_json::json!({
+            "variance": features.variance,
+            "motion_band_power": features.motion_band_power,
+            "breathing_band_power": features.breathing_band_power,
+            "spectral_power": features.spectral_power,
+        });
+
         s.latest_update = Some(update);
+        drop(s);
+
+        // ADR-036: Record frame if recording is active.
+        recording::maybe_record_frame(
+            &state, &rec_amps, rec_rssi, -90.0, &rec_features,
+        ).await;
     }
 }
 
@@ -2488,6 +2569,7 @@ async fn main() {
     }
 
     let (tx, _) = broadcast::channel::<String>(256);
+    let (training_progress_tx, _) = broadcast::channel::<String>(512);
     let state: SharedState = Arc::new(RwLock::new(AppStateInner {
         latest_update: None,
         rssi_history: VecDeque::new(),
@@ -2504,7 +2586,18 @@ async fn main() {
         progressive_loader,
         active_sona_profile: None,
         model_loaded,
+        recording_state: recording::RecordingState::default(),
+        loaded_model: None,
+        training_state: training_api::TrainingState::default(),
+        training_progress_tx,
     }));
+
+    // Ensure data directories exist (ADR-036).
+    for dir in &[recording::RECORDINGS_DIR, model_manager::MODELS_DIR] {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            warn!("Failed to create directory {dir}: {e}");
+        }
+    }
 
     // Start background tasks based on source
     match source {
@@ -2571,6 +2664,10 @@ async fn main() {
         .route("/api/v1/stream/pose", get(ws_pose_handler))
         // Sensing WebSocket on the HTTP port so the UI can reach it without a second port
         .route("/ws/sensing", get(ws_sensing_handler))
+        // ADR-036: Recording, model management, and training APIs
+        .merge(recording::routes())
+        .merge(model_manager::routes())
+        .merge(training_api::routes())
         // Static UI files
         .nest_service("/ui", ServeDir::new(&ui_path))
         .layer(SetResponseHeaderLayer::overriding(
