@@ -1,7 +1,7 @@
 // Training Service for WiFi-DensePose UI
 // Manages training lifecycle, progress streaming, and CSI recordings.
 
-import { API_CONFIG, buildApiUrl, buildWsUrl } from '../config/api.config.js';
+import { buildWsUrl } from '../config/api.config.js';
 import { apiService } from './api.service.js';
 
 export class TrainingService {
@@ -47,7 +47,7 @@ export class TrainingService {
   async startTraining(config) {
     try {
       this.logger.info('Starting training', { config });
-      const data = await apiService.post(buildApiUrl('/api/v1/training/start'), config);
+      const data = await apiService.post('/api/v1/train/start', config);
       this.emit('training-started', data);
       return data;
     } catch (error) {
@@ -59,7 +59,7 @@ export class TrainingService {
   async stopTraining() {
     try {
       this.logger.info('Stopping training');
-      const data = await apiService.post(buildApiUrl('/api/v1/training/stop'), {});
+      const data = await apiService.post('/api/v1/train/stop', {});
       this.emit('training-stopped', data);
       return data;
     } catch (error) {
@@ -70,7 +70,7 @@ export class TrainingService {
 
   async getTrainingStatus() {
     try {
-      const data = await apiService.get(buildApiUrl('/api/v1/training/status'));
+      const data = await apiService.get('/api/v1/train/status');
       return data;
     } catch (error) {
       this.logger.error('Failed to get training status', { error: error.message });
@@ -81,7 +81,7 @@ export class TrainingService {
   async startPretraining(config) {
     try {
       this.logger.info('Starting pretraining', { config });
-      const data = await apiService.post(buildApiUrl('/api/v1/training/pretrain'), config);
+      const data = await apiService.post('/api/v1/train/pretrain', config);
       this.emit('training-started', data);
       return data;
     } catch (error) {
@@ -93,7 +93,7 @@ export class TrainingService {
   async startLoraTraining(config) {
     try {
       this.logger.info('Starting LoRA training', { config });
-      const data = await apiService.post(buildApiUrl('/api/v1/training/lora'), config);
+      const data = await apiService.post('/api/v1/train/lora', config);
       this.emit('training-started', data);
       return data;
     } catch (error) {
@@ -106,7 +106,7 @@ export class TrainingService {
 
   async listRecordings() {
     try {
-      const data = await apiService.get(buildApiUrl('/api/v1/recordings'));
+      const data = await apiService.get('/api/v1/recording/list');
       return data?.recordings ?? [];
     } catch (error) {
       this.logger.error('Failed to list recordings', { error: error.message });
@@ -117,7 +117,7 @@ export class TrainingService {
   async startRecording(config) {
     try {
       this.logger.info('Starting recording', { config });
-      const data = await apiService.post(buildApiUrl('/api/v1/recordings/start'), config);
+      const data = await apiService.post('/api/v1/recording/start', config);
       this.emit('recording-started', data);
       return data;
     } catch (error) {
@@ -129,7 +129,7 @@ export class TrainingService {
   async stopRecording() {
     try {
       this.logger.info('Stopping recording');
-      const data = await apiService.post(buildApiUrl('/api/v1/recordings/stop'), {});
+      const data = await apiService.post('/api/v1/recording/stop', {});
       this.emit('recording-stopped', data);
       return data;
     } catch (error) {
@@ -142,7 +142,7 @@ export class TrainingService {
     try {
       this.logger.info('Deleting recording', { id });
       const data = await apiService.delete(
-        buildApiUrl(`/api/v1/recordings/${encodeURIComponent(id)}`)
+        `/api/v1/recording/${encodeURIComponent(id)}`
       );
       return data;
     } catch (error) {

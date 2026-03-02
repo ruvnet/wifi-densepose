@@ -114,7 +114,7 @@ export default class TrainingPanel {
   async _startRec() {
     this._set({ loading: true, error: null });
     try {
-      await trainingService.startRecording({ name: `rec_${Date.now()}`, label: 'pose' });
+      await trainingService.startRecording({ session_name: `rec_${Date.now()}`, label: 'pose' });
       this._set({ isRecording: true, loading: false });
       await this.refresh();
     } catch (e) { this._set({ loading: false, error: `Recording failed: ${e.message}` }); }
@@ -143,13 +143,16 @@ export default class TrainingPanel {
     this.progressData = { losses: [], pcks: [] };
     try {
       trainingService.connectProgressStream();
-      const base = {
+      const payload = {
         dataset_ids: this.config.selectedRecordings,
-        epochs: this.config.epochs,
-        batch_size: this.config.batch_size,
-        learning_rate: this.config.learning_rate
+        config: {
+          epochs: this.config.epochs,
+          batch_size: this.config.batch_size,
+          learning_rate: this.config.learning_rate,
+          ...extraCfg
+        }
       };
-      await trainingService[method]({ ...base, ...extraCfg });
+      await trainingService[method](payload);
       await this.refresh();
     } catch (e) { this._set({ loading: false, error: `Training failed: ${e.message}` }); }
   }

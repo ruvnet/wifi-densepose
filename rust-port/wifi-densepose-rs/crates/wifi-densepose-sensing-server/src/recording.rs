@@ -54,7 +54,7 @@ pub struct RecordingSession {
 }
 
 /// A single recorded CSI frame line (JSONL format).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecordedFrame {
     pub timestamp: f64,
     pub subcarriers: Vec<f64>,

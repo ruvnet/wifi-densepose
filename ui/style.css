@@ -683,7 +683,9 @@ body {
 /* Navigation tabs */
 .nav-tabs {
   display: flex;
-  overflow-x: auto;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 2px;
   border-bottom: 1px solid var(--color-border);
   margin-bottom: var(--space-24);
   scrollbar-width: none;
@@ -695,11 +697,11 @@ body {
 }
 
 .nav-tab {
-  padding: var(--space-12) var(--space-20);
+  padding: var(--space-12) var(--space-16);
   background: none;
   border: none;
   color: var(--color-text-secondary);
-  font-size: var(--font-size-md);
+  font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
   cursor: pointer;
   transition: all var(--duration-normal) var(--ease-standard);

@@ -5,21 +5,9 @@ import { poseService } from '../services/pose.service.js';
 import { streamService } from '../services/stream.service.js';
 import { wsService } from '../services/websocket.service.js';
 
-// Optional service imports - graceful degradation if unavailable
+// Optional services - loaded lazily in init() to avoid blocking module graph
 let modelService = null;
 let trainingService = null;
-try {
-  const modelMod = await import('../services/model.service.js');
-  modelService = modelMod.modelService;
-} catch (e) {
-  console.warn('[LIVEDEMO] model.service.js not available, model features disabled');
-}
-try {
-  const trainMod = await import('../services/training.service.js');
-  trainingService = trainMod.trainingService;
-} catch (e) {
-  console.warn('[LIVEDEMO] training.service.js not available, training features disabled');
-}
 
 export class LiveDemoTab {
   constructor(containerElement) {
@@ -95,7 +83,17 @@ export class LiveDemoTab {
   async init() {
     try {
       this.logger.info('Initializing LiveDemoTab component');
-      
+
+      // Load optional services (non-blocking)
+      try {
+        const mod = await import('../services/model.service.js');
+        modelService = mod.modelService;
+      } catch (e) { /* model features disabled */ }
+      try {
+        const mod = await import('../services/training.service.js');
+        trainingService = mod.trainingService;
+      } catch (e) { /* training features disabled */ }
+
       // Create enhanced DOM structure
       this.createEnhancedStructure();
       
@@ -1661,7 +1659,7 @@ export class LiveDemoTab {
       return;
     }
     try {
-      await trainingService.startRecording({ duration_seconds: 60 });
+      await trainingService.startRecording({ session_name: `quick_${Date.now()}`, duration_secs: 60 });
       this.trainingState.status = 'recording';
       this.updateTrainingStatus();
       // Auto-reset after ~65 seconds
