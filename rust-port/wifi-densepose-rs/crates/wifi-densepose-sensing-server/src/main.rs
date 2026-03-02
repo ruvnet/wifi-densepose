@@ -275,6 +275,9 @@ struct AppStateInner {
     frame_history: VecDeque<Vec<f64>>,
     tick: u64,
     source: String,
+    /// Timestamp of the last ESP32 UDP frame received.
+    /// Used by the hybrid auto-detect task to switch between esp32 and simulation.
+    last_esp32_frame: Option<std::time::Instant>,
     tx: broadcast::Sender<String>,
     total_detections: u64,
     start_time: std::time::Instant,
@@ -1812,6 +1815,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
 
                     let mut s = state.write().await;
                     s.source = "esp32".to_string();
+                    s.last_esp32_frame = Some(std::time::Instant::now());
 
                     // Append current amplitudes to history before extracting features so
                     // that temporal analysis includes the most recent frame.
@@ -1906,6 +1910,9 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
 
 // ── Simulated data task ──────────────────────────────────────────────────────
 
+/// Duration without ESP32 frames before falling back to simulation.
+const ESP32_TIMEOUT: Duration = Duration::from_secs(3);
+
 async fn simulated_data_task(state: SharedState, tick_ms: u64) {
     let mut interval = tokio::time::interval(Duration::from_millis(tick_ms));
     info!("Simulated data source active (tick={}ms)", tick_ms);
@@ -1913,7 +1920,23 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
     loop {
         interval.tick().await;
 
+        // If ESP32 sent a frame recently, skip simulation — real data is flowing.
+        {
+            let s = state.read().await;
+            if let Some(last) = s.last_esp32_frame {
+                if last.elapsed() < ESP32_TIMEOUT {
+                    continue; // ESP32 is active, don't emit simulated frames
+                }
+            }
+        }
+
         let mut s = state.write().await;
+
+        // If we just transitioned from esp32 → simulated, log once.
+        if s.source == "esp32" {
+            info!("ESP32 silent for {}s — switching to simulation", ESP32_TIMEOUT.as_secs());
+        }
+        s.source = "simulated".to_string();
         s.tick += 1;
         let tick = s.tick;
 
@@ -2477,6 +2500,7 @@ async fn main() {
     info!("  Source:    {}", args.source);
 
     // Auto-detect data source
+    let is_auto_mode = args.source == "auto";
     let source = match args.source.as_str() {
         "auto" => {
             info!("Auto-detecting data source...");
@@ -2487,7 +2511,7 @@ async fn main() {
                 info!("  Windows WiFi detected");
                 "wifi"
             } else {
-                info!("  No hardware detected, using simulation");
+                info!("  No hardware detected, starting with simulation (hot-plug enabled)");
                 "simulate"
             }
         }
@@ -2576,6 +2600,7 @@ async fn main() {
         frame_history: VecDeque::new(),
         tick: 0,
         source: source.into(),
+        last_esp32_frame: if source == "esp32" { Some(std::time::Instant::now()) } else { None },
         tx,
         total_detections: 0,
         start_time: std::time::Instant::now(),
@@ -2599,17 +2624,26 @@ async fn main() {
         }
     }
 
-    // Start background tasks based on source
-    match source {
-        "esp32" => {
-            tokio::spawn(udp_receiver_task(state.clone(), args.udp_port));
-            tokio::spawn(broadcast_tick_task(state.clone(), args.tick_ms));
-        }
-        "wifi" => {
-            tokio::spawn(windows_wifi_task(state.clone(), args.tick_ms));
-        }
-        _ => {
-            tokio::spawn(simulated_data_task(state.clone(), args.tick_ms));
+    // Start background tasks based on source.
+    // In auto mode we always start BOTH the UDP listener (for ESP32 hot-plug)
+    // and the simulation task (which self-pauses when ESP32 packets arrive).
+    if is_auto_mode {
+        info!("Auto mode: UDP listener + simulation fallback both active (hot-plug enabled)");
+        tokio::spawn(udp_receiver_task(state.clone(), args.udp_port));
+        tokio::spawn(simulated_data_task(state.clone(), args.tick_ms));
+        tokio::spawn(broadcast_tick_task(state.clone(), args.tick_ms));
+    } else {
+        match source {
+            "esp32" => {
+                tokio::spawn(udp_receiver_task(state.clone(), args.udp_port));
+                tokio::spawn(broadcast_tick_task(state.clone(), args.tick_ms));
+            }
+            "wifi" => {
+                tokio::spawn(windows_wifi_task(state.clone(), args.tick_ms));
+            }
+            _ => {
+                tokio::spawn(simulated_data_task(state.clone(), args.tick_ms));
+            }
         }
     }
 

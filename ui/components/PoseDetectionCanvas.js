@@ -93,7 +93,7 @@ export class PoseDetectionCanvas {
               <span class="status-text" id="status-text-${this.containerId}">Disconnected</span>
             </div>
           </div>
-          <div class="pose-canvas-controls" id="controls-${this.containerId}">
+          <div class="pose-canvas-controls" id="controls-${this.containerId}" ${!this.config.enableControls ? 'style="display:none"' : ''}>
             <button class="btn btn-start" id="start-btn-${this.containerId}">&#9654; Start</button>
             <button class="btn btn-stop" id="stop-btn-${this.containerId}" disabled>&#9632; Stop</button>
             <button class="btn btn-reconnect" id="reconnect-btn-${this.containerId}" disabled>&#8635; Reconnect</button>

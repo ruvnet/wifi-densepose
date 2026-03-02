@@ -200,7 +200,7 @@ When a `.rvf` model is loaded:
 - `ui/components/TrainingPanel.js` — Recording controls, training progress, metric charts
 - `rust-port/.../sensing-server/src/recording.rs` — CSI recording API handlers
 - `rust-port/.../sensing-server/src/training_api.rs` — Training API handlers + WS progress stream
-- `rust-port/.../sensing-server/src/model_manager.rs` — Model loading, hot-swap, LoRA activation
+- `rust-port/.../sensing-server/src/model_manager.rs` — Model loading, hot-swap, 32LoRA activation
 - `data/models/` — Default model storage directory
 
 ### Modified Files
@@ -208,12 +208,12 @@ When a `.rvf` model is loaded:
 - `rust-port/.../train/src/trainer.rs` — Add WebSocket progress callback, LoRA training mode
 - `rust-port/.../train/src/dataset.rs` — MM-Fi and Wi-Pose dataset loaders
 - `rust-port/.../nn/src/onnx.rs` — LoRA weight injection, INT8 quantization support
-- `ui/components/LiveDemoTab.js` — Model selector, LoRA dropdown, A/B split view
+- `ui/components/LiveDemoTab.js` — Model selector, LoRA dropdown, A/B spsplit view
 - `ui/components/SettingsPanel.js` — Model and training configuration sections
 - `ui/components/PoseDetectionCanvas.js` — Pose trail rendering, confidence heatmap overlay
 - `ui/services/pose.service.js` — Model-inference keypoint processing
-- `ui/index.html` — Add Training tab
-- `ui/style.css` — Styles for new panels
+- `ui/index.html` — Add Training tabhee
+- `ui/style.css` — Styles for new panels 
 
 ## References
 - ADR-015: MM-Fi + Wi-Pose training datasets

@@ -4,6 +4,7 @@ import { PoseDetectionCanvas } from './PoseDetectionCanvas.js';
 import { poseService } from '../services/pose.service.js';
 import { streamService } from '../services/stream.service.js';
 import { wsService } from '../services/websocket.service.js';
+import { sensingService } from '../services/sensing.service.js';
 
 // Optional services - loaded lazily in init() to avoid blocking module graph
 let modelService = null;
@@ -115,6 +116,22 @@ export class LiveDemoTab {
       // Initialize state
       this.updateUI();
 
+      // Auto-start pose detection when a backend is reachable.
+      // Check after a brief delay (sensing WS may still be connecting).
+      this._autoStartOnce = false;
+      const tryAutoStart = () => {
+        if (this._autoStartOnce || this.state.isActive) return;
+        const ds = sensingService.dataSource;
+        if (ds === 'live' || ds === 'server-simulated') {
+          this._autoStartOnce = true;
+          this.logger.info('Auto-starting pose detection (data source: ' + ds + ')');
+          this.startDemo();
+        }
+      };
+      setTimeout(tryAutoStart, 2000);
+      // Also listen for sensing state changes in case server connects later
+      this._autoStartUnsub = sensingService.onStateChange(tryAutoStart);
+
       this.logger.info('LiveDemoTab component initialized successfully');
     } catch (error) {
       this.logger.error('Failed to initialize LiveDemoTab', { error: error.message });
@@ -129,6 +146,11 @@ export class LiveDemoTab {
       // Create enhanced structure if it doesn't exist
       const enhancedHTML = `
         <div class="live-demo-enhanced">
+          <!-- Data source banner — prominent indicator for live vs simulated -->
+          <div id="demo-source-banner" class="demo-source-banner demo-source-unknown" role="status" aria-live="polite">
+            Detecting data source...
+          </div>
+
           <div class="demo-header">
             <div class="demo-title">
               <h2>Live Human Pose Detection</h2>
@@ -140,6 +162,7 @@ export class LiveDemoTab {
             <div class="demo-controls">
               <button class="btn btn--primary" id="start-enhanced-demo">Start Detection</button>
               <button class="btn btn--secondary" id="stop-enhanced-demo" disabled>Stop Detection</button>
+              <button class="btn btn--accent" id="run-offline-demo">Demo</button>
               <button class="btn btn--primary" id="toggle-debug">Debug Mode</button>
               <select class="zone-select" id="zone-selector">
                 <option value="zone_1">Zone 1</option>
@@ -1012,6 +1035,16 @@ export class LiveDemoTab {
       stopBtn.addEventListener('click', () => this.stopDemo());
     }
 
+    // Offline demo button — runs client-side animated demo (no server needed)
+    const offlineDemoBtn = this.container.querySelector('#run-offline-demo');
+    if (offlineDemoBtn) {
+      offlineDemoBtn.addEventListener('click', () => {
+        if (this.components.poseCanvas) {
+          this.components.poseCanvas.toggleDemo();
+        }
+      });
+    }
+
     if (debugBtn) {
       debugBtn.addEventListener('click', () => this.toggleDebugMode());
     }
@@ -1056,6 +1089,23 @@ export class LiveDemoTab {
     this.uiUpdateInterval = setInterval(() => {
       this.updateMetricsDisplay();
     }, 1000);
+
+    // Subscribe to sensing service for data-source changes
+    this._sensingStateUnsub = sensingService.onStateChange(() => {
+      this.updateSourceBanner();
+      this.updateStatusIndicator();
+    });
+    // Throttle data-based banner updates (frames arrive at 10Hz)
+    let lastBannerUpdate = 0;
+    this._sensingDataUnsub = sensingService.onData(() => {
+      const now = Date.now();
+      if (now - lastBannerUpdate > 2000) {
+        lastBannerUpdate = now;
+        this.updateSourceBanner();
+      }
+    });
+    // Initial banner update
+    this.updateSourceBanner();
 
     this.logger.debug('Monitoring set up');
   }
@@ -1252,17 +1302,40 @@ export class LiveDemoTab {
   }
 
   getStatusClass() {
-    if (this.state.isActive) {
-      return this.state.connectionState === 'connected' ? 'active' : 'connecting';
+    if (!this.state.isActive) {
+      return this.state.connectionState === 'error' ? 'error' : '';
     }
-    return this.state.connectionState === 'error' ? 'error' : '';
+    const ds = sensingService.dataSource;
+    if (ds === 'live') return 'active';
+    if (ds === 'server-simulated') return 'sim';
+    return 'connecting';
   }
 
   getStatusText() {
-    if (this.state.isActive) {
-      return this.state.connectionState === 'connected' ? 'Active' : 'Connecting...';
+    if (!this.state.isActive) {
+      return this.state.connectionState === 'error' ? 'Error' : 'Ready';
     }
-    return this.state.connectionState === 'error' ? 'Error' : 'Ready';
+    const ds = sensingService.dataSource;
+    if (ds === 'live') return 'Active \u2014 ESP32 Live';
+    if (ds === 'server-simulated') return 'Active \u2014 Simulated Data';
+    if (ds === 'simulated') return 'Active \u2014 Offline Simulation';
+    return 'Connecting...';
+  }
+
+  /** Update the prominent data-source banner at the top of Live Demo. */
+  updateSourceBanner() {
+    const banner = this.container.querySelector('#demo-source-banner');
+    if (!banner) return;
+    const ds = sensingService.dataSource;
+    const config = {
+      'live':             { text: 'LIVE \u2014 ESP32 Hardware Connected',           cls: 'demo-source-live' },
+      'server-simulated': { text: 'SIMULATED DATA \u2014 No Hardware Detected',     cls: 'demo-source-sim' },
+      'reconnecting':     { text: 'RECONNECTING TO SERVER...',                      cls: 'demo-source-reconnecting' },
+      'simulated':        { text: 'OFFLINE \u2014 Server Unreachable, Local Sim',   cls: 'demo-source-offline' },
+    };
+    const cfg = config[ds] || config['reconnecting'];
+    banner.textContent = cfg.text;
+    banner.className = 'demo-source-banner ' + cfg.cls;
   }
 
   updateControls() {
@@ -1293,8 +1366,20 @@ export class LiveDemoTab {
     };
 
     if (elements.connectionStatus) {
-      elements.connectionStatus.textContent = this.state.connectionState;
-      elements.connectionStatus.className = `health-${this.getHealthClass(this.state.connectionState)}`;
+      const ds = sensingService.dataSource;
+      const dsLabels = {
+        'live':              'Connected \u2014 ESP32',
+        'server-simulated':  'Connected \u2014 Simulated',
+        'reconnecting':      'Reconnecting...',
+        'simulated':         'Offline \u2014 Simulated',
+      };
+      const label = dsLabels[ds] || this.state.connectionState;
+      elements.connectionStatus.textContent = label;
+      const cls = ds === 'live' ? 'good'
+        : ds === 'server-simulated' ? 'sim'
+        : ds === 'simulated' ? 'bad'
+        : this.getHealthClass(this.state.connectionState);
+      elements.connectionStatus.className = `health-${cls}`;
     }
 
     if (elements.frameCount) {
@@ -1789,6 +1874,9 @@ export class LiveDemoTab {
       // Unsubscribe from services
       this.subscriptions.forEach(unsubscribe => unsubscribe());
       this.subscriptions = [];
+      if (this._sensingStateUnsub) this._sensingStateUnsub();
+      if (this._sensingDataUnsub) this._sensingDataUnsub();
+      if (this._autoStartUnsub) this._autoStartUnsub();
       
       this.logger.info('LiveDemoTab component disposed successfully');
     } catch (error) {
