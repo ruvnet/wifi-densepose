@@ -72,6 +72,7 @@ class WiFiDensePoseApp {
         const health = await healthService.checkLiveness();
         console.log('✅ Backend responding:', health);
         this.showBackendStatus('Connected to Rust sensing server', 'success');
+        sensingService.start();
       } catch (error) {
         console.warn('⚠️ Backend not available:', error.message);
         this.showBackendStatus('Backend unavailable — start sensing-server', 'warning');
