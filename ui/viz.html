@@ -84,15 +84,14 @@
     <div id="stats-container"></div>
   </div>
 
-  <!-- Three.js and OrbitControls from CDN -->
-  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
-  <script src="https://unpkg.com/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
   <!-- Stats.js for performance monitoring -->
   <script src="https://unpkg.com/stats.js@0.17.0/build/stats.min.js"></script>
 
-  <!-- Application modules loaded as ES modules via importmap workaround -->
+  <!-- Three.js r147 + OrbitControls (last version with examples/js/ global scripts) -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+
   <script type="module">
-    // Import all modules
     import { Scene } from './components/scene.js';
     import { BodyModel, BodyModelManager } from './components/body-model.js';
     import { SignalVisualization } from './components/signal-viz.js';
@@ -112,6 +111,8 @@
       dataProcessor: null,
       stats: null,
       isDemoMode: true,
+      lastServerData: null,
+      serverSensingMode: 'Connecting...',
       startTime: Date.now()
     };
 
@@ -176,8 +177,9 @@
         setLoadingProgress(85, 'Connecting to server...');
 
         // 8. WebSocket client
+        const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         state.wsClient = new WebSocketClient({
-          url: 'ws://localhost:8000/ws/pose',
+          url: `${wsProto}//${location.host}/api/v1/stream/pose`,
           onMessage: (msg) => handleWebSocketMessage(msg),
           onStateChange: (newState, oldState) => handleConnectionStateChange(newState, oldState),
           onError: (err) => console.error('[VIZ] WebSocket error:', err)
@@ -250,15 +252,22 @@
         state.hud.tickFPS();
 
         const wsMetrics = state.wsClient.getMetrics();
+        let sensingMode;
+        if (state.isDemoMode) {
+          sensingMode = state.wsClient.state === 'connected' ? 'Connecting...' : 'Demo';
+        } else {
+          sensingMode = state.serverSensingMode || (wsMetrics.dataSource || 'Server');
+        }
+
         state.hud.updateState({
           connectionStatus: state.wsClient.state,
-          isRealData: state.wsClient.isRealData && !state.isDemoMode,
+          isRealData: !state.isDemoMode,
           latency: wsMetrics.latency,
           messageCount: wsMetrics.messageCount,
           uptime: wsMetrics.uptime,
           personCount: state.bodyModelManager.getActiveCount(),
           confidence: state.bodyModelManager.getAverageConfidence(),
-          sensingMode: state.isDemoMode ? 'Mock' : (state.wsClient.isRealData ? 'CSI' : 'Mock')
+          sensingMode: sensingMode
         });
       }
 
@@ -271,12 +280,19 @@
       const processed = state.dataProcessor.processMessage(message);
       if (!processed) return;
 
-      // Switch off demo mode when we get real data
+      // Track server metadata regardless of person count
+      if (processed.metadata.sensingMode && processed.metadata.sensingMode !== 'Unknown') {
+        state.serverSensingMode = processed.metadata.sensingMode;
+      }
+
+      // Switch off demo mode when server sends data with persons
       if (processed.persons.length > 0) {
         if (state.isDemoMode) {
           state.isDemoMode = false;
-          console.log('[VIZ] Switched to live data mode');
+          console.log(`[VIZ] Switched to live data mode (source: ${processed.metadata.sensingMode})`);
         }
+
+        state.lastServerData = processed;
 
         // Update body models
         state.bodyModelManager.update(processed.persons, 0.016);
@@ -294,6 +310,9 @@
           processed.persons, 20, 15, 8, 6
         );
         state.environment.updateConfidenceHeatmap(heatmap);
+      } else if (!state.isDemoMode) {
+        // Server connected but no persons detected — keep live mode, clear body models
+        state.bodyModelManager.update([], 0.016);
       }
     }
 
@@ -302,13 +321,12 @@
       console.log(`[VIZ] Connection: ${oldState} -> ${newState}`);
 
       if (newState === 'connected') {
-        // Will switch from demo to real when data arrives
-        console.log('[VIZ] Connected to server, waiting for data...');
+        console.log('[VIZ] Connected to server, waiting for pose data...');
       } else if (newState === 'error' || newState === 'disconnected') {
-        // Fall back to demo mode
         if (!state.isDemoMode) {
           state.isDemoMode = true;
-          console.log('[VIZ] Switched to demo mode (server unavailable)');
+          state.serverSensingMode = 'Reconnecting...';
+          console.log('[VIZ] Fell back to demo mode (server unavailable)');
         }
       }
     }

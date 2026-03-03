@@ -324,6 +324,9 @@ struct AppStateInner {
     training_status: String,
     /// Training configuration, if any.
     training_config: Option<serde_json::Value>,
+    /// Set to true when real ESP32/bridge frames arrive on UDP — simulation task
+    /// will stop generating data so the real source takes over.
+    real_data_active: bool,
 }
 
 /// Number of frames retained in `frame_history` for temporal analysis.
@@ -2482,6 +2485,10 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                            frame.node_id, frame.n_subcarriers, frame.sequence);
 
                     let mut s = state.write().await;
+                    if !s.real_data_active {
+                        info!("Real ESP32/bridge data detected — overriding simulation");
+                        s.real_data_active = true;
+                    }
                     s.source = "esp32".to_string();
 
                     // Append current amplitudes to history before extracting features so
@@ -2581,6 +2588,14 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
 
     loop {
         interval.tick().await;
+
+        // Yield to real data when available
+        {
+            let s = state.read().await;
+            if s.real_data_active {
+                continue;
+            }
+        }
 
         let mut s = state.write().await;
         s.tick += 1;
@@ -3278,6 +3293,7 @@ async fn main() {
         // Training
         training_status: "idle".to_string(),
         training_config: None,
+        real_data_active: false,
     }));
 
     // Start background tasks based on source
@@ -3290,7 +3306,11 @@ async fn main() {
             tokio::spawn(windows_wifi_task(state.clone(), args.tick_ms));
         }
         _ => {
+            // Run simulation as fallback, but ALSO listen on UDP so that if
+            // real ESP32/bridge frames arrive later they override simulated data.
             tokio::spawn(simulated_data_task(state.clone(), args.tick_ms));
+            tokio::spawn(udp_receiver_task(state.clone(), args.udp_port));
+            info!("UDP listener also started — real frames will override simulation");
         }
     }
 

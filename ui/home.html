@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WIFI - DensePose — Home</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0f1117;color:#e4e4e7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;min-height:100vh}
+
+/* Top bar */
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;background:#18181b;border-bottom:1px solid #27272a}
+.topbar-left{display:flex;align-items:center;gap:12px}
+.logo{font-size:18px;font-weight:700;background:linear-gradient(135deg,#06b6d4,#8b5cf6);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.conn-pill{display:flex;align-items:center;gap:6px;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:500;background:#27272a}
+.conn-dot{width:7px;height:7px;border-radius:50%}
+.conn-dot.on{background:#22c55e;box-shadow:0 0 8px #22c55e}
+.conn-dot.off{background:#ef4444;box-shadow:0 0 8px #ef4444}
+.conn-dot.wait{background:#eab308;box-shadow:0 0 8px #eab308}
+.topbar-right{display:flex;gap:8px}
+.topbar-right a{color:#a1a1aa;text-decoration:none;font-size:12px;padding:6px 12px;border-radius:6px;transition:all .15s}
+.topbar-right a:hover{color:#e4e4e7;background:#27272a}
+
+/* Layout */
+.page{max-width:1100px;margin:0 auto;padding:24px 20px 60px}
+
+/* Presence hero */
+.presence-hero{text-align:center;padding:48px 20px 40px;border-radius:16px;margin-bottom:24px;position:relative;overflow:hidden}
+.presence-hero.empty{background:linear-gradient(145deg,#18181b 0%,#1c1c22 100%);border:1px solid #27272a}
+.presence-hero.occupied{background:linear-gradient(145deg,#042f2e 0%,#064e3b 100%);border:1px solid #065f46}
+.presence-icon{font-size:64px;margin-bottom:12px;opacity:.9}
+.presence-label{font-size:28px;font-weight:700;margin-bottom:4px}
+.presence-sub{font-size:14px;color:#a1a1aa}
+.presence-hero.occupied .presence-sub{color:#6ee7b7}
+
+/* Activity pill */
+.activity-pill{display:inline-flex;align-items:center;gap:6px;margin-top:16px;padding:6px 18px;border-radius:20px;font-size:13px;font-weight:600;letter-spacing:.5px}
+.activity-pill.absent{background:#27272a;color:#71717a}
+.activity-pill.still{background:#164e63;color:#67e8f9}
+.activity-pill.moving{background:#14532d;color:#86efac}
+.activity-pill.walking{background:#713f12;color:#fde68a}
+
+/* Cards grid */
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px}
+@media(max-width:800px){.cards{grid-template-columns:1fr 1fr}}
+@media(max-width:520px){.cards{grid-template-columns:1fr}}
+
+.card{background:#18181b;border:1px solid #27272a;border-radius:14px;padding:20px 22px;position:relative;transition:border-color .2s}
+.card:hover{border-color:#3f3f46}
+.card-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1.2px;color:#71717a;margin-bottom:12px}
+
+/* Vital card */
+.vital-value{font-size:40px;font-weight:700;line-height:1}
+.vital-unit{font-size:14px;font-weight:500;color:#71717a;margin-left:2px}
+.vital-conf{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px;color:#a1a1aa}
+.vital-bar{flex:1;height:4px;background:#27272a;border-radius:2px;overflow:hidden}
+.vital-bar-fill{height:100%;border-radius:2px;transition:width .4s ease}
+
+/* Breathing animation */
+.breath-ring{width:80px;height:80px;border-radius:50%;border:3px solid #22d3ee;margin:0 auto 14px;display:flex;align-items:center;justify-content:center;font-size:28px;animation:breathe 4s ease-in-out infinite;opacity:.85}
+@keyframes breathe{0%,100%{transform:scale(.92);opacity:.7}50%{transform:scale(1.08);opacity:1}}
+
+/* Heart pulse animation */
+.heart-ring{width:80px;height:80px;border-radius:50%;border:3px solid #f472b6;margin:0 auto 14px;display:flex;align-items:center;justify-content:center;font-size:28px;animation:pulse 1s ease-in-out infinite;opacity:.85}
+@keyframes pulse{0%,100%{transform:scale(1)}15%{transform:scale(1.12)}30%{transform:scale(1)}}
+
+/* Signal quality */
+.signal-bars{display:flex;align-items:flex-end;gap:3px;height:28px;margin-bottom:8px}
+.signal-bar{width:6px;border-radius:2px;background:#27272a;transition:background .3s}
+.signal-bar.active{background:#22c55e}
+.signal-bar.warn{background:#eab308}
+.signal-bar.poor{background:#ef4444}
+
+/* Environment card */
+.env-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #27272a;font-size:13px}
+.env-row:last-child{border:none}
+.env-key{color:#a1a1aa}
+.env-val{font-weight:600;color:#e4e4e7}
+
+/* Timeline */
+.timeline-section{margin-top:8px}
+.timeline-section .card-label{margin-bottom:14px}
+canvas{display:block;width:100%;border-radius:8px}
+
+/* Persons row */
+.wide{grid-column:1 / -1}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-left">
+    <div class="logo">WIfi DensePose</div>
+    <div class="conn-pill">
+      <span class="conn-dot wait" id="dot"></span>
+      <span id="connText">Connecting</span>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <a href="index.html">System</a>
+    <a href="sensing-dashboard.html">Technical</a>
+    <a href="viz.html">3D View</a>
+  </div>
+</div>
+
+<div class="page">
+
+  <!-- Presence hero -->
+  <div class="presence-hero empty" id="hero">
+    <div class="presence-icon" id="heroIcon">📡</div>
+    <div class="presence-label" id="heroLabel">Scanning...</div>
+    <div class="presence-sub" id="heroSub">Waiting for sensor data</div>
+    <div class="activity-pill absent" id="activityPill">NO ACTIVITY</div>
+  </div>
+
+  <!-- Vital signs + signal -->
+  <div class="cards">
+
+    <div class="card">
+      <div class="card-label">Breathing Rate</div>
+      <div class="breath-ring" id="breathRing">🫁</div>
+      <div style="text-align:center">
+        <span class="vital-value" id="breathVal" style="color:#22d3ee">--</span>
+        <span class="vital-unit">breaths/min</span>
+      </div>
+      <div class="vital-conf">
+        <span id="breathConfLabel">--</span>
+        <div class="vital-bar"><div class="vital-bar-fill" id="breathBar" style="width:0%;background:#22d3ee"></div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Heart Rate</div>
+      <div class="heart-ring" id="heartRing">❤️</div>
+      <div style="text-align:center">
+        <span class="vital-value" id="heartVal" style="color:#f472b6">--</span>
+        <span class="vital-unit">bpm</span>
+      </div>
+      <div class="vital-conf">
+        <span id="heartConfLabel">--</span>
+        <div class="vital-bar"><div class="vital-bar-fill" id="heartBar" style="width:0%;background:#f472b6"></div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Signal Quality</div>
+      <div class="signal-bars" id="signalBars">
+        <div class="signal-bar" style="height:20%"></div>
+        <div class="signal-bar" style="height:40%"></div>
+        <div class="signal-bar" style="height:60%"></div>
+        <div class="signal-bar" style="height:80%"></div>
+        <div class="signal-bar" style="height:100%"></div>
+      </div>
+      <div class="vital-value" id="sigQual" style="font-size:32px">--<span class="vital-unit">%</span></div>
+      <div class="env-row" style="margin-top:12px;border:none;padding:4px 0">
+        <span class="env-key">Source</span>
+        <span class="env-val" id="sourceVal">--</span>
+      </div>
+      <div class="env-row" style="border:none;padding:4px 0">
+        <span class="env-key">RSSI</span>
+        <span class="env-val" id="rssiVal">-- dBm</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Environment details -->
+  <div class="cards">
+    <div class="card">
+      <div class="card-label">Environment</div>
+      <div class="env-row"><span class="env-key">Motion energy</span><span class="env-val" id="envMotion">--</span></div>
+      <div class="env-row"><span class="env-key">Dominant frequency</span><span class="env-val" id="envFreq">--</span></div>
+      <div class="env-row"><span class="env-key">Variability</span><span class="env-val" id="envVar">--</span></div>
+      <div class="env-row"><span class="env-key">Change events</span><span class="env-val" id="envChange">--</span></div>
+    </div>
+
+    <div class="card wide timeline-section">
+      <div class="card-label">Activity Timeline</div>
+      <canvas id="timelineCanvas" height="100"></canvas>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const WS_URL = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/sensing`;
+const $ = id => document.getElementById(id);
+
+const MAX = 90;
+const motionHist = [];
+const breathHist = [];
+const heartHist  = [];
+
+let ws, reconnTimer;
+
+function connect() {
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => {
+    $('dot').className = 'conn-dot on';
+    $('connText').textContent = 'Live';
+  };
+  ws.onclose = () => {
+    $('dot').className = 'conn-dot wait';
+    $('connText').textContent = 'Reconnecting';
+    reconnTimer = setTimeout(connect, 2000);
+  };
+  ws.onerror = () => {};
+  ws.onmessage = e => { try { update(JSON.parse(e.data)); } catch(_){} };
+}
+
+function update(d) {
+  if (d.type !== 'sensing_update') return;
+
+  const f  = d.features || {};
+  const cl = d.classification || {};
+  const vs = d.vital_signs || {};
+
+  // --- Presence hero ---
+  const present = cl.presence;
+  const level = cl.motion_level || 'absent';
+  const hero = $('hero');
+
+  if (present) {
+    hero.className = 'presence-hero occupied';
+    $('heroIcon').textContent = '🏠';
+    $('heroLabel').textContent = 'Someone is here';
+    $('heroSub').textContent = friendlyMotion(level);
+  } else {
+    hero.className = 'presence-hero empty';
+    $('heroIcon').textContent = '📡';
+    $('heroLabel').textContent = 'Room is empty';
+    $('heroSub').textContent = 'No presence detected';
+  }
+
+  const pill = $('activityPill');
+  pill.textContent = friendlyPillText(level, present);
+  pill.className = 'activity-pill ' + pillClass(level, present);
+
+  // --- Breathing ---
+  const br = vs.breathing_rate_bpm;
+  const bConf = vs.breathing_confidence || 0;
+  if (br != null) {
+    $('breathVal').textContent = br.toFixed(1);
+    $('breathConfLabel').textContent = confLabel(bConf);
+    $('breathBar').style.width = (bConf * 100) + '%';
+    const dur = Math.max(2, Math.min(8, 60 / br));
+    $('breathRing').style.animationDuration = dur.toFixed(1) + 's';
+    breathHist.push(br); if (breathHist.length > MAX) breathHist.shift();
+  }
+
+  // --- Heart rate ---
+  const hr = vs.heart_rate_bpm;
+  const hConf = vs.heartbeat_confidence || 0;
+  if (hr != null) {
+    $('heartVal').textContent = hr.toFixed(0);
+    $('heartConfLabel').textContent = confLabel(hConf);
+    $('heartBar').style.width = (hConf * 100) + '%';
+    const dur = Math.max(0.4, Math.min(1.5, 60 / hr));
+    $('heartRing').style.animationDuration = dur.toFixed(2) + 's';
+    heartHist.push(hr); if (heartHist.length > MAX) heartHist.shift();
+  }
+
+  // --- Signal quality ---
+  const rssi = f.mean_rssi || -80;
+  const quality = Math.min(100, Math.max(0, (rssi + 100) * 2));
+  $('sigQual').innerHTML = quality.toFixed(0) + '<span class="vital-unit">%</span>';
+  $('rssiVal').textContent = rssi.toFixed(0) + ' dBm';
+  $('sourceVal').textContent = friendlySource(d.source);
+  updateBars(quality);
+
+  // --- Environment ---
+  $('envMotion').textContent = friendlyEnergy(f.motion_band_power);
+  $('envFreq').textContent = (f.dominant_freq_hz?.toFixed(2) || '0') + ' Hz';
+  $('envVar').textContent = friendlyVariance(f.variance);
+  $('envChange').textContent = f.change_points || '0';
+
+  // --- Timeline ---
+  motionHist.push(f.motion_band_power || 0);
+  if (motionHist.length > MAX) motionHist.shift();
+  drawTimeline();
+}
+
+// --- Helpers ---
+function friendlyMotion(level) {
+  if (level.includes('walk')) return 'Walking activity detected';
+  if (level.includes('moving') || level.includes('active')) return 'Movement detected';
+  return 'Person detected — still';
+}
+function friendlyPillText(level, present) {
+  if (!present) return 'EMPTY';
+  if (level.includes('walk')) return 'WALKING';
+  if (level.includes('moving') || level.includes('active')) return 'MOVING';
+  return 'STILL';
+}
+function pillClass(level, present) {
+  if (!present) return 'absent';
+  if (level.includes('walk')) return 'walking';
+  if (level.includes('moving') || level.includes('active')) return 'moving';
+  return 'still';
+}
+function confLabel(c) {
+  if (c > 0.8) return 'Strong';
+  if (c > 0.5) return 'Good';
+  if (c > 0.2) return 'Weak';
+  return 'Low';
+}
+function friendlySource(s) {
+  if (!s) return '--';
+  if (s === 'esp32') return 'Live WiFi';
+  if (s === 'simulate') return 'Simulated';
+  if (s === 'wifi') return 'RSSI scan';
+  return s;
+}
+function friendlyEnergy(v) {
+  if (v == null) return '--';
+  if (v > 15) return 'High';
+  if (v > 5) return 'Moderate';
+  if (v > 1) return 'Low';
+  return 'Calm';
+}
+function friendlyVariance(v) {
+  if (v == null) return '--';
+  if (v > 20) return 'Very active';
+  if (v > 8) return 'Moderate';
+  if (v > 2) return 'Slight';
+  return 'Stable';
+}
+
+function updateBars(quality) {
+  const bars = $('signalBars').children;
+  const count = quality > 80 ? 5 : quality > 60 ? 4 : quality > 40 ? 3 : quality > 20 ? 2 : 1;
+  const cls = count >= 4 ? 'active' : count >= 3 ? 'warn' : 'poor';
+  for (let i = 0; i < bars.length; i++) {
+    bars[i].className = 'signal-bar' + (i < count ? ' ' + cls : '');
+  }
+}
+
+function drawTimeline() {
+  const cv = $('timelineCanvas');
+  const rect = cv.getBoundingClientRect();
+  if (cv.width !== rect.width * 2) { cv.width = rect.width * 2; cv.height = rect.height * 2; }
+  const ctx = cv.getContext('2d');
+  const w = cv.width, h = cv.height;
+  ctx.clearRect(0, 0, w, h);
+  if (motionHist.length < 2) return;
+
+  const maxM = 30;
+  const barW = w / MAX;
+
+  for (let i = 0; i < motionHist.length; i++) {
+    const val = Math.min(1, motionHist[i] / maxM);
+    const barH = val * h * 0.85;
+    const alpha = 0.3 + val * 0.5;
+
+    if (val > 0.5) ctx.fillStyle = `rgba(251,191,36,${alpha})`;
+    else if (val > 0.15) ctx.fillStyle = `rgba(52,211,153,${alpha})`;
+    else ctx.fillStyle = `rgba(99,102,241,${alpha})`;
+
+    const radius = Math.min(3, barW / 2);
+    const x = i * barW + 0.5;
+    const y = h - barH;
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + barW - 1 - radius, y);
+    ctx.quadraticCurveTo(x + barW - 1, y, x + barW - 1, y + radius);
+    ctx.lineTo(x + barW - 1, h);
+    ctx.lineTo(x, h);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.fill();
+  }
+
+  ctx.fillStyle = '#52525b';
+  ctx.font = (Math.round(h * 0.12)) + 'px -apple-system, sans-serif';
+  ctx.fillText('← older', 8, h * 0.13);
+  ctx.fillText('now →', w - 80, h * 0.13);
+}
+
+connect();
+</script>
+</body>
+</html>

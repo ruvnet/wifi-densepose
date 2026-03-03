@@ -43,21 +43,22 @@ export class DataProcessor {
         result.zoneOccupancy = this._extractZoneOccupancy(payload, message.zone_id);
         result.signalData = this._extractSignalData(payload);
 
-        result.metadata.isRealData = payload.metadata?.mock_data === false;
+        const meta = payload.metadata || {};
+        const source = meta.source || '';
+        result.metadata.isRealData = source !== 'mock' && source !== 'demo' && source !== '';
         result.metadata.timestamp = message.timestamp;
-        result.metadata.processingTime = payload.metadata?.processing_time_ms || 0;
-        result.metadata.frameId = payload.metadata?.frame_id;
+        result.metadata.processingTime = meta.processing_time_ms || 0;
+        result.metadata.frameId = meta.frame_id;
+        result.metadata.poseSource = payload.pose_source || 'unknown';
+        result.metadata.signalStrength = meta.signal_strength;
+        result.metadata.motionBandPower = meta.motion_band_power;
 
-        // Determine sensing mode
-        if (payload.metadata?.source === 'csi') {
-          result.metadata.sensingMode = 'CSI';
-        } else if (payload.metadata?.source === 'rssi') {
-          result.metadata.sensingMode = 'RSSI';
-        } else if (payload.metadata?.mock_data !== false) {
-          result.metadata.sensingMode = 'Mock';
-        } else {
-          result.metadata.sensingMode = 'CSI';
-        }
+        // Map server source to UI sensing mode label
+        const sourceMap = {
+          'esp32': 'CSI', 'csi': 'CSI', 'wifi': 'WiFi',
+          'rssi': 'RSSI', 'simulated': 'Simulated', 'simulate': 'Simulated',
+        };
+        result.metadata.sensingMode = sourceMap[source] || (source || 'Unknown');
       }
     }
 
@@ -99,8 +100,7 @@ export class DataProcessor {
   _normalizeKeypoints(keypoints) {
     if (!keypoints || keypoints.length === 0) return [];
 
-    return keypoints.map(kp => {
-      // Handle various formats
+    const raw = keypoints.map(kp => {
       if (Array.isArray(kp)) {
         return { x: kp[0], y: kp[1], confidence: kp[2] || 0.5 };
       }
@@ -110,6 +110,22 @@ export class DataProcessor {
         confidence: kp.confidence !== undefined ? kp.confidence : (kp.score || 0.5)
       };
     });
+
+    // Auto-detect if values are in pixel coords (>1.0) and normalize to [0,1]
+    const maxX = Math.max(...raw.map(k => Math.abs(k.x)));
+    const maxY = Math.max(...raw.map(k => Math.abs(k.y)));
+
+    if (maxX > 1.5 || maxY > 1.5) {
+      const frameW = Math.max(maxX * 1.1, 640);
+      const frameH = Math.max(maxY * 1.1, 480);
+      return raw.map(kp => ({
+        x: Math.max(0, Math.min(1, kp.x / frameW)),
+        y: Math.max(0, Math.min(1, kp.y / frameH)),
+        confidence: kp.confidence
+      }));
+    }
+
+    return raw;
   }
 
   // Extract zone occupancy data
