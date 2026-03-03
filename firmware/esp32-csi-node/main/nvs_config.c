@@ -56,6 +56,43 @@ void nvs_config_load(nvs_config_t *cfg)
     memset(cfg->filter_mac, 0, 6);
     cfg->filter_mac_enabled = 0;
 
+    /* ADR-039: Edge processing defaults */
+#ifdef CONFIG_EDGE_TIER
+    cfg->edge_tier = (uint8_t)CONFIG_EDGE_TIER;
+#else
+    cfg->edge_tier = 0;
+#endif
+
+#ifdef CONFIG_EDGE_PRESENCE_THRESH
+    cfg->presence_thresh = (uint16_t)CONFIG_EDGE_PRESENCE_THRESH;
+#else
+    cfg->presence_thresh = 50;
+#endif
+
+#ifdef CONFIG_EDGE_FALL_THRESH
+    cfg->fall_thresh = (uint16_t)CONFIG_EDGE_FALL_THRESH;
+#else
+    cfg->fall_thresh = 500;
+#endif
+
+#ifdef CONFIG_EDGE_VITAL_WINDOW
+    cfg->vital_window = (uint16_t)CONFIG_EDGE_VITAL_WINDOW;
+#else
+    cfg->vital_window = 300;
+#endif
+
+#ifdef CONFIG_EDGE_VITAL_INTERVAL
+    cfg->vital_interval_ms = (uint16_t)CONFIG_EDGE_VITAL_INTERVAL;
+#else
+    cfg->vital_interval_ms = 1000;
+#endif
+
+#ifdef CONFIG_EDGE_SUBK_COUNT
+    cfg->subk_count = (uint8_t)CONFIG_EDGE_SUBK_COUNT;
+#else
+    cfg->subk_count = 32;
+#endif
+
     /* Parse compile-time Kconfig MAC filter if set (format: "AA:BB:CC:DD:EE:FF") */
 #ifdef CONFIG_CSI_FILTER_MAC
     {
@@ -202,6 +239,63 @@ void nvs_config_load(nvs_config_t *cfg)
         ESP_LOGW(TAG, "tdm_slot_index=%u >= tdm_node_count=%u, clamping to 0",
                  (unsigned)cfg->tdm_slot_index, (unsigned)cfg->tdm_node_count);
         cfg->tdm_slot_index = 0;
+    }
+
+    /* ADR-039: Edge processing overrides */
+    uint8_t edge_tier_val;
+    if (nvs_get_u8(handle, "edge_tier", &edge_tier_val) == ESP_OK) {
+        if (edge_tier_val <= 3) {
+            cfg->edge_tier = edge_tier_val;
+            ESP_LOGI(TAG, "NVS override: edge_tier=%u", (unsigned)cfg->edge_tier);
+        } else {
+            ESP_LOGW(TAG, "NVS edge_tier=%u out of range [0..3], ignored",
+                     (unsigned)edge_tier_val);
+        }
+    }
+
+    uint16_t presence_val;
+    if (nvs_get_u16(handle, "pres_thresh", &presence_val) == ESP_OK) {
+        cfg->presence_thresh = presence_val;
+        ESP_LOGI(TAG, "NVS override: presence_thresh=%u", cfg->presence_thresh);
+    }
+
+    uint16_t fall_val;
+    if (nvs_get_u16(handle, "fall_thresh", &fall_val) == ESP_OK) {
+        cfg->fall_thresh = fall_val;
+        ESP_LOGI(TAG, "NVS override: fall_thresh=%u", cfg->fall_thresh);
+    }
+
+    uint16_t vital_win_val;
+    if (nvs_get_u16(handle, "vital_win", &vital_win_val) == ESP_OK) {
+        if (vital_win_val >= 60 && vital_win_val <= 600) {
+            cfg->vital_window = vital_win_val;
+            ESP_LOGI(TAG, "NVS override: vital_window=%u", cfg->vital_window);
+        } else {
+            ESP_LOGW(TAG, "NVS vital_win=%u out of range [60..600], ignored",
+                     (unsigned)vital_win_val);
+        }
+    }
+
+    uint16_t vital_int_val;
+    if (nvs_get_u16(handle, "vital_int", &vital_int_val) == ESP_OK) {
+        if (vital_int_val >= 100) {
+            cfg->vital_interval_ms = vital_int_val;
+            ESP_LOGI(TAG, "NVS override: vital_interval_ms=%u", cfg->vital_interval_ms);
+        } else {
+            ESP_LOGW(TAG, "NVS vital_int=%u too small, ignored",
+                     (unsigned)vital_int_val);
+        }
+    }
+
+    uint8_t subk_val;
+    if (nvs_get_u8(handle, "subk_count", &subk_val) == ESP_OK) {
+        if (subk_val >= 1 && subk_val <= 192) {
+            cfg->subk_count = subk_val;
+            ESP_LOGI(TAG, "NVS override: subk_count=%u", (unsigned)cfg->subk_count);
+        } else {
+            ESP_LOGW(TAG, "NVS subk_count=%u out of range [1..192], ignored",
+                     (unsigned)subk_val);
+        }
     }
 
     nvs_close(handle);

@@ -39,6 +39,14 @@ typedef struct {
     /* MAC address filter for CSI source selection (Issue #98) */
     uint8_t  filter_mac[6];                   /**< Transmitter MAC to accept (all zeros = no filter). */
     uint8_t  filter_mac_enabled;              /**< 1 = filter active, 0 = accept all. */
+
+    /* ADR-039: Edge intelligence configuration */
+    uint8_t  edge_tier;                       /**< 0=disabled, 1=phase/stats, 2=vitals, 3=reserved. */
+    uint16_t presence_thresh;                 /**< Presence detection threshold (default 50). */
+    uint16_t fall_thresh;                     /**< Fall detection threshold (default 500). */
+    uint16_t vital_window;                    /**< Vital signs window in frames (default 300). */
+    uint16_t vital_interval_ms;               /**< Vitals packet send interval in ms (default 1000). */
+    uint8_t  subk_count;                      /**< Top-K subcarrier count (default 32). */
 } nvs_config_t;
 
 /**

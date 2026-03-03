@@ -21,11 +21,13 @@
 #include "csi_collector.h"
 #include "stream_sender.h"
 #include "nvs_config.h"
+#include "edge_processing.h"
 
 static const char *TAG = "main";
 
-/* Runtime configuration (loaded from NVS or Kconfig defaults). */
-static nvs_config_t s_cfg;
+/* Runtime configuration (loaded from NVS or Kconfig defaults).
+ * Non-static so edge_processing.c can access it via extern. */
+nvs_config_t s_cfg;
 
 /* Event group bits */
 #define WIFI_CONNECTED_BIT BIT0
@@ -141,8 +143,11 @@ void app_main(void)
         ESP_LOGI(TAG, "No MAC filter — accepting CSI from all transmitters");
     }
 
-    ESP_LOGI(TAG, "CSI streaming active → %s:%d",
-             s_cfg.target_ip, s_cfg.target_port);
+    /* ADR-039: Initialize edge processing (tier 0 = no-op for backward compat) */
+    edge_processing_init(s_cfg.edge_tier);
+
+    ESP_LOGI(TAG, "CSI streaming active → %s:%d (edge_tier=%u)",
+             s_cfg.target_ip, s_cfg.target_port, (unsigned)s_cfg.edge_tier);
 
     /* Main loop — keep alive */
     while (1) {

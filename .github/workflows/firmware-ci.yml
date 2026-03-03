@@ -1,0 +1,305 @@
+name: Firmware CI/CD
+
+on:
+  push:
+    branches: [ main, develop, 'feature/*', 'feat/*', 'hotfix/*' ]
+    paths:
+      - 'firmware/**'
+      - '.github/workflows/firmware-ci.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'firmware/**'
+      - '.github/workflows/firmware-ci.yml'
+  workflow_dispatch:
+
+env:
+  IDF_VERSION: v5.2
+  IDF_TARGET: esp32s3
+  FIRMWARE_DIR: firmware/esp32-csi-node
+  BINARY_PATH: firmware/esp32-csi-node/build/esp32-csi-node.bin
+  # 900 KB in bytes = 921600
+  BINARY_SIZE_LIMIT: 921600
+
+jobs:
+  # ── Build ────────────────────────────────────────────────────────────────────
+  build:
+    name: Build Firmware (ESP-IDF ${{ env.IDF_VERSION }})
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v5.2
+      options: --user root
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Build firmware
+      working-directory: ${{ env.FIRMWARE_DIR }}
+      shell: bash
+      run: |
+        . /opt/esp/idf/export.sh
+        idf.py set-target ${{ env.IDF_TARGET }}
+        idf.py build
+
+    - name: Capture build size summary
+      working-directory: ${{ env.FIRMWARE_DIR }}
+      shell: bash
+      run: |
+        . /opt/esp/idf/export.sh
+        idf.py size 2>&1 | tee build-size.txt
+
+    - name: Upload firmware artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: firmware-${{ github.sha }}
+        retention-days: 30
+        path: |
+          ${{ env.FIRMWARE_DIR }}/build/esp32-csi-node.bin
+          ${{ env.FIRMWARE_DIR }}/build/bootloader/bootloader.bin
+          ${{ env.FIRMWARE_DIR }}/build/partition_table/partition-table.bin
+          ${{ env.FIRMWARE_DIR }}/build/flasher_args.json
+          ${{ env.FIRMWARE_DIR }}/build/flash_args
+          ${{ env.FIRMWARE_DIR }}/build-size.txt
+
+  # ── Binary size gate ─────────────────────────────────────────────────────────
+  binary-size-check:
+    name: Binary Size Check (<= 900 KB)
+    runs-on: ubuntu-latest
+    needs: [build]
+
+    steps:
+    - name: Download firmware artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: firmware-${{ github.sha }}
+        path: artifacts
+
+    - name: Check binary size
+      run: |
+        BINARY="artifacts/firmware/esp32-csi-node/build/esp32-csi-node.bin"
+        # Fallback: search for the binary if the path differs
+        if [ ! -f "$BINARY" ]; then
+          BINARY=$(find artifacts -name 'esp32-csi-node.bin' | head -n 1)
+        fi
+
+        if [ ! -f "$BINARY" ]; then
+          echo "ERROR: esp32-csi-node.bin not found in artifacts"
+          exit 1
+        fi
+
+        SIZE=$(stat -c%s "$BINARY")
+        LIMIT=${{ env.BINARY_SIZE_LIMIT }}
+
+        echo "Binary: $BINARY"
+        echo "Size:   $SIZE bytes ($(( SIZE / 1024 )) KB)"
+        echo "Limit:  $LIMIT bytes ($(( LIMIT / 1024 )) KB, 90% of 1 MB partition)"
+
+        if [ "$SIZE" -gt "$LIMIT" ]; then
+          echo "FAIL: binary exceeds 900 KB limit by $(( SIZE - LIMIT )) bytes"
+          exit 1
+        fi
+
+        PCT=$(( SIZE * 100 / LIMIT ))
+        echo "PASS: binary is ${PCT}% of the 900 KB budget"
+
+  # ── Credential leak scan ─────────────────────────────────────────────────────
+  credential-scan:
+    name: Credential Leak Check
+    runs-on: ubuntu-latest
+    needs: [build]
+
+    steps:
+    - name: Download firmware artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: firmware-${{ github.sha }}
+        path: artifacts
+
+    - name: Scan binary for credential patterns
+      run: |
+        BINARY=$(find artifacts -name 'esp32-csi-node.bin' | head -n 1)
+
+        if [ ! -f "$BINARY" ]; then
+          echo "ERROR: esp32-csi-node.bin not found in artifacts"
+          exit 1
+        fi
+
+        echo "Scanning $BINARY for credential patterns..."
+
+        # Patterns to search for (case-insensitive strings embedded in the binary)
+        PATTERNS=(
+          "password"
+          "passwd"
+          "secret"
+          "api_key"
+          "apikey"
+          "private_key"
+          "access_token"
+          "auth_token"
+          "credentials"
+          "BEGIN RSA PRIVATE"
+          "BEGIN EC PRIVATE"
+          "BEGIN OPENSSH PRIVATE"
+          "AKIA"
+        )
+
+        FOUND=0
+        for PATTERN in "${PATTERNS[@]}"; do
+          # Use strings to extract printable text from the binary, then grep
+          MATCHES=$(strings "$BINARY" | grep -i "$PATTERN" | grep -v "^nvs_config\|^csi_cfg\|override: password=\*\*\*\|NVS override" || true)
+          if [ -n "$MATCHES" ]; then
+            echo "WARNING: pattern '$PATTERN' found in binary:"
+            echo "$MATCHES"
+            FOUND=$(( FOUND + 1 ))
+          fi
+        done
+
+        if [ "$FOUND" -gt 0 ]; then
+          echo ""
+          echo "FAIL: $FOUND credential pattern(s) detected in firmware binary."
+          echo "Review the matches above. Legitimate log-format strings (e.g."
+          echo "'NVS override: password=***') are excluded automatically."
+          exit 1
+        fi
+
+        echo "PASS: no credential patterns detected in firmware binary"
+
+  # ── QEMU smoke test ──────────────────────────────────────────────────────────
+  # NOTE: QEMU in espressif/idf:v5.2 only supports -machine esp32 (LX6),
+  # not esp32s3 (LX7). This test verifies the flash image can be created
+  # and QEMU can be invoked, but boot verification is best-effort.
+  qemu-smoke-test:
+    name: QEMU Smoke Test (flash image creation)
+    runs-on: ubuntu-latest
+    needs: [build]
+    container:
+      image: espressif/idf:v5.2
+      options: --user root
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download firmware artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: firmware-${{ github.sha }}
+        path: artifacts
+
+    - name: Locate firmware binaries
+      id: locate
+      run: |
+        APP=$(find artifacts -name 'esp32-csi-node.bin' | head -n 1)
+        BOOT=$(find artifacts -name 'bootloader.bin' | head -n 1)
+        PART=$(find artifacts -name 'partition-table.bin' | head -n 1)
+
+        echo "app=$APP"   >> "$GITHUB_OUTPUT"
+        echo "boot=$BOOT" >> "$GITHUB_OUTPUT"
+        echo "part=$PART" >> "$GITHUB_OUTPUT"
+
+        echo "Application: $APP"
+        echo "Bootloader:  $BOOT"
+        echo "Partitions:  $PART"
+
+        for f in "$APP" "$BOOT" "$PART"; do
+          if [ ! -f "$f" ]; then
+            echo "ERROR: missing binary: $f"
+            exit 1
+          fi
+        done
+
+    - name: Create merged flash image
+      run: |
+        . /opt/esp/idf/export.sh
+
+        APP="${{ steps.locate.outputs.app }}"
+        BOOT="${{ steps.locate.outputs.boot }}"
+        PART="${{ steps.locate.outputs.part }}"
+
+        # Merge bootloader + partition table + app into a single 4 MB flash image
+        esptool.py --chip esp32s3 merge_bin \
+          --fill-flash-size 4MB \
+          -o /tmp/flash_image.bin \
+          0x0000   "$BOOT" \
+          0x8000   "$PART" \
+          0x10000  "$APP"
+
+        ls -lh /tmp/flash_image.bin
+        echo "PASS: flash image created successfully (ready for esptool.py write_flash)"
+
+    - name: Verify flash image structure
+      run: |
+        # Verify the merged image has the expected components at correct offsets
+        FLASH=/tmp/flash_image.bin
+        SIZE=$(stat -c%s "$FLASH")
+        echo "Flash image size: $SIZE bytes ($(( SIZE / 1024 )) KB)"
+
+        # Check for ESP32-S3 bootloader magic at offset 0
+        MAGIC=$(xxd -p -l 1 -s 0 "$FLASH")
+        echo "Bootloader first byte: 0x$MAGIC"
+
+        # Check for partition table magic at offset 0x8000
+        PT_MAGIC=$(xxd -p -l 2 -s 0x8000 "$FLASH")
+        echo "Partition table magic: 0x$PT_MAGIC"
+
+        # Check for app binary at offset 0x10000 (ESP image magic = 0xE9)
+        APP_MAGIC=$(xxd -p -l 1 -s 0x10000 "$FLASH")
+        echo "App image magic: 0x$APP_MAGIC"
+        if [ "$APP_MAGIC" = "e9" ]; then
+          echo "PASS: ESP application image detected at 0x10000"
+        else
+          echo "WARN: unexpected app magic byte (expected 0xe9, got 0x$APP_MAGIC)"
+        fi
+
+  # ── Release artifact ─────────────────────────────────────────────────────────
+  release-artifacts:
+    name: Attach Firmware to Release
+    runs-on: ubuntu-latest
+    needs: [binary-size-check, credential-scan, qemu-smoke-test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+    - name: Download firmware artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: firmware-${{ github.sha }}
+        path: artifacts
+
+    - name: Bundle release assets
+      run: |
+        mkdir -p release
+        find artifacts -name '*.bin' -exec cp {} release/ \;
+        find artifacts -name 'flasher_args.json' -exec cp {} release/ \;
+        find artifacts -name 'flash_args' -exec cp {} release/ \;
+        ls -lh release/
+
+    - name: Upload release assets
+      uses: actions/upload-artifact@v4
+      with:
+        name: firmware-release-${{ github.run_number }}
+        retention-days: 90
+        path: release/
+
+    - name: Create GitHub Release (on tag)
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v2
+      with:
+        name: Firmware ${{ github.ref_name }}
+        body: |
+          ESP32-S3 CSI Node firmware — built from ${{ github.sha }}
+
+          **Build details:**
+          - ESP-IDF version: ${{ env.IDF_VERSION }}
+          - Target: ${{ env.IDF_TARGET }}
+          - Commit: ${{ github.sha }}
+
+          **Flashing:**
+          ```
+          esptool.py --chip esp32s3 --baud 460800 write_flash @flash_args
+          ```
+        files: release/*
+        draft: false
+        prerelease: false

@@ -13,6 +13,7 @@
 
 #include "csi_collector.h"
 #include "stream_sender.h"
+#include "edge_processing.h"
 
 #include <string.h>
 #include "esp_log.h"
@@ -180,6 +181,10 @@ static void wifi_csi_callback(void *ctx, wifi_csi_info_t *info)
                  info->mac[0], info->mac[1], info->mac[2],
                  info->mac[3], info->mac[4], info->mac[5]);
     }
+
+    /* ADR-039: Feed edge processing ring buffer (lock-free, O(1)).
+     * This is a no-op when edge_tier == 0. */
+    edge_push_csi(info);
 
     uint8_t frame_buf[CSI_MAX_FRAME_SIZE];
     size_t frame_len = csi_serialize_frame(info, frame_buf, sizeof(frame_buf));

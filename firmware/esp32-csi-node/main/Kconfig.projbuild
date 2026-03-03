@@ -54,3 +54,78 @@ menu "CSI Node Configuration"
             (6-byte blob) without reflashing.
 
 endmenu
+
+menu "Edge Intelligence (ADR-039)"
+
+    config EDGE_TIER
+        int "Edge processing tier (0=off, 1=phase/stats, 2=vitals)"
+        default 0
+        range 0 3
+        help
+            Controls the level of on-device CSI processing:
+
+            0 = Disabled. Raw CSI frames are streamed unchanged (default).
+                This preserves full backward compatibility.
+
+            1 = Phase sanitization + Welford statistics + top-K subcarrier
+                selection + delta compression. Runs on Core 1.
+
+            2 = All of Tier 1, plus presence detection, vital signs
+                extraction (breathing/heart rate), motion scoring,
+                and fall detection. Sends vitals packets over UDP.
+
+            3 = Reserved for future ML inference tier.
+
+    config EDGE_PRESENCE_THRESH
+        int "Presence detection threshold (0-65535)"
+        default 50
+        range 0 65535
+        depends on EDGE_TIER > 0
+        help
+            Amplitude variance threshold for presence detection.
+            Higher = less sensitive. Values below threshold/2 indicate
+            empty room; values above threshold indicate motion.
+
+    config EDGE_FALL_THRESH
+        int "Fall detection threshold (0-65535)"
+        default 500
+        range 0 65535
+        depends on EDGE_TIER > 0
+        help
+            Minimum variance spike (scaled by 100) required for fall
+            detection. The actual threshold is also gated by 5-sigma
+            above the running mean, whichever is higher.
+
+    config EDGE_VITAL_WINDOW
+        int "Vital signs window (frames, 60-600)"
+        default 300
+        range 60 600
+        depends on EDGE_TIER > 0
+        help
+            Number of phase history samples used for vital signs
+            estimation. At 20 Hz CSI rate, 300 frames = 15 seconds.
+            Larger windows give more stable estimates but respond
+            more slowly to changes.
+
+    config EDGE_VITAL_INTERVAL
+        int "Vitals packet send interval (ms)"
+        default 1000
+        range 100 60000
+        depends on EDGE_TIER > 0
+        help
+            How often to send a vitals summary packet over UDP.
+            1000 ms (1 Hz) is recommended for real-time dashboards.
+            Increase to reduce network bandwidth.
+
+    config EDGE_SUBK_COUNT
+        int "Top-K subcarrier count (1-192)"
+        default 32
+        range 1 192
+        depends on EDGE_TIER > 0
+        help
+            Number of highest-variance subcarriers to select for
+            downstream processing (vital signs, delta compression).
+            32 is a good default for HT20 (64 subcarriers).
+            Increase for HT40 (128 subcarriers).
+
+endmenu
