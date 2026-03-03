@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WiFi Sensing — Enhanced Dashboard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0e17;color:#c8d6e5;font-family:'SF Mono',Consolas,'Courier New',monospace;overflow-x:hidden}
+.grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;padding:12px;max-width:1600px;margin:0 auto}
+.card{background:#111827;border:1px solid #1e293b;border-radius:10px;padding:14px;position:relative;overflow:hidden}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#06b6d4,#8b5cf6,#ec4899)}
+.card h3{font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#64748b;margin-bottom:10px}
+.big-val{font-size:32px;font-weight:700;color:#f1f5f9;line-height:1}
+.unit{font-size:13px;color:#64748b;margin-left:4px}
+.sub-val{font-size:12px;color:#94a3b8;margin-top:4px}
+canvas{display:block;width:100%;border-radius:6px;background:#0f172a}
+.span2{grid-column:span 2}
+.span3{grid-column:span 3}
+.status-bar{display:flex;gap:16px;align-items:center;padding:8px 16px;background:#111827;border-bottom:1px solid #1e293b;font-size:12px}
+.status-bar .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px}
+.dot-green{background:#22c55e;box-shadow:0 0 6px #22c55e}
+.dot-yellow{background:#eab308;box-shadow:0 0 6px #eab308}
+.dot-red{background:#ef4444;box-shadow:0 0 6px #ef4444}
+.vital-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #1e293b}
+.vital-row:last-child{border:none}
+.vital-label{font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:1px}
+.vital-val{font-size:20px;font-weight:600}
+.confidence-bar{height:4px;background:#1e293b;border-radius:2px;margin-top:4px;overflow:hidden}
+.confidence-fill{height:100%;border-radius:2px;transition:width .3s}
+.cls-badge{display:inline-block;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:1px}
+.cls-absent{background:#1e293b;color:#64748b}
+.cls-still{background:#164e63;color:#22d3ee}
+.cls-moving{background:#14532d;color:#4ade80}
+.cls-walking{background:#713f12;color:#fbbf24}
+.meter{height:6px;background:#1e293b;border-radius:3px;margin:4px 0;overflow:hidden}
+.meter-fill{height:100%;border-radius:3px;transition:width .3s}
+.meter-cyan .meter-fill{background:linear-gradient(90deg,#06b6d4,#22d3ee)}
+.meter-purple .meter-fill{background:linear-gradient(90deg,#7c3aed,#a78bfa)}
+.meter-pink .meter-fill{background:linear-gradient(90deg,#db2777,#f472b6)}
+.meter-green .meter-fill{background:linear-gradient(90deg,#059669,#34d399)}
+.feature-row{display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px}
+.feature-label{color:#94a3b8}
+.feature-val{color:#e2e8f0;font-weight:500}
+.header{text-align:center;padding:16px 12px 4px;font-size:14px;font-weight:600;color:#e2e8f0;letter-spacing:2px;text-transform:uppercase;position:relative}
+.header span{background:linear-gradient(90deg,#06b6d4,#8b5cf6,#ec4899);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+@media(max-width:900px){.grid{grid-template-columns:1fr 1fr}.span3{grid-column:span 2}}
+@media(max-width:600px){.grid{grid-template-columns:1fr}.span2,.span3{grid-column:span 1}}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <a href="index.html" style="position:absolute;left:16px;top:50%;transform:translateY(-50%);color:#64748b;text-decoration:none;font-size:13px;font-weight:400;letter-spacing:0">&larr; Main UI</a>
+  <span>WiFi DensePose — Live Sensing Dashboard</span>
+</div>
+
+<div class="status-bar">
+  <div><span class="dot dot-yellow" id="connDot"></span> <span id="connLabel">Connecting...</span></div>
+  <div>Source: <strong id="sourceLabel">--</strong></div>
+  <div>Tick: <span id="tickLabel">0</span></div>
+  <div>RSSI: <span id="rssiTopLabel">--</span></div>
+  <div>Persons: <span id="personsLabel">0</span></div>
+</div>
+
+<div class="grid">
+
+  <!-- Row 1: Key metrics -->
+  <div class="card">
+    <h3>Signal Strength (RSSI)</h3>
+    <div class="big-val" id="rssiVal">--<span class="unit">dBm</span></div>
+    <div class="sub-val">SNR: <span id="snrVal">--</span> dB &nbsp;|&nbsp; Quality: <span id="qualVal">--</span></div>
+    <canvas id="rssiChart" height="80"></canvas>
+  </div>
+
+  <div class="card">
+    <h3>Classification</h3>
+    <div style="text-align:center;margin:12px 0">
+      <div class="cls-badge cls-absent" id="clsBadge">ABSENT</div>
+    </div>
+    <div style="text-align:center">
+      <div class="big-val" id="confVal">0<span class="unit">%</span></div>
+      <div class="sub-val">Confidence</div>
+    </div>
+    <div class="confidence-bar"><div class="confidence-fill" id="confBar" style="width:0%;background:#06b6d4"></div></div>
+  </div>
+
+  <div class="card">
+    <h3>Vital Signs</h3>
+    <div class="vital-row">
+      <span class="vital-label">Breathing</span>
+      <span class="vital-val" style="color:#22d3ee" id="breathVal">-- <span class="unit">BPM</span></span>
+    </div>
+    <div class="confidence-bar"><div class="confidence-fill" id="breathConf" style="width:0%;background:#06b6d4"></div></div>
+    <div class="vital-row" style="margin-top:8px">
+      <span class="vital-label">Heart Rate</span>
+      <span class="vital-val" style="color:#f472b6" id="heartVal">-- <span class="unit">BPM</span></span>
+    </div>
+    <div class="confidence-bar"><div class="confidence-fill" id="heartConf" style="width:0%;background:#ec4899"></div></div>
+    <canvas id="vitalChart" height="60" style="margin-top:8px"></canvas>
+  </div>
+
+  <!-- Row 2: Subcarrier spectrum (wide) + features -->
+  <div class="card span2">
+    <h3>Subcarrier Amplitude Spectrum (56 channels)</h3>
+    <canvas id="spectrumChart" height="140"></canvas>
+  </div>
+
+  <div class="card">
+    <h3>Signal Features</h3>
+    <div class="feature-row"><span class="feature-label">Variance</span><span class="feature-val" id="fVariance">0</span></div>
+    <div class="meter meter-cyan"><div class="meter-fill" id="mVariance" style="width:0%"></div></div>
+    <div class="feature-row"><span class="feature-label">Motion Band</span><span class="feature-val" id="fMotion">0</span></div>
+    <div class="meter meter-green"><div class="meter-fill" id="mMotion" style="width:0%"></div></div>
+    <div class="feature-row"><span class="feature-label">Breathing Band</span><span class="feature-val" id="fBreath">0</span></div>
+    <div class="meter meter-purple"><div class="meter-fill" id="mBreath" style="width:0%"></div></div>
+    <div class="feature-row"><span class="feature-label">Spectral Power</span><span class="feature-val" id="fSpectral">0</span></div>
+    <div class="meter meter-pink"><div class="meter-fill" id="mSpectral" style="width:0%"></div></div>
+    <div class="feature-row"><span class="feature-label">Dominant Freq</span><span class="feature-val" id="fFreq">0 Hz</span></div>
+    <div class="feature-row"><span class="feature-label">Change Points</span><span class="feature-val" id="fChange">0</span></div>
+  </div>
+
+  <!-- Row 3: Spectrum waterfall + Signal field heatmap + motion timeline -->
+  <div class="card span2">
+    <h3>Subcarrier Waterfall (time × frequency)</h3>
+    <canvas id="waterfallCanvas" height="180"></canvas>
+  </div>
+
+  <div class="card">
+    <h3>Motion Timeline</h3>
+    <canvas id="motionChart" height="180"></canvas>
+  </div>
+
+  <!-- Row 4: Signal field heatmap -->
+  <div class="card span3">
+    <h3>Signal Field Heatmap (20×20 spatial grid)</h3>
+    <canvas id="fieldCanvas" height="200"></canvas>
+  </div>
+
+</div>
+
+<script>
+const WS_URL = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/sensing`;
+const $ = id => document.getElementById(id);
+
+// Canvas contexts
+const rssiCtx    = $('rssiChart').getContext('2d');
+const specCtx    = $('spectrumChart').getContext('2d');
+const vitalCtx   = $('vitalChart').getContext('2d');
+const wfCtx      = $('waterfallCanvas').getContext('2d');
+const motionCtx  = $('motionChart').getContext('2d');
+const fieldCtx   = $('fieldCanvas').getContext('2d');
+
+// Ring buffers
+const MAX_HIST = 120;
+const rssiHist = [];
+const motionHist = [];
+const breathHist = [];
+const heartHist = [];
+const waterfallRows = [];
+const MAX_WF_ROWS = 80;
+
+let ws = null;
+let reconnectTimer = null;
+
+function connect() {
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => {
+    $('connDot').className = 'dot dot-green';
+    $('connLabel').textContent = 'Connected';
+  };
+  ws.onclose = () => {
+    $('connDot').className = 'dot dot-yellow';
+    $('connLabel').textContent = 'Reconnecting...';
+    reconnectTimer = setTimeout(connect, 2000);
+  };
+  ws.onerror = () => {};
+  ws.onmessage = evt => {
+    try { handleData(JSON.parse(evt.data)); } catch(e) {}
+  };
+}
+
+function handleData(d) {
+  if (d.type !== 'sensing_update') return;
+
+  const f = d.features || {};
+  const c = d.classification || {};
+  const vs = d.vital_signs || {};
+  const nodes = d.nodes || [];
+  const amps = nodes[0]?.amplitude || [];
+
+  // Status bar
+  $('sourceLabel').textContent = d.source || '--';
+  $('tickLabel').textContent = d.tick || 0;
+  $('rssiTopLabel').textContent = (f.mean_rssi || 0).toFixed(0) + ' dBm';
+  $('personsLabel').textContent = c.presence ? '1' : '0';
+
+  // RSSI
+  const rssi = f.mean_rssi || -80;
+  $('rssiVal').innerHTML = rssi.toFixed(0) + '<span class="unit">dBm</span>';
+  const snr = rssi - (-90);
+  $('snrVal').textContent = snr.toFixed(0);
+  const quality = Math.min(100, Math.max(0, (rssi + 100) * 2));
+  $('qualVal').textContent = quality.toFixed(0) + '%';
+  rssiHist.push(rssi);
+  if (rssiHist.length > MAX_HIST) rssiHist.shift();
+
+  // Classification
+  const level = c.motion_level || 'absent';
+  const conf = (c.confidence || 0) * 100;
+  const badge = $('clsBadge');
+  badge.textContent = level.replace('_', ' ').toUpperCase();
+  badge.className = 'cls-badge cls-' + (level.includes('walk') ? 'walking' : level.includes('moving') ? 'moving' : c.presence ? 'still' : 'absent');
+  $('confVal').innerHTML = conf.toFixed(1) + '<span class="unit">%</span>';
+  $('confBar').style.width = conf + '%';
+
+  // Vital signs
+  const br = vs.breathing_rate_bpm;
+  const hr = vs.heart_rate_bpm;
+  if (br != null) {
+    $('breathVal').innerHTML = br.toFixed(1) + ' <span class="unit">BPM</span>';
+    $('breathConf').style.width = ((vs.breathing_confidence || 0) * 100) + '%';
+    breathHist.push(br);
+    if (breathHist.length > MAX_HIST) breathHist.shift();
+  }
+  if (hr != null) {
+    $('heartVal').innerHTML = hr.toFixed(1) + ' <span class="unit">BPM</span>';
+    $('heartConf').style.width = ((vs.heartbeat_confidence || 0) * 100) + '%';
+    heartHist.push(hr);
+    if (heartHist.length > MAX_HIST) heartHist.shift();
+  }
+
+  // Features
+  $('fVariance').textContent = f.variance?.toFixed(2) || '0';
+  $('mVariance').style.width = Math.min(100, (f.variance || 0) / 30 * 100) + '%';
+  $('fMotion').textContent = f.motion_band_power?.toFixed(2) || '0';
+  $('mMotion').style.width = Math.min(100, (f.motion_band_power || 0) / 30 * 100) + '%';
+  $('fBreath').textContent = f.breathing_band_power?.toFixed(2) || '0';
+  $('mBreath').style.width = Math.min(100, (f.breathing_band_power || 0) / 30 * 100) + '%';
+  $('fSpectral').textContent = f.spectral_power?.toFixed(1) || '0';
+  $('mSpectral').style.width = Math.min(100, (f.spectral_power || 0) / 200 * 100) + '%';
+  $('fFreq').textContent = (f.dominant_freq_hz?.toFixed(2) || '0') + ' Hz';
+  $('fChange').textContent = f.change_points || 0;
+
+  // Motion history
+  motionHist.push(f.motion_band_power || 0);
+  if (motionHist.length > MAX_HIST) motionHist.shift();
+
+  // Waterfall
+  waterfallRows.push([...amps]);
+  if (waterfallRows.length > MAX_WF_ROWS) waterfallRows.shift();
+
+  // Draw all charts
+  drawRssiChart();
+  drawSpectrum(amps);
+  drawVitalChart();
+  drawWaterfall();
+  drawMotionChart();
+  if (d.signal_field) drawField(d.signal_field);
+}
+
+function resizeCanvas(canvas) {
+  const rect = canvas.getBoundingClientRect();
+  if (canvas.width !== rect.width * 2) {
+    canvas.width = rect.width * 2;
+    canvas.height = rect.height * 2;
+  }
+}
+
+function drawRssiChart() {
+  const c = rssiCtx; const cv = c.canvas;
+  resizeCanvas(cv);
+  const w = cv.width, h = cv.height;
+  c.clearRect(0, 0, w, h);
+  if (rssiHist.length < 2) return;
+
+  const min = -90, max = -20;
+  c.strokeStyle = '#06b6d4'; c.lineWidth = 2; c.beginPath();
+  for (let i = 0; i < rssiHist.length; i++) {
+    const x = (i / (MAX_HIST - 1)) * w;
+    const y = h - ((rssiHist[i] - min) / (max - min)) * h;
+    i === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
+  }
+  c.stroke();
+  // Fill under
+  c.lineTo((rssiHist.length - 1) / (MAX_HIST - 1) * w, h);
+  c.lineTo(0, h); c.closePath();
+  c.fillStyle = 'rgba(6,182,212,0.1)'; c.fill();
+}
+
+function drawSpectrum(amps) {
+  const c = specCtx; const cv = c.canvas;
+  resizeCanvas(cv);
+  const w = cv.width, h = cv.height;
+  c.clearRect(0, 0, w, h);
+  if (!amps.length) return;
+
+  const barW = w / amps.length;
+  const maxAmp = Math.max(...amps, 1);
+
+  for (let i = 0; i < amps.length; i++) {
+    const val = amps[i] / maxAmp;
+    const barH = val * h * 0.9;
+    const hue = 180 + val * 120;
+    c.fillStyle = `hsla(${hue}, 80%, 60%, 0.85)`;
+    c.fillRect(i * barW + 1, h - barH, barW - 2, barH);
+  }
+
+  // Subcarrier index labels
+  c.fillStyle = '#475569'; c.font = '16px monospace';
+  for (let i = 0; i < amps.length; i += 10) {
+    c.fillText(i.toString(), i * barW + 2, h - 4);
+  }
+}
+
+function drawVitalChart() {
+  const c = vitalCtx; const cv = c.canvas;
+  resizeCanvas(cv);
+  const w = cv.width, h = cv.height;
+  c.clearRect(0, 0, w, h);
+
+  // Breathing line
+  if (breathHist.length > 1) {
+    const min = 5, max = 25;
+    c.strokeStyle = '#22d3ee'; c.lineWidth = 2; c.beginPath();
+    for (let i = 0; i < breathHist.length; i++) {
+      const x = (i / (MAX_HIST - 1)) * w;
+      const y = h - ((breathHist[i] - min) / (max - min)) * h;
+      i === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
+    }
+    c.stroke();
+  }
+
+  // Heart rate line
+  if (heartHist.length > 1) {
+    const min = 40, max = 120;
+    c.strokeStyle = '#f472b6'; c.lineWidth = 2; c.beginPath();
+    for (let i = 0; i < heartHist.length; i++) {
+      const x = (i / (MAX_HIST - 1)) * w;
+      const y = h - ((heartHist[i] - min) / (max - min)) * h;
+      i === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
+    }
+    c.stroke();
+  }
+
+  // Legend
+  c.font = '16px monospace';
+  c.fillStyle = '#22d3ee'; c.fillText('— Breathing', 8, 18);
+  c.fillStyle = '#f472b6'; c.fillText('— Heart Rate', 140, 18);
+}
+
+function drawWaterfall() {
+  const c = wfCtx; const cv = c.canvas;
+  resizeCanvas(cv);
+  const w = cv.width, h = cv.height;
+  c.clearRect(0, 0, w, h);
+  if (!waterfallRows.length) return;
+
+  const rowH = h / MAX_WF_ROWS;
+  const maxAmp = 25;
+
+  for (let r = 0; r < waterfallRows.length; r++) {
+    const row = waterfallRows[r];
+    const colW = w / row.length;
+    const y = (MAX_WF_ROWS - waterfallRows.length + r) * rowH;
+    for (let i = 0; i < row.length; i++) {
+      const val = Math.min(1, row[i] / maxAmp);
+      const r_ = Math.floor(val * 200 + 10);
+      const g_ = Math.floor(val * 80);
+      const b_ = Math.floor((1 - val) * 180 + 40);
+      c.fillStyle = `rgb(${r_},${g_},${b_})`;
+      c.fillRect(i * colW, y, colW + 0.5, rowH + 0.5);
+    }
+  }
+
+  // Axis labels
+  c.fillStyle = '#475569'; c.font = '16px monospace';
+  c.fillText('← older', 4, 18);
+  c.fillText('newer →', 4, h - 6);
+  c.fillText('subcarrier →', w - 160, h - 6);
+}
+
+function drawMotionChart() {
+  const c = motionCtx; const cv = c.canvas;
+  resizeCanvas(cv);
+  const w = cv.width, h = cv.height;
+  c.clearRect(0, 0, w, h);
+  if (motionHist.length < 2) return;
+
+  // Threshold line
+  c.strokeStyle = '#334155'; c.lineWidth = 1; c.setLineDash([6, 4]);
+  const threshY = h - (0.55 / 1.0) * h * 0.5;
+  c.beginPath(); c.moveTo(0, threshY); c.lineTo(w, threshY); c.stroke();
+  c.setLineDash([]);
+  c.fillStyle = '#475569'; c.font = '14px monospace';
+  c.fillText('walking threshold', 6, threshY - 6);
+
+  // Motion bars
+  const barW = w / MAX_HIST;
+  const maxM = 30;
+  for (let i = 0; i < motionHist.length; i++) {
+    const val = motionHist[i] / maxM;
+    const barH = Math.min(1, val) * h * 0.9;
+    const hue = val > 0.55 ? 45 : val > 0.2 ? 160 : 220;
+    c.fillStyle = `hsla(${hue}, 70%, 55%, 0.7)`;
+    c.fillRect(i * barW + 0.5, h - barH, barW - 1, barH);
+  }
+}
+
+function drawField(field) {
+  const c = fieldCtx; const cv = c.canvas;
+  resizeCanvas(cv);
+  const w = cv.width, h = cv.height;
+  c.clearRect(0, 0, w, h);
+
+  const [gx, , gz] = field.grid_size || [20, 1, 20];
+  const vals = field.values || [];
+  if (!vals.length) return;
+
+  const cellW = w / gx;
+  const cellH = h / gz;
+
+  for (let iz = 0; iz < gz; iz++) {
+    for (let ix = 0; ix < gx; ix++) {
+      const val = vals[iz * gx + ix] || 0;
+      const v = Math.min(1, val);
+      // Viridis-inspired colormap
+      const r = Math.floor(v * 250 + 5);
+      const g = Math.floor(v * 200 * (1 - v * 0.4) + 10);
+      const b = Math.floor((1 - v) * 200 + 20);
+      c.fillStyle = `rgb(${r},${g},${b})`;
+      c.fillRect(ix * cellW, iz * cellH, cellW + 0.5, cellH + 0.5);
+    }
+  }
+
+  // Hot spot marker
+  let maxIdx = 0, maxV = 0;
+  for (let i = 0; i < vals.length; i++) {
+    if (vals[i] > maxV) { maxV = vals[i]; maxIdx = i; }
+  }
+  const mx = (maxIdx % gx + 0.5) * cellW;
+  const mz = (Math.floor(maxIdx / gx) + 0.5) * cellH;
+  c.strokeStyle = '#fff'; c.lineWidth = 2;
+  c.beginPath(); c.arc(mx, mz, 12, 0, Math.PI * 2); c.stroke();
+  c.fillStyle = '#fff'; c.font = '14px monospace';
+  c.fillText(`peak: ${(maxV * 100).toFixed(0)}%`, mx + 16, mz + 4);
+}
+
+connect();
+</script>
+</body>
+</html>
