@@ -676,6 +676,108 @@ asyncio.run(stream())
 
 </details>
 
+<details>
+<summary><strong>Running on macOS</strong> — Live WiFi sensing with CoreWLAN (no ESP32 needed)</summary>
+
+macOS can capture real RSSI, noise floor, and TX rate from your Mac's WiFi hardware via CoreWLAN. A Swift helper + Python bridge repackages these readings as ESP32-format CSI frames, feeding them to the sensing server over UDP.
+
+### Prerequisites
+
+- **macOS** 10.15+ (Catalina or later)
+- **Rust** 1.70+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
+- **Python 3** (pre-installed on macOS)
+- **Xcode Command Line Tools** (`xcode-select --install`)
+- **WiFi Location Services** must be enabled (System Settings → Privacy & Security → Location Services → enable for Terminal)
+
+### Step 1: Build the Rust sensing server
+
+```bash
+cd rust-port/wifi-densepose-rs
+cargo build --release -p wifi-densepose-sensing-server
+```
+
+### Step 2: Compile the macOS WiFi helper
+
+```bash
+swiftc -O -framework CoreWLAN -framework Foundation \
+  v1/src/sensing/mac_wifi.swift -o mac_wifi
+```
+
+This produces a `mac_wifi` binary that reads RSSI, noise, and TX rate from your Mac's WiFi interface at ~100 Hz and outputs JSON lines.
+
+### Step 3: Start the sensing server
+
+```bash
+cd rust-port/wifi-densepose-rs
+cargo run --release -p wifi-densepose-sensing-server
+```
+
+The server starts in **auto** mode: it listens on UDP port 5005 for live data and falls back to simulation if nothing arrives within 2 seconds. Once running you'll see:
+
+```
+HTTP server listening on 0.0.0.0:8080
+WebSocket server listening on 0.0.0.0:8765
+UDP listening on 0.0.0.0:5005 for ESP32 CSI frames
+```
+
+### Step 4: Start the WiFi bridge (separate terminal)
+
+```bash
+python3 scripts/macos_wifi_bridge.py --mac-wifi ./mac_wifi --port 5005
+```
+
+The bridge captures live WiFi readings and sends them to the sensing server. You should see:
+
+```
+[bridge] Starting mac_wifi helper: ./mac_wifi
+[bridge] Sending ESP32 frames to 127.0.0.1:5005
+[bridge] #    1  RSSI= -30 dBm  noise= -72 dBm  tx_rate= 144.0 Mbps  frame=132 bytes
+```
+
+The sensing server **hot-plugs** automatically — it switches from simulation to live data as soon as UDP frames arrive.
+
+### Step 5: Open the UI
+
+Open http://localhost:8080/ui/index.html in your browser.
+
+### One-command startup
+
+To start everything at once from the repo root:
+
+```bash
+bash run_all.sh &
+sleep 10  # wait for build + server startup
+python3 scripts/macos_wifi_bridge.py --mac-wifi ./mac_wifi --port 5005
+```
+
+### What macOS WiFi provides vs ESP32
+
+| Capability | macOS CoreWLAN | ESP32-S3 CSI |
+|------------|---------------|--------------|
+| RSSI (signal strength) | Yes | Yes |
+| Noise floor | Yes | Yes |
+| TX rate | Yes | Yes |
+| Per-subcarrier amplitude | No | Yes (56-192 subcarriers) |
+| Per-subcarrier phase | No | Yes |
+| Pose estimation | No (RSSI-only) | Yes (full CSI) |
+| Breathing detection | Coarse (RSSI variance) | Yes (sub-Hz phase) |
+| Heart rate | No | Yes (micro-Doppler) |
+| Presence / motion | Yes | Yes |
+
+macOS provides RSSI-level sensing — good for presence detection, coarse motion, and environment monitoring. For full pose estimation and vital signs, ESP32-S3 hardware is required.
+
+### Troubleshooting
+
+| Issue | Fix |
+|-------|-----|
+| `No WiFi interface found` | Enable WiFi; grant Location Services permission to Terminal |
+| Server stays in simulation mode | Start the bridge *after* the server is listening on port 5005 |
+| `Permission denied` on `mac_wifi` | Run `chmod +x mac_wifi` |
+| Bridge shows no output | Ensure `mac_wifi` binary exists and is compiled for your architecture (`file mac_wifi`) |
+| Port 8080 already in use | Kill previous server: `lsof -ti:8080 \| xargs kill` |
+
+</details>
+
 ---
 
 ## 📋 Table of Contents

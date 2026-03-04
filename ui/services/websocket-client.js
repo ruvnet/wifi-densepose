@@ -3,7 +3,9 @@
 
 export class WebSocketClient {
   constructor(options = {}) {
-    this.url = options.url || 'ws://localhost:8000/ws/pose';
+    const defaultProto = (typeof location !== 'undefined' && location.protocol === 'https:') ? 'wss:' : 'ws:';
+    const defaultHost = (typeof location !== 'undefined') ? location.host : 'localhost:8080';
+    this.url = options.url || `${defaultProto}//${defaultHost}/api/v1/stream/pose`;
     this.ws = null;
     this.state = 'disconnected'; // disconnected, connecting, connected, error
     this.isRealData = false;
@@ -29,6 +31,9 @@ export class WebSocketClient {
       latency: 0,
       bytesReceived: 0
     };
+
+    // Data source tracking
+    this.dataSource = null; // actual source string from server (e.g. "simulated", "esp32", "wifi")
 
     // Callbacks
     this._onMessage = options.onMessage || (() => {});
@@ -87,6 +92,7 @@ export class WebSocketClient {
 
     this._setState('disconnected');
     this.isRealData = false;
+    this.dataSource = null;
     console.log('[WS-VIZ] Disconnected');
   }
 
@@ -141,11 +147,14 @@ export class WebSocketClient {
         return;
       }
 
-      // Detect real vs mock data from metadata
-      if (data.data && data.data.metadata) {
-        this.isRealData = data.data.metadata.mock_data === false && data.data.metadata.source !== 'mock';
-      } else if (data.metadata) {
-        this.isRealData = data.metadata.mock_data === false;
+      // Detect data source from server metadata.
+      // The server sends: { type: "pose_data", payload: { metadata: { source: "..." } } }
+      // or sensing_update with top-level source field.
+      const meta = data?.payload?.metadata || data?.data?.metadata || data?.metadata;
+      const source = meta?.source || data?.source;
+      if (source) {
+        this.dataSource = source;
+        this.isRealData = source !== 'mock' && source !== 'demo';
       }
 
       // Calculate latency from message timestamp
@@ -240,6 +249,7 @@ export class WebSocketClient {
       ...this.metrics,
       state: this.state,
       isRealData: this.isRealData,
+      dataSource: this.dataSource,
       reconnectAttempts: this.reconnectAttempts,
       uptime: this.metrics.connectTime ? (Date.now() - this.metrics.connectTime) / 1000 : 0
     };
