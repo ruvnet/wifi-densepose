@@ -37,6 +37,7 @@ body {
   position: fixed;
   top: 0; left: 0;
   width: 100vw; height: 100vh;
+  touch-action: none;
 }
 
 /* ---- HUD Overlay ---- */
@@ -692,7 +693,120 @@ body {
 }
 
 @media (max-width: 800px) {
-  .data-panel { display: none; }
+  /* Brand — smaller, top-left */
+  #brand { top: 12px; left: 14px; }
+  #brand-logo { font-size: 22px; }
+  #brand-tagline { font-size: 9px; letter-spacing: 1px; }
+
+  /* Status bar — compact, below brand */
+  #status-bar {
+    top: 12px; right: 14px;
+    gap: 6px;
+  }
+  #data-source-badge { padding: 3px 8px; font-size: 9px; }
+  #scenario-area { padding: 3px 10px; }
+  #scenario-quick-select { font-size: 10px; }
+  #settings-btn { width: 30px; height: 30px; font-size: 15px; }
+
+  /* Scenario description — under status bar */
+  #scenario-description {
+    top: 46px; right: 14px;
+    max-width: 200px;
+    font-size: 10px;
+  }
+
+  /* Data panels — horizontal strip at bottom instead of side panels */
+  .data-panel {
+    position: fixed;
+    width: auto;
+    left: 8px;
+    right: 8px;
+    top: auto;
+    transform: none;
+    border-radius: 10px;
+    padding: 10px 14px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+    align-items: center;
+  }
+
+  #panel-vitals {
+    bottom: 100px;
+    left: 8px;
+    right: 8px;
+    transform: none;
+  }
+  #panel-vitals .panel-header { display: none; }
+  #panel-vitals .vital-row {
+    margin-bottom: 0;
+    flex: 1;
+    min-width: 90px;
+  }
+  #panel-vitals .vital-icon { font-size: 16px; }
+  #panel-vitals .vital-value { font-size: 18px; }
+  #panel-vitals .vital-bar { display: none; }
+  #panel-vitals .vital-label { font-size: 8px; }
+  #panel-vitals .vital-unit { font-size: 10px; }
+
+  #panel-signal {
+    bottom: 8px;
+    left: 8px;
+    right: 8px;
+    transform: none;
+  }
+  #panel-signal .panel-header { display: none; }
+  #panel-signal .signal-row { margin-bottom: 2px; }
+  #panel-signal .signal-label { font-size: 10px; }
+  #panel-signal .signal-value { font-size: 11px; }
+  #panel-signal #rssi-sparkline { display: none; }
+  #panel-signal .presence-state {
+    display: inline-block;
+    padding: 4px 12px;
+    font-size: 11px;
+  }
+  #panel-signal .fall-alert { padding: 4px 8px; font-size: 10px; }
+
+  /* Key hints — hidden on mobile (no keyboard) */
   #key-hints { display: none; }
-  .settings-dialog { width: 95vw; }
+
+  /* Capabilities bar — hidden */
+  #capabilities-bar { display: none; }
+
+  /* Edge modules — smaller */
+  #edge-modules-bar { bottom: 196px; }
+  .edge-badge { font-size: 8px; padding: 1px 6px; }
+
+  /* Settings dialog — full width on mobile */
+  .settings-dialog {
+    width: 96vw;
+    max-height: 85vh;
+    border-radius: 12px;
+  }
+  .settings-header { padding: 12px 16px; font-size: 12px; }
+  .stab { padding: 8px 10px; font-size: 9px; }
+  .stab-content { padding: 12px 16px; }
+  .setting-row { font-size: 11px; gap: 8px; margin-bottom: 10px; }
+  .setting-row span:first-child { min-width: 90px; }
+}
+
+/* Extra small screens (phones in portrait) */
+@media (max-width: 480px) {
+  #brand-tagline { display: none; }
+  #scenario-area { display: none; }
+  #scenario-description { display: none; }
+
+  #panel-vitals {
+    bottom: 70px;
+  }
+  #panel-vitals .vital-row { min-width: 70px; }
+  #panel-vitals .vital-value { font-size: 16px; }
+
+  #panel-signal {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 2px 12px;
+  }
+
+  #edge-modules-bar { display: none; }
 }
