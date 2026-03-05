@@ -13,6 +13,7 @@ services:
     environment:
       - RUST_LOG=info
     command: ["--source", "simulated", "--tick-ms", "100", "--ui-path", "/app/ui", "--http-port", "3000", "--ws-port", "3001"]
+    restart: unless-stopped
 
   python-sensing:
     build:
@@ -24,3 +25,4 @@ services:
       - "8080:8080"   # UI
     environment:
       - PYTHONUNBUFFERED=1
+    restart: unless-stopped
