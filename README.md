@@ -1,4 +1,4 @@
-# π RuView
+# WiFi DensePose
 
 **See through walls with WiFi.** No cameras. No wearables. No Internet. Just radio waves.
 
