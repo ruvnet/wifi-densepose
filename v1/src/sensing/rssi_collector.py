@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import math
+import platform
 import re
 import subprocess
 import threading
@@ -474,6 +475,7 @@ class WindowsWifiCollector:
         interface: str = "Wi-Fi",
         sample_rate_hz: float = 2.0,
         buffer_seconds: int = 120,
+        dither_std: float = 0.3,
     ) -> None:
         self._interface = interface
         self._rate = sample_rate_hz
@@ -482,6 +484,15 @@ class WindowsWifiCollector:
         self._thread: Optional[threading.Thread] = None
         self._cumulative_tx: int = 0
         self._cumulative_rx: int = 0
+        # Dithering overcomes integer-dBm quantization from netsh.
+        # Without it, a flat RSSI produces variance=0 and all spectral
+        # features collapse to zero, making the feature extractor useless.
+        self._dither_std = dither_std
+        self._rng = np.random.default_rng()
+        # Use netsh.exe on WSL2, netsh on native Windows
+        self._netsh = "netsh.exe" if (
+            platform.system() == "Linux" and "microsoft" in platform.release().lower()
+        ) else "netsh"
 
     # -- public API ----------------------------------------------------------
 
@@ -524,22 +535,24 @@ class WindowsWifiCollector:
     def _validate_interface(self) -> None:
         try:
             result = subprocess.run(
-                ["netsh", "wlan", "show", "interfaces"],
+                [self._netsh, "wlan", "show", "interfaces"],
                 capture_output=True, text=True, timeout=5.0,
             )
             if self._interface not in result.stdout:
                 raise RuntimeError(
                     f"WiFi interface '{self._interface}' not found. "
-                    f"Check 'netsh wlan show interfaces' for the correct name."
+                    f"Check '{self._netsh} wlan show interfaces' for the correct name."
                 )
-            if "disconnected" in result.stdout.lower().split(self._interface.lower())[1][:200]:
+            # Check for disconnected state (works for both English and Korean output)
+            after_iface = result.stdout.lower().split(self._interface.lower())
+            if len(after_iface) > 1 and "disconnect" in after_iface[1][:200]:
                 raise RuntimeError(
                     f"WiFi interface '{self._interface}' is disconnected. "
                     f"Connect to a WiFi network first."
                 )
         except FileNotFoundError:
             raise RuntimeError(
-                "netsh not found. This collector requires Windows."
+                f"{self._netsh} not found. This collector requires Windows (or WSL2)."
             )
 
     def _sample_loop(self) -> None:
@@ -558,29 +571,47 @@ class WindowsWifiCollector:
 
     def _read_sample(self) -> WifiSample:
         result = subprocess.run(
-            ["netsh", "wlan", "show", "interfaces"],
+            [self._netsh, "wlan", "show", "interfaces"],
             capture_output=True, text=True, timeout=5.0,
         )
         rssi = -80.0
         signal_pct = 0.0
+        rx_rate = 0.0
+        tx_rate = 0.0
 
         for line in result.stdout.splitlines():
             stripped = line.strip()
-            # "Rssi" line contains the raw dBm value (available on Win10+)
+            # "Rssi" or Korean equivalent contains the raw dBm value
             if stripped.lower().startswith("rssi"):
                 try:
                     rssi = float(stripped.split(":")[1].strip())
                 except (IndexError, ValueError):
                     pass
-            # "Signal" line contains percentage (always available)
-            elif stripped.lower().startswith("signal"):
+            # "Signal" or Korean "신호" contains percentage
+            elif stripped.lower().startswith("signal") or "신호" in stripped.lower():
                 try:
                     pct_str = stripped.split(":")[1].strip().rstrip("%")
                     signal_pct = float(pct_str)
-                    # If RSSI line was missing, estimate from percentage
-                    # Signal% roughly maps: 100% ≈ -30 dBm, 0% ≈ -90 dBm
                 except (IndexError, ValueError):
                     pass
+            # Receive rate: "Receive rate (Mbps)" or Korean "수신 속도(Mbps)"
+            elif "receive rate" in stripped.lower() or "수신 속도" in stripped.lower():
+                try:
+                    rx_rate = float(stripped.split(":")[1].strip())
+                except (IndexError, ValueError):
+                    pass
+            # Transmit rate: "Transmit rate (Mbps)" or Korean "전송 속도(Mbps)"
+            elif "transmit rate" in stripped.lower() or "전송 속도" in stripped.lower():
+                try:
+                    tx_rate = float(stripped.split(":")[1].strip())
+                except (IndexError, ValueError):
+                    pass
+
+        # Apply quantization dithering: netsh reports integer dBm, but the
+        # true analog RSSI has sub-dBm variation.  Small Gaussian dither
+        # recovers non-degenerate statistics while preserving the mean.
+        if self._dither_std > 0:
+            rssi += float(self._rng.normal(0.0, self._dither_std))
 
         # Normalise link quality from signal percentage
         link_quality = signal_pct / 100.0
@@ -588,9 +619,10 @@ class WindowsWifiCollector:
         # Estimate noise floor (Windows doesn't expose it directly)
         noise_dbm = -95.0
 
-        # Track cumulative bytes (not available from netsh; increment synthetic counter)
-        self._cumulative_tx += 1500
-        self._cumulative_rx += 3000
+        # Use throughput rates as byte-count proxies (Mbps → bytes/tick)
+        bytes_per_tick = int(rx_rate * 1e6 / 8 / self._rate) if rx_rate > 0 else 1500
+        self._cumulative_tx += int(tx_rate * 1e6 / 8 / self._rate) if tx_rate > 0 else 1500
+        self._cumulative_rx += bytes_per_tick
 
         return WifiSample(
             timestamp=time.time(),

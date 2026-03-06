@@ -17,7 +17,7 @@ from numpy.typing import NDArray
 from scipy import fft as scipy_fft
 from scipy import stats as scipy_stats
 
-from v1.src.sensing.rssi_collector import WifiSample
+from src.sensing.rssi_collector import WifiSample
 
 logger = logging.getLogger(__name__)
 

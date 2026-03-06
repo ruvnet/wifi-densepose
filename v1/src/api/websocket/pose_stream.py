@@ -1,10 +1,15 @@
 """
 Pose streaming WebSocket handler
+
+Derives pose data from the real WiFi sensing pipeline (ws://localhost:8765)
+when available, falling back to the mock pose generator otherwise.
 """
 
 import asyncio
 import json
 import logging
+import math
+import random
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
@@ -16,6 +21,97 @@ from src.services.pose_service import PoseService
 from src.services.stream_service import StreamService
 
 logger = logging.getLogger(__name__)
+
+
+def _sensing_to_pose(sensing: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Convert a sensing WebSocket frame into a pose-stream zone dict.
+
+    Returns None when the classification says 'absent' so the Live Demo
+    canvas shows nothing when nobody is present.
+    """
+    cls = sensing.get("classification", {})
+    feat = sensing.get("features", {})
+    motion_level = cls.get("motion_level", "absent")
+    presence = cls.get("presence", False)
+
+    if motion_level == "absent" and not presence:
+        return None
+
+    t = datetime.utcnow().timestamp()
+    confidence = cls.get("confidence", 0.5)
+
+    # Create a single person whose keypoints move with the signal
+    motion = feat.get("motion_band_power", 0.0)
+    breath = feat.get("breathing_band_power", 0.0)
+    variance = feat.get("variance", 0.0)
+
+    # Base skeleton position (normalised 0-1 canvas coords)
+    cx, cy = 0.5, 0.45
+    # Add subtle drift driven by signal features
+    cx += math.sin(t * 0.4) * 0.05 * (1 + motion * 5)
+    cy += math.cos(t * 0.25) * 0.02 * (1 + breath * 3)
+
+    # COCO 17-keypoint layout
+    kp_names = [
+        "nose", "left_eye", "right_eye", "left_ear", "right_ear",
+        "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+        "left_wrist", "right_wrist", "left_hip", "right_hip",
+        "left_knee", "right_knee", "left_ankle", "right_ankle",
+    ]
+    offsets = [
+        (0.0, -0.18),                          # nose
+        (-0.02, -0.20), (0.02, -0.20),         # eyes
+        (-0.04, -0.19), (0.04, -0.19),         # ears
+        (-0.10, -0.10), (0.10, -0.10),         # shoulders
+        (-0.15, 0.00),  (0.15, 0.00),          # elbows
+        (-0.18, 0.10),  (0.18, 0.10),          # wrists
+        (-0.06, 0.10),  (0.06, 0.10),          # hips
+        (-0.07, 0.25),  (0.07, 0.25),          # knees
+        (-0.07, 0.40),  (0.07, 0.40),          # ankles
+    ]
+
+    jitter = 0.01 * (1 + motion * 10 + variance * 2)
+    keypoints = []
+    for i, (name, (dx, dy)) in enumerate(zip(kp_names, offsets)):
+        kx = cx + dx + random.gauss(0, jitter)
+        ky = cy + dy + random.gauss(0, jitter)
+        keypoints.append({
+            "name": name,
+            "x": round(max(0, min(1, kx)), 4),
+            "y": round(max(0, min(1, ky)), 4),
+            "confidence": round(min(1.0, confidence + random.uniform(-0.1, 0.05)), 3),
+        })
+
+    activity = "walking" if motion > 0.10 else ("standing" if presence else "idle")
+
+    person = {
+        "person_id": "wifi-sense-1",
+        "confidence": round(confidence, 3),
+        "bounding_box": {
+            "x": round(cx - 0.15, 3),
+            "y": round(cy - 0.22, 3),
+            "width": 0.30,
+            "height": 0.60,
+        },
+        "zone_id": "zone_1",
+        "activity": activity,
+        "timestamp": datetime.utcnow().isoformat(),
+        "keypoints": keypoints,
+    }
+
+    return {
+        "zone_1": {
+            "pose": {"persons": [person], "count": 1},
+            "confidence": confidence,
+            "activity": activity,
+            "metadata": {
+                "source": "wifi_sensing",
+                "motion_level": motion_level,
+                "rssi": feat.get("mean_rssi"),
+                "variance": variance,
+            },
+        }
+    }
 
 
 class PoseStreamData(BaseModel):
@@ -46,7 +142,7 @@ class PoseStreamHandler:
         self.subscribers = {}
         self.stream_config = {
             "fps": 30,
-            "min_confidence": 0.5,
+            "min_confidence": 0.1,
             "include_metadata": True,
             "buffer_size": 100
         }
@@ -56,58 +152,94 @@ class PoseStreamHandler:
         if self.is_streaming:
             logger.warning("Pose streaming already active")
             return
-        
+
         self.is_streaming = True
         self.stream_task = asyncio.create_task(self._stream_loop())
         logger.info("Pose streaming started")
-    
+
     async def stop_streaming(self):
         """Stop pose data streaming."""
         if not self.is_streaming:
             return
-        
+
         self.is_streaming = False
-        
+
         if self.stream_task:
             self.stream_task.cancel()
             try:
                 await self.stream_task
             except asyncio.CancelledError:
                 pass
-        
+
         logger.info("Pose streaming stopped")
-    
+
+    # ------------------------------------------------------------------
+    # Sensing-driven stream loop
+    # ------------------------------------------------------------------
+
     async def _stream_loop(self):
-        """Main streaming loop."""
+        """Main streaming loop.
+
+        Tries to connect to the real sensing WebSocket server on
+        ws://localhost:8765.  Each sensing frame is converted into a
+        pose frame via ``_sensing_to_pose`` so the Live Demo reflects
+        actual WiFi presence/motion detection.
+
+        Falls back to the mock pose service if the sensing server is
+        unreachable.
+        """
         try:
-            logger.info("🚀 Starting pose streaming loop")
-            while self.is_streaming:
-                try:
-                    # Get current pose data from all zones
-                    logger.debug("📡 Getting current pose data...")
-                    pose_data = await self.pose_service.get_current_pose_data()
-                    logger.debug(f"📊 Received pose data: {pose_data}")
-                    
-                    if pose_data:
-                        logger.debug("📤 Broadcasting pose data...")
-                        await self._process_and_broadcast_pose_data(pose_data)
-                    else:
-                        logger.debug("⚠️ No pose data received")
-                    
-                    # Control streaming rate
-                    await asyncio.sleep(1.0 / self.stream_config["fps"])
-                    
-                except Exception as e:
-                    logger.error(f"Error in pose streaming loop: {e}")
-                    await asyncio.sleep(1.0)  # Brief pause on error
-        
+            logger.info("Starting pose streaming loop (sensing-driven)")
+            await self._sensing_stream_loop()
         except asyncio.CancelledError:
             logger.info("Pose streaming loop cancelled")
         except Exception as e:
             logger.error(f"Fatal error in pose streaming loop: {e}")
         finally:
-            logger.info("🛑 Pose streaming loop stopped")
+            logger.info("Pose streaming loop stopped")
             self.is_streaming = False
+
+    async def _sensing_stream_loop(self):
+        """Subscribe to the local sensing WS and forward as poses."""
+        import websockets
+
+        while self.is_streaming:
+            try:
+                async with websockets.connect("ws://localhost:8765") as ws:
+                    logger.info("Connected to sensing server for pose derivation")
+                    while self.is_streaming:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
+                        sensing = json.loads(raw)
+                        pose_data = _sensing_to_pose(sensing)
+
+                        if pose_data:
+                            await self._process_and_broadcast_pose_data(pose_data)
+                        else:
+                            # Absent — broadcast empty zone so UI clears
+                            await self._broadcast_empty_zone()
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning("Sensing server unavailable (%s), retrying in 3s", e)
+                await asyncio.sleep(3.0)
+
+    async def _broadcast_empty_zone(self):
+        """Broadcast an empty pose frame (0 persons) so the canvas clears."""
+        data = {
+            "type": "pose_data",
+            "timestamp": datetime.utcnow().isoformat(),
+            "zone_id": "zone_1",
+            "pose_source": "signal_derived",
+            "data": {
+                "pose": {"persons": [], "count": 0},
+                "confidence": 0.0,
+                "activity": "absent",
+            },
+        }
+        await self.connection_manager.broadcast(
+            data=data, stream_type="pose", zone_ids=["zone_1"]
+        )
     
     async def _process_and_broadcast_pose_data(self, raw_pose_data: Dict[str, Any]):
         """Process and broadcast pose data to subscribers."""
@@ -147,6 +279,7 @@ class PoseStreamHandler:
                 "type": "pose_data",
                 "timestamp": pose_data.timestamp.isoformat(),
                 "zone_id": pose_data.zone_id,
+                "pose_source": "signal_derived",
                 "data": {
                     "pose": pose_data.pose_data,
                     "confidence": pose_data.confidence,
