@@ -65,6 +65,7 @@ ESP32_UDP_PORT = 5005
 # ESP32 UDP Collector — reads ADR-018 binary frames
 # ---------------------------------------------------------------------------
 
+
 class Esp32UdpCollector:
     """
     Collects real CSI data from ESP32 nodes via UDP (ADR-018 binary format).
@@ -79,7 +80,7 @@ class Esp32UdpCollector:
     # ADR-018 header: magic(4) node_id(1) n_ant(1) n_sc(2) freq(4) seq(4) rssi(1) noise(1) reserved(2)
     MAGIC = 0xC5110001
     HEADER_SIZE = 20
-    HEADER_FMT = '<IBBHIIBB2x'
+    HEADER_FMT = "<IBBHIIBB2x"
 
     def __init__(
         self,
@@ -130,7 +131,9 @@ class Esp32UdpCollector:
         if self._sock:
             self._sock.close()
             self._sock = None
-        logger.info("Esp32UdpCollector stopped (%d frames received)", self._frames_received)
+        logger.info(
+            "Esp32UdpCollector stopped (%d frames received)", self._frames_received
+        )
 
     def get_samples(self, n: Optional[int] = None) -> List[WifiSample]:
         if n is not None:
@@ -152,8 +155,9 @@ class Esp32UdpCollector:
         if len(raw) < self.HEADER_SIZE:
             return
 
-        magic, node_id, n_ant, n_sc, freq_mhz, seq, rssi_u8, noise_u8 = \
+        magic, node_id, n_ant, n_sc, freq_mhz, seq, rssi_u8, noise_u8 = (
             struct.unpack_from(self.HEADER_FMT, raw, 0)
+        )
 
         if magic != self.MAGIC:
             return
@@ -167,10 +171,10 @@ class Esp32UdpCollector:
         amplitude_list = []
 
         if len(raw) >= iq_bytes_needed and iq_count > 0:
-            iq_raw = struct.unpack_from(f'<{iq_count * 2}b', raw, self.HEADER_SIZE)
+            iq_raw = struct.unpack_from(f"<{iq_count * 2}b", raw, self.HEADER_SIZE)
             i_vals = np.array(iq_raw[0::2], dtype=np.float64)
             q_vals = np.array(iq_raw[1::2], dtype=np.float64)
-            amplitudes = np.sqrt(i_vals ** 2 + q_vals ** 2)
+            amplitudes = np.sqrt(i_vals**2 + q_vals**2)
             mean_amp = float(np.mean(amplitudes))
             amplitude_list = amplitudes.tolist()
         else:
@@ -216,6 +220,7 @@ class Esp32UdpCollector:
 # Probe for ESP32 UDP
 # ---------------------------------------------------------------------------
 
+
 def probe_esp32_udp(port: int = ESP32_UDP_PORT, timeout: float = 2.0) -> bool:
     """Return True if an ESP32 is actively streaming on the UDP port."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -225,7 +230,7 @@ def probe_esp32_udp(port: int = ESP32_UDP_PORT, timeout: float = 2.0) -> bool:
         sock.bind(("0.0.0.0", port))
         data, _ = sock.recvfrom(256)
         if len(data) >= 20:
-            magic = struct.unpack_from('<I', data, 0)[0]
+            magic = struct.unpack_from("<I", data, 0)[0]
             return magic == 0xC5110001
         return False
     except (socket.timeout, OSError):
@@ -237,6 +242,7 @@ def probe_esp32_udp(port: int = ESP32_UDP_PORT, timeout: float = 2.0) -> bool:
 # ---------------------------------------------------------------------------
 # Signal field generator
 # ---------------------------------------------------------------------------
+
 
 def generate_signal_field(
     features: RssiFeatures,
@@ -309,6 +315,7 @@ def generate_signal_field(
 # WebSocket server
 # ---------------------------------------------------------------------------
 
+
 class SensingWebSocketServer:
     """Async WebSocket server that broadcasts sensing updates."""
 
@@ -344,15 +351,20 @@ class SensingWebSocketServer:
             # In Docker on Mac, Linux is detected but no wireless extensions exist.
             # Force SimulatedCollector if /proc/net/wireless doesn't exist.
             import os
+
             if os.path.exists("/proc/net/wireless"):
                 try:
                     collector = LinuxWifiCollector(sample_rate_hz=10.0)
+                    collector.collect_once()  # verify the interface is readable before committing to Linux WiFi
                     self.source = "linux_wifi"
+                    logger.info("Using LinuxWifiCollector")
                     return collector
-                except RuntimeError:
-                    logger.warning("Linux WiFi unavailable, falling back")
+                except RuntimeError as e:
+                    logger.warning("Linux WiFi unavailable (%s), falling back", e)
             else:
-                logger.warning("Linux detected but /proc/net/wireless missing (likely Docker). Falling back.")
+                logger.warning(
+                    "Linux detected but /proc/net/wireless missing (likely Docker). Falling back."
+                )
         elif system == "Darwin":
             try:
                 collector = MacosWifiCollector(sample_rate_hz=10.0)
@@ -511,6 +523,7 @@ class SensingWebSocketServer:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 def main():
     logging.basicConfig(
