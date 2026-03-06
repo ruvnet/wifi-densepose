@@ -96,7 +96,7 @@ export function NodeCard({ node, onClick }: NodeCardProps) {
       >
         <DetailRow label="MAC" value={node.mac ?? "--"} mono />
         <DetailRow label="Firmware" value={node.firmware_version ?? "--"} mono />
-        <DetailRow label="Chip" value={node.chip.toUpperCase()} />
+        <DetailRow label="Chip" value={node.chip?.toUpperCase() ?? "--"} />
         <DetailRow label="Role" value={node.mesh_role} />
         <DetailRow
           label="TDM"

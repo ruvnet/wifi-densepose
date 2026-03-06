@@ -192,7 +192,7 @@ function NodeRow({
         <Td mono>{node.mac ?? "--"}</Td>
         <Td mono>{node.ip}</Td>
         <Td mono>{node.firmware_version ?? "--"}</Td>
-        <Td>{node.chip.toUpperCase()}</Td>
+        <Td>{node.chip?.toUpperCase() ?? "--"}</Td>
         <Td>{formatLastSeen(node.last_seen)}</Td>
       </tr>
       {isExpanded && (
