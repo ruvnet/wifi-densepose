@@ -139,9 +139,9 @@ Status dot uses `--status-online/warning/error`. Card background shifts on hover
 
 Progress bar uses `--accent` fill with subtle pulse animation during active writes.
 
-#### 3. Mesh Topology View
+#### 3. Mesh Topology View (Three.js)
 
-Interactive visualization of the entire sensing network as a force-directed graph. Each node is a circle. Edges represent signal paths. The coordinator node is visually distinct (larger, outlined).
+Interactive 3D visualization of the sensing network. Each node is a sphere. Edges are lines representing signal paths. The coordinator node is visually distinct (larger, outlined ring). Built with **Three.js**, consistent with the existing visualization stack in `ui/observatory/js/` and `ui/components/`.
 
 ```
 +-- Mesh Topology ------------------------------------------+
@@ -156,7 +156,15 @@ Interactive visualization of the entire sensing network as a force-directed grap
 +-----------------------------------------------------------+
 ```
 
-Force-directed graph using D3 or a lightweight canvas renderer. Nodes are color-coded by status (green/amber/red). Edge thickness indicates signal strength. Clicking a node opens its detail in the Inspector panel. The graph updates in real-time as nodes join, leave, or change status.
+**Three.js implementation details:**
+- Force-directed layout computed on CPU, rendered as `THREE.Group` with `THREE.Mesh` (spheres) and `THREE.Line` (edges)
+- Node spheres use `THREE.MeshPhongMaterial` with emissive color matching `--status-online/warning/error`
+- Edge lines use `THREE.LineBasicMaterial` with opacity mapped to signal strength
+- Coordinator node rendered with `THREE.RingGeometry` outline
+- Camera: `OrbitControls` for pan/zoom/rotate, reset button returns to default view
+- Follows existing patterns: `BufferGeometry` + `BufferAttribute` for dynamic updates (see `ui/observatory/js/subcarrier-manifold.js`)
+- Raycasting for node click → opens detail in Inspector panel
+- Real-time updates as nodes join, leave, or change status — geometry attributes updated per frame
 
 #### 4. PropertyGrid (Unity Inspector-style)
 
@@ -226,7 +234,7 @@ Minimal and purposeful:
 - Panel collapse/expand: 200ms ease-out
 - Node card health transition: 300ms (color fade, not flash)
 - Progress bar fill: smooth 60fps CSS transition
-- Mesh graph node movement: D3 spring simulation (no easing hacks)
+- Mesh graph: Three.js render loop at 60fps, force simulation on requestAnimationFrame
 - No loading spinners — use skeleton placeholders instead
 
 ### Branding
@@ -261,5 +269,6 @@ Minimal and purposeful:
 
 - ADR-052: Tauri Desktop Frontend
 - Unity Editor UI Guidelines: https://docs.unity3d.com/Manual/UIE-USS.html
+- Three.js (existing project dependency): `ui/observatory/js/`, `ui/components/`
 - Inter font: https://rsms.me/inter/
 - JetBrains Mono: https://www.jetbrains.com/lp/mono/
