@@ -5,7 +5,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   server_http_port: 8080,
   server_ws_port: 8765,
   server_udp_port: 5005,
-  bind_address: "0.0.0.0",
+  bind_address: "127.0.0.1",
   ui_path: "",
   ota_psk: "",
   auto_discover: true,
@@ -19,17 +19,14 @@ export function Settings() {
   const [showPsk, setShowPsk] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load persisted settings on mount
   useEffect(() => {
     (async () => {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
         const persisted = await invoke<AppSettings | null>("get_settings");
-        if (persisted) {
-          setSettings(persisted);
-        }
+        if (persisted) setSettings(persisted);
       } catch {
-        // Settings command may not exist yet -- use defaults
+        // Settings command may not exist yet
       }
     })();
   }, []);
@@ -60,55 +57,38 @@ export function Settings() {
   };
 
   return (
-    <div style={{ padding: "24px", maxWidth: "600px" }}>
-      <h1
-        style={{
-          fontSize: "22px",
-          fontWeight: 700,
-          color: "var(--text-primary, #e2e8f0)",
-          margin: "0 0 4px",
-        }}
-      >
-        Settings
-      </h1>
-      <p
-        style={{
-          fontSize: "13px",
-          color: "var(--text-secondary, #94a3b8)",
-          marginBottom: "24px",
-        }}
-      >
+    <div style={{ padding: "var(--space-5)", maxWidth: 600 }}>
+      <h1 className="heading-lg" style={{ margin: "0 0 var(--space-1)" }}>Settings</h1>
+      <p style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: "var(--space-5)" }}>
         Configure server, network, and application preferences
       </p>
 
-      {/* Error */}
       {error && (
         <div
           style={{
-            background: "rgba(239, 68, 68, 0.1)",
-            border: "1px solid rgba(239, 68, 68, 0.3)",
-            borderRadius: "6px",
-            padding: "12px 16px",
-            marginBottom: "16px",
-            fontSize: "13px",
-            color: "#fca5a5",
+            background: "rgba(248, 81, 73, 0.1)",
+            border: "1px solid rgba(248, 81, 73, 0.3)",
+            borderRadius: 6,
+            padding: "var(--space-3) var(--space-4)",
+            marginBottom: "var(--space-4)",
+            fontSize: 13,
+            color: "var(--status-error)",
           }}
         >
           {error}
         </div>
       )}
 
-      {/* Saved toast */}
       {saved && (
         <div
           style={{
-            background: "rgba(34, 197, 94, 0.1)",
-            border: "1px solid rgba(34, 197, 94, 0.3)",
-            borderRadius: "6px",
-            padding: "12px 16px",
-            marginBottom: "16px",
-            fontSize: "13px",
-            color: "#86efac",
+            background: "rgba(63, 185, 80, 0.1)",
+            border: "1px solid rgba(63, 185, 80, 0.3)",
+            borderRadius: 6,
+            padding: "var(--space-3) var(--space-4)",
+            marginBottom: "var(--space-4)",
+            fontSize: 13,
+            color: "var(--status-online)",
           }}
         >
           Settings saved.
@@ -117,50 +97,32 @@ export function Settings() {
 
       {/* Sensing Server */}
       <Section title="Sensing Server">
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: "16px",
-          }}
-        >
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-4)" }}>
           <Field label="HTTP Port">
-            <NumberInput
-              value={settings.server_http_port}
-              onChange={(v) => update("server_http_port", v)}
-              min={1}
-              max={65535}
-            />
+            <NumberInput value={settings.server_http_port} onChange={(v) => update("server_http_port", v)} min={1} max={65535} />
           </Field>
           <Field label="WebSocket Port">
-            <NumberInput
-              value={settings.server_ws_port}
-              onChange={(v) => update("server_ws_port", v)}
-              min={1}
-              max={65535}
-            />
+            <NumberInput value={settings.server_ws_port} onChange={(v) => update("server_ws_port", v)} min={1} max={65535} />
           </Field>
           <Field label="UDP Port">
-            <NumberInput
-              value={settings.server_udp_port}
-              onChange={(v) => update("server_udp_port", v)}
-              min={1}
-              max={65535}
-            />
+            <NumberInput value={settings.server_udp_port} onChange={(v) => update("server_udp_port", v)} min={1} max={65535} />
           </Field>
           <Field label="Bind Address">
-            <TextInput
+            <input
+              type="text"
               value={settings.bind_address}
-              onChange={(v) => update("bind_address", v)}
-              placeholder="0.0.0.0"
+              onChange={(e) => update("bind_address", e.target.value)}
+              placeholder="127.0.0.1"
+              style={{ fontFamily: "var(--font-mono)" }}
             />
           </Field>
         </div>
-        <div style={{ marginTop: "16px" }}>
+        <div style={{ marginTop: "var(--space-4)" }}>
           <Field label="UI Static Files Path">
-            <TextInput
+            <input
+              type="text"
               value={settings.ui_path}
-              onChange={(v) => update("ui_path", v)}
+              onChange={(e) => update("ui_path", e.target.value)}
               placeholder="Leave empty for default"
             />
           </Field>
@@ -170,28 +132,19 @@ export function Settings() {
       {/* Security */}
       <Section title="Security">
         <Field label="OTA Pre-Shared Key (PSK)">
-          <div style={{ display: "flex", gap: "8px" }}>
+          <div style={{ display: "flex", gap: "var(--space-2)" }}>
             <input
               type={showPsk ? "text" : "password"}
               value={settings.ota_psk}
               onChange={(e) => update("ota_psk", e.target.value)}
               placeholder="Enter PSK for OTA authentication"
-              style={{ ...inputStyle, flex: 1 }}
+              style={{ flex: 1, fontFamily: "var(--font-mono)" }}
             />
-            <button
-              onClick={() => setShowPsk((prev) => !prev)}
-              style={secondaryBtnStyle}
-            >
+            <button onClick={() => setShowPsk((prev) => !prev)} style={secondaryBtn}>
               {showPsk ? "Hide" : "Show"}
             </button>
           </div>
-          <p
-            style={{
-              fontSize: "11px",
-              color: "var(--text-muted, #64748b)",
-              marginTop: "4px",
-            }}
-          >
+          <p style={{ fontSize: 11, color: "var(--text-muted)", marginTop: "var(--space-1)" }}>
             Used for authenticating OTA firmware updates to nodes.
           </p>
         </Field>
@@ -199,36 +152,16 @@ export function Settings() {
 
       {/* Discovery */}
       <Section title="Network Discovery">
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: "16px",
-          }}
-        >
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-4)" }}>
           <Field label="Auto-Discover">
-            <label
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                cursor: "pointer",
-              }}
-            >
+            <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", cursor: "pointer" }}>
               <input
                 type="checkbox"
                 checked={settings.auto_discover}
                 onChange={(e) => update("auto_discover", e.target.checked)}
-                style={{ accentColor: "var(--accent, #6366f1)" }}
+                style={{ accentColor: "var(--accent)" }}
               />
-              <span
-                style={{
-                  fontSize: "13px",
-                  color: "var(--text-secondary, #94a3b8)",
-                }}
-              >
-                Enable periodic scanning
-              </span>
+              <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>Enable periodic scanning</span>
             </label>
           </Field>
           <Field label="Scan Interval (ms)">
@@ -245,51 +178,34 @@ export function Settings() {
       </Section>
 
       {/* Actions */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          marginTop: "24px",
-        }}
-      >
-        <button onClick={reset} style={secondaryBtnStyle}>
-          Reset to Defaults
-        </button>
-        <button onClick={save} style={primaryBtnStyle}>
-          Save Settings
-        </button>
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: "var(--space-5)" }}>
+        <button onClick={reset} style={secondaryBtn}>Reset to Defaults</button>
+        <button onClick={save} style={primaryBtn}>Save Settings</button>
       </div>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Sub-components
-// ---------------------------------------------------------------------------
+// --- Sub-components ---
 
-function Section({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div
       style={{
-        background: "var(--card-bg, #1e1e2e)",
-        border: "1px solid var(--border, #2e2e3e)",
-        borderRadius: "8px",
-        padding: "20px",
-        marginBottom: "16px",
+        background: "var(--bg-surface)",
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        padding: "var(--space-5)",
+        marginBottom: "var(--space-4)",
       }}
     >
       <h2
         style={{
-          fontSize: "14px",
+          fontSize: 14,
           fontWeight: 600,
-          color: "var(--text-primary, #e2e8f0)",
-          margin: "0 0 16px",
+          color: "var(--text-primary)",
+          margin: "0 0 var(--space-4)",
+          fontFamily: "var(--font-sans)",
         }}
       >
         {title}
@@ -299,22 +215,17 @@ function Section({
   );
 }
 
-function Field({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
       <label
         style={{
           display: "block",
-          fontSize: "12px",
+          fontSize: 12,
           fontWeight: 600,
-          color: "var(--text-secondary, #94a3b8)",
-          marginBottom: "6px",
+          color: "var(--text-secondary)",
+          marginBottom: 6,
+          fontFamily: "var(--font-sans)",
         }}
       >
         {label}
@@ -324,101 +235,42 @@ function Field({
   );
 }
 
-function TextInput({
-  value,
-  onChange,
-  placeholder,
-  disabled = false,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  disabled?: boolean;
-}) {
-  return (
-    <input
-      type="text"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder={placeholder}
-      disabled={disabled}
-      style={{
-        ...inputStyle,
-        opacity: disabled ? 0.5 : 1,
-      }}
-    />
-  );
-}
-
 function NumberInput({
-  value,
-  onChange,
-  min,
-  max,
-  step = 1,
-  disabled = false,
+  value, onChange, min, max, step = 1, disabled = false,
 }: {
-  value: number;
-  onChange: (v: number) => void;
-  min?: number;
-  max?: number;
-  step?: number;
-  disabled?: boolean;
+  value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number; disabled?: boolean;
 }) {
   return (
     <input
       type="number"
       value={value}
-      onChange={(e) => {
-        const n = parseInt(e.target.value, 10);
-        if (!isNaN(n)) onChange(n);
-      }}
+      onChange={(e) => { const n = parseInt(e.target.value, 10); if (!isNaN(n)) onChange(n); }}
       min={min}
       max={max}
       step={step}
       disabled={disabled}
-      style={{
-        ...inputStyle,
-        opacity: disabled ? 0.5 : 1,
-      }}
     />
   );
 }
 
-// ---------------------------------------------------------------------------
-// Shared styles
-// ---------------------------------------------------------------------------
+// --- Shared styles ---
 
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  padding: "8px 12px",
-  border: "1px solid var(--border, #2e2e3e)",
-  borderRadius: "6px",
-  background: "var(--input-bg, #12121a)",
-  color: "var(--text-primary, #e2e8f0)",
-  fontSize: "13px",
-  outline: "none",
-  boxSizing: "border-box",
-};
-
-const primaryBtnStyle: React.CSSProperties = {
-  padding: "8px 20px",
+const primaryBtn: React.CSSProperties = {
+  padding: "var(--space-2) 20px",
   border: "none",
-  borderRadius: "6px",
-  background: "var(--accent, #6366f1)",
+  borderRadius: 6,
+  background: "var(--accent)",
   color: "#fff",
-  fontSize: "13px",
+  fontSize: 13,
   fontWeight: 600,
-  cursor: "pointer",
 };
 
-const secondaryBtnStyle: React.CSSProperties = {
-  padding: "8px 16px",
-  border: "1px solid var(--border, #2e2e3e)",
-  borderRadius: "6px",
+const secondaryBtn: React.CSSProperties = {
+  padding: "var(--space-2) var(--space-4)",
+  border: "1px solid var(--border)",
+  borderRadius: 6,
   background: "transparent",
-  color: "var(--text-secondary, #94a3b8)",
-  fontSize: "13px",
+  color: "var(--text-secondary)",
+  fontSize: 13,
   fontWeight: 500,
-  cursor: "pointer",
 };

@@ -2,69 +2,53 @@ import type { HealthStatus } from "../types";
 
 interface StatusBadgeProps {
   status: HealthStatus;
-  /** Optional size variant. Default: "sm" */
   size?: "sm" | "md" | "lg";
 }
 
-const STATUS_STYLES: Record<HealthStatus, { bg: string; text: string; label: string }> = {
-  online: {
-    bg: "rgba(34, 197, 94, 0.15)",
-    text: "#22c55e",
-    label: "Online",
-  },
-  offline: {
-    bg: "rgba(239, 68, 68, 0.15)",
-    text: "#ef4444",
-    label: "Offline",
-  },
-  degraded: {
-    bg: "rgba(234, 179, 8, 0.15)",
-    text: "#eab308",
-    label: "Degraded",
-  },
-  unknown: {
-    bg: "rgba(148, 163, 184, 0.15)",
-    text: "#94a3b8",
-    label: "Unknown",
-  },
+const STATUS_STYLES: Record<HealthStatus, { color: string; label: string }> = {
+  online:   { color: "var(--status-online)",  label: "Online" },
+  offline:  { color: "var(--status-error)",   label: "Offline" },
+  degraded: { color: "var(--status-warning)", label: "Degraded" },
+  unknown:  { color: "var(--text-muted)",     label: "Unknown" },
 };
 
-const SIZE_STYLES: Record<string, { fontSize: string; padding: string; dot: string }> = {
-  sm: { fontSize: "11px", padding: "2px 8px", dot: "6px" },
-  md: { fontSize: "13px", padding: "4px 12px", dot: "8px" },
-  lg: { fontSize: "15px", padding: "6px 16px", dot: "10px" },
+const SIZE_STYLES: Record<string, { fontSize: number; padding: string; dot: number }> = {
+  sm: { fontSize: 11, padding: "2px 8px", dot: 6 },
+  md: { fontSize: 13, padding: "4px 12px", dot: 8 },
+  lg: { fontSize: 15, padding: "6px 16px", dot: 10 },
 };
 
 export function StatusBadge({ status, size = "sm" }: StatusBadgeProps) {
-  const style = STATUS_STYLES[status];
-  const sizeStyle = SIZE_STYLES[size];
+  const { color, label } = STATUS_STYLES[status];
+  const s = SIZE_STYLES[size];
 
   return (
     <span
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: "6px",
-        backgroundColor: style.bg,
-        color: style.text,
-        fontSize: sizeStyle.fontSize,
+        gap: 6,
+        color,
+        fontSize: s.fontSize,
         fontWeight: 600,
-        padding: sizeStyle.padding,
-        borderRadius: "9999px",
+        fontFamily: "var(--font-sans)",
+        padding: s.padding,
+        borderRadius: 9999,
         lineHeight: 1,
         whiteSpace: "nowrap",
+        background: "rgba(255, 255, 255, 0.04)",
       }}
     >
       <span
         style={{
-          width: sizeStyle.dot,
-          height: sizeStyle.dot,
+          width: s.dot,
+          height: s.dot,
           borderRadius: "50%",
-          backgroundColor: style.text,
+          backgroundColor: color,
           flexShrink: 0,
         }}
       />
-      {style.label}
+      {label}
     </span>
   );
 }

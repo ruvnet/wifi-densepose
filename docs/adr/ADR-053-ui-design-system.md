@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| Status | Proposed |
+| Status | Accepted |
 | Date | 2026-03-06 |
 | Deciders | ruv |
 | Depends on | ADR-052 (Tauri Desktop Frontend) |

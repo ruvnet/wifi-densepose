@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from "react";
+import { StatusBadge } from "../components/StatusBadge";
+import type { HealthStatus } from "../types";
 
 interface DiscoveredNode {
   ip: string;
@@ -6,7 +8,7 @@ interface DiscoveredNode {
   hostname: string | null;
   node_id: number;
   firmware_version: string | null;
-  health: string;
+  health: HealthStatus;
   last_seen: string;
 }
 
@@ -52,27 +54,29 @@ const Dashboard: React.FC = () => {
     fetchServerStatus();
   }, []);
 
+  const onlineCount = nodes.filter((n) => n.health === "online").length;
+
   return (
-    <div>
+    <div style={{ padding: "var(--space-5)" }}>
+      {/* Header */}
       <div
         style={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          marginBottom: 24,
+          marginBottom: "var(--space-5)",
         }}
       >
-        <h2 style={{ fontSize: 24 }}>Dashboard</h2>
+        <h2 className="heading-lg">Dashboard</h2>
         <button
           onClick={handleScan}
           disabled={scanning}
           style={{
-            padding: "8px 16px",
-            background: scanning ? "#475569" : "#38bdf8",
-            color: "#0f172a",
-            border: "none",
+            padding: "var(--space-2) var(--space-4)",
+            background: scanning ? "var(--bg-active)" : "var(--accent)",
+            color: scanning ? "var(--text-muted)" : "#fff",
             borderRadius: 6,
-            cursor: scanning ? "not-allowed" : "pointer",
+            fontSize: 13,
             fontWeight: 600,
           }}
         >
@@ -80,45 +84,74 @@ const Dashboard: React.FC = () => {
         </button>
       </div>
 
+      {/* Stats row */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+          gap: "var(--space-4)",
+          marginBottom: "var(--space-5)",
+        }}
+      >
+        <StatCard label="Total Nodes" value={String(nodes.length)} />
+        <StatCard label="Online" value={String(onlineCount)} color="var(--status-online)" />
+        <StatCard label="Offline" value={String(nodes.length - onlineCount)} color="var(--status-error)" />
+        <StatCard
+          label="Server"
+          value={serverStatus?.running ? "Running" : "Stopped"}
+          color={serverStatus?.running ? "var(--status-online)" : "var(--status-error)"}
+        />
+      </div>
+
       {/* Server status panel */}
       <div
         style={{
-          background: "#1e293b",
+          background: "var(--bg-surface)",
           borderRadius: 8,
-          padding: 16,
-          marginBottom: 24,
-          border: "1px solid #334155",
+          padding: "var(--space-4)",
+          marginBottom: "var(--space-5)",
+          border: "1px solid var(--border)",
         }}
       >
-        <h3 style={{ fontSize: 14, color: "#94a3b8", marginBottom: 8 }}>
+        <h3 className="heading-sm" style={{ marginBottom: "var(--space-2)" }}>
           Sensing Server
         </h3>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
           <span
             style={{
-              width: 10,
-              height: 10,
+              width: 8,
+              height: 8,
               borderRadius: "50%",
-              background: serverStatus?.running ? "#22c55e" : "#ef4444",
-              display: "inline-block",
+              background: serverStatus?.running ? "var(--status-online)" : "var(--status-error)",
             }}
           />
-          <span>
+          <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>
             {serverStatus?.running
               ? `Running (PID ${serverStatus.pid})`
               : "Stopped"}
           </span>
+          {serverStatus?.running && serverStatus.http_port && (
+            <span
+              style={{
+                fontSize: 12,
+                color: "var(--text-muted)",
+                fontFamily: "var(--font-mono)",
+                marginLeft: "var(--space-2)",
+              }}
+            >
+              :{serverStatus.http_port}
+            </span>
+          )}
         </div>
       </div>
 
-      {/* Node grid */}
+      {/* Node list */}
       <h3
+        className="heading-sm"
         style={{
-          fontSize: 14,
-          color: "#94a3b8",
-          marginBottom: 12,
+          marginBottom: "var(--space-3)",
           textTransform: "uppercase",
-          letterSpacing: 1,
+          letterSpacing: "0.05em",
         }}
       >
         Discovered Nodes ({nodes.length})
@@ -127,12 +160,13 @@ const Dashboard: React.FC = () => {
       {nodes.length === 0 ? (
         <div
           style={{
-            background: "#1e293b",
+            background: "var(--bg-surface)",
             borderRadius: 8,
-            padding: 32,
+            padding: "var(--space-6)",
             textAlign: "center",
-            color: "#64748b",
-            border: "1px solid #334155",
+            color: "var(--text-muted)",
+            border: "1px solid var(--border)",
+            fontSize: 13,
           }}
         >
           No nodes discovered. Click "Scan Network" to search.
@@ -142,55 +176,64 @@ const Dashboard: React.FC = () => {
           style={{
             display: "grid",
             gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-            gap: 16,
+            gap: "var(--space-4)",
           }}
         >
           {nodes.map((node, i) => (
             <div
               key={node.mac || i}
               style={{
-                background: "#1e293b",
+                background: "var(--bg-surface)",
                 borderRadius: 8,
-                padding: 16,
-                border: "1px solid #334155",
+                padding: "var(--space-4)",
+                border: "1px solid var(--border)",
+                transition: "border-color 0.15s",
               }}
+              onMouseEnter={(e) =>
+                (e.currentTarget.style.borderColor = "var(--bg-active)")
+              }
+              onMouseLeave={(e) =>
+                (e.currentTarget.style.borderColor = "var(--border)")
+              }
             >
               <div
                 style={{
                   display: "flex",
                   justifyContent: "space-between",
                   alignItems: "start",
-                  marginBottom: 12,
+                  marginBottom: "var(--space-3)",
                 }}
               >
                 <div>
-                  <div style={{ fontWeight: 600 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>
                     {node.hostname || `Node ${node.node_id}`}
                   </div>
-                  <div style={{ fontSize: 12, color: "#64748b" }}>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: "var(--text-muted)",
+                      fontFamily: "var(--font-mono)",
+                    }}
+                  >
                     {node.ip}
                   </div>
                 </div>
-                <span
-                  style={{
-                    padding: "2px 8px",
-                    borderRadius: 12,
-                    fontSize: 11,
-                    fontWeight: 600,
-                    background:
-                      node.health === "online" ? "#064e3b" : "#7f1d1d",
-                    color:
-                      node.health === "online" ? "#34d399" : "#fca5a5",
-                  }}
-                >
-                  {node.health}
-                </span>
+                <StatusBadge status={node.health} />
               </div>
 
-              <div style={{ fontSize: 13, color: "#94a3b8" }}>
-                <div>MAC: {node.mac || "unknown"}</div>
-                <div>Firmware: {node.firmware_version || "unknown"}</div>
-                <div>Node ID: {node.node_id}</div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+                  <span style={{ color: "var(--text-muted)" }}>MAC</span>
+                  <span style={{ fontFamily: "var(--font-mono)" }}>{node.mac || "--"}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+                  <span style={{ color: "var(--text-muted)" }}>Firmware</span>
+                  <span style={{ fontFamily: "var(--font-mono)" }}>{node.firmware_version || "--"}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "var(--text-muted)" }}>Node ID</span>
+                  <span style={{ fontFamily: "var(--font-mono)" }}>{node.node_id}</span>
+                </div>
               </div>
             </div>
           ))}
@@ -199,5 +242,45 @@ const Dashboard: React.FC = () => {
     </div>
   );
 };
+
+function StatCard({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: string;
+  color?: string;
+}) {
+  return (
+    <div
+      style={{
+        background: "var(--bg-surface)",
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        padding: "var(--space-4)",
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          textTransform: "uppercase",
+          letterSpacing: "0.05em",
+          color: "var(--text-muted)",
+          marginBottom: "var(--space-1)",
+          fontFamily: "var(--font-sans)",
+        }}
+      >
+        {label}
+      </div>
+      <div
+        className="data-lg"
+        style={{ color: color || "var(--text-primary)" }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
 
 export default Dashboard;

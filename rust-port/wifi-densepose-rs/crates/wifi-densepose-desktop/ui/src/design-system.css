@@ -1,0 +1,152 @@
+/*
+ * RuView Design System (ADR-053)
+ * Dark professional + Unity-inspired interface
+ */
+
+/* ===== Design Tokens ===== */
+:root {
+  /* Background layers */
+  --bg-base:        #0d1117;
+  --bg-surface:     #161b22;
+  --bg-elevated:    #1c2333;
+  --bg-hover:       #242d3d;
+  --bg-active:      #2d3748;
+
+  /* Text hierarchy */
+  --text-primary:   #e6edf3;
+  --text-secondary: #8b949e;
+  --text-muted:     #484f58;
+
+  /* Status indicators */
+  --status-online:  #3fb950;
+  --status-warning: #d29922;
+  --status-error:   #f85149;
+  --status-info:    #58a6ff;
+
+  /* Accent */
+  --accent:         #7c3aed;
+  --accent-hover:   #6d28d9;
+
+  /* Borders */
+  --border:         #30363d;
+  --border-active:  #58a6ff;
+
+  /* Fonts */
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+
+  /* Spacing (4px base grid) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-8: 48px;
+
+  /* Panel dimensions */
+  --sidebar-width: 220px;
+  --sidebar-collapsed: 52px;
+  --statusbar-height: 28px;
+  --toolbar-height: 44px;
+}
+
+/* ===== Reset ===== */
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ===== Typography Scale ===== */
+.heading-xl { font: 600 28px/1.2 var(--font-sans); color: var(--text-primary); }
+.heading-lg { font: 600 20px/1.3 var(--font-sans); color: var(--text-primary); }
+.heading-md { font: 600 16px/1.4 var(--font-sans); color: var(--text-primary); }
+.heading-sm { font: 600 13px/1.4 var(--font-sans); color: var(--text-secondary); }
+.body       { font: 400 14px/1.6 var(--font-sans); color: var(--text-primary); }
+.body-sm    { font: 400 12px/1.5 var(--font-sans); color: var(--text-secondary); }
+.data       { font: 400 13px/1.4 var(--font-mono); color: var(--text-secondary); }
+.data-lg    { font: 500 18px/1.2 var(--font-mono); color: var(--text-primary); }
+
+/* ===== Scrollbar ===== */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-base);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--bg-active);
+}
+
+/* ===== Form Controls ===== */
+input, select, textarea {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: var(--space-2) var(--space-3);
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent);
+}
+input:disabled, select:disabled, textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+input[type="number"] {
+  font-family: var(--font-mono);
+}
+select {
+  cursor: pointer;
+}
+
+/* ===== Buttons ===== */
+button {
+  font-family: var(--font-sans);
+  cursor: pointer;
+  border: none;
+  outline: none;
+  transition: background 0.15s, opacity 0.15s;
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* ===== Animations ===== */
+@keyframes pulse-accent {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* ===== Selection ===== */
+::selection {
+  background: rgba(124, 58, 237, 0.3);
+  color: var(--text-primary);
+}
