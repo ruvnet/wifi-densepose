@@ -637,7 +637,103 @@ cargo build --release -p wifi-densepose-sensing-server
 # target/release/sensing-server -> crates/wifi-densepose-desktop/binaries/sensing-server-{arch}
 ```
 
-### 9. Security Considerations
+### 9. Persistent Node Registry
+
+Discovery alone is transient — nodes appear when they broadcast, disappear when they don't. A persistent local registry transforms discovery into **reconciliation**.
+
+```
+~/.ruview/nodes.db   (SQLite via rusqlite)
+```
+
+**Schema:**
+
+```sql
+CREATE TABLE nodes (
+    mac         TEXT PRIMARY KEY,        -- e.g. "AA:BB:CC:DD:EE:FF"
+    last_ip     TEXT,                    -- last known IP
+    last_seen   INTEGER NOT NULL,        -- Unix timestamp
+    firmware    TEXT,                    -- e.g. "0.3.1"
+    chip        TEXT DEFAULT 'esp32s3',  -- esp32, esp32s3, esp32c3
+    mesh_role   TEXT DEFAULT 'node',     -- 'coordinator' | 'node' | 'aggregator'
+    tdm_slot    INTEGER,                -- assigned TDM slot index
+    capabilities TEXT,                  -- JSON: {"wasm": true, "ota": true, "csi": true}
+    friendly_name TEXT,                 -- user-assigned label
+    notes       TEXT                    -- free-form notes
+);
+```
+
+**Behavior:**
+
+- On discovery broadcast, upsert into registry (update `last_ip`, `last_seen`, `firmware`)
+- Dashboard shows **all registered nodes**, dimming those not seen recently
+- User can manually add nodes by MAC/IP (for networks without mDNS)
+- Export/import registry as JSON for fleet management across machines
+- Node health history (uptime, last OTA, error count) tracked over time
+
+This means the desktop app **remembers the mesh** across restarts, which is critical for field deployments where nodes may be offline temporarily.
+
+### 10. OTA Safety Gate — Rolling Updates
+
+Mesh deployments cannot tolerate all nodes rebooting simultaneously. The OTA subsystem includes a **rolling update mode** that preserves sensing continuity:
+
+```rust
+#[derive(Serialize, Deserialize)]
+pub struct BatchOtaConfig {
+    /// Update strategy
+    pub strategy: OtaStrategy,
+    /// Max nodes updating concurrently
+    pub max_concurrent: usize,
+    /// Delay between batches (seconds)
+    pub batch_delay_secs: u64,
+    /// Abort if any node fails
+    pub fail_fast: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum OtaStrategy {
+    /// Update one node at a time, wait for it to rejoin mesh
+    Sequential,
+    /// Update non-adjacent TDM slots to maintain coverage
+    TdmSafe,
+    /// Update all nodes simultaneously (development only)
+    Parallel,
+}
+```
+
+**`TdmSafe` strategy:**
+
+1. Sort nodes by TDM slot index
+2. Update even-slot nodes first (slots 0, 2, 4...)
+3. Wait for each to reboot and rejoin mesh (verified via beacon)
+4. Then update odd-slot nodes (slots 1, 3, 5...)
+5. At no point are adjacent nodes offline simultaneously
+
+**UI flow:**
+
+- User selects target firmware + target nodes
+- App shows pre-update diff (current vs new version per node)
+- Progress bar per node with states: `queued → uploading → rebooting → verifying → done`
+- Abort button halts remaining updates without rolling back completed ones
+- Post-update health check confirms all nodes are sensing
+
+### 11. Plugin Architecture (Future)
+
+This desktop tool is quietly becoming the **control plane for RuView**. Once it manages discovery, firmware, OTA, WASM, sensing, and mesh topology, plugin extensibility becomes inevitable:
+
+- **Firmware management** today → **swarm orchestration** tomorrow
+- **WASM upload** today → **edge module marketplace** tomorrow
+- **Sensing view** today → **activity classification dashboard** tomorrow
+
+The Tauri command surface should be designed with this trajectory in mind:
+
+- Commands are grouped by bounded context (already done)
+- Each context can be extended by loading additional Tauri plugins
+- The node registry becomes the source of truth for all plugins
+- Event bus (Tauri's `emit`/`listen`) provides cross-plugin communication
+
+This does NOT mean building a plugin system in Phase 1. It means keeping the architecture open to it: no hardcoded views, state flows through the registry, commands are typed and versioned.
+
+### 12. Security Considerations
 
 1. **PSK Storage**: OTA PSK tokens are stored in the OS keychain via `tauri-plugin-stronghold` or the platform's native credential store, never in plaintext config files.
 
@@ -649,7 +745,7 @@ cargo build --release -p wifi-densepose-sensing-server
 
 5. **WASM Signature Verification**: The desktop app can sign WASM modules before upload using a locally stored Ed25519 key pair, complementing the node-side verification (ADR-040).
 
-### 10. Implementation Phases
+### 13. Implementation Phases
 
 | Phase | Scope | Effort | Priority |
 |-------|-------|--------|----------|

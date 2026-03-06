@@ -51,6 +51,12 @@ address.
 **Invariant**: No two nodes may share the same MAC address. If a node is
 discovered via multiple strategies, the most recent data wins.
 
+**Persistence**: The registry is persisted to `~/.ruview/nodes.db` (SQLite via
+`rusqlite`). On startup, all previously known nodes are loaded as `Offline` and
+reconciled against a fresh discovery scan. This means the app **remembers the
+mesh** across restarts — critical for field deployments where nodes may be
+temporarily powered off.
+
 #### `Node` (Entity)
 
 | Field | Type | Description |
@@ -156,6 +162,32 @@ Represents an over-the-air firmware update to a running node.
 | `phase` | `OtaPhase` | Uploading / Rebooting / Verifying / Done / Failed |
 | `progress` | `Progress` | Upload progress |
 
+#### `BatchOtaSession` (Aggregate Root)
+
+Coordinates rolling firmware updates across multiple mesh nodes. Prevents all
+nodes from rebooting simultaneously, which would collapse the sensing network.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `Uuid` | Batch session identifier |
+| `firmware` | `FirmwareBinary` | The binary being deployed |
+| `strategy` | `OtaStrategy` | `Sequential`, `TdmSafe`, `Parallel` |
+| `max_concurrent` | `usize` | Max nodes updating at once |
+| `batch_delay_secs` | `u64` | Delay between batches |
+| `fail_fast` | `bool` | Abort remaining on first failure |
+| `node_states` | `Map<MacAddress, BatchNodeState>` | Per-node progress |
+
+**Invariant**: In `TdmSafe` mode, adjacent TDM slots are never updated
+concurrently. Even-slot nodes update first, then odd-slot nodes.
+
+**Lifecycle**: `Planning → InProgress → Completed | PartialFailure | Aborted`
+
+- `BatchNodeState` — enum: `Queued`, `Uploading(Progress)`, `Rebooting`, `Verifying`, `Done`, `Failed(String)`, `Skipped`
+- `OtaStrategy` — enum:
+  - `Sequential` — one node at a time, wait for rejoin
+  - `TdmSafe` — update non-adjacent slots to maintain sensing coverage
+  - `Parallel` — all at once (development only)
+
 ### Value Objects
 
 - `SerialPort` — `{ name: String, vid: u16, pid: u16, manufacturer: Option<String> }`
@@ -177,6 +209,9 @@ Represents an over-the-air firmware update to a running node.
 | `OtaStarted` | `{ session_id, target_mac, firmware_version }` | Discovery (mark node as updating) |
 | `OtaCompleted` | `{ session_id, target_mac, new_version }` | Discovery (refresh node info) |
 | `OtaFailed` | `{ session_id, target_mac, error }` | UI (show error) |
+| `BatchOtaStarted` | `{ batch_id, strategy, node_count }` | UI (show batch progress) |
+| `BatchNodeUpdated` | `{ batch_id, mac, state }` | UI (update per-node status), Discovery (refresh) |
+| `BatchOtaCompleted` | `{ batch_id, succeeded, failed, skipped }` | UI (show summary), Discovery (full rescan) |
 
 ### Anti-Corruption Layer
 
