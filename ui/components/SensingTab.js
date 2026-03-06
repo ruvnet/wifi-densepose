@@ -216,7 +216,7 @@ export class SensingTab {
       // Map the service's dataSource to banner text and CSS modifier class.
       const dataSource = sensingService.dataSource;
       const bannerConfig = {
-        'live':              { text: 'LIVE \u2014 ESP32 HARDWARE',           cls: 'sensing-source-live' },
+        'live':              { text: 'LIVE \u2014 REAL WIFI DATA',            cls: 'sensing-source-live' },
         'server-simulated':  { text: 'SIMULATED \u2014 NO HARDWARE',        cls: 'sensing-source-server-sim' },
         'reconnecting':      { text: 'RECONNECTING...',                    cls: 'sensing-source-reconnecting' },
         'simulated':         { text: 'OFFLINE \u2014 CLIENT SIMULATION',    cls: 'sensing-source-simulated' },

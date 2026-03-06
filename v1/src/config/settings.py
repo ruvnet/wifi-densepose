@@ -29,8 +29,8 @@ class Settings(BaseSettings):
     secret_key: str = Field(..., description="Secret key for JWT tokens")
     jwt_algorithm: str = Field(default="HS256", description="JWT algorithm")
     jwt_expire_hours: int = Field(default=24, description="JWT token expiration in hours")
-    allowed_hosts: List[str] = Field(default=["*"], description="Allowed hosts")
-    cors_origins: List[str] = Field(default=["*"], description="CORS allowed origins")
+    allowed_hosts: str = Field(default="*", description="Allowed hosts (comma-separated or JSON array)")
+    cors_origins: str = Field(default="*", description="CORS allowed origins (comma-separated or JSON array)")
     
     # Rate limiting settings
     rate_limit_requests: int = Field(default=100, description="Rate limit requests per window")
@@ -161,6 +161,24 @@ class Settings(BaseSettings):
         case_sensitive=False
     )
     
+    @property
+    def allowed_hosts_list(self) -> list[str]:
+        """Parse allowed_hosts into a list."""
+        import json
+        try:
+            return json.loads(self.allowed_hosts)
+        except (json.JSONDecodeError, TypeError):
+            return [h.strip() for h in self.allowed_hosts.split(",")]
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Parse cors_origins into a list."""
+        import json
+        try:
+            return json.loads(self.cors_origins)
+        except (json.JSONDecodeError, TypeError):
+            return [o.strip() for o in self.cors_origins.split(",")]
+
     @field_validator("environment")
     @classmethod
     def validate_environment(cls, v):
@@ -422,10 +440,10 @@ def validate_settings(settings: Settings) -> List[str]:
         if settings.debug:
             issues.append("Debug mode should be disabled in production")
         
-        if "*" in settings.allowed_hosts:
+        if "*" in settings.allowed_hosts_list:
             issues.append("Allowed hosts should be restricted in production")
-        
-        if "*" in settings.cors_origins:
+
+        if "*" in settings.cors_origins_list:
             issues.append("CORS origins should be restricted in production")
     
     # Check storage paths exist

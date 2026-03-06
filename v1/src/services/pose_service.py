@@ -5,6 +5,7 @@ Production paths in this module must NEVER use random data generation.
 All mock/synthetic data generation is isolated in src.testing and is only
 invoked when settings.mock_pose_data is explicitly True.
 """
+from __future__ import annotations  # PEP 563: deferred annotation evaluation
 
 import logging
 import asyncio
@@ -12,14 +13,30 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 
 import numpy as np
-import torch
 
 from src.config.settings import Settings
 from src.config.domains import DomainConfig
 from src.core.csi_processor import CSIProcessor
 from src.core.phase_sanitizer import PhaseSanitizer
-from src.models.densepose_head import DensePoseHead
-from src.models.modality_translation import ModalityTranslationNetwork
+
+# Lazy imports: torch and model classes are only needed when actually loading
+# a model for inference.  Deferring them lets the API start without PyTorch
+# installed (e.g. when MOCK_POSE_DATA=true).
+torch = None  # will be imported on demand
+DensePoseHead = None  # will be imported on demand
+ModalityTranslationNetwork = None  # will be imported on demand
+
+
+def _ensure_torch():
+    """Import torch and model classes on first use."""
+    global torch, DensePoseHead, ModalityTranslationNetwork
+    if torch is None:
+        import torch as _torch
+        torch = _torch
+        from src.models.densepose_head import DensePoseHead as _DPH
+        from src.models.modality_translation import ModalityTranslationNetwork as _MTN
+        DensePoseHead = _DPH
+        ModalityTranslationNetwork = _MTN
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +123,7 @@ class PoseService:
     
     async def _initialize_models(self):
         """Initialize neural network models."""
+        _ensure_torch()
         try:
             # Initialize DensePose model
             if self.settings.pose_model_path:
@@ -514,7 +532,7 @@ class PoseService:
                 )
 
             metadata = {
-                "timestamp": datetime.now(),
+                "timestamp": datetime.now().isoformat(),
                 "zone_ids": zone_ids or ["zone_1"],
                 "confidence_threshold": confidence_threshold or self.settings.pose_confidence_threshold,
                 "max_persons": max_persons or self.settings.pose_max_persons,
@@ -548,7 +566,7 @@ class PoseService:
                     "bounding_box": pose["bounding_box"],
                     "zone_id": zone_ids[0] if zone_ids else "zone_1",
                     "activity": pose["activity"],
-                    "timestamp": datetime.fromisoformat(pose["timestamp"]) if isinstance(pose["timestamp"], str) else pose["timestamp"],
+                    "timestamp": pose["timestamp"] if isinstance(pose["timestamp"], str) else pose["timestamp"].isoformat(),
                 }
 
                 if include_keypoints:
@@ -567,7 +585,7 @@ class PoseService:
                 zone_summary[zone_id] = len([p for p in persons if p.get("zone_id") == zone_id])
 
             return {
-                "timestamp": datetime.now(),
+                "timestamp": datetime.now().isoformat(),
                 "frame_id": f"frame_{int(datetime.now().timestamp())}",
                 "persons": persons,
                 "zone_summary": zone_summary,
@@ -601,7 +619,7 @@ class PoseService:
                 "count": 0,
                 "max_occupancy": 10,
                 "persons": [],
-                "timestamp": datetime.now(),
+                "timestamp": datetime.now().isoformat(),
                 "note": "No real-time CSI data available. Connect hardware to get live occupancy.",
             }
 
@@ -810,10 +828,11 @@ class PoseService:
                 zone_data[zone_id]["pose"]["persons"].append(person)
                 zone_data[zone_id]["pose"]["count"] += 1
                 
-                # Update zone confidence (average)
-                current_confidence = zone_data[zone_id]["confidence"]
+                # Update zone confidence (running mean of all person confidences)
+                n = zone_data[zone_id]["pose"]["count"]
                 person_confidence = person.get("confidence", 0.0)
-                zone_data[zone_id]["confidence"] = (current_confidence + person_confidence) / 2
+                prev = zone_data[zone_id]["confidence"]
+                zone_data[zone_id]["confidence"] = prev + (person_confidence - prev) / n
                 
                 # Set activity if not already set
                 if not zone_data[zone_id]["activity"] and person.get("activity"):

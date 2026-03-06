@@ -37,7 +37,7 @@ from typing import Dict, List, Optional, Set
 import numpy as np
 
 # Sensing pipeline imports
-from v1.src.sensing.rssi_collector import (
+from src.sensing.rssi_collector import (
     LinuxWifiCollector,
     SimulatedCollector,
     WindowsWifiCollector,
@@ -45,8 +45,8 @@ from v1.src.sensing.rssi_collector import (
     WifiSample,
     RingBuffer,
 )
-from v1.src.sensing.feature_extractor import RssiFeatureExtractor, RssiFeatures
-from v1.src.sensing.classifier import MotionLevel, PresenceClassifier, SensingResult
+from src.sensing.feature_extractor import RssiFeatureExtractor, RssiFeatures
+from src.sensing.classifier import MotionLevel, PresenceClassifier, SensingResult
 
 logger = logging.getLogger(__name__)
 
@@ -315,7 +315,8 @@ class SensingWebSocketServer:
     def __init__(self) -> None:
         self.clients: Set = set()
         self.collector = None
-        self.extractor = RssiFeatureExtractor(window_seconds=10.0)
+        self.extractor = RssiFeatureExtractor(window_seconds=30.0)
+        # Thresholds are set per-source in _create_collector()
         self.classifier = PresenceClassifier()
         self.source: str = "unknown"
         self._running = False
@@ -330,20 +331,31 @@ class SensingWebSocketServer:
             return Esp32UdpCollector(port=ESP32_UDP_PORT, sample_rate_hz=10.0)
 
         # 2. Platform-specific WiFi
+        import os
         system = platform.system()
-        if system == "Windows":
+        is_wsl = system == "Linux" and "microsoft" in platform.release().lower()
+
+        # On WSL2, try Windows WiFi via netsh.exe before Linux WiFi
+        if system == "Windows" or is_wsl:
             try:
                 collector = WindowsWifiCollector(sample_rate_hz=2.0)
                 collector.collect_once()  # test that it works
-                logger.info("Using WindowsWifiCollector")
+                logger.info("Using WindowsWifiCollector%s", " (via WSL2)" if is_wsl else "")
                 self.source = "windows_wifi"
+                # Lower thresholds for integer-dBm quantised netsh data.
+                # Dithered baseline variance ≈ 0.09; a real 1 dBm RSSI shift
+                # pushes variance above 0.15, so 0.12 separates noise from signal.
+                self.classifier = PresenceClassifier(
+                    presence_variance_threshold=0.12,
+                    motion_energy_threshold=0.005,
+                )
                 return collector
             except Exception as e:
                 logger.warning("Windows WiFi unavailable (%s), falling back", e)
-        elif system == "Linux":
+
+        if system == "Linux" and not is_wsl:
             # In Docker on Mac, Linux is detected but no wireless extensions exist.
             # Force SimulatedCollector if /proc/net/wireless doesn't exist.
-            import os
             if os.path.exists("/proc/net/wireless"):
                 try:
                     collector = LinuxWifiCollector(sample_rate_hz=10.0)
@@ -489,7 +501,13 @@ class SensingWebSocketServer:
             sys.exit(1)
 
         self.collector = self._create_collector()
-        self.collector.start()
+        try:
+            self.collector.start()
+        except RuntimeError as exc:
+            logger.warning("Collector start failed (%s), falling back to SimulatedCollector", exc)
+            self.source = "simulated"
+            self.collector = SimulatedCollector(seed=42, sample_rate_hz=10.0)
+            self.collector.start()
         self._running = True
 
         print(f"\n  Sensing WebSocket server on ws://{HOST}:{PORT}")

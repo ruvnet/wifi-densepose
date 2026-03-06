@@ -31,7 +31,7 @@ class CORSMiddleware:
     ):
         self.app = app
         self.settings = settings
-        self.allow_origins = allow_origins or settings.cors_origins
+        self.allow_origins = allow_origins or settings.cors_origins_list
         self.allow_methods = allow_methods or ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"]
         self.allow_headers = allow_headers or [
             "Accept",
@@ -216,7 +216,7 @@ def setup_cors_middleware(app: ASGIApp, settings: Settings) -> ASGIApp:
         # Use FastAPI's built-in CORS middleware for basic functionality
         app = FastAPICORSMiddleware(
             app,
-            allow_origins=settings.cors_origins,
+            allow_origins=settings.cors_origins_list,
             allow_credentials=settings.cors_allow_credentials,
             allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
             allow_headers=[
@@ -338,20 +338,20 @@ def validate_cors_config(settings: Settings) -> List[str]:
         return issues
     
     # Check origins
-    if not settings.cors_origins:
+    if not settings.cors_origins_list:
         issues.append("CORS is enabled but no origins are configured")
-    
+
     # Check for wildcard in production
-    if settings.is_production and "*" in settings.cors_origins:
+    if settings.is_production and "*" in settings.cors_origins_list:
         issues.append("Wildcard origin (*) should not be used in production")
-    
+
     # Validate origin formats
-    for origin in settings.cors_origins:
+    for origin in settings.cors_origins_list:
         if origin != "*" and not origin.startswith(("http://", "https://")):
             issues.append(f"Invalid origin format: {origin}")
-    
+
     # Check credentials with wildcard
-    if settings.cors_allow_credentials and "*" in settings.cors_origins:
+    if settings.cors_allow_credentials and "*" in settings.cors_origins_list:
         issues.append("Cannot use credentials with wildcard origin")
     
     return issues

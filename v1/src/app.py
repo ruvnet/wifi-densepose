@@ -38,7 +38,13 @@ async def lifespan(app: FastAPI):
         
         # Start all services
         await orchestrator.start()
-        
+
+        # Expose individual services on app.state so health/dependency
+        # endpoints can find them via request.app.state.<service>
+        app.state.hardware_service = orchestrator.hardware_service
+        app.state.pose_service = orchestrator.pose_service
+        app.state.stream_service = orchestrator.stream_service
+
         logger.info("WiFi-DensePose API started successfully")
         
         yield
@@ -106,7 +112,7 @@ def setup_middleware(app: FastAPI, settings: Settings):
     if settings.cors_enabled:
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=settings.cors_origins,
+            allow_origins=settings.cors_origins_list,
             allow_credentials=settings.cors_allow_credentials,
             allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
             allow_headers=["*"],
@@ -116,7 +122,7 @@ def setup_middleware(app: FastAPI, settings: Settings):
     if settings.is_production:
         app.add_middleware(
             TrustedHostMiddleware,
-            allowed_hosts=settings.allowed_hosts
+            allowed_hosts=settings.allowed_hosts_list
         )
 
 
@@ -325,12 +331,52 @@ def setup_root_endpoints(app: FastAPI, settings: Settings):
 # Create default app instance for uvicorn
 def get_app() -> FastAPI:
     """Get the default application instance."""
+    import os
+    from pathlib import Path
     from src.config.settings import get_settings
     from src.services.orchestrator import ServiceOrchestrator
-    
+    from starlette.staticfiles import StaticFiles
+    from starlette.websockets import WebSocket as StarletteWebSocket
+    import asyncio
+
     settings = get_settings()
     orchestrator = ServiceOrchestrator(settings)
-    return create_app(settings, orchestrator)
+    application = create_app(settings, orchestrator)
+
+    # --- WebSocket proxy: /ws/sensing -> localhost:8765 ---
+    @application.websocket("/ws/sensing")
+    async def ws_sensing_proxy(ws: StarletteWebSocket):
+        """Proxy WebSocket connections to the sensing server on port 8765."""
+        import websockets
+        await ws.accept()
+        try:
+            async with websockets.connect("ws://localhost:8765") as upstream:
+                async def forward_to_client():
+                    async for msg in upstream:
+                        await ws.send_text(msg)
+
+                async def forward_to_upstream():
+                    while True:
+                        data = await ws.receive_text()
+                        await upstream.send(data)
+
+                done, pending = await asyncio.wait(
+                    [asyncio.ensure_future(forward_to_client()),
+                     asyncio.ensure_future(forward_to_upstream())],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in pending:
+                    task.cancel()
+        except Exception:
+            pass
+
+    # --- Serve UI static files from /ui directory ---
+    # Mounted at /app so it doesn't conflict with API routes on /
+    ui_dir = Path(__file__).resolve().parent.parent.parent / "ui"
+    if ui_dir.is_dir():
+        application.mount("/app", StaticFiles(directory=str(ui_dir), html=True), name="ui")
+
+    return application
 
 
 # Default app instance for uvicorn

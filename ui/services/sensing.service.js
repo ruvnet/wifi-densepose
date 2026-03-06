@@ -290,7 +290,8 @@ class SensingService {
    */
   _applyServerSource(rawSource) {
     this._serverSource = rawSource;
-    if (rawSource === 'esp32' || rawSource === 'wifi' || rawSource === 'live') {
+    if (rawSource === 'esp32' || rawSource === 'wifi' || rawSource === 'live'
+        || rawSource === 'windows_wifi' || rawSource === 'linux_wifi' || rawSource === 'macos_wifi') {
       this._setDataSource('live');
     } else if (rawSource === 'simulated' || rawSource === 'simulate') {
       this._setDataSource('server-simulated');
