@@ -97,7 +97,6 @@ export class PoseDetectionCanvas {
             <button class="btn btn-start" id="start-btn-${this.containerId}">&#9654; Start</button>
             <button class="btn btn-stop" id="stop-btn-${this.containerId}" disabled>&#9632; Stop</button>
             <button class="btn btn-reconnect" id="reconnect-btn-${this.containerId}" disabled>&#8635; Reconnect</button>
-            <button class="btn btn-demo" id="demo-btn-${this.containerId}">&#9881; Demo</button>
             <select class="mode-select" id="mode-select-${this.containerId}">
               <option value="skeleton">Skeleton</option>
               <option value="keypoints">Keypoints</option>
@@ -436,10 +435,6 @@ export class PoseDetectionCanvas {
     // Reconnect button
     const reconnectBtn = document.getElementById(`reconnect-btn-${this.containerId}`);
     reconnectBtn.addEventListener('click', () => this.reconnect());
-
-    // Demo button
-    const demoBtn = document.getElementById(`demo-btn-${this.containerId}`);
-    demoBtn.addEventListener('click', () => this.toggleDemo());
 
     // Trail toggle button
     const trailBtn = document.getElementById(`trail-btn-${this.containerId}`);
@@ -806,52 +801,13 @@ export class PoseDetectionCanvas {
 
   // Toggle demo mode
   toggleDemo() {
-    if (this.demoState && this.demoState.isRunning) {
-      this.stopDemo();
-      this.updateDemoButton(false);
-    } else {
-      this.runDemo();
-      this.updateDemoButton(true);
-    }
+    this.logger.warn('Demo mode is disabled in real-only builds');
   }
 
   // Demo mode - renders animated test pose data
   runDemo() {
-    this.logger.info('Running animated demo mode');
-    
-    // Stop any existing demo animation
-    this.stopDemo();
-    
-    // Force enable all visual elements for demo
-    this.originalConfig = { ...this.renderer.config };
-    this.renderer.updateConfig({
-      showKeypoints: true,
-      showSkeleton: true,
-      showBoundingBox: true,
-      showConfidence: true,
-      confidenceThreshold: 0.1,
-      keypointConfidenceThreshold: 0.1
-    });
-
-    // Initialize animation state
-    this.demoState = {
-      isRunning: true,
-      frameCount: 0,
-      startTime: Date.now(),
-      animations: {
-        person1: { type: 'walking', phase: 0, centerX: 150, centerY: 250 },
-        person2: { type: 'waving', phase: 0, centerX: 350, centerY: 270 },
-        person3: { type: 'dancing', phase: 0, centerX: 550, centerY: 260 }
-      }
-    };
-    
-    // Start animation loop
-    this.startDemoAnimation();
-    
-    // Show demo notification
-    this.showDemoNotification('🎭 Animated Demo Active - Walking, Waving & Dancing');
+    this.logger.warn('Demo mode is disabled in real-only builds');
   }
-
   stopDemo() {
     if (this.demoState && this.demoState.isRunning) {
       this.demoState.isRunning = false;

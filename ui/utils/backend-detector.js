@@ -59,30 +59,10 @@ export class BackendDetector {
     }
   }
 
-  // Determine if mock server should be used
+  // Real-only mode: mock server is never used.
   async shouldUseMockServer() {
-    // If mock is explicitly enabled, always use it
-    if (API_CONFIG.MOCK_SERVER.ENABLED) {
-      console.log('🧪 Using mock server (explicitly enabled)');
-      return true;
-    }
-
-    // If auto-detection is disabled, never use mock
-    if (!API_CONFIG.MOCK_SERVER.AUTO_DETECT) {
-      console.log('🔌 Using real backend (auto-detection disabled)');
-      return false;
-    }
-
-    // Check if backend is available
-    const backendAvailable = await this.checkBackendAvailability();
-    
-    if (backendAvailable) {
-      console.log('🔌 Using real backend (detected and available)');
-      return false;
-    } else {
-      console.log('🧪 Using mock server (backend unavailable)');
-      return true;
-    }
+    await this.checkBackendAvailability();
+    return false;
   }
 
   // Get the appropriate base URL

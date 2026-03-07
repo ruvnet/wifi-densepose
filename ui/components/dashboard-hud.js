@@ -14,7 +14,7 @@ export class DashboardHUD {
       fps: 0,
       confidence: 0,
       personCount: 0,
-      sensingMode: 'Mock',    // CSI, RSSI, Mock
+      sensingMode: 'OFFLINE', // CSI, RSSI, OFFLINE
       latency: 0,
       messageCount: 0,
       uptime: 0
@@ -244,7 +244,7 @@ export class DashboardHUD {
       </style>
 
       <!-- Data source banner -->
-      <div class="hud-banner mock" id="hud-banner">MOCK DATA</div>
+      <div class="hud-banner mock" id="hud-banner">NO VERIFIED LIVE DATA</div>
 
       <!-- Corner decorations -->
       <div class="hud-corner tl"></div>
@@ -298,7 +298,7 @@ export class DashboardHUD {
 
       <!-- Bottom-right: sensing mode -->
       <div class="hud-bottom-right">
-        <div class="hud-mode-badge mock" id="hud-mode-badge">MOCK</div>
+        <div class="hud-mode-badge mock" id="hud-mode-badge">OFFLINE</div>
         <div class="hud-row" style="margin-top: 4px;">
           <span class="hud-label">WiFi DensePose</span>
         </div>
@@ -306,7 +306,7 @@ export class DashboardHUD {
 
       <!-- Controls hint -->
       <div class="hud-controls-hint">
-        Drag to orbit | Scroll to zoom | Right-click to pan
+        Drag to orbit | Scroll to zoom | Right-click to pan | L: light/dark
       </div>
     `;
 
@@ -371,7 +371,7 @@ export class DashboardHUD {
       this._els.banner.textContent = 'REAL DATA - LIVE STREAM';
       this._els.banner.className = 'hud-banner real';
     } else {
-      this._els.banner.textContent = 'MOCK DATA - DEMO MODE';
+      this._els.banner.textContent = 'NO VERIFIED LIVE DATA';
       this._els.banner.className = 'hud-banner mock';
     }
 
@@ -416,7 +416,7 @@ export class DashboardHUD {
     this._els.confidenceFill.style.background = `hsl(${confHue}, 100%, 45%)`;
 
     // Sensing mode
-    const modeLower = (state.sensingMode || 'Mock').toLowerCase();
+    const modeLower = (state.sensingMode || 'offline').toLowerCase();
     this._els.modeBadge.textContent = state.sensingMode.toUpperCase();
     this._els.modeBadge.className = `hud-mode-badge ${modeLower}`;
   }

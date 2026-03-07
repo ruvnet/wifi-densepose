@@ -1,9 +1,9 @@
 // WebSocket Client for Three.js Visualization - WiFi DensePose
-// Connects to ws://localhost:8000/ws/pose and manages real-time data flow
+// Connects to the FastAPI pose stream and manages real-time data flow
 
 export class WebSocketClient {
   constructor(options = {}) {
-    this.url = options.url || 'ws://localhost:8000/ws/pose';
+    this.url = options.url || 'ws://localhost:8000/api/v1/stream/pose?token=dev-observatory';
     this.ws = null;
     this.state = 'disconnected'; // disconnected, connecting, connected, error
     this.isRealData = false;
@@ -141,12 +141,17 @@ export class WebSocketClient {
         return;
       }
 
-      // Detect real vs mock data from metadata
-      if (data.data && data.data.metadata) {
-        this.isRealData = data.data.metadata.mock_data === false && data.data.metadata.source !== 'mock';
-      } else if (data.metadata) {
-        this.isRealData = data.metadata.mock_data === false;
-      }
+      // Detect non-real payloads explicitly; otherwise treat the frame as live.
+      const source = String(
+        data?.data?.metadata?.source ??
+        data?.metadata?.source ??
+        data?.source ??
+        ''
+      ).toLowerCase();
+      const nonRealSource = source === 'mock' || source === 'simulated' || source === 'simulate' || source === 'demo';
+      const nonRealMetadata = data?.data?.metadata?.mock_data === true || data?.metadata?.mock_data === true;
+      const nonRealFlag = data?._simulated === true;
+      this.isRealData = !(nonRealSource || nonRealMetadata || nonRealFlag);
 
       // Calculate latency from message timestamp
       if (data.timestamp) {

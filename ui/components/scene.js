@@ -51,15 +51,24 @@ export class Scene {
     this.renderer.toneMappingExposure = 1.0;
     this.container.appendChild(this.renderer.domElement);
 
-    // OrbitControls
-    this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.08;
-    this.controls.minDistance = 3;
-    this.controls.maxDistance = 30;
-    this.controls.maxPolarAngle = Math.PI * 0.85;
-    this.controls.target.set(0, 1.2, 0);
-    this.controls.update();
+    // OrbitControls (fall back to fixed camera if controls are unavailable)
+    if (typeof THREE.OrbitControls === 'function') {
+      this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
+      this.controls.enableDamping = true;
+      this.controls.dampingFactor = 0.08;
+      this.controls.minDistance = 3;
+      this.controls.maxDistance = 30;
+      this.controls.maxPolarAngle = Math.PI * 0.85;
+      this.controls.target.set(0, 1.2, 0);
+      this.controls.update();
+    } else {
+      console.warn('[Scene] OrbitControls unavailable, using fixed camera controls');
+      this.controls = {
+        target: new THREE.Vector3(0, 1.2, 0),
+        update() {},
+        dispose() {}
+      };
+    }
 
     // Lights
     this._setupLights();

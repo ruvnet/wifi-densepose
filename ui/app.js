@@ -54,33 +54,22 @@ class WiFiDensePoseApp {
       return response;
     });
 
-    // Detect backend availability and initialize accordingly
-    const useMock = await backendDetector.shouldUseMockServer();
-    
-    if (useMock) {
-      console.log('🧪 Initializing with mock server for testing');
-      // Import and start mock server only when needed
-      const { mockServer } = await import('./utils/mock-server.js');
-      mockServer.start();
-      
-      // Show notification to user
-      this.showBackendStatus('Mock server active - testing mode', 'warning');
-    } else {
-      console.log('🔌 Connecting to backend...');
+    // Real-only mode: never initialize any mock backend.
+    console.log('Connecting to backend (real-only mode)...');
+    await backendDetector.checkBackendAvailability();
 
-      try {
-        const health = await healthService.checkLiveness();
-        console.log('✅ Backend responding:', health);
-        this.showBackendStatus('Connected to Rust sensing server', 'success');
-      } catch (error) {
-        console.warn('⚠️ Backend not available:', error.message);
-        this.showBackendStatus('Backend unavailable — start sensing-server', 'warning');
-      }
-
-      // Start the sensing WebSocket service early so the dashboard and
-      // live-demo tabs can show the correct data-source status immediately.
-      sensingService.start();
+    try {
+      const health = await healthService.checkLiveness();
+      console.log('Backend responding:', health);
+      this.showBackendStatus('Connected to sensing server', 'success');
+    } catch (error) {
+      console.warn('Backend not available:', error.message);
+      this.showBackendStatus('Backend unavailable - start sensing-server', 'warning');
     }
+
+    // Start the sensing WebSocket service early so the dashboard and
+    // live-demo tabs can show the current real-data connection status.
+    sensingService.start();
   }
 
   // Initialize UI components

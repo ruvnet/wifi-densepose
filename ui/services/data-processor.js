@@ -27,11 +27,11 @@ export class DataProcessor {
       zoneOccupancy: {},
       signalData: null,
       metadata: {
-        isRealData: false,
+        isRealData: true,
         timestamp: null,
         processingTime: 0,
         frameId: null,
-        sensingMode: 'Mock'
+        sensingMode: 'CSI'
       }
     };
 
@@ -43,7 +43,10 @@ export class DataProcessor {
         result.zoneOccupancy = this._extractZoneOccupancy(payload, message.zone_id);
         result.signalData = this._extractSignalData(payload);
 
-        result.metadata.isRealData = payload.metadata?.mock_data === false;
+        const source = String(payload.metadata?.source || '').toLowerCase();
+        const explicitMock = payload.metadata?.mock_data === true;
+        const sourceLooksMock = source === 'mock' || source === 'simulated' || source === 'simulate' || source === 'demo';
+        result.metadata.isRealData = !(explicitMock || sourceLooksMock);
         result.metadata.timestamp = message.timestamp;
         result.metadata.processingTime = payload.metadata?.processing_time_ms || 0;
         result.metadata.frameId = payload.metadata?.frame_id;
@@ -53,8 +56,8 @@ export class DataProcessor {
           result.metadata.sensingMode = 'CSI';
         } else if (payload.metadata?.source === 'rssi') {
           result.metadata.sensingMode = 'RSSI';
-        } else if (payload.metadata?.mock_data !== false) {
-          result.metadata.sensingMode = 'Mock';
+        } else if (!result.metadata.isRealData) {
+          result.metadata.sensingMode = 'OFFLINE';
         } else {
           result.metadata.sensingMode = 'CSI';
         }

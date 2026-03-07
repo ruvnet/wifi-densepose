@@ -66,6 +66,7 @@ async def initialize_services(app: FastAPI):
         # Initialize pose service
         pose_service = get_pose_service()
         await pose_service.initialize()
+        pose_service.hardware_service = hardware_service
         
         # Initialize stream service
         stream_service = get_stream_service()

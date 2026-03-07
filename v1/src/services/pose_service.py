@@ -10,6 +10,7 @@ import logging
 import asyncio
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -38,6 +39,7 @@ class PoseService:
         self.phase_sanitizer = None
         self.densepose_model = None
         self.modality_translator = None
+        self.hardware_service = None
         
         # Service state
         self.is_initialized = False
@@ -107,25 +109,54 @@ class PoseService:
     async def _initialize_models(self):
         """Initialize neural network models."""
         try:
-            # Initialize DensePose model
-            if self.settings.pose_model_path:
-                self.densepose_model = DensePoseHead()
-                # Load model weights if path is provided
-                # model_state = torch.load(self.settings.pose_model_path)
-                # self.densepose_model.load_state_dict(model_state)
-                self.logger.info("DensePose model loaded")
-            else:
-                self.logger.warning("No pose model path provided, using default model")
-                self.densepose_model = DensePoseHead()
-            
             # Initialize modality translation
-            config = {
+            modality_config = {
                 'input_channels': 64,  # CSI data channels
                 'hidden_channels': [128, 256, 512],
                 'output_channels': 256,  # Visual feature channels
                 'use_attention': True
             }
-            self.modality_translator = ModalityTranslationNetwork(config)
+            self.modality_translator = ModalityTranslationNetwork(modality_config)
+
+            # Initialize DensePose model with explicit config
+            densepose_config = {
+                "input_channels": modality_config["output_channels"],
+                "num_body_parts": 24,
+                "num_uv_coordinates": 2,
+                "hidden_channels": [256, 128],
+                "dropout_rate": 0.1,
+                "use_fpn": False,
+            }
+            self.densepose_model = DensePoseHead(densepose_config)
+
+            # Load optional model weights
+            if self.settings.pose_model_path:
+                model_path = Path(self.settings.pose_model_path)
+                if model_path.exists():
+                    model_state = torch.load(model_path, map_location="cpu")
+                    if isinstance(model_state, dict) and "state_dict" in model_state:
+                        model_state = model_state["state_dict"]
+                    missing, unexpected = self.densepose_model.load_state_dict(
+                        model_state,
+                        strict=False,
+                    )
+                    if missing:
+                        self.logger.warning(
+                            f"DensePose weights loaded with missing keys: {missing[:5]}"
+                        )
+                    if unexpected:
+                        self.logger.warning(
+                            f"DensePose weights loaded with unexpected keys: {unexpected[:5]}"
+                        )
+                    self.logger.info(f"DensePose model weights loaded from {model_path}")
+                else:
+                    self.logger.warning(
+                        f"Pose model path not found: {model_path}. Using randomly initialized weights."
+                    )
+            else:
+                self.logger.warning(
+                    "No pose model path provided; using randomly initialized DensePose weights."
+                )
             
             # Set models to evaluation mode
             self.densepose_model.eval()
@@ -237,12 +268,8 @@ class PoseService:
             return self._generate_mock_poses()
         
         try:
-            # Convert CSI data to tensor
-            csi_tensor = torch.from_numpy(csi_data).float()
-            
-            # Add batch dimension if needed
-            if len(csi_tensor.shape) == 2:
-                csi_tensor = csi_tensor.unsqueeze(0)
+            # Convert CSI data to tensor with expected (batch, channels, height, width) shape
+            csi_tensor = self._prepare_csi_tensor(csi_data)
             
             # Translate modality (CSI to visual-like features)
             with torch.no_grad():
@@ -273,8 +300,40 @@ class PoseService:
         except Exception as e:
             self.logger.error(f"Error in pose estimation: {e}")
             return []
+
+    def _prepare_csi_tensor(self, csi_data: np.ndarray) -> torch.Tensor:
+        """Prepare CSI data as a tensor compatible with the translation model."""
+        expected_channels = 64
+        if self.modality_translator is not None:
+            expected_channels = self.modality_translator.input_channels
+
+        data = np.asarray(csi_data, dtype=np.float32)
+
+        # Already in expected (batch, channels, height, width) format
+        if data.ndim == 4 and data.shape[1] == expected_channels:
+            return torch.from_numpy(data).float()
+
+        # Channels-first without batch
+        if data.ndim == 3 and data.shape[0] == expected_channels:
+            return torch.from_numpy(np.expand_dims(data, axis=0)).float()
+
+        flat = data.reshape(-1)
+        if flat.size == 0:
+            flat = np.zeros(expected_channels, dtype=np.float32)
+
+        width = max(8, int(np.ceil(flat.size / expected_channels)))
+        total_values = expected_channels * width
+
+        if flat.size < total_values:
+            pad_mode = "edge" if flat.size > 0 else "constant"
+            flat = np.pad(flat, (0, total_values - flat.size), mode=pad_mode)
+        elif flat.size > total_values:
+            flat = flat[:total_values]
+
+        reshaped = flat.reshape(1, expected_channels, 1, width)
+        return torch.from_numpy(reshaped).float()
     
-    def _parse_pose_outputs(self, outputs: torch.Tensor) -> List[Dict[str, Any]]:
+    def _parse_pose_outputs(self, outputs: Any) -> List[Dict[str, Any]]:
         """Parse neural network outputs into pose detections.
 
         Extracts confidence, keypoints, bounding boxes, and activity from model
@@ -287,6 +346,13 @@ class PoseService:
         Returns:
             List of pose detection dictionaries.
         """
+        if isinstance(outputs, dict):
+            return self._parse_densepose_outputs(outputs)
+
+        if not isinstance(outputs, torch.Tensor):
+            self.logger.warning(f"Unexpected pose output type: {type(outputs)}")
+            return []
+
         poses = []
         batch_size = outputs.shape[0]
 
@@ -317,6 +383,77 @@ class PoseService:
             poses.append(pose)
 
         return poses
+
+    def _parse_densepose_outputs(self, outputs: Dict[str, torch.Tensor]) -> List[Dict[str, Any]]:
+        """Parse DensePoseHead dictionary output into a generic pose list."""
+        segmentation = outputs.get("segmentation")
+        uv_coordinates = outputs.get("uv_coordinates")
+
+        if segmentation is None or not isinstance(segmentation, torch.Tensor):
+            return []
+
+        poses: List[Dict[str, Any]] = []
+        probs = torch.softmax(segmentation, dim=1)
+        foreground_prob = 1.0 - probs[:, 0, :, :]
+
+        batch_size = foreground_prob.shape[0]
+        for i in range(batch_size):
+            fg = foreground_prob[i]
+            confidence = float(fg.mean().item())
+            bbox = self._extract_bbox_from_mask(fg)
+            activity = self._classify_activity(fg)
+
+            pose = {
+                "person_id": i,
+                "confidence": confidence,
+                "keypoints": self._generate_default_keypoints(),
+                "bounding_box": bbox,
+                "activity": activity,
+                "timestamp": datetime.now().isoformat(),
+            }
+
+            if isinstance(uv_coordinates, torch.Tensor) and uv_coordinates.shape[0] > i:
+                pose["uv_summary"] = {
+                    "u_mean": float(uv_coordinates[i, 0].mean().item()),
+                    "v_mean": float(uv_coordinates[i, 1].mean().item()) if uv_coordinates.shape[1] > 1 else 0.0,
+                }
+
+            poses.append(pose)
+
+        return poses
+
+    def _extract_bbox_from_mask(self, foreground_mask: torch.Tensor) -> Dict[str, float]:
+        """Extract normalized bounding box from a foreground probability map."""
+        if foreground_mask.ndim != 2:
+            return {"x": 0.0, "y": 0.0, "width": 0.0, "height": 0.0}
+
+        mask = foreground_mask > 0.5
+        if not bool(mask.any()):
+            return {"x": 0.0, "y": 0.0, "width": 0.0, "height": 0.0}
+
+        indices = torch.nonzero(mask, as_tuple=False)
+        y_min = int(indices[:, 0].min().item())
+        y_max = int(indices[:, 0].max().item())
+        x_min = int(indices[:, 1].min().item())
+        x_max = int(indices[:, 1].max().item())
+
+        height, width = foreground_mask.shape
+        return {
+            "x": x_min / max(1, width),
+            "y": y_min / max(1, height),
+            "width": max(1, x_max - x_min + 1) / max(1, width),
+            "height": max(1, y_max - y_min + 1) / max(1, height),
+        }
+
+    def _generate_default_keypoints(self) -> List[Dict[str, Any]]:
+        """Return placeholder keypoints until a trained keypoint decoder is added."""
+        keypoint_names = [
+            "nose", "left_eye", "right_eye", "left_ear", "right_ear",
+            "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+            "left_wrist", "right_wrist", "left_hip", "right_hip",
+            "left_knee", "right_knee", "left_ankle", "right_ankle",
+        ]
+        return [{"name": name, "x": 0.0, "y": 0.0, "confidence": 0.0} for name in keypoint_names]
 
     def _extract_keypoints_from_output(self, output: torch.Tensor) -> List[Dict[str, Any]]:
         """Extract keypoints from a single person's model output.
@@ -783,8 +920,23 @@ class PoseService:
     async def get_current_pose_data(self):
         """Get current pose data for streaming."""
         try:
-            # Generate current pose data
-            result = await self.estimate_poses()
+            if self.settings.mock_pose_data:
+                result = await self.estimate_poses()
+            else:
+                if self.hardware_service is None:
+                    return {}
+
+                recent_samples = await self.hardware_service.get_recent_data(limit=1)
+                if not recent_samples:
+                    return {}
+
+                latest_sample = recent_samples[-1]
+                csi_data = np.asarray(latest_sample.get("data", []), dtype=np.float32)
+                if csi_data.size == 0:
+                    return {}
+
+                metadata = latest_sample.get("metadata", {})
+                result = await self.estimate_poses(csi_data=csi_data, zone_ids=[metadata.get("router_id", "zone_1")])
             
             # Format data by zones for WebSocket streaming
             zone_data = {}

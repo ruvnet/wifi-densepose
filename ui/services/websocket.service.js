@@ -37,20 +37,11 @@ export class WebSocketService {
   // Connect to WebSocket endpoint
   async connect(endpoint, params = {}, handlers = {}) {
     this.logger.debug('Attempting to connect to WebSocket', { endpoint, params });
-    
-    // Determine if we should use mock WebSockets
-    const useMock = await backendDetector.shouldUseMockServer();
-    
-    let url;
-    if (useMock) {
-      // Use mock WebSocket URL (served from same origin as UI)
-      url = buildWsUrl(endpoint, params).replace('localhost:8000', window.location.host);
-      this.logger.info('Using mock WebSocket server', { url });
-    } else {
-      // Use real backend WebSocket URL
-      url = buildWsUrl(endpoint, params);
-      this.logger.info('Using real backend WebSocket server', { url });
-    }
+
+    // Real-only mode: always use the real backend WebSocket URL.
+    await backendDetector.checkBackendAvailability();
+    const url = buildWsUrl(endpoint, params);
+    this.logger.info('Using backend WebSocket server', { url });
     
     // Check if already connected
     if (this.connections.has(url)) {

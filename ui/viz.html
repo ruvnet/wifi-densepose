@@ -5,14 +5,32 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>WiFi DensePose - 3D Visualization</title>
   <style>
+    :root {
+      --app-bg: #050510;
+      --app-fg: #88bbdd;
+      --overlay-bg: #050510;
+      --title-color: #aaddff;
+      --track-bg: #112233;
+      --status-color: #446688;
+    }
+
+    body.light-theme {
+      --app-bg: #eef4ff;
+      --app-fg: #2b4f74;
+      --overlay-bg: #eef4ff;
+      --title-color: #2c5d8f;
+      --track-bg: #c6d7eb;
+      --status-color: #5a7da1;
+    }
+
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body {
       width: 100%;
       height: 100%;
       overflow: hidden;
-      background: #050510;
+      background: var(--app-bg);
       font-family: 'Courier New', 'Consolas', monospace;
-      color: #88bbdd;
+      color: var(--app-fg);
     }
     #viz-container {
       width: 100%;
@@ -22,7 +40,7 @@
     #loading-overlay {
       position: absolute;
       top: 0; left: 0; right: 0; bottom: 0;
-      background: #050510;
+      background: var(--overlay-bg);
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -36,7 +54,7 @@
     }
     .loading-title {
       font-size: 22px;
-      color: #aaddff;
+      color: var(--title-color);
       margin-bottom: 16px;
       letter-spacing: 4px;
       text-transform: uppercase;
@@ -44,7 +62,7 @@
     .loading-bar-track {
       width: 280px;
       height: 3px;
-      background: #112233;
+      background: var(--track-bg);
       border-radius: 2px;
       overflow: hidden;
       margin-bottom: 12px;
@@ -58,7 +76,12 @@
     }
     .loading-status {
       font-size: 11px;
-      color: #446688;
+      color: var(--status-color);
+    }
+
+    /* Brighten only the rendered canvas in light mode; HUD remains readable */
+    canvas.theme-light {
+      filter: brightness(1.55) saturate(0.85) contrast(0.92);
     }
 
     /* Stats.js panel positioning */
@@ -67,6 +90,28 @@
       top: 40px;
       right: 140px;
       z-index: 200;
+    }
+
+    #theme-toggle {
+      position: absolute;
+      top: 40px;
+      right: 12px;
+      z-index: 220;
+      padding: 6px 10px;
+      border: 1px solid #35567a;
+      border-radius: 6px;
+      background: rgba(10, 20, 35, 0.75);
+      color: #b9d8f3;
+      font-size: 11px;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    body.light-theme #theme-toggle {
+      border-color: #6f95bb;
+      background: rgba(240, 247, 255, 0.9);
+      color: #244a70;
     }
   </style>
 </head>
@@ -82,17 +127,18 @@
     </div>
     <!-- Stats.js container -->
     <div id="stats-container"></div>
+    <button id="theme-toggle" title="Toggle light/dark (L)">Theme: Dark</button>
   </div>
 
-  <!-- Three.js and OrbitControls from CDN -->
-  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
-  <script src="https://unpkg.com/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
+  <!-- Three.js (global build) + OrbitControls -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
   <!-- Stats.js for performance monitoring -->
   <script src="https://unpkg.com/stats.js@0.17.0/build/stats.min.js"></script>
 
-  <!-- Application modules loaded as ES modules via importmap workaround -->
+  <!-- Application modules loaded as ES modules -->
   <script type="module">
-    // Import all modules
     import { Scene } from './components/scene.js';
     import { BodyModel, BodyModelManager } from './components/body-model.js';
     import { SignalVisualization } from './components/signal-viz.js';
@@ -111,9 +157,59 @@
       wsClient: null,
       dataProcessor: null,
       stats: null,
-      isDemoMode: true,
+      theme: 'dark',
       startTime: Date.now()
     };
+
+    function resolveInitialTheme() {
+      const params = new URLSearchParams(window.location.search);
+      const fromQuery = params.get('theme');
+      if (fromQuery === 'light' || fromQuery === 'dark') {
+        return fromQuery;
+      }
+
+      const saved = localStorage.getItem('viz-theme');
+      if (saved === 'light' || saved === 'dark') {
+        return saved;
+      }
+
+      return 'dark';
+    }
+
+    function applyTheme(theme) {
+      const nextTheme = theme === 'light' ? 'light' : 'dark';
+      state.theme = nextTheme;
+      const isLight = nextTheme === 'light';
+
+      document.body.classList.toggle('light-theme', isLight);
+      localStorage.setItem('viz-theme', nextTheme);
+
+      if (state.scene) {
+        const sceneObj = state.scene.getScene();
+        const renderer = state.scene.getRenderer();
+        const bgColor = isLight ? 0xeef4ff : 0x0a0a1a;
+        const fogDensity = isLight ? 0.004 : 0.008;
+        const exposure = isLight ? 1.6 : 1.0;
+
+        if (sceneObj) {
+          sceneObj.background = new window.THREE.Color(bgColor);
+          sceneObj.fog = new window.THREE.FogExp2(bgColor, fogDensity);
+        }
+
+        if (renderer) {
+          renderer.toneMappingExposure = exposure;
+          renderer.setClearColor(bgColor, 1.0);
+          renderer.domElement.classList.toggle('theme-light', isLight);
+        }
+      }
+
+      const themeBtn = document.getElementById('theme-toggle');
+      if (themeBtn) {
+        themeBtn.textContent = `Theme: ${isLight ? 'Light' : 'Dark'}`;
+      }
+
+      console.log(`[VIZ] Theme: ${nextTheme}`);
+    }
 
     // -- Loading Progress --
     function setLoadingProgress(pct, msg) {
@@ -122,6 +218,20 @@
       if (fill) fill.style.width = pct + '%';
       if (status) status.textContent = msg;
     }
+
+    function showFatalError(error) {
+      const msg = error?.message || String(error || 'Unknown error');
+      setLoadingProgress(100, `Error: ${msg}`);
+      console.error('[VIZ] Fatal error:', error);
+    }
+
+    window.addEventListener('error', (event) => {
+      if (event?.error) showFatalError(event.error);
+    });
+
+    window.addEventListener('unhandledrejection', (event) => {
+      showFatalError(event?.reason || new Error('Unhandled promise rejection'));
+    });
 
     function hideLoading() {
       const overlay = document.getElementById('loading-overlay');
@@ -143,12 +253,15 @@
     // -- Main Initialization --
     async function init() {
       const container = document.getElementById('viz-container');
+      state.theme = resolveInitialTheme();
+      applyTheme(state.theme);
 
       try {
         setLoadingProgress(10, 'Creating 3D scene...');
 
         // 1. Scene setup
         state.scene = new Scene(container);
+        applyTheme(state.theme);
         setLoadingProgress(25, 'Building environment...');
 
         // 2. Environment (room, grid, APs, zones)
@@ -177,13 +290,13 @@
 
         // 8. WebSocket client
         state.wsClient = new WebSocketClient({
-          url: 'ws://localhost:8000/ws/pose',
+          url: 'ws://localhost:8000/api/v1/stream/pose?token=dev-observatory',
           onMessage: (msg) => handleWebSocketMessage(msg),
           onStateChange: (newState, oldState) => handleConnectionStateChange(newState, oldState),
           onError: (err) => console.error('[VIZ] WebSocket error:', err)
         });
 
-        // Attempt connection (will fall back to demo mode if server unavailable)
+        // Attempt connection (real-only mode: no demo fallback)
         state.wsClient.connect();
         setLoadingProgress(95, 'Starting render loop...');
 
@@ -212,17 +325,8 @@
       // Stats.js begin
       if (state.stats) state.stats.begin();
 
-      // Determine data source
-      let vizData = null;
-
-      if (state.isDemoMode) {
-        // Generate demo data
-        vizData = state.dataProcessor.generateDemoData(delta);
-
-        // Generate demo signal data
-        const demoSignal = SignalVisualization.generateDemoData(elapsed);
-        state.signalViz.updateSignalData(demoSignal);
-      }
+      // Real-only mode: visual updates are driven only by incoming stream frames.
+      const vizData = null;
 
       // If we have viz data (from demo or last processed real data), update visualizations
       if (vizData) {
@@ -252,13 +356,13 @@
         const wsMetrics = state.wsClient.getMetrics();
         state.hud.updateState({
           connectionStatus: state.wsClient.state,
-          isRealData: state.wsClient.isRealData && !state.isDemoMode,
+          isRealData: state.wsClient.isRealData,
           latency: wsMetrics.latency,
           messageCount: wsMetrics.messageCount,
           uptime: wsMetrics.uptime,
           personCount: state.bodyModelManager.getActiveCount(),
           confidence: state.bodyModelManager.getAverageConfidence(),
-          sensingMode: state.isDemoMode ? 'Mock' : (state.wsClient.isRealData ? 'CSI' : 'Mock')
+          sensingMode: state.wsClient.isRealData ? 'CSI' : 'OFFLINE'
         });
       }
 
@@ -270,13 +374,13 @@
     function handleWebSocketMessage(message) {
       const processed = state.dataProcessor.processMessage(message);
       if (!processed) return;
+      if (processed.metadata && processed.metadata.isRealData === false) {
+        console.warn('[VIZ] Non-real frame rejected');
+        return;
+      }
 
-      // Switch off demo mode when we get real data
       if (processed.persons.length > 0) {
-        if (state.isDemoMode) {
-          state.isDemoMode = false;
-          console.log('[VIZ] Switched to live data mode');
-        }
+        console.log('[VIZ] Live data frame received');
 
         // Update body models
         state.bodyModelManager.update(processed.persons, 0.016);
@@ -302,13 +406,15 @@
       console.log(`[VIZ] Connection: ${oldState} -> ${newState}`);
 
       if (newState === 'connected') {
-        // Will switch from demo to real when data arrives
         console.log('[VIZ] Connected to server, waiting for data...');
       } else if (newState === 'error' || newState === 'disconnected') {
-        // Fall back to demo mode
-        if (!state.isDemoMode) {
-          state.isDemoMode = true;
-          console.log('[VIZ] Switched to demo mode (server unavailable)');
+        console.log('[VIZ] Server unavailable; no synthetic fallback in real-only mode');
+        if (state.bodyModelManager) {
+          state.bodyModelManager.update([], 0.016);
+        }
+        if (state.environment) {
+          state.environment.updateZoneOccupancy({});
+          state.environment.updateConfidenceHeatmap(new Float32Array(20 * 15));
         }
       }
     }
@@ -331,9 +437,7 @@
           if (state.scene) state.scene.resetCamera();
           break;
         case 'd':
-          // Toggle demo mode
-          state.isDemoMode = !state.isDemoMode;
-          console.log(`[VIZ] Demo mode: ${state.isDemoMode ? 'ON' : 'OFF'}`);
+          // Disabled in real-only mode
           break;
         case 'c':
           // Force reconnect
@@ -344,8 +448,19 @@
             state.wsClient.connect();
           }
           break;
+        case 'l':
+          // Toggle light/dark theme
+          applyTheme(state.theme === 'light' ? 'dark' : 'light');
+          break;
       }
     });
+
+    const themeBtn = document.getElementById('theme-toggle');
+    if (themeBtn) {
+      themeBtn.addEventListener('click', () => {
+        applyTheme(state.theme === 'light' ? 'dark' : 'light');
+      });
+    }
 
     // -- Start --
     init();

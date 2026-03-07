@@ -95,7 +95,7 @@ class Observatory {
     if (this.settings.scenario && this.settings.scenario !== 'auto') {
       this._demoData.setScenario(this.settings.scenario);
     }
-    this._currentData = null;
+    this._currentData = this._emptyDataFrame();
     this._currentScenario = null;
 
     // Build scene
@@ -130,6 +130,9 @@ class Observatory {
     // WebSocket for live data — always try auto-detect on startup
     this._ws = null;
     this._liveData = null;
+    this._warnedNonRealData = false;
+    this._reconnectTimer = null;
+    this._suppressNextCloseReconnect = false;
     this._autoDetectLive();
 
     // Input
@@ -436,66 +439,239 @@ class Observatory {
   // ---- WebSocket live data ----
 
   _autoDetectLive() {
-    // Probe sensing server health on same origin, then common ports
+    // Probe likely API hosts first to avoid noisy 404s from static-file servers.
     const host = window.location.hostname || 'localhost';
+    const sameOrigin = new URL(window.location.origin);
     const candidates = [
-      window.location.origin,                   // same origin (e.g. :3000)
-      `http://${host}:8765`,                     // default WS port
-      `http://${host}:3000`,                     // default HTTP port
+      `http://${host}:8000`,                     // FastAPI server
+      `http://${host}:8765`,                     // sensing server
     ];
+    if (sameOrigin.port === '8000') {
+      candidates.unshift(window.location.origin);
+    }
     // Deduplicate
     const unique = [...new Set(candidates)];
+    const healthPaths = ['/health/live', '/health/health'];
 
-    const tryNext = (i) => {
+    const probeHealth = async (base) => {
+      for (const path of healthPaths) {
+        try {
+          const r = await fetch(`${base}${path}`, { signal: AbortSignal.timeout(1500) });
+          if (!r.ok) continue;
+          const data = await r.json();
+          const status = String(data?.status || '').toLowerCase();
+          if (
+            status === 'ok' ||
+            status === 'alive' ||
+            status === 'healthy' ||
+            data?.ready === true
+          ) {
+            return true;
+          }
+        } catch {
+          // try next path
+        }
+      }
+      return false;
+    };
+
+    const tryNext = async (i) => {
       if (i >= unique.length) {
-        console.log('[Observatory] No sensing server detected, using demo mode');
+        // Fallback: try FastAPI pose stream directly (health probes can fail due CORS).
+        const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const fallbackWs = `${wsProto}//${host}:8000/api/v1/stream/pose?token=dev-observatory`;
+        console.log('[Observatory] Health probe failed, trying direct WS fallback ->', fallbackWs);
+        this.settings.dataSource = 'ws';
+        this.settings.wsUrl = fallbackWs;
+        this._connectWS(fallbackWs);
         return;
       }
       const base = unique[i];
-      fetch(`${base}/health`, { signal: AbortSignal.timeout(1500) })
-        .then(r => r.ok ? r.json() : Promise.reject())
-        .then(data => {
-          if (data && data.status === 'ok') {
-            const wsProto = base.startsWith('https') ? 'wss:' : 'ws:';
-            const urlObj = new URL(base);
-            const wsUrl = `${wsProto}//${urlObj.host}/ws/sensing`;
-            console.log('[Observatory] Sensing server detected at', base, '→', wsUrl);
-            this.settings.dataSource = 'ws';
-            this.settings.wsUrl = wsUrl;
-            this._connectWS(wsUrl);
-          } else {
-            tryNext(i + 1);
-          }
-        })
-        .catch(() => tryNext(i + 1));
+      const healthy = await probeHealth(base);
+      if (!healthy) {
+        tryNext(i + 1);
+        return;
+      }
+
+      const wsProto = base.startsWith('https') ? 'wss:' : 'ws:';
+      const urlObj = new URL(base);
+      const wsPath = urlObj.port === '8000'
+        ? '/api/v1/stream/pose?token=dev-observatory'
+        : '/ws/sensing';
+      const wsUrl = `${wsProto}//${urlObj.host}${wsPath}`;
+      console.log('[Observatory] Sensing server detected at', base, '->', wsUrl);
+      this.settings.dataSource = 'ws';
+      this.settings.wsUrl = wsUrl;
+      this._connectWS(wsUrl);
     };
     tryNext(0);
   }
-
   _connectWS(url) {
     this._disconnectWS();
     try {
-      this._ws = new WebSocket(url);
-      this._ws.onopen = () => {
-        console.log('[Observatory] WebSocket connected');
-        this._hud.updateSourceBadge('ws', this._ws);
+      let attemptedFastApiFallback = false;
+
+      const openSocket = (targetUrl) => {
+        this._ws = new WebSocket(targetUrl);
+        this._ws.onopen = () => {
+          console.log('[Observatory] WebSocket connected');
+          // Transport-level LIVE; real frames may still be zero if hardware has no CSI feed.
+          this._hud.updateSourceBadge('ws', this._ws);
+        };
+        this._ws.onmessage = (evt) => {
+          try {
+            const parsed = JSON.parse(evt.data);
+            const normalized = this._normalizeLiveData(parsed);
+            if (!normalized) return;
+            if (this._isNonRealPayload(parsed, normalized)) {
+              if (!this._warnedNonRealData) {
+                this._warnedNonRealData = true;
+                console.warn('[Observatory] Non-real payload rejected');
+              }
+              return;
+            }
+            this._liveData = normalized;
+            this._hud.updateSourceBadge('ws', this._ws);
+          } catch {}
+        };
+        this._ws.onclose = () => {
+          const suppressReconnect = this._suppressNextCloseReconnect;
+          this._suppressNextCloseReconnect = false;
+
+          // If a stale /ws/sensing URL is saved while only FastAPI is running,
+          // retry once against FastAPI websocket before staying offline.
+          if (!attemptedFastApiFallback && /\/ws\/sensing(?:\?|$)/.test(targetUrl)) {
+            attemptedFastApiFallback = true;
+            const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const host = window.location.hostname || 'localhost';
+            const fallback = `${wsProto}//${host}:8000/api/v1/stream/pose?token=dev-observatory`;
+            console.log('[Observatory] /ws/sensing closed, trying FastAPI fallback ->', fallback);
+            openSocket(fallback);
+            return;
+          }
+
+          console.log('[Observatory] WebSocket closed, staying in real-only offline mode');
+          this._ws = null;
+          this._liveData = null;
+          this._currentData = this._emptyDataFrame();
+          this.settings.dataSource = 'ws';
+          this._hud.updateSourceBadge('offline', null);
+
+          if (!suppressReconnect && this.settings.dataSource === 'ws') {
+            if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
+            this._reconnectTimer = setTimeout(() => {
+              this._reconnectTimer = null;
+              this._autoDetectLive();
+            }, 2500);
+          }
+        };
+        this._ws.onerror = () => {};
       };
-      this._ws.onmessage = (evt) => { try { this._liveData = JSON.parse(evt.data); } catch {} };
-      this._ws.onclose = () => {
-        console.log('[Observatory] WebSocket closed, falling back to demo');
-        this._ws = null;
-        this.settings.dataSource = 'demo';
-        this._hud.updateSourceBadge('demo', null);
-      };
-      this._ws.onerror = () => {};
+
+      // Compatibility rewrite: FastAPI legacy server uses /api/v1/stream/pose
+      // and expects a token query parameter.
+      if (typeof url === 'string' && /:8000\/ws\/sensing(?:\?|$)/.test(url)) {
+        const proto = url.startsWith('wss://') ? 'wss' : 'ws';
+        const host = url.replace(/^wss?:\/\//, '').split('/')[0];
+        url = `${proto}://${host}/api/v1/stream/pose?token=dev-observatory`;
+      }
+      openSocket(url);
     } catch {}
+    // Real-only mode: force live WebSocket source even if old settings had demo.
+    this.settings.dataSource = 'ws';
   }
 
   _disconnectWS() {
-    if (this._ws) { this._ws.close(); this._ws = null; }
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
+    if (this._ws) {
+      this._suppressNextCloseReconnect = true;
+      this._ws.close();
+      this._ws = null;
+    }
     this._liveData = null;
   }
 
+  _normalizeLiveData(raw) {
+    if (!raw || typeof raw !== 'object') return raw;
+
+    // Native sensing-server frame already matches Observatory contract.
+    if (raw.features || raw.vital_signs || raw.classification || raw.signal_field || raw.persons) {
+      return raw;
+    }
+
+    // Ignore control envelopes that are not sensing frames.
+    if (raw.type && raw.type !== 'pose_data') {
+      return null;
+    }
+
+    // FastAPI pose stream wrapper: {type:"pose_data", data:{pose:{...}, confidence, activity}, ...}
+    const payload = raw.data || raw.payload || raw.pose_data || raw.pose || {};
+    const pose = payload.pose || payload;
+    const persons = Array.isArray(pose?.persons) ? pose.persons : [];
+    const hasPeople = persons.length > 0;
+
+    const mappedPersons = hasPeople
+      ? persons.map((p, idx) => {
+          const kps = Array.isArray(p?.keypoints) ? p.keypoints : [];
+          const hipL = kps[11];
+          const hipR = kps[12];
+          const nx = (hipL?.x ?? hipR?.x ?? 0.5);
+          const ny = (hipL?.y ?? hipR?.y ?? 0.5);
+          const x = (nx - 0.5) * 8.0;
+          const z = (ny - 0.5) * 6.0;
+          return {
+            id: p?.id ?? idx,
+            position: [x, 0, z],
+            motion_score: Math.max(0, Math.min(100, (p?.confidence ?? payload?.confidence ?? 0.6) * 100)),
+            pose: payload?.activity || 'standing',
+          };
+        })
+      : [];
+
+    return {
+      persons: mappedPersons,
+      classification: {
+        presence: hasPeople,
+      },
+      features: {},
+      vital_signs: {},
+      signal_field: { values: [] },
+    };
+  }
+
+  _isNonRealPayload(raw, normalized) {
+    const source = String(
+      raw?.source ??
+      raw?.data?.metadata?.source ??
+      raw?.metadata?.source ??
+      normalized?.source ??
+      ''
+    ).toLowerCase();
+    if (source === 'simulated' || source === 'simulate' || source === 'mock' || source === 'demo') {
+      return true;
+    }
+    if (raw?._simulated === true || normalized?._simulated === true) {
+      return true;
+    }
+    if (raw?.data?.metadata?.mock_data === true || raw?.metadata?.mock_data === true || normalized?.metadata?.mock_data === true) {
+      return true;
+    }
+    return false;
+  }
+
+  _emptyDataFrame() {
+    return {
+      persons: [],
+      classification: { presence: false, confidence: 0, motion_level: 'absent' },
+      features: { mean_rssi: 0, variance: 0, motion_band_power: 0 },
+      vital_signs: { heart_rate_bpm: 0, breathing_rate_bpm: 0 },
+      signal_field: { values: [] },
+      estimated_persons: 0,
+    };
+  }
   // ========================================
   // ANIMATION LOOP
   // ========================================
@@ -505,11 +681,11 @@ class Observatory {
     const dt = Math.min(this._clock.getDelta(), 0.1);
     const elapsed = this._clock.getElapsedTime();
 
-    // Data source
+    // Data source: real stream only.
     if (this.settings.dataSource === 'ws' && this._liveData) {
       this._currentData = this._liveData;
-    } else {
-      this._currentData = this._demoData.update(dt);
+    } else if (!this._currentData) {
+      this._currentData = this._emptyDataFrame();
     }
     const data = this._currentData;
 
@@ -713,3 +889,4 @@ class Observatory {
 }
 
 new Observatory();
+

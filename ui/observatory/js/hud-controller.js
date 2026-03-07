@@ -25,7 +25,7 @@ export const DEFAULTS = {
   wireColor: '#00d878', jointColor: '#ff4060', aura: 0.02,
   field: 0.45, waves: 0.4, ambient: 0.7, reflect: 0.2,
   fov: 50, orbitSpeed: 0.15, grid: true, room: true,
-  scenario: 'auto', cycle: 30, dataSource: 'demo', wsUrl: '',
+  scenario: 'auto', cycle: 30, dataSource: 'ws', wsUrl: '',
 };
 
 export const SETTINGS_VERSION = '6';
@@ -164,6 +164,7 @@ export class HudController {
     const overlay = document.getElementById('settings-overlay');
     const btn = document.getElementById('settings-btn');
     const closeBtn = document.getElementById('settings-close');
+    const sourceBadge = document.getElementById('data-source-badge');
     btn.addEventListener('click', () => this.toggleSettings());
     closeBtn.addEventListener('click', () => this.toggleSettings());
     overlay.addEventListener('click', (e) => { if (e.target === overlay) this.toggleSettings(); });
@@ -180,6 +181,19 @@ export class HudController {
 
     const obs = this._obs;
     const s = obs.settings;
+
+    // Quick action: click source badge to retry live auto-detection.
+    sourceBadge?.addEventListener('click', () => {
+      const dsSel = document.getElementById('opt-data-source');
+      const wsRow = document.getElementById('ws-url-row');
+      s.dataSource = 'ws';
+      if (dsSel) dsSel.value = 'ws';
+      if (wsRow) wsRow.style.display = 'flex';
+      obs._autoDetectLive?.();
+
+      this.updateSourceBadge(s.dataSource, obs._ws);
+      this.saveSettings();
+    });
 
     // Bind ranges
     this._bindRange('opt-bloom', 'bloom', v => { obs._postProcessing._bloomPass.strength = v; });
@@ -239,16 +253,18 @@ export class HudController {
 
     // Data source
     const dsSel = document.getElementById('opt-data-source');
-    dsSel.value = s.dataSource;
+    dsSel.value = 'ws';
+    s.dataSource = 'ws';
     dsSel.addEventListener('change', (e) => {
-      s.dataSource = e.target.value;
-      document.getElementById('ws-url-row').style.display = e.target.value === 'ws' ? 'flex' : 'none';
-      if (e.target.value === 'ws' && s.wsUrl) obs._connectWS(s.wsUrl);
-      else obs._disconnectWS();
+      s.dataSource = 'ws';
+      if (e.target.value !== 'ws') e.target.value = 'ws';
+      document.getElementById('ws-url-row').style.display = 'flex';
+      if (s.wsUrl) obs._connectWS(s.wsUrl);
+      else obs._autoDetectLive?.();
       this.updateSourceBadge(s.dataSource, obs._ws);
       this.saveSettings();
     });
-    document.getElementById('ws-url-row').style.display = s.dataSource === 'ws' ? 'flex' : 'none';
+    document.getElementById('ws-url-row').style.display = 'flex';
 
     const wsInput = document.getElementById('opt-ws-url');
     wsInput.value = s.wsUrl;
@@ -365,7 +381,7 @@ export class HudController {
     if (dataSource === 'ws' && ws?.readyState === WebSocket.OPEN) {
       dot.className = 'dot dot--live'; label.textContent = 'LIVE';
     } else {
-      dot.className = 'dot dot--demo'; label.textContent = 'DEMO';
+      dot.className = 'dot dot--demo'; label.textContent = 'OFFLINE';
     }
   }
 

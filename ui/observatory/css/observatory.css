@@ -98,6 +98,17 @@ body {
   font-size: 11px;
   letter-spacing: 1px;
   color: var(--green-glow);
+  pointer-events: auto;
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.15s ease;
+}
+
+#data-source-badge:hover {
+  filter: brightness(1.12);
+}
+
+#data-source-badge:active {
+  transform: translateY(1px);
 }
 
 .dot {
