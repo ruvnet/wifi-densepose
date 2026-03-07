@@ -1,8 +1,0 @@
-target/
-.git/
-*.log
-__pycache__/
-*.pyc
-.env
-node_modules/
-.claude/
