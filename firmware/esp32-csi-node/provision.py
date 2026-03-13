@@ -17,11 +17,10 @@ import argparse
 import csv
 import io
 import os
-import struct
 import subprocess
 import sys
 import tempfile
-
+from types import SimpleNamespace
 
 # NVS partition table offset — default for ESP-IDF 4MB flash with standard
 # partition scheme.  The "nvs" partition starts at 0x9000 (36864) and is
@@ -74,79 +73,71 @@ def build_nvs_csv(args):
     return buf.getvalue()
 
 
-def generate_nvs_binary(csv_content, size):
-    """Generate an NVS partition binary from CSV using nvs_partition_gen.py."""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f_csv:
-        f_csv.write(csv_content)
-        csv_path = f_csv.name
-
-    bin_path = csv_path.replace(".csv", ".bin")
-
+def generate_nvs_binary(csv_path: str, bin_path: str, size: str = "0x6000") -> str:
+    """
+    Gera binário NVS compatível com diferentes versões do esp_idf_nvs_partition_gen.
+    """
     try:
-        # Try the pip-installed version first (esp_idf_nvs_partition_gen package)
-        try:
-            from esp_idf_nvs_partition_gen import nvs_partition_gen
-            nvs_partition_gen.generate(csv_path, bin_path, size)
-            with open(bin_path, "rb") as f:
-                return f.read()
-        except ImportError:
-            pass
+        from esp_idf_nvs_partition_gen import nvs_partition_gen as nvs_gen
 
-        # Try legacy import name (older versions)
-        try:
-            import nvs_partition_gen
-            nvs_partition_gen.generate(csv_path, bin_path, size)
-            with open(bin_path, "rb") as f:
-                return f.read()
-        except ImportError:
-            pass
-
-        # Fall back to calling the ESP-IDF script directly
-        idf_path = os.environ.get("IDF_PATH", "")
-        gen_script = os.path.join(idf_path, "components", "nvs_flash",
-                                  "nvs_partition_generator", "nvs_partition_gen.py")
-        if os.path.isfile(gen_script):
-            subprocess.check_call([
-                sys.executable, gen_script, "generate",
-                csv_path, bin_path, hex(size)
-            ])
-            with open(bin_path, "rb") as f:
-                return f.read()
-
-        # Last resort: try as a module
-        subprocess.check_call([
-            sys.executable, "-m", "nvs_partition_gen", "generate",
-            csv_path, bin_path, hex(size)
-        ])
-        with open(bin_path, "rb") as f:
-            return f.read()
-
-    finally:
-        for p in (csv_path, bin_path):
-            if os.path.isfile(p):
-                os.unlink(p)
+        # API atual: generate(args)
+        args = SimpleNamespace(
+            input=[csv_path],
+            output=bin_path,
+            size=size,
+            version=2,
+            outdir=os.getcwd(),
+        )
+        nvs_gen.generate(args)
+        print(f"Generated NVS binary: {bin_path}")
+        return bin_path
+    except Exception:
+        # Fallback robusto: CLI do módulo
+        cmd = [
+            sys.executable,
+            "-m",
+            "esp_idf_nvs_partition_gen.nvs_partition_gen",
+            "generate",
+            csv_path,
+            bin_path,
+            size,
+        ]
+        subprocess.run(cmd, check=True)
 
 
-def flash_nvs(port, baud, nvs_bin):
-    """Flash the NVS partition binary to the ESP32."""
-    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
-        f.write(nvs_bin)
-        bin_path = f.name
+def flash_nvs(port: str, baud: int, nvs_bin_path: str) -> None:
+    if not nvs_bin_path:
+        raise ValueError("nvs_bin_path está vazio/None")
+    if not os.path.exists(nvs_bin_path):
+        raise FileNotFoundError(f"NVS bin não encontrado: {nvs_bin_path}")
+
+    with (
+        open(nvs_bin_path, "rb") as src,
+        tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f,
+    ):
+        f.write(src.read())
+        temp_bin = f.name
 
     try:
         cmd = [
-            sys.executable, "-m", "esptool",
-            "--chip", "esp32s3",
-            "--port", port,
-            "--baud", str(baud),
+            sys.executable,
+            "-m",
+            "esptool",
+            "--chip",
+            "esp32s3",
+            "--port",
+            port,
+            "--baud",
+            str(baud),
             "write_flash",
-            hex(NVS_PARTITION_OFFSET), bin_path,
+            hex(NVS_PARTITION_OFFSET),
+            temp_bin,
         ]
-        print(f"Flashing NVS partition ({len(nvs_bin)} bytes) to {port}...")
+        print(f"Flashing NVS partition ({len(nvs_bin_path)} bytes) to {port}...")
         subprocess.check_call(cmd)
         print("NVS provisioning complete!")
     finally:
-        os.unlink(bin_path)
+        os.unlink(temp_bin)
 
 
 def main():
@@ -154,41 +145,85 @@ def main():
         description="Provision ESP32-S3 CSI Node with WiFi and aggregator settings",
         epilog="Example: python provision.py --port COM7 --ssid MyWiFi --password secret --target-ip 192.168.1.20",
     )
-    parser.add_argument("--port", required=True, help="Serial port (e.g. COM7, /dev/ttyUSB0)")
-    parser.add_argument("--baud", type=int, default=460800, help="Flash baud rate (default: 460800)")
+    parser.add_argument(
+        "--port", required=True, help="Serial port (e.g. COM7, /dev/ttyUSB0)"
+    )
+    parser.add_argument(
+        "--baud", type=int, default=460800, help="Flash baud rate (default: 460800)"
+    )
     parser.add_argument("--ssid", help="WiFi SSID")
     parser.add_argument("--password", help="WiFi password")
     parser.add_argument("--target-ip", help="Aggregator host IP (e.g. 192.168.1.20)")
-    parser.add_argument("--target-port", type=int, help="Aggregator UDP port (default: 5005)")
+    parser.add_argument(
+        "--target-port", type=int, help="Aggregator UDP port (default: 5005)"
+    )
     parser.add_argument("--node-id", type=int, help="Node ID 0-255 (default: 1)")
     # TDM mesh settings
-    parser.add_argument("--tdm-slot", type=int, help="TDM slot index for this node (0-based)")
-    parser.add_argument("--tdm-total", type=int, help="Total number of TDM nodes in mesh")
+    parser.add_argument(
+        "--tdm-slot", type=int, help="TDM slot index for this node (0-based)"
+    )
+    parser.add_argument(
+        "--tdm-total", type=int, help="Total number of TDM nodes in mesh"
+    )
     # Edge intelligence settings (ADR-039)
-    parser.add_argument("--edge-tier", type=int, choices=[0, 1, 2],
-                        help="Edge processing tier: 0=off, 1=stats, 2=vitals")
-    parser.add_argument("--pres-thresh", type=int, help="Presence detection threshold (default: 50)")
-    parser.add_argument("--fall-thresh", type=int, help="Fall detection threshold (default: 500)")
-    parser.add_argument("--vital-win", type=int, help="Phase history window in frames (default: 300)")
-    parser.add_argument("--vital-int", type=int, help="Vitals packet interval in ms (default: 1000)")
-    parser.add_argument("--subk-count", type=int, help="Top-K subcarrier count (default: 32)")
+    parser.add_argument(
+        "--edge-tier",
+        type=int,
+        choices=[0, 1, 2],
+        help="Edge processing tier: 0=off, 1=stats, 2=vitals",
+    )
+    parser.add_argument(
+        "--pres-thresh", type=int, help="Presence detection threshold (default: 50)"
+    )
+    parser.add_argument(
+        "--fall-thresh", type=int, help="Fall detection threshold (default: 500)"
+    )
+    parser.add_argument(
+        "--vital-win", type=int, help="Phase history window in frames (default: 300)"
+    )
+    parser.add_argument(
+        "--vital-int", type=int, help="Vitals packet interval in ms (default: 1000)"
+    )
+    parser.add_argument(
+        "--subk-count", type=int, help="Top-K subcarrier count (default: 32)"
+    )
     # ADR-060: Channel override and MAC filter
-    parser.add_argument("--channel", type=int, help="CSI channel (1-14 for 2.4GHz, 36-177 for 5GHz). "
-                        "Overrides auto-detection from connected AP.")
-    parser.add_argument("--filter-mac", type=str, help="MAC address to filter CSI frames (AA:BB:CC:DD:EE:FF)")
-    parser.add_argument("--dry-run", action="store_true", help="Generate NVS binary but don't flash")
+    parser.add_argument(
+        "--channel",
+        type=int,
+        help="CSI channel (1-14 for 2.4GHz, 36-177 for 5GHz). "
+        "Overrides auto-detection from connected AP.",
+    )
+    parser.add_argument(
+        "--filter-mac",
+        type=str,
+        help="MAC address to filter CSI frames (AA:BB:CC:DD:EE:FF)",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Generate NVS binary but don't flash"
+    )
 
     args = parser.parse_args()
 
-    has_value = any([
-        args.ssid, args.password is not None, args.target_ip,
-        args.target_port, args.node_id is not None,
-        args.tdm_slot is not None, args.tdm_total is not None,
-        args.edge_tier is not None, args.pres_thresh is not None,
-        args.fall_thresh is not None, args.vital_win is not None,
-        args.vital_int is not None, args.subk_count is not None,
-        args.channel is not None, args.filter_mac is not None,
-    ])
+    has_value = any(
+        [
+            args.ssid,
+            args.password is not None,
+            args.target_ip,
+            args.target_port,
+            args.node_id is not None,
+            args.tdm_slot is not None,
+            args.tdm_total is not None,
+            args.edge_tier is not None,
+            args.pres_thresh is not None,
+            args.fall_thresh is not None,
+            args.vital_win is not None,
+            args.vital_int is not None,
+            args.subk_count is not None,
+            args.channel is not None,
+            args.filter_mac is not None,
+        ]
+    )
     if not has_value:
         parser.error("At least one config value must be specified")
 
@@ -196,23 +231,31 @@ def main():
     if (args.tdm_slot is not None) != (args.tdm_total is not None):
         parser.error("--tdm-slot and --tdm-total must be specified together")
     if args.tdm_slot is not None and args.tdm_slot >= args.tdm_total:
-        parser.error(f"--tdm-slot ({args.tdm_slot}) must be less than --tdm-total ({args.tdm_total})")
+        parser.error(
+            f"--tdm-slot ({args.tdm_slot}) must be less than --tdm-total ({args.tdm_total})"
+        )
 
     # ADR-060: Validate channel and MAC filter
     if args.channel is not None:
         if not ((1 <= args.channel <= 14) or (36 <= args.channel <= 177)):
-            parser.error(f"--channel must be 1-14 (2.4GHz) or 36-177 (5GHz), got {args.channel}")
+            parser.error(
+                f"--channel must be 1-14 (2.4GHz) or 36-177 (5GHz), got {args.channel}"
+            )
     if args.filter_mac is not None:
         parts = args.filter_mac.split(":")
         if len(parts) != 6:
-            parser.error(f"--filter-mac must be in AA:BB:CC:DD:EE:FF format, got '{args.filter_mac}'")
+            parser.error(
+                f"--filter-mac must be in AA:BB:CC:DD:EE:FF format, got '{args.filter_mac}'"
+            )
         try:
             for p in parts:
                 val = int(p, 16)
                 if val < 0 or val > 255:
                     raise ValueError
         except ValueError:
-            parser.error(f"--filter-mac contains invalid hex bytes: '{args.filter_mac}'")
+            parser.error(
+                f"--filter-mac contains invalid hex bytes: '{args.filter_mac}'"
+            )
 
     print("Building NVS configuration:")
     if args.ssid:
@@ -229,7 +272,9 @@ def main():
         print(f"  TDM Slot:      {args.tdm_slot} of {args.tdm_total}")
     if args.edge_tier is not None:
         tier_desc = {0: "off (raw CSI)", 1: "stats", 2: "vitals"}
-        print(f"  Edge Tier:     {args.edge_tier} ({tier_desc.get(args.edge_tier, '?')})")
+        print(
+            f"  Edge Tier:     {args.edge_tier} ({tier_desc.get(args.edge_tier, '?')})"
+        )
     if args.pres_thresh is not None:
         print(f"  Pres Thresh:   {args.pres_thresh}")
     if args.fall_thresh is not None:
@@ -248,17 +293,23 @@ def main():
     csv_content = build_nvs_csv(args)
 
     try:
-        nvs_bin = generate_nvs_binary(csv_content, NVS_PARTITION_SIZE)
+        nvs_bin = generate_nvs_binary("nvs_config.csv", "nvs.bin", "0x6000")
     except Exception as e:
         print(f"\nError generating NVS binary: {e}", file=sys.stderr)
-        print("\nFallback: save CSV and flash manually with ESP-IDF tools.", file=sys.stderr)
+        print(
+            "\nFallback: save CSV and flash manually with ESP-IDF tools.",
+            file=sys.stderr,
+        )
         fallback_path = "nvs_config.csv"
         with open(fallback_path, "w") as f:
             f.write(csv_content)
         print(f"Saved NVS CSV to {fallback_path}", file=sys.stderr)
-        print(f"Flash with: python $IDF_PATH/components/nvs_flash/"
-              f"nvs_partition_generator/nvs_partition_gen.py generate "
-              f"{fallback_path} nvs.bin 0x6000", file=sys.stderr)
+        print(
+            f"Flash with: python $IDF_PATH/components/nvs_flash/"
+            f"nvs_partition_generator/nvs_partition_gen.py generate "
+            f"{fallback_path} nvs.bin 0x6000",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     if args.dry_run:
@@ -266,8 +317,10 @@ def main():
         with open(out, "wb") as f:
             f.write(nvs_bin)
         print(f"NVS binary saved to {out} ({len(nvs_bin)} bytes)")
-        print(f"Flash manually: python -m esptool --chip esp32s3 --port {args.port} "
-              f"write_flash 0x9000 {out}")
+        print(
+            f"Flash manually: python -m esptool --chip esp32s3 --port {args.port} "
+            f"write_flash 0x9000 {out}"
+        )
         return
 
     flash_nvs(args.port, args.baud, nvs_bin)

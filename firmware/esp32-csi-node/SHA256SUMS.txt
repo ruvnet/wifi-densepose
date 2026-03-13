@@ -1,0 +1,4 @@
+9688566b6601fc8ffdf00d8988458222f2fc91a3616e935358eb5279e5471d0d *dist/firmware-v0.4.1/bootloader.bin
+fe2be04e9a259c3b0323ae1cf2c4a24da644b879ce446ac8ea4eb0c4ea19ac71 *dist/firmware-v0.4.1/esp32-csi-node.bin
+7d2c7ac4888bfd75cd5f56e8d61f69595121183afc81556c876732fd3782c62f *dist/firmware-v0.4.1/ota_data_initial.bin
+67222c257c0477501fd4002275638dc4262b34eb68235b8289fb1337054d322b *dist/firmware-v0.4.1/partition-table.bin
