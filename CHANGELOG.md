@@ -144,6 +144,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **README: corrected the camera-supervised pose-accuracy claim** (audit finding #5; see PR #535) — "92.9% PCK@20" → the ADR-079 target (35%+; proxy baseline 35.3%), noting P7/P8/P9 are pending.
 
 ### Added
+- **`RollingP95` adaptive feature normalizer** (`v2/crates/wifi-densepose-sensing-server`) —
+  Streaming P95 estimator (600-sample / ~30 s sliding window) that self-calibrates
+  feature normalization to whatever distribution the deployment produces. Replaces
+  fixed-scale denominators (`variance/300`, `motion/250`, `spectral/500`) which saturated
+  when live ESP32 values exceeded those limits, collapsing dynamic range to zero.
+  Cold-start (<60 samples) falls back to the legacy denominators so day-0 behaviour
+  is preserved. Deployment-neutral: no hardcoded values. (ADR-044 §5.2)
+
+- **`dedup_factor` runtime configuration API** (`v2/crates/wifi-densepose-sensing-server`) —
+  Exposes the multi-node person-count deduplication divisor at runtime via REST:
+  - `GET  /api/v1/config/dedup-factor` — read current value.
+  - `POST /api/v1/config/dedup-factor` — set value (clamped 1.0–10.0, persisted).
+  - `POST /api/v1/config/ground-truth` — auto-tunes `dedup_factor` from a known
+    person count (`{"count": N}`); derives optimal divisor from current node-sum.
+  Config is persisted to `data/config.json` and reloaded on restart. (ADR-044 §5.3)
+
 - **`nvsim` crate — deterministic NV-diamond magnetometer pipeline simulator** (ADR-089) —
   New standalone leaf crate at `v2/crates/nvsim` modeling a forward-only
   magnetic sensing path: scene → source synthesis (Biot–Savart, dipole,

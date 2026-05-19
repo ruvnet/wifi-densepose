@@ -97,6 +97,7 @@ pub fn node_frames_from_states(node_states: &HashMap<u8, NodeState>) -> Vec<Mult
 pub fn fuse_or_fallback(
     fuser: &MultistaticFuser,
     node_states: &HashMap<u8, NodeState>,
+    dedup_factor: f64,
 ) -> (Option<FusedSensingFrame>, Option<usize>) {
     let frames = node_frames_from_states(node_states);
     if frames.is_empty() {
@@ -109,9 +110,11 @@ pub fn fuse_or_fallback(
             (Some(fused), None)
         }
         Err(e) => {
-            tracing::debug!("Multistatic fusion failed ({e}), using per-node max fallback");
-            // Use max (not sum) to avoid double-counting when nodes have overlapping coverage.
-            let max_count: usize = node_states
+            tracing::debug!("Multistatic fusion failed ({e}), using per-node sum/dedup fallback");
+            // Sum per-node counts then divide by dedup_factor (assumed average
+            // visibility per body across nodes).  ADR-044 §5.1.
+            // dedup_factor is runtime-configurable; default 3.0.
+            let total: usize = node_states
                 .values()
                 .filter(|ns| {
                     ns.last_frame_time
@@ -119,9 +122,9 @@ pub fn fuse_or_fallback(
                         .unwrap_or(false)
                 })
                 .map(|ns| ns.prev_person_count)
-                .max()
-                .unwrap_or(0);
-            (None, Some(max_count))
+                .sum();
+            let estimated = ((total as f64) / dedup_factor).ceil() as usize;
+            (None, Some(estimated))
         }
     }
 }
@@ -257,7 +260,7 @@ mod tests {
     fn test_fuse_or_fallback_empty() {
         let fuser = MultistaticFuser::new();
         let states: HashMap<u8, NodeState> = HashMap::new();
-        let (fused, count) = fuse_or_fallback(&fuser, &states);
+        let (fused, count) = fuse_or_fallback(&fuser, &states, 3.0);
         assert!(fused.is_none());
         assert_eq!(count, Some(0));
     }
