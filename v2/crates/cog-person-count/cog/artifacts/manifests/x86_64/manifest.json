@@ -1,25 +1,25 @@
 {
-  "id": "person-count",
-  "version": "0.0.1",
-  "binary_url": "https://storage.googleapis.com/cognitum-apps/cogs/x86_64/cog-person-count-x86_64",
-  "binary_bytes": 2615528,
-  "binary_sha256": "76cdd1ec40211add90b4942a09f79939aa28210a27e931de67122357392b01db",
-  "binary_signature": "QB+8cnGSMQmubSt/KWVu1+JMg37AKnQXDsFQi/vi+jqpW9rVrGMtnxQpWEWZPeWU1AJ6pl3O2V+7ZtTNIQ2rDg==",
-  "weights_url": "https://storage.googleapis.com/cognitum-apps/cogs/arm/cog-person-count-count_v1.safetensors",
-  "weights_bytes": 392088,
-  "weights_sha256": "dacb0551fd3887958db19696d90d811ab08faa44703e6e04ff56d15c3a65a9ff",
   "arch": "x86_64",
-  "target_triple": "x86_64-unknown-linux-gnu",
-  "installed_at": 0,
-  "status": "installed",
-  "signed_by": "COGNITUM_OWNER_SIGNING_KEY",
-  "sig_algo": "Ed25519",
+  "binary_bytes": 4502960,
+  "binary_sha256": "051614ce6ba63df704fae848a67ad095df4bb88862fdff05ef3c0419cc8388b3",
+  "binary_signature": "P9txCcsqCoFN6LyZS+Hl33pYZxiP/nXJMTI6s4bt26cc+Cteidz7ymajCQIfuq0mx0cnWaQ6eKZUjzq5AIgoBw==",
+  "binary_url": "https://storage.googleapis.com/cognitum-apps/cogs/x86_64/cog-person-count-x86_64",
   "build_metadata": {
-    "rust": "1.95.0",
     "candle": "0.9 cpu",
     "cog_person_count_version": "0.3.0",
+    "rust": "1.95.0",
+    "training_caveat": "single-session data; class-1 accuracy 0% \u00e2\u20ac\u201d see docs/benchmarks/person-count-cog.md",
     "training_eval_accuracy": 0.651,
-    "training_eval_mae": 0.349,
-    "training_caveat": "single-session data; class-1 accuracy 0% — see docs/benchmarks/person-count-cog.md"
-  }
+    "training_eval_mae": 0.349
+  },
+  "id": "person-count",
+  "installed_at": 0,
+  "sig_algo": "Ed25519",
+  "signed_by": "COGNITUM_OWNER_SIGNING_KEY",
+  "status": "installed",
+  "target_triple": "x86_64-unknown-linux-gnu",
+  "version": "0.0.1",
+  "weights_bytes": 392088,
+  "weights_sha256": "dacb0551fd3887958db19696d90d811ab08faa44703e6e04ff56d15c3a65a9ff",
+  "weights_url": "https://storage.googleapis.com/cognitum-apps/cogs/arm/cog-person-count-count_v1.safetensors"
 }
