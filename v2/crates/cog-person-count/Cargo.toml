@@ -1,0 +1,42 @@
+[package]
+name = "cog-person-count"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cognitum Cog: learned multi-person counter from WiFi CSI (ADR-103). Replaces the PR #491 slot heuristic with a Candle-based count head + Stoer-Wagner multi-node fusion."
+publish = false
+
+[[bin]]
+name = "cog-person-count"
+path = "src/main.rs"
+
+[lib]
+name = "cog_person_count"
+path = "src/lib.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+sha2 = "0.10"
+ureq = { version = "2", default-features = false, features = ["tls"] }
+# Same Candle stack the pose cog uses — CPU by default, `cuda` feature
+# opt-in for hosts with a CUDA GPU.
+candle-core = { version = "0.9", default-features = false }
+candle-nn = { version = "0.9", default-features = false }
+safetensors = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+approx = "0.5"
+
+[features]
+default = []
+cuda = ["candle-core/cuda", "candle-nn/cuda"]
+hailo = []

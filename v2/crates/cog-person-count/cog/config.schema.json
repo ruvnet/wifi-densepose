@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cognitum.one/schemas/cog-person-count-config-v1.json",
+  "title": "Person Count Cog Runtime Config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "sensing_url": {
+      "type": "string",
+      "format": "uri",
+      "default": "http://127.0.0.1:3000/api/v1/sensing/latest"
+    },
+    "model_path": {
+      "type": "string",
+      "description": "Filesystem path to count_v1.safetensors. Resolved relative to /var/lib/cognitum/apps/person-count/ when not absolute."
+    },
+    "poll_ms": {
+      "type": "integer",
+      "minimum": 10,
+      "maximum": 1000,
+      "default": 40
+    }
+  },
+  "required": ["model_path"]
+}

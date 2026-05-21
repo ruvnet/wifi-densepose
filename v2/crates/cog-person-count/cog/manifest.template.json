@@ -1,0 +1,17 @@
+{
+  "id": "person-count",
+  "version": "{{VERSION}}",
+  "binary_url": "https://storage.googleapis.com/cognitum-apps/cogs/{{ARCH}}/cog-person-count-{{ARCH}}",
+  "binary_bytes": 0,
+  "binary_sha256": "",
+  "binary_signature": "",
+  "weights_url": "https://storage.googleapis.com/cognitum-apps/cogs/{{ARCH}}/cog-person-count-count_v1.safetensors",
+  "weights_bytes": 0,
+  "weights_sha256": "",
+  "arch": "{{ARCH}}",
+  "target_triple": "{{TARGET_TRIPLE}}",
+  "installed_at": 0,
+  "status": "installed",
+  "signed_by": "COGNITUM_OWNER_SIGNING_KEY",
+  "sig_algo": "Ed25519"
+}

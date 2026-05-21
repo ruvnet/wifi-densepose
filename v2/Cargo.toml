@@ -34,6 +34,10 @@ members = [
     # cognitum-cluster-*, ruvultra). The companion appliance-side crate
     # lives in cognitum-one/v0-appliance as `cognitum-pose-estimation`.
     "crates/cog-pose-estimation",
+    # ADR-103: Learned multi-person counter (SOTA path) — replaces the
+    # PR #491 slot heuristic with a Candle network + Stoer-Wagner fusion.
+    # Motivated by #499 ghost-skeleton reports.
+    "crates/cog-person-count",
     # rvCSI — edge RF sensing runtime (ADR-095 platform, ADR-096 FFI/crate layout):
     # lives in its own repo (https://github.com/ruvnet/rvcsi), vendored here as
     # `vendor/rvcsi` and published to crates.io as `rvcsi-*` 0.3.x. Depend on the
