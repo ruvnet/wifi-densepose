@@ -10,6 +10,7 @@
 pub mod fusion;
 pub mod inference;
 pub mod publisher;
+pub mod runtime;
 
 pub const COG_ID: &str = "person-count";
 pub const COG_VERSION: &str = env!("CARGO_PKG_VERSION");

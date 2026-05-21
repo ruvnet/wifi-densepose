@@ -103,10 +103,31 @@ fn cmd_health() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn cmd_run(_config_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    // Long-running mode is wired in the v0.0.1 release follow-up — same
-    // approach as cog-pose-estimation's runtime.rs. For now, the cog
-    // satisfies the four-verb contract; downstream consumers integrate
-    // via the in-process `InferenceEngine` API.
-    Err("`run` subcommand wiring is pending v0.0.1 — for now consume via the InferenceEngine library API".into())
+fn cmd_run(config_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let raw = std::fs::read_to_string(&config_path)
+        .map_err(|e| format!("failed to read config at {}: {}", config_path.display(), e))?;
+    let cfg: RunConfig = serde_json::from_str(&raw)
+        .map_err(|e| format!("failed to parse config at {}: {}", config_path.display(), e))?;
+
+    let engine = InferenceEngine::with_weights(cfg.model_path.as_deref())?;
+    publisher::run_started(
+        COG_ID,
+        &cfg.sensing_url,
+        cfg.poll_ms,
+        &cfg.model_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(auto-discover)".to_string()),
+    );
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(cog_person_count::runtime::run_loop(
+        cog_person_count::runtime::RunConfig {
+            sensing_url: cfg.sensing_url,
+            poll_ms: cfg.poll_ms,
+        },
+        engine,
+    ))
 }
