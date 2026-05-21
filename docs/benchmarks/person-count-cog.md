@@ -81,3 +81,45 @@ cp count_v1.safetensors v2/crates/cog-person-count/cog/artifacts/
 cargo run -p cog-person-count --release -- health
 # → {"backend":"candle-cpu", "synthetic_count": <int>, "synthetic_confidence": <float>, ...}
 ```
+
+### Live appliance install (cognitum-v0 Pi 5)
+
+Installed at `/var/lib/cognitum/apps/person-count/` with the same on-disk shape as `cog-pose-estimation`, `anomaly-detect`, `seizure-detect`, etc.:
+
+```
+$ ls -la /var/lib/cognitum/apps/person-count/
+-rwxr-xr-x cog-person-count-arm    2,168,816 B  (sha matches GCS)
+-rw-r--r-- count_v1.safetensors      392,088 B
+-rw-r--r-- manifest.json               1,073 B
+-rw-r--r-- config.json                   160 B
+```
+
+```
+$ ./cog-person-count-arm health
+{"ts": ..., "event": "health.ok",
+ "fields": {"backend": "candle-cpu", "synthetic_count": 0,
+            "synthetic_confidence": 0.49, "synthetic_p95_range": [0, 7]}}
+```
+
+Cold-start on real Pi 5 hardware: **9.2 ms / invocation** (30 sequential `health` invocations in 0.276 s). Slightly slower than the pose cog (8.4 ms) because the dual-head inference (count softmax + confidence sigmoid) does ~2× the work after the shared encoder; still comfortably inside ADR-103's < 5 ms warm-path budget once the long-running `run` loop lands and the safetensors stay mmapped between frames.
+
+### Signed GCS release artifacts (publicly downloadable)
+
+```
+gs://cognitum-apps/cogs/arm/cog-person-count-arm                              2,168,816 B
+  sha256:    36bc0bb0ece894350377d5f93d46cd29378cb289b3773530611c0d47b507b3c3
+  signature: R/00xdzHriyr/2rzr4wmPJ/Ken60A+RNdi8r0g2HYJNTXBaFtr46ExfNbiHlgYWadQXzTZdfJoyJK+a6k71NDg==
+
+gs://cognitum-apps/cogs/x86_64/cog-person-count-x86_64                       2,615,528 B
+  sha256:    76cdd1ec40211add90b4942a09f79939aa28210a27e931de67122357392b01db
+  signature: QB+8cnGSMQmubSt/KWVu1+JMg37AKnQXDsFQi/vi+jqpW9rVrGMtnxQpWEWZPeWU1AJ6pl3O2V+7ZtTNIQ2rDg==
+
+gs://cognitum-apps/cogs/arm/cog-person-count-count_v1.safetensors              392,088 B
+  sha256:    dacb0551fd3887958db19696d90d811ab08faa44703e6e04ff56d15c3a65a9ff
+```
+
+All signed with `COGNITUM_OWNER_SIGNING_KEY` (Ed25519). SHAs verified via public anonymous `https://storage.googleapis.com/...` download.
+
+Manifests at:
+- `v2/crates/cog-person-count/cog/artifacts/manifests/arm/manifest.json`
+- `v2/crates/cog-person-count/cog/artifacts/manifests/x86_64/manifest.json
