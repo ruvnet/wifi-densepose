@@ -481,12 +481,33 @@ function align() {
       ? extractCsiMatrix(window)
       : extractFeatureMatrix(window);
 
+    // ADR-103: aggregate `n_persons` per window so the cog-person-count
+    // training pipeline has count labels. Two summaries:
+    //   - `n_persons_mode`   — modal value across the camera frames in
+    //                          the window. Robust to single-frame noise;
+    //                          this is the supervised label for the
+    //                          categorical {0..7} count head.
+    //   - `n_persons_max`    — the maximum value seen in the window.
+    //                          Useful as a soft upper bound (e.g. for
+    //                          dynamic dropout weighting during training).
+    const personCounts = matched.map(f => f.nPersons ?? 0);
+    const counts = new Map();
+    for (const v of personCounts) counts.set(v, (counts.get(v) ?? 0) + 1);
+    let modeVal = 0;
+    let modeCount = -1;
+    for (const [v, n] of counts) {
+      if (n > modeCount) { modeVal = v; modeCount = n; }
+    }
+    const maxVal = personCounts.reduce((a, b) => Math.max(a, b), 0);
+
     paired.push({
       csi: csiMatrix.data,
       csi_shape: csiMatrix.shape,
       kp: keypoints,
       conf: Math.round(avgConfidence * 1000) / 1000,
       n_camera_frames: matched.length,
+      n_persons_mode: modeVal,
+      n_persons_max: maxVal,
       ts_start: new Date(tStartMs).toISOString(),
       ts_end: new Date(tEndMs).toISOString(),
     });

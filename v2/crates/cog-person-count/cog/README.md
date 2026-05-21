@@ -27,19 +27,25 @@ Replaces the PR #491 slot heuristic (`subcarrier_diversity / dedup_factor`) with
 
 Downstream consumers can render the **most-likely count** when confidence is high, or fall back to a `[lo, hi]` band with a "?" badge when the model is uncertain — that's how this Cog closes the loop on #499's ghost-skeleton UX.
 
-## Status — v0.0.1 (this scaffold)
+## Status — v0.0.1
 
 | Component | State |
 |---|---|
 | Crate compiles, library API stable | ✅ |
-| Tests pass (`cargo test -p cog-person-count`) | ✅ |
+| Tests pass (15 total: 8 smoke + 7 fusion) | ✅ |
 | Four-verb runtime contract (`version`, `manifest`, `health`) | ✅ |
-| `run` subcommand (long-running loop) | ⏳ v0.0.1 follow-up |
-| Trained `count_v1.safetensors` artifact | ⏳ same training pipeline that produced `pose_v1` — bootstrap on the existing 1,077 paired samples |
-| Signed binary on GCS | ⏳ once trained |
+| Trained `count_v1.safetensors` artifact | ✅ shipped at `cog/artifacts/count_v1.safetensors` (392 KB) |
+| ONNX export | ✅ `count_v1.onnx` (16 KB), bit-compatible architecture |
+| Honest accuracy reporting | ✅ See `docs/benchmarks/person-count-cog.md` — 65.1% eval acc on a single-session dataset; confidence head Spearman 0.023 ⇒ uncalibrated for v0.0.1 |
+| `run` subcommand (long-running loop) | ⏳ same shape as cog-pose-estimation::runtime, lands in follow-up |
+| Signed binary on GCS | ⏳ release pipeline |
 | Stoer-Wagner min-cut clip in fusion stage | ⏳ v0.2.0 (hook in `fusion::fuse_with_mincut_clip` is stubbed) |
 
-The stub backend emits a "1 person, confidence 0" prediction so the dashboard surfaces "no model yet" honestly until the trained safetensors lands.
+### Honest v0.0.1 caveat
+
+`count_v1` was trained on a single 30-minute solo recording. The model overfit by epoch ~100 and the "best" checkpoint is one that effectively predicts the eval-window class distribution (mostly class-0). Class-1 accuracy on the held-out tail = 0%. **This v0.0.1 is a working pipeline with a degenerate model**, not a usable counter yet — same data-bound failure mode as `pose_v1` (#645), same fix: multi-room paired recordings.
+
+`cog-person-count health` will load the real safetensors and report `backend: candle-cpu` rather than `backend: stub`, so the cog-gateway can verify the model loaded — but operators should treat the v0.0.1 count outputs as scaffold-validation rather than production data. The 2.36 MB binary + 392 KB weights + 16 KB ONNX are all real and reusable as soon as more data lands.
 
 ## Security
 
