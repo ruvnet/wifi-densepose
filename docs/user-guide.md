@@ -29,13 +29,14 @@ WiFi DensePose turns commodity WiFi signals into real-time human pose estimation
 8. [Vital Sign Detection](#vital-sign-detection)
 9. [CLI Reference](#cli-reference)
 10. [Observatory Visualization](#observatory-visualization)
-11. [Adaptive Classifier](#adaptive-classifier)
+11. [Loading the Pretrained Model from Hugging Face](#loading-the-pretrained-model-from-hugging-face)
+12. [Adaptive Classifier](#adaptive-classifier)
     - [Recording Training Data](#recording-training-data)
     - [Training the Model](#training-the-model)
     - [Using the Trained Model](#using-the-trained-model)
-12. [Training a Model](#training-a-model)
+13. [Training a Model](#training-a-model)
     - [CRV Signal-Line Protocol](#crv-signal-line-protocol)
-13. [RVF Model Containers](#rvf-model-containers)
+14. [RVF Model Containers](#rvf-model-containers)
 14. [Hardware Setup](#hardware-setup)
     - [ESP32-S3 Mesh](#esp32-s3-mesh)
     - [Intel 5300 / Atheros NIC](#intel-5300--atheros-nic)
@@ -790,6 +791,67 @@ The Observatory is an immersive Three.js visualization that renders WiFi sensing
 | `R` | Reset camera |
 
 **Live data auto-detect:** When served by the sensing server, the Observatory probes `/health` on the same origin and automatically connects via WebSocket. The HUD badge switches from `DEMO` to `LIVE`. No configuration needed.
+
+---
+
+## Loading the Pretrained Model from Hugging Face
+
+A pretrained CSI encoder + presence-detection head is published on Hugging Face at [`ruvnet/wifi-densepose-pretrained`](https://huggingface.co/ruvnet/wifi-densepose-pretrained). It was trained on 60,630 frames / 610,615 contrastive triplets (12.2M steps, final loss 0.065) and reports 100% presence accuracy and ~164k embeddings/sec on an Apple M4 Pro.
+
+What it ships (and what it does not):
+
+| Capability | Status |
+|------------|--------|
+| Presence detection (occupied / empty) | ✅ Trained head — 100% accuracy on validation |
+| 128-dim CSI embeddings (re-ID, similarity, downstream training) | ✅ Trained encoder |
+| Single-person breathing / heart-rate | ⚠️ Server still uses heuristic DSP — model does not replace this yet |
+| 17-keypoint full-body pose | 🔬 No keypoint weights shipped yet — pose pipeline runs but without a learned head |
+
+### Download
+
+```bash
+pip install huggingface_hub
+huggingface-cli download ruvnet/wifi-densepose-pretrained \
+    --local-dir models/wifi-densepose-pretrained
+```
+
+The download yields a small set of files (the `.rvf.jsonl` is the canonical container the sensing server reads):
+
+```
+models/wifi-densepose-pretrained/
+  model.rvf.jsonl       # RVF container (encoder + presence head + lora)
+  model.safetensors     # 48 KB — same encoder weights, safetensors format
+  model-q4.bin          # 8 KB — recommended quantization for edge
+  presence-head.json    # presence classifier head
+  config.json           # sona-lora rank=8 alpha=16, target encoder + task_heads
+```
+
+### Using the weights
+
+The HF artifact is in **JSONL RVF** format (one JSON object per line: `metadata`, `encoder`, `lora`). What you can do with it today:
+
+| Consumer | Format it reads | Status |
+|----------|-----------------|--------|
+| Python / PyTorch training pipeline | `model.safetensors` | ✅ Works — load with `safetensors.torch.load_file` |
+| RVF JSONL inspection / re-export | `model.rvf.jsonl` | ✅ Works — plain JSONL, parse line-by-line |
+| Sensing-server `--model <PATH>` flag | binary RVF (`RVFS` magic) | ⚠️ Does **not** accept the JSONL file yet — see gap below |
+
+**Known gap (tracked):** `v2/crates/wifi-densepose-sensing-server/src/rvf_container.rs` only parses the binary RVF segment format (magic `0x52564653`). Pointing `--model` at `model.rvf.jsonl` causes the progressive loader to error with `invalid magic at offset 0: expected 0x52564653, got 0x7974227B` (`0x7974227B` is the ASCII bytes `{"ty…` from the JSONL header), and the live pipeline degrades to null output rather than falling back to heuristic mode. Until a JSONL adapter lands (or the model is re-published as binary RVF), run the sensing-server **without** `--model` and consume the HF weights from Python or the training pipeline.
+
+```bash
+# Works today — Python side (training, evaluation, embedding extraction):
+python -c "
+from safetensors.torch import load_file
+state = load_file('models/wifi-densepose-pretrained/model.safetensors')
+print({k: tuple(v.shape) for k, v in state.items()})
+"
+
+# Sensing server — run heuristic for now:
+cargo run -p wifi-densepose-sensing-server --release -- \
+    --source esp32 --udp-port 5005 --http-port 3000
+```
+
+See [RVF Model Containers](#rvf-model-containers) for the binary format the loader expects, and [Training a Model](#training-a-model) for using the encoder as a starting point for environment-specific fine-tuning.
 
 ---
 

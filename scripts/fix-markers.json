@@ -213,6 +213,15 @@
       ],
       "rationale": "Without quantization, the SHA-256 of features_to_bytes() diverges across SIMD backends (Intel AVX2/AVX-512 vs Apple Silicon NEON) because scipy.fft's pocketfft kernels reorder vectorized FP operations differently per build. IEEE 754 guarantees per-operation determinism, not associativity. Rounding to 9 decimal places (~5 orders of magnitude headroom over observed ULP drift) collapses the cross-platform divergence to a single canonical hash. Removing the round() call reintroduces the macOS arm64 vs Linux x86_64 hash mismatch in issue #560.",
       "ref": "https://github.com/ruvnet/RuView/issues/560"
+    },
+    {
+      "id": "RuView#679",
+      "title": "ESP32-S3 CSI: csi_collector_set_node_id() called before wifi_init_sta() so node_id is never clobbered",
+      "files": ["firmware/esp32-csi-node/main/main.c"],
+      "require": ["csi_collector_set_node_id"],
+      "forbid": ["/csi_collector_init.*node_id\\s*=\\s*1[^0-9]/"],
+      "rationale": "release_bins/ shipped v0.4.3.1 binaries that lacked csi_collector_set_node_id() — every provisioned node reported node_id=1 over UDP regardless of NVS value, making a 4-node deployment look like a single node. main.c must call csi_collector_set_node_id(g_nvs_config.node_id) immediately after nvs_config_load() and before wifi_init_sta(). Reverting silently breaks multi-node deployments with no build-time error.",
+      "ref": "https://github.com/ruvnet/RuView/issues/679"
     }
   ]
 }

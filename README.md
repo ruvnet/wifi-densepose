@@ -1,7 +1,7 @@
 # π RuView
 
 <p align="center">
-  <a href="https://x.com/rUv/status/2037556932802761004">
+  <a href="https://cognitum.one/seed">
     <img src="assets/ruview-small-gemini.jpg" alt="RuView - WiFi DensePose" width="100%">
   </a>
 </p>
@@ -32,7 +32,7 @@ Built on [RuVector](https://github.com/ruvnet/ruvector/) and [Cognitum Seed](htt
 
 The system learns each environment locally using spiking neural networks that adapt in under 30 seconds, with multi-frequency mesh scanning across 6 WiFi channels that uses your neighbors' routers as free radar illuminators. Every measurement is cryptographically attested via an Ed25519 witness chain.
 
-RuView also supports pose estimation (17 COCO keypoints via the WiFlow architecture), trained entirely without cameras using 10 sensor signals — a technique pioneered from the original *DensePose From WiFi* research at Carnegie Mellon University.
+RuView turns ordinary WiFi into a contactless sensor. A $9 ESP32 board reads the radio reflections off the people in a room, and a small pretrained model — published on Hugging Face at [`ruvnet/wifi-densepose-pretrained`](https://huggingface.co/ruvnet/wifi-densepose-pretrained) — tells you who's there, how they're breathing, and how their heart rate is trending. The model fits in 8 KB (4-bit quantized), runs in microseconds on a Raspberry Pi, and reports 100% presence accuracy on the validation set. No cameras, no wearables, no app on the user's phone.
 
 ### Built for low-power edge applications
 
@@ -45,20 +45,29 @@ RuView also supports pose estimation (17 COCO keypoints via the WiFlow architect
 [![Vital Signs](https://img.shields.io/badge/vital%20signs-breathing%20%2B%20heartbeat-red.svg)](#vital-sign-detection)
 [![ESP32 Ready](https://img.shields.io/badge/ESP32--S3-CSI%20streaming-purple.svg)](#esp32-s3-hardware-pipeline)
 [![crates.io](https://img.shields.io/crates/v/wifi-densepose-ruvector.svg)](https://crates.io/crates/wifi-densepose-ruvector)
+[![Downloads](https://img.shields.io/badge/downloads-10M%2B-brightgreen.svg)](#-edge-module-catalog)
 
  
-> | What | How | Speed |
-> |------|-----|-------|
-> | 🦴 **Pose estimation** | CSI subcarrier amplitude/phase → 17 COCO keypoints | 171K emb/s (M4 Pro) |
-> | 🫁 **Breathing detection** | Bandpass 0.1-0.5 Hz → zero-crossing BPM | 6-30 BPM |
-> | 💓 **Heart rate** | Bandpass 0.8-2.0 Hz → zero-crossing BPM | 40-120 BPM |
-> | 👤 **Presence sensing** | Trained model + PIR fusion — 100% accuracy | 0.012 ms latency |
-> | 🧱 **Through-wall** | Fresnel zone geometry + multipath modeling | Up to 5m depth |
-> | 🧠 **Edge intelligence** | 8-dim feature vectors + RVF store on Cognitum Seed | $140 total BOM |
-> | 🎯 **Camera-free training** | 10 sensor signals, no labels needed | 84s on M4 Pro |
-> | 📷 **Camera-supervised training** | MediaPipe + ESP32 CSI → **35%+ PCK@20 target** (ADR-079; eval phases pending) | ~19 min on laptop (pipeline) |
-> | 📡 **Multi-frequency mesh** | Channel hopping across 6 bands, neighbor APs as illuminators | 3x sensing bandwidth |
-> | 🌐 **3D point cloud** *(optional fusion)* | Camera depth (MiDaS) + WiFi CSI + mmWave radar → unified spatial model | 22 ms pipeline · 19K+ points/frame |
+> | What | How | Speed / scale |
+> |------|-----|---------------|
+> | 🫁 **Breathing rate** | Bandpass 0.1–0.5 Hz on wrapped phase, circular variance, zero-crossing BPM ([#593](https://github.com/ruvnet/RuView/issues/593)) | 6–30 BPM, real-time |
+> | 💓 **Heart rate** | Bandpass 0.8–2.0 Hz, zero-crossing BPM | 40–120 BPM, real-time |
+> | 👤 **Presence detection** | Trained head on Hugging Face ([`ruvnet/wifi-densepose-pretrained`](https://huggingface.co/ruvnet/wifi-densepose-pretrained), 100% validation accuracy) + a phase-variance fallback that needs no model | < 1 ms, ~30 s ambient calibration |
+> | 🧬 **CSI embeddings** | 128-dim contrastive encoder shipped on Hugging Face, 4-bit quantised variant fits in 8 KB | **164,183 emb/s** on M4 Pro |
+> | 🦴 **17-keypoint pose estimation** | `cog-pose-estimation` Cog v0.0.1 — signed aarch64 + x86_64 binaries on GCS, loads `pose_v1.safetensors` via Candle. Train your own from paired data in 2.1 s on an RTX 5080 ([ADR-101](docs/adr/ADR-101-pose-estimation-cog.md), [benchmarks](docs/benchmarks/pose-estimation-cog.md)) | 8.4 ms cold-start on a Pi 5 |
+> | 🚶 **Motion / activity** | Motion-band power + phase acceleration | Real-time |
+> | 🤸 **Fall detection** | Phase-acceleration threshold + 3-frame debounce + 5 s cooldown ([#263](https://github.com/ruvnet/RuView/issues/263)) | < 200 ms |
+> | 🧮 **Multi-person count** | Adaptive P95 normalisation + runtime-tunable dedup factor (`/api/v1/config/dedup-factor`, [#491](https://github.com/ruvnet/RuView/pull/491)). Six specialised learned counters available as Cogs: `occupancy-zones`, `elevator-count`, `queue-length`, `customer-flow`, `clean-room`, `person-matching` | Real-time, self-calibrating |
+> | 🧱 **Through-wall sensing** | Fresnel-zone geometry + multipath modeling | Up to ~5 m, signal-dependent |
+> | 🧠 **Edge intelligence** | **105-cog catalog** ([ADR-102](docs/adr/ADR-102-edge-module-registry.md)) live from `app-registry.json` — health, security, building, retail, industrial, research, AI, swarm, signal, network, and developer modules. Optional Cognitum Seed adds persistent vector store + kNN + witness chain | $140 total BOM |
+> | 🎯 **Camera-free pre-training** | Self-supervised contrastive encoder, 12.2M training steps on 60K frames, shipped on Hugging Face | 84 s/epoch retrain on M4 Pro |
+> | 📷 **Camera-supervised fine-tune** | MediaPipe + ESP32 CSI paired training, end-to-end Candle pipeline on RTX 5080 ([ADR-079](docs/adr/ADR-079-camera-supervised-pose-finetune.md)) | 2.1 s for 400 epochs (~5 ms/epoch) |
+> | 📡 **Multi-frequency mesh** | Channel hopping across 6 bands, TDM slot scheduling ([ADR-029](docs/adr/ADR-029-multifrequency-mesh.md)) | 3× sensing bandwidth |
+> | 🌐 **3D point cloud fusion** | Camera depth (MiDaS) + WiFi CSI + mmWave radar → unified spatial model | 22 ms pipeline · 19K+ points/frame |
+>
+> Browse the full 105-module catalog (with practical descriptions, sizes, and difficulty) below in [🧩 Edge Module Catalog](#-edge-module-catalog), or visit [seed.cognitum.one/store](https://seed.cognitum.one/store).
+>
+> 🤗 **Pretrained weights**: download from [`ruvnet/wifi-densepose-pretrained`](https://huggingface.co/ruvnet/wifi-densepose-pretrained) — see [Loading the pretrained model](#loading-the-pretrained-model) below for one-command setup.
 
 ```bash
 # Option 1: Docker (simulated data, no hardware needed)
@@ -88,10 +97,10 @@ node scripts/mincut-person-counter.js --port 5006  # Correct person counting
 >
 > | Option | Hardware | Cost | Full CSI | Capabilities |
 > |--------|----------|------|----------|-------------|
-> | **ESP32 + Cognitum Seed** (recommended) | ESP32-S3 + [Cognitum Seed](https://cognitum.one) | ~$140 | Yes | Pose, breathing, heartbeat, motion, presence + persistent vector store, kNN search, witness chain, MCP proxy |
-> | **ESP32 Mesh** | 3-6x ESP32-S3 + WiFi router | ~$54 | Yes | Pose, breathing, heartbeat, motion, presence |
+> | **ESP32 + Cognitum Seed** (recommended) | ESP32-S3 + [Cognitum Seed](https://cognitum.one) | ~$140 | Yes | Presence, motion, breathing, heart rate, fall detection, multi-person counting, 17-keypoint pose (signed Cog binary), 105-cog catalog, persistent vector store, kNN search, witness chain, MCP proxy |
+> | **ESP32 Mesh** | 3-6x ESP32-S3 + WiFi router | ~$54 | Yes | Same capabilities as above without the persistent-memory features |
 > | **Research NIC** | Intel 5300 / Atheros AR9580 | ~$50-100 | Yes | Full CSI with 3x3 MIMO |
-> | **Any WiFi** | Windows, macOS, or Linux laptop | $0 | No | RSSI-only: coarse presence and motion |
+> | **Any WiFi** | Windows, macOS, or Linux laptop | $0 | No | RSSI-only: coarse presence and motion (see [tutorial #36](https://github.com/ruvnet/RuView/issues/36)) |
 >
 > No hardware? Verify the signal processing pipeline with the deterministic reference signal: `python archive/v1/data/proof/verify.py`
 >
@@ -109,10 +118,211 @@ node scripts/mincut-person-counter.js --port 5006  # Correct person counting
   <a href="https://ruvnet.github.io/RuView/pose-fusion.html"><strong>▶ Dual-Modal Pose Fusion Demo</strong></a>
   &nbsp;|&nbsp;
   <a href="https://ruvnet.github.io/RuView/pointcloud/"><strong>▶ Live 3D Point Cloud</strong></a>
+  &nbsp;|&nbsp;
+  <a href="https://ruvnet.github.io/RuView/three.js/"><strong>▶ three.js Demos (5)</strong></a>
 
 > The [server](#-quick-start) is optional for visualization and aggregation — the ESP32 [runs independently](#esp32-s3-hardware-pipeline) for presence detection, vital signs, and fall alerts.
 >
 > **Live ESP32 pipeline**: Connect an ESP32-S3 node → run the [sensing server](#sensing-server) → open the [pose fusion demo](https://ruvnet.github.io/RuView/pose-fusion.html) for real-time dual-modal pose estimation (webcam + WiFi CSI). See [ADR-059](docs/adr/ADR-059-live-esp32-csi-pipeline.md).
+>
+> **three.js scene gallery** at [`/three.js/`](https://ruvnet.github.io/RuView/three.js/) — five progressively richer ADR-097 demos: helpers, cinematic, GLTF skinned, FBX skinned, and a live MediaPipe→Mixamo retargeting feed driven by ESP32 CSI. Demos 04 and 05 require a local Mixamo `X Bot.fbx` (license boundary — not redistributed).
+
+
+## 🤗 Pretrained model on Hugging Face
+
+Pretrained CSI weights live at [`ruvnet/wifi-densepose-pretrained`](https://huggingface.co/ruvnet/wifi-densepose-pretrained) — 12.2M training steps on 60K frames / 610K contrastive triplets, **100% presence accuracy** on the validation set, 4-bit quantized variant fits in 8 KB. The release includes a contrastive **CSI encoder** producing 128-dim embeddings (164,183 emb/s on M4 Pro) and a **presence-detection head**. Per-node LoRA adapters are included for environment-specific fine-tuning.
+
+```bash
+# Download the model bundle
+pip install huggingface_hub
+huggingface-cli download ruvnet/wifi-densepose-pretrained --local-dir models/wifi-densepose-pretrained
+```
+
+**What works today vs. what's pending wiring:**
+
+| Consumer | Format used | Status |
+|----------|-------------|--------|
+| Python training / evaluation / embedding extraction | `model.safetensors` | ✅ Works — load with `safetensors.torch.load_file` |
+| Inspect / re-export the bundle | `model.rvf.jsonl` (line-by-line JSON) | ✅ Works — plain JSONL |
+| Sensing-server `--model <PATH>` flag | binary RVF (`RVFS` magic) | ⚠️ Loader does not yet accept the JSONL container |
+
+**Known gap:** the HF model ships in JSONL RVF format, but `v2/crates/wifi-densepose-sensing-server/src/rvf_container.rs` only parses the binary RVF segment format. Pointing `--model` at `model.rvf.jsonl` currently errors with `invalid magic at offset 0: expected 0x52564653, got 0x7974227B` and the live pipeline degrades to null output rather than falling back to heuristic mode — so for the live sensing-server, run **without** `--model` until a JSONL adapter lands (or the model is re-published as binary RVF). Use the weights from Python / training in the meantime.
+
+**Quantization choices** (all in the HF repo): `model-q2.bin` (4 KB) · `model-q4.bin` ⭐ recommended (8 KB) · `model-q8.bin` (16 KB) · `model.safetensors` full (48 KB)
+
+The separate **17-keypoint pose-estimation model** is not in this release — pipeline is implemented but keypoint weights are still pending. Tracked in [#509](https://github.com/ruvnet/RuView/issues/509); see [ADR-079](docs/adr/ADR-079-camera-supervised-pose-finetune.md) phases P7–P9.
+
+
+## 🧩 Edge Module Catalog
+
+<details>
+<summary><b>🧩 105 edge modules ready to install on a Cognitum appliance</b> &mdash; live catalog from <code>app-registry.json</code> v2.1.0 (updated 2026-05-13). Browse + install at <a href="https://seed.cognitum.one/store">seed.cognitum.one/store</a> or your local appliance <code>http://&lt;appliance&gt;:9000/cogs</code>.</summary>
+
+Each module is a small signed binary (~400 KB) that runs alongside the WiFi-DensePose sensing stack on a Cognitum-V0 appliance. The catalog updates over the air &mdash; your appliance fetches it via <code>GET /api/v1/edge/registry</code> ([ADR-102](docs/adr/ADR-102-edge-module-registry.md)) and verifies each binary against an Ed25519 signature ([ADR-100](docs/adr/ADR-100-cog-packaging-specification.md)) before install.
+
+### 🫀 Health &mdash; <sub>14 modules</sub>
+
+| ID | What it does | Size | Difficulty |
+|----|--------------|-----:|:----------:|
+| `air-quality-index` | Track indoor air quality with CO2 and particle sensors | 8 KB | Easy |
+| `baby-cry` | Sustained mid-band energy detector for nursery / infant monitoring. Audio-only, no camera. | 451 KB | Easy |
+| `breathing-sync` | Detects when two people breathe in sync | 10 KB | Hard |
+| `cardiac-arrhythmia` | Spots irregular heartbeats and abnormal heart rhythms | 8 KB | Hard |
+| `cough-detect` | Acoustic transient + spectral cough detector with 30s cluster aggregation. Early-warning signal for respiratory illness. | 451 KB | Easy |
+| `dream-stage` | Tracks your sleep stages — light, deep, and dreaming | 14 KB | Hard |
+| `fall-detect` | Two-stage impact + stillness fall detector over ambient feature stream (ESP32 motion / mic). Optional ruview-mode for CSI-based pose reinforcement. | 402 KB | Easy |
+| `gait-analysis` | Detects walking problems and scores fall risk | 12 KB | Hard |
+| `health-monitor` | Contactless heart rate, breathing, sleep, and fall alerts | 30 KB | Med |
+| `respiratory-distress` | Alerts when breathing becomes labored or dangerously fast | 10 KB | Hard |
+| `seizure-detect` | Recognizes seizures and sends immediate alerts | 10 KB | Hard |
+| `sleep-apnea` | Detects when someone stops breathing during sleep | 4 KB | Easy |
+| `snore-monitor` | Periodic low-band energy tracker for sleep-quality / apnea-risk trending. Companion to sleep-apnea cog. | 451 KB | Easy |
+| `vital-trend` | Tracks breathing and heart rate trends over weeks | 6 KB | Med |
+
+### 🔒 Security &mdash; <sub>14 modules</sub>
+
+| ID | What it does | Size | Difficulty |
+|----|--------------|-----:|:----------:|
+| `audit-logger` | Record every action for compliance — tamper-proof log | 8 KB | Easy |
+| `behavioral-profiler` | Learns normal behavior and flags anything unusual | 12 KB | Hard |
+| `fleet-auth` | Manage device certificates and access across all seeds | 12 KB | Med |
+| `glass-break` | Two-phase bang + shatter acoustic detector. Distinguishes glass break from ordinary impulse noise. | 451 KB | Easy |
+| `gunshot-detect` | Saturating peak + exponential decay acoustic detector with optional ruview CSI motion-drop reinforcement. | 451 KB | Easy |
+| `intrusion` | Alerts when an unauthorized person enters a room | 6 KB | Med |
+| `intrusion-detect-ml` | Detect network attacks using machine learning | 14 KB | Hard |
+| `loitering` | Alerts when someone lingers too long in one spot | 3 KB | Easy |
+| `network-firewall` | Block unauthorized network access per cog | 6 KB | Easy |
+| `panic-motion` | Detects sudden panicked or erratic movement | 6 KB | Med |
+| `perimeter-breach` | Guards multiple zones and shows entry direction | 10 KB | Med |
+| `prompt-shield` | Blocks signal replay and injection attacks on the seed | 10 KB | Med |
+| `tailgating` | Catches when someone sneaks in behind a badge holder | 6 KB | Med |
+| `weapon-detect` | Detects concealed metal objects on a person | 8 KB | Hard |
+
+### 🏢 Building &mdash; <sub>11 modules</sub>
+
+| ID | What it does | Size | Difficulty |
+|----|--------------|-----:|:----------:|
+| `beehive-monitor` | Acoustic hive state classifier. Detects healthy / chaotic / queenless / swarming / robbing via hum-band energy + chaos + piping autocorr. | 451 KB | Easy |
+| `elevator-count` | Counts how many people are in an elevator | 8 KB | Med |
+| `energy-audit` | Learns your schedule and cuts wasted energy | 6 KB | Med |
+| `frost-warning` | Predicts frost 6 hours ahead via temperature trend + dewpoint-depression gate. Field/orchard agriculture. | 451 KB | Easy |
+| `hvac-presence` | Turns heating and cooling on when you arrive | 3 KB | Easy |
+| `lighting-zones` | Turns lights on and off as people move between rooms | 4 KB | Easy |
+| `meeting-room` | Shows if a meeting room is free or occupied | 5 KB | Easy |
+| `occupancy-zones` | Counts people in each room through walls | 8 KB | Med |
+| `predictive-maintenance` | Vibration harmonic analyzer for rotating equipment. Tracks F1 / 2×F1 / high-order / sideband energy to score degradation severity. | 451 KB | Easy |
+| `smoke-fire` | Multi-signal smoke and fire detector. Fuses acoustic crackle, thermal drift proxy, and optional ruview CSI plume signature. Not a UL-listed replacement for code-required smoke alarms. | 451 KB | Easy |
+| `water-leak` | Persistent low-amplitude hiss + periodic drip acoustic detector with multi-minute persistence gate. Two-stage likely → confirmed. | 451 KB | Easy |
+
+### 🛍️ Retail &mdash; <sub>7 modules</sub>
+
+| ID | What it does | Size | Difficulty |
+|----|--------------|-----:|:----------:|
+| `customer-flow` | Counts foot traffic in and out of each entrance | 8 KB | Med |
+| `dwell-heatmap` | Shows where customers spend the most time | 6 KB | Med |
+| `package-detect` | Sustained CSI-shift detector for porch / loading bay package arrivals and departures. Requires ESP32 CSI ruview input. | 451 KB | Easy |
+| `parking-occupancy` | Per-zone parking occupancy via ESP32 CSI subcarrier-amplitude shift. Tracks utilization and churn-per-hour. Requires ruview. | 451 KB | Easy |
+| `queue-length` | Estimates line length and wait time | 6 KB | Med |
+| `shelf-engagement` | Detects when customers interact with products | 6 KB | Med |
+| `table-turnover` | Tracks which restaurant tables are free or occupied | 4 KB | Easy |
+
+### 🏭 Industrial &mdash; <sub>7 modules</sub>
+
+| ID | What it does | Size | Difficulty |
+|----|--------------|-----:|:----------:|
+| `clean-room` | Enforces max headcount in controlled environments | 4 KB | Easy |
+| `confined-space` | Monitors workers in tight spaces for safety | 5 KB | Med |
+| `forklift-proximity` | Warns if a forklift gets too close to workers | 10 KB | Hard |
+| `livestock-monitor` | Monitors animals for distress, escape, or illness | 6 KB | Med |
+| `ppe-compliance` | Cog-composition layer: alerts when ruview-densepose detects presence in a restricted zone without an accompanying PPE-camera-cog confirmation vector. | 387 KB | Easy |
+| `slip-fall-zone` | Pre-fall risk detector. Fires when motion-variance drop, splash audio, and optional cautious-gait CSI all signal elevated slip risk. | 451 KB | Easy |
+| `structural-vibration` | Detects dangerous vibrations in buildings or machines | 8 KB | Hard |
+
+### 🔬 Research &mdash; <sub>12 modules</sub>
+
+| ID | What it does | Size | Difficulty |
+|----|--------------|-----:|:----------:|
+| `emotion-detect` | Reads stress and calm from body language and breathing | 10 KB | Hard |
+| `energy-harvester` | Optimize solar and battery for off-grid seed deployment | 6 KB | Med |
+| `gesture-language` | Recognizes sign language gestures in real time | 12 KB | Hard |
+| `ghost-hunter` | Finds unexplained environmental anomalies — for fun | 10 KB | Hard |
+| `happiness-score` | Estimates well-being from movement and mood signals | 8 KB | Med |
+| `hyperbolic-space` | Maps data into curved space for tree-like structures | 12 KB | Hard |
+| `music-conductor` | Reads a conductor's gestures for tempo and dynamics | 12 KB | Hard |
+| `plant-growth` | Tracks plant growth rate and day/night cycles | 8 KB | Med |
+| `rain-detect` | Detects when rain starts, stops, and how heavy it is | 6 KB | Med |
+| `ruview-densepose` | Full body pose tracking from WiFi — no cameras needed | 50 KB | Hard |
+| `sound-classifier` | Identify sounds like glass break, alarm, or baby cry | 16 KB | Hard |
+| `time-crystal` | Experiments with repeating time-pattern symmetry | 12 KB | Hard |
+
+### 🤖 Ai &mdash; <sub>15 modules</sub>
+
+| ID | What it does | Size | Difficulty |
+|----|--------------|-----:|:----------:|
+| `anomaly-attractor` | Learns what's normal and catches anything weird | 10 KB | Hard |
+| `cognitive-pipeline` | FastGRNN anomaly gate + SmolLM2 sparse-LLM inference for on-device Pi Zero 2W cognitive events | 320 KB | Hard |
+| `dtw-gesture-learn` | Teach custom hand gestures by showing examples | 14 KB | Med |
+| `ewc-lifelong` | Learns new things without forgetting old lessons | 8 KB | Hard |
+| `federated-learning` | Train AI across seeds without sharing raw data | 18 KB | Hard |
+| `goap-autonomy` | Plans and executes goals on its own | 14 KB | Hard |
+| `meta-adapt` | Automatically tunes itself for best performance | 10 KB | Hard |
+| `micro-hnsw` | Fast on-device fingerprinting and classification | 12 KB | Med |
+| `neural-trader` | Spot market patterns and trends from live data | 20 KB | Hard |
+| `pagerank-influence` | Finds the most influential person in a group | 12 KB | Med |
+| `pattern-sequence` | Detects daily routines and repeated habits | 10 KB | Med |
+| `rag-local` | Search your documents using AI — runs on the seed | 14 KB | Med |
+| `spiking-tracker` | Brain-inspired tracker that runs on tiny hardware | 16 KB | Hard |
+| `temporal-logic` | Enforces safety rules on live event streams | 12 KB | Hard |
+| `time-series-forecast` | Predict sensor trends using historical patterns | 12 KB | Med |
+
+### 🐝 Swarm &mdash; <sub>11 modules</sub>
+
+| ID | What it does | Size | Difficulty |
+|----|--------------|-----:|:----------:|
+| `swarm-backup-restore` | Auto-backup data to other seeds — one-click restore | 8 KB | Easy |
+| `swarm-cluster-monitor` | Live dashboard of every seed's health and status | 6 KB | Easy |
+| `swarm-consensus` | Seeds vote before making critical changes together | 16 KB | Hard |
+| `swarm-delta-sync` | Auto-sync data between seeds — only sends changes | 8 KB | Med |
+| `swarm-deploy` | Install or remove cogs on all seeds at once | 10 KB | Med |
+| `swarm-distributed-store` | Spread data across seeds and search them all at once | 14 KB | Hard |
+| `swarm-edge-orchestrator` | Manage all ESP32 sensor nodes from one place | 14 KB | Hard |
+| `swarm-load-balancer` | Spread queries across seeds so no single one overloads | 10 KB | Med |
+| `swarm-mesh-manager` | Find, connect, and monitor all seeds on your network | 12 KB | Easy |
+| `swarm-mqtt-bridge` | Share events between seeds over MQTT messaging | 6 KB | Easy |
+| `swarm-witness-federation` | Share tamper-proof audit trails across seeds | 12 KB | Hard |
+
+### 📡 Signal &mdash; <sub>6 modules</sub>
+
+| ID | What it does | Size | Difficulty |
+|----|--------------|-----:|:----------:|
+| `coherence-gate` | Filters out noisy signals and keeps clean ones | 8 KB | Med |
+| `flash-attention` | Focuses sensing on specific areas for better accuracy | 12 KB | Med |
+| `optimal-transport` | Measures motion using shape-aware signal comparison | 12 KB | Hard |
+| `person-matching` | Tells apart multiple people in the same room | 18 KB | Hard |
+| `sparse-recovery` | Recovers missing signal data from partial readings | 16 KB | Hard |
+| `temporal-compress` | Shrinks old data to save memory without losing meaning | 14 KB | Med |
+
+### 🌐 Network &mdash; <sub>1 modules</sub>
+
+| ID | What it does | Size | Difficulty |
+|----|--------------|-----:|:----------:|
+| `tailscale` | Reach the seed from anywhere via a private WireGuard mesh (Tailscale). Userspace mode — no root. | 700 KB | Med |
+
+### 🛠️ Developer &mdash; <sub>7 modules</sub>
+
+| ID | What it does | Size | Difficulty |
+|----|--------------|-----:|:----------:|
+| `adversarial` | Detects tampered or spoofed sensor signals | 4 KB | Easy |
+| `coherence` | Monitors signal quality across multiple channels | 4 KB | Easy |
+| `gesture` | Core gesture recognition building block for cogs | 6 KB | Med |
+| `interference-search` | Searches many possibilities at once for fast answers | 14 KB | Hard |
+| `psycho-symbolic` | Reasons over knowledge graphs with multiple styles | 16 KB | Hard |
+| `quantum-coherence` | Quantum-inspired model for advanced signal states | 16 KB | Hard |
+| `self-healing-mesh` | Keeps sensor mesh running even when nodes drop out | 14 KB | Hard |
+
+> ℹ️ Build your own cog: see [ADR-100](docs/adr/ADR-100-cog-packaging-specification.md) for the packaging spec. The first cog this repo ships into the catalog lives in [v2/crates/cog-pose-estimation/](v2/crates/cog-pose-estimation/) (17-keypoint WiFi pose, [ADR-101](docs/adr/ADR-101-pose-estimation-cog.md)).
+
+</details>
 
 
 ## 🔬 How It Works
@@ -228,178 +438,6 @@ These scenarios exploit WiFi's ability to penetrate solid materials — concrete
 
 </details>
 
-<details>
-<summary><strong>🧩 Edge Intelligence (<a href="docs/adr/ADR-041-wasm-module-collection.md">ADR-041</a>)</strong> — 60 WASM modules across 13 categories, all implemented (609 tests)</summary>
-
-Small programs that run directly on the ESP32 sensor — no internet needed, no cloud fees, instant response. Each module is a tiny WASM file (5-30 KB) that you upload to the device over-the-air. It reads WiFi signal data and makes decisions locally in under 10 ms. [ADR-041](docs/adr/ADR-041-wasm-module-collection.md) defines 60 modules across 13 categories — all 60 are implemented with 609 tests passing.
-
-| | Category | Examples |
-|---|----------|---------|
-| 🏥 | [**Medical & Health**](docs/edge-modules/medical.md) | Sleep apnea detection, cardiac arrhythmia, gait analysis, seizure detection |
-| 🔐 | [**Security & Safety**](docs/edge-modules/security.md) | Intrusion detection, perimeter breach, loitering, panic motion |
-| 🏢 | [**Smart Building**](docs/edge-modules/building.md) | Zone occupancy, HVAC control, elevator counting, meeting room tracking |
-| 🛒 | [**Retail & Hospitality**](docs/edge-modules/retail.md) | Queue length, dwell heatmaps, customer flow, table turnover |
-| 🏭 | [**Industrial**](docs/edge-modules/industrial.md) | Forklift proximity, confined space monitoring, structural vibration |
-| 🔮 | [**Exotic & Research**](docs/edge-modules/exotic.md) | Sleep staging, emotion detection, sign language, breathing sync |
-| 📡 | [**Signal Intelligence**](docs/edge-modules/signal-intelligence.md) | Cleans and sharpens raw WiFi signals — focuses on important regions, filters noise, fills in missing data, and tracks which person is which |
-| 🧠 | [**Adaptive Learning**](docs/edge-modules/adaptive-learning.md) | The sensor learns new gestures and patterns on its own over time — no cloud needed, remembers what it learned even after updates |
-| 🗺️ | [**Spatial Reasoning**](docs/edge-modules/spatial-temporal.md) | Figures out where people are in a room, which zones matter most, and tracks movement across areas using graph-based spatial logic |
-| ⏱️ | [**Temporal Analysis**](docs/edge-modules/spatial-temporal.md) | Learns daily routines, detects when patterns break (someone didn't get up), and verifies safety rules are being followed over time |
-| 🛡️ | [**AI Security**](docs/edge-modules/ai-security.md) | Detects signal replay attacks, WiFi jamming, injection attempts, and flags abnormal behavior that could indicate tampering |
-| ⚛️ | [**Quantum-Inspired**](docs/edge-modules/autonomous.md) | Uses quantum-inspired math to map room-wide signal coherence and search for optimal sensor configurations |
-| 🤖 | [**Autonomous & Exotic**](docs/edge-modules/autonomous.md) | Self-managing sensor mesh — auto-heals dropped nodes, plans its own actions, and explores experimental signal representations |
-
-All implemented modules are `no_std` Rust, share a [common utility library](v2/crates/wifi-densepose-wasm-edge/src/vendor_common.rs), and talk to the host through a 12-function API. Full documentation: [**Edge Modules Guide**](docs/edge-modules/README.md). See the [complete implemented module list](#edge-module-list) below.
-
-</details>
-
-<details id="edge-module-list">
-<summary><strong>🧩 Edge Intelligence — <a href="docs/edge-modules/README.md">All 65 Modules Implemented</a></strong> (ADR-041 complete)</summary>
-
-All 60 modules are implemented, tested (609 tests passing), and ready to deploy. They compile to `wasm32-unknown-unknown`, run on ESP32-S3 via WASM3, and share a [common utility library](v2/crates/wifi-densepose-wasm-edge/src/vendor_common.rs). Source: [`crates/wifi-densepose-wasm-edge/src/`](v2/crates/wifi-densepose-wasm-edge/src/)
-
-**Core modules** (ADR-040 flagship + early implementations):
-
-| Module | File | What It Does |
-|--------|------|-------------|
-| Gesture Classifier | [`gesture.rs`](v2/crates/wifi-densepose-wasm-edge/src/gesture.rs) | DTW template matching for hand gestures |
-| Coherence Filter | [`coherence.rs`](v2/crates/wifi-densepose-wasm-edge/src/coherence.rs) | Phase coherence gating for signal quality |
-| Adversarial Detector | [`adversarial.rs`](v2/crates/wifi-densepose-wasm-edge/src/adversarial.rs) | Detects physically impossible signal patterns |
-| Intrusion Detector | [`intrusion.rs`](v2/crates/wifi-densepose-wasm-edge/src/intrusion.rs) | Human vs non-human motion classification |
-| Occupancy Counter | [`occupancy.rs`](v2/crates/wifi-densepose-wasm-edge/src/occupancy.rs) | Zone-level person counting |
-| Vital Trend | [`vital_trend.rs`](v2/crates/wifi-densepose-wasm-edge/src/vital_trend.rs) | Long-term breathing and heart rate trending |
-| RVF Parser | [`rvf.rs`](v2/crates/wifi-densepose-wasm-edge/src/rvf.rs) | RVF container format parsing |
-
-**Vendor-integrated modules** (24 modules, ADR-041 Category 7):
-
-**📡 Signal Intelligence** — Real-time CSI analysis and feature extraction
-
-| Module | File | What It Does | Budget |
-|--------|------|-------------|--------|
-| Flash Attention | [`sig_flash_attention.rs`](v2/crates/wifi-densepose-wasm-edge/src/sig_flash_attention.rs) | Tiled attention over 8 subcarrier groups — finds spatial focus regions and entropy | S (<5ms) |
-| Coherence Gate | [`sig_coherence_gate.rs`](v2/crates/wifi-densepose-wasm-edge/src/sig_coherence_gate.rs) | Z-score phasor gating with hysteresis: Accept / PredictOnly / Reject / Recalibrate | L (<2ms) |
-| Temporal Compress | [`sig_temporal_compress.rs`](v2/crates/wifi-densepose-wasm-edge/src/sig_temporal_compress.rs) | 3-tier adaptive quantization (8-bit hot / 5-bit warm / 3-bit cold) | L (<2ms) |
-| Sparse Recovery | [`sig_sparse_recovery.rs`](v2/crates/wifi-densepose-wasm-edge/src/sig_sparse_recovery.rs) | ISTA L1 reconstruction for dropped subcarriers | H (<10ms) |
-| Person Match | [`sig_mincut_person_match.rs`](v2/crates/wifi-densepose-wasm-edge/src/sig_mincut_person_match.rs) | Hungarian-lite bipartite assignment for multi-person tracking | S (<5ms) |
-| Optimal Transport | [`sig_optimal_transport.rs`](v2/crates/wifi-densepose-wasm-edge/src/sig_optimal_transport.rs) | Sliced Wasserstein-1 distance with 4 projections | L (<2ms) |
-
-**🧠 Adaptive Learning** — On-device learning without cloud connectivity
-
-| Module | File | What It Does | Budget |
-|--------|------|-------------|--------|
-| DTW Gesture Learn | [`lrn_dtw_gesture_learn.rs`](v2/crates/wifi-densepose-wasm-edge/src/lrn_dtw_gesture_learn.rs) | User-teachable gesture recognition — 3-rehearsal protocol, 16 templates | S (<5ms) |
-| Anomaly Attractor | [`lrn_anomaly_attractor.rs`](v2/crates/wifi-densepose-wasm-edge/src/lrn_anomaly_attractor.rs) | 4D dynamical system attractor classification with Lyapunov exponents | H (<10ms) |
-| Meta Adapt | [`lrn_meta_adapt.rs`](v2/crates/wifi-densepose-wasm-edge/src/lrn_meta_adapt.rs) | Hill-climbing self-optimization with safety rollback | L (<2ms) |
-| EWC Lifelong | [`lrn_ewc_lifelong.rs`](v2/crates/wifi-densepose-wasm-edge/src/lrn_ewc_lifelong.rs) | Elastic Weight Consolidation — remembers past tasks while learning new ones | S (<5ms) |
-
-**🗺️ Spatial Reasoning** — Location, proximity, and influence mapping
-
-| Module | File | What It Does | Budget |
-|--------|------|-------------|--------|
-| PageRank Influence | [`spt_pagerank_influence.rs`](v2/crates/wifi-densepose-wasm-edge/src/spt_pagerank_influence.rs) | 4x4 cross-correlation graph with power iteration PageRank | L (<2ms) |
-| Micro HNSW | [`spt_micro_hnsw.rs`](v2/crates/wifi-densepose-wasm-edge/src/spt_micro_hnsw.rs) | 64-vector navigable small-world graph for nearest-neighbor search | S (<5ms) |
-| Spiking Tracker | [`spt_spiking_tracker.rs`](v2/crates/wifi-densepose-wasm-edge/src/spt_spiking_tracker.rs) | 32 LIF neurons + 4 output zone neurons with STDP learning | S (<5ms) |
-
-**⏱️ Temporal Analysis** — Activity patterns, logic verification, autonomous planning
-
-| Module | File | What It Does | Budget |
-|--------|------|-------------|--------|
-| Pattern Sequence | [`tmp_pattern_sequence.rs`](v2/crates/wifi-densepose-wasm-edge/src/tmp_pattern_sequence.rs) | Activity routine detection and deviation alerts | S (<5ms) |
-| Temporal Logic Guard | [`tmp_temporal_logic_guard.rs`](v2/crates/wifi-densepose-wasm-edge/src/tmp_temporal_logic_guard.rs) | LTL formula verification on CSI event streams | S (<5ms) |
-| GOAP Autonomy | [`tmp_goap_autonomy.rs`](v2/crates/wifi-densepose-wasm-edge/src/tmp_goap_autonomy.rs) | Goal-Oriented Action Planning for autonomous module management | S (<5ms) |
-
-**🛡️ AI Security** — Tamper detection and behavioral anomaly profiling
-
-| Module | File | What It Does | Budget |
-|--------|------|-------------|--------|
-| Prompt Shield | [`ais_prompt_shield.rs`](v2/crates/wifi-densepose-wasm-edge/src/ais_prompt_shield.rs) | FNV-1a replay detection, injection detection (10x amplitude), jamming (SNR) | L (<2ms) |
-| Behavioral Profiler | [`ais_behavioral_profiler.rs`](v2/crates/wifi-densepose-wasm-edge/src/ais_behavioral_profiler.rs) | 6D behavioral profile with Mahalanobis anomaly scoring | S (<5ms) |
-
-**⚛️ Quantum-Inspired** — Quantum computing metaphors applied to CSI analysis
-
-| Module | File | What It Does | Budget |
-|--------|------|-------------|--------|
-| Quantum Coherence | [`qnt_quantum_coherence.rs`](v2/crates/wifi-densepose-wasm-edge/src/qnt_quantum_coherence.rs) | Bloch sphere mapping, Von Neumann entropy, decoherence detection | S (<5ms) |
-| Interference Search | [`qnt_interference_search.rs`](v2/crates/wifi-densepose-wasm-edge/src/qnt_interference_search.rs) | 16 room-state hypotheses with Grover-inspired oracle + diffusion | S (<5ms) |
-
-**🤖 Autonomous Systems** — Self-governing and self-healing behaviors
-
-| Module | File | What It Does | Budget |
-|--------|------|-------------|--------|
-| Psycho-Symbolic | [`aut_psycho_symbolic.rs`](v2/crates/wifi-densepose-wasm-edge/src/aut_psycho_symbolic.rs) | 16-rule forward-chaining knowledge base with contradiction detection | S (<5ms) |
-| Self-Healing Mesh | [`aut_self_healing_mesh.rs`](v2/crates/wifi-densepose-wasm-edge/src/aut_self_healing_mesh.rs) | 8-node mesh with health tracking, degradation/recovery, coverage healing | S (<5ms) |
-
-**🔮 Exotic (Vendor)** — Novel mathematical models for CSI interpretation
-
-| Module | File | What It Does | Budget |
-|--------|------|-------------|--------|
-| Time Crystal | [`exo_time_crystal.rs`](v2/crates/wifi-densepose-wasm-edge/src/exo_time_crystal.rs) | Autocorrelation subharmonic detection in 256-frame history | S (<5ms) |
-| Hyperbolic Space | [`exo_hyperbolic_space.rs`](v2/crates/wifi-densepose-wasm-edge/src/exo_hyperbolic_space.rs) | Poincare ball embedding with 32 reference locations, hyperbolic distance | S (<5ms) |
-
-**🏥 Medical & Health** (Category 1) — Contactless health monitoring
-
-| Module | File | What It Does | Budget |
-|--------|------|-------------|--------|
-| Sleep Apnea | [`med_sleep_apnea.rs`](v2/crates/wifi-densepose-wasm-edge/src/med_sleep_apnea.rs) | Detects breathing pauses during sleep | S (<5ms) |
-| Cardiac Arrhythmia | [`med_cardiac_arrhythmia.rs`](v2/crates/wifi-densepose-wasm-edge/src/med_cardiac_arrhythmia.rs) | Monitors heart rate for irregular rhythms | S (<5ms) |
-| Respiratory Distress | [`med_respiratory_distress.rs`](v2/crates/wifi-densepose-wasm-edge/src/med_respiratory_distress.rs) | Alerts on abnormal breathing patterns | S (<5ms) |
-| Gait Analysis | [`med_gait_analysis.rs`](v2/crates/wifi-densepose-wasm-edge/src/med_gait_analysis.rs) | Tracks walking patterns and detects changes | S (<5ms) |
-| Seizure Detection | [`med_seizure_detect.rs`](v2/crates/wifi-densepose-wasm-edge/src/med_seizure_detect.rs) | 6-state machine for tonic-clonic seizure recognition | S (<5ms) |
-
-**🔐 Security & Safety** (Category 2) — Perimeter and threat detection
-
-| Module | File | What It Does | Budget |
-|--------|------|-------------|--------|
-| Perimeter Breach | [`sec_perimeter_breach.rs`](v2/crates/wifi-densepose-wasm-edge/src/sec_perimeter_breach.rs) | Detects boundary crossings with approach/departure | S (<5ms) |
-| Weapon Detection | [`sec_weapon_detect.rs`](v2/crates/wifi-densepose-wasm-edge/src/sec_weapon_detect.rs) | Metal anomaly detection via CSI amplitude shifts | S (<5ms) |
-| Tailgating | [`sec_tailgating.rs`](v2/crates/wifi-densepose-wasm-edge/src/sec_tailgating.rs) | Detects unauthorized follow-through at access points | S (<5ms) |
-| Loitering | [`sec_loitering.rs`](v2/crates/wifi-densepose-wasm-edge/src/sec_loitering.rs) | Alerts when someone lingers too long in a zone | S (<5ms) |
-| Panic Motion | [`sec_panic_motion.rs`](v2/crates/wifi-densepose-wasm-edge/src/sec_panic_motion.rs) | Detects fleeing, struggling, or panic movement | S (<5ms) |
-
-**🏢 Smart Building** (Category 3) — Automation and energy efficiency
-
-| Module | File | What It Does | Budget |
-|--------|------|-------------|--------|
-| HVAC Presence | [`bld_hvac_presence.rs`](v2/crates/wifi-densepose-wasm-edge/src/bld_hvac_presence.rs) | Occupancy-driven HVAC control with departure countdown | S (<5ms) |
-| Lighting Zones | [`bld_lighting_zones.rs`](v2/crates/wifi-densepose-wasm-edge/src/bld_lighting_zones.rs) | Auto-dim/off lighting based on zone activity | S (<5ms) |
-| Elevator Count | [`bld_elevator_count.rs`](v2/crates/wifi-densepose-wasm-edge/src/bld_elevator_count.rs) | Counts people entering/leaving with overload warning | S (<5ms) |
-| Meeting Room | [`bld_meeting_room.rs`](v2/crates/wifi-densepose-wasm-edge/src/bld_meeting_room.rs) | Tracks meeting lifecycle: start, headcount, end, availability | S (<5ms) |
-| Energy Audit | [`bld_energy_audit.rs`](v2/crates/wifi-densepose-wasm-edge/src/bld_energy_audit.rs) | Tracks after-hours usage and room utilization rates | S (<5ms) |
-
-**🛒 Retail & Hospitality** (Category 4) — Customer insights without cameras
-
-| Module | File | What It Does | Budget |
-|--------|------|-------------|--------|
-| Queue Length | [`ret_queue_length.rs`](v2/crates/wifi-densepose-wasm-edge/src/ret_queue_length.rs) | Estimates queue size and wait times | S (<5ms) |
-| Dwell Heatmap | [`ret_dwell_heatmap.rs`](v2/crates/wifi-densepose-wasm-edge/src/ret_dwell_heatmap.rs) | Shows where people spend time (hot/cold zones) | S (<5ms) |
-| Customer Flow | [`ret_customer_flow.rs`](v2/crates/wifi-densepose-wasm-edge/src/ret_customer_flow.rs) | Counts ins/outs and tracks net occupancy | S (<5ms) |
-| Table Turnover | [`ret_table_turnover.rs`](v2/crates/wifi-densepose-wasm-edge/src/ret_table_turnover.rs) | Restaurant table lifecycle: seated, dining, vacated | S (<5ms) |
-| Shelf Engagement | [`ret_shelf_engagement.rs`](v2/crates/wifi-densepose-wasm-edge/src/ret_shelf_engagement.rs) | Detects browsing, considering, and reaching for products | S (<5ms) |
-
-**🏭 Industrial & Specialized** (Category 5) — Safety and compliance
-
-| Module | File | What It Does | Budget |
-|--------|------|-------------|--------|
-| Forklift Proximity | [`ind_forklift_proximity.rs`](v2/crates/wifi-densepose-wasm-edge/src/ind_forklift_proximity.rs) | Warns when people get too close to vehicles | S (<5ms) |
-| Confined Space | [`ind_confined_space.rs`](v2/crates/wifi-densepose-wasm-edge/src/ind_confined_space.rs) | OSHA-compliant worker monitoring with extraction alerts | S (<5ms) |
-| Clean Room | [`ind_clean_room.rs`](v2/crates/wifi-densepose-wasm-edge/src/ind_clean_room.rs) | Occupancy limits and turbulent motion detection | S (<5ms) |
-| Livestock Monitor | [`ind_livestock_monitor.rs`](v2/crates/wifi-densepose-wasm-edge/src/ind_livestock_monitor.rs) | Animal presence, stillness, and escape alerts | S (<5ms) |
-| Structural Vibration | [`ind_structural_vibration.rs`](v2/crates/wifi-densepose-wasm-edge/src/ind_structural_vibration.rs) | Seismic events, mechanical resonance, structural drift | S (<5ms) |
-
-**🔮 Exotic & Research** (Category 6) — Experimental sensing applications
-
-| Module | File | What It Does | Budget |
-|--------|------|-------------|--------|
-| Dream Stage | [`exo_dream_stage.rs`](v2/crates/wifi-densepose-wasm-edge/src/exo_dream_stage.rs) | Contactless sleep stage classification (wake/light/deep/REM) | S (<5ms) |
-| Emotion Detection | [`exo_emotion_detect.rs`](v2/crates/wifi-densepose-wasm-edge/src/exo_emotion_detect.rs) | Arousal, stress, and calm detection from micro-movements | S (<5ms) |
-| Gesture Language | [`exo_gesture_language.rs`](v2/crates/wifi-densepose-wasm-edge/src/exo_gesture_language.rs) | Sign language letter recognition via WiFi | S (<5ms) |
-| Music Conductor | [`exo_music_conductor.rs`](v2/crates/wifi-densepose-wasm-edge/src/exo_music_conductor.rs) | Tempo and dynamic tracking from conducting gestures | S (<5ms) |
-| Plant Growth | [`exo_plant_growth.rs`](v2/crates/wifi-densepose-wasm-edge/src/exo_plant_growth.rs) | Monitors plant growth, circadian rhythms, wilt detection | S (<5ms) |
-| Ghost Hunter | [`exo_ghost_hunter.rs`](v2/crates/wifi-densepose-wasm-edge/src/exo_ghost_hunter.rs) | Environmental anomaly classification (draft/insect/wind/unknown) | S (<5ms) |
-| Rain Detection | [`exo_rain_detect.rs`](v2/crates/wifi-densepose-wasm-edge/src/exo_rain_detect.rs) | Detects rain onset, intensity, and cessation via signal scatter | S (<5ms) |
-| Breathing Sync | [`exo_breathing_sync.rs`](v2/crates/wifi-densepose-wasm-edge/src/exo_breathing_sync.rs) | Detects synchronized breathing between multiple people | S (<5ms) |
-
-</details>
 
 ---
 

@@ -25,6 +25,23 @@ This firmware captures WiFi Channel State Information (CSI) from an ESP32-S3 and
 
 For users who want to get running fast. Detailed explanations follow in later sections.
 
+### 0. Pre-built binaries (v0.6.5 — skip the build step)
+
+Pre-built binaries are in `firmware/esp32-csi-node/release_bins/` (version: see `release_bins/version.txt`).
+Flash them directly:
+
+```bash
+python -m esptool --chip esp32s3 --port COM7 --baud 460800 \
+  write_flash --flash_mode dio --flash_size 8MB \
+  0x0     firmware/esp32-csi-node/release_bins/bootloader.bin \
+  0x8000  firmware/esp32-csi-node/release_bins/partition-table.bin \
+  0xf000  firmware/esp32-csi-node/release_bins/ota_data_initial.bin \
+  0x20000 firmware/esp32-csi-node/release_bins/esp32-csi-node.bin
+```
+
+For 4 MB boards use `release_bins/esp32-csi-node-4mb.bin` and `release_bins/partition-table-4mb.bin`
+with `--flash_size 4MB`.
+
 ### 1. Build (Docker -- the only reliable method)
 
 ```bash
@@ -294,8 +311,9 @@ python -m serial.tools.miniterm COM7 115200
 Expected output after boot:
 
 ```
-I (321) main: ESP32-S3 CSI Node (ADR-018) -- Node ID: 1
-I (345) main: WiFi STA initialized, connecting to SSID: wifi-densepose
+I (396) csi_collector: Early capture node_id=1 (before WiFi init, #232/#390)
+I (406) main: ESP32-S3 CSI Node (ADR-018) -- v0.6.5 -- Node ID: 1
+I (566) main: WiFi STA initialized, connecting to SSID: wifi-densepose
 I (1023) main: Connected to WiFi
 I (1025) main: CSI streaming active -> 192.168.1.100:5005 (edge_tier=2, OTA=ready, WASM=ready)
 ```
