@@ -8,9 +8,11 @@
     "candle": "0.9 cpu",
     "cog_person_count_version": "0.3.0",
     "rust": "1.95.0",
-    "training_caveat": "single-session data; class-1 accuracy 0% \u00e2\u20ac\u201d see docs/benchmarks/person-count-cog.md",
-    "training_eval_accuracy": 0.651,
-    "training_eval_mae": 0.349
+    "training_caveat": "random 80/20 split + label smoothing + early stopping + balanced sampler + temperature calibration. K-fold reference: class-1 mean 57.1% across 5 folds.",
+    "training_class1_accuracy": 0.343,
+    "training_eval_accuracy": 0.623,
+    "training_eval_mae": 0.349,
+    "training_temperature_scale": 0.9262
   },
   "id": "person-count",
   "installed_at": 0,
@@ -18,8 +20,8 @@
   "signed_by": "COGNITUM_OWNER_SIGNING_KEY",
   "status": "installed",
   "target_triple": "x86_64-unknown-linux-gnu",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "weights_bytes": 392088,
-  "weights_sha256": "dacb0551fd3887958db19696d90d811ab08faa44703e6e04ff56d15c3a65a9ff",
+  "weights_sha256": "32996433516891a37c63c600db8b95e42192a53bd538c088c82cd6a85e55513c",
   "weights_url": "https://storage.googleapis.com/cognitum-apps/cogs/arm/cog-person-count-count_v1.safetensors"
 }
