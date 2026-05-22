@@ -59,6 +59,9 @@ Stay 8 minutes / tick. Commit + PR + auto-merge per piece. Future-tick re-entry 
 ### 2026-05-21 kickoff tick
 - ✅ **R5 in-flight** — `examples/research-sota/r5_subcarrier_saliency.py` runs; first measurement on `cog-person-count` v0.0.2 ships: top-8 subcarriers spread across the band, max/mean ratio 2.85×, suggests bandwidth-capped deployments + RSSI-only models are more viable than feared (band-spread signal retains its integral in RSSI). See `R5-subcarrier-saliency.md` §"First measurement" + §"Implications".
 
+### 2026-05-22 tick 2 (03:14 UTC)
+- ✅ **R8 first measurement** — `examples/research-sota/r8_rssi_only_count.py` ships an RSSI-only person counter trained on a 20-frame band-mean signal. **Result: 59.1% accuracy = 94.82% of the full-CSI v0.0.2 baseline (62.3%).** Tiny model: 656 params (~5 KB), 56× smaller input, trains in 0.72 s on CPU. **Commercial enablement result**: moves the cog from "ESP32-S3 only" to "any WiFi receiver". Class accuracy balanced (59.5 / 58.6 vs v0.0.2's skewed 86.2 / 34.3). Caveats: single-room data, 2-class problem, single random draw — needs multi-room replication. See `R8-rssi-only-count.md` for full method + interpretation + 3 follow-up experiments queued. Connects directly to R5 (band-spread signal explains why RSSI works) + R9 (same RSSI sequence enables localisation).
+
 ## Negative results
 
 (populated when we discover something doesn't work — these are explicit, not failures)
@@ -66,3 +69,4 @@ Stay 8 minutes / tick. Commit + PR + auto-merge per piece. Future-tick re-entry 
 ## Index by date
 
 - 2026-05-21 — kickoff (this file)
+- 2026-05-22 — tick 2: R8 RSSI-only count (59.1% / 94.82% retained)
