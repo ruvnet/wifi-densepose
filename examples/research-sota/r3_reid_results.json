@@ -1,0 +1,23 @@
+{
+  "config": {
+    "n_subjects": 10,
+    "n_rooms": 3,
+    "n_samples_per_room": 20,
+    "embedding_dim": 128,
+    "person_signature_scale": 0.35,
+    "environment_signature_scale": 1.5,
+    "noise_scale": 0.3
+  },
+  "signature_norms": {
+    "person_norm_avg": 3.890960952927665,
+    "environment_norm_avg": 18.141078308016272,
+    "env_to_person_ratio": 4.662364523181974
+  },
+  "accuracy": {
+    "within_room_baseline": 1.0,
+    "cross_room_raw": 0.7,
+    "cross_room_meridian_perfect": 1.0,
+    "cross_room_meridian_70pct": 1.0,
+    "chance": 0.1
+  }
+}
