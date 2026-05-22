@@ -1,0 +1,63 @@
+{
+  "model": "additive complex sum of 6 point-scatterer human body model",
+  "link": {
+    "tx": [
+      0.0,
+      0.0
+    ],
+    "rx": [
+      5.0,
+      0.0
+    ],
+    "freq_ghz": 2.4,
+    "wavelength_m": 0.12491666666666666,
+    "length_m": 5.0
+  },
+  "per_part_contributions": {
+    "head": {
+      "mag_mean": 0.015841584158415842,
+      "mag_max": 0.015841584158415845,
+      "phase_spread_deg": 0.47725379616596797,
+      "fraction_of_total_energy": 0.011026055571541609
+    },
+    "chest": {
+      "mag_mean": 0.07920792079207921,
+      "mag_max": 0.07920792079207922,
+      "phase_spread_deg": 0.47725379616596797,
+      "fraction_of_total_energy": 0.2756513892885403
+    },
+    "left_arm": {
+      "mag_mean": 0.015940580962411778,
+      "mag_max": 0.01594058096241178,
+      "phase_spread_deg": 0.48028947110512377,
+      "fraction_of_total_energy": 0.011164293626008683
+    },
+    "right_arm": {
+      "mag_mean": 0.015940580962411778,
+      "mag_max": 0.01594058096241178,
+      "phase_spread_deg": 0.48028947110512377,
+      "fraction_of_total_energy": 0.011164293626008683
+    },
+    "left_leg": {
+      "mag_mean": 0.015967880656919845,
+      "mag_max": 0.015967880656919845,
+      "phase_spread_deg": 0.17235962706852703,
+      "fraction_of_total_energy": 0.01120256610671521
+    },
+    "right_leg": {
+      "mag_mean": 0.015967880656919845,
+      "mag_max": 0.015967880656919845,
+      "phase_spread_deg": 0.17235962706852703,
+      "fraction_of_total_energy": 0.01120256610671521
+    }
+  },
+  "breathing_band_snr": {
+    "scatterer_count": 6,
+    "best_subcarrier_snr_db": 18.973630961871965,
+    "best_subcarrier_index": 0,
+    "mean_subcarrier_snr_db": 18.97214047380962,
+    "worst_subcarrier_snr_db": 18.970657303638884,
+    "chest_only_baseline_snr_db": 23.666542080148105,
+    "multi_scatterer_penalty_db": 4.69291111827614
+  }
+}
