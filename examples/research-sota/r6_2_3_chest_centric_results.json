@@ -1,0 +1,118 @@
+{
+  "room": {
+    "width_m": 5.0,
+    "height_m": 5.0
+  },
+  "freq_ghz": 2.4,
+  "body_zones": [
+    {
+      "name": "bed",
+      "x": 1.5,
+      "y": 0.5,
+      "w": 2.0,
+      "h": 1.5
+    },
+    {
+      "name": "chair",
+      "x": 3.5,
+      "y": 3.5,
+      "w": 0.8,
+      "h": 0.8
+    },
+    {
+      "name": "desk",
+      "x": 0.2,
+      "y": 2.5,
+      "w": 1.0,
+      "h": 0.6
+    }
+  ],
+  "chest_zones": [
+    {
+      "name": "bed_chest",
+      "x": 2.2,
+      "y": 0.8,
+      "w": 0.6,
+      "h": 0.4
+    },
+    {
+      "name": "chair_chest",
+      "x": 3.7,
+      "y": 3.7,
+      "w": 0.4,
+      "h": 0.4
+    },
+    {
+      "name": "desk_chest",
+      "x": 0.5,
+      "y": 2.7,
+      "w": 0.4,
+      "h": 0.2
+    }
+  ],
+  "best_body_centric": {
+    "score": 0.493006993006993,
+    "tx": [
+      4.25,
+      0.0
+    ],
+    "rx": [
+      0.0,
+      3.25
+    ],
+    "link_m": 5.350233639758174,
+    "per_zone": {
+      "bed": {
+        "area_m2": 3.0000000000000004,
+        "covered_m2": 1.6175000000000004,
+        "coverage_fraction": 0.5391666666666667
+      },
+      "chair": {
+        "area_m2": 0.6400000000000001,
+        "covered_m2": 0.0,
+        "coverage_fraction": 0.0
+      },
+      "desk": {
+        "area_m2": 0.6500000000000001,
+        "covered_m2": 0.4975000000000001,
+        "coverage_fraction": 0.7653846153846153
+      }
+    }
+  },
+  "best_chest_centric": {
+    "score": 0.8235294117647058,
+    "tx": [
+      2.0,
+      0.0
+    ],
+    "rx": [
+      4.5,
+      5.0
+    ],
+    "link_m": 5.5901699437494745,
+    "per_zone": {
+      "bed_chest": {
+        "area_m2": 0.29250000000000004,
+        "covered_m2": 0.28750000000000003,
+        "coverage_fraction": 0.9829059829059829
+      },
+      "chair_chest": {
+        "area_m2": 0.20250000000000004,
+        "covered_m2": 0.20250000000000004,
+        "coverage_fraction": 1.0
+      },
+      "desk_chest": {
+        "area_m2": 0.10000000000000002,
+        "covered_m2": 0.0,
+        "coverage_fraction": 0.0
+      }
+    }
+  },
+  "cross_eval": {
+    "body_pl_on_chest": 0.5546218487394958,
+    "chest_pl_on_body": 0.40326340326340326,
+    "chest_gain_pp": 26.890756302521,
+    "body_loss_pp": 8.974358974358976
+  },
+  "verdict": "CHEST-CENTRIC WINS: significant placement-strategy change. R6.2.3 should be a CLI option."
+}
