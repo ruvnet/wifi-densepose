@@ -1,0 +1,152 @@
+{
+  "room": {
+    "width_m": 5.0,
+    "height_m": 5.0
+  },
+  "freq_ghz": 2.4,
+  "scenarios_n5": [
+    {
+      "scenario": "1 occupant (chair)",
+      "n_zones": 1,
+      "total_zone_area_m2": 0.16000000000000003,
+      "coverage_n5": 1.0,
+      "best_anchors": [
+        [
+          5.0,
+          3.25
+        ],
+        [
+          0.0,
+          1.25
+        ],
+        [
+          2.0,
+          5.0
+        ],
+        [
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          5.0
+        ]
+      ]
+    },
+    {
+      "scenario": "2 occupants (chair + bed)",
+      "n_zones": 2,
+      "total_zone_area_m2": 0.4,
+      "coverage_n5": 1.0,
+      "best_anchors": [
+        [
+          5.0,
+          3.25
+        ],
+        [
+          0.0,
+          1.25
+        ],
+        [
+          5.0,
+          0.5
+        ],
+        [
+          2.0,
+          5.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ]
+    },
+    {
+      "scenario": "3 occupants (chair + bed + desk)",
+      "n_zones": 3,
+      "total_zone_area_m2": 0.48000000000000004,
+      "coverage_n5": 1.0,
+      "best_anchors": [
+        [
+          5.0,
+          3.25
+        ],
+        [
+          0.0,
+          1.25
+        ],
+        [
+          2.0,
+          5.0
+        ],
+        [
+          5.0,
+          0.5
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ]
+    },
+    {
+      "scenario": "4 occupants (+ 2nd chair)",
+      "n_zones": 4,
+      "total_zone_area_m2": 0.6400000000000001,
+      "coverage_n5": 1.0,
+      "best_anchors": [
+        [
+          3.0,
+          0.0
+        ],
+        [
+          2.5,
+          5.0
+        ],
+        [
+          0.0,
+          3.75
+        ],
+        [
+          4.25,
+          5.0
+        ],
+        [
+          0.75,
+          5.0
+        ]
+      ]
+    }
+  ],
+  "saturation_4subj": [
+    {
+      "n_anchors": 2,
+      "coverage": 0.14516129032258066
+    },
+    {
+      "n_anchors": 3,
+      "coverage": 0.7290322580645161
+    },
+    {
+      "n_anchors": 4,
+      "coverage": 0.9903225806451613
+    },
+    {
+      "n_anchors": 5,
+      "coverage": 1.0
+    },
+    {
+      "n_anchors": 6,
+      "coverage": 1.0
+    },
+    {
+      "n_anchors": 7,
+      "coverage": 1.0
+    }
+  ],
+  "cross_eval": {
+    "single_opt_on_multi": 0.7064516129032258,
+    "multi_opt_on_multi": 1.0,
+    "gain_pp": 29.354838709677423
+  }
+}
