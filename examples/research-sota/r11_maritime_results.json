@@ -1,0 +1,108 @@
+{
+  "model": "skin-depth steel + lossy-dielectric saltwater + slot-diffraction seam",
+  "materials": {
+    "2.4_GHz": {
+      "steel_skin_depth_um": 3.248736671806984,
+      "steel_atten_dB_per_mm": 2673.654677948628,
+      "saltwater_atten_dB_per_m": 852.7792439147287
+    },
+    "5.0_GHz": {
+      "steel_skin_depth_um": 2.2507907903927653,
+      "steel_atten_dB_per_mm": 3859.0881200843564,
+      "saltwater_atten_dB_per_m": 867.7495416795573
+    }
+  },
+  "scenarios": [
+    {
+      "scenario": "man-overboard, surface-floating",
+      "freq_ghz": 2.4,
+      "fspl_db": 86.07916660695635,
+      "bulk_loss_db": 0.0,
+      "seam_loss_db": 999.0,
+      "metal_path_used": "bulk",
+      "metal_path_loss_db": 0.0,
+      "saltwater_loss_db": 0.0,
+      "total_loss_db": 86.07916660695635,
+      "esp32_link_budget_db": 121,
+      "snr_margin_db": 24.92083339304365
+    },
+    {
+      "scenario": "man-overboard, head 30 cm underwater",
+      "freq_ghz": 2.4,
+      "fspl_db": 86.07916660695635,
+      "bulk_loss_db": 0.0,
+      "seam_loss_db": 999.0,
+      "metal_path_used": "bulk",
+      "metal_path_loss_db": 0.0,
+      "saltwater_loss_db": 255.83377317441858,
+      "total_loss_db": 341.9129397813749,
+      "esp32_link_budget_db": 121,
+      "snr_margin_db": -230.91293978137492
+    },
+    {
+      "scenario": "crew vitals through 10 mm steel cabin door (closed)",
+      "freq_ghz": 2.4,
+      "fspl_db": 49.88145871091758,
+      "bulk_loss_db": 26736.546779486278,
+      "seam_loss_db": 999.0,
+      "metal_path_used": "seam",
+      "metal_path_loss_db": 999.0,
+      "saltwater_loss_db": 0.0,
+      "total_loss_db": 1048.8814587109175,
+      "esp32_link_budget_db": 121,
+      "snr_margin_db": -937.8814587109175
+    },
+    {
+      "scenario": "crew vitals through cabin door (2 mm seam gap)",
+      "freq_ghz": 2.4,
+      "fspl_db": 49.88145871091758,
+      "bulk_loss_db": 26736.546779486278,
+      "seam_loss_db": 29.891207909453847,
+      "metal_path_used": "seam",
+      "metal_path_loss_db": 29.891207909453847,
+      "saltwater_loss_db": 0.0,
+      "total_loss_db": 79.77266662037142,
+      "esp32_link_budget_db": 121,
+      "snr_margin_db": 31.227333379628575
+    },
+    {
+      "scenario": "crew vitals through cabin door (5 mm seam gap)",
+      "freq_ghz": 2.4,
+      "fspl_db": 49.88145871091758,
+      "bulk_loss_db": 26736.546779486278,
+      "seam_loss_db": 21.93240773601309,
+      "metal_path_used": "seam",
+      "metal_path_loss_db": 21.93240773601309,
+      "saltwater_loss_db": 0.0,
+      "total_loss_db": 71.81386644693066,
+      "esp32_link_budget_db": 121,
+      "snr_margin_db": 39.18613355306934
+    },
+    {
+      "scenario": "container intrusion (steel cargo container, 2 mm walls, 30 mm vent slot)",
+      "freq_ghz": 2.4,
+      "fspl_db": 60.14065230988498,
+      "bulk_loss_db": 5347.309355897256,
+      "seam_loss_db": 6.369382728340219,
+      "metal_path_used": "seam",
+      "metal_path_loss_db": 6.369382728340219,
+      "saltwater_loss_db": 0.0,
+      "total_loss_db": 66.5100350382252,
+      "esp32_link_budget_db": 121,
+      "snr_margin_db": 44.4899649617748
+    },
+    {
+      "scenario": "through hull (submarine, 30 mm pressure hull)",
+      "freq_ghz": 2.4,
+      "fspl_db": 40.88207853739662,
+      "bulk_loss_db": 80209.64033845883,
+      "seam_loss_db": 999.0,
+      "metal_path_used": "seam",
+      "metal_path_loss_db": 999.0,
+      "saltwater_loss_db": 0.0,
+      "total_loss_db": 1039.8820785373966,
+      "esp32_link_budget_db": 121,
+      "snr_margin_db": -928.8820785373966
+    }
+  ]
+}
