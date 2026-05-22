@@ -1,0 +1,19 @@
+{
+  "config": {
+    "n_subjects": 10,
+    "n_positions_per_room": 3,
+    "rooms": [
+      "5x5 m",
+      "4x6 m"
+    ],
+    "freq_ghz": 2.4
+  },
+  "accuracy": {
+    "within_room_1": 1.0,
+    "within_room_2": 1.0,
+    "cross_room_raw": 0.1,
+    "cross_room_meridian_labelled": 0.1,
+    "cross_room_physics_informed": 0.1,
+    "chance": 0.1
+  }
+}
