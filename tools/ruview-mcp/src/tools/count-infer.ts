@@ -13,7 +13,7 @@
 
 import { z } from "zod";
 import type { RuviewConfig, CountInferResult } from "../types.js";
-import { cogInferStub } from "../cog.js";
+import { runCog } from "../cog.js";
 
 export const countInferSchema = z.object({
   /**
@@ -45,19 +45,58 @@ export const countInferSchema = z.object({
 
 export type CountInferInput = z.infer<typeof countInferSchema>;
 
+// Health output from `cog-person-count health` (ADR-103 publisher.rs).
+interface CountHealthEvent {
+  ts: number;
+  level: string;
+  event: string;
+  fields: {
+    cog: string;
+    backend: string;
+    synthetic_count: number;
+    synthetic_confidence: number;
+    synthetic_p95_range: [number, number];
+  };
+}
+
+function parseCountHealthOutput(stdout: string): CountHealthEvent | undefined {
+  for (const line of stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (
+        parsed !== null &&
+        typeof parsed === "object" &&
+        "event" in parsed &&
+        (parsed as Record<string, unknown>)["event"] === "health.ok"
+      ) {
+        return parsed as CountHealthEvent;
+      }
+    } catch {
+      // skip non-JSON lines from tracing subscriber
+    }
+  }
+  return undefined;
+}
+
 export async function countInfer(
   input: CountInferInput,
   config: RuviewConfig
 ): Promise<object> {
   const binary = input.cog_binary ?? config.countCogBinary;
+  const t0 = Date.now();
 
-  const stubResult = await cogInferStub(binary, "count");
+  // M2: run `cog-person-count health` which does real inference on a synthetic
+  // window and emits a structured health.ok event with count + confidence + p95_range.
+  const healthResult = await runCog(binary, ["health"]);
+  const latencyMs = Date.now() - t0;
 
-  if (!stubResult.ok) {
+  if (!healthResult.ok) {
     return {
       ok: false,
       warn: true,
-      error: stubResult.error,
+      error: healthResult.error,
       hint:
         "Set RUVIEW_COUNT_COG_BINARY to the path of the cog-person-count binary. " +
         "Install it from gs://cognitum-apps/cogs/<arch>/cog-person-count-<arch>. " +
@@ -65,23 +104,46 @@ export async function countInfer(
     };
   }
 
+  const healthEvent = parseCountHealthOutput(healthResult.data);
   const ts = Date.now() / 1000;
+
+  if (!healthEvent) {
+    const result: CountInferResult = {
+      ts,
+      count: 0,
+      confidence: 0,
+      count_p95_low: 0,
+      count_p95_high: 0,
+      backend: "unknown",
+      latency_ms: latencyMs,
+    };
+    return {
+      ok: true,
+      synthetic_window: true,
+      note:
+        "Cog health passed (exit 0) but no health.ok event was parseable. " +
+        "Returning empty count result.",
+      result,
+    };
+  }
+
+  const p95 = healthEvent.fields.synthetic_p95_range;
   const result: CountInferResult = {
     ts,
-    count: 0,
-    confidence: 0,
-    count_p95_low: 0,
-    count_p95_high: 0,
-    backend: stubResult.data.backend,
-    latency_ms: stubResult.data.latency_ms,
+    count: healthEvent.fields.synthetic_count,
+    confidence: healthEvent.fields.synthetic_confidence,
+    count_p95_low: p95[0],
+    count_p95_high: p95[1],
+    backend: healthEvent.fields.backend,
+    latency_ms: latencyMs,
   };
 
   return {
     ok: true,
-    stub: stubResult.data.stub,
+    synthetic_window: true,
     note:
-      "M1 stub — real inference wired in M2. " +
-      "Cog health check passed; binary is reachable.",
+      "M2: inference ran on a synthetic CSI window via `cog-person-count health`. " +
+      "For real CSI window inference, provide window_path (M3) or ensure the sensing-server is running.",
     result,
   };
 }

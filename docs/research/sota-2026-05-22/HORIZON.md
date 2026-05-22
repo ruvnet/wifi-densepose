@@ -21,8 +21,8 @@
 
 ### M1 — Scaffold `tools/ruview-mcp/` + `tools/ruview-cli/`
 **Target:** +1h (by ~21:00 ET)
-**Status:** `in_progress`
-**Branch:** `feat/ruview-mcp-cli`
+**Status:** `COMPLETE` — merged as PR #705 (squash commit `5a6c585aa`)
+**Branch:** `feat/ruview-mcp-cli-pr` (deleted after merge)
 
 Deliverables:
 - `tools/ruview-mcp/package.json` — `@ruv/ruview-mcp`, TypeScript, `@modelcontextprotocol/sdk`
@@ -39,7 +39,7 @@ Completion criteria: `npm run build` succeeds in both packages, MCP server can b
 
 ### M2 — Wire `ruview_pose_infer` + `ruview_count_infer`
 **Target:** +3h (by ~23:00 ET)
-**Status:** `pending`
+**Status:** `in_progress`
 
 Wire inference via subprocess to cog binaries (`cog-pose-estimation`, `cog-person-count`). MCP tools and CLI subcommands both delegate to the cog binary's `health` + a synthetic-frame run.
 
@@ -123,8 +123,17 @@ Current cross-links identified at session start:
 
 ## Session log
 
-### Session 1 — 2026-05-21 (horizon init)
+### Session 1 — 2026-05-21 (horizon init + M1)
 
 **Started:** Initial read of PROGRESS.md, ADR-100/101/102/103, R5 saliency note.
-**Plan:** Three-objective parallel run. M1 scaffold first.
-**Status:** HORIZON.md written, branch `feat/ruview-mcp-cli` created. Beginning M1.
+**Accomplished:**
+- HORIZON.md initialized.
+- `tools/ruview-mcp/` and `tools/ruview-cli/` scaffolded with TypeScript, MCP SDK, Yargs.
+- 6 MCP tools defined (stubs): csi_latest, pose_infer, count_infer, registry_list, train_count, job_status.
+- 6 CLI subcommands defined: csi tail, pose infer, count infer, cogs list, train count, job status.
+- `docs/adr/ADR-104-ruview-mcp-cli-distribution.md` written (full depth, 6-row threat table).
+- 6/6 smoke tests pass.
+- PR #705 created and merged.
+- PROGRESS.md updated: R7 and R8 cross-links added (cron produced these results in parallel).
+**Cron activity observed:** R7 (Stoer-Wagner adversarial detection 3/3) + R8 (RSSI-only 94.82% retained) landed while M1 was in progress.
+**Next:** M2 — wire real inference via sensing-server + cog subprocess.
