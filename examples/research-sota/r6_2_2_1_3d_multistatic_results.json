@@ -1,0 +1,127 @@
+{
+  "room": {
+    "width_m": 5.0,
+    "depth_m": 5.0,
+    "ceiling_m": 2.5
+  },
+  "freq_ghz": 2.4,
+  "target_zones": [
+    {
+      "name": "bed",
+      "x": 1.5,
+      "y": 0.5,
+      "z": 0.3,
+      "dx": 2.0,
+      "dy": 1.5,
+      "dz": 0.3
+    },
+    {
+      "name": "chair",
+      "x": 3.5,
+      "y": 3.5,
+      "z": 0.5,
+      "dx": 0.8,
+      "dy": 0.8,
+      "dz": 0.7
+    },
+    {
+      "name": "standing",
+      "x": 0.5,
+      "y": 3.5,
+      "z": 1.0,
+      "dx": 1.0,
+      "dy": 1.0,
+      "dz": 0.7
+    }
+  ],
+  "saturation": [
+    {
+      "n_anchors": 2,
+      "coverage": 0.07659574468085106,
+      "n_pairs": 1,
+      "heights": {
+        "low_0.8m": 1,
+        "mid_1.5m": 1,
+        "high_2.4m+": 0
+      }
+    },
+    {
+      "n_anchors": 3,
+      "coverage": 0.28085106382978725,
+      "n_pairs": 3,
+      "heights": {
+        "low_0.8m": 1,
+        "mid_1.5m": 2,
+        "high_2.4m+": 0
+      }
+    },
+    {
+      "n_anchors": 4,
+      "coverage": 0.4056737588652482,
+      "n_pairs": 6,
+      "heights": {
+        "low_0.8m": 3,
+        "mid_1.5m": 0,
+        "high_2.4m+": 1
+      }
+    },
+    {
+      "n_anchors": 5,
+      "coverage": 0.49361702127659574,
+      "n_pairs": 10,
+      "heights": {
+        "low_0.8m": 4,
+        "mid_1.5m": 0,
+        "high_2.4m+": 1
+      }
+    },
+    {
+      "n_anchors": 6,
+      "coverage": 0.5914893617021276,
+      "n_pairs": 15,
+      "heights": {
+        "low_0.8m": 4,
+        "mid_1.5m": 1,
+        "high_2.4m+": 1
+      }
+    },
+    {
+      "n_anchors": 7,
+      "coverage": 0.6510638297872341,
+      "n_pairs": 21,
+      "heights": {
+        "low_0.8m": 5,
+        "mid_1.5m": 1,
+        "high_2.4m+": 1
+      }
+    }
+  ],
+  "marginal": [
+    {
+      "from_n": 2,
+      "to_n": 3,
+      "marginal_pp": 20.425531914893618
+    },
+    {
+      "from_n": 3,
+      "to_n": 4,
+      "marginal_pp": 12.482269503546096
+    },
+    {
+      "from_n": 4,
+      "to_n": 5,
+      "marginal_pp": 8.794326241134753
+    },
+    {
+      "from_n": 5,
+      "to_n": 6,
+      "marginal_pp": 9.78723404255319
+    },
+    {
+      "from_n": 6,
+      "to_n": 7,
+      "marginal_pp": 5.957446808510647
+    }
+  ],
+  "knee_n_anchors": null
+}
