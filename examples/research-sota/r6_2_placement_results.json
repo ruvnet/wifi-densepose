@@ -1,0 +1,56 @@
+{
+  "room": {
+    "width_m": 5.0,
+    "height_m": 5.0
+  },
+  "frequency_ghz": 2.4,
+  "wavelength_m": 0.12491666666666666,
+  "target_zones": [
+    {
+      "name": "bed",
+      "x0": 1.5,
+      "y0": 0.5,
+      "width": 2.0,
+      "height": 1.5
+    },
+    {
+      "name": "chair",
+      "x0": 3.5,
+      "y0": 3.5,
+      "width": 0.8,
+      "height": 0.8
+    }
+  ],
+  "best": {
+    "score": 0.510989010989011,
+    "tx": [
+      1.25,
+      0.0
+    ],
+    "rx": [
+      4.75,
+      5.0
+    ],
+    "link_length_m": 6.103277807866851,
+    "result": {
+      "total_coverage_fraction": 0.510989010989011,
+      "total_area_m2": 3.6400000000000006,
+      "covered_area_m2": 1.8600000000000003,
+      "per_zone": {
+        "bed": {
+          "area_m2": 3.0000000000000004,
+          "covered_m2": 1.3050000000000002,
+          "coverage_fraction": 0.435
+        },
+        "chair": {
+          "area_m2": 0.6400000000000001,
+          "covered_m2": 0.5550000000000002,
+          "coverage_fraction": 0.8671875000000001
+        }
+      }
+    }
+  },
+  "median_score": 0.005494505494505495,
+  "worst_score": 0.0,
+  "n_pairs_evaluated": 2900
+}
