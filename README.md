@@ -2,10 +2,9 @@
 
 <p align="center">
   <a href="https://cognitum.one/seed">
-    <img src="assets/ruview-small-gemini.jpg" alt="RuView - WiFi DensePose" width="100%">
+    <img src="assets/ruview-seed.png" alt="RuView - WiFi DensePose" width="100%">
   </a>
 </p>
-
 <p align="center">
   <a href="https://cognitum.one/seed">
     <img src="assets/seed.png" alt="Cognitum Seed" width="100%">
