@@ -11,6 +11,7 @@
 import { z } from "zod";
 import type { RuviewConfig, SensingLatestResponse } from "../types.js";
 import { sensingGet } from "../http.js";
+import { validateSensingLatestResponse } from "../validate.js";
 
 export const csiLatestSchema = z.object({
   /** Override the sensing-server URL for this call only. */
@@ -49,6 +50,20 @@ export async function csiLatest(
     };
   }
 
+  const validation = validateSensingLatestResponse(result.data);
+  if (!validation.valid) {
+    return {
+      ok: false,
+      warn: true,
+      error: `Sensing-server response failed schema validation: ${validation.errors.join("; ")}`,
+      raw_response: result.data,
+      hint:
+        "The sensing-server may have upgraded its schema. " +
+        "Check schema_version in the raw_response and update " +
+        "ruview-mcp/src/types.ts if needed.",
+    };
+  }
+
   return {
     ok: true,
     ts: result.data.window.ts,
@@ -56,7 +71,7 @@ export async function csiLatest(
     captured_at: result.data.captured_at,
     n_paths: result.data.window.n_paths,
     node_mac: result.data.window.node_mac,
-    subcarriers: 56,
+    subcarriers: result.data.window.amplitudes.length,
     frames: result.data.window.amplitudes[0]?.length ?? 0,
     window: result.data.window,
   };
