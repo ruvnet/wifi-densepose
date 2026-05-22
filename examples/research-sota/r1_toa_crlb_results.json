@@ -1,0 +1,197 @@
+{
+  "model": "Cramer-Rao Lower Bound on ToA + phase ranging precision",
+  "bandwidth_grid": {
+    "bw_20MHz": {
+      "snr_0dB": {
+        "sigma_toa_ns": 13.7832223855448,
+        "sigma_range_m": 4.132210071186331
+      },
+      "snr_10dB": {
+        "sigma_toa_ns": 4.358637623494103,
+        "sigma_range_m": 1.3067195595235321
+      },
+      "snr_20dB": {
+        "sigma_toa_ns": 1.37832223855448,
+        "sigma_range_m": 0.41322100711863313
+      },
+      "snr_30dB": {
+        "sigma_toa_ns": 0.43586376234941043,
+        "sigma_range_m": 0.13067195595235323
+      },
+      "snr_40dB": {
+        "sigma_toa_ns": 0.137832223855448,
+        "sigma_range_m": 0.041322100711863305
+      }
+    },
+    "bw_40MHz": {
+      "snr_0dB": {
+        "sigma_toa_ns": 6.8916111927724,
+        "sigma_range_m": 2.0661050355931656
+      },
+      "snr_10dB": {
+        "sigma_toa_ns": 2.1793188117470517,
+        "sigma_range_m": 0.6533597797617661
+      },
+      "snr_20dB": {
+        "sigma_toa_ns": 0.68916111927724,
+        "sigma_range_m": 0.20661050355931657
+      },
+      "snr_30dB": {
+        "sigma_toa_ns": 0.21793188117470522,
+        "sigma_range_m": 0.06533597797617662
+      },
+      "snr_40dB": {
+        "sigma_toa_ns": 0.068916111927724,
+        "sigma_range_m": 0.020661050355931652
+      }
+    },
+    "bw_80MHz": {
+      "snr_0dB": {
+        "sigma_toa_ns": 3.4458055963862,
+        "sigma_range_m": 1.0330525177965828
+      },
+      "snr_10dB": {
+        "sigma_toa_ns": 1.0896594058735258,
+        "sigma_range_m": 0.32667988988088303
+      },
+      "snr_20dB": {
+        "sigma_toa_ns": 0.34458055963862,
+        "sigma_range_m": 0.10330525177965828
+      },
+      "snr_30dB": {
+        "sigma_toa_ns": 0.10896594058735261,
+        "sigma_range_m": 0.03266798898808831
+      },
+      "snr_40dB": {
+        "sigma_toa_ns": 0.034458055963862,
+        "sigma_range_m": 0.010330525177965826
+      }
+    },
+    "bw_160MHz": {
+      "snr_0dB": {
+        "sigma_toa_ns": 1.7229027981931,
+        "sigma_range_m": 0.5165262588982914
+      },
+      "snr_10dB": {
+        "sigma_toa_ns": 0.5448297029367629,
+        "sigma_range_m": 0.16333994494044152
+      },
+      "snr_20dB": {
+        "sigma_toa_ns": 0.17229027981931,
+        "sigma_range_m": 0.05165262588982914
+      },
+      "snr_30dB": {
+        "sigma_toa_ns": 0.054482970293676304,
+        "sigma_range_m": 0.016333994494044154
+      },
+      "snr_40dB": {
+        "sigma_toa_ns": 0.017229027981931,
+        "sigma_range_m": 0.005165262588982913
+      }
+    },
+    "bw_320MHz": {
+      "snr_0dB": {
+        "sigma_toa_ns": 0.86145139909655,
+        "sigma_range_m": 0.2582631294491457
+      },
+      "snr_10dB": {
+        "sigma_toa_ns": 0.27241485146838146,
+        "sigma_range_m": 0.08166997247022076
+      },
+      "snr_20dB": {
+        "sigma_toa_ns": 0.086145139909655,
+        "sigma_range_m": 0.02582631294491457
+      },
+      "snr_30dB": {
+        "sigma_toa_ns": 0.027241485146838152,
+        "sigma_range_m": 0.008166997247022077
+      },
+      "snr_40dB": {
+        "sigma_toa_ns": 0.0086145139909655,
+        "sigma_range_m": 0.0025826312944914566
+      }
+    }
+  },
+  "phase_grid": {
+    "carrier_2.4GHz": {
+      "sigma_phi_0.5deg": {
+        "sigma_range_mm": 0.17349537037037038,
+        "sigma_range_m": 0.00017349537037037038
+      },
+      "sigma_phi_1.0deg": {
+        "sigma_range_mm": 0.34699074074074077,
+        "sigma_range_m": 0.00034699074074074076
+      },
+      "sigma_phi_2.0deg": {
+        "sigma_range_mm": 0.6939814814814815,
+        "sigma_range_m": 0.0006939814814814815
+      },
+      "sigma_phi_5.0deg": {
+        "sigma_range_mm": 1.7349537037037037,
+        "sigma_range_m": 0.0017349537037037036
+      },
+      "sigma_phi_10.0deg": {
+        "sigma_range_mm": 3.4699074074074074,
+        "sigma_range_m": 0.0034699074074074072
+      }
+    },
+    "carrier_5.0GHz": {
+      "sigma_phi_0.5deg": {
+        "sigma_range_mm": 0.08327777777777778,
+        "sigma_range_m": 8.327777777777778e-05
+      },
+      "sigma_phi_1.0deg": {
+        "sigma_range_mm": 0.16655555555555557,
+        "sigma_range_m": 0.00016655555555555556
+      },
+      "sigma_phi_2.0deg": {
+        "sigma_range_mm": 0.33311111111111114,
+        "sigma_range_m": 0.0003331111111111111
+      },
+      "sigma_phi_5.0deg": {
+        "sigma_range_mm": 0.8327777777777777,
+        "sigma_range_m": 0.0008327777777777778
+      },
+      "sigma_phi_10.0deg": {
+        "sigma_range_mm": 1.6655555555555555,
+        "sigma_range_m": 0.0016655555555555555
+      }
+    },
+    "carrier_6.0GHz": {
+      "sigma_phi_0.5deg": {
+        "sigma_range_mm": 0.06939814814814814,
+        "sigma_range_m": 6.939814814814814e-05
+      },
+      "sigma_phi_1.0deg": {
+        "sigma_range_mm": 0.13879629629629628,
+        "sigma_range_m": 0.00013879629629629629
+      },
+      "sigma_phi_2.0deg": {
+        "sigma_range_mm": 0.27759259259259256,
+        "sigma_range_m": 0.00027759259259259257
+      },
+      "sigma_phi_5.0deg": {
+        "sigma_range_mm": 0.6939814814814815,
+        "sigma_range_m": 0.0006939814814814815
+      },
+      "sigma_phi_10.0deg": {
+        "sigma_range_mm": 1.387962962962963,
+        "sigma_range_m": 0.001387962962962963
+      }
+    }
+  },
+  "headline_practical": {
+    "scenario": "20 MHz HT20 channel, 20 dB SNR, 100 averaged frames",
+    "toa_single_shot_m": 0.41322100711863313,
+    "toa_after_100_avg_m": 0.04132210071186332,
+    "phase_single_shot_m": 0.0017349537037037036,
+    "phase_after_100_avg_m": 0.00017349537037037038,
+    "phase_advantage_ratio": 238.17408282221416
+  },
+  "multistatic_4anchor": {
+    "n_anchors": 4,
+    "gdop": 1.5,
+    "toa_position_precision_m": 0.2530451546099066,
+    "phase_position_precision_m": 0.0010624378253564768
+  }
+}
