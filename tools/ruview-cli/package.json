@@ -1,0 +1,49 @@
+{
+  "name": "@ruv/ruview-cli",
+  "version": "0.0.1",
+  "description": "RuView CLI — shell access to WiFi-DensePose sensing, inference, and training capabilities",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "ruview": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "ruview",
+    "wifi",
+    "csi",
+    "pose-estimation",
+    "cognitum",
+    "cli"
+  ],
+  "author": "ruv <ruv@ruv.net>",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "yargs": "^17.7.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/yargs": "^17.0.32",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.0",
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}
