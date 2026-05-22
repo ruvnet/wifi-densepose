@@ -1,0 +1,174 @@
+{
+  "room": {
+    "width_m": 5.0,
+    "depth_m": 5.0,
+    "ceiling_m": 2.5
+  },
+  "freq_ghz": 2.4,
+  "target_zones": [
+    {
+      "name": "bed",
+      "x": 1.5,
+      "y": 0.5,
+      "z": 0.3,
+      "dx": 2.0,
+      "dy": 1.5,
+      "dz": 0.3
+    },
+    {
+      "name": "chair",
+      "x": 3.5,
+      "y": 3.5,
+      "z": 0.5,
+      "dx": 0.8,
+      "dy": 0.8,
+      "dz": 0.7
+    },
+    {
+      "name": "standing",
+      "x": 0.5,
+      "y": 3.5,
+      "z": 1.0,
+      "dx": 1.0,
+      "dy": 1.0,
+      "dz": 0.7
+    }
+  ],
+  "strategies": {
+    "desk-height (0.8 m, wall)": {
+      "best_score": 0.22216796875,
+      "best_tx": [
+        0.5,
+        0.0,
+        0.8
+      ],
+      "best_rx": [
+        5.0,
+        5.0,
+        0.8
+      ],
+      "n_candidates": 40,
+      "n_pairs_evaluated": 736,
+      "best_per_zone": {
+        "bed": {
+          "n_points": 900,
+          "n_covered": 94,
+          "coverage_fraction": 0.10444444444444445
+        },
+        "chair": {
+          "n_points": 448,
+          "n_covered": 361,
+          "coverage_fraction": 0.8058035714285714
+        },
+        "standing": {
+          "n_points": 700,
+          "n_covered": 0,
+          "coverage_fraction": 0.0
+        }
+      }
+    },
+    "wall-mount (1.5 m, wall)": {
+      "best_score": 0.17431640625,
+      "best_tx": [
+        0.0,
+        5.0,
+        1.5
+      ],
+      "best_rx": [
+        4.5,
+        0.0,
+        1.5
+      ],
+      "n_candidates": 40,
+      "n_pairs_evaluated": 736,
+      "best_per_zone": {
+        "bed": {
+          "n_points": 900,
+          "n_covered": 0,
+          "coverage_fraction": 0.0
+        },
+        "chair": {
+          "n_points": 448,
+          "n_covered": 0,
+          "coverage_fraction": 0.0
+        },
+        "standing": {
+          "n_points": 700,
+          "n_covered": 357,
+          "coverage_fraction": 0.51
+        }
+      }
+    },
+    "ceiling (2.5 m, full ceiling grid)": {
+      "best_score": 0.0,
+      "best_tx": [
+        0.5,
+        0.5,
+        2.5
+      ],
+      "best_rx": [
+        0.5,
+        1.5,
+        2.5
+      ],
+      "n_candidates": 100,
+      "n_pairs_evaluated": 4608,
+      "best_per_zone": {
+        "bed": {
+          "n_points": 900,
+          "n_covered": 0,
+          "coverage_fraction": 0.0
+        },
+        "chair": {
+          "n_points": 448,
+          "n_covered": 0,
+          "coverage_fraction": 0.0
+        },
+        "standing": {
+          "n_points": 700,
+          "n_covered": 0,
+          "coverage_fraction": 0.0
+        }
+      }
+    },
+    "wall + ceiling (mixed at any height)": {
+      "best_score": 0.25732421875,
+      "best_tx": [
+        5.0,
+        4.0,
+        0.8
+      ],
+      "best_rx": [
+        0.0,
+        4.0,
+        1.5
+      ],
+      "n_candidates": 201,
+      "n_pairs_evaluated": 19464,
+      "best_per_zone": {
+        "bed": {
+          "n_points": 900,
+          "n_covered": 0,
+          "coverage_fraction": 0.0
+        },
+        "chair": {
+          "n_points": 448,
+          "n_covered": 217,
+          "coverage_fraction": 0.484375
+        },
+        "standing": {
+          "n_points": 700,
+          "n_covered": 310,
+          "coverage_fraction": 0.44285714285714284
+        }
+      }
+    }
+  },
+  "headline": {
+    "best_strategy": "wall + ceiling (mixed at any height)",
+    "desk_score": 0.22216796875,
+    "ceiling_score": 0.0,
+    "mixed_score": 0.25732421875,
+    "mixed_lift_over_desk_pct": 15.824175824175823
+  }
+}
