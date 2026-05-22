@@ -1,0 +1,57 @@
+{
+  "true": {
+    "breathing_bpm": 15.0,
+    "hr_bpm": 72.0
+  },
+  "classical_alone": {
+    "breathing_estimate_bpm": 15.0,
+    "breathing_confidence": 0.6890232604797502,
+    "breathing_snr_db": 13.97778456684242,
+    "hr_estimate_bpm": 105.0,
+    "hr_confidence": 0.3805459134253063,
+    "hr_snr_db": 7.563841257063811,
+    "hrv_contour_detected": false,
+    "note": "R13 NEGATIVE rules out HRV contour from CSI"
+  },
+  "nv_alone": {
+    "1m": {
+      "distance_m": 1.0,
+      "expected_amplitude_pT": 6.25,
+      "hr_estimate_bpm": 72.0,
+      "hr_confidence": 0.6348478326335925,
+      "hr_snr_db": 12.765355864643407,
+      "rr_intervals_ms_mean": 126.24472573839662,
+      "sdnn_ms": 119.29306192767852,
+      "hrv_contour_detected": true
+    },
+    "2m": {
+      "distance_m": 2.0,
+      "expected_amplitude_pT": 0.78125,
+      "hr_estimate_bpm": 96.0,
+      "hr_confidence": 0.4211816517613361,
+      "hr_snr_db": 8.410377613772285,
+      "rr_intervals_ms_mean": 118.69781312127236,
+      "sdnn_ms": 112.67329985488028,
+      "hrv_contour_detected": true
+    },
+    "3m": {
+      "distance_m": 3.0,
+      "expected_amplitude_pT": 0.23148148148148143,
+      "hr_estimate_bpm": 166.0,
+      "hr_confidence": 0.3009523919429609,
+      "hr_snr_db": 5.786166186069737,
+      "rr_intervals_ms_mean": 117.07436399217221,
+      "sdnn_ms": 107.25403001901388,
+      "hrv_contour_detected": true
+    }
+  },
+  "fused_adr_114": {
+    "breathing_estimate_bpm": 15.0,
+    "breathing_confidence": 0.6890232604797502,
+    "hr_estimate_bpm": 84.36763088940579,
+    "hr_confidence": 0.7738049977032724,
+    "hrv_contour_sdnn_ms": 119.29306192767852,
+    "hrv_contour_detected": true,
+    "note": "Classical breathing + NV-derived HR + NV-only HRV contour"
+  }
+}
