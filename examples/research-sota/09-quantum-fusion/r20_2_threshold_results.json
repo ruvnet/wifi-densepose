@@ -1,0 +1,71 @@
+{
+  "true_hr_bpm": 72.0,
+  "classical_hr_rate": 105.0,
+  "classical_hr_conf": 0.3805459134253063,
+  "results_per_distance": [
+    {
+      "distance_m": 0.5,
+      "nv_amplitude_pT": 50.0,
+      "nv_rate_bpm": 72.0,
+      "nv_conf": 0.8348130933810896,
+      "naive_fused_bpm": 82.33276175218474,
+      "smart_fused_bpm": 72.0,
+      "regime": "nv_drives",
+      "true_hr_bpm": 72.0,
+      "naive_error_bpm": 10.332761752184737,
+      "smart_error_bpm": 0.0
+    },
+    {
+      "distance_m": 1.0,
+      "nv_amplitude_pT": 6.25,
+      "nv_rate_bpm": 144.0,
+      "nv_conf": 0.6689134324169522,
+      "naive_fused_bpm": 129.85815561865903,
+      "smart_fused_bpm": 144.0,
+      "regime": "nv_drives",
+      "true_hr_bpm": 72.0,
+      "naive_error_bpm": 57.858155618659026,
+      "smart_error_bpm": 72.0
+    },
+    {
+      "distance_m": 1.5,
+      "nv_amplitude_pT": 1.8518518518518514,
+      "nv_rate_bpm": 72.0,
+      "nv_conf": 0.39058395452018735,
+      "naive_fused_bpm": 88.28521417307823,
+      "smart_fused_bpm": 88.28521417307823,
+      "regime": "weighted_fallback",
+      "true_hr_bpm": 72.0,
+      "naive_error_bpm": 16.28521417307823,
+      "smart_error_bpm": 16.28521417307823
+    },
+    {
+      "distance_m": 2.0,
+      "nv_amplitude_pT": 0.78125,
+      "nv_rate_bpm": 77.0,
+      "nv_conf": 0.3549718835175086,
+      "naive_fused_bpm": 91.48678132427328,
+      "smart_fused_bpm": 91.48678132427328,
+      "regime": "weighted_fallback",
+      "true_hr_bpm": 72.0,
+      "naive_error_bpm": 19.48678132427328,
+      "smart_error_bpm": 19.48678132427328
+    },
+    {
+      "distance_m": 3.0,
+      "nv_amplitude_pT": 0.23148148148148143,
+      "nv_rate_bpm": 78.0,
+      "nv_conf": 0.3829009843660022,
+      "naive_fused_bpm": 91.45835525791024,
+      "smart_fused_bpm": 91.45835525791024,
+      "regime": "weighted_fallback",
+      "true_hr_bpm": 72.0,
+      "naive_error_bpm": 19.45835525791024,
+      "smart_error_bpm": 19.45835525791024
+    }
+  ],
+  "thresholds": {
+    "nv_conf": 0.6,
+    "nv_amplitude_pT": 3.0
+  }
+}
