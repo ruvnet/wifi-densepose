@@ -62,6 +62,9 @@ Stay 8 minutes / tick. Commit + PR + auto-merge per piece. Future-tick re-entry 
 ### 2026-05-22 tick 2 (03:14 UTC)
 - ✅ **R8 first measurement** — `examples/research-sota/r8_rssi_only_count.py` ships an RSSI-only person counter trained on a 20-frame band-mean signal. **Result: 59.1% accuracy = 94.82% of the full-CSI v0.0.2 baseline (62.3%).** Tiny model: 656 params (~5 KB), 56× smaller input, trains in 0.72 s on CPU. **Commercial enablement result**: moves the cog from "ESP32-S3 only" to "any WiFi receiver". Class accuracy balanced (59.5 / 58.6 vs v0.0.2's skewed 86.2 / 34.3). Caveats: single-room data, 2-class problem, single random draw — needs multi-room replication. See `R8-rssi-only-count.md` for full method + interpretation + 3 follow-up experiments queued. Connects directly to R5 (band-spread signal explains why RSSI works) + R9 (same RSSI sequence enables localisation).
 
+### 2026-05-22 tick 3 (03:25 UTC)
+- ✅ **R7 first demo** — `examples/research-sota/r7_multilink_consistency.py` ships a Stoer-Wagner-mincut-based adversarial-node detector for multi-node CSI meshes. **Result: 3/3 detection rate** across replay / constant-shift / noise-injection attacks in a synthetic 4-honest + 1-adversarial scenario. Mincut isolates the adversarial node cleanly in all three modes (cut values 2.56–3.57, partition_B = `{4}` consistently). Pure-NumPy demo, no framework deps. **Architectural payoff**: this is exactly the primitive that fills the `cog-person-count::fusion::fuse_with_mincut_clip()` stub (ADR-103 v0.2.0). Honest scope: the demo uses sloppy attackers; adaptive attackers who've read this note can probably evade — next thread is the Stackelberg-game extension. See `R7-multilink-consistency.md`.
+
 ## Negative results
 
 (populated when we discover something doesn't work — these are explicit, not failures)
@@ -70,3 +73,4 @@ Stay 8 minutes / tick. Commit + PR + auto-merge per piece. Future-tick re-entry 
 
 - 2026-05-21 — kickoff (this file)
 - 2026-05-22 — tick 2: R8 RSSI-only count (59.1% / 94.82% retained)
+- 2026-05-22 — tick 3: R7 multi-link consistency detection (3/3 attack modes detected by Stoer-Wagner mincut)
