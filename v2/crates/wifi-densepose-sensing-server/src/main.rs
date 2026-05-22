@@ -4578,17 +4578,36 @@ fn coalesce_ui_path(initial: std::path::PathBuf) -> std::path::PathBuf {
     if initial.is_dir() {
         return initial;
     }
-    for rel in &["../ui", "./ui", "../../ui"] {
-        let p = std::path::PathBuf::from(rel);
+    // Try relative to CWD
+    let mut candidates: Vec<std::path::PathBuf> = vec![
+        std::path::PathBuf::from("../ui"),
+        std::path::PathBuf::from("./ui"),
+        std::path::PathBuf::from("../../ui"),
+    ];
+
+    // Try relative to executable (handles cases where CWD != repo root)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            candidates.push(exe_dir.join("../ui"));
+            candidates.push(exe_dir.join("../../ui"));
+        }
+    }
+
+    for p in &candidates {
         if p.is_dir() {
             warn!(
                 "UI path {} not found; using {} (set --ui-path explicitly if wrong)",
                 initial.display(),
                 p.display()
             );
-            return p;
+            return p.clone();
         }
     }
+
+    warn!(
+        "UI path {} not found. Try running from repo root or set --ui-path explicitly.",
+        initial.display()
+    );
     initial
 }
 
