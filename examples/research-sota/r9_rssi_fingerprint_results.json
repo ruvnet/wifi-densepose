@@ -1,0 +1,10 @@
+{
+  "n_samples": 1077,
+  "k": 5,
+  "temporal_window_s": 60.0,
+  "knn_within_window_fraction": 0.16861653327941895,
+  "random_baseline": 0.07726679742336273,
+  "lift": 2.1822638511657715,
+  "per_query_within_fraction_stdev": 0.18328286707401276,
+  "verdict": "MODERATE: RSSI fingerprints work but with significant noise"
+}

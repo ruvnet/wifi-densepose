@@ -38,11 +38,11 @@ Stay 8 minutes / tick. Commit + PR + auto-merge per piece. Future-tick re-entry 
 
 - [ ] **R5. Subcarrier attention over time → "RF saliency map".** Visualize which subcarriers carry the most information per task. ADR-097 hints at this; nothing in repo computes it. Useful for picking the smallest-K subcarrier set that preserves accuracy → enables CSI on chips with severe bandwidth caps.
 - [ ] **R6. Fresnel-zone forward model for through-wall sensing.** Code in `wifi-densepose-signal/src/ruvsense/tomography.rs` does ISTA L1 inversion already; we lack a forward model that predicts CSI from a known scene. Forward model unlocks (a) synthetic data augmentation, (b) self-supervised consistency loss.
-- [ ] **R7. Quantum-inspired Stoer-Wagner sampling for adversarial robustness.** Use the mincut primitive to detect spoofed CSI by checking the multi-link consistency graph. Lands in `cognitum-rvcsi` if it works.
+- [x] **R7. Stoer-Wagner adversarial-node detection.** DONE — 3/3 detection rate (replay/shift/noise). See `R7-multilink-consistency.md`. Cross-links: R5 top-8 saliency subcarriers are priority targets for partial-spectrum attackers; fills `cog-person-count::fusion::fuse_with_mincut_clip()` stub (ADR-103 v0.2.0). Next tick: Stackelberg-game adaptive attacker.
 
 ### RSSI Alone (no CSI)
 
-- [ ] **R8. RSSI-only presence + vitals.** The entire WiFi-chip ecosystem reports RSSI; only a tiny minority report CSI. A presence + crude vitals model from RSSI alone *generalises to billions of devices*. Hard problem (very low information rate) but enormous downstream value. Start with literature survey + first model experiment.
+- [x] **R8. RSSI-only person count.** DONE — 59.1% = 94.82% of full-CSI (62.3%). 656 params, 5 KB, 0.72 s CPU. See `R8-rssi-only-count.md`. Cross-links: R5 band-spread saliency explains the retained accuracy; R9 extends same stream to localisation; ADR-104 MCP server should grow `ruview_count_infer --rssi` mode for non-CSI chips. Next: 3-class ceiling, multi-room replication.
 - [ ] **R9. RSSI fingerprint topology — graph neural network on WiFi-scan beacons.** Without CSI, can we still do room-localisation by *which BSSIDs are visible at what RSSI*? Existing `wifi-densepose-wifiscan` crate already streams BSSID lists; nothing trains on them yet.
 
 ### Exotic & Future (10–20 year)
