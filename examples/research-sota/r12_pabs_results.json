@@ -1,0 +1,60 @@
+{
+  "model": "PABS = ||y_observed - y_predicted||^2 / ||y_observed||^2",
+  "forward_operator_source": "R6.1 multi-scatterer additive Fresnel",
+  "expected_scene": {
+    "subject_pos": [
+      2.5,
+      2.75
+    ],
+    "wall_reflectors": 4
+  },
+  "link": {
+    "tx": [
+      0.0,
+      2.5
+    ],
+    "rx": [
+      5.0,
+      2.5
+    ],
+    "freq_ghz": 2.4
+  },
+  "scenarios": {
+    "A_empty_room": {
+      "description": "no occupant",
+      "pabs": 4.170183705070839,
+      "svd_distance": 0.5965843005537784
+    },
+    "B_subject_expected": {
+      "description": "subject where expected",
+      "pabs": 0.0,
+      "svd_distance": 0.0
+    },
+    "C_added_furniture": {
+      "description": "+1 new structural element",
+      "pabs": 0.04744306789447172,
+      "svd_distance": 0.1011460778806426
+    },
+    "D_unexpected_person": {
+      "description": "+1 unexpected human",
+      "pabs": 0.6575620431155754,
+      "svd_distance": 0.09866444424036849
+    },
+    "E_natural_drift": {
+      "description": "5%% wall reflectivity drift",
+      "pabs": 0.0005664412950287771,
+      "svd_distance": 0.009233808950251039
+    },
+    "F_subject_moved": {
+      "description": "subject shifted 10 cm",
+      "pabs": 12.442629346878062,
+      "svd_distance": 0.8354632981416396
+    }
+  },
+  "verdict": {
+    "pabs_signal_to_drift": 1160.8652986399395,
+    "pabs_furniture_to_drift": 83.75637212689702,
+    "svd_signal_to_drift": 10.685129481446127,
+    "svd_furniture_to_drift": 10.953884623949552
+  }
+}
