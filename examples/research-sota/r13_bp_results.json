@@ -1,0 +1,36 @@
+{
+  "model": "PTT + pulse-contour physics scrutiny for contactless BP",
+  "ptt": {
+    "baseline_ms": 78.57142857142858,
+    "sensitivity_ms_per_mmHg": 0.5,
+    "required_resolution_for_1mmHg_ms": 0.5,
+    "required_resolution_for_5mmHg_ms": 2.5,
+    "required_resolution_for_10mmHg_ms": 5.0,
+    "esp32_max_csi_rate_hz": 1000,
+    "esp32_max_temporal_resolution_ms": 1.0,
+    "esp32_typical_csi_rate_hz": 100,
+    "esp32_typical_temporal_resolution_ms": 10.0
+  },
+  "spatial_resolution": {
+    "carotid_femoral_distance_m": 0.55,
+    "fresnel_envelope_5m_link_m": 0.39515292398428903,
+    "fresnel_envelope_2m_link_m": 0.2499166527731462,
+    "sites_resolvable_5m_link": false,
+    "sites_resolvable_2m_link": true,
+    "comment": "Single-link CSI cannot spatially separate two body sites. PTT requires multi-link multistatic with severely ill-posed inverse problem."
+  },
+  "snr": {
+    "breath_phase_deg": 46.08,
+    "pulse_phase_deg": 1.728,
+    "motion_phase_deg": 11.52,
+    "breath_vs_pulse_amp_ratio": 26.666666666666664,
+    "hr_band_snr_db": 20.0,
+    "bp_contour_required_snr_db": 25.0,
+    "bp_contour_feasibility": "INFEASIBLE"
+  },
+  "vs_baseline": {
+    "arm_cuff_accuracy_mmHg": 2.0,
+    "published_csi_bp_mae_mmHg": 10.0,
+    "ratio_worse": 5.0
+  }
+}
