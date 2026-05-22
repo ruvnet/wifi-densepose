@@ -1,0 +1,25 @@
+{
+  "config": {
+    "n_subjects": 10,
+    "rooms": [
+      "5x5",
+      "4x6"
+    ],
+    "positions_per_room": 3
+  },
+  "accuracy": {
+    "within_room_1": 1.0,
+    "within_room_2": 1.0,
+    "cross_aether_raw": 0.1,
+    "cross_aether_meridian_labelled": 0.2,
+    "cross_aether_physics_informed": 0.1,
+    "cross_aether_physics_plus_residual": 0.2,
+    "chance": 0.1
+  },
+  "r3_1_baseline_raw_csi": {
+    "raw": 0.1,
+    "meridian": 0.1,
+    "physics": 0.1
+  },
+  "verdict": "NOT VALIDATED: embedding-level physics-informed only marginal lift."
+}
