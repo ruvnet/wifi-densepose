@@ -19,6 +19,8 @@ export class ToastManager {
   }
 
   show(message, options = {}) {
+    if (!this.container) this.init();
+
     const {
       type = 'info',
       duration = 5000,

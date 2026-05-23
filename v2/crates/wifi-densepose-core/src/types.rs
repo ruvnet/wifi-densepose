@@ -16,6 +16,13 @@ use ndarray::{Array1, Array2, Array3};
 use num_complex::Complex64;
 use uuid::Uuid;
 
+#[cfg(not(feature = "std"))]
+use alloc::{
+    format,
+    string::String,
+    vec::Vec,
+};
+
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
@@ -57,8 +64,8 @@ impl Default for FrameId {
     }
 }
 
-impl std::fmt::Display for FrameId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for FrameId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
@@ -82,8 +89,8 @@ impl DeviceId {
     }
 }
 
-impl std::fmt::Display for DeviceId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for DeviceId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
@@ -1003,7 +1010,7 @@ impl PoseEstimate {
                 a.confidence
                     .value()
                     .partial_cmp(&b.confidence.value())
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .unwrap_or(core::cmp::Ordering::Equal)
             })
     }
 }

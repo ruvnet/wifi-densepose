@@ -23,6 +23,9 @@
 
 use thiserror::Error;
 
+#[cfg(not(feature = "std"))]
+use alloc::{string::String, vec::Vec};
+
 /// A specialized `Result` type for core operations.
 pub type CoreResult<T> = Result<T, CoreError>;
 

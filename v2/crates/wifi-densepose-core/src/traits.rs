@@ -18,6 +18,8 @@
 //! 3. **Async-Ready**: Async versions available with the `async` feature
 //! 4. **Error Handling**: Consistent use of `Result` types with domain errors
 
+#[cfg(not(feature = "std"))]
+use alloc::{string::String, vec::Vec};
 use crate::error::{CoreResult, InferenceError, SignalError, StorageError};
 use crate::types::{CsiFrame, FrameId, PoseEstimate, ProcessedSignal, Timestamp};
 
