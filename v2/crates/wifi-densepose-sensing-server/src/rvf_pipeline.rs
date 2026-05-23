@@ -131,12 +131,21 @@ impl HnswIndex {
                 for _ in 0..vec_len {
                     vector.push(read_f32(&mut off)?);
                 }
-                nodes.push(HnswNode { id, neighbors, vector });
+                nodes.push(HnswNode {
+                    id,
+                    neighbors,
+                    vector,
+                });
             }
             layers.push(HnswLayer { nodes });
         }
 
-        Ok(Self { layers, entry_point, ef_construction, m })
+        Ok(Self {
+            layers,
+            entry_point,
+            ef_construction,
+            m,
+        })
     }
 }
 
@@ -209,10 +218,18 @@ impl OverlayGraph {
             for _ in 0..ni {
                 insensitive.push(Self::read_u64(data, &mut off)? as usize);
             }
-            mincut_partitions.push(Partition { sensitive, insensitive });
+            mincut_partitions.push(Partition {
+                sensitive,
+                insensitive,
+            });
         }
 
-        Ok(Self { subcarrier_graph, antenna_graph, body_graph, mincut_partitions })
+        Ok(Self {
+            subcarrier_graph,
+            antenna_graph,
+            body_graph,
+            mincut_partitions,
+        })
     }
 
     // -- helpers --
@@ -357,11 +374,7 @@ impl RvfModelBuilder {
     }
 
     /// Set training provenance (witness).
-    pub fn set_training_proof(
-        &mut self,
-        hash: &str,
-        metrics: serde_json::Value,
-    ) -> &mut Self {
+    pub fn set_training_proof(&mut self, hash: &str, metrics: serde_json::Value) -> &mut Self {
         self.training_hash = Some(hash.to_string());
         self.training_metrics = Some(metrics);
         self
@@ -434,7 +447,10 @@ impl RvfModelBuilder {
 
         // 7) Witness / training proof
         if let Some(ref hash) = self.training_hash {
-            let metrics = self.training_metrics.clone().unwrap_or(serde_json::json!({}));
+            let metrics = self
+                .training_metrics
+                .clone()
+                .unwrap_or(serde_json::json!({}));
             rvf.add_witness(hash, &metrics);
         }
 
@@ -470,8 +486,7 @@ impl RvfModelBuilder {
     /// Build and write to a file.
     pub fn write_to_file(&self, path: &Path) -> Result<(), String> {
         let data = self.build()?;
-        std::fs::write(path, &data)
-            .map_err(|e| format!("write {}: {e}", path.display()))
+        std::fs::write(path, &data).map_err(|e| format!("write {}: {e}", path.display()))
     }
 
     /// Return build info (segment names + sizes) without fully building.
@@ -579,7 +594,12 @@ impl ProgressiveLoader {
         let n_segments = self.reader.segment_count();
 
         self.layer_a_loaded = true;
-        Ok(LayerAData { manifest, model_name, version, n_segments })
+        Ok(LayerAData {
+            manifest,
+            model_name,
+            version,
+            n_segments,
+        })
     }
 
     /// Load Layer B: hot neuron weights subset.
@@ -612,7 +632,10 @@ impl ProgressiveLoader {
         };
 
         self.layer_b_loaded = true;
-        Ok(LayerBData { weights_subset, hot_neuron_ids })
+        Ok(LayerBData {
+            weights_subset,
+            hot_neuron_ids,
+        })
     }
 
     /// Load Layer C: all remaining weights and structures (full accuracy).
@@ -644,7 +667,11 @@ impl ProgressiveLoader {
         }
 
         self.layer_c_loaded = true;
-        Ok(LayerCData { all_weights, overlay, sona_profiles })
+        Ok(LayerCData {
+            all_weights,
+            overlay,
+            sona_profiles,
+        })
     }
 
     /// Current loading progress (0.0 to 1.0).
@@ -664,7 +691,11 @@ impl ProgressiveLoader {
 
     /// Per-layer status for the REST API.
     pub fn layer_status(&self) -> (bool, bool, bool) {
-        (self.layer_a_loaded, self.layer_b_loaded, self.layer_c_loaded)
+        (
+            self.layer_a_loaded,
+            self.layer_b_loaded,
+            self.layer_c_loaded,
+        )
     }
 
     /// Collect segment info list for the REST API.
@@ -708,15 +739,29 @@ mod tests {
             layers: vec![
                 HnswLayer {
                     nodes: vec![
-                        HnswNode { id: 0, neighbors: vec![1, 2], vector: vec![1.0, 2.0] },
-                        HnswNode { id: 1, neighbors: vec![0], vector: vec![3.0, 4.0] },
-                        HnswNode { id: 2, neighbors: vec![0], vector: vec![5.0, 6.0] },
+                        HnswNode {
+                            id: 0,
+                            neighbors: vec![1, 2],
+                            vector: vec![1.0, 2.0],
+                        },
+                        HnswNode {
+                            id: 1,
+                            neighbors: vec![0],
+                            vector: vec![3.0, 4.0],
+                        },
+                        HnswNode {
+                            id: 2,
+                            neighbors: vec![0],
+                            vector: vec![5.0, 6.0],
+                        },
                     ],
                 },
                 HnswLayer {
-                    nodes: vec![
-                        HnswNode { id: 0, neighbors: vec![2], vector: vec![1.0, 2.0] },
-                    ],
+                    nodes: vec![HnswNode {
+                        id: 0,
+                        neighbors: vec![2],
+                        vector: vec![1.0, 2.0],
+                    }],
                 },
             ],
             entry_point: 0,
@@ -838,7 +883,11 @@ mod tests {
         let reader = RvfReader::from_bytes(&data).unwrap();
 
         // manifest + vec + index + overlay + quant + 2*agg + witness + profile + meta + crypto = 11
-        assert!(reader.segment_count() >= 10, "got {}", reader.segment_count());
+        assert!(
+            reader.segment_count() >= 10,
+            "got {}",
+            reader.segment_count()
+        );
         assert!(reader.manifest().is_some());
         assert!(reader.weights().is_some());
         assert!(reader.find_segment(SEG_INDEX).is_some());
@@ -899,7 +948,11 @@ mod tests {
         assert_eq!(la.version, "1.0.0");
         assert!(la.n_segments > 0);
         // Layer A should be very fast (target <5ms, we allow generous 100ms for CI).
-        assert!(elapsed.as_millis() < 100, "Layer A took {}ms", elapsed.as_millis());
+        assert!(
+            elapsed.as_millis() < 100,
+            "Layer A took {}ms",
+            elapsed.as_millis()
+        );
     }
 
     #[test]
@@ -1022,6 +1075,9 @@ mod tests {
         // Crypto segment should exist but be empty (placeholder).
         let crypto = reader.find_segment(SEG_CRYPTO);
         assert!(crypto.is_some(), "crypto segment must be present");
-        assert!(crypto.unwrap().is_empty(), "crypto segment should be empty placeholder");
+        assert!(
+            crypto.unwrap().is_empty(),
+            "crypto segment should be empty placeholder"
+        );
     }
 }

@@ -1,10 +1,11 @@
 //! Domain events for the wifi-Mat system.
+#![allow(missing_docs)]
 
 use chrono::{DateTime, Utc};
 
 use super::{
-    AlertId, Coordinates3D, Priority, ScanZoneId, SurvivorId,
-    TriageStatus, VitalSignsReading, AlertResolution,
+    AlertId, AlertResolution, Coordinates3D, Priority, ScanZoneId, SurvivorId, TriageStatus,
+    VitalSignsReading,
 };
 
 /// All domain events in the system
@@ -422,7 +423,7 @@ pub enum ErrorSeverity {
 pub enum TrackingEvent {
     /// A tentative track has been confirmed (Tentative → Active).
     TrackBorn {
-        track_id: String,  // TrackId as string (avoids circular dep)
+        track_id: String, // TrackId as string (avoids circular dep)
         survivor_id: SurvivorId,
         zone_id: ScanZoneId,
         timestamp: DateTime<Utc>,

@@ -77,11 +77,7 @@ fn bench_search_vs_prefilter(c: &mut Criterion) {
             &n,
             |bencher, _| {
                 bencher.iter(|| {
-                    let r = black_box(&pf).search_prefilter(
-                        black_box(&query),
-                        K,
-                        PREFILTER_FACTOR,
-                    );
+                    let r = black_box(&pf).search_prefilter(black_box(&query), K, PREFILTER_FACTOR);
                     hint::black_box(r)
                 });
             },

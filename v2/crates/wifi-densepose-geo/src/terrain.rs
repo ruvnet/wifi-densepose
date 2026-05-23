@@ -10,7 +10,13 @@ pub async fn fetch_elevation(point: &GeoPoint, cache: &TileCache) -> Result<Elev
     let lon_int = point.lon.floor() as i32;
     let ns = if lat_int >= 0 { 'N' } else { 'S' };
     let ew = if lon_int >= 0 { 'E' } else { 'W' };
-    let filename = format!("{}{:02}{}{:03}.hgt", ns, lat_int.unsigned_abs(), ew, lon_int.unsigned_abs());
+    let filename = format!(
+        "{}{:02}{}{:03}.hgt",
+        ns,
+        lat_int.unsigned_abs(),
+        ew,
+        lon_int.unsigned_abs()
+    );
     let cache_key = format!("srtm_{filename}");
 
     if let Some(data) = cache.get(&cache_key) {
@@ -22,9 +28,8 @@ pub async fn fetch_elevation(point: &GeoPoint, cache: &TileCache) -> Result<Elev
         .build()?;
 
     // Primary: NASA SRTM public mirror (no auth required for .hgt)
-    let nasa_url = format!(
-        "https://e4ftl01.cr.usgs.gov/MEASURES/SRTMGL1.003/2000.02.11/{filename}"
-    );
+    let nasa_url =
+        format!("https://e4ftl01.cr.usgs.gov/MEASURES/SRTMGL1.003/2000.02.11/{filename}");
 
     if let Ok(resp) = client.get(&nasa_url).send().await {
         if resp.status().is_success() {
@@ -37,9 +42,7 @@ pub async fn fetch_elevation(point: &GeoPoint, cache: &TileCache) -> Result<Elev
     // Fallback: viewfinderpanoramas.org
     // Files are grouped by continent zip, but individual .hgt files can be
     // fetched directly when the server exposes them.
-    let vfp_url = format!(
-        "http://viewfinderpanoramas.org/dem1/{filename}"
-    );
+    let vfp_url = format!("http://viewfinderpanoramas.org/dem1/{filename}");
 
     if let Ok(resp) = client.get(&vfp_url).send().await {
         if resp.status().is_success() {
@@ -54,7 +57,8 @@ pub async fn fetch_elevation(point: &GeoPoint, cache: &TileCache) -> Result<Elev
         origin_lat: lat_int as f64,
         origin_lon: lon_int as f64,
         cell_size_deg: 1.0 / 3600.0,
-        cols: 100, rows: 100,
+        cols: 100,
+        rows: 100,
         heights: vec![0.0; 10000],
     })
 }
@@ -64,17 +68,24 @@ pub fn parse_hgt(data: &[u8], origin_lat: f64, origin_lon: f64) -> Result<Elevat
     let n_samples = data.len() / 2;
     let side = (n_samples as f64).sqrt() as usize;
 
-    let heights: Vec<f32> = data.chunks_exact(2)
+    let heights: Vec<f32> = data
+        .chunks_exact(2)
         .map(|c| {
             let v = i16::from_be_bytes([c[0], c[1]]);
-            if v == -32768 { 0.0 } else { v as f32 } // -32768 = void
+            if v == -32768 {
+                0.0
+            } else {
+                v as f32
+            } // -32768 = void
         })
         .collect();
 
     Ok(ElevationGrid {
-        origin_lat, origin_lon,
+        origin_lat,
+        origin_lon,
         cell_size_deg: 1.0 / (side - 1) as f64,
-        cols: side, rows: side,
+        cols: side,
+        rows: side,
         heights,
     })
 }
@@ -87,10 +98,18 @@ pub fn elevation_at(grid: &ElevationGrid, point: &GeoPoint) -> f32 {
 /// Extract a small subgrid around a point.
 pub fn extract_subgrid(grid: &ElevationGrid, center: &GeoPoint, radius_m: f64) -> ElevationGrid {
     let radius_deg = radius_m / 111_320.0;
-    let min_row = ((grid.origin_lat + (grid.rows as f64 * grid.cell_size_deg) - center.lat - radius_deg) / grid.cell_size_deg).max(0.0) as usize;
-    let max_row = ((grid.origin_lat + (grid.rows as f64 * grid.cell_size_deg) - center.lat + radius_deg) / grid.cell_size_deg).min(grid.rows as f64) as usize;
-    let min_col = ((center.lon - radius_deg - grid.origin_lon) / grid.cell_size_deg).max(0.0) as usize;
-    let max_col = ((center.lon + radius_deg - grid.origin_lon) / grid.cell_size_deg).min(grid.cols as f64) as usize;
+    let min_row =
+        ((grid.origin_lat + (grid.rows as f64 * grid.cell_size_deg) - center.lat - radius_deg)
+            / grid.cell_size_deg)
+            .max(0.0) as usize;
+    let max_row = ((grid.origin_lat + (grid.rows as f64 * grid.cell_size_deg) - center.lat
+        + radius_deg)
+        / grid.cell_size_deg)
+        .min(grid.rows as f64) as usize;
+    let min_col =
+        ((center.lon - radius_deg - grid.origin_lon) / grid.cell_size_deg).max(0.0) as usize;
+    let max_col = ((center.lon + radius_deg - grid.origin_lon) / grid.cell_size_deg)
+        .min(grid.cols as f64) as usize;
 
     let rows = max_row.saturating_sub(min_row);
     let cols = max_col.saturating_sub(min_col);
@@ -105,6 +124,8 @@ pub fn extract_subgrid(grid: &ElevationGrid, center: &GeoPoint, radius_m: f64) -
         origin_lat: grid.origin_lat + (grid.rows - max_row) as f64 * grid.cell_size_deg,
         origin_lon: grid.origin_lon + min_col as f64 * grid.cell_size_deg,
         cell_size_deg: grid.cell_size_deg,
-        cols, rows, heights,
+        cols,
+        rows,
+        heights,
     }
 }

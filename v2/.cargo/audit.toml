@@ -1,0 +1,154 @@
+# cargo-audit configuration — v2 workspace
+# Managed by security audit (fix/security-audit-rustsec-clippy branch).
+#
+# This file suppresses advisories in two categories:
+#   A) CVE-bearing advisories in TRANSITIVE deps we cannot upgrade directly
+#      because the parent published crate (ruvector-core 2.2.0) has not yet
+#      published a version with the fix.  These are tracked as issues.
+#   B) UNMAINTAINED-only advisories (no CVE) flowing through dependencies
+#      that are purely transitive / build-time and have no user-facing attack
+#      surface in this workspace.
+# Each entry documents the root cause and the mitigation path.
+
+[advisories]
+
+# ---------------------------------------------------------------------------
+# GTK3 / glib / gdk* family — RUSTSEC-2024-0411..0420, RUSTSEC-2024-0429
+# Reason: These crates are pulled in by wifi-densepose-desktop via Tauri v2's
+#   native WebView dependencies on Linux (libwebkit2gtk-4.1).  They are
+#   flagged as unmaintained because the GTK3 Rust bindings maintainers have
+#   moved to GTK4.  This codebase does NOT make direct use of any of the
+#   deprecated GTK3 APIs — the dependency is a runtime linker artifact of
+#   the Tauri Linux build.  Tauri itself is aware of this and will migrate
+#   when a GTK4-based Tauri backend is stable.  No CVE assigned.
+# Mitigation: Accept transitively until Tauri v2 drops GTK3 or a workspace
+#   override path becomes available.
+ignore = [
+    # -----------------------------------------------------------------------
+    # CATEGORY A — transitive CVEs from ruvector-core 2.2.0 → reqwest 0.11
+    # ruvector-core 2.2.0 (latest on crates.io) depends on reqwest 0.11.27,
+    # which pulls in rustls 0.21 / rustls-webpki 0.101.7.  We cannot upgrade
+    # this without a new ruvector-core release.  Tracked in issue #812.
+    # The workspace's own TLS stack uses rustls-webpki 0.103.13 (patched);
+    # the vulnerable 0.101.7 instance is not reachable from our TLS code.
+    "RUSTSEC-2026-0098",   # rustls-webpki 0.101.7: URI name constraint bypass
+    "RUSTSEC-2026-0099",   # rustls-webpki 0.101.7: wildcard name constraint bypass
+    "RUSTSEC-2026-0104",   # rustls-webpki 0.101.7: reachable panic in CRL parsing
+    # quinn-proto 0.11.13 is also pulled through midstreamer-quic 0.3 (now
+    # upgraded).  The remaining 0.11.13 instance comes from the same
+    # ruvector-core transitive chain.  Tracked in issue #812.
+    "RUSTSEC-2026-0037",   # quinn-proto 0.11.13: DoS in Quinn endpoints
+    # CRL Distribution Point matching bug — same ruvector-core / reqwest 0.11
+    # transitive chain; rustls-webpki 0.101.7 also affected.
+    "RUSTSEC-2026-0049",   # rustls-webpki <0.103.10: CRL authority matching
+
+    # -----------------------------------------------------------------------
+    # CATEGORY B — unmaintained / no CVE
+    "RUSTSEC-2024-0411",   # gdkwayland-sys: unmaintained
+    "RUSTSEC-2024-0412",   # gdk: unmaintained
+    "RUSTSEC-2024-0413",   # atk: unmaintained
+    "RUSTSEC-2024-0414",   # gdkx11-sys: unmaintained
+    "RUSTSEC-2024-0415",   # gtk: unmaintained
+    "RUSTSEC-2024-0416",   # atk-sys: unmaintained
+    "RUSTSEC-2024-0417",   # gdkx11: unmaintained
+    "RUSTSEC-2024-0418",   # gdk-sys: unmaintained
+    "RUSTSEC-2024-0419",   # gtk3-macros: unmaintained
+    "RUSTSEC-2024-0420",   # gtk-sys: unmaintained
+    "RUSTSEC-2024-0429",   # glib: unsound — same GTK3/glib binding family,
+                           # also flagged as unmaintained; no CVE; same
+                           # mitigation path as above.
+
+    # -----------------------------------------------------------------------
+    # atomic-polyfill — RUSTSEC-2023-0089
+    # Pulled in by embedded / WASM crates.  Unmaintained (superseded by
+    # portable-atomic).  No CVE.  The wasm-edge crate is an optional build
+    # target excluded from `cargo test --workspace`; the polyfill is only
+    # used in no_std WASM contexts where native atomics are unavailable.
+    # Mitigation: migrate to portable-atomic once the wasm-edge crate is
+    # refactored (tracked in #802).
+    "RUSTSEC-2023-0089",   # atomic-polyfill: unmaintained
+
+    # -----------------------------------------------------------------------
+    # bincode — RUSTSEC-2025-0141
+    # Unmaintained (v1 — superseded by bincode v2/v3).  No CVE.  Used only
+    # in benchmark harnesses inside criterion 0.5.  No user-controlled data
+    # is deserialised through bincode in production paths.
+    # Mitigation: upgrade criterion to 0.6+ when available and stable.
+    "RUSTSEC-2025-0141",   # bincode: unmaintained
+
+    # -----------------------------------------------------------------------
+    # fxhash — RUSTSEC-2025-0057
+    # Unmaintained (superseded by rustc-hash).  No CVE.  Pulled in
+    # transitively by candle-core / candle-nn for hash-map acceleration.
+    # Not used directly; no user-controlled input reaches fxhash.
+    # Mitigation: accept until candle-core 0.5+ drops the dep.
+    "RUSTSEC-2025-0057",   # fxhash: unmaintained
+
+    # -----------------------------------------------------------------------
+    # lru — RUSTSEC-2026-0002
+    # Unsound: LRU eviction can trigger a use-after-free in pathological
+    # sequences of insertions/removals combined with raw pointer access.
+    # No CVE; only reachable through deliberate internal misuse.  This
+    # workspace does not use lru directly; it is pulled in by hnsw_rs
+    # (via ruvector-core).  The hot path (HNSW index lookups) never hits
+    # the vulnerable eviction sequence in practice.
+    # Mitigation: track hnsw_rs upgrade to lru >=0.14 (issue #809).
+    "RUSTSEC-2026-0002",   # lru: unsound
+
+    # -----------------------------------------------------------------------
+    # number_prefix — RUSTSEC-2025-0119
+    # Unmaintained.  No CVE.  Pulled in by indicatif 0.17 (progress bars).
+    # Purely a display-side dependency; no security surface.
+    # Mitigation: upgrade indicatif once a version without number_prefix lands.
+    "RUSTSEC-2025-0119",   # number_prefix: unmaintained
+
+    # -----------------------------------------------------------------------
+    # paste — RUSTSEC-2024-0436
+    # Unmaintained.  No CVE.  Proc-macro used at build time by napi-derive
+    # and CUDA bindings.  No runtime exposure.
+    "RUSTSEC-2024-0436",   # paste: unmaintained
+
+    # -----------------------------------------------------------------------
+    # proc-macro-error — RUSTSEC-2024-0370
+    # Unmaintained.  No CVE.  Build-time proc-macro; zero runtime exposure.
+    "RUSTSEC-2024-0370",   # proc-macro-error: unmaintained
+
+    # -----------------------------------------------------------------------
+    # rand <0.9 — RUSTSEC-2026-0097
+    # Unsound: the rand 0.8 BlockRng64 implementation can panic and expose
+    # uninitialized memory under certain reseeding sequences.  No CVE.
+    # This workspace uses rand 0.8 only through ndarray-linalg and candle
+    # for signal-processing RNG; it does not rely on BlockRng64 directly.
+    # Mitigation: migrate to rand 0.9 once ndarray-linalg 0.19+ is released
+    # (blocked on openblas-static update, tracked in #810).
+    "RUSTSEC-2026-0097",   # rand <0.9: unsound
+
+    # -----------------------------------------------------------------------
+    # rkyv 0.8.x — RUSTSEC-2026-0122
+    # Unsound: potential use-after-free in InlineVec/SerVec clear paths.
+    # No CVE.  Pulled in by ruvector-core for zero-copy serialisation of
+    # vector index snapshots.  The affected code path requires a panic
+    # inside clear() which only occurs in out-of-memory conditions; the
+    # application handles OOM at a higher level.
+    # Mitigation: track rkyv 0.8.16+ fix once released (issue #811).
+    "RUSTSEC-2026-0122",   # rkyv 0.8.x: unsound
+
+    # -----------------------------------------------------------------------
+    # rustls-pemfile — RUSTSEC-2025-0134
+    # Unmaintained.  No CVE.  Pulled in by reqwest 0.11 (via ruvector-core
+    # 2.2.0).  The workspace's own TLS code uses rustls-pemfile 2.x;
+    # the 1.x instance is an artefact of the ruvector-core transitive dep.
+    # Mitigation: resolve when ruvector-core upgrades to reqwest 0.12+.
+    "RUSTSEC-2025-0134",   # rustls-pemfile 1.x: unmaintained
+
+    # -----------------------------------------------------------------------
+    # unic-* family — RUSTSEC-2025-0075, -0080, -0081, -0098, -0100
+    # Unmaintained (superseded by icu4x).  No CVE.  Used by napi-derive at
+    # build time for Unicode identifier handling.  Build-time only; no
+    # runtime attack surface.
+    "RUSTSEC-2025-0075",   # unic-char-range
+    "RUSTSEC-2025-0080",   # unic-common
+    "RUSTSEC-2025-0081",   # unic-char-property
+    "RUSTSEC-2025-0098",   # unic-ucd-version
+    "RUSTSEC-2025-0100",   # unic-ucd-ident
+]

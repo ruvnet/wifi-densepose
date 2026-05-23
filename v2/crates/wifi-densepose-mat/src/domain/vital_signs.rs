@@ -344,11 +344,7 @@ mod tests {
             pattern_type: BreathingType::Normal,
         };
 
-        let reading = VitalSignsReading::new(
-            Some(breathing),
-            None,
-            MovementProfile::default(),
-        );
+        let reading = VitalSignsReading::new(Some(breathing), None, MovementProfile::default());
 
         assert!(reading.has_vitals());
         assert!(reading.has_breathing());

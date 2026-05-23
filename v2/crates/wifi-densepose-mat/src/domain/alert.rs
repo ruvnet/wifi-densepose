@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use super::{SurvivorId, TriageStatus, Coordinates3D};
+use super::{Coordinates3D, SurvivorId, TriageStatus};
 
 /// Unique identifier for an alert
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -398,11 +398,7 @@ mod tests {
 
     #[test]
     fn test_alert_lifecycle() {
-        let mut alert = Alert::new(
-            SurvivorId::new(),
-            Priority::High,
-            create_test_payload(),
-        );
+        let mut alert = Alert::new(SurvivorId::new(), Priority::High, create_test_payload());
 
         // Initial state
         assert!(alert.is_pending());
@@ -429,11 +425,7 @@ mod tests {
 
     #[test]
     fn test_alert_escalation() {
-        let mut alert = Alert::new(
-            SurvivorId::new(),
-            Priority::Low,
-            create_test_payload(),
-        );
+        let mut alert = Alert::new(SurvivorId::new(), Priority::Low, create_test_payload());
 
         alert.escalate();
         assert_eq!(alert.priority(), Priority::Medium);
@@ -452,8 +444,17 @@ mod tests {
 
     #[test]
     fn test_priority_from_triage() {
-        assert_eq!(Priority::from_triage(&TriageStatus::Immediate), Priority::Critical);
-        assert_eq!(Priority::from_triage(&TriageStatus::Delayed), Priority::High);
-        assert_eq!(Priority::from_triage(&TriageStatus::Minor), Priority::Medium);
+        assert_eq!(
+            Priority::from_triage(&TriageStatus::Immediate),
+            Priority::Critical
+        );
+        assert_eq!(
+            Priority::from_triage(&TriageStatus::Delayed),
+            Priority::High
+        );
+        assert_eq!(
+            Priority::from_triage(&TriageStatus::Minor),
+            Priority::Medium
+        );
     }
 }

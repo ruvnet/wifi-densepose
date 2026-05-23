@@ -20,9 +20,7 @@
 //! - ADR-032a Section 6.4: midstreamer-attractor integration
 //! - Takens, F. (1981). "Detecting strange attractors in turbulence."
 
-use midstreamer_attractor::{
-    AttractorAnalyzer, AttractorType, PhasePoint,
-};
+use midstreamer_attractor::{AttractorAnalyzer, AttractorType, PhasePoint};
 
 use super::longitudinal::DriftMetric;
 
@@ -225,10 +223,7 @@ impl std::fmt::Debug for AttractorDriftAnalyzer {
 
 impl AttractorDriftAnalyzer {
     /// Create a new attractor drift analyzer for a person.
-    pub fn new(
-        person_id: u64,
-        config: AttractorDriftConfig,
-    ) -> Result<Self, AttractorDriftError> {
+    pub fn new(person_id: u64, config: AttractorDriftConfig) -> Result<Self, AttractorDriftError> {
         if config.embedding_dim < 2 {
             return Err(AttractorDriftError::InvalidEmbeddingDim {
                 dim: config.embedding_dim,
@@ -297,9 +292,7 @@ impl AttractorDriftAnalyzer {
         // Analyze the trajectory
         let attractor = match analyzer.analyze() {
             Ok(info) => {
-                let max_lyap = info
-                    .max_lyapunov_exponent()
-                    .unwrap_or(0.0);
+                let max_lyap = info.max_lyapunov_exponent().unwrap_or(0.0);
 
                 match info.attractor_type {
                     AttractorType::PointAttractor => {

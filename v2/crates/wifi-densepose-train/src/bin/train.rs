@@ -29,7 +29,7 @@ use tracing::{error, info};
 
 use wifi_densepose_train::{
     config::TrainingConfig,
-    dataset::{CsiDataset, MmFiDataset, SyntheticCsiDataset, SyntheticConfig},
+    dataset::{CsiDataset, MmFiDataset, SyntheticConfig, SyntheticCsiDataset},
 };
 
 // ---------------------------------------------------------------------------
@@ -184,10 +184,7 @@ fn main() {
             Ok(ds) => ds,
             Err(e) => {
                 error!("Failed to load dataset: {e}");
-                error!(
-                    "Ensure MM-Fi data exists at {}",
-                    data_dir.display()
-                );
+                error!("Ensure MM-Fi data exists at {}", data_dir.display());
                 std::process::exit(1);
             }
         };
@@ -226,11 +223,7 @@ fn main() {
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "tch-backend")]
-fn run_training(
-    config: TrainingConfig,
-    train_ds: &dyn CsiDataset,
-    val_ds: &dyn CsiDataset,
-) {
+fn run_training(config: TrainingConfig, train_ds: &dyn CsiDataset, val_ds: &dyn CsiDataset) {
     use wifi_densepose_train::trainer::Trainer;
 
     info!(
@@ -259,11 +252,7 @@ fn run_training(
 }
 
 #[cfg(not(feature = "tch-backend"))]
-fn run_training(
-    _config: TrainingConfig,
-    train_ds: &dyn CsiDataset,
-    val_ds: &dyn CsiDataset,
-) {
+fn run_training(_config: TrainingConfig, train_ds: &dyn CsiDataset, val_ds: &dyn CsiDataset) {
     info!(
         "Pipeline verification complete: {} train / {} val samples loaded.",
         train_ds.len(),
@@ -283,12 +272,21 @@ fn run_training(
 /// Log a human-readable summary of the active training configuration.
 fn log_config_summary(config: &TrainingConfig) {
     info!("Training configuration:");
-    info!("  subcarriers  : {} (native: {})", config.num_subcarriers, config.native_subcarriers);
-    info!("  antennas     : {}×{}", config.num_antennas_tx, config.num_antennas_rx);
+    info!(
+        "  subcarriers  : {} (native: {})",
+        config.num_subcarriers, config.native_subcarriers
+    );
+    info!(
+        "  antennas     : {}×{}",
+        config.num_antennas_tx, config.num_antennas_rx
+    );
     info!("  window frames: {}", config.window_frames);
     info!("  batch size   : {}", config.batch_size);
     info!("  learning rate: {:.2e}", config.learning_rate);
     info!("  epochs       : {}", config.num_epochs);
-    info!("  device       : {}", if config.use_gpu { "GPU" } else { "CPU" });
+    info!(
+        "  device       : {}",
+        if config.use_gpu { "GPU" } else { "CPU" }
+    );
     info!("  checkpoint   : {}", config.checkpoint_dir.display());
 }

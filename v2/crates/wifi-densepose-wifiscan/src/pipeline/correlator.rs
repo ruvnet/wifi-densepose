@@ -215,7 +215,10 @@ mod tests {
         let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let y = vec![10.0, 8.0, 6.0, 4.0, 2.0];
         let r = pearson_r(&x, &y);
-        assert!((r - (-1.0)).abs() < 1e-5, "perfect negative correlation: {r}");
+        assert!(
+            (r - (-1.0)).abs() < 1e-5,
+            "perfect negative correlation: {r}"
+        );
     }
 
     #[test]

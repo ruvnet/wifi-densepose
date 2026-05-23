@@ -135,7 +135,10 @@ struct VerifyBody {
     expected_hex: String,
 }
 
+/// Incoming request body for the `/step` endpoint.
+/// Fields are optional; unused ones are reserved for future extensions.
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct StepReq {
     direction: Option<String>,
     dt_ms: Option<f64>,
@@ -347,10 +350,7 @@ fn chrono_like_now() -> String {
     format!("{secs}-unix")
 }
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(s): State<AppState>,
-) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(s): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_ws(socket, s))
 }
 

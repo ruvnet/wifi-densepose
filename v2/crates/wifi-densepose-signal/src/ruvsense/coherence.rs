@@ -148,10 +148,7 @@ impl CoherenceState {
     ///
     /// Computes the coherence score, updates the reference template if
     /// the observation is accepted, and tracks staleness.
-    pub fn update(
-        &mut self,
-        current: &[f32],
-    ) -> std::result::Result<f32, CoherenceError> {
+    pub fn update(&mut self, current: &[f32]) -> std::result::Result<f32, CoherenceError> {
         if current.is_empty() {
             return Err(CoherenceError::EmptyInput);
         }
@@ -190,16 +187,21 @@ impl CoherenceState {
     /// Update the reference template with EMA.
     fn update_reference(&mut self, observation: &[f32]) {
         let alpha = 1.0 - self.decay;
-        for i in 0..self.reference.len() {
-            let old_ref = self.reference[i];
-            self.reference[i] = self.decay * old_ref + alpha * observation[i];
+        for ((r, v), &obs) in self
+            .reference
+            .iter_mut()
+            .zip(self.variance.iter_mut())
+            .zip(observation.iter())
+        {
+            let old_ref = *r;
+            *r = self.decay * old_ref + alpha * obs;
 
             // Update variance with Welford-style online estimate
-            let diff = observation[i] - old_ref;
-            self.variance[i] = self.decay * self.variance[i] + alpha * diff * diff;
+            let diff = obs - old_ref;
+            *v = self.decay * *v + alpha * diff * diff;
             // Ensure variance does not collapse to zero
-            if self.variance[i] < 1e-6 {
-                self.variance[i] = 1e-6;
+            if *v < 1e-6 {
+                *v = 1e-6;
             }
         }
     }
@@ -221,11 +223,7 @@ impl CoherenceState {
 /// and w_i = 1 / (variance_i + epsilon).
 ///
 /// Returns a value in [0.0, 1.0] where 1.0 means perfect agreement.
-pub fn coherence_score(
-    current: &[f32],
-    reference: &[f32],
-    variance: &[f32],
-) -> f32 {
+pub fn coherence_score(current: &[f32], reference: &[f32], variance: &[f32]) -> f32 {
     let n = current.len().min(reference.len()).min(variance.len());
     if n == 0 {
         return 0.0;
@@ -267,11 +265,7 @@ fn classify_drift(score: f32, stale_count: u64) -> DriftProfile {
 /// Compute per-subcarrier z-scores for diagnostics.
 ///
 /// Returns a vector of z-scores, one per subcarrier.
-pub fn per_subcarrier_zscores(
-    current: &[f32],
-    reference: &[f32],
-    variance: &[f32],
-) -> Vec<f32> {
+pub fn per_subcarrier_zscores(current: &[f32], reference: &[f32], variance: &[f32]) -> Vec<f32> {
     let n = current.len().min(reference.len()).min(variance.len());
     (0..n)
         .map(|i| {
@@ -309,7 +303,11 @@ mod tests {
         let reference = vec![1.0, 2.0, 3.0, 4.0];
         let variance = vec![0.01, 0.01, 0.01, 0.01];
         let score = coherence_score(&current, &reference, &variance);
-        assert!((score - 1.0).abs() < 0.01, "Perfect match should give ~1.0, got {}", score);
+        assert!(
+            (score - 1.0).abs() < 0.01,
+            "Perfect match should give ~1.0, got {}",
+            score
+        );
     }
 
     #[test]
@@ -318,7 +316,11 @@ mod tests {
         let reference = vec![0.0, 0.0, 0.0];
         let variance = vec![0.001, 0.001, 0.001];
         let score = coherence_score(&current, &reference, &variance);
-        assert!(score < 0.01, "Large deviation should give ~0.0, got {}", score);
+        assert!(
+            score < 0.01,
+            "Large deviation should give ~0.0, got {}",
+            score
+        );
     }
 
     #[test]
@@ -340,7 +342,11 @@ mod tests {
         let mut state = CoherenceState::new(4, 0.5);
         state.initialize(&[1.0, 2.0, 3.0, 4.0]);
         let score = state.update(&[1.01, 2.01, 3.01, 4.01]).unwrap();
-        assert!(score > 0.8, "Small deviation should be accepted, got {}", score);
+        assert!(
+            score > 0.8,
+            "Small deviation should be accepted, got {}",
+            score
+        );
         assert_eq!(state.stale_count(), 0);
     }
 
@@ -459,6 +465,10 @@ mod tests {
         let variance = vec![100.0, 100.0, 100.0]; // high variance
         let score = coherence_score(&current, &reference, &variance);
         // With high variance, deviation is relatively small
-        assert!(score > 0.5, "High variance should tolerate deviation, got {}", score);
+        assert!(
+            score > 0.5,
+            "High variance should tolerate deviation, got {}",
+            score
+        );
     }
 }

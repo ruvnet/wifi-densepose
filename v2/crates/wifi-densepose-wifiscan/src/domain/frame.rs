@@ -70,10 +70,7 @@ impl MultiApFrame {
 
     /// The maximum amplitude across all BSSIDs. Returns 0.0 for empty frames.
     pub fn max_amplitude(&self) -> f64 {
-        self.amplitudes
-            .iter()
-            .copied()
-            .fold(0.0_f64, f64::max)
+        self.amplitudes.iter().copied().fold(0.0_f64, f64::max)
     }
 
     /// The mean RSSI across all BSSIDs in dBm. Returns `f64::NEG_INFINITY`
@@ -133,9 +130,9 @@ mod tests {
     #[test]
     fn empty_frame_handles_gracefully() {
         let frame = make_frame(0, &[]);
-        assert_eq!(frame.max_amplitude(), 0.0);
+        assert!(frame.max_amplitude().abs() < f64::EPSILON);
         assert!(frame.mean_rssi().is_infinite());
-        assert_eq!(frame.total_variance(), 0.0);
+        assert!(frame.total_variance().abs() < f64::EPSILON);
         assert!(!frame.is_sufficient(1));
     }
 

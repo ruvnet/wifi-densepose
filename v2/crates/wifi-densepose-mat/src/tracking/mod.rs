@@ -18,15 +18,14 @@
 //! println!("Active survivors: {}", tracker.active_count());
 //! ```
 
-pub mod kalman;
 pub mod fingerprint;
+pub mod kalman;
 pub mod lifecycle;
 pub mod tracker;
 
-pub use kalman::KalmanState;
 pub use fingerprint::CsiFingerprint;
-pub use lifecycle::{TrackState, TrackLifecycle, TrackerConfig};
+pub use kalman::KalmanState;
+pub use lifecycle::{TrackLifecycle, TrackState, TrackerConfig};
 pub use tracker::{
-    TrackId, TrackedSurvivor, SurvivorTracker,
-    DetectionObservation, AssociationResult,
+    AssociationResult, DetectionObservation, SurvivorTracker, TrackId, TrackedSurvivor,
 };

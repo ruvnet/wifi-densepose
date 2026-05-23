@@ -26,9 +26,7 @@ use std::collections::VecDeque;
 
 use serde::{Deserialize, Serialize};
 
-use midstreamer_attractor::{
-    AttractorAnalyzer, AttractorError, AttractorType, PhasePoint,
-};
+use midstreamer_attractor::{AttractorAnalyzer, AttractorError, AttractorType, PhasePoint};
 
 /// Default sliding window of derived amplitude scalars fed to the attractor
 /// analyzer. Sized so that at 30 Hz CSI the analyzer always has ≥3 s of history,
@@ -97,7 +95,9 @@ impl SignatureLibrary {
     /// Empty library — fine for tests and for the introspection tap booting
     /// without any captured signatures yet (the analyzer half still works).
     pub fn new() -> Self {
-        Self { signatures: Vec::new() }
+        Self {
+            signatures: Vec::new(),
+        }
     }
 
     /// Library from in-memory signatures (testing / programmatic loaders).
@@ -256,7 +256,11 @@ impl IntrospectionState {
     /// host (ADR-099 D4). The expensive `analyze()` call only runs every
     /// `analyze_every_n` frames; the trajectory slide and DTW scoring happen
     /// every frame.
-    pub fn update(&mut self, timestamp_ns: u64, derived_feature: f64) -> Result<(), AttractorError> {
+    pub fn update(
+        &mut self,
+        timestamp_ns: u64,
+        derived_feature: f64,
+    ) -> Result<(), AttractorError> {
         self.frame_count = self.frame_count.saturating_add(1);
 
         // Slide the amplitude buffer.
@@ -298,11 +302,8 @@ impl IntrospectionState {
 
         // DTW scoring runs every frame; cheap when the library is small (and
         // empty when it's empty). See `score_signatures` for the metric.
-        self.last_snapshot.top_k_similarity = score_signatures(
-            &self.library,
-            &self.recent_amplitudes,
-            DEFAULT_TOP_K,
-        );
+        self.last_snapshot.top_k_similarity =
+            score_signatures(&self.library, &self.recent_amplitudes, DEFAULT_TOP_K);
         self.last_snapshot.timestamp_ns = timestamp_ns;
         self.last_snapshot.frame_count = self.frame_count;
         Ok(())

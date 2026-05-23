@@ -98,19 +98,14 @@ impl Default for UreqFetcher {
 
 impl Fetcher for UreqFetcher {
     fn fetch(&self, url: &str) -> Result<Vec<u8>, FetcherError> {
-        let agent = ureq::AgentBuilder::new()
-            .timeout(self.timeout)
-            .build();
-        let resp = agent
-            .get(url)
-            .call()
-            .map_err(|e| match e {
-                ureq::Error::Status(status, r) => FetcherError::Http {
-                    status,
-                    body: r.into_string().unwrap_or_default(),
-                },
-                ureq::Error::Transport(t) => FetcherError::Network(t.to_string()),
-            })?;
+        let agent = ureq::AgentBuilder::new().timeout(self.timeout).build();
+        let resp = agent.get(url).call().map_err(|e| match e {
+            ureq::Error::Status(status, r) => FetcherError::Http {
+                status,
+                body: r.into_string().unwrap_or_default(),
+            },
+            ureq::Error::Transport(t) => FetcherError::Network(t.to_string()),
+        })?;
         let mut reader = resp.into_reader().take((MAX_PAYLOAD_BYTES + 1) as u64);
         let mut buf = Vec::with_capacity(64 * 1024);
         reader
@@ -371,7 +366,7 @@ mod tests {
         let resp = reg.get(false).expect("get");
         // SHA-256 of br#"{"version":"2.1.0","updated":"2026-05-13","cogs":[]}"#
         let mut hasher = Sha256::new();
-        hasher.update(&sample_payload());
+        hasher.update(sample_payload());
         let expected = hex_encode(&hasher.finalize());
         assert_eq!(resp.upstream_sha256, expected);
         assert_eq!(resp.upstream_sha256.len(), 64);

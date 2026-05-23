@@ -41,8 +41,8 @@ fn default_min_confidence() -> f32 {
 
 impl CogConfig {
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
-        let raw = std::fs::read_to_string(path)
-            .map_err(|e| ConfigError::Read(path.to_path_buf(), e))?;
+        let raw =
+            std::fs::read_to_string(path).map_err(|e| ConfigError::Read(path.to_path_buf(), e))?;
         let cfg: CogConfig =
             serde_json::from_str(&raw).map_err(|e| ConfigError::Parse(path.to_path_buf(), e))?;
         Ok(cfg)

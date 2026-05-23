@@ -88,65 +88,71 @@ pub mod tracking;
 
 // Re-export main types
 pub use domain::{
-    survivor::{Survivor, SurvivorId, SurvivorMetadata, SurvivorStatus},
-    disaster_event::{DisasterEvent, DisasterEventId, DisasterType, EventStatus},
-    scan_zone::{ScanZone, ScanZoneId, ZoneBounds, ZoneStatus, ScanParameters},
     alert::{Alert, AlertId, AlertPayload, Priority},
-    vital_signs::{
-        VitalSignsReading, BreathingPattern, BreathingType,
-        HeartbeatSignature, MovementProfile, MovementType,
+    coordinates::{Coordinates3D, DepthEstimate, LocationUncertainty},
+    disaster_event::{DisasterEvent, DisasterEventId, DisasterType, EventStatus},
+    events::{
+        AlertEvent, DetectionEvent, DomainEvent, EventStore, InMemoryEventStore, TrackingEvent,
     },
-    triage::{TriageStatus, TriageCalculator},
-    coordinates::{Coordinates3D, LocationUncertainty, DepthEstimate},
-    events::{DetectionEvent, AlertEvent, DomainEvent, EventStore, InMemoryEventStore, TrackingEvent},
+    scan_zone::{ScanParameters, ScanZone, ScanZoneId, ZoneBounds, ZoneStatus},
+    survivor::{Survivor, SurvivorId, SurvivorMetadata, SurvivorStatus},
+    triage::{TriageCalculator, TriageStatus},
+    vital_signs::{
+        BreathingPattern, BreathingType, HeartbeatSignature, MovementProfile, MovementType,
+        VitalSignsReading,
+    },
 };
 
 pub use detection::{
-    BreathingDetector, BreathingDetectorConfig,
-    HeartbeatDetector, HeartbeatDetectorConfig,
-    MovementClassifier, MovementClassifierConfig,
-    VitalSignsDetector, DetectionPipeline, DetectionConfig,
-    EnsembleClassifier, EnsembleConfig, EnsembleResult,
+    BreathingDetector, BreathingDetectorConfig, DetectionConfig, DetectionPipeline,
+    EnsembleClassifier, EnsembleConfig, EnsembleResult, HeartbeatDetector, HeartbeatDetectorConfig,
+    MovementClassifier, MovementClassifierConfig, VitalSignsDetector,
 };
 
 pub use localization::{
-    Triangulator, TriangulationConfig,
-    DepthEstimator, DepthEstimatorConfig,
-    PositionFuser, LocalizationService,
+    DepthEstimator, DepthEstimatorConfig, LocalizationService, PositionFuser, TriangulationConfig,
+    Triangulator,
 };
 
 pub use alerting::{
-    AlertGenerator, AlertDispatcher, AlertConfig,
-    TriageService, PriorityCalculator,
+    AlertConfig, AlertDispatcher, AlertGenerator, PriorityCalculator, TriageService,
 };
 
 pub use integration::{
-    SignalAdapter, NeuralAdapter, HardwareAdapter,
-    AdapterError, IntegrationConfig,
+    AdapterError, HardwareAdapter, IntegrationConfig, NeuralAdapter, SignalAdapter,
 };
 
-pub use api::{
-    create_router, AppState,
-};
+pub use api::{create_router, AppState};
 
 pub use ml::{
-    // Core ML types
-    MlError, MlResult, MlDetectionConfig, MlDetectionPipeline, MlDetectionResult,
+    AttenuationPrediction,
+    BreathingClassification,
+    ClassifierOutput,
+    DebrisClassification,
+    DebrisFeatureExtractor,
+    DebrisFeatures,
+    DebrisModel,
+    DebrisModelConfig,
     // Debris penetration model
-    DebrisPenetrationModel, DebrisFeatures, DepthEstimate as MlDepthEstimate,
-    DebrisModel, DebrisModelConfig, DebrisFeatureExtractor,
-    MaterialType, DebrisClassification, AttenuationPrediction,
+    DebrisPenetrationModel,
+    DepthEstimate as MlDepthEstimate,
+    HeartbeatClassification,
+    MaterialType,
+    MlDetectionConfig,
+    MlDetectionPipeline,
+    MlDetectionResult,
+    // Core ML types
+    MlError,
+    MlResult,
+    UncertaintyEstimate,
     // Vital signs classifier
-    VitalSignsClassifier, VitalSignsClassifierConfig,
-    BreathingClassification, HeartbeatClassification,
-    UncertaintyEstimate, ClassifierOutput,
+    VitalSignsClassifier,
+    VitalSignsClassifierConfig,
 };
 
 pub use tracking::{
-    SurvivorTracker, TrackerConfig, TrackId, TrackedSurvivor,
-    DetectionObservation, AssociationResult,
-    KalmanState, CsiFingerprint,
-    TrackState, TrackLifecycle,
+    AssociationResult, CsiFingerprint, DetectionObservation, KalmanState, SurvivorTracker, TrackId,
+    TrackLifecycle, TrackState, TrackedSurvivor, TrackerConfig,
 };
 
 /// Library version
@@ -399,18 +405,18 @@ impl DisasterResponse {
         location: geo::Point<f64>,
         description: &str,
     ) -> Result<&DisasterEvent> {
-        let event = DisasterEvent::new(
-            self.config.disaster_type.clone(),
-            location,
-            description,
-        );
+        let event = DisasterEvent::new(self.config.disaster_type.clone(), location, description);
         self.event = Some(event);
-        self.event.as_ref().ok_or_else(|| MatError::Domain("Failed to create event".into()))
+        self.event
+            .as_ref()
+            .ok_or_else(|| MatError::Domain("Failed to create event".into()))
     }
 
     /// Add a scan zone to the current event
     pub fn add_zone(&mut self, zone: ScanZone) -> Result<()> {
-        let event = self.event.as_mut()
+        let event = self
+            .event
+            .as_mut()
             .ok_or_else(|| MatError::Domain("No active disaster event".into()))?;
         event.add_zone(zone);
         Ok(())
@@ -429,9 +435,10 @@ impl DisasterResponse {
                 break;
             }
 
-            tokio::time::sleep(
-                std::time::Duration::from_millis(self.config.scan_interval_ms)
-            ).await;
+            tokio::time::sleep(std::time::Duration::from_millis(
+                self.config.scan_interval_ms,
+            ))
+            .await;
         }
 
         Ok(())
@@ -455,7 +462,9 @@ impl DisasterResponse {
         let mut detections = Vec::new();
 
         {
-            let event = self.event.as_ref()
+            let event = self
+                .event
+                .as_ref()
                 .ok_or_else(|| MatError::Domain("No active disaster event".into()))?;
 
             for zone in event.zones() {
@@ -473,10 +482,17 @@ impl DisasterResponse {
                     // Only proceed if ensemble confidence meets threshold
                     if ensemble_result.confidence >= self.config.confidence_threshold {
                         // Attempt localization
-                        let location = self.localization_service
+                        let location = self
+                            .localization_service
                             .estimate_position(&vital_signs, zone);
 
-                        detections.push((zone.id().clone(), zone.name().to_string(), vital_signs, location, ensemble_result));
+                        detections.push((
+                            zone.id().clone(),
+                            zone.name().to_string(),
+                            vital_signs,
+                            location,
+                            ensemble_result,
+                        ));
                     }
                 }
 
@@ -494,22 +510,25 @@ impl DisasterResponse {
         }
 
         // Now process detections with mutable access
-        let event = self.event.as_mut()
+        let event = self
+            .event
+            .as_mut()
             .ok_or_else(|| MatError::Domain("No active disaster event".into()))?;
 
         for (zone_id, _zone_name, vital_signs, location, _ensemble) in detections {
-            let survivor = event.record_detection(zone_id.clone(), vital_signs.clone(), location.clone())?;
+            let survivor =
+                event.record_detection(zone_id.clone(), vital_signs.clone(), location.clone())?;
 
             // Emit SurvivorDetected domain event
-            let _ = self.event_store.append(DomainEvent::Detection(
-                DetectionEvent::SurvivorDetected {
-                    survivor_id: survivor.id().clone(),
-                    zone_id,
-                    vital_signs,
-                    location,
-                    timestamp: chrono::Utc::now(),
-                },
-            ));
+            let _ =
+                self.event_store
+                    .append(DomainEvent::Detection(DetectionEvent::SurvivorDetected {
+                        survivor_id: survivor.id().clone(),
+                        zone_id,
+                        vital_signs,
+                        location,
+                        timestamp: chrono::Utc::now(),
+                    }));
 
             // Generate and dispatch alert if needed
             if survivor.should_alert() {
@@ -519,14 +538,14 @@ impl DisasterResponse {
                 let survivor_id = alert.survivor_id().clone();
 
                 // Emit AlertGenerated domain event
-                let _ = self.event_store.append(DomainEvent::Alert(
-                    AlertEvent::AlertGenerated {
+                let _ = self
+                    .event_store
+                    .append(DomainEvent::Alert(AlertEvent::AlertGenerated {
                         alert_id,
                         survivor_id,
                         priority,
                         timestamp: chrono::Utc::now(),
-                    },
-                ));
+                    }));
 
                 self.alert_dispatcher.dispatch(alert).await?;
             }
@@ -542,7 +561,8 @@ impl DisasterResponse {
 
     /// Get all detected survivors
     pub fn survivors(&self) -> Vec<&Survivor> {
-        self.event.as_ref()
+        self.event
+            .as_ref()
             .map(|e| e.survivors())
             .unwrap_or_default()
     }
@@ -559,29 +579,57 @@ impl DisasterResponse {
 /// Prelude module for convenient imports
 pub mod prelude {
     pub use crate::{
-        DisasterConfig, DisasterConfigBuilder, DisasterResponse,
-        MatError, Result,
-        // Domain types
-        Survivor, SurvivorId, DisasterEvent, DisasterType,
-        ScanZone, ZoneBounds, TriageStatus,
-        VitalSignsReading, BreathingPattern, HeartbeatSignature,
-        Coordinates3D, Alert, Priority,
-        // Event sourcing
-        DomainEvent, EventStore, InMemoryEventStore,
-        DetectionEvent, AlertEvent, TrackingEvent,
-        // Detection
-        DetectionPipeline, VitalSignsDetector,
-        EnsembleClassifier, EnsembleConfig, EnsembleResult,
-        // Localization
-        LocalizationService,
+        Alert,
         // Alerting
         AlertDispatcher,
+        AlertEvent,
+        AssociationResult,
+        BreathingPattern,
+        Coordinates3D,
+        DebrisClassification,
+        DebrisModel,
+        DetectionEvent,
+        DetectionObservation,
+        // Detection
+        DetectionPipeline,
+        DisasterConfig,
+        DisasterConfigBuilder,
+        DisasterEvent,
+        DisasterResponse,
+        DisasterType,
+        // Event sourcing
+        DomainEvent,
+        EnsembleClassifier,
+        EnsembleConfig,
+        EnsembleResult,
+        EventStore,
+        HeartbeatSignature,
+        InMemoryEventStore,
+        // Localization
+        LocalizationService,
+        MatError,
+        MaterialType,
         // ML types
-        MlDetectionConfig, MlDetectionPipeline, MlDetectionResult,
-        DebrisModel, MaterialType, DebrisClassification,
-        VitalSignsClassifier, UncertaintyEstimate,
+        MlDetectionConfig,
+        MlDetectionPipeline,
+        MlDetectionResult,
+        Priority,
+        Result,
+        ScanZone,
+        // Domain types
+        Survivor,
+        SurvivorId,
         // Tracking
-        SurvivorTracker, TrackerConfig, TrackId, DetectionObservation, AssociationResult,
+        SurvivorTracker,
+        TrackId,
+        TrackerConfig,
+        TrackingEvent,
+        TriageStatus,
+        UncertaintyEstimate,
+        VitalSignsClassifier,
+        VitalSignsDetector,
+        VitalSignsReading,
+        ZoneBounds,
     };
 }
 
@@ -606,21 +654,17 @@ mod tests {
 
     #[test]
     fn test_sensitivity_clamping() {
-        let config = DisasterConfig::builder()
-            .sensitivity(1.5)
-            .build();
+        let config = DisasterConfig::builder().sensitivity(1.5).build();
 
         assert!((config.sensitivity - 1.0).abs() < f64::EPSILON);
 
-        let config = DisasterConfig::builder()
-            .sensitivity(-0.5)
-            .build();
+        let config = DisasterConfig::builder().sensitivity(-0.5).build();
 
         assert!(config.sensitivity.abs() < f64::EPSILON);
     }
 
     #[test]
     fn test_version() {
-        assert!(!VERSION.is_empty());
+        assert!(VERSION.contains('.'), "VERSION should be a semver string");
     }
 }

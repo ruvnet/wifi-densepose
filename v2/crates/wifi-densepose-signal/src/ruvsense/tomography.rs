@@ -402,28 +402,33 @@ fn compute_link_weights(link: &LinkGeometry, config: &TomographyConfig) -> Vec<(
         // Expand by Fresnel radius to check neighboring voxels.
         for diz in -expand_z..=expand_z {
             let iz = base_iz + diz;
-            if iz < 0 || iz >= config.nz as isize { continue; }
+            if iz < 0 || iz >= config.nz as isize {
+                continue;
+            }
             for diy in -expand_y..=expand_y {
                 let iy = base_iy + diy;
-                if iy < 0 || iy >= config.ny as isize { continue; }
+                if iy < 0 || iy >= config.ny as isize {
+                    continue;
+                }
                 for dix in -expand_x..=expand_x {
                     let ix = base_ix + dix;
-                    if ix < 0 || ix >= config.nx as isize { continue; }
+                    if ix < 0 || ix >= config.nx as isize {
+                        continue;
+                    }
 
-                    let idx = iz as usize * config.ny * config.nx
-                        + iy as usize * config.nx
-                        + ix as usize;
+                    let idx =
+                        iz as usize * config.ny * config.nx + iy as usize * config.nx + ix as usize;
 
-                    if visited[idx] { continue; }
+                    if visited[idx] {
+                        continue;
+                    }
 
                     let cx = config.bounds[0] + (ix as f64 + 0.5) * vx;
                     let cy = config.bounds[1] + (iy as f64 + 0.5) * vy;
                     let cz = config.bounds[2] + (iz as f64 + 0.5) * vz;
 
                     let dist = point_to_segment_distance(
-                        cx, cy, cz,
-                        link.tx.x, link.tx.y, link.tx.z,
-                        dx, dy, dz, link_dist,
+                        cx, cy, cz, link.tx.x, link.tx.y, link.tx.z, dx, dy, dz, link_dist,
                     );
 
                     if dist < fresnel_radius {
@@ -441,6 +446,7 @@ fn compute_link_weights(link: &LinkGeometry, config: &TomographyConfig) -> Vec<(
 
 /// Distance from point (px,py,pz) to line segment defined by start + t*dir
 /// where dir = (dx,dy,dz) and segment length = `seg_len`.
+#[allow(clippy::too_many_arguments)]
 fn point_to_segment_distance(
     px: f64,
     py: f64,

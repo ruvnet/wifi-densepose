@@ -209,10 +209,7 @@ fn compute_confidence(history: &[f64]) -> f64 {
         return 0.0;
     }
 
-    let peak = history
-        .iter()
-        .map(|x| x.abs())
-        .fold(0.0_f64, f64::max);
+    let peak = history.iter().map(|x| x.abs()).fold(0.0_f64, f64::max);
     let noise = variance.sqrt();
 
     let snr = if noise > 1e-15 { peak / noise } else { 0.0 };
@@ -303,9 +300,7 @@ mod tests {
 
     #[test]
     fn confidence_positive_for_oscillating_signal() {
-        let history: Vec<f64> = (0..100)
-            .map(|i| (i as f64 * 0.5).sin())
-            .collect();
+        let history: Vec<f64> = (0..100).map(|i| (i as f64 * 0.5).sin()).collect();
         let conf = compute_confidence(&history);
         assert!(conf > 0.0);
     }

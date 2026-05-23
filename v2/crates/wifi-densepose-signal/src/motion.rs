@@ -307,7 +307,12 @@ impl MotionDetector {
             (d.mean_magnitude / 100.0).clamp(0.0, 1.0)
         });
 
-        let motion_score = MotionScore::new(variance_score, correlation_score, phase_score, doppler_score);
+        let motion_score = MotionScore::new(
+            variance_score,
+            correlation_score,
+            phase_score,
+            doppler_score,
+        );
 
         // Calculate temporal and spatial variance
         let temporal_variance = self.calculate_temporal_variance();
@@ -322,7 +327,7 @@ impl MotionDetector {
             .unwrap_or(0.0);
 
         // Motion direction from phase gradient
-        let motion_direction = if features.phase.gradient.len() > 0 {
+        let motion_direction = if !features.phase.gradient.is_empty() {
             let mean_grad: f64 =
                 features.phase.gradient.iter().sum::<f64>() / features.phase.gradient.len() as f64;
             Some(mean_grad.atan())
@@ -345,7 +350,8 @@ impl MotionDetector {
 
     /// Calculate variance-based motion score
     fn calculate_variance_score(&self, amplitude: &AmplitudeFeatures) -> f64 {
-        let mean_variance = amplitude.variance.iter().sum::<f64>() / amplitude.variance.len() as f64;
+        let mean_variance =
+            amplitude.variance.iter().sum::<f64>() / amplitude.variance.len() as f64;
 
         // Normalize using baseline if available
         if let Some(baseline) = self.baseline_variance {
@@ -399,7 +405,8 @@ impl MotionDetector {
 
         let scores: Vec<f64> = self.motion_history.iter().map(|m| m.total).collect();
         let mean: f64 = scores.iter().sum::<f64>() / scores.len() as f64;
-        let variance: f64 = scores.iter().map(|s| (s - mean).powi(2)).sum::<f64>() / scores.len() as f64;
+        let variance: f64 =
+            scores.iter().map(|s| (s - mean).powi(2)).sum::<f64>() / scores.len() as f64;
         variance.sqrt()
     }
 
@@ -425,7 +432,8 @@ impl MotionDetector {
 
         // Doppler quality if available
         if let Some(ref doppler) = features.doppler {
-            let doppler_quality = (doppler.spread / doppler.mean_magnitude.max(1.0)).clamp(0.0, 1.0);
+            let doppler_quality =
+                (doppler.spread / doppler.mean_magnitude.max(1.0)).clamp(0.0, 1.0);
             confidence += (1.0 - doppler_quality) * 0.2;
             weight_sum += 0.2;
         }
@@ -440,8 +448,8 @@ impl MotionDetector {
     /// Calculate detection confidence from features and motion score
     fn calculate_detection_confidence(&self, features: &CsiFeatures, motion_score: f64) -> f64 {
         // Amplitude indicator
-        let amplitude_mean = features.amplitude.mean.iter().sum::<f64>()
-            / features.amplitude.mean.len() as f64;
+        let amplitude_mean =
+            features.amplitude.mean.iter().sum::<f64>() / features.amplitude.mean.len() as f64;
         let amplitude_indicator = if amplitude_mean > self.config.amplitude_threshold {
             1.0
         } else {
@@ -541,7 +549,8 @@ impl MotionDetector {
         let scores: Vec<f64> = self.motion_history.iter().map(|m| m.total).collect();
         let mean: f64 = scores.iter().sum::<f64>() / scores.len() as f64;
         let std: f64 = {
-            let var: f64 = scores.iter().map(|s| (s - mean).powi(2)).sum::<f64>() / scores.len() as f64;
+            let var: f64 =
+                scores.iter().map(|s| (s - mean).powi(2)).sum::<f64>() / scores.len() as f64;
             var.sqrt()
         };
 
@@ -551,8 +560,8 @@ impl MotionDetector {
 
     /// Update baseline variance (for calibration)
     pub fn calibrate(&mut self, features: &CsiFeatures) {
-        let mean_variance =
-            features.amplitude.variance.iter().sum::<f64>() / features.amplitude.variance.len() as f64;
+        let mean_variance = features.amplitude.variance.iter().sum::<f64>()
+            / features.amplitude.variance.len() as f64;
         self.baseline_variance = Some(mean_variance);
     }
 
@@ -818,9 +827,7 @@ mod tests {
 
     #[test]
     fn test_motion_history() {
-        let config = MotionDetectorConfig::builder()
-            .history_size(10)
-            .build();
+        let config = MotionDetectorConfig::builder().history_size(10).build();
         let mut detector = MotionDetector::new(config);
 
         for i in 0..15 {

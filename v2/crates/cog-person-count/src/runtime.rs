@@ -35,7 +35,9 @@ pub async fn run_loop(
                     buffer.drain(0..extra);
                 }
                 if buffer.len() >= cap {
-                    let window = CsiWindow { data: buffer[buffer.len() - cap..].to_vec() };
+                    let window = CsiWindow {
+                        data: buffer[buffer.len() - cap..].to_vec(),
+                    };
                     if let Ok(pred) = engine.infer(&window) {
                         // v0.0.1 ships single-node — fusion is a no-op for
                         // N=1. v0.2.0 will append additional per-node

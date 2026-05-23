@@ -273,7 +273,10 @@ mod tests {
             let alerts = det.check(&make_reading(15.0, 72.0));
             // After warmup, should have no alerts
             if det.reading_count() > 5 {
-                assert!(alerts.is_empty(), "normal readings should not trigger alerts");
+                assert!(
+                    alerts.is_empty(),
+                    "normal readings should not trigger alerts"
+                );
             }
         }
     }
@@ -287,9 +290,7 @@ mod tests {
         }
         // Elevated HR
         let alerts = det.check(&make_reading(15.0, 130.0));
-        let tachycardia = alerts
-            .iter()
-            .any(|a| a.alert_type == "tachycardia");
+        let tachycardia = alerts.iter().any(|a| a.alert_type == "tachycardia");
         assert!(tachycardia, "should detect tachycardia at 130 BPM");
     }
 

@@ -270,10 +270,7 @@ mod tch_tests {
             !val.is_nan(),
             "densepose_loss must not produce NaN, got {val}"
         );
-        assert!(
-            val >= 0.0,
-            "densepose_loss must be non-negative, got {val}"
-        );
+        assert!(val >= 0.0, "densepose_loss must be non-negative, got {val}");
     }
 
     // -----------------------------------------------------------------------
@@ -293,9 +290,7 @@ mod tch_tests {
         let vis = tch::Tensor::ones([2, 17], (tch::Kind::Float, dev));
 
         let (_, output) = loss_fn.forward(
-            &pred_kp, &target_kp, &vis,
-            None, None, None, None,
-            None, None,
+            &pred_kp, &target_kp, &vis, None, None, None, None, None, None,
         );
 
         assert!(
@@ -319,11 +314,8 @@ mod tch_tests {
         let perfect = tch::Tensor::ones([1, 17, 8, 8], (tch::Kind::Float, dev));
         let vis = tch::Tensor::ones([1, 17], (tch::Kind::Float, dev));
 
-        let (_, output) = loss_fn.forward(
-            &perfect, &perfect, &vis,
-            None, None, None, None,
-            None, None,
-        );
+        let (_, output) =
+            loss_fn.forward(&perfect, &perfect, &vis, None, None, None, None, None, None);
 
         assert!(
             output.total.abs() < 1e-5,
@@ -341,11 +333,7 @@ mod tch_tests {
         let t = tch::Tensor::ones([1, 17, 8, 8], (tch::Kind::Float, dev));
         let vis = tch::Tensor::ones([1, 17], (tch::Kind::Float, dev));
 
-        let (_, output) = loss_fn.forward(
-            &t, &t, &vis,
-            None, None, None, None,
-            None, None,
-        );
+        let (_, output) = loss_fn.forward(&t, &t, &vis, None, None, None, None, None, None);
 
         assert!(
             output.densepose.is_none(),
@@ -375,9 +363,15 @@ mod tch_tests {
         let teacher = tch::Tensor::ones([1, 64, 4, 4], (tch::Kind::Float, dev));
 
         let (_, output) = loss_fn.forward(
-            &pred_kp, &target_kp, &vis,
-            Some(&pred_parts), Some(&target_parts), Some(&uv), Some(&uv),
-            Some(&student), Some(&teacher),
+            &pred_kp,
+            &target_kp,
+            &vis,
+            Some(&pred_parts),
+            Some(&target_parts),
+            Some(&uv),
+            Some(&uv),
+            Some(&student),
+            Some(&teacher),
         );
 
         assert!(

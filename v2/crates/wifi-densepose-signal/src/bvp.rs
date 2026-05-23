@@ -15,9 +15,9 @@
 
 use ndarray::Array2;
 use num_complex::Complex64;
-use ruvector_attention::ScaledDotProductAttention;
-use ruvector_attention::traits::Attention;
 use rustfft::FftPlanner;
+use ruvector_attention::traits::Attention;
+use ruvector_attention::ScaledDotProductAttention;
 use std::f64::consts::PI;
 
 /// Configuration for BVP extraction.
@@ -84,7 +84,9 @@ pub fn extract_bvp(
         return Err(BvpError::NoSubcarriers);
     }
     if config.hop_size == 0 || config.window_size == 0 {
-        return Err(BvpError::InvalidConfig("window_size and hop_size must be > 0".into()));
+        return Err(BvpError::InvalidConfig(
+            "window_size and hop_size must be > 0".into(),
+        ));
     }
 
     let wavelength = 2.998e8 / config.carrier_frequency;
@@ -206,9 +208,7 @@ pub fn attention_weighted_bvp(
             stft_rows
                 .iter()
                 .zip(sensitivity.iter())
-                .map(|(row, &s)| {
-                    row.get(v).copied().unwrap_or(0.0) * s
-                })
+                .map(|(row, &s)| row.get(v).copied().unwrap_or(0.0) * s)
                 .sum::<f32>()
                 / sens_sum
         })
@@ -217,20 +217,19 @@ pub fn attention_weighted_bvp(
     let keys: Vec<&[f32]> = stft_rows.iter().map(|r| r.as_slice()).collect();
     let values: Vec<&[f32]> = stft_rows.iter().map(|r| r.as_slice()).collect();
 
-    attn.compute(&query, &keys, &values)
-        .unwrap_or_else(|_| {
-            // Fallback: plain weighted sum
-            (0..n_velocity_bins)
-                .map(|v| {
-                    stft_rows
-                        .iter()
-                        .zip(sensitivity.iter())
-                        .map(|(row, &s)| row.get(v).copied().unwrap_or(0.0) * s)
-                        .sum::<f32>()
-                        / sens_sum
-                })
-                .collect()
-        })
+    attn.compute(&query, &keys, &values).unwrap_or_else(|_| {
+        // Fallback: plain weighted sum
+        (0..n_velocity_bins)
+            .map(|v| {
+                stft_rows
+                    .iter()
+                    .zip(sensitivity.iter())
+                    .map(|(row, &s)| row.get(v).copied().unwrap_or(0.0) * s)
+                    .sum::<f32>()
+                    / sens_sum
+            })
+            .collect()
+    })
 }
 
 #[cfg(test)]
@@ -241,9 +240,7 @@ mod attn_bvp_tests {
     fn attention_bvp_output_shape() {
         let n_sc = 4_usize;
         let n_vbins = 8_usize;
-        let stft_rows: Vec<Vec<f32>> = (0..n_sc)
-            .map(|i| vec![i as f32 * 0.1; n_vbins])
-            .collect();
+        let stft_rows: Vec<Vec<f32>> = (0..n_sc).map(|i| vec![i as f32 * 0.1; n_vbins]).collect();
         let sensitivity = vec![0.9_f32, 0.1, 0.8, 0.2];
         let bvp = attention_weighted_bvp(&stft_rows, &sensitivity, n_vbins);
         assert_eq!(bvp.len(), n_vbins);
@@ -350,7 +347,10 @@ mod tests {
 
         let bvp = extract_bvp(&csi, 100.0, &config).unwrap();
         let total_energy: f64 = bvp.data.iter().sum();
-        assert!(total_energy > 0.0, "Moving body should produce Doppler energy");
+        assert!(
+            total_energy > 0.0,
+            "Moving body should produce Doppler energy"
+        );
     }
 
     #[test]

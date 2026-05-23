@@ -48,7 +48,8 @@ fn safe_join(base: &Path, child: &str) -> Result<PathBuf> {
     let joined = base.join(child_path);
     // Canonicalise base (must exist) and verify joined starts with it. If the
     // joined file doesn't exist yet we canonicalise the parent.
-    let canonical_base = base.canonicalize()
+    let canonical_base = base
+        .canonicalize()
         .map_err(|e| anyhow!("data_dir not accessible {}: {e}", base.display()))?;
     let canonical_parent = joined
         .parent()
@@ -63,7 +64,9 @@ fn safe_join(base: &Path, child: &str) -> Result<PathBuf> {
         ));
     }
     Ok(canonical_parent.join(
-        joined.file_name().ok_or_else(|| anyhow!("no filename for {}", joined.display()))?,
+        joined
+            .file_name()
+            .ok_or_else(|| anyhow!("no filename for {}", joined.display()))?,
     ))
 }
 
@@ -96,7 +99,9 @@ impl From<&OccupancyVolume> for OccupancyData {
     fn from(vol: &OccupancyVolume) -> Self {
         Self {
             densities: vol.densities.clone(),
-            nx: vol.nx, ny: vol.ny, nz: vol.nz,
+            nx: vol.nx,
+            ny: vol.ny,
+            nz: vol.nz,
         }
     }
 }
@@ -127,13 +132,13 @@ pub struct TrainingSession {
 /// Depth calibration parameters — maps luminance to real depth.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DepthCalibration {
-    pub scale: f32,       // multiplier for depth values
-    pub offset: f32,      // additive offset
-    pub near_clip: f32,   // minimum valid depth
-    pub far_clip: f32,    // maximum valid depth
-    pub gamma: f32,       // nonlinear correction (luminance^gamma → depth)
+    pub scale: f32,     // multiplier for depth values
+    pub offset: f32,    // additive offset
+    pub near_clip: f32, // minimum valid depth
+    pub far_clip: f32,  // maximum valid depth
+    pub gamma: f32,     // nonlinear correction (luminance^gamma → depth)
     pub samples_used: u32,
-    pub rmse: f32,        // root mean square error against ground truth
+    pub rmse: f32, // root mean square error against ground truth
 }
 
 impl Default for DepthCalibration {
@@ -215,14 +220,21 @@ impl TrainingSession {
         let mut best_rmse = f32::MAX;
 
         // Collect all reference points across samples
-        let refs: Vec<(f32, f32)> = self.samples.iter()
+        let refs: Vec<(f32, f32)> = self
+            .samples
+            .iter()
             .filter_map(|s| {
                 let gt = s.ground_truth.as_ref()?;
                 let dm = s.depth_map.as_ref()?;
-                Some(gt.reference_distances.iter().filter_map(|rp| {
-                    let idx = (rp.y_pixel * s.depth_width + rp.x_pixel) as usize;
-                    dm.get(idx).map(|&est| (est, rp.true_distance_m))
-                }).collect::<Vec<_>>())
+                Some(
+                    gt.reference_distances
+                        .iter()
+                        .filter_map(|rp| {
+                            let idx = (rp.y_pixel * s.depth_width + rp.x_pixel) as usize;
+                            dm.get(idx).map(|&est| (est, rp.true_distance_m))
+                        })
+                        .collect::<Vec<_>>(),
+                )
             })
             .flatten()
             .collect();
@@ -242,19 +254,24 @@ impl TrainingSession {
                 for gamma_i in 5..15 {
                     let gamma = gamma_i as f32 * 0.2;
 
-                    let rmse = refs.iter()
+                    let rmse = refs
+                        .iter()
                         .map(|&(est, truth)| {
                             let calibrated = offset + est.powf(gamma) * scale;
                             (calibrated - truth).powi(2)
                         })
-                        .sum::<f32>() / refs.len() as f32;
+                        .sum::<f32>()
+                        / refs.len() as f32;
                     let rmse = rmse.sqrt();
 
                     if rmse < best_rmse {
                         best_rmse = rmse;
                         best = DepthCalibration {
-                            scale, offset, gamma,
-                            near_clip: 0.3, far_clip: 8.0,
+                            scale,
+                            offset,
+                            gamma,
+                            near_clip: 0.3,
+                            far_clip: 8.0,
                             samples_used: refs.len() as u32,
                             rmse,
                         };
@@ -263,8 +280,10 @@ impl TrainingSession {
             }
         }
 
-        eprintln!("  Best calibration: scale={:.2} offset={:.2} gamma={:.2} RMSE={:.4}m",
-            best.scale, best.offset, best.gamma, best.rmse);
+        eprintln!(
+            "  Best calibration: scale={:.2} offset={:.2} gamma={:.2} RMSE={:.4}m",
+            best.scale, best.offset, best.gamma, best.rmse
+        );
 
         self.calibration = best.clone();
         self.save_calibration()?;
@@ -276,8 +295,15 @@ impl TrainingSession {
     /// Uses samples with known occupancy labels to optimize the
     /// attenuation-to-density mapping.
     pub fn train_occupancy(&self) -> Result<OccupancyCalibration> {
-        let labeled: Vec<&TrainingSample> = self.samples.iter()
-            .filter(|s| s.ground_truth.as_ref().and_then(|g| g.occupancy_label.as_ref()).is_some())
+        let labeled: Vec<&TrainingSample> = self
+            .samples
+            .iter()
+            .filter(|s| {
+                s.ground_truth
+                    .as_ref()
+                    .and_then(|g| g.occupancy_label.as_ref())
+                    .is_some()
+            })
             .collect();
 
         if labeled.is_empty() {
@@ -285,7 +311,10 @@ impl TrainingSession {
             return Ok(OccupancyCalibration::default());
         }
 
-        eprintln!("  Training occupancy model with {} samples...", labeled.len());
+        eprintln!(
+            "  Training occupancy model with {} samples...",
+            labeled.len()
+        );
 
         // Simple threshold optimization — find the density threshold
         // that best separates occupied vs unoccupied
@@ -299,11 +328,18 @@ impl TrainingSession {
 
             for sample in &labeled {
                 if let Some(ref occ) = sample.occupancy {
-                    let label = sample.ground_truth.as_ref().unwrap()
-                        .occupancy_label.as_ref().unwrap();
+                    let label = sample
+                        .ground_truth
+                        .as_ref()
+                        .unwrap()
+                        .occupancy_label
+                        .as_ref()
+                        .unwrap();
                     let is_occupied = label == "occupied" || label == "present";
                     let detected = occ.densities.iter().any(|&d| d > threshold);
-                    if detected == is_occupied { correct += 1; }
+                    if detected == is_occupied {
+                        correct += 1;
+                    }
                     total += 1;
                 }
             }
@@ -321,7 +357,11 @@ impl TrainingSession {
             samples_used: labeled.len() as u32,
         };
 
-        eprintln!("  Occupancy threshold={:.2} accuracy={:.1}%", cal.density_threshold, cal.accuracy * 100.0);
+        eprintln!(
+            "  Occupancy threshold={:.2} accuracy={:.1}%",
+            cal.density_threshold,
+            cal.accuracy * 100.0
+        );
 
         // Save (path-traversal safe: constant filename under canonical data_dir)
         let path = safe_join(&self.data_dir, "occupancy_calibration.json")?;
@@ -337,12 +377,8 @@ impl TrainingSession {
     pub fn export_preference_pairs(&self) -> Result<Vec<PreferencePair>> {
         let mut pairs = Vec::new();
 
-        let good: Vec<&TrainingSample> = self.samples.iter()
-            .filter(|s| s.quality > 0.7)
-            .collect();
-        let bad: Vec<&TrainingSample> = self.samples.iter()
-            .filter(|s| s.quality < 0.3)
-            .collect();
+        let good: Vec<&TrainingSample> = self.samples.iter().filter(|s| s.quality > 0.7).collect();
+        let bad: Vec<&TrainingSample> = self.samples.iter().filter(|s| s.quality < 0.3).collect();
 
         for (g, b) in good.iter().zip(bad.iter()) {
             pairs.push(PreferencePair {
@@ -369,7 +405,11 @@ impl TrainingSession {
             writeln!(f, "{}", serde_json::to_string(pair)?)?;
         }
 
-        eprintln!("  Exported {} preference pairs to {}", pairs.len(), path.display());
+        eprintln!(
+            "  Exported {} preference pairs to {}",
+            pairs.len(),
+            path.display()
+        );
         Ok(pairs)
     }
 
@@ -389,8 +429,13 @@ impl TrainingSession {
                 self.calibration.scale, self.calibration.offset, self.calibration.gamma,
                 self.calibration.rmse, self.calibration.samples_used),
         });
-        if client.post(format!("{brain_url}/memories"))
-            .json(&body).send().await.is_ok() {
+        if client
+            .post(format!("{brain_url}/memories"))
+            .json(&body)
+            .send()
+            .await
+            .is_ok()
+        {
             stored += 1;
         }
 
@@ -403,8 +448,13 @@ impl TrainingSession {
                     sample.quality,
                     sample.occupancy.as_ref().map(|o| format!("{}x{}x{}", o.nx, o.ny, o.nz)).unwrap_or("none".into())),
             });
-            if client.post(format!("{brain_url}/memories"))
-                .json(&body).send().await.is_ok() {
+            if client
+                .post(format!("{brain_url}/memories"))
+                .json(&body)
+                .send()
+                .await
+                .is_ok()
+            {
                 stored += 1;
             }
         }
@@ -424,7 +474,11 @@ impl TrainingSession {
     pub fn save_samples(&self) -> Result<()> {
         let path = safe_join(&self.data_dir, "samples.json")?;
         std::fs::write(&path, serde_json::to_string_pretty(&self.samples)?)?;
-        eprintln!("  Saved {} samples to {}", self.samples.len(), path.display());
+        eprintln!(
+            "  Saved {} samples to {}",
+            self.samples.len(),
+            path.display()
+        );
         Ok(())
     }
 
@@ -449,7 +503,11 @@ pub struct OccupancyCalibration {
 
 impl Default for OccupancyCalibration {
     fn default() -> Self {
-        Self { density_threshold: 0.3, accuracy: 0.0, samples_used: 0 }
+        Self {
+            density_threshold: 0.3,
+            accuracy: 0.0,
+            samples_used: 0,
+        }
     }
 }
 
@@ -467,7 +525,10 @@ mod tests {
     fn sanitize_rejects_parent_dir_traversal() {
         assert!(sanitize_data_path("../etc/passwd").is_err());
         assert!(sanitize_data_path("foo/../bar").is_err());
-        assert!(sanitize_data_path("/tmp/.. /evil").is_ok(), "`.. ` is not ParentDir");
+        assert!(
+            sanitize_data_path("/tmp/.. /evil").is_ok(),
+            "`.. ` is not ParentDir"
+        );
     }
 
     #[test]

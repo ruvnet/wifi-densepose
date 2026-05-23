@@ -12,10 +12,10 @@ use crate::rvf_container::RvfContainerInfo;
 use crate::rvf_pipeline::ProgressiveLoader;
 use crate::vital_signs::{VitalSignDetector, VitalSigns};
 
-use wifi_densepose_signal::ruvsense::pose_tracker::PoseTracker;
-use wifi_densepose_signal::ruvsense::multistatic::MultistaticFuser;
 use wifi_densepose_signal::ruvsense::field_model::FieldModel;
 use wifi_densepose_signal::ruvsense::longitudinal::{EmbeddingEntry, EmbeddingHistory};
+use wifi_densepose_signal::ruvsense::multistatic::MultistaticFuser;
+use wifi_densepose_signal::ruvsense::pose_tracker::PoseTracker;
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -283,6 +283,12 @@ pub struct NodeState {
     pub last_novelty_score: Option<f32>,
 }
 
+impl Default for NodeState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NodeState {
     pub fn new() -> Self {
         Self {
@@ -374,9 +380,12 @@ impl NodeState {
         }
 
         let mean: f64 = self.motion_energy_history.iter().sum::<f64>() / n as f64;
-        let variance: f64 = self.motion_energy_history.iter()
+        let variance: f64 = self
+            .motion_energy_history
+            .iter()
             .map(|v| (v - mean) * (v - mean))
-            .sum::<f64>() / (n - 1) as f64;
+            .sum::<f64>()
+            / (n - 1) as f64;
 
         self.coherence_score = (1.0 / (1.0 + variance)).clamp(0.0, 1.0);
     }
@@ -459,21 +468,25 @@ impl AppStateInner {
 
     /// Person count: eigenvalue-based if field model is calibrated, else heuristic.
     pub fn person_count(&self) -> usize {
-        use crate::field_bridge;
         use crate::csi::score_to_person_count;
+        use crate::field_bridge;
         match self.field_model.as_ref() {
             Some(fm) => {
                 let history = if !self.frame_history.is_empty() {
                     &self.frame_history
                 } else {
-                    self.node_states.values()
+                    self.node_states
+                        .values()
                         .filter(|ns| !ns.frame_history.is_empty())
                         .max_by_key(|ns| ns.last_frame_time)
                         .map(|ns| &ns.frame_history)
                         .unwrap_or(&self.frame_history)
                 };
                 field_bridge::occupancy_or_fallback(
-                    fm, history, self.smoothed_person_score, self.prev_person_count,
+                    fm,
+                    history,
+                    self.smoothed_person_score,
+                    self.prev_person_count,
                 )
             }
             None => score_to_person_count(self.smoothed_person_score, self.prev_person_count),

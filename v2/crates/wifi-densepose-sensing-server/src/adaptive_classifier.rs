@@ -29,7 +29,10 @@ const DEFAULT_CLASSES: &[&str] = &["absent", "present_still", "present_moving", 
 
 /// Extract extended feature vector from a JSONL frame (features + raw amplitudes).
 pub fn features_from_frame(frame: &serde_json::Value) -> [f64; N_FEATURES] {
-    let feat = frame.get("features").cloned().unwrap_or(serde_json::Value::Null);
+    let feat = frame
+        .get("features")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     let nodes = frame.get("nodes").and_then(|n| n.as_array());
     let amps: Vec<f64> = nodes
         .and_then(|ns| ns.first())
@@ -40,37 +43,99 @@ pub fn features_from_frame(frame: &serde_json::Value) -> [f64; N_FEATURES] {
 
     // Server-computed features (0-6).
     let variance = feat.get("variance").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let mbp = feat.get("motion_band_power").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let bbp = feat.get("breathing_band_power").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let sp = feat.get("spectral_power").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let df = feat.get("dominant_freq_hz").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let cp = feat.get("change_points").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let rssi = feat.get("mean_rssi").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let mbp = feat
+        .get("motion_band_power")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let bbp = feat
+        .get("breathing_band_power")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let sp = feat
+        .get("spectral_power")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let df = feat
+        .get("dominant_freq_hz")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let cp = feat
+        .get("change_points")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let rssi = feat
+        .get("mean_rssi")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
 
     // Subcarrier-derived features (7-14).
     let (amp_mean, amp_std, amp_skew, amp_kurt, amp_iqr, amp_entropy, amp_max, amp_range) =
         subcarrier_stats(&amps);
 
     [
-        variance, mbp, bbp, sp, df, cp, rssi,
-        amp_mean, amp_std, amp_skew, amp_kurt, amp_iqr, amp_entropy, amp_max, amp_range,
+        variance,
+        mbp,
+        bbp,
+        sp,
+        df,
+        cp,
+        rssi,
+        amp_mean,
+        amp_std,
+        amp_skew,
+        amp_kurt,
+        amp_iqr,
+        amp_entropy,
+        amp_max,
+        amp_range,
     ]
 }
 
 /// Also keep a simpler version for runtime (no JSONL, just FeatureInfo + amps).
 pub fn features_from_runtime(feat: &serde_json::Value, amps: &[f64]) -> [f64; N_FEATURES] {
     let variance = feat.get("variance").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let mbp = feat.get("motion_band_power").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let bbp = feat.get("breathing_band_power").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let sp = feat.get("spectral_power").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let df = feat.get("dominant_freq_hz").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let cp = feat.get("change_points").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let rssi = feat.get("mean_rssi").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let mbp = feat
+        .get("motion_band_power")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let bbp = feat
+        .get("breathing_band_power")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let sp = feat
+        .get("spectral_power")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let df = feat
+        .get("dominant_freq_hz")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let cp = feat
+        .get("change_points")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let rssi = feat
+        .get("mean_rssi")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
     let (amp_mean, amp_std, amp_skew, amp_kurt, amp_iqr, amp_entropy, amp_max, amp_range) =
         subcarrier_stats(amps);
     [
-        variance, mbp, bbp, sp, df, cp, rssi,
-        amp_mean, amp_std, amp_skew, amp_kurt, amp_iqr, amp_entropy, amp_max, amp_range,
+        variance,
+        mbp,
+        bbp,
+        sp,
+        df,
+        cp,
+        rssi,
+        amp_mean,
+        amp_std,
+        amp_skew,
+        amp_kurt,
+        amp_iqr,
+        amp_entropy,
+        amp_max,
+        amp_range,
     ]
 }
 
@@ -102,12 +167,18 @@ fn subcarrier_stats(amps: &[f64]) -> (f64, f64, f64, f64, f64, f64, f64, f64) {
 
     // Spectral entropy (normalised).
     let total_power: f64 = amps.iter().map(|a| a * a).sum::<f64>().max(1e-9);
-    let entropy: f64 = amps.iter()
+    let entropy: f64 = amps
+        .iter()
         .map(|a| {
             let p = (a * a) / total_power;
-            if p > 1e-12 { -p * p.ln() } else { 0.0 }
+            if p > 1e-12 {
+                -p * p.ln()
+            } else {
+                0.0
+            }
         })
-        .sum::<f64>() / n.ln().max(1e-9); // normalise to [0,1]
+        .sum::<f64>()
+        / n.ln().max(1e-9); // normalise to [0,1]
 
     let max_val = sorted.last().copied().unwrap_or(0.0);
     let range = max_val - sorted.first().copied().unwrap_or(0.0);
@@ -182,15 +253,17 @@ impl AdaptiveModel {
         }
 
         // Compute logits: w·x + b for each class.
-        let mut logits: Vec<f64> = vec![0.0; n_classes];
-        for c in 0..n_classes {
-            let w = &self.weights[c];
-            let mut z = w[N_FEATURES]; // bias
-            for i in 0..N_FEATURES {
-                z += w[i] * x[i];
-            }
-            logits[c] = z;
-        }
+        let logits: Vec<f64> = (0..n_classes)
+            .map(|c| {
+                let w = &self.weights[c];
+                w[N_FEATURES]
+                    + w[..N_FEATURES]
+                        .iter()
+                        .zip(x.iter())
+                        .map(|(&wi, &xi)| wi * xi)
+                        .sum::<f64>()
+            })
+            .collect();
 
         // Softmax.
         let max_logit = logits.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
@@ -203,7 +276,9 @@ impl AdaptiveModel {
         // Pick argmax. Same NaN-panic class as #611: if any raw_feature is NaN
         // it propagates through normalize → logits → softmax, then partial_cmp
         // returns None and unwrap() panics the sensing server on every frame.
-        let (best_c, best_p) = probs.iter().enumerate()
+        let (best_c, best_p) = probs
+            .iter()
+            .enumerate()
             .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
             .unwrap();
         let label = if best_c < self.class_names.len() {
@@ -216,16 +291,14 @@ impl AdaptiveModel {
 
     /// Save model to a JSON file.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         std::fs::write(path, json)
     }
 
     /// Load model from a JSON file.
     pub fn load(path: &Path) -> std::io::Result<Self> {
         let json = std::fs::read_to_string(path)?;
-        serde_json::from_str(&json)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+        serde_json::from_str(&json).map_err(std::io::Error::other)
     }
 }
 
@@ -243,14 +316,17 @@ fn load_recording(path: &Path, class_idx: usize) -> Vec<Sample> {
         Ok(c) => c,
         Err(_) => return Vec::new(),
     };
-    content.lines().filter_map(|line| {
-        let v: serde_json::Value = serde_json::from_str(line).ok()?;
-        // Use extended features (server features + subcarrier stats).
-        Some(Sample {
-            features: features_from_frame(&v),
-            class_idx,
+    content
+        .lines()
+        .filter_map(|line| {
+            let v: serde_json::Value = serde_json::from_str(line).ok()?;
+            // Use extended features (server features + subcarrier stats).
+            Some(Sample {
+                features: features_from_frame(&v),
+                class_idx,
+            })
         })
-    }).collect()
+        .collect()
 }
 
 /// Map a recording filename to a class name (String).
@@ -263,13 +339,23 @@ fn classify_recording_name(name: &str) -> Option<String> {
     // or the entire middle portion if no pattern matches.
 
     // Check common patterns first for backward compat
-    if lower.contains("empty") || lower.contains("absent") { return Some("absent".into()); }
-    if lower.contains("still") || lower.contains("sitting") || lower.contains("standing") { return Some("present_still".into()); }
-    if lower.contains("walking") || lower.contains("moving") { return Some("present_moving".into()); }
-    if lower.contains("active") || lower.contains("exercise") || lower.contains("running") { return Some("active".into()); }
+    if lower.contains("empty") || lower.contains("absent") {
+        return Some("absent".into());
+    }
+    if lower.contains("still") || lower.contains("sitting") || lower.contains("standing") {
+        return Some("present_still".into());
+    }
+    if lower.contains("walking") || lower.contains("moving") {
+        return Some("present_moving".into());
+    }
+    if lower.contains("active") || lower.contains("exercise") || lower.contains("running") {
+        return Some("active".into());
+    }
 
     // Fallback: extract class from filename structure train_<class>_*.jsonl
-    let stem = lower.trim_start_matches("train_").trim_end_matches(".jsonl");
+    let stem = lower
+        .trim_start_matches("train_")
+        .trim_end_matches(".jsonl");
     let class_name = stem.split('_').next().unwrap_or(stem);
     if !class_name.is_empty() {
         Some(class_name.to_string())
@@ -324,8 +410,12 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
     for (path, fname, class_name) in &file_classes {
         let class_idx = class_map[class_name];
         let loaded = load_recording(path, class_idx);
-        eprintln!("  Loaded {}: {} frames → class '{}'",
-                 fname, loaded.len(), class_name);
+        eprintln!(
+            "  Loaded {}: {} frames → class '{}'",
+            fname,
+            loaded.len(),
+            class_name
+        );
         samples.extend(loaded);
     }
 
@@ -334,15 +424,22 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
     }
 
     let n = samples.len();
-    eprintln!("Total training samples: {n} across {n_classes} classes: {:?}", class_names);
+    eprintln!(
+        "Total training samples: {n} across {n_classes} classes: {:?}",
+        class_names
+    );
 
     // ── Compute global normalisation stats ──
     let mut global_mean = [0.0f64; N_FEATURES];
     let mut global_var = [0.0f64; N_FEATURES];
     for s in &samples {
-        for i in 0..N_FEATURES { global_mean[i] += s.features[i]; }
+        for (m, &f) in global_mean.iter_mut().zip(s.features.iter()) {
+            *m += f;
+        }
     }
-    for i in 0..N_FEATURES { global_mean[i] /= n as f64; }
+    for m in global_mean.iter_mut() {
+        *m /= n as f64;
+    }
     for s in &samples {
         for i in 0..N_FEATURES {
             global_var[i] += (s.features[i] - global_mean[i]).powi(2);
@@ -384,13 +481,16 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
     }
 
     // ── Normalise all samples ──
-    let mut norm_samples: Vec<([f64; N_FEATURES], usize)> = samples.iter().map(|s| {
-        let mut x = [0.0; N_FEATURES];
-        for i in 0..N_FEATURES {
-            x[i] = (s.features[i] - global_mean[i]) / (global_std[i] + 1e-9);
-        }
-        (x, s.class_idx)
-    }).collect();
+    let mut norm_samples: Vec<([f64; N_FEATURES], usize)> = samples
+        .iter()
+        .map(|s| {
+            let mut x = [0.0; N_FEATURES];
+            for i in 0..N_FEATURES {
+                x[i] = (s.features[i] - global_mean[i]) / (global_std[i] + 1e-9);
+            }
+            (x, s.class_idx)
+        })
+        .collect();
 
     // ── Train logistic regression via mini-batch SGD ──
     let mut weights: Vec<Vec<f64>> = vec![vec![0.0f64; N_FEATURES + 1]; n_classes];
@@ -401,7 +501,9 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
     // Shuffle helper (simple LCG for determinism).
     let mut rng_state: u64 = 42;
     let mut rng_next = move || -> u64 {
-        rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        rng_state = rng_state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         rng_state >> 33
     };
 
@@ -413,7 +515,6 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
         }
 
         let mut epoch_loss = 0.0f64;
-        let mut _batch_count = 0;
 
         for batch_start in (0..norm_samples.len()).step_by(batch_size) {
             let batch_end = (batch_start + batch_size).min(norm_samples.len());
@@ -425,11 +526,13 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
             for (x, target) in batch {
                 // Forward: softmax.
                 let mut logits: Vec<f64> = vec![0.0; n_classes];
-                for c in 0..n_classes {
-                    logits[c] = weights[c][N_FEATURES]; // bias
-                    for i in 0..N_FEATURES {
-                        logits[c] += weights[c][i] * x[i];
-                    }
+                for (c, logit) in logits.iter_mut().enumerate() {
+                    *logit = weights[c][N_FEATURES]; // bias
+                    *logit += weights[c][..N_FEATURES]
+                        .iter()
+                        .zip(x.iter())
+                        .map(|(&w, &xi)| w * xi)
+                        .sum::<f64>();
                 }
                 let max_l = logits.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
                 let exp_sum: f64 = logits.iter().map(|z| (z - max_l).exp()).sum();
@@ -444,8 +547,8 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
                 // Gradient: prob - one_hot(target).
                 for c in 0..n_classes {
                     let delta = probs[c] - if c == *target { 1.0 } else { 0.0 };
-                    for i in 0..N_FEATURES {
-                        grad[c][i] += delta * x[i];
+                    for (g, &xi) in grad[c][..N_FEATURES].iter_mut().zip(x.iter()) {
+                        *g += delta * xi;
                     }
                     grad[c][N_FEATURES] += delta; // bias grad
                 }
@@ -459,7 +562,6 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
                     weights[c][i] -= current_lr * grad[c][i] / bs;
                 }
             }
-            _batch_count += 1;
         }
 
         if epoch % 50 == 0 || epoch == epochs - 1 {
@@ -469,19 +571,30 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
     }
 
     // ── Evaluate accuracy ──
+    let compute_logits = |x: &[f64]| -> Vec<f64> {
+        (0..n_classes)
+            .map(|c| {
+                weights[c][N_FEATURES]
+                    + weights[c][..N_FEATURES]
+                        .iter()
+                        .zip(x.iter())
+                        .map(|(&w, &xi)| w * xi)
+                        .sum::<f64>()
+            })
+            .collect()
+    };
     let mut correct = 0;
     for (x, target) in &norm_samples {
-        let mut logits: Vec<f64> = vec![0.0; n_classes];
-        for c in 0..n_classes {
-            logits[c] = weights[c][N_FEATURES];
-            for i in 0..N_FEATURES {
-                logits[c] += weights[c][i] * x[i];
-            }
-        }
-        let pred = logits.iter().enumerate()
+        let logits = compute_logits(x);
+        let pred = logits
+            .iter()
+            .enumerate()
             .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .unwrap().0;
-        if pred == *target { correct += 1; }
+            .unwrap()
+            .0;
+        if pred == *target {
+            correct += 1;
+        }
     }
     let accuracy = correct as f64 / n as f64;
     eprintln!("Training accuracy: {correct}/{n} = {accuracy:.1}%");
@@ -491,22 +604,26 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
     let mut class_total = vec![0usize; n_classes];
     for (x, target) in &norm_samples {
         class_total[*target] += 1;
-        let mut logits: Vec<f64> = vec![0.0; n_classes];
-        for c in 0..n_classes {
-            logits[c] = weights[c][N_FEATURES];
-            for i in 0..N_FEATURES {
-                logits[c] += weights[c][i] * x[i];
-            }
-        }
-        let pred = logits.iter().enumerate()
+        let logits = compute_logits(x);
+        let pred = logits
+            .iter()
+            .enumerate()
             .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .unwrap().0;
-        if pred == *target { class_correct[*target] += 1; }
+            .unwrap()
+            .0;
+        if pred == *target {
+            class_correct[*target] += 1;
+        }
     }
     for c in 0..n_classes {
         let tot = class_total[c].max(1);
-        eprintln!("  {}: {}/{} ({:.0}%)", class_names[c], class_correct[c], tot,
-                 class_correct[c] as f64 / tot as f64 * 100.0);
+        eprintln!(
+            "  {}: {}/{} ({:.0}%)",
+            class_names[c],
+            class_correct[c],
+            tot,
+            class_correct[c] as f64 / tot as f64 * 100.0
+        );
     }
 
     Ok(AdaptiveModel {

@@ -515,11 +515,11 @@ mod tests {
         let mut det = AdversarialDetector::new(default_config()).unwrap();
 
         // 2 clean frames
-        det.check(&vec![1.0; 6], 1, 0).unwrap();
-        det.check(&vec![1.0; 6], 1, 50_000).unwrap();
+        det.check(&[1.0; 6], 1, 0).unwrap();
+        det.check(&[1.0; 6], 1, 50_000).unwrap();
 
         // 1 anomalous frame
-        det.check(&vec![10.0, 0.0, 0.0, 0.0, 0.0, 0.0], 0, 100_000)
+        det.check(&[10.0, 0.0, 0.0, 0.0, 0.0, 0.0], 0, 100_000)
             .unwrap();
 
         assert_eq!(det.total_frames(), 3);
@@ -530,7 +530,7 @@ mod tests {
     #[test]
     fn test_reset() {
         let mut det = AdversarialDetector::new(default_config()).unwrap();
-        det.check(&vec![1.0; 6], 1, 0).unwrap();
+        det.check(&[1.0; 6], 1, 0).unwrap();
         det.reset();
 
         assert_eq!(det.total_frames(), 0);

@@ -117,8 +117,12 @@ pub async fn start_server(
     cmd.stderr(Stdio::piped());
 
     // Spawn the child process
-    let child = cmd.spawn()
-        .map_err(|e| format!("Failed to start server: {}. Is '{}' installed?", e, server_path))?;
+    let child = cmd.spawn().map_err(|e| {
+        format!(
+            "Failed to start server: {}. Is '{}' installed?",
+            e, server_path
+        )
+    })?;
 
     let pid = child.id();
 
@@ -262,12 +266,14 @@ pub async fn server_status(state: State<'_, AppState>) -> Result<ServerStatusRes
         });
     }
 
-    let pid = srv.pid.unwrap();
+    // srv.pid.is_none() is checked above; the expect is unreachable in practice.
+    let pid = srv.pid.expect("pid checked as Some before this point");
     let mut sys = System::new();
     let sysinfo_pid = Pid::from_u32(pid);
     sys.refresh_processes(ProcessesToUpdate::Some(&[sysinfo_pid]), true);
 
-    let (memory_mb, cpu_percent) = sys.process(sysinfo_pid)
+    let (memory_mb, cpu_percent) = sys
+        .process(sysinfo_pid)
         .map(|proc| {
             let mem = proc.memory() as f64 / 1024.0 / 1024.0;
             let cpu = proc.cpu_usage();
@@ -276,9 +282,9 @@ pub async fn server_status(state: State<'_, AppState>) -> Result<ServerStatusRes
         .unwrap_or((None, None));
 
     // Calculate uptime if we have start time
-    let uptime_secs = srv.start_time.map(|start| {
-        std::time::Instant::now().duration_since(start).as_secs()
-    });
+    let uptime_secs = srv
+        .start_time
+        .map(|start| std::time::Instant::now().duration_since(start).as_secs());
 
     Ok(ServerStatusResponse {
         running: srv.running,

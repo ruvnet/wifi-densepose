@@ -51,10 +51,7 @@ impl ProvisioningConfig {
         }
         if let Some(duty) = self.power_duty {
             if !(10..=100).contains(&duty) {
-                return Err(format!(
-                    "power_duty ({}) must be between 10 and 100",
-                    duty
-                ));
+                return Err(format!("power_duty ({}) must be between 10 and 100", duty));
             }
         }
         Ok(())

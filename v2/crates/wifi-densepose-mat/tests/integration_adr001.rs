@@ -10,10 +10,8 @@
 
 use std::sync::Arc;
 use wifi_densepose_mat::{
-    DisasterConfig, DisasterResponse, DisasterType,
-    DetectionPipeline, DetectionConfig,
-    EnsembleClassifier, EnsembleConfig,
-    InMemoryEventStore, EventStore,
+    DetectionConfig, DetectionPipeline, DisasterConfig, DisasterResponse, DisasterType,
+    EnsembleClassifier, EnsembleConfig, EventStore, InMemoryEventStore,
 };
 
 /// Generate deterministic CSI data simulating a breathing survivor.
@@ -67,9 +65,8 @@ fn test_detection_pipeline_accepts_deterministic_data() {
 #[test]
 fn test_ensemble_classifier_triage_logic() {
     use wifi_densepose_mat::domain::{
-        BreathingPattern, BreathingType, MovementProfile,
-        MovementType, HeartbeatSignature, SignalStrength,
-        VitalSignsReading, TriageStatus,
+        BreathingPattern, BreathingType, HeartbeatSignature, MovementProfile, MovementType,
+        SignalStrength, TriageStatus, VitalSignsReading,
     };
 
     let classifier = EnsembleClassifier::new(EnsembleConfig::default());
@@ -195,7 +192,15 @@ fn test_deterministic_signal_properties() {
 
     assert_eq!(a1.len(), a2.len());
     for i in 0..a1.len() {
-        assert!((a1[i] - a2[i]).abs() < 1e-15, "Amplitude mismatch at index {}", i);
-        assert!((p1[i] - p2[i]).abs() < 1e-15, "Phase mismatch at index {}", i);
+        assert!(
+            (a1[i] - a2[i]).abs() < 1e-15,
+            "Amplitude mismatch at index {}",
+            i
+        );
+        assert!(
+            (p1[i] - p2[i]).abs() < 1e-15,
+            "Phase mismatch at index {}",
+            i
+        );
     }
 }

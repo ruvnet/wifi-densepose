@@ -41,20 +41,15 @@ pub const STREAM_CONTROL: u64 = 2;
 /// Determines whether communication uses manual HMAC/SipHash over
 /// plain UDP (for constrained ESP32-S3 devices) or QUIC with TLS 1.3
 /// (for aggregator-class nodes).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SecurityMode {
     /// Manual HMAC-SHA256 beacon auth + SipHash-2-4 frame integrity
     /// over plain UDP. Suitable for ESP32-S3 with limited memory.
     ManualCrypto,
     /// QUIC transport with TLS 1.3 AEAD encryption, built-in replay
     /// protection, congestion control, and connection migration.
+    #[default]
     QuicTransport,
-}
-
-impl Default for SecurityMode {
-    fn default() -> Self {
-        SecurityMode::QuicTransport
-    }
 }
 
 impl fmt::Display for SecurityMode {
@@ -336,8 +331,7 @@ impl FramedMessage {
             return None;
         }
         let msg_type = MessageType::from_byte(buf[0])?;
-        let payload_len =
-            u32::from_le_bytes([buf[1], buf[2], buf[3], buf[4]]) as usize;
+        let payload_len = u32::from_le_bytes([buf[1], buf[2], buf[3], buf[4]]) as usize;
         let total = FRAMED_HEADER_SIZE + payload_len;
         if buf.len() < total {
             return None;

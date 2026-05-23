@@ -116,13 +116,7 @@ mod tests {
 
     #[test]
     fn csi_frame_new_valid() {
-        let frame = CsiFrame::new(
-            vec![1.0, 2.0, 3.0],
-            vec![0.1, 0.2, 0.3],
-            3,
-            0,
-            100.0,
-        );
+        let frame = CsiFrame::new(vec![1.0, 2.0, 3.0], vec![0.1, 0.2, 0.3], 3, 0, 100.0);
         assert!(frame.is_some());
         let f = frame.unwrap();
         assert_eq!(f.n_subcarriers, 3);
@@ -131,13 +125,7 @@ mod tests {
 
     #[test]
     fn csi_frame_new_mismatched_lengths() {
-        let frame = CsiFrame::new(
-            vec![1.0, 2.0],
-            vec![0.1, 0.2, 0.3],
-            3,
-            0,
-            100.0,
-        );
+        let frame = CsiFrame::new(vec![1.0, 2.0], vec![0.1, 0.2, 0.3], 3, 0, 100.0);
         assert!(frame.is_none());
     }
 

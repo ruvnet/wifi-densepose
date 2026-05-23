@@ -106,10 +106,7 @@ fn main() {
             Ok(hash) => {
                 println!("  Hash written: {hash}");
                 println!();
-                println!(
-                    "  File: {}/expected_proof.sha256",
-                    args.proof_dir.display()
-                );
+                println!("  File: {}/expected_proof.sha256", args.proof_dir.display());
                 println!();
                 println!("  Commit this file to version control, then run");
                 println!("  verify-training (without --generate-hash) to verify.");
@@ -133,7 +130,10 @@ fn main() {
     println!("  Model seed:  {}", proof::MODEL_SEED);
     println!("  Data seed:   {}", proof::PROOF_SEED);
     println!("  Batch size:  {}", proof::PROOF_BATCH_SIZE);
-    println!("  Dataset:     SyntheticCsiDataset ({} samples, deterministic)", proof::PROOF_DATASET_SIZE);
+    println!(
+        "  Dataset:     SyntheticCsiDataset ({} samples, deterministic)",
+        proof::PROOF_DATASET_SIZE
+    );
     println!("  Subcarriers: {}", cfg.num_subcarriers);
     println!("  Window len:  {}", cfg.window_frames);
     println!("  Heatmap:     {}×{}", cfg.heatmap_size, cfg.heatmap_size);
@@ -184,14 +184,20 @@ fn main() {
             println!("  SKIP — no expected hash file found.");
             println!();
             println!("  Run the following to generate the expected hash:");
-            println!("    verify-training --generate-hash --proof-dir {}", args.proof_dir.display());
+            println!(
+                "    verify-training --generate-hash --proof-dir {}",
+                args.proof_dir.display()
+            );
             println!("{}", "=".repeat(72));
             std::process::exit(2);
         }
         Some(expected) => {
             println!("  Expected:  {expected}");
             let matched = result.hash_matches.unwrap_or(false);
-            println!("  Status:    {}", if matched { "MATCH" } else { "MISMATCH" });
+            println!(
+                "  Status:    {}",
+                if matched { "MATCH" } else { "MISMATCH" }
+            );
             println!();
 
             // Step 4: final verdict.
@@ -208,7 +214,10 @@ fn main() {
                 println!("       Same seed → same weight trajectory → same hash.");
                 println!();
                 println!("    2. Loss DECREASED over {} steps", proof::N_PROOF_STEPS);
-                println!("       ({:.6} → {:.6})", result.initial_loss, result.final_loss);
+                println!(
+                    "       ({:.6} → {:.6})",
+                    result.initial_loss, result.final_loss
+                );
                 println!("       The model is genuinely learning signal structure.");
                 println!();
                 println!("    3. No non-determinism was introduced");

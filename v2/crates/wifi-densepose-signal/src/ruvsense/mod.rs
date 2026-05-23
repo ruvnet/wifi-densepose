@@ -44,8 +44,8 @@ pub mod longitudinal;
 pub mod tomography;
 
 // ADR-032a: Midstreamer-enhanced sensing
-pub mod temporal_gesture;
 pub mod attractor_drift;
+pub mod temporal_gesture;
 
 // ADR-029: Core multistatic pipeline
 pub mod coherence;
@@ -60,7 +60,7 @@ pub use coherence::CoherenceState;
 pub use coherence_gate::{GateDecision, GatePolicy};
 pub use multiband::MultiBandCsiFrame;
 pub use multistatic::FusedSensingFrame;
-pub use phase_align::{PhaseAligner, PhaseAlignError};
+pub use phase_align::{PhaseAlignError, PhaseAligner};
 pub use pose_tracker::{
     CompressedPoseHistory, KeypointState, PoseTrack, SkeletonConstraints,
     TemporalKeypointAttention, TrackLifecycleState, TrackerConfig,
@@ -90,12 +90,7 @@ pub mod keypoint {
     pub const RIGHT_ANKLE: usize = 16;
 
     /// Torso keypoint indices (shoulders, hips, spine midpoint proxy).
-    pub const TORSO_INDICES: &[usize] = &[
-        LEFT_SHOULDER,
-        RIGHT_SHOULDER,
-        LEFT_HIP,
-        RIGHT_HIP,
-    ];
+    pub const TORSO_INDICES: &[usize] = &[LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP];
 }
 
 /// Unique identifier for a pose track.
@@ -182,8 +177,10 @@ impl Default for RuvSenseConfig {
 /// finally into the pose tracker.
 pub struct RuvSensePipeline {
     config: RuvSenseConfig,
+    #[allow(dead_code)]
     phase_aligner: PhaseAligner,
     coherence_state: CoherenceState,
+    #[allow(dead_code)]
     gate_policy: GatePolicy,
     frame_counter: u64,
 }

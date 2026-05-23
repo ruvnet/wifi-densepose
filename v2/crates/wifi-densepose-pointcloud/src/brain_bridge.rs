@@ -16,8 +16,8 @@ const DEFAULT_BRAIN_URL: &str = "http://127.0.0.1:9876";
 fn brain_url() -> &'static str {
     static BRAIN_URL: OnceLock<String> = OnceLock::new();
     BRAIN_URL.get_or_init(|| {
-        let url = std::env::var("RUVIEW_BRAIN_URL")
-            .unwrap_or_else(|_| DEFAULT_BRAIN_URL.to_string());
+        let url =
+            std::env::var("RUVIEW_BRAIN_URL").unwrap_or_else(|_| DEFAULT_BRAIN_URL.to_string());
         eprintln!("  brain_bridge: using brain URL {url}");
         url
     })
@@ -34,7 +34,8 @@ async fn store_memory(category: &str, content: &str) -> Result<()> {
         "content": content,
     });
 
-    client.post(format!("{}/memories", brain_url()))
+    client
+        .post(format!("{}/memories", brain_url()))
         .json(&body)
         .send()
         .await?;
@@ -44,12 +45,22 @@ async fn store_memory(category: &str, content: &str) -> Result<()> {
 /// Summarize pipeline state and store in brain (called every 60 seconds).
 pub async fn sync_to_brain(pipeline: &PipelineOutput, camera_frames: u64) {
     // Only store if there's meaningful data
-    if pipeline.total_frames < 10 && camera_frames < 5 { return; }
+    if pipeline.total_frames < 10 && camera_frames < 5 {
+        return;
+    }
 
     // Store spatial summary
-    let motion_str = if pipeline.motion_detected { "detected" } else { "absent" };
+    let motion_str = if pipeline.motion_detected {
+        "detected"
+    } else {
+        "absent"
+    };
     let skeleton_str = if let Some(ref sk) = pipeline.skeleton {
-        format!("{} keypoints ({:.0}% conf)", sk.keypoints.len(), sk.confidence * 100.0)
+        format!(
+            "{} keypoints ({:.0}% conf)",
+            sk.keypoints.len(),
+            sk.confidence * 100.0
+        )
     } else {
         "inactive".to_string()
     };
@@ -75,18 +86,27 @@ pub async fn sync_to_brain(pipeline: &PipelineOutput, camera_frames: u64) {
 
     // Store motion events
     if pipeline.motion_detected && pipeline.vitals.motion_score > 0.3 {
-        let _ = store_memory("spatial-motion",
-            &format!("Strong motion detected: {:.0}% score, {} CSI frames",
-                pipeline.vitals.motion_score * 100.0, pipeline.total_frames)
-        ).await;
+        let _ = store_memory(
+            "spatial-motion",
+            &format!(
+                "Strong motion detected: {:.0}% score, {} CSI frames",
+                pipeline.vitals.motion_score * 100.0,
+                pipeline.total_frames
+            ),
+        )
+        .await;
     }
 
     // Store vital signs if available
     if pipeline.vitals.breathing_rate > 5.0 && pipeline.vitals.breathing_rate < 35.0 {
-        let _ = store_memory("spatial-vitals",
-            &format!("Vital signs: breathing {:.0} BPM, motion {:.0}%",
-                pipeline.vitals.breathing_rate, pipeline.vitals.motion_score * 100.0)
-        ).await;
+        let _ = store_memory(
+            "spatial-vitals",
+            &format!(
+                "Vital signs: breathing {:.0} BPM, motion {:.0}%",
+                pipeline.vitals.breathing_rate,
+                pipeline.vitals.motion_score * 100.0
+            ),
+        )
+        .await;
     }
 }
-

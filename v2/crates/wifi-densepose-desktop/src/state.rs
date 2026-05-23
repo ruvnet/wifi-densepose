@@ -12,6 +12,7 @@ pub struct DiscoveryState {
 }
 
 /// Sub-state for the managed sensing server process.
+#[derive(Default)]
 pub struct ServerState {
     pub running: bool,
     pub pid: Option<u32>,
@@ -20,20 +21,6 @@ pub struct ServerState {
     pub udp_port: Option<u16>,
     pub child: Option<Child>,
     pub start_time: Option<Instant>,
-}
-
-impl Default for ServerState {
-    fn default() -> Self {
-        Self {
-            running: false,
-            pid: None,
-            http_port: None,
-            ws_port: None,
-            udp_port: None,
-            child: None,
-            start_time: None,
-        }
-    }
 }
 
 /// Sub-state for flash progress tracking.
@@ -73,39 +60,20 @@ impl Default for OtaUpdateTracker {
 }
 
 /// Sub-state for application settings cache.
+#[derive(Default)]
 pub struct SettingsState {
     pub loaded: bool,
     pub dirty: bool,
 }
 
-impl Default for SettingsState {
-    fn default() -> Self {
-        Self {
-            loaded: false,
-            dirty: false,
-        }
-    }
-}
-
 /// Top-level application state managed by Tauri.
+#[derive(Default)]
 pub struct AppState {
     pub discovery: Mutex<DiscoveryState>,
     pub server: Mutex<ServerState>,
     pub flash: Mutex<FlashState>,
     pub ota: Mutex<OtaState>,
     pub settings: Mutex<SettingsState>,
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        Self {
-            discovery: Mutex::new(DiscoveryState::default()),
-            server: Mutex::new(ServerState::default()),
-            flash: Mutex::new(FlashState::default()),
-            ota: Mutex::new(OtaState::default()),
-            settings: Mutex::new(SettingsState::default()),
-        }
-    }
 }
 
 impl AppState {

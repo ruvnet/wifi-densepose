@@ -100,8 +100,8 @@ pub struct JointErrorResult {
 
 /// COCO keypoint sigmas for OKS computation (17 joints).
 const COCO_SIGMAS: [f32; 17] = [
-    0.026, 0.025, 0.025, 0.035, 0.035, 0.079, 0.079, 0.072, 0.072,
-    0.062, 0.062, 0.107, 0.107, 0.087, 0.087, 0.089, 0.089,
+    0.026, 0.025, 0.025, 0.035, 0.035, 0.079, 0.079, 0.072, 0.072, 0.062, 0.062, 0.107, 0.107,
+    0.087, 0.087, 0.089, 0.089,
 ];
 
 /// Torso keypoint indices (COCO ordering): left_shoulder, right_shoulder,
@@ -154,7 +154,7 @@ pub fn evaluate_joint_error(
         let safe_diag = bbox_diag.max(1e-3);
         let dist_thr = pck_threshold * safe_diag;
 
-        for j in 0..17 {
+        for (j, kp_errors) in per_kp_errors.iter_mut().enumerate() {
             if visibility[i][j] < 0.5 {
                 continue;
             }
@@ -162,7 +162,7 @@ pub fn evaluate_joint_error(
             let dy = pred_kpts[i][[j, 1]] - gt_kpts[i][[j, 1]];
             let dist = (dx * dx + dy * dy).sqrt();
 
-            per_kp_errors[j].push(dist);
+            kp_errors.push(dist);
 
             all_total += 1;
             if dist <= dist_thr {
@@ -183,8 +183,16 @@ pub fn evaluate_joint_error(
         oks_sum += oks_frame as f64;
     }
 
-    let pck_all = if all_total > 0 { all_correct as f32 / all_total as f32 } else { 0.0 };
-    let pck_torso = if torso_total > 0 { torso_correct as f32 / torso_total as f32 } else { 0.0 };
+    let pck_all = if all_total > 0 {
+        all_correct as f32 / all_total as f32
+    } else {
+        0.0
+    };
+    let pck_torso = if torso_total > 0 {
+        torso_correct as f32 / torso_total as f32
+    } else {
+        0.0
+    };
     let oks = (oks_sum / n as f64) as f32;
 
     // Torso jitter: RMS of frame-to-frame torso centroid displacement.
@@ -491,12 +499,12 @@ pub fn evaluate_vital_signs(
     // Heartbeat metrics (optional).
     let heartbeat_pairs: Vec<(f32, f32, f32)> = measurements
         .iter()
-        .filter_map(|m| {
-            match (m.heartbeat_bpm, m.gt_heartbeat_bpm, m.heartbeat_snr_db) {
+        .filter_map(
+            |m| match (m.heartbeat_bpm, m.gt_heartbeat_bpm, m.heartbeat_snr_db) {
                 (Some(hb), Some(gt), Some(snr)) => Some((hb, gt, snr)),
                 _ => None,
-            }
-        })
+            },
+        )
         .collect();
 
     let (heartbeat_error, heartbeat_snr) = if heartbeat_pairs.is_empty() {
@@ -633,7 +641,11 @@ fn compute_single_oks(pred: &Array2<f32>, gt: &Array2<f32>, vis: &Array1<f32>, s
         let k = COCO_SIGMAS[j];
         num += (-d_sq / (2.0 * s_sq * k * k)).exp();
     }
-    if den > 0.0 { num / den } else { 0.0 }
+    if den > 0.0 {
+        num / den
+    } else {
+        0.0
+    }
 }
 
 fn compute_torso_jitter(pred_kpts: &[Array2<f32>], visibility: &[Array1<f32>]) -> f32 {
@@ -684,7 +696,10 @@ fn compute_torso_jitter(pred_kpts: &[Array2<f32>], visibility: &[Array1<f32>]) -
 
 fn compute_p95_max_error(per_kp_errors: &[Vec<f32>]) -> f32 {
     // Collect all per-keypoint errors, find 95th percentile.
-    let mut all_errors: Vec<f32> = per_kp_errors.iter().flat_map(|e| e.iter().copied()).collect();
+    let mut all_errors: Vec<f32> = per_kp_errors
+        .iter()
+        .flat_map(|e| e.iter().copied())
+        .collect();
     if all_errors.is_empty() {
         return 0.0;
     }
@@ -704,7 +719,11 @@ mod tests {
 
     fn make_perfect_kpts() -> (Array2<f32>, Array2<f32>, Array1<f32>) {
         let kp = Array2::from_shape_fn((17, 2), |(j, d)| {
-            if d == 0 { j as f32 * 0.05 } else { j as f32 * 0.03 }
+            if d == 0 {
+                j as f32 * 0.05
+            } else {
+                j as f32 * 0.03
+            }
         });
         let vis = Array1::ones(17);
         (kp.clone(), kp, vis)
@@ -712,7 +731,11 @@ mod tests {
 
     fn make_noisy_kpts(noise: f32) -> (Array2<f32>, Array2<f32>, Array1<f32>) {
         let gt = Array2::from_shape_fn((17, 2), |(j, d)| {
-            if d == 0 { j as f32 * 0.03 } else { j as f32 * 0.02 }
+            if d == 0 {
+                j as f32 * 0.03
+            } else {
+                j as f32 * 0.02
+            }
         });
         let pred = Array2::from_shape_fn((17, 2), |(j, d)| {
             // Apply deterministic noise that varies per joint so some joints
@@ -733,19 +756,19 @@ mod tests {
             &[1.0],
             &JointErrorThresholds::default(),
         );
-        assert_eq!(result.pck_all, 1.0, "perfect predictions should have PCK=1.0");
-        assert!((result.oks - 1.0).abs() < 1e-3, "perfect predictions should have OKS~1.0");
+        assert_eq!(
+            result.pck_all, 1.0,
+            "perfect predictions should have PCK=1.0"
+        );
+        assert!(
+            (result.oks - 1.0).abs() < 1e-3,
+            "perfect predictions should have OKS~1.0"
+        );
     }
 
     #[test]
     fn joint_error_empty_returns_fail() {
-        let result = evaluate_joint_error(
-            &[],
-            &[],
-            &[],
-            &[],
-            &JointErrorThresholds::default(),
-        );
+        let result = evaluate_joint_error(&[], &[], &[], &[], &JointErrorThresholds::default());
         assert!(!result.passes);
     }
 
@@ -759,7 +782,10 @@ mod tests {
             &[1.0],
             &JointErrorThresholds::default(),
         );
-        assert!(result.pck_all < 1.0, "noisy predictions should have PCK < 1.0");
+        assert!(
+            result.pck_all < 1.0,
+            "noisy predictions should have PCK < 1.0"
+        );
     }
 
     #[test]
@@ -790,7 +816,10 @@ mod tests {
         // Swap assignments at frame 5.
         frames[5].assignments = vec![(2, 1), (1, 2)];
         let result = evaluate_tracking(&frames, 1.0, &TrackingThresholds::default());
-        assert!(result.id_switches >= 1, "should detect ID switch at frame 5");
+        assert!(
+            result.id_switches >= 1,
+            "should detect ID switch at frame 5"
+        );
         assert!(!result.passes, "ID switches should cause failure");
     }
 
@@ -876,25 +905,52 @@ mod tests {
 
     #[test]
     fn tier_determination_silver() {
-        let je = JointErrorResult { passes: true, ..Default::default() };
-        let tr = TrackingResult { passes: true, ..Default::default() };
-        let vs = VitalSignResult { passes: false, ..Default::default() };
+        let je = JointErrorResult {
+            passes: true,
+            ..Default::default()
+        };
+        let tr = TrackingResult {
+            passes: true,
+            ..Default::default()
+        };
+        let vs = VitalSignResult {
+            passes: false,
+            ..Default::default()
+        };
         assert_eq!(determine_tier(&je, &tr, &vs), RuViewTier::Silver);
     }
 
     #[test]
     fn tier_determination_bronze() {
-        let je = JointErrorResult { passes: false, ..Default::default() };
-        let tr = TrackingResult { passes: true, ..Default::default() };
-        let vs = VitalSignResult { passes: false, ..Default::default() };
+        let je = JointErrorResult {
+            passes: false,
+            ..Default::default()
+        };
+        let tr = TrackingResult {
+            passes: true,
+            ..Default::default()
+        };
+        let vs = VitalSignResult {
+            passes: false,
+            ..Default::default()
+        };
         assert_eq!(determine_tier(&je, &tr, &vs), RuViewTier::Bronze);
     }
 
     #[test]
     fn tier_determination_fail() {
-        let je = JointErrorResult { passes: true, ..Default::default() };
-        let tr = TrackingResult { passes: false, ..Default::default() };
-        let vs = VitalSignResult { passes: true, ..Default::default() };
+        let je = JointErrorResult {
+            passes: true,
+            ..Default::default()
+        };
+        let tr = TrackingResult {
+            passes: false,
+            ..Default::default()
+        };
+        let vs = VitalSignResult {
+            passes: true,
+            ..Default::default()
+        };
         assert_eq!(determine_tier(&je, &tr, &vs), RuViewTier::Fail);
     }
 

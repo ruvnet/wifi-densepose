@@ -1,16 +1,16 @@
 use std::net::{SocketAddr, UdpSocket};
 use std::time::Duration;
 
+use flume::RecvTimeoutError;
 use mdns_sd::{ServiceDaemon, ServiceEvent};
 use serde::Serialize;
 use tauri::State;
 use tokio::time::timeout;
 use tokio_serial::available_ports;
-use flume::RecvTimeoutError;
 
 use crate::domain::node::{
-    Chip, DiscoveredNode, DiscoveryMethod, HealthStatus, MacAddress, MeshRole,
-    NodeCapabilities, NodeRegistry,
+    Chip, DiscoveredNode, DiscoveryMethod, HealthStatus, MacAddress, MeshRole, NodeCapabilities,
+    NodeRegistry,
 };
 use crate::state::AppState;
 
@@ -110,14 +110,16 @@ async fn discover_via_mdns(timeout_duration: Duration) -> Result<Vec<DiscoveredN
                         _ => MeshRole::Node,
                     };
                     let node = DiscoveredNode {
-                        ip: info.get_addresses()
+                        ip: info
+                            .get_addresses()
                             .iter()
                             .next()
                             .map(|a| a.to_string())
                             .unwrap_or_default(),
                         mac: props.get("mac").map(|v| v.val_str().to_string()),
                         hostname: Some(info.get_hostname().to_string()),
-                        node_id: props.get("node_id")
+                        node_id: props
+                            .get("node_id")
                             .and_then(|v| v.val_str().parse().ok())
                             .unwrap_or(0),
                         firmware_version: props.get("version").map(|v| v.val_str().to_string()),
@@ -127,11 +129,18 @@ async fn discover_via_mdns(timeout_duration: Duration) -> Result<Vec<DiscoveredN
                         mesh_role,
                         discovery_method: DiscoveryMethod::Mdns,
                         tdm_slot: props.get("tdm_slot").and_then(|v| v.val_str().parse().ok()),
-                        tdm_total: props.get("tdm_total").and_then(|v| v.val_str().parse().ok()),
-                        edge_tier: props.get("edge_tier").and_then(|v| v.val_str().parse().ok()),
+                        tdm_total: props
+                            .get("tdm_total")
+                            .and_then(|v| v.val_str().parse().ok()),
+                        edge_tier: props
+                            .get("edge_tier")
+                            .and_then(|v| v.val_str().parse().ok()),
                         uptime_secs: props.get("uptime").and_then(|v| v.val_str().parse().ok()),
                         capabilities: Some(NodeCapabilities {
-                            wasm: props.get("wasm").map(|v| v.val_str() == "1").unwrap_or(false),
+                            wasm: props
+                                .get("wasm")
+                                .map(|v| v.val_str() == "1")
+                                .unwrap_or(false),
                             ota: props.get("ota").map(|v| v.val_str() == "1").unwrap_or(true),
                             csi: props.get("csi").map(|v| v.val_str() == "1").unwrap_or(true),
                         }),
@@ -153,7 +162,12 @@ async fn discover_via_mdns(timeout_duration: Duration) -> Result<Vec<DiscoveredN
         discovered
     });
 
-    match timeout(timeout_duration + Duration::from_millis(500), discovery_task).await {
+    match timeout(
+        timeout_duration + Duration::from_millis(500),
+        discovery_task,
+    )
+    .await
+    {
         Ok(Ok(nodes)) => Ok(nodes),
         Ok(Err(e)) => Err(format!("mDNS discovery task failed: {}", e)),
         Err(_) => Ok(Vec::new()), // Timeout, return empty
@@ -210,7 +224,12 @@ async fn discover_via_udp(timeout_duration: Duration) -> Result<Vec<DiscoveredNo
         discovered
     });
 
-    match timeout(timeout_duration + Duration::from_millis(500), discovery_task).await {
+    match timeout(
+        timeout_duration + Duration::from_millis(500),
+        discovery_task,
+    )
+    .await
+    {
         Ok(Ok(nodes)) => Ok(nodes),
         Ok(Err(e)) => Err(format!("UDP discovery task failed: {}", e)),
         Err(_) => Ok(Vec::new()),
@@ -295,16 +314,14 @@ pub async fn list_serial_ports() -> Result<Vec<SerialPortInfo>, String> {
     for port in ports {
         tracing::debug!("Processing port: {}", port.port_name);
         let info = match port.port_type {
-            tokio_serial::SerialPortType::UsbPort(usb_info) => {
-                SerialPortInfo {
-                    name: port.port_name,
-                    vid: Some(usb_info.vid),
-                    pid: Some(usb_info.pid),
-                    manufacturer: usb_info.manufacturer,
-                    serial_number: usb_info.serial_number,
-                    is_esp32_compatible: is_esp32_compatible(usb_info.vid, usb_info.pid),
-                }
-            }
+            tokio_serial::SerialPortType::UsbPort(usb_info) => SerialPortInfo {
+                name: port.port_name,
+                vid: Some(usb_info.vid),
+                pid: Some(usb_info.pid),
+                manufacturer: usb_info.manufacturer,
+                serial_number: usb_info.serial_number,
+                is_esp32_compatible: is_esp32_compatible(usb_info.vid, usb_info.pid),
+            },
             _ => {
                 SerialPortInfo {
                     name: port.port_name.clone(),
@@ -401,7 +418,9 @@ fn is_esp32_compatible(vid: u16, pid: u16) -> bool {
         return true;
     }
     // FTDI
-    if vid == 0x0403 && (pid == 0x6001 || pid == 0x6010 || pid == 0x6011 || pid == 0x6014 || pid == 0x6015) {
+    if vid == 0x0403
+        && (pid == 0x6001 || pid == 0x6010 || pid == 0x6011 || pid == 0x6014 || pid == 0x6015)
+    {
         return true;
     }
     // ESP32-S2/S3 native USB
@@ -450,9 +469,12 @@ pub async fn configure_esp32_wifi(
         let _ = serial.read(&mut buf);
 
         // Send command
-        serial.write_all(cmd.as_bytes())
+        serial
+            .write_all(cmd.as_bytes())
             .map_err(|e| format!("Failed to write: {}", e))?;
-        serial.flush().map_err(|e| format!("Failed to flush: {}", e))?;
+        serial
+            .flush()
+            .map_err(|e| format!("Failed to flush: {}", e))?;
 
         // Wait and read response
         std::thread::sleep(Duration::from_millis(500));
@@ -465,7 +487,8 @@ pub async fn configure_esp32_wifi(
                 // Check for success indicators
                 if text.to_lowercase().contains("ok")
                     || text.to_lowercase().contains("saved")
-                    || text.to_lowercase().contains("configured") {
+                    || text.to_lowercase().contains("configured")
+                {
                     tracing::info!("WiFi config successful: {}", text.trim());
                     return Ok(format!("WiFi configured! Response: {}", text.trim()));
                 }

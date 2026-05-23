@@ -5,11 +5,8 @@
 use ndarray::Array2;
 use std::f64::consts::PI;
 use wifi_densepose_signal::{
-    CsiData,
-    PhaseSanitizer, PhaseSanitizerConfig, UnwrappingMethod,
-    FeatureExtractor, FeatureExtractorConfig,
-    MotionDetector, MotionDetectorConfig,
-    CsiFeatures,
+    CsiData, CsiFeatures, FeatureExtractor, FeatureExtractorConfig, MotionDetector,
+    MotionDetectorConfig, PhaseSanitizer, PhaseSanitizerConfig, UnwrappingMethod,
 };
 
 /// Validate phase unwrapping against known mathematical result
@@ -42,7 +39,12 @@ fn validate_phase_unwrapping_correctness() {
     for i in 1..n {
         let diff = unwrapped[[0, i]] - unwrapped[[0, i - 1]];
         // Should be small positive increment, not large jump
-        assert!(diff.abs() < PI, "Jump detected at index {}: diff={}", i, diff);
+        assert!(
+            diff.abs() < PI,
+            "Jump detected at index {}: diff={}",
+            i,
+            diff
+        );
 
         let expected_diff = expected_unwrapped[i] - expected_unwrapped[i - 1];
         let error = (diff - expected_diff).abs();
@@ -50,7 +52,11 @@ fn validate_phase_unwrapping_correctness() {
     }
 
     println!("Phase unwrapping max error: {:.6} radians", max_error);
-    assert!(max_error < 0.1, "Phase unwrapping error too large: {}", max_error);
+    assert!(
+        max_error < 0.1,
+        "Phase unwrapping error too large: {}",
+        max_error
+    );
 }
 
 /// Validate amplitude RMS calculation
@@ -71,17 +77,31 @@ fn validate_amplitude_rms() {
     let features = extractor.extract_amplitude(&csi_data);
 
     // RMS of constant signal = that constant
-    println!("Amplitude RMS: expected={:.4}, got={:.4}", amplitude_value, features.rms);
-    assert!((features.rms - amplitude_value).abs() < 0.01,
-            "RMS error: expected={}, got={}", amplitude_value, features.rms);
+    println!(
+        "Amplitude RMS: expected={:.4}, got={:.4}",
+        amplitude_value, features.rms
+    );
+    assert!(
+        (features.rms - amplitude_value).abs() < 0.01,
+        "RMS error: expected={}, got={}",
+        amplitude_value,
+        features.rms
+    );
 
     // Peak should equal the constant
-    assert!((features.peak - amplitude_value).abs() < 0.01,
-            "Peak error: expected={}, got={}", amplitude_value, features.peak);
+    assert!(
+        (features.peak - amplitude_value).abs() < 0.01,
+        "Peak error: expected={}, got={}",
+        amplitude_value,
+        features.peak
+    );
 
     // Dynamic range should be zero
-    assert!(features.dynamic_range.abs() < 0.01,
-            "Dynamic range should be zero for constant signal: {}", features.dynamic_range);
+    assert!(
+        features.dynamic_range.abs() < 0.01,
+        "Dynamic range should be zero for constant signal: {}",
+        features.dynamic_range
+    );
 }
 
 /// Validate Doppler shift calculation conceptually
@@ -97,7 +117,10 @@ fn validate_doppler_calculation() {
     let c = 3.0e8; // speed of light
     let expected_doppler = 2.0 * velocity * freq / c;
 
-    println!("Expected Doppler shift for 1 m/s target: {:.2} Hz", expected_doppler);
+    println!(
+        "Expected Doppler shift for 1 m/s target: {:.2} Hz",
+        expected_doppler
+    );
 
     // Create phase data with Doppler shift
     let n_samples = 100;
@@ -126,10 +149,15 @@ fn validate_doppler_calculation() {
     }
 
     let avg_doppler: f64 = phase_rates.iter().sum::<f64>() / phase_rates.len() as f64;
-    println!("Measured Doppler: {:.2} Hz (expected: {:.2} Hz)", avg_doppler, expected_doppler);
+    println!(
+        "Measured Doppler: {:.2} Hz (expected: {:.2} Hz)",
+        avg_doppler, expected_doppler
+    );
 
-    assert!((avg_doppler - expected_doppler).abs() < 1.0,
-            "Doppler estimation error too large");
+    assert!(
+        (avg_doppler - expected_doppler).abs() < 1.0,
+        "Doppler estimation error too large"
+    );
 }
 
 /// Validate FFT-based spectral analysis
@@ -164,7 +192,10 @@ fn validate_spectral_analysis() {
     // Total power should be positive
     assert!(psd.total_power > 0.0, "Total power should be positive");
     // Centroid should be reasonable
-    assert!(psd.centroid >= 0.0, "Spectral centroid should be non-negative");
+    assert!(
+        psd.centroid >= 0.0,
+        "Spectral centroid should be non-negative"
+    );
 }
 
 /// Validate CSI complex conversion (amplitude/phase <-> complex)
@@ -200,16 +231,29 @@ fn validate_complex_conversion() {
             let amp_error = (recovered_amp - amplitude[[i, j]]).abs();
             let phase_error = (recovered_phase - phase[[i, j]]).abs();
 
-            assert!(amp_error < 1e-10,
-                    "Amplitude mismatch at [{},{}]: expected {}, got {}",
-                    i, j, amplitude[[i, j]], recovered_amp);
-            assert!(phase_error < 1e-10,
-                    "Phase mismatch at [{},{}]: expected {}, got {}",
-                    i, j, phase[[i, j]], recovered_phase);
+            assert!(
+                amp_error < 1e-10,
+                "Amplitude mismatch at [{},{}]: expected {}, got {}",
+                i,
+                j,
+                amplitude[[i, j]],
+                recovered_amp
+            );
+            assert!(
+                phase_error < 1e-10,
+                "Phase mismatch at [{},{}]: expected {}, got {}",
+                i,
+                j,
+                phase[[i, j]],
+                recovered_phase
+            );
         }
     }
 
-    println!("Complex conversion validated: all {} elements correct", 4 * n);
+    println!(
+        "Complex conversion validated: all {} elements correct",
+        4 * n
+    );
 }
 
 /// Validate motion detection threshold behavior
@@ -233,12 +277,16 @@ fn validate_motion_detection_sensitivity() {
     let motion_features = create_motion_features(0.5);
     let result = detector.analyze_motion(&motion_features);
 
-    println!("Motion analysis - total_score: {:.3}, confidence: {:.3}",
-             result.score.total, result.confidence);
+    println!(
+        "Motion analysis - total_score: {:.3}, confidence: {:.3}",
+        result.score.total, result.confidence
+    );
 
     // Motion features should show valid scores
-    assert!(result.score.total >= 0.0 && result.confidence >= 0.0,
-            "Motion analysis should return valid scores");
+    assert!(
+        result.score.total >= 0.0 && result.confidence >= 0.0,
+        "Motion analysis should return valid scores"
+    );
 }
 
 /// Validate correlation features
@@ -268,8 +316,11 @@ fn validate_correlation_features() {
     println!("Max correlation: {:.4}", corr.max_correlation);
 
     // Correlation should be high for identical signals
-    assert!(corr.mean_correlation > 0.9,
-            "Identical signals should have high correlation: {}", corr.mean_correlation);
+    assert!(
+        corr.mean_correlation > 0.9,
+        "Identical signals should have high correlation: {}",
+        corr.mean_correlation
+    );
 }
 
 /// Validate phase coherence
@@ -298,8 +349,11 @@ fn validate_phase_coherence() {
     println!("Phase coherence: {:.4}", phase_features.coherence);
 
     // Coherent phase should have high coherence value
-    assert!(phase_features.coherence > 0.5,
-            "Coherent phase should have high coherence: {}", phase_features.coherence);
+    assert!(
+        phase_features.coherence > 0.5,
+        "Coherent phase should have high coherence: {}",
+        phase_features.coherence
+    );
 }
 
 /// Validate feature extraction completeness
@@ -311,18 +365,41 @@ fn validate_feature_extraction_complete() {
     let features = extractor.extract(&csi_data);
 
     // All feature components should be present and finite
-    assert!(features.amplitude.rms.is_finite(), "Amplitude RMS should be finite");
-    assert!(features.amplitude.peak.is_finite(), "Amplitude peak should be finite");
-    assert!(features.phase.coherence.is_finite(), "Phase coherence should be finite");
-    assert!(features.correlation.mean_correlation.is_finite(), "Correlation should be finite");
-    assert!(features.psd.total_power.is_finite(), "PSD power should be finite");
+    assert!(
+        features.amplitude.rms.is_finite(),
+        "Amplitude RMS should be finite"
+    );
+    assert!(
+        features.amplitude.peak.is_finite(),
+        "Amplitude peak should be finite"
+    );
+    assert!(
+        features.phase.coherence.is_finite(),
+        "Phase coherence should be finite"
+    );
+    assert!(
+        features.correlation.mean_correlation.is_finite(),
+        "Correlation should be finite"
+    );
+    assert!(
+        features.psd.total_power.is_finite(),
+        "PSD power should be finite"
+    );
 
     println!("Feature extraction complete - all fields populated");
-    println!("  Amplitude: rms={:.4}, peak={:.4}, dynamic_range={:.4}",
-             features.amplitude.rms, features.amplitude.peak, features.amplitude.dynamic_range);
+    println!(
+        "  Amplitude: rms={:.4}, peak={:.4}, dynamic_range={:.4}",
+        features.amplitude.rms, features.amplitude.peak, features.amplitude.dynamic_range
+    );
     println!("  Phase: coherence={:.4}", features.phase.coherence);
-    println!("  Correlation: mean={:.4}", features.correlation.mean_correlation);
-    println!("  PSD: power={:.4}, peak_freq={:.1}", features.psd.total_power, features.psd.peak_frequency);
+    println!(
+        "  Correlation: mean={:.4}",
+        features.correlation.mean_correlation
+    );
+    println!(
+        "  PSD: power={:.4}, peak_freq={:.1}",
+        features.psd.total_power, features.psd.peak_frequency
+    );
 }
 
 /// Validate dynamic range calculation
@@ -352,9 +429,16 @@ fn validate_dynamic_range() {
     let extractor = FeatureExtractor::new(FeatureExtractorConfig::default());
     let features = extractor.extract_amplitude(&csi_data);
 
-    println!("Dynamic range: expected={:.4}, got={:.4}", expected_range, features.dynamic_range);
-    assert!((features.dynamic_range - expected_range).abs() < 0.01,
-            "Dynamic range error: expected={}, got={}", expected_range, features.dynamic_range);
+    println!(
+        "Dynamic range: expected={:.4}, got={:.4}",
+        expected_range, features.dynamic_range
+    );
+    assert!(
+        (features.dynamic_range - expected_range).abs() < 0.01,
+        "Dynamic range error: expected={}, got={}",
+        expected_range,
+        features.dynamic_range
+    );
 }
 
 // Helper functions

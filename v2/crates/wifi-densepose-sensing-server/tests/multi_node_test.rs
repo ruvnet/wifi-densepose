@@ -72,7 +72,7 @@ fn build_vitals_packet(node_id: u8, presence: bool, n_persons: u8, rssi: i8) -> 
 
     buf[4] = node_id;
     buf[5] = if presence { 0x01 } else { 0x00 }; // flags
-    // breathing_rate (u16 LE) = 15.0 * 100 = 1500
+                                                 // breathing_rate (u16 LE) = 15.0 * 100 = 1500
     buf[6..8].copy_from_slice(&1500u16.to_le_bytes());
     // heartrate (u32 LE) = 72.0 * 10000 = 720000
     buf[8..12].copy_from_slice(&720000u32.to_le_bytes());
@@ -95,7 +95,10 @@ fn build_vitals_packet(node_id: u8, presence: bool, n_persons: u8, rssi: i8) -> 
 fn test_csi_frame_builder_valid() {
     let frame = build_csi_frame(1, 0, -50, 32);
     assert_eq!(frame.len(), 20 + 32 * 2);
-    assert_eq!(u32::from_le_bytes([frame[0], frame[1], frame[2], frame[3]]), 0xC511_0001);
+    assert_eq!(
+        u32::from_le_bytes([frame[0], frame[1], frame[2], frame[3]]),
+        0xC511_0001
+    );
     assert_eq!(frame[4], 1); // node_id
     assert_eq!(frame[5], 1); // n_antennas
     assert_eq!(frame[6], 32); // n_subcarriers
@@ -105,7 +108,10 @@ fn test_csi_frame_builder_valid() {
 fn test_vitals_packet_builder_valid() {
     let pkt = build_vitals_packet(2, true, 1, -45);
     assert_eq!(pkt.len(), 32);
-    assert_eq!(u32::from_le_bytes([pkt[0], pkt[1], pkt[2], pkt[3]]), 0xC511_0002);
+    assert_eq!(
+        u32::from_le_bytes([pkt[0], pkt[1], pkt[2], pkt[3]]),
+        0xC511_0002
+    );
     assert_eq!(pkt[4], 2); // node_id
     assert_eq!(pkt[5], 0x01); // flags: presence
     assert_eq!(pkt[13], 1); // n_persons
@@ -127,7 +133,8 @@ fn test_multi_node_udp_send() {
     // Try to bind to a random port and send to localhost:5005
     // This is a smoke test — it verifies frames can be sent without panic.
     let sock = UdpSocket::bind("0.0.0.0:0").expect("bind");
-    sock.set_write_timeout(Some(Duration::from_millis(100))).ok();
+    sock.set_write_timeout(Some(Duration::from_millis(100)))
+        .ok();
 
     let n_sub = 32u8;
     let node_ids = [1u8, 2, 3, 5, 7];
@@ -147,7 +154,7 @@ fn test_multi_node_udp_send() {
     }
 
     // If we get here without panic, the frame builders work correctly
-    assert!(true, "Multi-node UDP send completed without errors");
+    let _ = "Multi-node UDP send completed without errors";
 }
 
 /// Verify that the frame builder produces frames of the correct minimum
@@ -221,7 +228,8 @@ fn test_large_mesh_100_nodes() {
 #[test]
 fn test_max_nodes_255() {
     let sock = UdpSocket::bind("0.0.0.0:0").expect("bind");
-    sock.set_write_timeout(Some(Duration::from_millis(100))).ok();
+    sock.set_write_timeout(Some(Duration::from_millis(100)))
+        .ok();
 
     for nid in 1..=255u8 {
         let frame = build_csi_frame(nid, 0, -50, 16);
@@ -229,5 +237,5 @@ fn test_max_nodes_255() {
     }
 
     // 255 unique node_ids — the HashMap should handle this fine
-    assert!(true);
+    let _ = 255; // loop completed without panic
 }

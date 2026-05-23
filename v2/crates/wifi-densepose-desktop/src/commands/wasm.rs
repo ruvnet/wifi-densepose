@@ -22,14 +22,19 @@ pub async fn wasm_list(node_ip: String) -> Result<Vec<WasmModuleInfo>, String> {
 
     let url = format!("http://{}:{}/wasm/list", node_ip, WASM_PORT);
 
-    let response = client.get(&url).send().await
+    let response = client
+        .get(&url)
+        .send()
+        .await
         .map_err(|e| format!("Failed to connect to node: {}", e))?;
 
     if !response.status().is_success() {
         return Err(format!("Node returned HTTP {}", response.status()));
     }
 
-    let modules: Vec<WasmModuleInfo> = response.json().await
+    let modules: Vec<WasmModuleInfo> = response
+        .json()
+        .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
 
     Ok(modules)
@@ -50,8 +55,7 @@ pub async fn wasm_upload(
     auto_start: Option<bool>,
 ) -> Result<WasmUploadResult, String> {
     // Read WASM file
-    let mut file = File::open(&wasm_path)
-        .map_err(|e| format!("Cannot read WASM file: {}", e))?;
+    let mut file = File::open(&wasm_path).map_err(|e| format!("Cannot read WASM file: {}", e))?;
 
     let mut wasm_data = Vec::new();
     file.read_to_end(&mut wasm_data)
@@ -99,7 +103,8 @@ pub async fn wasm_upload(
 
     // Send request
     let url = format!("http://{}:{}/wasm/upload", node_ip, WASM_PORT);
-    let response = client.post(&url)
+    let response = client
+        .post(&url)
         .multipart(form)
         .send()
         .await
@@ -113,13 +118,18 @@ pub async fn wasm_upload(
     }
 
     // Parse response for module ID
-    let upload_response: WasmUploadResponse = response.json().await
+    let upload_response: WasmUploadResponse = response
+        .json()
+        .await
         .map_err(|e| format!("Failed to parse upload response: {}", e))?;
 
     Ok(WasmUploadResult {
         success: true,
         module_id: upload_response.module_id,
-        message: format!("Module '{}' uploaded successfully ({} bytes)", name, wasm_size),
+        message: format!(
+            "Module '{}' uploaded successfully ({} bytes)",
+            name, wasm_size
+        ),
         sha256: Some(wasm_hash),
     })
 }
@@ -156,7 +166,10 @@ pub async fn wasm_control(
         node_ip, WASM_PORT, module_id, action
     );
 
-    let response = client.post(&url).send().await
+    let response = client
+        .post(&url)
+        .send()
+        .await
         .map_err(|e| format!("WASM control failed: {}", e))?;
 
     let status = response.status();
@@ -179,10 +192,7 @@ pub async fn wasm_control(
 
 /// Get detailed info about a specific WASM module.
 #[tauri::command]
-pub async fn wasm_info(
-    node_ip: String,
-    module_id: String,
-) -> Result<WasmModuleDetail, String> {
+pub async fn wasm_info(node_ip: String, module_id: String) -> Result<WasmModuleDetail, String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(WASM_TIMEOUT_SECS))
         .build()
@@ -190,14 +200,19 @@ pub async fn wasm_info(
 
     let url = format!("http://{}:{}/wasm/{}", node_ip, WASM_PORT, module_id);
 
-    let response = client.get(&url).send().await
+    let response = client
+        .get(&url)
+        .send()
+        .await
         .map_err(|e| format!("Failed to get module info: {}", e))?;
 
     if !response.status().is_success() {
         return Err(format!("Module not found or HTTP {}", response.status()));
     }
 
-    let detail: WasmModuleDetail = response.json().await
+    let detail: WasmModuleDetail = response
+        .json()
+        .await
         .map_err(|e| format!("Failed to parse module info: {}", e))?;
 
     Ok(detail)
@@ -213,14 +228,19 @@ pub async fn wasm_stats(node_ip: String) -> Result<WasmRuntimeStats, String> {
 
     let url = format!("http://{}:{}/wasm/stats", node_ip, WASM_PORT);
 
-    let response = client.get(&url).send().await
+    let response = client
+        .get(&url)
+        .send()
+        .await
         .map_err(|e| format!("Failed to get WASM stats: {}", e))?;
 
     if !response.status().is_success() {
         return Err(format!("HTTP {}", response.status()));
     }
 
-    let stats: WasmRuntimeStats = response.json().await
+    let stats: WasmRuntimeStats = response
+        .json()
+        .await
         .map_err(|e| format!("Failed to parse stats: {}", e))?;
 
     Ok(stats)
@@ -246,13 +266,16 @@ pub async fn check_wasm_support(node_ip: String) -> Result<WasmSupportInfo, Stri
 
                 Ok(WasmSupportInfo {
                     supported: true,
-                    max_modules: info.as_ref()
+                    max_modules: info
+                        .as_ref()
                         .and_then(|v| v.get("max_modules").and_then(|v| v.as_u64()))
                         .map(|v| v as u8),
-                    memory_limit_kb: info.as_ref()
+                    memory_limit_kb: info
+                        .as_ref()
                         .and_then(|v| v.get("memory_limit_kb").and_then(|v| v.as_u64()))
                         .map(|v| v as u32),
-                    verify_signatures: info.as_ref()
+                    verify_signatures: info
+                        .as_ref()
                         .and_then(|v| v.get("verify_signatures").and_then(|v| v.as_bool()))
                         .unwrap_or(false),
                 })

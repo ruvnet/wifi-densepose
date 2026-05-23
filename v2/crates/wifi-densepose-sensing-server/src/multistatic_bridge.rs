@@ -144,10 +144,14 @@ pub fn compute_person_score_from_amplitudes(amplitudes: &[f32]) -> f64 {
     let sum: f64 = amplitudes.iter().map(|&a| a as f64).sum();
     let mean = sum / n;
 
-    let variance: f64 = amplitudes.iter().map(|&a| {
-        let diff = (a as f64) - mean;
-        diff * diff
-    }).sum::<f64>() / n;
+    let variance: f64 = amplitudes
+        .iter()
+        .map(|&a| {
+            let diff = (a as f64) - mean;
+            diff * diff
+        })
+        .sum::<f64>()
+        / n;
 
     let score = variance / (mean * mean + 1e-10);
     score.clamp(0.0, 1.0)
@@ -236,15 +240,23 @@ mod tests {
         // Constant amplitude => variance = 0 => score ~ 0
         let flat = vec![5.0_f32; 64];
         let score = compute_person_score_from_amplitudes(&flat);
-        assert!(score < 0.001, "flat signal should have near-zero score, got {score}");
+        assert!(
+            score < 0.001,
+            "flat signal should have near-zero score, got {score}"
+        );
     }
 
     #[test]
     fn test_compute_person_score_varied() {
         // High variance relative to mean should produce a positive score
-        let varied: Vec<f32> = (0..64).map(|i| if i % 2 == 0 { 1.0 } else { 10.0 }).collect();
+        let varied: Vec<f32> = (0..64)
+            .map(|i| if i % 2 == 0 { 1.0 } else { 10.0 })
+            .collect();
         let score = compute_person_score_from_amplitudes(&varied);
-        assert!(score > 0.1, "varied signal should have positive score, got {score}");
+        assert!(
+            score > 0.1,
+            "varied signal should have positive score, got {score}"
+        );
         assert!(score <= 1.0, "score should be clamped to 1.0, got {score}");
     }
 

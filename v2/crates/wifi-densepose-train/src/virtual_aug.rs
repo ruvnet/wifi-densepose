@@ -29,7 +29,9 @@ pub struct Xorshift64 {
 impl Xorshift64 {
     /// Create a new PRNG. Seed `0` is replaced with a fixed non-zero value.
     pub fn new(seed: u64) -> Self {
-        Self { state: if seed == 0 { 0x853c49e6748fea9b } else { seed } }
+        Self {
+            state: if seed == 0 { 0x853c49e6748fea9b } else { seed },
+        }
     }
 
     /// Advance the state and return the next `u64`.
@@ -56,7 +58,9 @@ impl Xorshift64 {
     /// Return a uniformly distributed `usize` in `[lo, hi]` (inclusive).
     #[inline]
     pub fn next_usize_range(&mut self, lo: usize, hi: usize) -> usize {
-        if lo >= hi { return lo; }
+        if lo >= hi {
+            return lo;
+        }
         lo + (self.next_u64() % (hi - lo + 1) as u64) as usize
     }
 
@@ -129,8 +133,10 @@ impl VirtualDomainAugmentor {
         self.next_domain_id = self.next_domain_id.wrapping_add(1);
         VirtualDomain {
             room_scale: rng.next_f32_range(self.room_scale_range.0, self.room_scale_range.1),
-            reflection_coeff: rng.next_f32_range(self.reflection_coeff_range.0, self.reflection_coeff_range.1),
-            n_scatterers: rng.next_usize_range(self.n_virtual_scatterers.0, self.n_virtual_scatterers.1),
+            reflection_coeff: rng
+                .next_f32_range(self.reflection_coeff_range.0, self.reflection_coeff_range.1),
+            n_scatterers: rng
+                .next_usize_range(self.n_virtual_scatterers.0, self.n_virtual_scatterers.1),
             noise_std: rng.next_f32_range(self.noise_std_range.0, self.noise_std_range.1),
             domain_id: id,
         }
@@ -144,16 +150,22 @@ impl VirtualDomainAugmentor {
         let n = frame.len();
         let n_f = n as f32;
         let mut noise_rng = Xorshift64::new(
-            (domain.domain_id as u64).wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(1),
+            (domain.domain_id as u64)
+                .wrapping_mul(0x9E3779B97F4A7C15)
+                .wrapping_add(1),
         );
         let mut out = Vec::with_capacity(n);
         for (k, &val) in frame.iter().enumerate() {
             let k_f = k as f32;
             // 1. Room-scale amplitude attenuation (guard against zero scale)
-            let scaled = if domain.room_scale.abs() < 1e-10 { val } else { val / domain.room_scale };
+            let scaled = if domain.room_scale.abs() < 1e-10 {
+                val
+            } else {
+                val / domain.room_scale
+            };
             // 2. Reflection coefficient modulation (per-subcarrier)
-            let refl = domain.reflection_coeff
-                + (1.0 - domain.reflection_coeff) * (PI * k_f / n_f).cos();
+            let refl =
+                domain.reflection_coeff + (1.0 - domain.reflection_coeff) * (PI * k_f / n_f).cos();
             let modulated = scaled * refl;
             // 3. Virtual scatterer sinusoidal interference
             let mut scatter = 0.0_f32;
@@ -170,7 +182,10 @@ impl VirtualDomainAugmentor {
     ///
     /// Returns `(augmented_frame, domain_id)` pairs; total = `batch.len() * k`.
     pub fn augment_batch(
-        &mut self, batch: &[Vec<f32>], k: usize, rng: &mut Xorshift64,
+        &mut self,
+        batch: &[Vec<f32>],
+        k: usize,
+        rng: &mut Xorshift64,
     ) -> Vec<(Vec<f32>, u32)> {
         let mut results = Vec::with_capacity(batch.len() * k);
         for frame in batch {
@@ -193,7 +208,13 @@ mod tests {
     use super::*;
 
     fn make_domain(scale: f32, coeff: f32, scatter: usize, noise: f32, id: u32) -> VirtualDomain {
-        VirtualDomain { room_scale: scale, reflection_coeff: coeff, n_scatterers: scatter, noise_std: noise, domain_id: id }
+        VirtualDomain {
+            room_scale: scale,
+            reflection_coeff: coeff,
+            n_scatterers: scatter,
+            noise_std: noise,
+            domain_id: id,
+        }
     }
 
     #[test]
@@ -222,7 +243,10 @@ mod tests {
         let frame: Vec<f32> = (0..56).map(|i| 0.3 + 0.01 * i as f32).collect();
         let out = aug.augment_frame(&frame, &make_domain(1.0, 1.0, 0, 0.0, 0));
         for (a, b) in out.iter().zip(frame.iter()) {
-            assert!((a - b).abs() < 1e-5, "identity domain: got {a}, expected {b}");
+            assert!(
+                (a - b).abs() < 1e-5,
+                "identity domain: got {a}, expected {b}"
+            );
         }
     }
 
@@ -233,7 +257,9 @@ mod tests {
         let batch: Vec<Vec<f32>> = (0..4).map(|_| vec![0.5; 56]).collect();
         let results = aug.augment_batch(&batch, 3, &mut rng);
         assert_eq!(results.len(), 12);
-        for (f, _) in &results { assert_eq!(f.len(), 56); }
+        for (f, _) in &results {
+            assert_eq!(f.len(), 56);
+        }
     }
 
     #[test]
@@ -245,7 +271,10 @@ mod tests {
         let d2 = aug2.generate_domain(&mut Xorshift64::new(2));
         let out1 = aug1.augment_frame(&frame, &d1);
         let out2 = aug2.augment_frame(&frame, &d2);
-        assert!(out1.iter().zip(out2.iter()).any(|(a, b)| (a - b).abs() > 1e-6));
+        assert!(out1
+            .iter()
+            .zip(out2.iter())
+            .any(|(a, b)| (a - b).abs() > 1e-6));
     }
 
     #[test]
@@ -259,7 +288,10 @@ mod tests {
         for ((f1, id1), (f2, id2)) in res1.iter().zip(res2.iter()) {
             assert_eq!(id1, id2);
             for (a, b) in f1.iter().zip(f2.iter()) {
-                assert!((a - b).abs() < 1e-7, "same seed must produce identical output");
+                assert!(
+                    (a - b).abs() < 1e-7,
+                    "same seed must produce identical output"
+                );
             }
         }
     }
@@ -268,14 +300,18 @@ mod tests {
     fn domain_ids_are_sequential() {
         let mut aug = VirtualDomainAugmentor::default();
         let mut rng = Xorshift64::new(7);
-        for i in 0..10_u32 { assert_eq!(aug.generate_domain(&mut rng).domain_id, i); }
+        for i in 0..10_u32 {
+            assert_eq!(aug.generate_domain(&mut rng).domain_id, i);
+        }
     }
 
     #[test]
     fn xorshift64_deterministic() {
         let mut a = Xorshift64::new(999);
         let mut b = Xorshift64::new(999);
-        for _ in 0..100 { assert_eq!(a.next_u64(), b.next_u64()); }
+        for _ in 0..100 {
+            assert_eq!(a.next_u64(), b.next_u64());
+        }
     }
 
     #[test]
@@ -283,15 +319,19 @@ mod tests {
         let mut rng = Xorshift64::new(42);
         for _ in 0..1000 {
             let v = rng.next_f32();
-            assert!(v >= 0.0 && v < 1.0, "f32 sample {v} not in [0, 1)");
+            assert!((0.0..1.0).contains(&v), "f32 sample {v} not in [0, 1)");
         }
     }
 
     #[test]
     fn augment_frame_empty_and_batch_k_zero() {
         let aug = VirtualDomainAugmentor::default();
-        assert!(aug.augment_frame(&[], &make_domain(1.5, 0.5, 2, 0.05, 0)).is_empty());
+        assert!(aug
+            .augment_frame(&[], &make_domain(1.5, 0.5, 2, 0.05, 0))
+            .is_empty());
         let mut aug2 = VirtualDomainAugmentor::default();
-        assert!(aug2.augment_batch(&[vec![0.5; 56]], 0, &mut Xorshift64::new(1)).is_empty());
+        assert!(aug2
+            .augment_batch(&[vec![0.5; 56]], 0, &mut Xorshift64::new(1))
+            .is_empty());
     }
 }

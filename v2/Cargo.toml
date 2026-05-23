@@ -144,10 +144,13 @@ mockall = "0.12"
 wiremock = "0.5"
 
 # midstreamer integration (published on crates.io)
-midstreamer-quic = "0.1.0"
-midstreamer-scheduler = "0.1.0"
-midstreamer-temporal-compare = "0.1.0"
-midstreamer-attractor = "0.1.0"
+# 0.1.0 was yanked; upgrade to latest 0.3/0.2 releases which pull in
+# quinn-proto >=0.11.14 (fixes RUSTSEC-2026-0037) and
+# rustls-webpki >=0.103.13 (fixes RUSTSEC-2026-0049/0098/0099/0104).
+midstreamer-quic = "0.3"
+midstreamer-scheduler = "0.2"
+midstreamer-temporal-compare = "0.2"
+midstreamer-attractor = "0.2"
 
 # ruvector integration (published on crates.io)
 # Vendored at v2.1.0 in vendor/ruvector; using crates.io versions until published.

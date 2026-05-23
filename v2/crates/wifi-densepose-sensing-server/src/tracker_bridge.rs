@@ -6,10 +6,8 @@
 //! accepts server-side detections and returns tracker-smoothed results.
 
 use std::time::Instant;
-use wifi_densepose_signal::ruvsense::{
-    self, KeypointState, PoseTrack, TrackLifecycleState, TrackId, NUM_KEYPOINTS,
-};
 use wifi_densepose_signal::ruvsense::pose_tracker::PoseTracker;
+use wifi_densepose_signal::ruvsense::{TrackId, TrackLifecycleState, NUM_KEYPOINTS};
 
 use super::{BoundingBox, PersonDetection, PoseKeypoint};
 
@@ -36,7 +34,9 @@ const COCO_NAMES: [&str; 17] = [
 
 /// Map a lowercase keypoint name to its COCO-17 index.
 fn keypoint_name_to_coco_index(name: &str) -> Option<usize> {
-    COCO_NAMES.iter().position(|&n| n.eq_ignore_ascii_case(name))
+    COCO_NAMES
+        .iter()
+        .position(|&n| n.eq_ignore_ascii_case(name))
 }
 
 /// Convert server-side PersonDetection slices into tracker-compatible keypoint arrays.
@@ -135,10 +135,18 @@ pub fn tracker_to_person_detections(tracker: &PoseTracker) -> Vec<PersonDetectio
             let mut observed = 0;
             for kp in &keypoints {
                 if kp.confidence > 0.0 {
-                    if kp.x < min_x { min_x = kp.x; }
-                    if kp.y < min_y { min_y = kp.y; }
-                    if kp.x > max_x { max_x = kp.x; }
-                    if kp.y > max_y { max_y = kp.y; }
+                    if kp.x < min_x {
+                        min_x = kp.x;
+                    }
+                    if kp.y < min_y {
+                        min_y = kp.y;
+                    }
+                    if kp.x > max_x {
+                        max_x = kp.x;
+                    }
+                    if kp.y > max_y {
+                        max_y = kp.y;
+                    }
                     observed += 1;
                 }
             }
@@ -154,7 +162,12 @@ pub fn tracker_to_person_detections(tracker: &PoseTracker) -> Vec<PersonDetectio
                 // No observed keypoints — use a default bbox at centroid
                 let cx = keypoints.iter().map(|k| k.x).sum::<f64>() / keypoints.len() as f64;
                 let cy = keypoints.iter().map(|k| k.y).sum::<f64>() / keypoints.len() as f64;
-                BoundingBox { x: cx - 0.3, y: cy - 0.5, width: 0.6, height: 1.0 }
+                BoundingBox {
+                    x: cx - 0.3,
+                    y: cy - 0.5,
+                    width: 0.6,
+                    height: 1.0,
+                }
             };
 
             PersonDetection {
@@ -217,18 +230,24 @@ pub fn tracker_update(
 
     // Greedy assignment: for each detection, find the best matching active track.
     // Collect tracks once to avoid re-borrowing tracker per detection.
-    let active: Vec<(TrackId, [f32; 3])> = tracker.active_tracks().iter().map(|t| {
-        let centroid = {
-            let mut c = [0.0_f32; 3];
-            for kp in &t.keypoints {
-                let p = kp.position();
-                c[0] += p[0]; c[1] += p[1]; c[2] += p[2];
-            }
-            let n = NUM_KEYPOINTS as f32;
-            [c[0] / n, c[1] / n, c[2] / n]
-        };
-        (t.id, centroid)
-    }).collect();
+    let active: Vec<(TrackId, [f32; 3])> = tracker
+        .active_tracks()
+        .iter()
+        .map(|t| {
+            let centroid = {
+                let mut c = [0.0_f32; 3];
+                for kp in &t.keypoints {
+                    let p = kp.position();
+                    c[0] += p[0];
+                    c[1] += p[1];
+                    c[2] += p[2];
+                }
+                let n = NUM_KEYPOINTS as f32;
+                [c[0] / n, c[1] / n, c[2] / n]
+            };
+            (t.id, centroid)
+        })
+        .collect();
 
     let mut used_tracks: Vec<bool> = vec![false; active.len()];
     let mut matched: Vec<Option<TrackId>> = vec![None; persons.len()];
@@ -415,7 +434,7 @@ mod tests {
     /// vector, even though they remain in the tracker for re-identification.
     #[test]
     fn test_lost_tracks_excluded_from_bridge_output() {
-        use wifi_densepose_signal::ruvsense::{TrackerConfig, TrackLifecycleState};
+        use wifi_densepose_signal::ruvsense::{TrackLifecycleState, TrackerConfig};
 
         // Tight config so the test doesn't have to spin for hundreds of ticks.
         let cfg = TrackerConfig {
@@ -475,7 +494,10 @@ mod tests {
         // Sanity: the Lost track is still tracked internally (for re-ID), it
         // just shouldn't ship to the UI.
         assert!(
-            tracker.all_tracks().iter().any(|t| t.lifecycle == TrackLifecycleState::Lost),
+            tracker
+                .all_tracks()
+                .iter()
+                .any(|t| t.lifecycle == TrackLifecycleState::Lost),
             "Lost track must remain in tracker for re-identification window"
         );
     }

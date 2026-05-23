@@ -16,21 +16,21 @@
 //! 8. [`orchestrator`] -- full pipeline orchestrator
 
 #[cfg(feature = "pipeline")]
-pub mod predictive_gate;
-#[cfg(feature = "pipeline")]
 pub mod attention_weighter;
-#[cfg(feature = "pipeline")]
-pub mod correlator;
-#[cfg(feature = "pipeline")]
-pub mod motion_estimator;
 #[cfg(feature = "pipeline")]
 pub mod breathing_extractor;
 #[cfg(feature = "pipeline")]
-pub mod quality_gate;
+pub mod correlator;
 #[cfg(feature = "pipeline")]
 pub mod fingerprint_matcher;
 #[cfg(feature = "pipeline")]
+pub mod motion_estimator;
+#[cfg(feature = "pipeline")]
 pub mod orchestrator;
+#[cfg(feature = "pipeline")]
+pub mod predictive_gate;
+#[cfg(feature = "pipeline")]
+pub mod quality_gate;
 
 #[cfg(feature = "pipeline")]
 pub use orchestrator::WindowsWifiPipeline;

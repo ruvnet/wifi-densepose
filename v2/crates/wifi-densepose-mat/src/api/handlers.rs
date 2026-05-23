@@ -15,8 +15,7 @@ use super::dto::*;
 use super::error::{ApiError, ApiResult};
 use super::state::AppState;
 use crate::domain::{
-    DisasterEvent, DisasterType, ScanZone, ZoneBounds,
-    ScanParameters, ScanResolution, MovementType,
+    DisasterEvent, DisasterType, MovementType, ScanParameters, ScanResolution, ScanZone, ZoneBounds,
 };
 
 // ============================================================================
@@ -95,7 +94,7 @@ pub async fn list_events(
     let total = filtered.len();
 
     // Apply pagination
-    let page_size = query.page_size.min(100).max(1);
+    let page_size = query.page_size.clamp(1, 100);
     let start = query.page * page_size;
     let events: Vec<_> = filtered
         .into_iter()
@@ -318,7 +317,12 @@ pub async fn add_zone(
 ) -> ApiResult<(StatusCode, Json<ZoneResponse>)> {
     // Convert DTO to domain
     let bounds = match request.bounds {
-        ZoneBoundsDto::Rectangle { min_x, min_y, max_x, max_y } => {
+        ZoneBoundsDto::Rectangle {
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+        } => {
             if max_x <= min_x || max_y <= min_y {
                 return Err(ApiError::validation(
                     "max coordinates must be greater than min coordinates",
@@ -327,7 +331,11 @@ pub async fn add_zone(
             }
             ZoneBounds::rectangle(min_x, min_y, max_x, max_y)
         }
-        ZoneBoundsDto::Circle { center_x, center_y, radius } => {
+        ZoneBoundsDto::Circle {
+            center_x,
+            center_y,
+            radius,
+        } => {
             if radius <= 0.0 {
                 return Err(ApiError::validation(
                     "radius must be positive",
@@ -713,26 +721,29 @@ fn event_to_response(event: DisasterEvent) -> EventResponse {
 
 fn zone_to_response(zone: &ScanZone) -> ZoneResponse {
     let bounds = match zone.bounds() {
-        ZoneBounds::Rectangle { min_x, min_y, max_x, max_y } => {
-            ZoneBoundsDto::Rectangle {
-                min_x: *min_x,
-                min_y: *min_y,
-                max_x: *max_x,
-                max_y: *max_y,
-            }
-        }
-        ZoneBounds::Circle { center_x, center_y, radius } => {
-            ZoneBoundsDto::Circle {
-                center_x: *center_x,
-                center_y: *center_y,
-                radius: *radius,
-            }
-        }
-        ZoneBounds::Polygon { vertices } => {
-            ZoneBoundsDto::Polygon {
-                vertices: vertices.clone(),
-            }
-        }
+        ZoneBounds::Rectangle {
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+        } => ZoneBoundsDto::Rectangle {
+            min_x: *min_x,
+            min_y: *min_y,
+            max_x: *max_x,
+            max_y: *max_y,
+        },
+        ZoneBounds::Circle {
+            center_x,
+            center_y,
+            radius,
+        } => ZoneBoundsDto::Circle {
+            center_x: *center_x,
+            center_y: *center_y,
+            radius: *radius,
+        },
+        ZoneBounds::Polygon { vertices } => ZoneBoundsDto::Polygon {
+            vertices: vertices.clone(),
+        },
     };
 
     let params = zone.parameters();
@@ -775,7 +786,11 @@ fn survivor_to_response(survivor: &crate::Survivor) -> SurvivorResponse {
     let latest_vitals = survivor.vital_signs().latest();
     let vital_signs = VitalSignsSummaryDto {
         breathing_rate: latest_vitals.and_then(|v| v.breathing.as_ref().map(|b| b.rate_bpm)),
-        breathing_type: latest_vitals.and_then(|v| v.breathing.as_ref().map(|b| format!("{:?}", b.pattern_type))),
+        breathing_type: latest_vitals.and_then(|v| {
+            v.breathing
+                .as_ref()
+                .map(|b| format!("{:?}", b.pattern_type))
+        }),
         heart_rate: latest_vitals.and_then(|v| v.heartbeat.as_ref().map(|h| h.rate_bpm)),
         has_heartbeat: latest_vitals.map(|v| v.has_heartbeat()).unwrap_or(false),
         has_movement: latest_vitals.map(|v| v.has_movement()).unwrap_or(false),
@@ -786,7 +801,9 @@ fn survivor_to_response(survivor: &crate::Survivor) -> SurvivorResponse {
                 None
             }
         }),
-        timestamp: latest_vitals.map(|v| v.timestamp).unwrap_or_else(chrono::Utc::now),
+        timestamp: latest_vitals
+            .map(|v| v.timestamp)
+            .unwrap_or_else(chrono::Utc::now),
     };
 
     let metadata = {
@@ -795,7 +812,10 @@ fn survivor_to_response(survivor: &crate::Survivor) -> SurvivorResponse {
             None
         } else {
             Some(SurvivorMetadataDto {
-                estimated_age_category: m.estimated_age_category.as_ref().map(|a| format!("{:?}", a)),
+                estimated_age_category: m
+                    .estimated_age_category
+                    .as_ref()
+                    .map(|a| format!("{:?}", a)),
                 assigned_team: m.assigned_team.clone(),
                 notes: m.notes.clone(),
                 tags: m.tags.clone(),
@@ -1055,9 +1075,9 @@ pub async fn list_domain_events(
     State(state): State<AppState>,
 ) -> ApiResult<Json<DomainEventsResponse>> {
     let store = state.event_store();
-    let events = store.all().map_err(|e| ApiError::internal(
-        format!("Failed to read event store: {}", e),
-    ))?;
+    let events = store
+        .all()
+        .map_err(|e| ApiError::internal(format!("Failed to read event store: {}", e)))?;
 
     let event_dtos: Vec<DomainEventDto> = events
         .iter()

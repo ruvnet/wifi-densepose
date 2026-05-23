@@ -1505,7 +1505,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1726,7 +1726,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3134,7 +3134,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -3395,7 +3395,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3875,24 +3875,11 @@ dependencies = [
 
 [[package]]
 name = "midstreamer-attractor"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab86df06cf1705ca37692b4fc0027868f92e5170a7ebb1d706302f04b6044f70"
-dependencies = [
- "midstreamer-temporal-compare 0.1.0",
- "nalgebra",
- "ndarray 0.16.1",
- "serde",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "midstreamer-attractor"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bebe548a4e74b80ecb8dd058e352a91fed9e5685c49c5d3fa5062520c660c6c9"
 dependencies = [
- "midstreamer-temporal-compare 0.2.1",
+ "midstreamer-temporal-compare",
  "nalgebra",
  "ndarray 0.16.1",
  "serde",
@@ -3901,18 +3888,20 @@ dependencies = [
 
 [[package]]
 name = "midstreamer-quic"
-version = "0.1.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35ad2099588e987cdbedb039fdf8a56163a2f3dc1ff6bf5a39c63b9ce4e2248c"
+checksum = "9d4dcf971dfa9eb5087e9c79e078f88c1508110bf010b8bb2d29b0b7229fd229"
 dependencies = [
+ "async-trait",
  "futures",
  "js-sys",
  "quinn",
  "rcgen",
- "rustls 0.22.4",
+ "rustls-platform-verifier",
  "serde",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -3920,27 +3909,15 @@ dependencies = [
 
 [[package]]
 name = "midstreamer-scheduler"
-version = "0.1.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9296b3f0a2b04e5c1a378ee7926e9f892895bface2ccebcfa407450c3aca269"
+checksum = "a8085dbcfb13808d075c0b31681022b41acc1c8021313d45fa7461e97d7767ff"
 dependencies = [
  "crossbeam",
  "parking_lot",
  "serde",
  "thiserror 2.0.18",
  "tokio",
-]
-
-[[package]]
-name = "midstreamer-temporal-compare"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1f935ba86c1632a3b5bc5e1cb56a308d4c5d2ec87c84db551c65f3e1001a642"
-dependencies = [
- "dashmap",
- "lru",
- "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -4319,7 +4296,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4748,7 +4725,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.45.0",
 ]
 
 [[package]]
@@ -5492,7 +5469,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls 0.23.37",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -5531,9 +5508,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6171,7 +6148,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6188,20 +6165,6 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.22.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf4ef73721ac7bcd79b2b315da7779d8fc09718c6b3d2d1b2d94850eb8c18432"
-dependencies = [
- "log",
- "ring",
- "rustls-pki-types",
- "rustls-webpki 0.102.8",
- "subtle",
- "zeroize",
-]
-
-[[package]]
-name = "rustls"
 version = "0.23.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "758025cb5fccfd3bc2fd74708fd4682be41d99e5dff73c377c0646c6012c73a4"
@@ -6210,7 +6173,7 @@ dependencies = [
  "once_cell",
  "ring",
  "rustls-pki-types",
- "rustls-webpki 0.103.9",
+ "rustls-webpki 0.103.13",
  "subtle",
  "zeroize",
 ]
@@ -6260,11 +6223,11 @@ dependencies = [
  "rustls 0.23.37",
  "rustls-native-certs",
  "rustls-platform-verifier-android",
- "rustls-webpki 0.103.9",
+ "rustls-webpki 0.103.13",
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6285,20 +6248,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.102.8"
+version = "0.103.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64ca1bc8749bd4cf37b5ce386cc146580777b4e8572c7b97baf22c83f444bee9"
-dependencies = [
- "ring",
- "rustls-pki-types",
- "untrusted",
-]
-
-[[package]]
-name = "rustls-webpki"
-version = "0.103.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7df23109aa6c1567d1c575b9952556388da57401e4ace1d15f79eedad0d8f53"
+checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -7698,7 +7650,7 @@ dependencies = [
  "getrandom 0.4.1",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9174,8 +9126,8 @@ dependencies = [
  "chrono",
  "clap",
  "futures-util",
- "midstreamer-attractor 0.2.1",
- "midstreamer-temporal-compare 0.2.1",
+ "midstreamer-attractor",
+ "midstreamer-temporal-compare",
  "ruvector-mincut",
  "serde",
  "serde_json",
@@ -9198,8 +9150,8 @@ version = "0.3.0"
 dependencies = [
  "chrono",
  "criterion",
- "midstreamer-attractor 0.1.0",
- "midstreamer-temporal-compare 0.1.0",
+ "midstreamer-attractor",
+ "midstreamer-temporal-compare",
  "ndarray 0.17.2",
  "ndarray-linalg",
  "num-complex",
@@ -9317,7 +9269,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

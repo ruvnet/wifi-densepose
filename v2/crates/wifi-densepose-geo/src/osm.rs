@@ -13,7 +13,9 @@ pub const MAX_RADIUS_M: f64 = 5000.0;
 
 fn check_radius(radius_m: f64) -> Result<()> {
     if !radius_m.is_finite() || radius_m <= 0.0 {
-        return Err(anyhow!("radius_m must be positive and finite (got {radius_m})"));
+        return Err(anyhow!(
+            "radius_m must be positive and finite (got {radius_m})"
+        ));
     }
     if radius_m > MAX_RADIUS_M {
         return Err(anyhow!(
@@ -34,8 +36,7 @@ pub async fn fetch_buildings(center: &GeoPoint, radius_m: f64) -> Result<Vec<Osm
     let bbox = GeoBBox::from_center(center, radius_m);
     let query = format!(
         r#"[out:json][timeout:25];(way["building"]({},{},{},{});relation["building"]({},{},{},{}););out body;>;out skel qt;"#,
-        bbox.south, bbox.west, bbox.north, bbox.east,
-        bbox.south, bbox.west, bbox.north, bbox.east,
+        bbox.south, bbox.west, bbox.north, bbox.east, bbox.south, bbox.west, bbox.north, bbox.east,
     );
     let resp = overpass_query(&query).await?;
     parse_buildings(&resp)
@@ -59,9 +60,11 @@ async fn overpass_query(query: &str) -> Result<serde_json::Value> {
         .user_agent("RuView/0.1")
         .build()?;
 
-    let resp = client.post(OVERPASS_URL)
+    let resp = client
+        .post(OVERPASS_URL)
         .form(&[("data", query)])
-        .send().await?;
+        .send()
+        .await?;
 
     if !resp.status().is_success() {
         anyhow::bail!("Overpass API error: {}", resp.status());
@@ -75,7 +78,9 @@ async fn overpass_query(query: &str) -> Result<serde_json::Value> {
 /// top-level `elements` array (indicative of a malformed/non-Overpass payload).
 pub fn parse_overpass_json(data: &serde_json::Value) -> Result<Vec<OsmFeature>> {
     if !data.is_object() || data.get("elements").and_then(|e| e.as_array()).is_none() {
-        return Err(anyhow!("malformed Overpass response: missing `elements` array"));
+        return Err(anyhow!(
+            "malformed Overpass response: missing `elements` array"
+        ));
     }
     parse_buildings(data)
 }
@@ -84,7 +89,11 @@ pub(crate) fn parse_buildings(data: &serde_json::Value) -> Result<Vec<OsmFeature
     let mut buildings = Vec::new();
     let mut nodes: std::collections::HashMap<u64, [f64; 2]> = std::collections::HashMap::new();
 
-    let elements = data.get("elements").and_then(|e| e.as_array()).cloned().unwrap_or_default();
+    let elements = data
+        .get("elements")
+        .and_then(|e| e.as_array())
+        .cloned()
+        .unwrap_or_default();
 
     // First pass: collect nodes
     for el in &elements {
@@ -101,24 +110,44 @@ pub(crate) fn parse_buildings(data: &serde_json::Value) -> Result<Vec<OsmFeature
 
     // Second pass: build ways
     for el in &elements {
-        if el.get("type").and_then(|t| t.as_str()) != Some("way") { continue; }
+        if el.get("type").and_then(|t| t.as_str()) != Some("way") {
+            continue;
+        }
         let tags = el.get("tags").cloned().unwrap_or(serde_json::json!({}));
-        if tags.get("building").is_none() { continue; }
+        if tags.get("building").is_none() {
+            continue;
+        }
 
-        let node_ids = el.get("nodes").and_then(|n| n.as_array()).cloned().unwrap_or_default();
-        let outline: Vec<[f64; 2]> = node_ids.iter()
+        let node_ids = el
+            .get("nodes")
+            .and_then(|n| n.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let outline: Vec<[f64; 2]> = node_ids
+            .iter()
             .filter_map(|id| id.as_u64().and_then(|id| nodes.get(&id).copied()))
             .collect();
 
-        if outline.len() < 3 { continue; }
+        if outline.len() < 3 {
+            continue;
+        }
 
-        let height = tags.get("height").and_then(|h| h.as_str())
+        let height = tags
+            .get("height")
+            .and_then(|h| h.as_str())
             .and_then(|s| s.trim_end_matches('m').trim().parse::<f32>().ok())
             .or(Some(8.0)); // default building height
 
-        let name = tags.get("name").and_then(|n| n.as_str()).map(|s| s.to_string());
+        let name = tags
+            .get("name")
+            .and_then(|n| n.as_str())
+            .map(|s| s.to_string());
 
-        buildings.push(OsmFeature::Building { outline, height, name });
+        buildings.push(OsmFeature::Building {
+            outline,
+            height,
+            name,
+        });
     }
 
     Ok(buildings)
@@ -128,7 +157,11 @@ fn parse_roads(data: &serde_json::Value) -> Result<Vec<OsmFeature>> {
     let mut roads = Vec::new();
     let mut nodes: std::collections::HashMap<u64, [f64; 2]> = std::collections::HashMap::new();
 
-    let elements = data.get("elements").and_then(|e| e.as_array()).cloned().unwrap_or_default();
+    let elements = data
+        .get("elements")
+        .and_then(|e| e.as_array())
+        .cloned()
+        .unwrap_or_default();
 
     for el in &elements {
         if el.get("type").and_then(|t| t.as_str()) == Some("node") {
@@ -143,19 +176,33 @@ fn parse_roads(data: &serde_json::Value) -> Result<Vec<OsmFeature>> {
     }
 
     for el in &elements {
-        if el.get("type").and_then(|t| t.as_str()) != Some("way") { continue; }
+        if el.get("type").and_then(|t| t.as_str()) != Some("way") {
+            continue;
+        }
         let tags = el.get("tags").cloned().unwrap_or(serde_json::json!({}));
         let highway = tags.get("highway").and_then(|h| h.as_str());
-        if highway.is_none() { continue; }
+        if highway.is_none() {
+            continue;
+        }
 
-        let node_ids = el.get("nodes").and_then(|n| n.as_array()).cloned().unwrap_or_default();
-        let path: Vec<[f64; 2]> = node_ids.iter()
+        let node_ids = el
+            .get("nodes")
+            .and_then(|n| n.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let path: Vec<[f64; 2]> = node_ids
+            .iter()
             .filter_map(|id| id.as_u64().and_then(|id| nodes.get(&id).copied()))
             .collect();
 
-        if path.len() < 2 { continue; }
+        if path.len() < 2 {
+            continue;
+        }
 
-        let name = tags.get("name").and_then(|n| n.as_str()).map(|s| s.to_string());
+        let name = tags
+            .get("name")
+            .and_then(|n| n.as_str())
+            .map(|s| s.to_string());
 
         roads.push(OsmFeature::Road {
             path,
@@ -209,7 +256,11 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_buildings_rejects_oversized_radius() {
-        let center = GeoPoint { lat: 43.0, lon: -79.0, alt: 0.0 };
+        let center = GeoPoint {
+            lat: 43.0,
+            lon: -79.0,
+            alt: 0.0,
+        };
         let err = fetch_buildings(&center, MAX_RADIUS_M + 1.0).await.err();
         assert!(err.is_some(), "should reject radius > MAX_RADIUS_M");
     }

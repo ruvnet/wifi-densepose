@@ -76,10 +76,7 @@ use super::state::AppState;
 ///         description: WebSocket connection established
 /// ```
 #[tracing::instrument(skip(state, ws))]
-pub async fn ws_handler(
-    State(state): State<AppState>,
-    ws: WebSocketUpgrade,
-) -> Response {
+pub async fn ws_handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> Response {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
@@ -88,7 +85,8 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
 
     // Subscription state for this connection
-    let subscriptions: Arc<Mutex<SubscriptionState>> = Arc::new(Mutex::new(SubscriptionState::new()));
+    let subscriptions: Arc<Mutex<SubscriptionState>> =
+        Arc::new(Mutex::new(SubscriptionState::new()));
 
     // Subscribe to broadcast channel
     let mut broadcast_rx = state.subscribe();
@@ -260,7 +258,7 @@ impl SubscriptionState {
             WebSocketMessage::ZoneScanComplete { event_id, .. } => Some(*event_id),
             WebSocketMessage::EventStatusChanged { event_id, .. } => Some(*event_id),
             WebSocketMessage::Heartbeat { .. } => None, // Always receive
-            WebSocketMessage::Error { .. } => None, // Always receive
+            WebSocketMessage::Error { .. } => None,     // Always receive
         };
 
         match event_id {

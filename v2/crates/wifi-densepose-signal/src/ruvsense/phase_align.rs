@@ -68,7 +68,8 @@ impl Default for PhaseAlignConfig {
 /// removes them to produce phase-coherent multi-band observations.
 #[derive(Debug)]
 pub struct PhaseAligner {
-    /// Number of channels expected.
+    /// Number of channels expected (reserved for future validation).
+    #[allow(dead_code)]
     num_channels: usize,
     /// Configuration parameters.
     config: PhaseAlignConfig,
@@ -249,10 +250,7 @@ fn estimate_phase_offsets(
 }
 
 /// Apply phase correction: subtract offset from each subcarrier phase.
-fn apply_phase_correction(
-    frames: &[CanonicalCsiFrame],
-    offsets: &[f32],
-) -> Vec<CanonicalCsiFrame> {
+fn apply_phase_correction(frames: &[CanonicalCsiFrame], offsets: &[f32]) -> Vec<CanonicalCsiFrame> {
     frames
         .iter()
         .zip(offsets.iter())
@@ -310,7 +308,9 @@ mod tests {
 
     fn make_frame_with_phase(n: usize, base_phase: f32, offset: f32) -> CanonicalCsiFrame {
         let amplitude: Vec<f32> = (0..n).map(|i| 1.0 + 0.01 * i as f32).collect();
-        let phase: Vec<f32> = (0..n).map(|i| base_phase + i as f32 * 0.01 + offset).collect();
+        let phase: Vec<f32> = (0..n)
+            .map(|i| base_phase + i as f32 * 0.01 + offset)
+            .collect();
         CanonicalCsiFrame {
             amplitude,
             phase,
@@ -340,7 +340,10 @@ mod tests {
         let f1 = make_frame_with_phase(56, 0.0, 0.0);
         let f2 = make_frame_with_phase(30, 0.0, 0.0);
         let result = aligner.align(&[f1, f2]);
-        assert!(matches!(result, Err(PhaseAlignError::PhaseLengthMismatch { .. })));
+        assert!(matches!(
+            result,
+            Err(PhaseAlignError::PhaseLengthMismatch { .. })
+        ));
     }
 
     #[test]

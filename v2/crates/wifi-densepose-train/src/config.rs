@@ -366,16 +366,10 @@ impl TrainingConfig {
             return Err(ConfigError::invalid_value("batch_size", "must be > 0"));
         }
         if self.learning_rate <= 0.0 {
-            return Err(ConfigError::invalid_value(
-                "learning_rate",
-                "must be > 0.0",
-            ));
+            return Err(ConfigError::invalid_value("learning_rate", "must be > 0.0"));
         }
         if self.weight_decay < 0.0 {
-            return Err(ConfigError::invalid_value(
-                "weight_decay",
-                "must be >= 0.0",
-            ));
+            return Err(ConfigError::invalid_value("weight_decay", "must be >= 0.0"));
         }
         if self.grad_clip_norm <= 0.0 {
             return Err(ConfigError::invalid_value(
@@ -474,7 +468,9 @@ mod tests {
         let path = tmp.path().join("config.json");
 
         let original = TrainingConfig::default();
-        original.to_json(&path).expect("serialization should succeed");
+        original
+            .to_json(&path)
+            .expect("serialization should succeed");
 
         let loaded = TrainingConfig::from_json(&path).expect("deserialization should succeed");
         assert_eq!(loaded.num_subcarriers, original.num_subcarriers);
@@ -485,57 +481,78 @@ mod tests {
 
     #[test]
     fn zero_subcarriers_is_invalid() {
-        let mut cfg = TrainingConfig::default();
-        cfg.num_subcarriers = 0;
+        let cfg = TrainingConfig {
+            num_subcarriers: 0,
+            ..TrainingConfig::default()
+        };
         assert!(cfg.validate().is_err());
     }
 
     #[test]
     fn negative_learning_rate_is_invalid() {
-        let mut cfg = TrainingConfig::default();
-        cfg.learning_rate = -0.001;
+        let cfg = TrainingConfig {
+            learning_rate: -0.001,
+            ..TrainingConfig::default()
+        };
         assert!(cfg.validate().is_err());
     }
 
     #[test]
     fn warmup_equal_to_epochs_is_invalid() {
-        let mut cfg = TrainingConfig::default();
-        cfg.warmup_epochs = cfg.num_epochs;
+        let default = TrainingConfig::default();
+        let cfg = TrainingConfig {
+            warmup_epochs: default.num_epochs,
+            ..default
+        };
         assert!(cfg.validate().is_err());
     }
 
     #[test]
     fn non_increasing_milestones_are_invalid() {
-        let mut cfg = TrainingConfig::default();
-        cfg.lr_milestones = vec![30, 20]; // wrong order
+        let cfg = TrainingConfig {
+            lr_milestones: vec![30, 20],
+            ..TrainingConfig::default()
+        };
         assert!(cfg.validate().is_err());
     }
 
     #[test]
     fn milestone_beyond_epochs_is_invalid() {
-        let mut cfg = TrainingConfig::default();
-        cfg.lr_milestones = vec![30, cfg.num_epochs + 1];
+        let default = TrainingConfig::default();
+        let beyond = default.num_epochs + 1;
+        let cfg = TrainingConfig {
+            lr_milestones: vec![30, beyond],
+            ..default
+        };
         assert!(cfg.validate().is_err());
     }
 
     #[test]
     fn all_zero_loss_weights_are_invalid() {
-        let mut cfg = TrainingConfig::default();
-        cfg.lambda_kp = 0.0;
-        cfg.lambda_dp = 0.0;
-        cfg.lambda_tr = 0.0;
+        let cfg = TrainingConfig {
+            lambda_kp: 0.0,
+            lambda_dp: 0.0,
+            lambda_tr: 0.0,
+            ..TrainingConfig::default()
+        };
         assert!(cfg.validate().is_err());
     }
 
     #[test]
     fn needs_subcarrier_interp_when_counts_differ() {
-        let mut cfg = TrainingConfig::default();
-        cfg.num_subcarriers = 56;
-        cfg.native_subcarriers = 114;
+        let cfg = TrainingConfig {
+            num_subcarriers: 56,
+            native_subcarriers: 114,
+            ..TrainingConfig::default()
+        };
         assert!(cfg.needs_subcarrier_interp());
 
-        cfg.native_subcarriers = 56;
-        assert!(!cfg.needs_subcarrier_interp());
+        let cfg2 = TrainingConfig {
+            num_subcarriers: 56,
+            native_subcarriers: 56,
+            ..TrainingConfig::default()
+        };
+        assert!(!cfg2.needs_subcarrier_interp());
     }
 
     #[test]

@@ -43,11 +43,19 @@ impl TileProvider {
 }
 
 /// Fetch a single tile with caching.
-pub async fn fetch_tile(provider: &TileProvider, coord: &TileCoord, cache: &TileCache) -> Result<RasterTile> {
+pub async fn fetch_tile(
+    provider: &TileProvider,
+    coord: &TileCoord,
+    cache: &TileCache,
+) -> Result<RasterTile> {
     let cache_key = format!("tiles_{}_{}_{}.dat", coord.z, coord.x, coord.y);
 
     if let Some(data) = cache.get(&cache_key) {
-        return Ok(RasterTile { coord: coord.clone(), data, bounds: coord::tile_bounds(coord) });
+        return Ok(RasterTile {
+            coord: coord.clone(),
+            data,
+            bounds: coord::tile_bounds(coord),
+        });
     }
 
     let url = provider.url(coord);
@@ -63,11 +71,20 @@ pub async fn fetch_tile(provider: &TileProvider, coord: &TileCoord, cache: &Tile
     let data = resp.bytes().await?.to_vec();
     cache.put(&cache_key, &data)?;
 
-    Ok(RasterTile { coord: coord.clone(), data, bounds: coord::tile_bounds(coord) })
+    Ok(RasterTile {
+        coord: coord.clone(),
+        data,
+        bounds: coord::tile_bounds(coord),
+    })
 }
 
 /// Fetch all tiles covering a bounding box.
-pub async fn fetch_area(provider: &TileProvider, bbox: &GeoBBox, zoom: u8, cache: &TileCache) -> Result<Vec<RasterTile>> {
+pub async fn fetch_area(
+    provider: &TileProvider,
+    bbox: &GeoBBox,
+    zoom: u8,
+    cache: &TileCache,
+) -> Result<Vec<RasterTile>> {
     let coords = coord::tiles_for_bbox(bbox, zoom);
     let mut tiles = Vec::with_capacity(coords.len());
     for c in &coords {

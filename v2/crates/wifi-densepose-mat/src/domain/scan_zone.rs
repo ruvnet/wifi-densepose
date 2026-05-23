@@ -66,12 +66,21 @@ pub enum ZoneBounds {
 impl ZoneBounds {
     /// Create a rectangular zone
     pub fn rectangle(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Self {
-        ZoneBounds::Rectangle { min_x, min_y, max_x, max_y }
+        ZoneBounds::Rectangle {
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+        }
     }
 
     /// Create a circular zone
     pub fn circle(center_x: f64, center_y: f64, radius: f64) -> Self {
-        ZoneBounds::Circle { center_x, center_y, radius }
+        ZoneBounds::Circle {
+            center_x,
+            center_y,
+            radius,
+        }
     }
 
     /// Create a polygon zone
@@ -82,12 +91,13 @@ impl ZoneBounds {
     /// Calculate the area of the zone in square meters
     pub fn area(&self) -> f64 {
         match self {
-            ZoneBounds::Rectangle { min_x, min_y, max_x, max_y } => {
-                (max_x - min_x) * (max_y - min_y)
-            }
-            ZoneBounds::Circle { radius, .. } => {
-                std::f64::consts::PI * radius * radius
-            }
+            ZoneBounds::Rectangle {
+                min_x,
+                min_y,
+                max_x,
+                max_y,
+            } => (max_x - min_x) * (max_y - min_y),
+            ZoneBounds::Circle { radius, .. } => std::f64::consts::PI * radius * radius,
             ZoneBounds::Polygon { vertices } => {
                 // Shoelace formula
                 if vertices.len() < 3 {
@@ -108,10 +118,17 @@ impl ZoneBounds {
     /// Check if a point is within the zone bounds
     pub fn contains(&self, x: f64, y: f64) -> bool {
         match self {
-            ZoneBounds::Rectangle { min_x, min_y, max_x, max_y } => {
-                x >= *min_x && x <= *max_x && y >= *min_y && y <= *max_y
-            }
-            ZoneBounds::Circle { center_x, center_y, radius } => {
+            ZoneBounds::Rectangle {
+                min_x,
+                min_y,
+                max_x,
+                max_y,
+            } => x >= *min_x && x <= *max_x && y >= *min_y && y <= *max_y,
+            ZoneBounds::Circle {
+                center_x,
+                center_y,
+                radius,
+            } => {
                 let dx = x - center_x;
                 let dy = y - center_y;
                 (dx * dx + dy * dy).sqrt() <= *radius
@@ -127,9 +144,7 @@ impl ZoneBounds {
                 for i in 0..n {
                     let (xi, yi) = vertices[i];
                     let (xj, yj) = vertices[j];
-                    if ((yi > y) != (yj > y))
-                        && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)
-                    {
+                    if ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi) {
                         inside = !inside;
                     }
                     j = i;
@@ -142,12 +157,15 @@ impl ZoneBounds {
     /// Get the center point of the zone
     pub fn center(&self) -> (f64, f64) {
         match self {
-            ZoneBounds::Rectangle { min_x, min_y, max_x, max_y } => {
-                ((min_x + max_x) / 2.0, (min_y + max_y) / 2.0)
-            }
-            ZoneBounds::Circle { center_x, center_y, .. } => {
-                (*center_x, *center_y)
-            }
+            ZoneBounds::Rectangle {
+                min_x,
+                min_y,
+                max_x,
+                max_y,
+            } => ((min_x + max_x) / 2.0, (min_y + max_y) / 2.0),
+            ZoneBounds::Circle {
+                center_x, center_y, ..
+            } => (*center_x, *center_y),
             ZoneBounds::Polygon { vertices } => {
                 if vertices.is_empty() {
                     return (0.0, 0.0);
@@ -271,6 +289,7 @@ pub struct ScanZone {
     sensor_positions: Vec<SensorPosition>,
     parameters: ScanParameters,
     status: ZoneStatus,
+    #[allow(dead_code)]
     created_at: DateTime<Utc>,
     last_scan: Option<DateTime<Utc>>,
     scan_count: u32,
@@ -403,9 +422,11 @@ impl ScanZone {
     /// Check if zone has enough sensors for localization
     pub fn has_sufficient_sensors(&self) -> bool {
         // Need at least 3 sensors for 2D localization
-        self.sensor_positions.iter()
+        self.sensor_positions
+            .iter()
             .filter(|s| s.is_operational)
-            .count() >= 3
+            .count()
+            >= 3
     }
 
     /// Time since last scan
@@ -440,10 +461,7 @@ mod tests {
 
     #[test]
     fn test_scan_zone_creation() {
-        let zone = ScanZone::new(
-            "Test Zone",
-            ZoneBounds::rectangle(0.0, 0.0, 50.0, 30.0),
-        );
+        let zone = ScanZone::new("Test Zone", ZoneBounds::rectangle(0.0, 0.0, 50.0, 30.0));
 
         assert_eq!(zone.name(), "Test Zone");
         assert!(matches!(zone.status(), ZoneStatus::Active));
@@ -452,10 +470,7 @@ mod tests {
 
     #[test]
     fn test_scan_zone_sensors() {
-        let mut zone = ScanZone::new(
-            "Test Zone",
-            ZoneBounds::rectangle(0.0, 0.0, 50.0, 30.0),
-        );
+        let mut zone = ScanZone::new("Test Zone", ZoneBounds::rectangle(0.0, 0.0, 50.0, 30.0));
 
         assert!(!zone.has_sufficient_sensors());
 
@@ -475,10 +490,7 @@ mod tests {
 
     #[test]
     fn test_scan_zone_status_transitions() {
-        let mut zone = ScanZone::new(
-            "Test",
-            ZoneBounds::rectangle(0.0, 0.0, 10.0, 10.0),
-        );
+        let mut zone = ScanZone::new("Test", ZoneBounds::rectangle(0.0, 0.0, 10.0, 10.0));
 
         assert!(matches!(zone.status(), ZoneStatus::Active));
 

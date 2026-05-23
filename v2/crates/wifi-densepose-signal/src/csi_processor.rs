@@ -650,12 +650,8 @@ mod tests {
     use ndarray::Array2;
 
     fn create_test_csi_data() -> CsiData {
-        let amplitude = Array2::from_shape_fn((4, 64), |(i, j)| {
-            1.0 + 0.1 * ((i + j) as f64).sin()
-        });
-        let phase = Array2::from_shape_fn((4, 64), |(i, j)| {
-            0.5 * ((i + j) as f64 * 0.1).sin()
-        });
+        let amplitude = Array2::from_shape_fn((4, 64), |(i, j)| 1.0 + 0.1 * ((i + j) as f64).sin());
+        let phase = Array2::from_shape_fn((4, 64), |(i, j)| 0.5 * ((i + j) as f64 * 0.1).sin());
 
         CsiData::builder()
             .amplitude(amplitude)
@@ -680,9 +676,7 @@ mod tests {
 
     #[test]
     fn test_invalid_config() {
-        let config = CsiProcessorConfig::builder()
-            .sampling_rate(-100.0)
-            .build();
+        let config = CsiProcessorConfig::builder().sampling_rate(-100.0).build();
 
         assert!(config.validate().is_err());
     }
@@ -711,9 +705,7 @@ mod tests {
 
     #[test]
     fn test_history_management() {
-        let config = CsiProcessorConfig::builder()
-            .max_history_size(5)
-            .build();
+        let config = CsiProcessorConfig::builder().max_history_size(5).build();
         let mut processor = CsiProcessor::new(config).unwrap();
 
         for _ in 0..10 {
@@ -726,9 +718,7 @@ mod tests {
 
     #[test]
     fn test_temporal_smoothing() {
-        let config = CsiProcessorConfig::builder()
-            .smoothing_factor(0.9)
-            .build();
+        let config = CsiProcessorConfig::builder().smoothing_factor(0.9).build();
         let mut processor = CsiProcessor::new(config).unwrap();
 
         let smoothed1 = processor.apply_temporal_smoothing(1.0);

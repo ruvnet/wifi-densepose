@@ -89,11 +89,17 @@ mod tests {
         let mut buf = CompressedBreathingBuffer::new(n_subcarriers, 1);
 
         for i in 0..20 {
-            let amplitudes: Vec<f32> = (0..n_subcarriers).map(|s| (i * n_subcarriers + s) as f32 * 0.01).collect();
+            let amplitudes: Vec<f32> = (0..n_subcarriers)
+                .map(|s| (i * n_subcarriers + s) as f32 * 0.01)
+                .collect();
             buf.push_frame(&amplitudes);
         }
 
-        assert_eq!(buf.frame_count(), 20, "frame_count must equal the number of pushed frames");
+        assert_eq!(
+            buf.frame_count(),
+            20,
+            "frame_count must equal the number of pushed frames"
+        );
     }
 
     #[test]

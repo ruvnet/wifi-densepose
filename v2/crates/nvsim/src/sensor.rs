@@ -63,12 +63,7 @@ pub const DEFAULT_N_SPINS: f64 = 1.0e12;
 /// Tetrahedral 〈111〉 family in the diamond lattice.
 pub fn nv_axes() -> [[f64; 3]; 4] {
     let s = 1.0 / 3.0_f64.sqrt();
-    [
-        [s, s, s],
-        [s, -s, -s],
-        [-s, s, -s],
-        [-s, -s, s],
-    ]
+    [[s, s, s], [s, -s, -s], [-s, s, -s], [-s, -s, s]]
 }
 
 /// Sensor configuration. All defaults match plan §2.3 / Barry 2020 Table III
@@ -163,8 +158,9 @@ impl NvSensor {
     /// per-sample noise σ in T.
     pub fn shot_noise_floor_t_sqrt_hz(&self, integration_s: f64) -> f64 {
         let t = integration_s.max(self.config.t2_star_s);
-        let denom =
-            GAMMA_E * self.config.contrast * (self.config.n_spins * t * self.config.t2_star_s).sqrt();
+        let denom = GAMMA_E
+            * self.config.contrast
+            * (self.config.n_spins * t * self.config.t2_star_s).sqrt();
         if denom <= 0.0 {
             f64::INFINITY
         } else {
@@ -316,13 +312,10 @@ mod tests {
         ];
         for &b_in in &inputs {
             let r = s.sample(b_in, 1.0e-3, 0xCAFE_BABE);
-            for k in 0..3 {
-                let denom = b_in[k].abs().max(1e-30);
-                let rel = (r.b_recovered[k] - b_in[k]).abs() / denom;
-                assert!(
-                    rel < 0.01,
-                    "LSQ residual {rel:.4} exceeds 1% for axis {k}"
-                );
+            for (k, (&b_recovered, &b_orig)) in r.b_recovered.iter().zip(b_in.iter()).enumerate() {
+                let denom = b_orig.abs().max(1e-30);
+                let rel = (b_recovered - b_orig).abs() / denom;
+                assert!(rel < 0.01, "LSQ residual {rel:.4} exceeds 1% for axis {k}");
             }
         }
     }
@@ -338,19 +331,19 @@ mod tests {
         let mut sum = [0.0_f64; 3];
         for i in 0..n {
             let r = s.sample([0.0; 3], dt, 0xDEAD_BEEF + i as u64);
-            for k in 0..3 {
-                sum[k] += r.b_recovered[k];
+            for (s, &b) in sum.iter_mut().zip(r.b_recovered.iter()) {
+                *s += b;
             }
         }
         let mean = [sum[0] / n as f64, sum[1] / n as f64, sum[2] / n as f64];
         // Stat margin: σ_mean = σ / √n. Allow ≤ 1σ_mean (loose).
         let r = s.sample([0.0; 3], dt, 0);
         let sigma_mean = r.sigma_per_axis[0] / (n as f64).sqrt();
-        for k in 0..3 {
+        for (k, &m) in mean.iter().enumerate() {
             assert!(
-                mean[k].abs() <= sigma_mean,
+                m.abs() <= sigma_mean,
                 "axis {k} zero-input mean {} exceeds σ_mean {}",
-                mean[k],
+                m,
                 sigma_mean
             );
         }
@@ -392,6 +385,9 @@ mod tests {
         // form depends on this. Verify the matrix.
         let axes = nv_axes();
         let mut ata = [[0.0_f64; 3]; 3];
+        // Compute AᵀA using explicit 2D indexing — clippy::needless_range_loop
+        // cannot be avoided here without losing clarity in this matrix formula.
+        #[allow(clippy::needless_range_loop)]
         for j in 0..3 {
             for k in 0..3 {
                 let mut acc = 0.0;
@@ -401,6 +397,7 @@ mod tests {
                 ata[j][k] = acc;
             }
         }
+        #[allow(clippy::needless_range_loop)]
         for j in 0..3 {
             for k in 0..3 {
                 let expected = if j == k { 4.0 / 3.0 } else { 0.0 };

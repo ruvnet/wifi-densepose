@@ -76,7 +76,8 @@ pub async fn serve(bind: &str, _brain: Option<&str>) -> anyhow::Result<()> {
 
             let (cloud, luminance) = if bg_cam && !skip_depth {
                 tokio::task::spawn_blocking(capture_camera_cloud_with_luminance)
-                    .await.unwrap_or_else(|_| (demo_cloud(), None))
+                    .await
+                    .unwrap_or_else(|_| (demo_cloud(), None))
             } else {
                 // Reuse previous cloud when no motion
                 (bg.latest_cloud.lock().unwrap().clone(), None)
@@ -107,8 +108,11 @@ pub async fn serve(bind: &str, _brain: Option<&str>) -> anyhow::Result<()> {
         }
     });
 
-    if has_camera { eprintln!("  Camera: LIVE (/dev/video0)"); }
-    else { eprintln!("  Camera: DEMO"); }
+    if has_camera {
+        eprintln!("  Camera: LIVE (/dev/video0)");
+    } else {
+        eprintln!("  Camera: DEMO");
+    }
 
     // CORS — allow the hosted GitHub Pages viewer to fetch /api/splats from a
     // locally-running instance of this server. Modern browsers treat
@@ -173,12 +177,14 @@ fn capture_camera_cloud_with_luminance() -> (pointcloud::PointCloud, Option<f32>
             let mut sum = 0.0f64;
             let mut n = 0usize;
             for chunk in frame.rgb.chunks_exact(3).take(pixels) {
-                sum += 0.299 * chunk[0] as f64
-                     + 0.587 * chunk[1] as f64
-                     + 0.114 * chunk[2] as f64;
+                sum += 0.299 * chunk[0] as f64 + 0.587 * chunk[1] as f64 + 0.114 * chunk[2] as f64;
                 n += 1;
             }
-            let lum = if n > 0 { Some((sum / n as f64) as f32) } else { None };
+            let lum = if n > 0 {
+                Some((sum / n as f64) as f32)
+            } else {
+                None
+            };
 
             let cloud = match depth::estimate_depth(&frame.rgb, frame.width, frame.height) {
                 Ok(dm) => {
@@ -255,4 +261,3 @@ static VIEWER_HTML: &str = include_str!("viewer.html");
 async fn index() -> Html<&'static str> {
     Html(VIEWER_HTML)
 }
-

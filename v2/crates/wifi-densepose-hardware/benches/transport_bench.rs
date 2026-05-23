@@ -6,12 +6,11 @@
 //! - Replay window check performance
 //! - FramedMessage encode/decode throughput
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::time::Duration;
 use wifi_densepose_hardware::esp32::{
-    TdmSchedule, SyncBeacon, SecurityMode, QuicTransportConfig,
-    SecureTdmCoordinator, SecureTdmConfig, SecLevel,
-    AuthenticatedBeacon, ReplayWindow, FramedMessage, MessageType,
+    AuthenticatedBeacon, FramedMessage, MessageType, QuicTransportConfig, ReplayWindow, SecLevel,
+    SecureTdmConfig, SecureTdmCoordinator, SecurityMode, SyncBeacon, TdmSchedule,
 };
 
 fn make_beacon() -> SyncBeacon {
@@ -43,12 +42,14 @@ fn bench_beacon_serialize_authenticated(c: &mut Criterion) {
     c.bench_function("beacon_serialize_28byte_auth", |b| {
         b.iter(|| {
             let tag = AuthenticatedBeacon::compute_tag(black_box(&msg), &key);
-            black_box(AuthenticatedBeacon {
-                beacon: beacon.clone(),
-                nonce,
-                hmac_tag: tag,
-            }
-            .to_bytes());
+            black_box(
+                AuthenticatedBeacon {
+                    beacon: beacon.clone(),
+                    nonce,
+                    hmac_tag: tag,
+                }
+                .to_bytes(),
+            );
         });
     });
 }
@@ -114,15 +115,11 @@ fn bench_framed_message_roundtrip(c: &mut Criterion) {
         let msg = FramedMessage::new(MessageType::CsiFrame, payload);
         let bytes = msg.to_bytes();
 
-        group.bench_with_input(
-            BenchmarkId::new("encode", payload_size),
-            &msg,
-            |b, msg| {
-                b.iter(|| {
-                    black_box(msg.to_bytes());
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("encode", payload_size), &msg, |b, msg| {
+            b.iter(|| {
+                black_box(msg.to_bytes());
+            });
+        });
 
         group.bench_with_input(
             BenchmarkId::new("decode", payload_size),

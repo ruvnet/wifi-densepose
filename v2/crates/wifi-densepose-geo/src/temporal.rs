@@ -18,13 +18,28 @@ pub async fn fetch_weather(point: &GeoPoint) -> Result<WeatherData> {
         .build()?;
 
     let resp: serde_json::Value = client.get(&url).send().await?.json().await?;
-    let current = resp.get("current").cloned().unwrap_or(serde_json::json!({}));
+    let current = resp
+        .get("current")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
 
     Ok(WeatherData {
-        temperature_c: current.get("temperature_2m").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
-        humidity_pct: current.get("relative_humidity_2m").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
-        wind_speed_ms: current.get("wind_speed_10m").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
-        weather_code: current.get("weather_code").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
+        temperature_c: current
+            .get("temperature_2m")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32,
+        humidity_pct: current
+            .get("relative_humidity_2m")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32,
+        wind_speed_ms: current
+            .get("wind_speed_10m")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32,
+        weather_code: current
+            .get("weather_code")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u16,
     })
 }
 
@@ -33,7 +48,8 @@ pub async fn check_osm_changes(scene: &GeoScene, cache: &TileCache) -> Result<Ve
     let mut changes = Vec::new();
 
     let cache_key = "osm_building_count";
-    let prev_count: usize = cache.get(cache_key)
+    let prev_count: usize = cache
+        .get(cache_key)
         .and_then(|d| String::from_utf8(d).ok())
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0);
@@ -41,7 +57,10 @@ pub async fn check_osm_changes(scene: &GeoScene, cache: &TileCache) -> Result<Ve
     let current_count = scene.buildings.len();
     if prev_count > 0 && current_count != prev_count {
         let diff = current_count as i64 - prev_count as i64;
-        changes.push(format!("Building count changed: {} → {} ({:+})", prev_count, current_count, diff));
+        changes.push(format!(
+            "Building count changed: {} → {} ({:+})",
+            prev_count, current_count, diff
+        ));
     }
 
     cache.put(cache_key, current_count.to_string().as_bytes())?;
@@ -199,9 +218,7 @@ pub fn is_night_at(lat_deg: f64, utc: chrono::DateTime<chrono::Utc>) -> bool {
 
     // Solar declination (Spencer, 1971 — simplified)
     let gamma = 2.0 * PI * (day_of_year - 1.0) / 365.0;
-    let decl = 0.006918
-        - 0.399912 * gamma.cos()
-        + 0.070257 * gamma.sin()
+    let decl = 0.006918 - 0.399912 * gamma.cos() + 0.070257 * gamma.sin()
         - 0.006758 * (2.0 * gamma).cos()
         + 0.000907 * (2.0 * gamma).sin();
 
@@ -290,7 +307,9 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let result = rt.block_on(detect_tile_changes("test_tile_ident", &data, &cache)).unwrap();
+        let result = rt
+            .block_on(detect_tile_changes("test_tile_ident", &data, &cache))
+            .unwrap();
         assert!((result.diff_score - 0.0).abs() < 1e-9);
         assert_eq!(result.changed_pixels, 0);
     }
@@ -306,7 +325,9 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let result = rt.block_on(detect_tile_changes("test_tile_diff", &new, &cache)).unwrap();
+        let result = rt
+            .block_on(detect_tile_changes("test_tile_diff", &new, &cache))
+            .unwrap();
         assert!((result.diff_score - 1.0).abs() < 1e-9);
     }
 }

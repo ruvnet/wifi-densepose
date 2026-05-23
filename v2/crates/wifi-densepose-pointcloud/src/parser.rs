@@ -43,10 +43,14 @@ pub struct CsiFrame {
 /// - the magic does not match either accepted value
 /// - the declared I/Q payload is truncated
 pub fn parse_adr018(data: &[u8]) -> Option<CsiFrame> {
-    if data.len() < CSI_HEADER_SIZE { return None; }
+    if data.len() < CSI_HEADER_SIZE {
+        return None;
+    }
 
     let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-    if magic != CSI_MAGIC_V6 && magic != CSI_MAGIC_V1 { return None; }
+    if magic != CSI_MAGIC_V6 && magic != CSI_MAGIC_V1 {
+        return None;
+    }
 
     let node_id = data[4];
     let n_antennas = data[5].max(1);
@@ -57,10 +61,14 @@ pub fn parse_adr018(data: &[u8]) -> Option<CsiFrame> {
     let timestamp_us = u32::from_le_bytes([data[16], data[17], data[18], data[19]]);
 
     let iq_len = (n_subcarriers as usize) * 2 * (n_antennas as usize);
-    if data.len() < CSI_HEADER_SIZE + iq_len { return None; }
+    if data.len() < CSI_HEADER_SIZE + iq_len {
+        return None;
+    }
 
     let iq_data: Vec<i8> = data[CSI_HEADER_SIZE..CSI_HEADER_SIZE + iq_len]
-        .iter().map(|&b| b as i8).collect();
+        .iter()
+        .map(|&b| b as i8)
+        .collect();
 
     // Compute amplitude and phase per subcarrier (first antenna).
     let mut amplitudes = Vec::with_capacity(n_subcarriers as usize);
@@ -76,8 +84,16 @@ pub fn parse_adr018(data: &[u8]) -> Option<CsiFrame> {
     }
 
     Some(CsiFrame {
-        node_id, n_antennas, n_subcarriers, channel, rssi, noise_floor,
-        timestamp_us, iq_data, amplitudes, phases,
+        node_id,
+        n_antennas,
+        n_subcarriers,
+        channel,
+        rssi,
+        noise_floor,
+        timestamp_us,
+        iq_data,
+        amplitudes,
+        phases,
     })
 }
 
@@ -85,15 +101,15 @@ pub fn parse_adr018(data: &[u8]) -> Option<CsiFrame> {
 /// subcommand and by the unit tests in this module.
 pub fn build_test_frame(magic: u32, node_id: u8, n_subcarriers: u16, i: usize) -> Vec<u8> {
     let mut buf = Vec::with_capacity(CSI_HEADER_SIZE + (n_subcarriers as usize) * 2);
-    buf.extend_from_slice(&magic.to_le_bytes());                 // magic (0..4)
-    buf.push(node_id);                                           // node_id (4)
-    buf.push(1u8);                                               // n_antennas (5)
-    buf.extend_from_slice(&n_subcarriers.to_le_bytes());         // n_subcarriers (6..8)
-    buf.push(6u8);                                               // channel (8)
-    buf.push((-40i8 - (i % 30) as i8) as u8);                    // rssi (9)
-    buf.push((-90i8) as u8);                                     // noise_floor (10)
-    buf.extend_from_slice(&[0u8; 5]);                            // reserved (11..16)
-    buf.extend_from_slice(&(i as u32).to_le_bytes());            // timestamp_us (16..20)
+    buf.extend_from_slice(&magic.to_le_bytes()); // magic (0..4)
+    buf.push(node_id); // node_id (4)
+    buf.push(1u8); // n_antennas (5)
+    buf.extend_from_slice(&n_subcarriers.to_le_bytes()); // n_subcarriers (6..8)
+    buf.push(6u8); // channel (8)
+    buf.push((-40i8 - (i % 30) as i8) as u8); // rssi (9)
+    buf.push((-90i8) as u8); // noise_floor (10)
+    buf.extend_from_slice(&[0u8; 5]); // reserved (11..16)
+    buf.extend_from_slice(&(i as u32).to_le_bytes()); // timestamp_us (16..20)
     for j in 0..(n_subcarriers as usize) {
         buf.push(((i + j) as i8).wrapping_mul(3) as u8);
         buf.push(((i + j) as i8).wrapping_mul(5) as u8);
@@ -150,7 +166,10 @@ mod tests {
     #[test]
     fn parse_rejects_truncated_header() {
         let short = vec![0u8; CSI_HEADER_SIZE - 1];
-        assert!(parse_adr018(&short).is_none(), "truncated header must not parse");
+        assert!(
+            parse_adr018(&short).is_none(),
+            "truncated header must not parse"
+        );
     }
 
     #[test]
@@ -158,6 +177,9 @@ mod tests {
         let mut frame = build_test_frame(MAGIC_V1, 0, 32, 0);
         // Drop half the declared payload.
         frame.truncate(CSI_HEADER_SIZE + 20);
-        assert!(parse_adr018(&frame).is_none(), "truncated payload must not parse");
+        assert!(
+            parse_adr018(&frame).is_none(),
+            "truncated payload must not parse"
+        );
     }
 }

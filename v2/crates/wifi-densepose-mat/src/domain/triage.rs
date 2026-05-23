@@ -3,7 +3,7 @@
 //! The START (Simple Triage and Rapid Treatment) protocol is used to
 //! quickly categorize victims in mass casualty incidents.
 
-use super::{VitalSignsReading, BreathingType, MovementType};
+use super::{BreathingType, MovementType, VitalSignsReading};
 
 /// Triage status following START protocol
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -132,9 +132,7 @@ impl TriageCalculator {
     /// Assess movement/responsiveness
     fn assess_movement(vitals: &VitalSignsReading) -> MovementAssessment {
         match vitals.movement.movement_type {
-            MovementType::Gross if vitals.movement.is_voluntary => {
-                MovementAssessment::Responsive
-            }
+            MovementType::Gross if vitals.movement.is_voluntary => MovementAssessment::Responsive,
             MovementType::Gross => MovementAssessment::Moving,
             MovementType::Fine => MovementAssessment::MinimalMovement,
             MovementType::Tremor => MovementAssessment::InvoluntaryOnly,
@@ -150,32 +148,20 @@ impl TriageCalculator {
     ) -> TriageStatus {
         match (breathing, movement) {
             // No breathing
-            (BreathingAssessment::Absent, MovementAssessment::None) => {
-                TriageStatus::Deceased
-            }
-            (BreathingAssessment::Agonal, _) => {
-                TriageStatus::Immediate
-            }
+            (BreathingAssessment::Absent, MovementAssessment::None) => TriageStatus::Deceased,
+            (BreathingAssessment::Agonal, _) => TriageStatus::Immediate,
             (BreathingAssessment::Absent, _) => {
                 // No breathing but movement - possible airway obstruction
                 TriageStatus::Immediate
             }
 
             // Abnormal breathing rates
-            (BreathingAssessment::TooFast, _) => {
-                TriageStatus::Immediate
-            }
-            (BreathingAssessment::TooSlow, _) => {
-                TriageStatus::Immediate
-            }
+            (BreathingAssessment::TooFast, _) => TriageStatus::Immediate,
+            (BreathingAssessment::TooSlow, _) => TriageStatus::Immediate,
 
             // Normal breathing with movement assessment
-            (BreathingAssessment::Normal, MovementAssessment::Responsive) => {
-                TriageStatus::Minor
-            }
-            (BreathingAssessment::Normal, MovementAssessment::Moving) => {
-                TriageStatus::Delayed
-            }
+            (BreathingAssessment::Normal, MovementAssessment::Responsive) => TriageStatus::Minor,
+            (BreathingAssessment::Normal, MovementAssessment::Moving) => TriageStatus::Delayed,
             (BreathingAssessment::Normal, MovementAssessment::MinimalMovement) => {
                 TriageStatus::Delayed
             }
@@ -288,7 +274,10 @@ mod tests {
                 is_voluntary: false,
             },
         );
-        assert_eq!(TriageCalculator::calculate(&vitals), TriageStatus::Immediate);
+        assert_eq!(
+            TriageCalculator::calculate(&vitals),
+            TriageStatus::Immediate
+        );
     }
 
     #[test]
@@ -307,7 +296,10 @@ mod tests {
                 is_voluntary: false,
             },
         );
-        assert_eq!(TriageCalculator::calculate(&vitals), TriageStatus::Immediate);
+        assert_eq!(
+            TriageCalculator::calculate(&vitals),
+            TriageStatus::Immediate
+        );
     }
 
     #[test]
@@ -321,7 +313,10 @@ mod tests {
             }),
             MovementProfile::default(),
         );
-        assert_eq!(TriageCalculator::calculate(&vitals), TriageStatus::Immediate);
+        assert_eq!(
+            TriageCalculator::calculate(&vitals),
+            TriageStatus::Immediate
+        );
     }
 
     #[test]

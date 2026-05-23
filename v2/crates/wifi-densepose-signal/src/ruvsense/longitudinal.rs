@@ -374,11 +374,7 @@ impl EmbeddingHistory {
     /// `sketch_version` is the producing embedding-model version (bump it
     /// on any model change so callers can invalidate stored sketches
     /// instead of silently comparing across generations).
-    pub fn with_sketch(
-        embedding_dim: usize,
-        max_entries: usize,
-        sketch_version: u16,
-    ) -> Self {
+    pub fn with_sketch(embedding_dim: usize, max_entries: usize, sketch_version: u16) -> Self {
         Self {
             entries: Vec::new(),
             sketches: Vec::new(),

@@ -2,6 +2,7 @@
 //!
 //! This module provides the shared state that is passed to all API handlers.
 //! It contains repositories, services, and real-time event broadcasting.
+#![allow(missing_docs)]
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -10,12 +11,12 @@ use parking_lot::RwLock;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::domain::{
-    DisasterEvent, Alert,
-    events::{EventStore, InMemoryEventStore},
-};
-use crate::detection::{DetectionPipeline, DetectionConfig};
 use super::dto::WebSocketMessage;
+use crate::detection::{DetectionConfig, DetectionPipeline};
+use crate::domain::{
+    events::{EventStore, InMemoryEventStore},
+    Alert, DisasterEvent,
+};
 
 /// Shared application state for the API.
 ///
@@ -109,12 +110,16 @@ impl AppState {
 
     /// Get scanning state.
     pub fn is_scanning(&self) -> bool {
-        self.inner.scanning.load(std::sync::atomic::Ordering::SeqCst)
+        self.inner
+            .scanning
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Set scanning state.
     pub fn set_scanning(&self, state: bool) {
-        self.inner.scanning.store(state, std::sync::atomic::Ordering::SeqCst);
+        self.inner
+            .scanning
+            .store(state, std::sync::atomic::Ordering::SeqCst);
     }
 
     // ========================================================================
@@ -235,7 +240,7 @@ impl Default for AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{DisasterType, DisasterEvent};
+    use crate::domain::{DisasterEvent, DisasterType};
     use geo::Point;
 
     #[test]
@@ -258,11 +263,7 @@ mod tests {
     #[test]
     fn test_update_event() {
         let state = AppState::new();
-        let event = DisasterEvent::new(
-            DisasterType::Earthquake,
-            Point::new(0.0, 0.0),
-            "Test",
-        );
+        let event = DisasterEvent::new(DisasterType::Earthquake, Point::new(0.0, 0.0), "Test");
         let id = *event.id().as_uuid();
         state.store_event(event);
 
@@ -279,7 +280,7 @@ mod tests {
     #[test]
     fn test_broadcast_subscribe() {
         let state = AppState::new();
-        let mut rx = state.subscribe();
+        let _rx = state.subscribe();
 
         state.broadcast(WebSocketMessage::Heartbeat {
             timestamp: chrono::Utc::now(),

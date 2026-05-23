@@ -58,12 +58,12 @@ pub struct LosSegment {
 pub fn material_loss_db_per_m(m: Material) -> f64 {
     match m {
         Material::Air => 0.0,
-        Material::Drywall => 0.0,           // conjecture: gypsum non-ferromagnetic
-        Material::Brick => 0.0,             // conjecture: same logic as drywall
-        Material::ConcreteDry => 0.5,       // conjecture: Ulrich 2002 proxy
+        Material::Drywall => 0.0, // conjecture: gypsum non-ferromagnetic
+        Material::Brick => 0.0,   // conjecture: same logic as drywall
+        Material::ConcreteDry => 0.5, // conjecture: Ulrich 2002 proxy
         Material::ReinforcedConcrete => 20.0, // proxy + warning flag (plan §2.2)
-        Material::SheetSteel => 100.0,      // frequency-dependent in reality;
-                                            // representative DC bulk loss
+        Material::SheetSteel => 100.0, // frequency-dependent in reality;
+                                   // representative DC bulk loss
     }
 }
 
@@ -92,10 +92,7 @@ pub fn attenuate(b_in: Vec3, segments: &[LosSegment]) -> (Vec3, bool) {
         heavy |= material_is_heavy(seg.material);
     }
     let scale = 10.0_f64.powf(-total_db / 20.0);
-    (
-        [b_in[0] * scale, b_in[1] * scale, b_in[2] * scale],
-        heavy,
-    )
+    ([b_in[0] * scale, b_in[1] * scale, b_in[2] * scale], heavy)
 }
 
 /// Aggregate "propagator" type — currently a stateless wrapper over
@@ -175,8 +172,8 @@ mod tests {
         }];
         let (b_out, heavy) = attenuate(b_in, &segs);
         let expected = 10.0_f64.powf(-4.0 / 20.0);
-        for k in 0..3 {
-            assert_relative_eq!(b_out[k], expected, max_relative = 1e-12);
+        for &val in &b_out {
+            assert_relative_eq!(val, expected, max_relative = 1e-12);
         }
         assert!(heavy, "reinforced concrete must raise heavy_flag");
     }

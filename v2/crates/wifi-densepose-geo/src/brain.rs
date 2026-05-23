@@ -13,8 +13,8 @@ const DEFAULT_BRAIN_URL: &str = "http://127.0.0.1:9876";
 pub(crate) fn brain_url() -> &'static str {
     static BRAIN_URL: OnceLock<String> = OnceLock::new();
     BRAIN_URL.get_or_init(|| {
-        let url = std::env::var("RUVIEW_BRAIN_URL")
-            .unwrap_or_else(|_| DEFAULT_BRAIN_URL.to_string());
+        let url =
+            std::env::var("RUVIEW_BRAIN_URL").unwrap_or_else(|_| DEFAULT_BRAIN_URL.to_string());
         eprintln!("  wifi-densepose-geo: using brain URL {url}");
         url
     })
@@ -34,7 +34,13 @@ pub async fn store_geo_context(scene: &GeoScene) -> Result<u32> {
         "category": "spatial-geo",
         "content": summary,
     });
-    if client.post(format!("{}/memories", brain_url())).json(&body).send().await.is_ok() {
+    if client
+        .post(format!("{}/memories", brain_url()))
+        .json(&body)
+        .send()
+        .await
+        .is_ok()
+    {
         stored += 1;
     }
 

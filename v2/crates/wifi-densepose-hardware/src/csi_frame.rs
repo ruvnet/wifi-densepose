@@ -28,11 +28,15 @@ impl CsiFrame {
     /// - amplitude = sqrt(I^2 + Q^2)
     /// - phase = atan2(Q, I)
     pub fn to_amplitude_phase(&self) -> (Vec<f64>, Vec<f64>) {
-        let amplitudes: Vec<f64> = self.subcarriers.iter()
+        let amplitudes: Vec<f64> = self
+            .subcarriers
+            .iter()
             .map(|sc| (sc.i as f64 * sc.i as f64 + sc.q as f64 * sc.q as f64).sqrt())
             .collect();
 
-        let phases: Vec<f64> = self.subcarriers.iter()
+        let phases: Vec<f64> = self
+            .subcarriers
+            .iter()
             .map(|sc| (sc.q as f64).atan2(sc.i as f64))
             .collect();
 
@@ -44,7 +48,9 @@ impl CsiFrame {
         if self.subcarriers.is_empty() {
             return 0.0;
         }
-        let sum: f64 = self.subcarriers.iter()
+        let sum: f64 = self
+            .subcarriers
+            .iter()
             .map(|sc| (sc.i as f64 * sc.i as f64 + sc.q as f64 * sc.q as f64).sqrt())
             .sum();
         sum / self.subcarriers.len() as f64
@@ -52,8 +58,7 @@ impl CsiFrame {
 
     /// Check if this frame has valid data (non-zero subcarriers with non-zero I/Q).
     pub fn is_valid(&self) -> bool {
-        !self.subcarriers.is_empty()
-            && self.subcarriers.iter().any(|sc| sc.i != 0 || sc.q != 0)
+        !self.subcarriers.is_empty() && self.subcarriers.iter().any(|sc| sc.i != 0 || sc.q != 0)
     }
 }
 
@@ -156,9 +161,21 @@ mod tests {
                 sequence: 1,
             },
             subcarriers: vec![
-                SubcarrierData { i: 100, q: 0, index: -28 },
-                SubcarrierData { i: 0, q: 50, index: -27 },
-                SubcarrierData { i: 30, q: 40, index: -26 },
+                SubcarrierData {
+                    i: 100,
+                    q: 0,
+                    index: -28,
+                },
+                SubcarrierData {
+                    i: 0,
+                    q: 50,
+                    index: -27,
+                },
+                SubcarrierData {
+                    i: 30,
+                    q: 40,
+                    index: -26,
+                },
             ],
         }
     }

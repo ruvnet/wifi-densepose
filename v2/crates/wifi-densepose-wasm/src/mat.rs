@@ -746,7 +746,8 @@ impl MatDashboard {
                 // Fire callback
                 if let Some(callback) = &state.on_zone_updated {
                     let this = JsValue::NULL;
-                    let zone_value = serde_wasm_bindgen::to_value(&js_zone).unwrap_or(JsValue::NULL);
+                    let zone_value =
+                        serde_wasm_bindgen::to_value(&js_zone).unwrap_or(JsValue::NULL);
                     let _ = callback.call1(&this, &zone_value);
                 }
 
@@ -1231,10 +1232,10 @@ impl MatDashboard {
 
                         // Draw zone name at centroid
                         if !vertices.is_empty() {
-                            let cx: f64 =
-                                vertices.iter().map(|(x, _)| x).sum::<f64>() / vertices.len() as f64;
-                            let cy: f64 =
-                                vertices.iter().map(|(_, y)| y).sum::<f64>() / vertices.len() as f64;
+                            let cx: f64 = vertices.iter().map(|(x, _)| x).sum::<f64>()
+                                / vertices.len() as f64;
+                            let cy: f64 = vertices.iter().map(|(_, y)| y).sum::<f64>()
+                                / vertices.len() as f64;
                             ctx.set_fill_style_str("#ffffff");
                             ctx.set_font("12px sans-serif");
                             let _ = ctx.fill_text(&zone.name, cx - 20.0, cy);
@@ -1254,13 +1255,23 @@ impl MatDashboard {
 
         for survivor in state.survivors.values() {
             let color = survivor.triage_status.color();
-            let radius = if survivor.is_deteriorating { 12.0 } else { 10.0 };
+            let radius = if survivor.is_deteriorating {
+                12.0
+            } else {
+                10.0
+            };
 
             // Draw outer glow for urgent survivors
             if survivor.triage_status == JsTriageStatus::Immediate {
                 ctx.set_fill_style_str("rgba(255, 0, 0, 0.3)");
                 ctx.begin_path();
-                let _ = ctx.arc(survivor.x, survivor.y, radius + 8.0, 0.0, std::f64::consts::TAU);
+                let _ = ctx.arc(
+                    survivor.x,
+                    survivor.y,
+                    radius + 8.0,
+                    0.0,
+                    std::f64::consts::TAU,
+                );
                 ctx.fill();
             }
 
@@ -1319,13 +1330,15 @@ impl MatDashboard {
         if amplitudes.len() != phases.len() {
             return serde_json::json!({
                 "error": "Amplitudes and phases must have equal length"
-            }).to_string();
+            })
+            .to_string();
         }
 
         if amplitudes.is_empty() {
             return serde_json::json!({
                 "error": "CSI data cannot be empty"
-            }).to_string();
+            })
+            .to_string();
         }
 
         // Lightweight breathing rate extraction using zero-crossing analysis
@@ -1334,9 +1347,7 @@ impl MatDashboard {
 
         // Compute amplitude mean and variance
         let mean: f64 = amplitudes.iter().sum::<f64>() / n as f64;
-        let variance: f64 = amplitudes.iter()
-            .map(|a| (a - mean).powi(2))
-            .sum::<f64>() / n as f64;
+        let variance: f64 = amplitudes.iter().map(|a| (a - mean).powi(2)).sum::<f64>() / n as f64;
 
         // Count zero crossings (crossings of mean value) for frequency estimation
         let mut zero_crossings = 0usize;
@@ -1362,29 +1373,40 @@ impl MatDashboard {
         let breathing_rate_bpm = estimated_freq * 60.0;
 
         // Confidence based on signal variance and consistency
-        let confidence = if variance > 0.001 && breathing_rate_bpm > 4.0 && breathing_rate_bpm < 40.0 {
-            let regularity = 1.0 - (variance.sqrt() / mean.abs().max(0.01)).min(1.0);
-            (regularity * 0.8 + 0.2).min(1.0)
-        } else {
-            0.0
-        };
+        let confidence =
+            if variance > 0.001 && breathing_rate_bpm > 4.0 && breathing_rate_bpm < 40.0 {
+                let regularity = 1.0 - (variance.sqrt() / mean.abs().max(0.01)).min(1.0);
+                (regularity * 0.8 + 0.2).min(1.0)
+            } else {
+                0.0
+            };
 
         // Phase coherence (how correlated phase is with amplitude)
         let phase_mean: f64 = phases.iter().sum::<f64>() / n as f64;
         let _phase_coherence: f64 = if n > 1 {
-            let cov: f64 = amplitudes.iter().zip(phases.iter())
+            let cov: f64 = amplitudes
+                .iter()
+                .zip(phases.iter())
                 .map(|(a, p)| (a - mean) * (p - phase_mean))
-                .sum::<f64>() / n as f64;
+                .sum::<f64>()
+                / n as f64;
             let std_a = variance.sqrt();
-            let std_p = (phases.iter().map(|p| (p - phase_mean).powi(2)).sum::<f64>() / n as f64).sqrt();
-            if std_a > 0.0 && std_p > 0.0 { (cov / (std_a * std_p)).abs() } else { 0.0 }
+            let std_p =
+                (phases.iter().map(|p| (p - phase_mean).powi(2)).sum::<f64>() / n as f64).sqrt();
+            if std_a > 0.0 && std_p > 0.0 {
+                (cov / (std_a * std_p)).abs()
+            } else {
+                0.0
+            }
         } else {
             0.0
         };
 
         log::debug!(
             "CSI analysis: {} samples, rate={:.1} BPM, confidence={:.2}",
-            n, breathing_rate_bpm, confidence
+            n,
+            breathing_rate_bpm,
+            confidence
         );
 
         let result = serde_json::json!({
@@ -1413,7 +1435,8 @@ impl MatDashboard {
             "heartbeat_freq_range": [0.8, 3.0],
             "min_confidence": 0.3,
             "buffer_duration_secs": 10.0,
-        }).to_string()
+        })
+        .to_string()
     }
 
     // ========================================================================

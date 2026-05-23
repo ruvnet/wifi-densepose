@@ -64,6 +64,7 @@ pub struct TrackLifecycle {
     state: TrackState,
     birth_hits_required: u32,
     max_active_misses: u32,
+    #[allow(dead_code)]
     max_lost_age_secs: f64,
     /// Consecutive misses while Active (resets on hit).
     active_miss_count: u32,
@@ -128,7 +129,10 @@ impl TrackLifecycle {
                     };
                 }
             }
-            TrackState::Lost { miss_count, lost_since } => {
+            TrackState::Lost {
+                miss_count,
+                lost_since,
+            } => {
                 let new_count = miss_count + 1;
                 let since = *lost_since;
                 self.state = TrackState::Lost {
@@ -163,7 +167,10 @@ impl TrackLifecycle {
 
     /// True if track is Active or Tentative (should keep in active pool).
     pub fn is_active_or_tentative(&self) -> bool {
-        matches!(self.state, TrackState::Active | TrackState::Tentative { .. })
+        matches!(
+            self.state,
+            TrackState::Active | TrackState::Tentative { .. }
+        )
     }
 
     /// True if track is in Lost state.

@@ -143,16 +143,14 @@ mod tests {
     #[test]
     fn test_clean_signal_unchanged() {
         // A smooth sinusoid should have zero outliers
-        let signal: Vec<f64> = (0..100)
-            .map(|i| (i as f64 * 0.1).sin())
-            .collect();
+        let signal: Vec<f64> = (0..100).map(|i| (i as f64 * 0.1).sin()).collect();
 
         let result = hampel_filter(&signal, &HampelConfig::default()).unwrap();
         assert!(result.outlier_indices.is_empty());
 
-        for i in 0..signal.len() {
+        for (i, (&filt, &orig)) in result.filtered.iter().zip(signal.iter()).enumerate() {
             assert!(
-                (result.filtered[i] - signal[i]).abs() < 1e-10,
+                (filt - orig).abs() < 1e-10,
                 "Clean signal modified at index {}",
                 i
             );
@@ -171,9 +169,7 @@ mod tests {
 
     #[test]
     fn test_multiple_spikes() {
-        let mut signal: Vec<f64> = (0..200)
-            .map(|i| (i as f64 * 0.05).sin())
-            .collect();
+        let mut signal: Vec<f64> = (0..200).map(|i| (i as f64 * 0.05).sin()).collect();
 
         // Insert spikes
         signal[30] = 50.0;

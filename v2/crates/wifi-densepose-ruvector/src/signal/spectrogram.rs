@@ -21,16 +21,21 @@ use ruvector_attn_mincut::attn_mincut;
 /// # Returns
 ///
 /// Gated spectrogram of the same length `n_freq * n_time`.
-pub fn gate_spectrogram(spectrogram: &[f32], n_freq: usize, n_time: usize, lambda: f32) -> Vec<f32> {
+pub fn gate_spectrogram(
+    spectrogram: &[f32],
+    n_freq: usize,
+    n_time: usize,
+    lambda: f32,
+) -> Vec<f32> {
     let out = attn_mincut(
-        spectrogram,  // q
-        spectrogram,  // k
-        spectrogram,  // v
-        n_freq,       // d: feature dimension
-        n_time,       // seq_len: number of time frames
-        lambda,       // lambda: min-cut threshold
-        2,            // tau: temporal hysteresis window
-        1e-7_f32,     // eps: numerical epsilon
+        spectrogram, // q
+        spectrogram, // k
+        spectrogram, // v
+        n_freq,      // d: feature dimension
+        n_time,      // seq_len: number of time frames
+        lambda,      // lambda: min-cut threshold
+        2,           // tau: temporal hysteresis window
+        1e-7_f32,    // eps: numerical epsilon
     );
     out.output
 }

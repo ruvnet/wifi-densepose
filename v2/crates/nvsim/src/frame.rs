@@ -217,7 +217,10 @@ mod tests {
         let mut bytes = MagFrame::empty(0).to_bytes();
         bytes[4..6].copy_from_slice(&99_u16.to_le_bytes());
         let err = MagFrame::from_bytes(&bytes).unwrap_err();
-        assert!(matches!(err, crate::NvsimError::UnsupportedVersion { got: 99, .. }));
+        assert!(matches!(
+            err,
+            crate::NvsimError::UnsupportedVersion { got: 99, .. }
+        ));
     }
 
     #[test]

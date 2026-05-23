@@ -55,9 +55,9 @@ pub fn mincut_subcarrier_partition(sensitivity: &[f32]) -> (Vec<usize>, Vec<usiz
 
     // Source connects to subcarriers with above-average sensitivity.
     // Sink connects to subcarriers with below-average sensitivity.
-    for i in 0..n {
-        let cap = (sensitivity[i] as f64).abs() + 1e-6;
-        if sensitivity[i] >= mean_sens {
+    for (i, &sens) in sensitivity.iter().enumerate().take(n) {
+        let cap = (sens as f64).abs() + 1e-6;
+        if sens >= mean_sens {
             edges.push((source, i as u64, cap));
         } else {
             edges.push((i as u64, sink, cap));
@@ -176,10 +176,17 @@ mod tests {
 
         // Both groups must be non-empty for a non-trivial input.
         assert!(!sensitive.is_empty(), "sensitive group must not be empty");
-        assert!(!insensitive.is_empty(), "insensitive group must not be empty");
+        assert!(
+            !insensitive.is_empty(),
+            "insensitive group must not be empty"
+        );
 
         // Together they must cover every index exactly once.
-        let mut all_indices: Vec<usize> = sensitive.iter().chain(insensitive.iter()).cloned().collect();
+        let mut all_indices: Vec<usize> = sensitive
+            .iter()
+            .chain(insensitive.iter())
+            .cloned()
+            .collect();
         all_indices.sort_unstable();
         let expected: Vec<usize> = (0..10).collect();
         assert_eq!(all_indices, expected, "partition must cover all 10 indices");
@@ -214,7 +221,7 @@ mod tests {
         // the same way (either all sensitive or all insensitive after mincut).
         // At minimum, no weight should exceed 2.0 or be negative.
         for &wt in &w {
-            assert!(wt >= 0.5 && wt <= 2.0, "weight {wt} out of range");
+            assert!((0.5..=2.0).contains(&wt), "weight {wt} out of range");
         }
     }
 

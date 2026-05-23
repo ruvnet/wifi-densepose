@@ -115,8 +115,12 @@ impl HeartRateExtractor {
         }
 
         // Use autocorrelation to find the dominant periodicity
-        let (period_samples, acf_peak) =
-            autocorrelation_peak(&self.filtered_history, self.sample_rate, self.freq_low, self.freq_high);
+        let (period_samples, acf_peak) = autocorrelation_peak(
+            &self.filtered_history,
+            self.sample_rate,
+            self.freq_low,
+            self.freq_high,
+        );
 
         if period_samples == 0 {
             return None;
@@ -385,7 +389,10 @@ mod tests {
         // Two coherent subcarriers (small phase difference)
         let result = compute_phase_coherence_signal(&[1.0, 1.0], &[0.0, 0.01], 2);
         // Both weights should be ~1.0 (exp(-0.01) ~ 0.99), so result ~ 1.0
-        assert!((result - 1.0).abs() < 0.1, "coherent result should be ~1.0: {result}");
+        assert!(
+            (result - 1.0).abs() < 0.1,
+            "coherent result should be ~1.0: {result}"
+        );
     }
 
     #[test]

@@ -209,7 +209,10 @@ mod tests {
         log_b.push(&s, 0.25, 999_999);
         let wa = log_a.iter().next().unwrap().witness_sha256;
         let wb = log_b.iter().next().unwrap().witness_sha256;
-        assert_eq!(wa, wb, "witness must be content-addressable, not time-addressable");
+        assert_eq!(
+            wa, wb,
+            "witness must be content-addressable, not time-addressable"
+        );
     }
 
     #[test]

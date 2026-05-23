@@ -5,12 +5,10 @@
 //! dimension scaling using the `ruvector-crv` crate directly.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use ruvector_crv::types::{GeometricKind, SketchElement, SpatialRelationType, SpatialRelationship};
 use ruvector_crv::{
     CrvConfig, CrvSessionManager, GestaltType, SensoryModality, StageIData, StageIIData,
     StageIIIData, StageIVData,
-};
-use ruvector_crv::types::{
-    GeometricKind, SketchElement, SpatialRelationType, SpatialRelationship,
 };
 
 // ---------------------------------------------------------------------------
@@ -142,9 +140,7 @@ fn gestalt_classify_single(c: &mut Criterion) {
 
     c.bench_function("gestalt_classify_single", |b| {
         b.iter(|| {
-            manager
-                .add_stage_i("gc-single", black_box(&data))
-                .unwrap();
+            manager.add_stage_i("gc-single", black_box(&data)).unwrap();
         })
     });
 }
@@ -193,9 +189,7 @@ fn sensory_encode_single(c: &mut Criterion) {
 
     c.bench_function("sensory_encode_single", |b| {
         b.iter(|| {
-            manager
-                .add_stage_ii("se-single", black_box(&data))
-                .unwrap();
+            manager.add_stage_ii("se-single", black_box(&data)).unwrap();
         })
     });
 }
@@ -224,9 +218,7 @@ fn pipeline_full_session(c: &mut Criterion) {
 
             // 10 frames across stages I-IV
             for _ in 0..3 {
-                manager
-                    .add_stage_i(&sid, black_box(&stage_i_data))
-                    .unwrap();
+                manager.add_stage_i(&sid, black_box(&stage_i_data)).unwrap();
             }
             for _ in 0..3 {
                 manager
@@ -261,7 +253,11 @@ fn pipeline_full_session(c: &mut Criterion) {
 /// Benchmark: cross-session convergence analysis with 2 independent
 /// sessions of 10 frames each, targeting the same coordinate.
 fn convergence_two_sessions(c: &mut Criterion) {
-    let gestalts = [GestaltType::Manmade, GestaltType::Natural, GestaltType::Energy];
+    let gestalts = [
+        GestaltType::Manmade,
+        GestaltType::Natural,
+        GestaltType::Energy,
+    ];
     let stage_ii_data = make_stage_ii();
 
     c.bench_function("convergence_two_sessions", |b| {
@@ -356,9 +352,7 @@ fn crv_embedding_dimension_scaling(c: &mut Criterion) {
                     .unwrap();
 
                 // Encode one Stage I + one Stage II at this dimensionality
-                let emb_i = manager
-                    .add_stage_i(&sid, black_box(&stage_i_data))
-                    .unwrap();
+                let emb_i = manager.add_stage_i(&sid, black_box(&stage_i_data)).unwrap();
                 let emb_ii = manager
                     .add_stage_ii(&sid, black_box(&stage_ii_data))
                     .unwrap();

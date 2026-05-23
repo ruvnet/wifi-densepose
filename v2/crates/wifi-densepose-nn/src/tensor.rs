@@ -49,7 +49,10 @@ impl TensorShape {
         let max_dims = self.ndim().max(other.ndim());
         for i in 0..max_dims {
             let d1 = self.0.get(self.ndim().saturating_sub(i + 1)).unwrap_or(&1);
-            let d2 = other.0.get(other.ndim().saturating_sub(i + 1)).unwrap_or(&1);
+            let d2 = other
+                .0
+                .get(other.ndim().saturating_sub(i + 1))
+                .unwrap_or(&1);
             if *d1 != *d2 && *d1 != 1 && *d2 != 1 {
                 return false;
             }
@@ -217,12 +220,24 @@ impl Tensor {
     /// Get the underlying data as a slice
     pub fn as_slice(&self) -> NnResult<&[f32]> {
         match self {
-            Tensor::Float1D(a) => a.as_slice().ok_or_else(|| NnError::tensor_op("Non-contiguous array")),
-            Tensor::Float2D(a) => a.as_slice().ok_or_else(|| NnError::tensor_op("Non-contiguous array")),
-            Tensor::Float3D(a) => a.as_slice().ok_or_else(|| NnError::tensor_op("Non-contiguous array")),
-            Tensor::Float4D(a) => a.as_slice().ok_or_else(|| NnError::tensor_op("Non-contiguous array")),
-            Tensor::FloatND(a) => a.as_slice().ok_or_else(|| NnError::tensor_op("Non-contiguous array")),
-            _ => Err(NnError::tensor_op("Cannot get float slice from integer tensor")),
+            Tensor::Float1D(a) => a
+                .as_slice()
+                .ok_or_else(|| NnError::tensor_op("Non-contiguous array")),
+            Tensor::Float2D(a) => a
+                .as_slice()
+                .ok_or_else(|| NnError::tensor_op("Non-contiguous array")),
+            Tensor::Float3D(a) => a
+                .as_slice()
+                .ok_or_else(|| NnError::tensor_op("Non-contiguous array")),
+            Tensor::Float4D(a) => a
+                .as_slice()
+                .ok_or_else(|| NnError::tensor_op("Non-contiguous array")),
+            Tensor::FloatND(a) => a
+                .as_slice()
+                .ok_or_else(|| NnError::tensor_op("Non-contiguous array")),
+            _ => Err(NnError::tensor_op(
+                "Cannot get float slice from integer tensor",
+            )),
         }
     }
 
@@ -234,7 +249,9 @@ impl Tensor {
             Tensor::Float3D(a) => Ok(a.iter().copied().collect()),
             Tensor::Float4D(a) => Ok(a.iter().copied().collect()),
             Tensor::FloatND(a) => Ok(a.iter().copied().collect()),
-            _ => Err(NnError::tensor_op("Cannot convert integer tensor to float vec")),
+            _ => Err(NnError::tensor_op(
+                "Cannot convert integer tensor to float vec",
+            )),
         }
     }
 
@@ -243,7 +260,9 @@ impl Tensor {
         match self {
             Tensor::Float4D(a) => Ok(Tensor::Float4D(a.mapv(|x| x.max(0.0)))),
             Tensor::FloatND(a) => Ok(Tensor::FloatND(a.mapv(|x| x.max(0.0)))),
-            _ => Err(NnError::tensor_op("ReLU not supported for this tensor type")),
+            _ => Err(NnError::tensor_op(
+                "ReLU not supported for this tensor type",
+            )),
         }
     }
 
@@ -252,7 +271,9 @@ impl Tensor {
         match self {
             Tensor::Float4D(a) => Ok(Tensor::Float4D(a.mapv(|x| 1.0 / (1.0 + (-x).exp())))),
             Tensor::FloatND(a) => Ok(Tensor::FloatND(a.mapv(|x| 1.0 / (1.0 + (-x).exp())))),
-            _ => Err(NnError::tensor_op("Sigmoid not supported for this tensor type")),
+            _ => Err(NnError::tensor_op(
+                "Sigmoid not supported for this tensor type",
+            )),
         }
     }
 
@@ -261,12 +282,14 @@ impl Tensor {
         match self {
             Tensor::Float4D(a) => Ok(Tensor::Float4D(a.mapv(|x| x.tanh()))),
             Tensor::FloatND(a) => Ok(Tensor::FloatND(a.mapv(|x| x.tanh()))),
-            _ => Err(NnError::tensor_op("Tanh not supported for this tensor type")),
+            _ => Err(NnError::tensor_op(
+                "Tanh not supported for this tensor type",
+            )),
         }
     }
 
     /// Apply softmax along axis
-    pub fn softmax(&self, axis: usize) -> NnResult<Tensor> {
+    pub fn softmax(&self, _axis: usize) -> NnResult<Tensor> {
         match self {
             Tensor::Float4D(a) => {
                 let max = a.fold(f32::NEG_INFINITY, |acc, &x| acc.max(x));
@@ -274,7 +297,9 @@ impl Tensor {
                 let sum = exp.sum();
                 Ok(Tensor::Float4D(exp / sum))
             }
-            _ => Err(NnError::tensor_op("Softmax not supported for this tensor type")),
+            _ => Err(NnError::tensor_op(
+                "Softmax not supported for this tensor type",
+            )),
         }
     }
 
@@ -285,13 +310,17 @@ impl Tensor {
                 let result = a.map_axis(ndarray::Axis(axis), |row| {
                     row.iter()
                         .enumerate()
-                        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                        .max_by(|(_, a), (_, b)| {
+                            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                        })
                         .map(|(i, _)| i as i64)
                         .unwrap_or(0)
                 });
                 Ok(Tensor::IntND(result.into_dyn()))
             }
-            _ => Err(NnError::tensor_op("Argmax not supported for this tensor type")),
+            _ => Err(NnError::tensor_op(
+                "Argmax not supported for this tensor type",
+            )),
         }
     }
 
@@ -300,7 +329,9 @@ impl Tensor {
         match self {
             Tensor::Float4D(a) => Ok(a.mean().unwrap_or(0.0)),
             Tensor::FloatND(a) => Ok(a.mean().unwrap_or(0.0)),
-            _ => Err(NnError::tensor_op("Mean not supported for this tensor type")),
+            _ => Err(NnError::tensor_op(
+                "Mean not supported for this tensor type",
+            )),
         }
     }
 
@@ -315,7 +346,7 @@ impl Tensor {
         let first_shape = tensors[0].shape();
         for (i, t) in tensors.iter().enumerate().skip(1) {
             if t.shape() != first_shape {
-                return Err(NnError::tensor_op(&format!(
+                return Err(NnError::tensor_op(format!(
                     "Shape mismatch at index {i}: expected {first_shape}, got {}",
                     t.shape()
                 )));
@@ -328,11 +359,8 @@ impl Tensor {
         }
         let mut new_dims = vec![tensors.len()];
         new_dims.extend_from_slice(first_shape.dims());
-        let arr = ndarray::ArrayD::from_shape_vec(
-            ndarray::IxDyn(&new_dims),
-            all_data,
-        )
-        .map_err(|e| NnError::tensor_op(&format!("Stack reshape failed: {e}")))?;
+        let arr = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&new_dims), all_data)
+            .map_err(|e| NnError::tensor_op(format!("Stack reshape failed: {e}")))?;
         Ok(Tensor::FloatND(arr))
     }
 
@@ -344,9 +372,11 @@ impl Tensor {
             return Err(NnError::tensor_op("Cannot split into 0 pieces"));
         }
         let shape = self.shape();
-        let batch = shape.dim(0).ok_or_else(|| NnError::tensor_op("Tensor has no dimensions"))?;
+        let batch = shape
+            .dim(0)
+            .ok_or_else(|| NnError::tensor_op("Tensor has no dimensions"))?;
         if batch % n != 0 {
-            return Err(NnError::tensor_op(&format!(
+            return Err(NnError::tensor_op(format!(
                 "Batch dim {batch} not divisible by {n}"
             )));
         }
@@ -366,7 +396,7 @@ impl Tensor {
                 ndarray::IxDyn(&sub_dims),
                 data[start..end].to_vec(),
             )
-            .map_err(|e| NnError::tensor_op(&format!("Split reshape failed: {e}")))?;
+            .map_err(|e| NnError::tensor_op(format!("Split reshape failed: {e}")))?;
             result.push(Tensor::FloatND(arr));
         }
         Ok(result)
@@ -462,7 +492,7 @@ mod tests {
     fn test_tensor_shape() {
         let shape = TensorShape::new(vec![1, 3, 224, 224]);
         assert_eq!(shape.ndim(), 4);
-        assert_eq!(shape.numel(), 1 * 3 * 224 * 224);
+        assert_eq!(shape.numel(), 3 * 224 * 224);
         assert_eq!(shape.dim(0), Some(1));
         assert_eq!(shape.dim(1), Some(3));
     }

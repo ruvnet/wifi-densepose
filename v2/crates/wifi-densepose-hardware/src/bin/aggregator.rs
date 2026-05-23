@@ -14,7 +14,10 @@ use wifi_densepose_hardware::{Esp32CsiParser, ParseError};
 
 /// UDP aggregator for ESP32 CSI nodes (ADR-018).
 #[derive(Parser)]
-#[command(name = "aggregator", about = "Receive and display live CSI frames from ESP32 nodes")]
+#[command(
+    name = "aggregator",
+    about = "Receive and display live CSI frames from ESP32 nodes"
+)]
 struct Cli {
     /// Address:port to bind the UDP listener to.
     #[arg(long, default_value = "0.0.0.0:5005")]

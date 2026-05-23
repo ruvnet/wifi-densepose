@@ -94,7 +94,10 @@ impl fmt::Display for WifiScanError {
                 )
             }
             Self::RssiOutOfRange { value } => {
-                write!(f, "RSSI value {value} dBm is out of expected range [-120, 0]")
+                write!(
+                    f,
+                    "RSSI value {value} dBm is out of expected range [-120, 0]"
+                )
             }
             Self::Unsupported(msg) => {
                 write!(f, "unsupported operation: {msg}")

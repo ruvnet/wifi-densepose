@@ -41,8 +41,7 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
 
     // Ensure directory exists
-    fs::create_dir_all(&app_dir)
-        .map_err(|e| format!("Failed to create app data dir: {}", e))?;
+    fs::create_dir_all(&app_dir).map_err(|e| format!("Failed to create app data dir: {}", e))?;
 
     Ok(app_dir.join("settings.json"))
 }
@@ -56,11 +55,11 @@ pub async fn get_settings(app: AppHandle) -> Result<Option<AppSettings>, String>
         return Ok(None);
     }
 
-    let contents = fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read settings: {}", e))?;
+    let contents =
+        fs::read_to_string(&path).map_err(|e| format!("Failed to read settings: {}", e))?;
 
-    let settings: AppSettings = serde_json::from_str(&contents)
-        .map_err(|e| format!("Failed to parse settings: {}", e))?;
+    let settings: AppSettings =
+        serde_json::from_str(&contents).map_err(|e| format!("Failed to parse settings: {}", e))?;
 
     Ok(Some(settings))
 }
@@ -73,8 +72,7 @@ pub async fn save_settings(app: AppHandle, settings: AppSettings) -> Result<(), 
     let contents = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
 
-    fs::write(&path, contents)
-        .map_err(|e| format!("Failed to write settings: {}", e))?;
+    fs::write(&path, contents).map_err(|e| format!("Failed to write settings: {}", e))?;
 
     Ok(())
 }

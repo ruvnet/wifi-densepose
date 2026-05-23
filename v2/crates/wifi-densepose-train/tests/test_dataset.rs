@@ -5,7 +5,7 @@
 //! directory use [`tempfile::TempDir`].
 
 use wifi_densepose_train::dataset::{
-    CsiDataset, MmFiDataset, SyntheticCsiDataset, SyntheticConfig,
+    CsiDataset, MmFiDataset, SyntheticConfig, SyntheticCsiDataset,
 };
 // DatasetError is re-exported at the crate root from error.rs.
 use wifi_densepose_train::DatasetError;
@@ -27,11 +27,7 @@ fn default_cfg() -> SyntheticConfig {
 fn len_returns_constructor_count() {
     for &n in &[0_usize, 1, 10, 100, 200] {
         let ds = SyntheticCsiDataset::new(n, default_cfg());
-        assert_eq!(
-            ds.len(),
-            n,
-            "len() must return {n} for dataset of size {n}"
-        );
+        assert_eq!(ds.len(), n, "len() must return {n} for dataset of size {n}");
     }
 }
 
@@ -69,7 +65,12 @@ fn get_sample_amplitude_shape() {
 
     assert_eq!(
         sample.amplitude.shape(),
-        &[cfg.window_frames, cfg.num_antennas_tx, cfg.num_antennas_rx, cfg.num_subcarriers],
+        &[
+            cfg.window_frames,
+            cfg.num_antennas_tx,
+            cfg.num_antennas_rx,
+            cfg.num_subcarriers
+        ],
         "amplitude shape must be [T, n_tx, n_rx, n_sc]"
     );
 }
@@ -82,7 +83,12 @@ fn get_sample_phase_shape() {
 
     assert_eq!(
         sample.phase.shape(),
-        &[cfg.window_frames, cfg.num_antennas_tx, cfg.num_antennas_rx, cfg.num_subcarriers],
+        &[
+            cfg.window_frames,
+            cfg.num_antennas_tx,
+            cfg.num_antennas_rx,
+            cfg.num_subcarriers
+        ],
         "phase shape must be [T, n_tx, n_rx, n_sc]"
     );
 }
@@ -131,11 +137,11 @@ fn keypoints_in_unit_square() {
             let x = joint[0];
             let y = joint[1];
             assert!(
-                x >= 0.0 && x <= 1.0,
+                (0.0..=1.0).contains(&x),
                 "keypoint x={x} at sample {idx} is outside [0, 1]"
             );
             assert!(
-                y >= 0.0 && y <= 1.0,
+                (0.0..=1.0).contains(&y),
                 "keypoint y={y} at sample {idx} is outside [0, 1]"
             );
         }
@@ -167,7 +173,7 @@ fn amplitude_values_in_physics_range() {
         let sample = ds.get(idx).expect("get must succeed");
         for &v in sample.amplitude.iter() {
             assert!(
-                v >= 0.19 && v <= 0.81,
+                (0.19..=0.81).contains(&v),
                 "amplitude value {v} at sample {idx} is outside [0.2, 0.8]"
             );
         }
@@ -403,10 +409,7 @@ fn dataloader_shuffle_is_deterministic_same_seed() {
     let ids1: Vec<u64> = dl1.iter().flatten().map(|s| s.frame_id).collect();
     let ids2: Vec<u64> = dl2.iter().flatten().map(|s| s.frame_id).collect();
 
-    assert_eq!(
-        ids1, ids2,
-        "same seed must produce identical shuffle order"
-    );
+    assert_eq!(ids1, ids2, "same seed must produce identical shuffle order");
 }
 
 /// Different seeds must produce different iteration orders.
@@ -447,11 +450,7 @@ fn dataloader_empty_dataset_zero_batches() {
 
     let ds = SyntheticCsiDataset::new(0, default_cfg());
     let dl = DataLoader::new(&ds, 4, false, 42);
-    assert_eq!(
-        dl.num_batches(),
-        0,
-        "empty dataset must produce 0 batches"
-    );
+    assert_eq!(dl.num_batches(), 0, "empty dataset must produce 0 batches");
     assert_eq!(
         dl.iter().count(),
         0,

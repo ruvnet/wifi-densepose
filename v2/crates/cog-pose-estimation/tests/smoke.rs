@@ -4,13 +4,15 @@
 //! depend on a trained safetensors blob that doesn't live in-repo yet.
 
 use cog_pose_estimation::{
-    inference::{InferenceEngine, SyntheticInput, INPUT_SUBCARRIERS, INPUT_TIMESTEPS, OUTPUT_KEYPOINTS},
+    inference::{
+        InferenceEngine, SyntheticInput, INPUT_SUBCARRIERS, INPUT_TIMESTEPS, OUTPUT_KEYPOINTS,
+    },
     manifest::ManifestSpec,
 };
 
 #[test]
 fn synthetic_window_has_correct_shape() {
-    let syn = SyntheticInput::default();
+    let syn = SyntheticInput;
     let window = syn.as_window();
     assert_eq!(window.data.len(), INPUT_SUBCARRIERS * INPUT_TIMESTEPS);
 }
@@ -18,17 +20,20 @@ fn synthetic_window_has_correct_shape() {
 #[test]
 fn engine_produces_finite_output_for_synthetic_input() {
     let engine = InferenceEngine::new().expect("engine init");
-    let out = engine
-        .infer(&SyntheticInput::default().as_window())
-        .expect("infer");
-    assert!(out.is_finite(), "synthetic input must produce finite output");
+    let out = engine.infer(&SyntheticInput.as_window()).expect("infer");
+    assert!(
+        out.is_finite(),
+        "synthetic input must produce finite output"
+    );
     assert_eq!(out.keypoints.len(), OUTPUT_KEYPOINTS * 2);
 }
 
 #[test]
 fn engine_rejects_wrong_shape_input() {
     let engine = InferenceEngine::new().expect("engine init");
-    let bad = cog_pose_estimation::inference::CsiWindow { data: vec![0.0; 10] };
+    let bad = cog_pose_estimation::inference::CsiWindow {
+        data: vec![0.0; 10],
+    };
     assert!(engine.infer(&bad).is_err());
 }
 
@@ -47,14 +52,15 @@ fn real_weights_load_when_available() {
         "expected real Candle backend, got {}",
         engine.backend()
     );
-    let out = engine
-        .infer(&SyntheticInput::default().as_window())
-        .expect("infer");
+    let out = engine.infer(&SyntheticInput.as_window()).expect("infer");
     assert!(out.is_finite());
     // Real model emits the published validation PCK@50 as its self-reported
     // confidence — stub returns 0.0. This is the key assertion that proves
     // the cog isn't silently falling back to the stub.
-    assert!(out.confidence > 0.0, "real model should emit non-zero confidence");
+    assert!(
+        out.confidence > 0.0,
+        "real model should emit non-zero confidence"
+    );
 }
 
 #[test]

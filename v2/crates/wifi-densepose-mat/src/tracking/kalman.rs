@@ -3,6 +3,7 @@
 //! Implements a constant-velocity model in 3-D space.
 //! State: [px, py, pz, vx, vy, vz] (metres, m/s)
 //! Observation: [px, py, pz] (metres, from multi-AP triangulation)
+#![allow(clippy::needless_range_loop)]
 
 /// 6×6 matrix type (row-major)
 type Mat6 = [[f64; 6]; 6];
@@ -387,7 +388,7 @@ fn build_process_noise(dt: f64, q_a: f64) -> Mat6 {
 
     let qpp = dt4 / 4.0 * q_a; // position–position diagonal
     let qpv = dt3 / 2.0 * q_a; // position–velocity cross term
-    let qvv = dt2 * q_a;        // velocity–velocity diagonal
+    let qvv = dt2 * q_a; // velocity–velocity diagonal
 
     let mut q = [[0.0f64; 6]; 6];
     for i in 0..3 {

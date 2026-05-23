@@ -10,31 +10,39 @@
 //! - Localization algorithms (triangulation, depth estimation)
 //! - Alert generation
 
-use criterion::{
-    black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput,
-};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::f64::consts::PI;
 
 use wifi_densepose_mat::{
-    // Detection types
-    BreathingDetector, BreathingDetectorConfig,
-    HeartbeatDetector, HeartbeatDetectorConfig,
-    MovementClassifier, MovementClassifierConfig,
-    DetectionConfig, DetectionPipeline, VitalSignsDetector,
-    // Localization types
-    Triangulator, DepthEstimator,
     // Alerting types
     AlertGenerator,
+    // Detection types
+    BreathingDetector,
+    BreathingDetectorConfig,
     // Domain types exported at crate root
-    BreathingPattern, BreathingType, VitalSignsReading,
-    MovementProfile, ScanZoneId, Survivor,
+    BreathingPattern,
+    BreathingType,
+    DepthEstimator,
+    DetectionConfig,
+    DetectionPipeline,
+    HeartbeatDetector,
+    HeartbeatDetectorConfig,
+    MovementClassifier,
+    MovementClassifierConfig,
+    MovementProfile,
+    ScanZoneId,
+    Survivor,
+    // Localization types
+    Triangulator,
+    VitalSignsDetector,
+    VitalSignsReading,
 };
 
 // Types that need to be accessed from submodules
 use wifi_densepose_mat::detection::CsiDataBuffer;
 use wifi_densepose_mat::domain::{
-    ConfidenceScore, SensorPosition, SensorType,
-    DebrisProfile, DebrisMaterial, MoistureLevel, MetalContent,
+    ConfidenceScore, DebrisMaterial, DebrisProfile, MetalContent, MoistureLevel, SensorPosition,
+    SensorType,
 };
 
 use chrono::Utc;
@@ -140,7 +148,8 @@ fn generate_multi_person_signal(
     (0..num_samples)
         .map(|i| {
             let t = i as f64 / sample_rate;
-            base_rates.iter()
+            base_rates
+                .iter()
                 .enumerate()
                 .map(|(idx, &rate)| {
                     let freq = rate / 60.0;
@@ -154,22 +163,26 @@ fn generate_multi_person_signal(
 }
 
 /// Generate movement signal with specified characteristics
-fn generate_movement_signal(
-    movement_type: &str,
-    sample_rate: f64,
-    duration_secs: f64,
-) -> Vec<f64> {
+fn generate_movement_signal(movement_type: &str, sample_rate: f64, duration_secs: f64) -> Vec<f64> {
     let num_samples = (sample_rate * duration_secs) as usize;
 
     match movement_type {
         "gross" => {
             // Large, irregular movements
             let mut signal = vec![0.0; num_samples];
-            for i in (num_samples / 4)..(num_samples / 2) {
-                signal[i] = 2.0;
+            for s in signal
+                .iter_mut()
+                .take(num_samples / 2)
+                .skip(num_samples / 4)
+            {
+                *s = 2.0;
             }
-            for i in (3 * num_samples / 4)..(4 * num_samples / 5) {
-                signal[i] = -1.5;
+            for s in signal
+                .iter_mut()
+                .take(4 * num_samples / 5)
+                .skip(3 * num_samples / 4)
+            {
+                *s = -1.5;
             }
             signal
         }
@@ -259,9 +272,7 @@ fn bench_breathing_detection(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("clean_signal", format!("{}s", duration as u32)),
             &signal,
-            |b, signal| {
-                b.iter(|| detector.detect(black_box(signal), black_box(sample_rate)))
-            },
+            |b, signal| b.iter(|| detector.detect(black_box(signal), black_box(sample_rate))),
         );
     }
 
@@ -270,11 +281,12 @@ fn bench_breathing_detection(c: &mut Criterion) {
         let signal = generate_noisy_breathing_signal(16.0, sample_rate, 30.0, noise_level);
 
         group.bench_with_input(
-            BenchmarkId::new("noisy_signal", format!("noise_{}", (noise_level * 10.0) as u32)),
+            BenchmarkId::new(
+                "noisy_signal",
+                format!("noise_{}", (noise_level * 10.0) as u32),
+            ),
             &signal,
-            |b, signal| {
-                b.iter(|| detector.detect(black_box(signal), black_box(sample_rate)))
-            },
+            |b, signal| b.iter(|| detector.detect(black_box(signal), black_box(sample_rate))),
         );
     }
 
@@ -285,9 +297,7 @@ fn bench_breathing_detection(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("rate_variation", format!("{}bpm", rate as u32)),
             &signal,
-            |b, signal| {
-                b.iter(|| detector.detect(black_box(signal), black_box(sample_rate)))
-            },
+            |b, signal| b.iter(|| detector.detect(black_box(signal), black_box(sample_rate))),
         );
     }
 
@@ -306,9 +316,7 @@ fn bench_breathing_detection(c: &mut Criterion) {
     group.bench_with_input(
         BenchmarkId::new("high_sensitivity", "30s_noisy"),
         &signal,
-        |b, signal| {
-            b.iter(|| sensitive_detector.detect(black_box(signal), black_box(sample_rate)))
-        },
+        |b, signal| b.iter(|| sensitive_detector.detect(black_box(signal), black_box(sample_rate))),
     );
 
     group.finish();
@@ -333,9 +341,7 @@ fn bench_heartbeat_detection(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("clean_signal", format!("{}s", duration as u32)),
             &signal,
-            |b, signal| {
-                b.iter(|| detector.detect(black_box(signal), black_box(sample_rate), None))
-            },
+            |b, signal| b.iter(|| detector.detect(black_box(signal), black_box(sample_rate), None)),
         );
     }
 
@@ -362,9 +368,7 @@ fn bench_heartbeat_detection(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("rate_variation", format!("{}bpm", rate as u32)),
             &signal,
-            |b, signal| {
-                b.iter(|| detector.detect(black_box(signal), black_box(sample_rate), None))
-            },
+            |b, signal| b.iter(|| detector.detect(black_box(signal), black_box(sample_rate), None)),
         );
     }
 
@@ -410,9 +414,7 @@ fn bench_movement_classification(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("movement_type", movement_type),
             &signal,
-            |b, signal| {
-                b.iter(|| classifier.classify(black_box(signal), black_box(sample_rate)))
-            },
+            |b, signal| b.iter(|| classifier.classify(black_box(signal), black_box(sample_rate))),
         );
     }
 
@@ -423,9 +425,7 @@ fn bench_movement_classification(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("signal_length", format!("{}s", duration as u32)),
             &signal,
-            |b, signal| {
-                b.iter(|| classifier.classify(black_box(signal), black_box(sample_rate)))
-            },
+            |b, signal| b.iter(|| classifier.classify(black_box(signal), black_box(sample_rate))),
         );
     }
 
@@ -480,7 +480,8 @@ fn bench_detection_pipeline(c: &mut Criterion) {
 
     // Benchmark standard pipeline at different data sizes
     for duration in [5.0, 10.0, 30.0] {
-        let (amplitudes, phases) = generate_combined_vital_signal(16.0, 72.0, sample_rate, duration);
+        let (amplitudes, phases) =
+            generate_combined_vital_signal(16.0, 72.0, sample_rate, duration);
         let mut buffer = CsiDataBuffer::new(sample_rate);
         buffer.add_samples(&amplitudes, &phases);
 
@@ -488,9 +489,7 @@ fn bench_detection_pipeline(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("standard_pipeline", format!("{}s", duration as u32)),
             &buffer,
-            |b, buffer| {
-                b.iter(|| standard_pipeline.detect(black_box(buffer)))
-            },
+            |b, buffer| b.iter(|| standard_pipeline.detect(black_box(buffer))),
         );
     }
 
@@ -503,9 +502,7 @@ fn bench_detection_pipeline(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("full_pipeline", format!("{}s", duration as u32)),
             &buffer,
-            |b, buffer| {
-                b.iter(|| full_pipeline.detect(black_box(buffer)))
-            },
+            |b, buffer| b.iter(|| full_pipeline.detect(black_box(buffer))),
         );
     }
 
@@ -518,9 +515,7 @@ fn bench_detection_pipeline(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("multi_person", format!("{}_people", person_count)),
             &buffer,
-            |b, buffer| {
-                b.iter(|| standard_pipeline.detect(black_box(buffer)))
-            },
+            |b, buffer| b.iter(|| standard_pipeline.detect(black_box(buffer))),
         );
     }
 
@@ -541,7 +536,8 @@ fn bench_triangulation(c: &mut Criterion) {
         let sensors = create_test_sensors(sensor_count);
 
         // Generate RSSI values (simulate target at center)
-        let rssi_values: Vec<(String, f64)> = sensors.iter()
+        let rssi_values: Vec<(String, f64)> = sensors
+            .iter()
             .map(|s| {
                 let distance = (s.x * s.x + s.y * s.y).sqrt();
                 let rssi = -30.0 - 20.0 * distance.log10(); // Path loss model
@@ -553,9 +549,7 @@ fn bench_triangulation(c: &mut Criterion) {
             BenchmarkId::new("rssi_position", format!("{}_sensors", sensor_count)),
             &(sensors.clone(), rssi_values.clone()),
             |b, (sensors, rssi)| {
-                b.iter(|| {
-                    triangulator.estimate_position(black_box(sensors), black_box(rssi))
-                })
+                b.iter(|| triangulator.estimate_position(black_box(sensors), black_box(rssi)))
             },
         );
     }
@@ -565,7 +559,8 @@ fn bench_triangulation(c: &mut Criterion) {
         let sensors = create_test_sensors(sensor_count);
 
         // Generate ToA values (time in nanoseconds)
-        let toa_values: Vec<(String, f64)> = sensors.iter()
+        let toa_values: Vec<(String, f64)> = sensors
+            .iter()
             .map(|s| {
                 let distance = (s.x * s.x + s.y * s.y).sqrt();
                 // Round trip time: 2 * distance / speed_of_light
@@ -578,9 +573,7 @@ fn bench_triangulation(c: &mut Criterion) {
             BenchmarkId::new("toa_position", format!("{}_sensors", sensor_count)),
             &(sensors.clone(), toa_values.clone()),
             |b, (sensors, toa)| {
-                b.iter(|| {
-                    triangulator.estimate_from_toa(black_box(sensors), black_box(toa))
-                })
+                b.iter(|| triangulator.estimate_from_toa(black_box(sensors), black_box(toa)))
             },
         );
     }
@@ -588,7 +581,8 @@ fn bench_triangulation(c: &mut Criterion) {
     // Benchmark with noisy measurements
     let sensors = create_test_sensors(5);
     for noise_pct in [0, 5, 10, 20] {
-        let rssi_values: Vec<(String, f64)> = sensors.iter()
+        let rssi_values: Vec<(String, f64)> = sensors
+            .iter()
             .enumerate()
             .map(|(i, s)| {
                 let distance = (s.x * s.x + s.y * s.y).sqrt();
@@ -603,9 +597,7 @@ fn bench_triangulation(c: &mut Criterion) {
             BenchmarkId::new("noisy_rssi", format!("{}pct_noise", noise_pct)),
             &(sensors.clone(), rssi_values.clone()),
             |b, (sensors, rssi)| {
-                b.iter(|| {
-                    triangulator.estimate_position(black_box(sensors), black_box(rssi))
-                })
+                b.iter(|| triangulator.estimate_position(black_box(sensors), black_box(rssi)))
             },
         );
     }
@@ -662,11 +654,7 @@ fn bench_depth_estimation(c: &mut Criterion) {
             &debris,
             |b, debris| {
                 b.iter(|| {
-                    estimator.estimate_depth(
-                        black_box(30.0),
-                        black_box(5.0),
-                        black_box(debris),
-                    )
+                    estimator.estimate_depth(black_box(30.0), black_box(5.0), black_box(debris))
                 })
             },
         );
@@ -699,21 +687,20 @@ fn bench_depth_estimation(c: &mut Criterion) {
     }
 
     // Benchmark debris profile estimation
-    for (variance, multipath, moisture) in [
-        (0.2, 0.3, 0.2),
-        (0.5, 0.5, 0.5),
-        (0.7, 0.8, 0.8),
-    ] {
+    for (variance, multipath, moisture) in [(0.2, 0.3, 0.2), (0.5, 0.5, 0.5), (0.7, 0.8, 0.8)] {
         group.bench_with_input(
-            BenchmarkId::new("profile_estimation", format!("v{}_m{}", (variance * 10.0) as u32, (multipath * 10.0) as u32)),
+            BenchmarkId::new(
+                "profile_estimation",
+                format!(
+                    "v{}_m{}",
+                    (variance * 10.0) as u32,
+                    (multipath * 10.0) as u32
+                ),
+            ),
             &(variance, multipath, moisture),
             |b, &(v, m, mo)| {
                 b.iter(|| {
-                    estimator.estimate_debris_profile(
-                        black_box(v),
-                        black_box(m),
-                        black_box(mo),
-                    )
+                    estimator.estimate_debris_profile(black_box(v), black_box(m), black_box(mo))
                 })
             },
         );
@@ -740,10 +727,8 @@ fn bench_alert_generation(c: &mut Criterion) {
     // Benchmark escalation alert
     group.bench_function("generate_escalation_alert", |b| {
         b.iter(|| {
-            generator.generate_escalation(
-                black_box(&survivor),
-                black_box("Vital signs deteriorating"),
-            )
+            generator
+                .generate_escalation(black_box(&survivor), black_box("Vital signs deteriorating"))
         })
     });
 
@@ -751,10 +736,7 @@ fn bench_alert_generation(c: &mut Criterion) {
     use wifi_densepose_mat::domain::TriageStatus;
     group.bench_function("generate_status_change_alert", |b| {
         b.iter(|| {
-            generator.generate_status_change(
-                black_box(&survivor),
-                black_box(&TriageStatus::Minor),
-            )
+            generator.generate_status_change(black_box(&survivor), black_box(&TriageStatus::Minor))
         })
     });
 
@@ -773,7 +755,8 @@ fn bench_alert_generation(c: &mut Criterion) {
 
     group.bench_function("batch_generate_10_alerts", |b| {
         b.iter(|| {
-            survivors.iter()
+            survivors
+                .iter()
                 .map(|s| generator.generate(black_box(s)))
                 .collect::<Vec<_>>()
         })
@@ -796,9 +779,7 @@ fn bench_csi_buffer(c: &mut Criterion) {
         let amplitudes: Vec<f64> = (0..sample_count)
             .map(|i| (i as f64 / 100.0).sin())
             .collect();
-        let phases: Vec<f64> = (0..sample_count)
-            .map(|i| (i as f64 / 50.0).cos())
-            .collect();
+        let phases: Vec<f64> = (0..sample_count).map(|i| (i as f64 / 50.0).cos()).collect();
 
         group.throughput(Throughput::Elements(sample_count as u64));
         group.bench_with_input(

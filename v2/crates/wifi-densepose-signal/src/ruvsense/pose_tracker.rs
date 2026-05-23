@@ -79,14 +79,14 @@ impl KeypointState {
     pub fn new(x: f32, y: f32, z: f32) -> Self {
         let mut cov = [0.0_f32; 21];
         // Initialize diagonal with default uncertainty
-        let pos_var = 0.1 * 0.1;  // 10 cm initial uncertainty
-        let vel_var = 0.5 * 0.5;  // 0.5 m/s initial velocity uncertainty
-        cov[0] = pos_var;   // x variance
-        cov[6] = pos_var;   // y variance
-        cov[11] = pos_var;  // z variance
-        cov[15] = vel_var;  // vx variance
-        cov[18] = vel_var;  // vy variance
-        cov[20] = vel_var;  // vz variance
+        let pos_var = 0.1 * 0.1; // 10 cm initial uncertainty
+        let vel_var = 0.5 * 0.5; // 0.5 m/s initial velocity uncertainty
+        cov[0] = pos_var; // x variance
+        cov[6] = pos_var; // y variance
+        cov[11] = pos_var; // z variance
+        cov[15] = vel_var; // vx variance
+        cov[18] = vel_var; // vy variance
+        cov[20] = vel_var; // vz variance
 
         Self {
             state: [x, y, z, 0.0, 0.0, 0.0],
@@ -130,12 +130,12 @@ impl KeypointState {
         let _cross_q = q * dt3 / 2.0;
 
         // Simplified: only update diagonal for numerical stability
-        self.covariance[0] += pos_q;   // xx
-        self.covariance[6] += pos_q;   // yy
-        self.covariance[11] += pos_q;  // zz
-        self.covariance[15] += vel_q;  // vxvx
-        self.covariance[18] += vel_q;  // vyvy
-        self.covariance[20] += vel_q;  // vzvz
+        self.covariance[0] += pos_q; // xx
+        self.covariance[6] += pos_q; // yy
+        self.covariance[11] += pos_q; // zz
+        self.covariance[15] += vel_q; // vxvx
+        self.covariance[18] += vel_q; // vyvy
+        self.covariance[20] += vel_q; // vzvz
     }
 
     /// Measurement update: incorporate a position observation [x, y, z].
@@ -168,18 +168,18 @@ impl KeypointState {
         // Kalman gain K = P * H^T * S^-1
         // For diagonal S, K_ij = P_ij / S_jj (simplified)
         let k = [
-            [self.covariance[0] / s[0], 0.0, 0.0],               // x row
-            [0.0, self.covariance[6] / s[1], 0.0],               // y row
-            [0.0, 0.0, self.covariance[11] / s[2]],              // z row
-            [self.covariance[3] / s[0], 0.0, 0.0],               // vx row
-            [0.0, self.covariance[9] / s[1], 0.0],               // vy row
-            [0.0, 0.0, self.covariance[14] / s[2]],              // vz row
+            [self.covariance[0] / s[0], 0.0, 0.0],  // x row
+            [0.0, self.covariance[6] / s[1], 0.0],  // y row
+            [0.0, 0.0, self.covariance[11] / s[2]], // z row
+            [self.covariance[3] / s[0], 0.0, 0.0],  // vx row
+            [0.0, self.covariance[9] / s[1], 0.0],  // vy row
+            [0.0, 0.0, self.covariance[14] / s[2]], // vz row
         ];
 
         // State update: x' = x + K * innov
-        for i in 0..6 {
-            for j in 0..3 {
-                self.state[i] += k[i][j] * innov[j];
+        for (ki, state_i) in k.iter().zip(self.state.iter_mut()) {
+            for (kij, &inv_j) in ki.iter().zip(innov.iter()) {
+                *state_i += kij * inv_j;
             }
         }
 
@@ -200,9 +200,9 @@ impl KeypointState {
         // Using diagonal approximation
         let mut dist_sq = 0.0_f32;
         let variances = [self.covariance[0], self.covariance[6], self.covariance[11]];
-        for i in 0..3 {
-            let v = variances[i].max(1e-6);
-            dist_sq += innov[i] * innov[i] / v;
+        for (&inv_i, &var_i) in innov.iter().zip(variances.iter()) {
+            let v = var_i.max(1e-6);
+            dist_sq += inv_i * inv_i / v;
         }
 
         dist_sq.sqrt()
@@ -501,10 +501,12 @@ impl PoseTracker {
     pub fn confirmed_tracks(&self) -> Vec<&PoseTrack> {
         self.tracks
             .iter()
-            .filter(|t| matches!(
-                t.lifecycle,
-                TrackLifecycleState::Tentative | TrackLifecycleState::Active
-            ))
+            .filter(|t| {
+                matches!(
+                    t.lifecycle,
+                    TrackLifecycleState::Tentative | TrackLifecycleState::Active
+                )
+            })
             .collect()
     }
 
@@ -515,7 +517,10 @@ impl PoseTracker {
 
     /// Return the number of active (alive) tracks.
     pub fn active_count(&self) -> usize {
-        self.tracks.iter().filter(|t| t.lifecycle.is_alive()).count()
+        self.tracks
+            .iter()
+            .filter(|t| t.lifecycle.is_alive())
+            .count()
     }
 
     /// Predict step for all tracks (advance by dt seconds).
@@ -641,7 +646,13 @@ pub struct PoseDetection {
 impl PoseDetection {
     /// Extract the 3D position array from keypoints.
     pub fn positions(&self) -> [[f32; 3]; NUM_KEYPOINTS] {
-        std::array::from_fn(|i| [self.keypoints[i][0], self.keypoints[i][1], self.keypoints[i][2]])
+        std::array::from_fn(|i| {
+            [
+                self.keypoints[i][0],
+                self.keypoints[i][1],
+                self.keypoints[i][2],
+            ]
+        })
     }
 
     /// Compute the centroid of the detection.
@@ -725,7 +736,7 @@ impl SkeletonConstraints {
 
                 let ratio = current_len / rest_len;
                 // Only correct if deviation exceeds tolerance.
-                if ratio < (1.0 - Self::TOLERANCE) || ratio > (1.0 + Self::TOLERANCE) {
+                if !((1.0 - Self::TOLERANCE)..=(1.0 + Self::TOLERANCE)).contains(&ratio) {
                     let correction = (rest_len - current_len) / current_len * 0.5;
                     let cx = dx * correction;
                     let cy = dy * correction;
@@ -849,8 +860,7 @@ impl CompressedPoseHistory {
             for d in 0..3 {
                 out[kp][d] = (pose[kp][d] * inv)
                     .round()
-                    .clamp(i16::MIN as f32, i16::MAX as f32)
-                    as i16;
+                    .clamp(i16::MIN as f32, i16::MAX as f32) as i16;
             }
         }
         out
@@ -938,17 +948,17 @@ impl TemporalKeypointAttention {
         for (age, frame) in self.window.iter().rev().enumerate() {
             let w = self.decay.powi(age as i32);
             total_weight += w;
-            for kp in 0..NUM_KEYPOINTS {
-                for dim in 0..3 {
-                    result[kp][dim] += w * frame[kp][dim];
+            for (res_kp, frame_kp) in result.iter_mut().zip(frame.iter()) {
+                for (r, &f) in res_kp.iter_mut().zip(frame_kp.iter()) {
+                    *r += w * f;
                 }
             }
         }
 
         if total_weight > 0.0 {
-            for kp in 0..NUM_KEYPOINTS {
-                for dim in 0..3 {
-                    result[kp][dim] /= total_weight;
+            for kp_arr in result.iter_mut() {
+                for val in kp_arr.iter_mut() {
+                    *val /= total_weight;
                 }
             }
         }
@@ -965,10 +975,7 @@ impl TemporalKeypointAttention {
 
     /// Clamp bone lengths so they don't change by more than MAX_BONE_CHANGE
     /// compared to the previous frame.
-    fn clamp_bone_lengths(
-        pose: &mut [[f32; 3]; NUM_KEYPOINTS],
-        prev: &[[f32; 3]; NUM_KEYPOINTS],
-    ) {
+    fn clamp_bone_lengths(pose: &mut [[f32; 3]; NUM_KEYPOINTS], prev: &[[f32; 3]; NUM_KEYPOINTS]) {
         for &(parent, child, _) in BONE_LENGTHS {
             let prev_len = Self::bone_len(prev, parent, child);
             if prev_len < 1e-6 {
@@ -1051,7 +1058,11 @@ mod tests {
         let mut kp = KeypointState::new(0.0, 0.0, 0.0);
         kp.state[3] = 1.0; // vx = 1 m/s
         kp.predict(0.05, 0.3); // 50ms step
-        assert!((kp.state[0] - 0.05).abs() < 1e-5, "x should be ~0.05, got {}", kp.state[0]);
+        assert!(
+            (kp.state[0] - 0.05).abs() < 1e-5,
+            "x should be ~0.05, got {}",
+            kp.state[0]
+        );
     }
 
     #[test]
@@ -1142,8 +1153,7 @@ mod tests {
 
     #[test]
     fn track_centroid() {
-        let positions: [[f32; 3]; NUM_KEYPOINTS] =
-            std::array::from_fn(|_| [1.0, 2.0, 3.0]);
+        let positions: [[f32; 3]; NUM_KEYPOINTS] = std::array::from_fn(|_| [1.0, 2.0, 3.0]);
         let track = PoseTrack::new(TrackId(0), &positions, 0, 128);
         let c = track.centroid();
         assert!((c[0] - 1.0).abs() < 1e-5);
@@ -1158,8 +1168,8 @@ mod tests {
         let new_embed = vec![1.0, 2.0, 3.0, 4.0];
         track.update_embedding(&new_embed, 0.5);
         // EMA: 0.5 * 0.0 + 0.5 * new = new / 2
-        for i in 0..4 {
-            assert!((track.embedding[i] - new_embed[i] * 0.5).abs() < 1e-5);
+        for (&emb_val, &new_val) in track.embedding.iter().zip(new_embed.iter()) {
+            assert!((emb_val - new_val * 0.5).abs() < 1e-5);
         }
     }
 
@@ -1237,8 +1247,7 @@ mod tests {
 
     #[test]
     fn pose_detection_centroid() {
-        let kps: [[f32; 4]; NUM_KEYPOINTS] =
-            std::array::from_fn(|_| [1.0, 2.0, 3.0, 0.9]);
+        let kps: [[f32; 4]; NUM_KEYPOINTS] = std::array::from_fn(|_| [1.0, 2.0, 3.0, 0.9]);
         let det = PoseDetection {
             keypoints: kps,
             embedding: vec![0.0; 128],
@@ -1249,8 +1258,7 @@ mod tests {
 
     #[test]
     fn pose_detection_mean_confidence() {
-        let kps: [[f32; 4]; NUM_KEYPOINTS] =
-            std::array::from_fn(|_| [0.0, 0.0, 0.0, 0.8]);
+        let kps: [[f32; 4]; NUM_KEYPOINTS] = std::array::from_fn(|_| [0.0, 0.0, 0.0, 0.8]);
         let det = PoseDetection {
             keypoints: kps,
             embedding: vec![0.0; 128],
@@ -1260,8 +1268,7 @@ mod tests {
 
     #[test]
     fn pose_detection_positions() {
-        let kps: [[f32; 4]; NUM_KEYPOINTS] =
-            std::array::from_fn(|i| [i as f32, 0.0, 0.0, 1.0]);
+        let kps: [[f32; 4]; NUM_KEYPOINTS] = std::array::from_fn(|i| [i as f32, 0.0, 0.0, 1.0]);
         let det = PoseDetection {
             keypoints: kps,
             embedding: vec![],
@@ -1290,7 +1297,10 @@ mod tests {
         let positions = zero_positions();
         let track = PoseTrack::new(TrackId(0), &positions, 0, 128);
         let jitter = track.torso_jitter_rms();
-        assert!(jitter < 1e-5, "Stationary track should have near-zero jitter");
+        assert!(
+            jitter < 1e-5,
+            "Stationary track should have near-zero jitter"
+        );
     }
 
     #[test]
@@ -1326,24 +1336,24 @@ mod tests {
     fn valid_skeleton() -> [[f32; 3]; 17] {
         let mut kps = [[0.0_f32; 3]; 17];
         // Head / face (indices 0-4) clustered near top.
-        kps[0] = [0.0, 1.0, 0.0];   // nose
+        kps[0] = [0.0, 1.0, 0.0]; // nose
         kps[1] = [-0.02, 1.02, 0.0]; // left eye
-        kps[2] = [0.02, 1.02, 0.0];  // right eye
-        kps[3] = [-0.04, 1.0, 0.0];  // left ear
-        kps[4] = [0.04, 1.0, 0.0];   // right ear
-        // Torso
+        kps[2] = [0.02, 1.02, 0.0]; // right eye
+        kps[3] = [-0.04, 1.0, 0.0]; // left ear
+        kps[4] = [0.04, 1.0, 0.0]; // right ear
+                                   // Torso
         kps[5] = [-0.09, 0.85, 0.0]; // L shoulder
-        kps[6] = [0.09, 0.85, 0.0];  // R shoulder
+        kps[6] = [0.09, 0.85, 0.0]; // R shoulder
         kps[7] = [-0.09, 0.70, 0.0]; // L elbow  (dist ~0.15 from shoulder)
-        kps[8] = [0.09, 0.70, 0.0];  // R elbow
+        kps[8] = [0.09, 0.70, 0.0]; // R elbow
         kps[9] = [-0.09, 0.56, 0.0]; // L wrist  (dist ~0.14 from elbow)
         kps[10] = [0.09, 0.56, 0.0]; // R wrist
         kps[11] = [-0.075, 0.60, 0.0]; // L hip  (dist ~0.25 from shoulder)
-        kps[12] = [0.075, 0.60, 0.0];  // R hip
+        kps[12] = [0.075, 0.60, 0.0]; // R hip
         kps[13] = [-0.075, 0.38, 0.0]; // L knee (dist ~0.22 from hip)
-        kps[14] = [0.075, 0.38, 0.0];  // R knee
+        kps[14] = [0.075, 0.38, 0.0]; // R knee
         kps[15] = [-0.075, 0.16, 0.0]; // L ankle (dist ~0.22 from knee)
-        kps[16] = [0.075, 0.16, 0.0];  // R ankle
+        kps[16] = [0.075, 0.16, 0.0]; // R ankle
         kps
     }
 
@@ -1360,12 +1370,7 @@ mod tests {
                 + (kps[i][1] - before[i][1]).powi(2)
                 + (kps[i][2] - before[i][2]).powi(2))
             .sqrt();
-            assert!(
-                d < 0.05,
-                "keypoint {} moved {:.4}, expected < 0.05",
-                i,
-                d
-            );
+            assert!(d < 0.05, "keypoint {} moved {:.4}, expected < 0.05", i, d);
         }
     }
 
@@ -1514,7 +1519,11 @@ mod tests {
         let out = attn.smooth_keypoints(&jittery);
         // Output should be closer to base than to jittery (smoothed).
         assert!(out[0][0] < 110.0, "Expected smoothing, got {}", out[0][0]);
-        assert!(out[0][0] > 100.0, "Expected some movement, got {}", out[0][0]);
+        assert!(
+            out[0][0] > 100.0,
+            "Expected some movement, got {}",
+            out[0][0]
+        );
     }
 
     #[test]

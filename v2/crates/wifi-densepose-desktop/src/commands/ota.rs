@@ -37,16 +37,19 @@ pub async fn ota_update(
     let start_time = std::time::Instant::now();
 
     // Emit progress
-    let _ = app.emit("ota-progress", OtaProgress {
-        node_ip: node_ip.clone(),
-        phase: "preparing".into(),
-        progress_pct: 0.0,
-        message: Some("Reading firmware...".into()),
-    });
+    let _ = app.emit(
+        "ota-progress",
+        OtaProgress {
+            node_ip: node_ip.clone(),
+            phase: "preparing".into(),
+            progress_pct: 0.0,
+            message: Some("Reading firmware...".into()),
+        },
+    );
 
     // Read firmware file
-    let mut file = File::open(&firmware_path)
-        .map_err(|e| format!("Cannot read firmware: {}", e))?;
+    let mut file =
+        File::open(&firmware_path).map_err(|e| format!("Cannot read firmware: {}", e))?;
 
     let mut firmware_data = Vec::new();
     file.read_to_end(&mut firmware_data)
@@ -70,12 +73,18 @@ pub async fn ota_update(
     };
 
     // Emit progress
-    let _ = app.emit("ota-progress", OtaProgress {
-        node_ip: node_ip.clone(),
-        phase: "uploading".into(),
-        progress_pct: 10.0,
-        message: Some(format!("Uploading {} bytes to {}...", firmware_size, node_ip)),
-    });
+    let _ = app.emit(
+        "ota-progress",
+        OtaProgress {
+            node_ip: node_ip.clone(),
+            phase: "uploading".into(),
+            progress_pct: 10.0,
+            message: Some(format!(
+                "Uploading {} bytes to {}...",
+                firmware_size, node_ip
+            )),
+        },
+    );
 
     // Build HTTP client
     let client = reqwest::Client::builder()
@@ -107,30 +116,38 @@ pub async fn ota_update(
     request = request.header("X-OTA-SHA256", &firmware_hash);
 
     // Send request
-    let response = request.send().await
+    let response = request
+        .send()
+        .await
         .map_err(|e| format!("OTA upload failed: {}", e))?;
 
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
 
     if !status.is_success() {
-        let _ = app.emit("ota-progress", OtaProgress {
-            node_ip: node_ip.clone(),
-            phase: "failed".into(),
-            progress_pct: 0.0,
-            message: Some(format!("HTTP {}: {}", status, body)),
-        });
+        let _ = app.emit(
+            "ota-progress",
+            OtaProgress {
+                node_ip: node_ip.clone(),
+                phase: "failed".into(),
+                progress_pct: 0.0,
+                message: Some(format!("HTTP {}: {}", status, body)),
+            },
+        );
 
         return Err(format!("OTA failed with HTTP {}: {}", status, body));
     }
 
     // Emit progress - upload complete
-    let _ = app.emit("ota-progress", OtaProgress {
-        node_ip: node_ip.clone(),
-        phase: "rebooting".into(),
-        progress_pct: 80.0,
-        message: Some("Waiting for node reboot...".into()),
-    });
+    let _ = app.emit(
+        "ota-progress",
+        OtaProgress {
+            node_ip: node_ip.clone(),
+            phase: "rebooting".into(),
+            progress_pct: 80.0,
+            message: Some("Waiting for node reboot...".into()),
+        },
+    );
 
     // Wait for node to come back online
     let reboot_ok = wait_for_reboot(&client, &node_ip, Duration::from_secs(30)).await;
@@ -138,12 +155,15 @@ pub async fn ota_update(
     let duration = start_time.elapsed().as_secs_f64();
 
     if reboot_ok {
-        let _ = app.emit("ota-progress", OtaProgress {
-            node_ip: node_ip.clone(),
-            phase: "completed".into(),
-            progress_pct: 100.0,
-            message: Some(format!("OTA completed in {:.1}s", duration)),
-        });
+        let _ = app.emit(
+            "ota-progress",
+            OtaProgress {
+                node_ip: node_ip.clone(),
+                phase: "completed".into(),
+                progress_pct: 100.0,
+                message: Some(format!("OTA completed in {:.1}s", duration)),
+            },
+        );
 
         Ok(OtaResult {
             success: true,
@@ -153,12 +173,15 @@ pub async fn ota_update(
             duration_secs: Some(duration),
         })
     } else {
-        let _ = app.emit("ota-progress", OtaProgress {
-            node_ip: node_ip.clone(),
-            phase: "warning".into(),
-            progress_pct: 90.0,
-            message: Some("Node may not have rebooted successfully".into()),
-        });
+        let _ = app.emit(
+            "ota-progress",
+            OtaProgress {
+                node_ip: node_ip.clone(),
+                phase: "warning".into(),
+                progress_pct: 90.0,
+                message: Some("Node may not have rebooted successfully".into()),
+            },
+        );
 
         Ok(OtaResult {
             success: true,
@@ -190,13 +213,16 @@ pub async fn batch_ota_update(
     let strategy = strategy.unwrap_or_else(|| "sequential".into());
     let max_concurrent = max_concurrent.unwrap_or(1);
 
-    let _ = app.emit("batch-ota-progress", BatchOtaProgress {
-        phase: "starting".into(),
-        total: total_nodes,
-        completed: 0,
-        failed: 0,
-        current_node: None,
-    });
+    let _ = app.emit(
+        "batch-ota-progress",
+        BatchOtaProgress {
+            phase: "starting".into(),
+            total: total_nodes,
+            completed: 0,
+            failed: 0,
+            current_node: None,
+        },
+    );
 
     let mut results = Vec::new();
     let mut completed = 0;
@@ -212,22 +238,26 @@ pub async fn batch_ota_update(
             let psk = std::sync::Arc::new(psk);
             let app = std::sync::Arc::new(app.clone());
 
-            let tasks: Vec<_> = node_ips.into_iter().map(|ip| {
-                let sem = semaphore.clone();
-                let fw_path = firmware_path.clone();
-                let psk_clone = psk.clone();
-                let app_clone = app.clone();
+            let tasks: Vec<_> = node_ips
+                .into_iter()
+                .map(|ip| {
+                    let sem = semaphore.clone();
+                    let fw_path = firmware_path.clone();
+                    let psk_clone = psk.clone();
+                    let app_clone = app.clone();
 
-                async move {
-                    let _permit = sem.acquire().await.unwrap();
-                    ota_update(
-                        (*app_clone).clone(),
-                        ip,
-                        (*fw_path).clone(),
-                        (*psk_clone).clone(),
-                    ).await
-                }
-            }).collect();
+                    async move {
+                        let _permit = sem.acquire().await.unwrap();
+                        ota_update(
+                            (*app_clone).clone(),
+                            ip,
+                            (*fw_path).clone(),
+                            (*psk_clone).clone(),
+                        )
+                        .await
+                    }
+                })
+                .collect();
 
             let task_results = futures::future::join_all(tasks).await;
 
@@ -257,20 +287,19 @@ pub async fn batch_ota_update(
         _ => {
             // Sequential execution (default)
             for ip in node_ips {
-                let _ = app.emit("batch-ota-progress", BatchOtaProgress {
-                    phase: "updating".into(),
-                    total: total_nodes,
-                    completed,
-                    failed,
-                    current_node: Some(ip.clone()),
-                });
+                let _ = app.emit(
+                    "batch-ota-progress",
+                    BatchOtaProgress {
+                        phase: "updating".into(),
+                        total: total_nodes,
+                        completed,
+                        failed,
+                        current_node: Some(ip.clone()),
+                    },
+                );
 
-                match ota_update(
-                    app.clone(),
-                    ip.clone(),
-                    firmware_path.clone(),
-                    psk.clone(),
-                ).await {
+                match ota_update(app.clone(), ip.clone(), firmware_path.clone(), psk.clone()).await
+                {
                     Ok(r) => {
                         if r.success {
                             completed += 1;
@@ -296,13 +325,16 @@ pub async fn batch_ota_update(
 
     let duration = start_time.elapsed().as_secs_f64();
 
-    let _ = app.emit("batch-ota-progress", BatchOtaProgress {
-        phase: "completed".into(),
-        total: total_nodes,
-        completed,
-        failed,
-        current_node: None,
-    });
+    let _ = app.emit(
+        "batch-ota-progress",
+        BatchOtaProgress {
+            phase: "completed".into(),
+            total: total_nodes,
+            completed,
+            failed,
+            current_node: None,
+        },
+    );
 
     Ok(BatchOtaResult {
         total: total_nodes,
@@ -331,7 +363,10 @@ pub async fn check_ota_endpoint(node_ip: String) -> Result<OtaEndpointInfo, Stri
                 // Try to parse as JSON
                 let version = serde_json::from_str::<serde_json::Value>(&body)
                     .ok()
-                    .and_then(|v| v.get("version").and_then(|v| v.as_str().map(|s| s.to_string())));
+                    .and_then(|v| {
+                        v.get("version")
+                            .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    });
 
                 Ok(OtaEndpointInfo {
                     reachable: true,

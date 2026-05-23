@@ -187,11 +187,8 @@ fn compute_confidence(history: &[f32]) -> f32 {
 
     // Use variance-based SNR as a confidence metric
     let mean: f32 = history.iter().sum::<f32>() / history.len() as f32;
-    let variance: f32 = history
-        .iter()
-        .map(|x| (x - mean) * (x - mean))
-        .sum::<f32>()
-        / history.len() as f32;
+    let variance: f32 =
+        history.iter().map(|x| (x - mean) * (x - mean)).sum::<f32>() / history.len() as f32;
 
     if variance < 1e-10 {
         return 0.0;

@@ -12,9 +12,7 @@ use super::{
     lifecycle::{TrackLifecycle, TrackState, TrackerConfig},
 };
 use crate::domain::{
-    coordinates::Coordinates3D,
-    scan_zone::ScanZoneId,
-    survivor::Survivor,
+    coordinates::Coordinates3D, scan_zone::ScanZoneId, survivor::Survivor,
     vital_signs::VitalSignsReading,
 };
 
@@ -111,7 +109,11 @@ pub struct TrackedSurvivor {
 impl TrackedSurvivor {
     /// Construct a new tentative TrackedSurvivor from a detection observation.
     fn from_observation(obs: &DetectionObservation, config: &TrackerConfig) -> Self {
-        let pos_vec = obs.position.as_ref().map(|p| [p.x, p.y, p.z]).unwrap_or([0.0, 0.0, 0.0]);
+        let pos_vec = obs
+            .position
+            .as_ref()
+            .map(|p| [p.x, p.y, p.z])
+            .unwrap_or([0.0, 0.0, 0.0]);
         let kalman = KalmanState::new(pos_vec, config.process_noise_var, config.obs_noise_var);
         let fingerprint = CsiFingerprint::from_vitals(&obs.vital_signs, obs.position.as_ref());
         let mut lifecycle = TrackLifecycle::new(config);
@@ -209,7 +211,9 @@ impl SurvivorTracker {
             for (oi, obs) in observations.iter().enumerate() {
                 if let Some(pos) = &obs.position {
                     let obs_vec = [pos.x, pos.y, pos.z];
-                    let d_sq = self.tracks[track_idx].kalman.mahalanobis_distance_sq(obs_vec);
+                    let d_sq = self.tracks[track_idx]
+                        .kalman
+                        .mahalanobis_distance_sq(obs_vec);
                     if d_sq < self.config.gate_mahalanobis_sq {
                         costs[ti][oi] = d_sq;
                     }
@@ -310,7 +314,9 @@ impl SurvivorTracker {
             if best_dist < self.config.reid_threshold {
                 if let Some(track_idx) = best_lost_idx {
                     obs_assigned[oi] = true;
-                    result.reidentified_track_ids.push(self.tracks[track_idx].id.clone());
+                    result
+                        .reidentified_track_ids
+                        .push(self.tracks[track_idx].id.clone());
 
                     // Transition Lost → Active
                     self.tracks[track_idx].lifecycle.hit();
@@ -368,7 +374,9 @@ impl SurvivorTracker {
                 .survivor
                 .update_vitals(obs.vital_signs.clone());
 
-            result.matched_track_ids.push(self.tracks[track_idx].id.clone());
+            result
+                .matched_track_ids
+                .push(self.tracks[track_idx].id.clone());
         }
 
         // ----------------------------------------------------------------
@@ -383,16 +391,16 @@ impl SurvivorTracker {
                 self.tracks[track_idx].lifecycle.hit();
             } else {
                 // Snapshot state before miss
-                let was_active = matches!(
-                    self.tracks[track_idx].lifecycle.state(),
-                    TrackState::Active
-                );
+                let was_active =
+                    matches!(self.tracks[track_idx].lifecycle.state(), TrackState::Active);
 
                 self.tracks[track_idx].lifecycle.miss();
 
                 // Detect Active → Lost transition
                 if was_active && self.tracks[track_idx].lifecycle.is_lost() {
-                    result.lost_track_ids.push(self.tracks[track_idx].id.clone());
+                    result
+                        .lost_track_ids
+                        .push(self.tracks[track_idx].id.clone());
                     tracing::debug!(
                         track_id = %self.tracks[track_idx].id,
                         "Track transitioned to Lost"
@@ -518,8 +526,8 @@ fn greedy_assign(costs: &[Vec<f64>], n_tracks: usize, n_obs: usize) -> Vec<Optio
             if track_used[ti] {
                 continue;
             }
-            for oi in 0..n_obs {
-                if obs_used[oi] {
+            for (oi, &used) in obs_used.iter().enumerate() {
+                if used {
                     continue;
                 }
                 if costs[ti][oi] < best {
@@ -554,11 +562,7 @@ fn greedy_assign(costs: &[Vec<f64>], n_tracks: usize, n_obs: usize) -> Vec<Optio
 fn hungarian_assign(costs: &[Vec<f64>], n_tracks: usize, n_obs: usize) -> Vec<Option<usize>> {
     // Build adjacency: for each track, list the observations it can match.
     let adj: Vec<Vec<usize>> = (0..n_tracks)
-        .map(|ti| {
-            (0..n_obs)
-                .filter(|&oi| costs[ti][oi] < f64::MAX)
-                .collect()
-        })
+        .map(|ti| (0..n_obs).filter(|&oi| costs[ti][oi] < f64::MAX).collect())
         .collect();
 
     // match_obs[oi] = track index that observation oi is matched to, or None

@@ -165,14 +165,14 @@ impl<'a> DataLoader<'a> {
     /// - `shuffle`    – if `true`, samples are shuffled deterministically using
     ///   `seed` at the start of each iteration.
     /// - `seed`       – fixed seed for the shuffle RNG.
-    pub fn new(
-        dataset: &'a dyn CsiDataset,
-        batch_size: usize,
-        shuffle: bool,
-        seed: u64,
-    ) -> Self {
+    pub fn new(dataset: &'a dyn CsiDataset, batch_size: usize, shuffle: bool, seed: u64) -> Self {
         assert!(batch_size > 0, "batch_size must be > 0");
-        DataLoader { dataset, batch_size, shuffle, seed }
+        DataLoader {
+            dataset,
+            batch_size,
+            shuffle,
+            seed,
+        }
     }
 
     /// Number of complete (or partial) batches yielded per epoch.
@@ -181,7 +181,7 @@ impl<'a> DataLoader<'a> {
         if n == 0 {
             return 0;
         }
-        (n + self.batch_size - 1) / self.batch_size
+        n.div_ceil(self.batch_size)
     }
 
     /// Return an iterator that yields `Vec<CsiSample>` batches.
@@ -232,7 +232,11 @@ impl<'a> Iterator for DataLoaderIter<'a> {
                 }
             }
         }
-        if batch.is_empty() { None } else { Some(batch) }
+        if batch.is_empty() {
+            None
+        } else {
+            Some(batch)
+        }
     }
 }
 
@@ -364,8 +368,10 @@ impl MmFiDataset {
             action_dirs.sort();
 
             for action_path in &action_dirs {
-                let action_name =
-                    action_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                let action_name = action_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
                 let action_id = parse_id_suffix(action_name).unwrap_or(0);
 
                 let amp_path = action_path.join("wifi_csi.npy");
@@ -373,10 +379,7 @@ impl MmFiDataset {
                 let kp_path = action_path.join("gt_keypoints.npy");
 
                 if !amp_path.exists() || !kp_path.exists() {
-                    debug!(
-                        "Skipping {}: missing required files",
-                        action_path.display()
-                    );
+                    debug!("Skipping {}: missing required files", action_path.display());
                     continue;
                 }
 
@@ -448,11 +451,9 @@ impl CsiDataset for MmFiDataset {
 
     fn get(&self, idx: usize) -> Result<CsiSample, DatasetError> {
         let total = self.len();
-        let (entry_idx, frame_offset) =
-            self.locate(idx).ok_or(DatasetError::IndexOutOfBounds {
-                idx,
-                len: total,
-            })?;
+        let (entry_idx, frame_offset) = self
+            .locate(idx)
+            .ok_or(DatasetError::IndexOutOfBounds { idx, len: total })?;
 
         let entry = &self.entries[entry_idx];
         let t_start = frame_offset;
@@ -464,9 +465,7 @@ impl CsiDataset for MmFiDataset {
         if t_end > t {
             return Err(DatasetError::invalid_format(
                 &entry.amp_path,
-                format!(
-                    "window [{t_start}, {t_end}) exceeds clip length {t}"
-                ),
+                format!("window [{t_start}, {t_end}) exceeds clip length {t}"),
             ));
         }
         let amp_window = amp_full
@@ -498,9 +497,7 @@ impl CsiDataset for MmFiDataset {
 
         // Load keypoints [T, 17, 3] — take the first frame of the window
         let kp_full = load_npy_kp(&entry.kp_path, self.num_keypoints)?;
-        let kp_frame = kp_full
-            .slice(ndarray::s![t_start, .., ..])
-            .to_owned();
+        let kp_frame = kp_full.slice(ndarray::s![t_start, .., ..]).to_owned();
 
         // Split into (x,y) and visibility
         let keypoints = kp_frame.slice(ndarray::s![.., 0..2]).to_owned();
@@ -716,26 +713,21 @@ impl CompressedCsiBuffer {
 /// Load a 4-D float32 NPY array from disk.
 fn load_npy_f32(path: &Path) -> Result<Array4<f32>, DatasetError> {
     use ndarray_npy::ReadNpyExt;
-    let file = std::fs::File::open(path)
-        .map_err(|e| DatasetError::io_error(path, e))?;
-    let arr: ndarray::ArrayD<f32> = ndarray::ArrayD::read_npy(file)
-        .map_err(|e| DatasetError::npy_read(path, e.to_string()))?;
+    let file = std::fs::File::open(path).map_err(|e| DatasetError::io_error(path, e))?;
+    let arr: ndarray::ArrayD<f32> =
+        ndarray::ArrayD::read_npy(file).map_err(|e| DatasetError::npy_read(path, e.to_string()))?;
     let shape = arr.shape().to_vec();
     arr.into_dimensionality::<ndarray::Ix4>().map_err(|_e| {
-        DatasetError::invalid_format(
-            path,
-            format!("Expected 4-D array, got shape {:?}", shape),
-        )
+        DatasetError::invalid_format(path, format!("Expected 4-D array, got shape {:?}", shape))
     })
 }
 
 /// Load a 3-D float32 NPY array (keypoints: `[T, J, 3]`).
 fn load_npy_kp(path: &Path, _num_keypoints: usize) -> Result<ndarray::Array3<f32>, DatasetError> {
     use ndarray_npy::ReadNpyExt;
-    let file = std::fs::File::open(path)
-        .map_err(|e| DatasetError::io_error(path, e))?;
-    let arr: ndarray::ArrayD<f32> = ndarray::ArrayD::read_npy(file)
-        .map_err(|e| DatasetError::npy_read(path, e.to_string()))?;
+    let file = std::fs::File::open(path).map_err(|e| DatasetError::io_error(path, e))?;
+    let arr: ndarray::ArrayD<f32> =
+        ndarray::ArrayD::read_npy(file).map_err(|e| DatasetError::npy_read(path, e.to_string()))?;
     let shape = arr.shape().to_vec();
     arr.into_dimensionality::<ndarray::Ix3>().map_err(|_e| {
         DatasetError::invalid_format(
@@ -749,36 +741,40 @@ fn load_npy_kp(path: &Path, _num_keypoints: usize) -> Result<ndarray::Array3<f32
 /// loading the entire file into memory.
 fn peek_npy_first_dim(path: &Path) -> Result<usize, DatasetError> {
     use std::io::{BufReader, Read};
-    let f = std::fs::File::open(path)
-        .map_err(|e| DatasetError::io_error(path, e))?;
+    let f = std::fs::File::open(path).map_err(|e| DatasetError::io_error(path, e))?;
     let mut reader = BufReader::new(f);
 
     let mut magic = [0u8; 6];
-    reader.read_exact(&mut magic)
+    reader
+        .read_exact(&mut magic)
         .map_err(|e| DatasetError::io_error(path, e))?;
     if &magic != b"\x93NUMPY" {
         return Err(DatasetError::invalid_format(path, "Not a valid NPY file"));
     }
 
     let mut version = [0u8; 2];
-    reader.read_exact(&mut version)
+    reader
+        .read_exact(&mut version)
         .map_err(|e| DatasetError::io_error(path, e))?;
 
     // Header length field: 2 bytes in v1, 4 bytes in v2
     let header_len: usize = if version[0] == 1 {
         let mut buf = [0u8; 2];
-        reader.read_exact(&mut buf)
+        reader
+            .read_exact(&mut buf)
             .map_err(|e| DatasetError::io_error(path, e))?;
         u16::from_le_bytes(buf) as usize
     } else {
         let mut buf = [0u8; 4];
-        reader.read_exact(&mut buf)
+        reader
+            .read_exact(&mut buf)
             .map_err(|e| DatasetError::io_error(path, e))?;
         u32::from_le_bytes(buf) as usize
     };
 
     let mut header = vec![0u8; header_len];
-    reader.read_exact(&mut header)
+    reader
+        .read_exact(&mut header)
         .map_err(|e| DatasetError::io_error(path, e))?;
     let header_str = String::from_utf8_lossy(&header);
 
@@ -797,7 +793,10 @@ fn peek_npy_first_dim(path: &Path) -> Result<usize, DatasetError> {
         }
     }
 
-    Err(DatasetError::invalid_format(path, "Cannot parse shape from NPY header"))
+    Err(DatasetError::invalid_format(
+        path,
+        "Cannot parse shape from NPY header",
+    ))
 }
 
 /// Parse the numeric suffix of a directory name like `S01` → `1` or `A12` → `12`.
@@ -881,14 +880,17 @@ pub struct SyntheticCsiDataset {
 impl SyntheticCsiDataset {
     /// Create a new synthetic dataset with `num_samples` entries.
     pub fn new(num_samples: usize, config: SyntheticConfig) -> Self {
-        SyntheticCsiDataset { num_samples, config }
+        SyntheticCsiDataset {
+            num_samples,
+            config,
+        }
     }
 
     /// Compute the deterministic amplitude value for the given indices.
     #[inline]
     fn amp_value(&self, idx: usize, t: usize, _tx: usize, _rx: usize, k: usize) -> f32 {
-        let phase = 2.0 * std::f32::consts::PI
-            * (idx as f32 * 0.01 + t as f32 * 0.1 + k as f32 * 0.05);
+        let phase =
+            2.0 * std::f32::consts::PI * (idx as f32 * 0.01 + t as f32 * 0.1 + k as f32 * 0.05);
         0.5 + 0.3 * phase.sin()
     }
 
@@ -896,16 +898,13 @@ impl SyntheticCsiDataset {
     #[inline]
     fn phase_value(&self, _idx: usize, _t: usize, tx: usize, rx: usize, k: usize) -> f32 {
         let n_sc = self.config.num_subcarriers as f32;
-        (2.0 * std::f32::consts::PI * k as f32 / n_sc)
-            * (tx as f32 + 1.0)
-            * (rx as f32 + 1.0)
+        (2.0 * std::f32::consts::PI * k as f32 / n_sc) * (tx as f32 + 1.0) * (rx as f32 + 1.0)
     }
 
     /// Compute the deterministic keypoint (x, y) for joint `j` at sample `idx`.
     #[inline]
     fn keypoint_xy(&self, idx: usize, j: usize) -> (f32, f32) {
-        let x = 0.5
-            + 0.1 * (2.0 * std::f32::consts::PI * idx as f32 * 0.007 + j as f32).sin();
+        let x = 0.5 + 0.1 * (2.0 * std::f32::consts::PI * idx as f32 * 0.007 + j as f32).sin();
         let y = 0.3 + j as f32 * 0.04;
         (x, y)
     }
@@ -925,8 +924,12 @@ impl CsiDataset for SyntheticCsiDataset {
         }
 
         let cfg = &self.config;
-        let (t, n_tx, n_rx, n_sc) =
-            (cfg.window_frames, cfg.num_antennas_tx, cfg.num_antennas_rx, cfg.num_subcarriers);
+        let (t, n_tx, n_rx, n_sc) = (
+            cfg.window_frames,
+            cfg.num_antennas_tx,
+            cfg.num_antennas_rx,
+            cfg.num_subcarriers,
+        );
 
         let amplitude = Array4::from_shape_fn((t, n_tx, n_rx, n_sc), |(frame, tx, rx, k)| {
             self.amp_value(idx, frame, tx, rx, k)
@@ -982,11 +985,21 @@ mod tests {
 
         assert_eq!(
             s.amplitude.shape(),
-            &[cfg.window_frames, cfg.num_antennas_tx, cfg.num_antennas_rx, cfg.num_subcarriers]
+            &[
+                cfg.window_frames,
+                cfg.num_antennas_tx,
+                cfg.num_antennas_rx,
+                cfg.num_subcarriers
+            ]
         );
         assert_eq!(
             s.phase.shape(),
-            &[cfg.window_frames, cfg.num_antennas_tx, cfg.num_antennas_rx, cfg.num_subcarriers]
+            &[
+                cfg.window_frames,
+                cfg.num_antennas_tx,
+                cfg.num_antennas_rx,
+                cfg.num_subcarriers
+            ]
         );
         assert_eq!(s.keypoints.shape(), &[cfg.num_keypoints, 2]);
         assert_eq!(s.keypoint_visibility.shape(), &[cfg.num_keypoints]);
@@ -1033,7 +1046,10 @@ mod tests {
         for idx in 0..4 {
             let s = ds.get(idx).unwrap();
             for &v in s.amplitude.iter() {
-                assert!(v >= 0.19 && v <= 0.81, "amplitude {v} out of [0.2, 0.8]");
+                assert!(
+                    (0.19..=0.81).contains(&v),
+                    "amplitude {v} out of [0.2, 0.8]"
+                );
             }
         }
     }
@@ -1056,7 +1072,10 @@ mod tests {
         let cfg = SyntheticConfig::default();
         let ds = SyntheticCsiDataset::new(3, cfg);
         let s = ds.get(0).unwrap();
-        assert!(s.keypoint_visibility.iter().all(|&v| (v - 2.0).abs() < 1e-6));
+        assert!(s
+            .keypoint_visibility
+            .iter()
+            .all(|&v| (v - 2.0).abs() < 1e-6));
     }
 
     // ----- DataLoader -------------------------------------------------------
@@ -1107,7 +1126,10 @@ mod tests {
         let dl2 = DataLoader::new(&ds, 20, true, 2);
         let ids1: Vec<u64> = dl1.iter().flatten().map(|s| s.frame_id).collect();
         let ids2: Vec<u64> = dl2.iter().flatten().map(|s| s.frame_id).collect();
-        assert_ne!(ids1, ids2, "different seeds should produce different orders");
+        assert_ne!(
+            ids1, ids2,
+            "different seeds should produce different orders"
+        );
     }
 
     #[test]
@@ -1158,12 +1180,15 @@ mod tests {
         let buf = CompressedCsiBuffer::from_array4(&arr, 0);
         assert_eq!(buf.len(), 10);
         assert!(!buf.is_empty());
-        assert!(buf.compression_ratio > 1.0, "Should compress better than f32");
+        assert!(
+            buf.compression_ratio > 1.0,
+            "Should compress better than f32"
+        );
 
         // Decode single frame
         let frame = buf.get_frame(0);
         assert!(frame.is_some());
-        assert_eq!(frame.unwrap().len(), 1 * 3 * 16);
+        assert_eq!(frame.unwrap().len(), 3 * 16);
 
         // Full decode
         let decoded = buf.to_array4(1, 3, 16);

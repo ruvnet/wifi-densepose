@@ -806,7 +806,10 @@ impl BoundingBox {
     /// Returns the center point of the bounding box.
     #[must_use]
     pub fn center(&self) -> (f32, f32) {
-        ((self.x_min + self.x_max) / 2.0, (self.y_min + self.y_max) / 2.0)
+        (
+            (self.x_min + self.x_max) / 2.0,
+            (self.y_min + self.y_max) / 2.0,
+        )
     }
 
     /// Computes the Intersection over Union (IoU) with another bounding box.
@@ -997,14 +1000,12 @@ impl PoseEstimate {
     /// Returns the person with the highest confidence.
     #[must_use]
     pub fn highest_confidence_person(&self) -> Option<&PersonPose> {
-        self.persons
-            .iter()
-            .max_by(|a, b| {
-                a.confidence
-                    .value()
-                    .partial_cmp(&b.confidence.value())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+        self.persons.iter().max_by(|a, b| {
+            a.confidence
+                .value()
+                .partial_cmp(&b.confidence.value())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
     }
 }
 
@@ -1082,7 +1083,10 @@ mod tests {
     #[test]
     fn test_keypoint_type_conversion() {
         assert_eq!(KeypointType::try_from(0).unwrap(), KeypointType::Nose);
-        assert_eq!(KeypointType::try_from(16).unwrap(), KeypointType::RightAnkle);
+        assert_eq!(
+            KeypointType::try_from(16).unwrap(),
+            KeypointType::RightAnkle
+        );
         assert!(KeypointType::try_from(17).is_err());
     }
 

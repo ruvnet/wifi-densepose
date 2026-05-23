@@ -38,8 +38,17 @@ impl PointCloud {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add(&mut self, x: f32, y: f32, z: f32, r: u8, g: u8, b: u8, intensity: f32) {
-        self.points.push(ColorPoint { x, y, z, r, g, b, intensity });
+        self.points.push(ColorPoint {
+            x,
+            y,
+            z,
+            r,
+            g,
+            b,
+            intensity,
+        });
     }
 
     pub fn bounds(&self) -> ([f32; 3], [f32; 3]) {
@@ -49,8 +58,12 @@ impl PointCloud {
         let mut min = [f32::MAX; 3];
         let mut max = [f32::MIN; 3];
         for p in &self.points {
-            min[0] = min[0].min(p.x); min[1] = min[1].min(p.y); min[2] = min[2].min(p.z);
-            max[0] = max[0].max(p.x); max[1] = max[1].max(p.y); max[2] = max[2].max(p.z);
+            min[0] = min[0].min(p.x);
+            min[1] = min[1].min(p.y);
+            min[2] = min[2].min(p.z);
+            max[0] = max[0].max(p.x);
+            max[1] = max[1].max(p.y);
+            max[2] = max[2].max(p.z);
         }
         (min, max)
     }
@@ -74,7 +87,11 @@ pub fn write_ply(cloud: &PointCloud, path: &str) -> anyhow::Result<()> {
     writeln!(f, "property float intensity")?;
     writeln!(f, "end_header")?;
     for p in &cloud.points {
-        writeln!(f, "{:.4} {:.4} {:.4} {} {} {} {:.4}", p.x, p.y, p.z, p.r, p.g, p.b, p.intensity)?;
+        writeln!(
+            f,
+            "{:.4} {:.4} {:.4} {} {} {} {:.4}",
+            p.x, p.y, p.z, p.r, p.g, p.b, p.intensity
+        )?;
     }
     Ok(())
 }
@@ -90,8 +107,9 @@ pub struct GaussianSplat {
 
 pub fn to_gaussian_splats(cloud: &PointCloud) -> Vec<GaussianSplat> {
     // Cluster points into voxels and create one Gaussian per cluster
-    let voxel_size = 0.08;  // smaller voxels = more detail = visible movement
-    let mut cells: std::collections::HashMap<(i32, i32, i32), Vec<&ColorPoint>> = std::collections::HashMap::new();
+    let voxel_size = 0.08; // smaller voxels = more detail = visible movement
+    let mut cells: std::collections::HashMap<(i32, i32, i32), Vec<&ColorPoint>> =
+        std::collections::HashMap::new();
 
     for p in &cloud.points {
         let key = (
@@ -102,25 +120,28 @@ pub fn to_gaussian_splats(cloud: &PointCloud) -> Vec<GaussianSplat> {
         cells.entry(key).or_default().push(p);
     }
 
-    cells.values().map(|pts| {
-        let n = pts.len() as f32;
-        let cx = pts.iter().map(|p| p.x).sum::<f32>() / n;
-        let cy = pts.iter().map(|p| p.y).sum::<f32>() / n;
-        let cz = pts.iter().map(|p| p.z).sum::<f32>() / n;
-        let cr = pts.iter().map(|p| p.r as f32).sum::<f32>() / n / 255.0;
-        let cg = pts.iter().map(|p| p.g as f32).sum::<f32>() / n / 255.0;
-        let cb = pts.iter().map(|p| p.b as f32).sum::<f32>() / n / 255.0;
+    cells
+        .values()
+        .map(|pts| {
+            let n = pts.len() as f32;
+            let cx = pts.iter().map(|p| p.x).sum::<f32>() / n;
+            let cy = pts.iter().map(|p| p.y).sum::<f32>() / n;
+            let cz = pts.iter().map(|p| p.z).sum::<f32>() / n;
+            let cr = pts.iter().map(|p| p.r as f32).sum::<f32>() / n / 255.0;
+            let cg = pts.iter().map(|p| p.g as f32).sum::<f32>() / n / 255.0;
+            let cb = pts.iter().map(|p| p.b as f32).sum::<f32>() / n / 255.0;
 
-        // Scale based on point spread
-        let sx = pts.iter().map(|p| (p.x - cx).abs()).sum::<f32>() / n + 0.01;
-        let sy = pts.iter().map(|p| (p.y - cy).abs()).sum::<f32>() / n + 0.01;
-        let sz = pts.iter().map(|p| (p.z - cz).abs()).sum::<f32>() / n + 0.01;
+            // Scale based on point spread
+            let sx = pts.iter().map(|p| (p.x - cx).abs()).sum::<f32>() / n + 0.01;
+            let sy = pts.iter().map(|p| (p.y - cy).abs()).sum::<f32>() / n + 0.01;
+            let sz = pts.iter().map(|p| (p.z - cz).abs()).sum::<f32>() / n + 0.01;
 
-        GaussianSplat {
-            center: [cx, cy, cz],
-            color: [cr, cg, cb],
-            opacity: (n / 10.0).min(1.0),
-            scale: [sx, sy, sz],
-        }
-    }).collect()
+            GaussianSplat {
+                center: [cx, cy, cz],
+                color: [cr, cg, cb],
+                opacity: (n / 10.0).min(1.0),
+                scale: [sx, sy, sz],
+            }
+        })
+        .collect()
 }

@@ -98,9 +98,7 @@ impl BssidBlock {
         let signal_pct = self.signal_pct.unwrap_or(0.0);
         let rssi_dbm = BssidObservation::pct_to_dbm(signal_pct);
         let channel = self.channel.unwrap_or(0);
-        let band = self
-            .band
-            .unwrap_or_else(|| BandType::from_channel(channel));
+        let band = self.band.unwrap_or_else(|| BandType::from_channel(channel));
         let radio_type = self.radio_type.unwrap_or(RadioType::N);
 
         Some(BssidObservation {
@@ -842,9 +840,15 @@ SSID 3 : Office
         assert_eq!(results.len(), 5, "expected 5 total BSSIDs across 3 SSIDs");
 
         assert_eq!(results[0].ssid, "HomeNet");
-        assert_eq!(results[0].bssid, BssidId::parse("11:11:11:11:11:11").unwrap());
+        assert_eq!(
+            results[0].bssid,
+            BssidId::parse("11:11:11:11:11:11").unwrap()
+        );
         assert_eq!(results[1].ssid, "HomeNet");
-        assert_eq!(results[1].bssid, BssidId::parse("22:22:22:22:22:22").unwrap());
+        assert_eq!(
+            results[1].bssid,
+            BssidId::parse("22:22:22:22:22:22").unwrap()
+        );
 
         assert_eq!(results[2].ssid, "Neighbor");
         assert_eq!(results[3].ssid, "Neighbor");
@@ -1051,16 +1055,13 @@ SSID 1 : Padded
 
     #[test]
     fn try_parse_bssid_line_valid() {
-        let mac =
-            try_parse_bssid_line("BSSID 1                 : d8:32:14:b0:a0:3e").unwrap();
+        let mac = try_parse_bssid_line("BSSID 1                 : d8:32:14:b0:a0:3e").unwrap();
         assert_eq!(mac.to_string(), "d8:32:14:b0:a0:3e");
     }
 
     #[test]
     fn try_parse_bssid_line_invalid_mac() {
-        assert!(
-            try_parse_bssid_line("BSSID 1                 : not-a-mac").is_none()
-        );
+        assert!(try_parse_bssid_line("BSSID 1                 : not-a-mac").is_none());
     }
 
     #[test]
@@ -1073,18 +1074,12 @@ SSID 1 : Padded
 
     #[test]
     fn try_parse_signal_line_without_percent() {
-        assert_eq!(
-            try_parse_signal_line("Signal             : 84"),
-            Some(84.0)
-        );
+        assert_eq!(try_parse_signal_line("Signal             : 84"), Some(84.0));
     }
 
     #[test]
     fn try_parse_signal_line_zero() {
-        assert_eq!(
-            try_parse_signal_line("Signal             : 0%"),
-            Some(0.0)
-        );
+        assert_eq!(try_parse_signal_line("Signal             : 0%"), Some(0.0));
     }
 
     #[test]
@@ -1157,7 +1152,8 @@ SSID 1 : Padded
 
     #[test]
     fn default_creates_scanner() {
-        let _scanner = NetshBssidScanner::default();
+        // Verify construction doesn't panic; discard unit struct immediately.
+        _ = NetshBssidScanner;
     }
 
     #[test]

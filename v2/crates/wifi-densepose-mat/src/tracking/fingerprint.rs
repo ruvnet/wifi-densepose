@@ -4,10 +4,7 @@
 //! Re-identification matches Lost tracks to new observations by weighted
 //! Euclidean distance on normalized biometric features.
 
-use crate::domain::{
-    vital_signs::VitalSignsReading,
-    coordinates::Coordinates3D,
-};
+use crate::domain::{coordinates::Coordinates3D, vital_signs::VitalSignsReading};
 
 // ---------------------------------------------------------------------------
 // Weight constants for the distance metric
@@ -23,9 +20,9 @@ const W_LOCATION: f32 = 0.15;
 /// Each range converts raw feature units into a [0, 1]-scale delta so that
 /// different physical quantities can be combined with consistent weighting.
 const BREATHING_RATE_RANGE: f32 = 30.0; // bpm: typical 0–30 bpm range
-const BREATHING_AMP_RANGE: f32 = 1.0;   // amplitude is already [0, 1]
-const HEARTBEAT_RANGE: f32 = 80.0;      // bpm: 40–120 → span 80
-const LOCATION_RANGE: f32 = 20.0;       // metres, typical room scale
+const BREATHING_AMP_RANGE: f32 = 1.0; // amplitude is already [0, 1]
+const HEARTBEAT_RANGE: f32 = 80.0; // bpm: 40–120 → span 80
+const LOCATION_RANGE: f32 = 20.0; // metres, typical room scale
 
 // ---------------------------------------------------------------------------
 // CsiFingerprint
@@ -98,16 +95,14 @@ impl CsiFingerprint {
             self.breathing_rate_bpm =
                 ONE_MINUS_ALPHA * self.breathing_rate_bpm + ALPHA * b.rate_bpm;
             self.breathing_amplitude =
-                ONE_MINUS_ALPHA * self.breathing_amplitude
-                    + ALPHA * b.amplitude.clamp(0.0, 1.0);
+                ONE_MINUS_ALPHA * self.breathing_amplitude + ALPHA * b.amplitude.clamp(0.0, 1.0);
         }
 
         // Heartbeat: blend if both present, replace if only new is present,
         // leave unchanged if only old is present, clear if new reading has none.
         match (&self.heartbeat_rate_bpm, vitals.heartbeat.as_ref()) {
             (Some(old), Some(new)) => {
-                self.heartbeat_rate_bpm =
-                    Some(ONE_MINUS_ALPHA * old + ALPHA * new.rate_bpm);
+                self.heartbeat_rate_bpm = Some(ONE_MINUS_ALPHA * old + ALPHA * new.rate_bpm);
             }
             (None, Some(new)) => {
                 self.heartbeat_rate_bpm = Some(new.rate_bpm);
@@ -120,9 +115,8 @@ impl CsiFingerprint {
         // Location
         if let Some(loc) = location {
             let new_loc = [loc.x as f32, loc.y as f32, loc.z as f32];
-            for i in 0..3 {
-                self.location_hint[i] =
-                    ONE_MINUS_ALPHA * self.location_hint[i] + ALPHA * new_loc[i];
+            for (h, &n) in self.location_hint.iter_mut().zip(new_loc.iter()) {
+                *h = ONE_MINUS_ALPHA * *h + ALPHA * n;
             }
         }
 
@@ -171,8 +165,7 @@ impl CsiFingerprint {
             };
 
         // Total weight of present features.
-        let total_weight =
-            W_BREATHING_RATE + W_BREATHING_AMP + effective_w_heartbeat + W_LOCATION;
+        let total_weight = W_BREATHING_RATE + W_BREATHING_AMP + effective_w_heartbeat + W_LOCATION;
 
         // Renormalise weights so they sum to 1.0.
         let scale = if total_weight > 1e-6 {
@@ -181,13 +174,11 @@ impl CsiFingerprint {
             1.0
         };
 
-        let distance = (W_BREATHING_RATE * d_breathing_rate
+        (W_BREATHING_RATE * d_breathing_rate
             + W_BREATHING_AMP * d_breathing_amp
             + heartbeat_term
             + W_LOCATION * d_location)
-            * scale;
-
-        distance
+            * scale
     }
 
     /// Returns `true` if `self.distance(other) < threshold`.
@@ -203,11 +194,11 @@ impl CsiFingerprint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::coordinates::Coordinates3D;
     use crate::domain::vital_signs::{
         BreathingPattern, BreathingType, HeartbeatSignature, MovementProfile, SignalStrength,
         VitalSignsReading,
     };
-    use crate::domain::coordinates::Coordinates3D;
 
     /// Helper to build a VitalSignsReading with controlled breathing and heartbeat.
     fn make_vitals(
@@ -244,11 +235,7 @@ mod tests {
         let fp = CsiFingerprint::from_vitals(&vitals, Some(&loc));
 
         let d = fp.distance(&fp);
-        assert!(
-            d.abs() < 1e-5,
-            "Self-distance should be ~0.0, got {}",
-            d
-        );
+        assert!(d.abs() < 1e-5, "Self-distance should be ~0.0, got {}", d);
     }
 
     /// Two fingerprints with identical breathing rates, amplitudes, heartbeat
@@ -324,6 +311,9 @@ mod tests {
         );
 
         // Sample count must be incremented.
-        assert_eq!(fp.sample_count, 2, "sample_count should be 2 after one update");
+        assert_eq!(
+            fp.sample_count, 2,
+            "sample_count should be 2 after one update"
+        );
     }
 }

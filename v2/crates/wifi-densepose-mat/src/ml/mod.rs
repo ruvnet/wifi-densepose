@@ -23,15 +23,13 @@ mod debris_model;
 mod vital_signs_classifier;
 
 pub use debris_model::{
-    DebrisModel, DebrisModelConfig, DebrisFeatureExtractor,
-    MaterialType, DebrisClassification, AttenuationPrediction,
-    DebrisModelError,
+    AttenuationPrediction, DebrisClassification, DebrisFeatureExtractor, DebrisModel,
+    DebrisModelConfig, DebrisModelError, MaterialType,
 };
 
 pub use vital_signs_classifier::{
+    BreathingClassification, ClassifierOutput, HeartbeatClassification, UncertaintyEstimate,
     VitalSignsClassifier, VitalSignsClassifierConfig,
-    BreathingClassification, HeartbeatClassification,
-    UncertaintyEstimate, ClassifierOutput,
 };
 
 use crate::detection::CsiDataBuffer;
@@ -83,7 +81,10 @@ pub trait DebrisPenetrationModel: Send + Sync {
     async fn classify_material(&self, features: &DebrisFeatures) -> MlResult<MaterialType>;
 
     /// Predict signal attenuation through debris
-    async fn predict_attenuation(&self, features: &DebrisFeatures) -> MlResult<AttenuationPrediction>;
+    async fn predict_attenuation(
+        &self,
+        features: &DebrisFeatures,
+    ) -> MlResult<AttenuationPrediction>;
 
     /// Estimate penetration depth in meters
     async fn estimate_depth(&self, features: &DebrisFeatures) -> MlResult<DepthEstimate>;
@@ -166,13 +167,13 @@ impl DebrisFeatures {
         }
 
         let mean = amplitudes.iter().sum::<f64>() / amplitudes.len() as f64;
-        let variance = amplitudes.iter()
-            .map(|a| (a - mean).powi(2))
-            .sum::<f64>() / amplitudes.len() as f64;
+        let variance =
+            amplitudes.iter().map(|a| (a - mean).powi(2)).sum::<f64>() / amplitudes.len() as f64;
         let std_dev = variance.sqrt();
 
         // Normalize amplitudes
-        amplitudes.iter()
+        amplitudes
+            .iter()
             .map(|a| ((a - mean) / (std_dev + 1e-8)) as f32)
             .collect()
     }
@@ -184,7 +185,8 @@ impl DebrisFeatures {
         }
 
         // Compute phase differences (unwrapped)
-        phases.windows(2)
+        phases
+            .windows(2)
             .map(|w| {
                 let diff = w[1] - w[0];
                 // Unwrap phase
@@ -202,7 +204,7 @@ impl DebrisFeatures {
 
     /// Compute fading profile (power spectral characteristics)
     fn compute_fading_profile(amplitudes: &[f64]) -> Vec<f32> {
-        use rustfft::{FftPlanner, num_complex::Complex};
+        use rustfft::{num_complex::Complex, FftPlanner};
 
         if amplitudes.len() < 16 {
             return vec![0.0; 8];
@@ -210,7 +212,8 @@ impl DebrisFeatures {
 
         // Take a subset for FFT
         let n = 64.min(amplitudes.len());
-        let mut buffer: Vec<Complex<f64>> = amplitudes.iter()
+        let mut buffer: Vec<Complex<f64>> = amplitudes
+            .iter()
             .take(n)
             .map(|&a| Complex::new(a, 0.0))
             .collect();
@@ -226,7 +229,8 @@ impl DebrisFeatures {
         fft.process(&mut buffer);
 
         // Extract power spectrum (first half)
-        buffer.iter()
+        buffer
+            .iter()
             .take(8)
             .map(|c| (c.norm() / n as f64) as f32)
             .collect()
@@ -241,9 +245,7 @@ impl DebrisFeatures {
         // Compute autocorrelation
         let n = amplitudes.len();
         let mean = amplitudes.iter().sum::<f64>() / n as f64;
-        let variance: f64 = amplitudes.iter()
-            .map(|a| (a - mean).powi(2))
-            .sum::<f64>() / n as f64;
+        let variance: f64 = amplitudes.iter().map(|a| (a - mean).powi(2)).sum::<f64>() / n as f64;
 
         if variance < 1e-10 {
             return 0.0;
@@ -252,11 +254,13 @@ impl DebrisFeatures {
         // Find lag where correlation drops below 0.5
         let mut coherence_lag = n;
         for lag in 1..n / 2 {
-            let correlation: f64 = amplitudes.iter()
+            let correlation: f64 = amplitudes
+                .iter()
                 .take(n - lag)
                 .zip(amplitudes.iter().skip(lag))
                 .map(|(a, b)| (a - mean) * (b - mean))
-                .sum::<f64>() / ((n - lag) as f64 * variance);
+                .sum::<f64>()
+                / ((n - lag) as f64 * variance);
 
             if correlation < 0.5 {
                 coherence_lag = lag;
@@ -283,16 +287,20 @@ impl DebrisFeatures {
         }
 
         // Calculate mean delay
-        let mean_delay: f64 = power.iter()
+        let mean_delay: f64 = power
+            .iter()
             .enumerate()
             .map(|(i, p)| i as f64 * p)
-            .sum::<f64>() / total_power;
+            .sum::<f64>()
+            / total_power;
 
         // Calculate RMS delay spread
-        let variance: f64 = power.iter()
+        let variance: f64 = power
+            .iter()
             .enumerate()
             .map(|(i, p)| (i as f64 - mean_delay).powi(2) * p)
-            .sum::<f64>() / total_power;
+            .sum::<f64>()
+            / total_power;
 
         // Convert to nanoseconds (assuming sample period)
         (variance.sqrt() * 50.0) as f32 // 50 ns per sample assumed
@@ -305,9 +313,8 @@ impl DebrisFeatures {
         }
 
         let mean = amplitudes.iter().sum::<f64>() / amplitudes.len() as f64;
-        let variance = amplitudes.iter()
-            .map(|a| (a - mean).powi(2))
-            .sum::<f64>() / amplitudes.len() as f64;
+        let variance =
+            amplitudes.iter().map(|a| (a - mean).powi(2)).sum::<f64>() / amplitudes.len() as f64;
 
         if variance < 1e-10 {
             return 30.0; // High SNR assumed
@@ -328,9 +335,8 @@ impl DebrisFeatures {
 
         // Calculate amplitude variance as multipath indicator
         let mean = amplitudes.iter().sum::<f64>() / amplitudes.len() as f64;
-        let variance = amplitudes.iter()
-            .map(|a| (a - mean).powi(2))
-            .sum::<f64>() / amplitudes.len() as f64;
+        let variance =
+            amplitudes.iter().map(|a| (a - mean).powi(2)).sum::<f64>() / amplitudes.len() as f64;
 
         // Normalize to 0-1 range
         let std_dev = variance.sqrt();
@@ -346,9 +352,7 @@ impl DebrisFeatures {
         }
 
         // Calculate coefficient of variation over time
-        let differences: Vec<f64> = amplitudes.windows(2)
-            .map(|w| (w[1] - w[0]).abs())
-            .collect();
+        let differences: Vec<f64> = amplitudes.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
 
         let mean_diff = differences.iter().sum::<f64>() / differences.len() as f64;
         let mean_amp = amplitudes.iter().sum::<f64>() / amplitudes.len() as f64;
@@ -563,9 +567,12 @@ impl MlDetectionPipeline {
     /// Check if the pipeline is ready for inference
     pub fn is_ready(&self) -> bool {
         let debris_ready = !self.config.enable_debris_classification
-            || self.debris_model.as_ref().map_or(false, |m| m.is_loaded());
+            || self.debris_model.as_ref().is_some_and(|m| m.is_loaded());
         let vital_ready = !self.config.enable_vital_classification
-            || self.vital_classifier.as_ref().map_or(false, |c| c.is_loaded());
+            || self
+                .vital_classifier
+                .as_ref()
+                .is_some_and(|c| c.is_loaded());
 
         debris_ready && vital_ready
     }

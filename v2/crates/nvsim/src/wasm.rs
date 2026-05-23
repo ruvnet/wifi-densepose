@@ -46,8 +46,8 @@ impl WasmPipeline {
     pub fn new(scene_json: &str, config_json: &str, seed: f64) -> Result<WasmPipeline, JsValue> {
         let scene: Scene =
             serde_json::from_str(scene_json).map_err(|e| js_err(format!("scene parse: {e}")))?;
-        let config: PipelineConfig = serde_json::from_str(config_json)
-            .map_err(|e| js_err(format!("config parse: {e}")))?;
+        let config: PipelineConfig =
+            serde_json::from_str(config_json).map_err(|e| js_err(format!("config parse: {e}")))?;
         let seed_u64 = seed as u64;
         Ok(WasmPipeline {
             inner: Pipeline::new(scene, config, seed_u64),
@@ -184,8 +184,8 @@ pub fn run_transient(
 ) -> Result<JsValue, JsValue> {
     let scene: crate::scene::Scene =
         serde_json::from_str(scene_json).map_err(|e| js_err(format!("scene parse: {e}")))?;
-    let config: crate::pipeline::PipelineConfig = serde_json::from_str(config_json)
-        .map_err(|e| js_err(format!("config parse: {e}")))?;
+    let config: crate::pipeline::PipelineConfig =
+        serde_json::from_str(config_json).map_err(|e| js_err(format!("config parse: {e}")))?;
     let pipeline = crate::pipeline::Pipeline::new(scene, config, seed as u64);
     let (frames, witness) = pipeline.run_with_witness(n_samples);
 
@@ -217,7 +217,11 @@ pub fn run_transient(
     let s_arr = js_sys::Float64Array::new_with_length(3);
     s_arr.copy_from(&avg_s_pt);
     js_sys::Reflect::set(&obj, &JsValue::from_str("bRecoveredT"), &b_arr)?;
-    js_sys::Reflect::set(&obj, &JsValue::from_str("bMagT"), &JsValue::from_f64(bmag_t))?;
+    js_sys::Reflect::set(
+        &obj,
+        &JsValue::from_str("bMagT"),
+        &JsValue::from_f64(bmag_t),
+    )?;
     js_sys::Reflect::set(
         &obj,
         &JsValue::from_str("noiseFloorPtSqrtHz"),
@@ -230,6 +234,10 @@ pub fn run_transient(
         &JsValue::from_f64(frames.len() as f64),
     )?;
     let witness_hex = crate::proof::Proof::hex(&witness);
-    js_sys::Reflect::set(&obj, &JsValue::from_str("witnessHex"), &JsValue::from_str(&witness_hex))?;
+    js_sys::Reflect::set(
+        &obj,
+        &JsValue::from_str("witnessHex"),
+        &JsValue::from_str(&witness_hex),
+    )?;
     Ok(obj.into())
 }

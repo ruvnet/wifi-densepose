@@ -9,8 +9,8 @@
 
 use ndarray::Array2;
 use num_complex::Complex64;
-use ruvector_attn_mincut::attn_mincut;
 use rustfft::FftPlanner;
+use ruvector_attn_mincut::attn_mincut;
 use std::f64::consts::PI;
 
 /// Configuration for spectrogram generation.
@@ -185,8 +185,11 @@ pub fn gate_spectrogram(
     n_time: usize,
     lambda: f32,
 ) -> Vec<f32> {
-    debug_assert_eq!(spectrogram.len(), n_freq * n_time,
-        "spectrogram length must equal n_freq * n_time");
+    debug_assert_eq!(
+        spectrogram.len(),
+        n_freq * n_time,
+        "spectrogram length must equal n_freq * n_time"
+    );
 
     if n_freq == 0 || n_time == 0 {
         return spectrogram.to_vec();
@@ -197,8 +200,8 @@ pub fn gate_spectrogram(
         spectrogram,
         spectrogram,
         spectrogram,
-        n_freq,  // d = feature dimension
-        n_time,  // seq_len = time tokens
+        n_freq, // d = feature dimension
+        n_time, // seq_len = time tokens
         lambda,
         /*tau=*/ 2,
         /*eps=*/ 1e-7_f32,
@@ -210,7 +213,10 @@ pub fn gate_spectrogram(
 #[derive(Debug, thiserror::Error)]
 pub enum SpectrogramError {
     #[error("Signal too short ({signal_len} samples) for window size {window_size}")]
-    SignalTooShort { signal_len: usize, window_size: usize },
+    SignalTooShort {
+        signal_len: usize,
+        window_size: usize,
+    },
 
     #[error("Hop size must be > 0")]
     InvalidHopSize,

@@ -24,10 +24,10 @@ use std::convert::TryFrom;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum RadioMode {
-    Disabled     = 0,
-    PassiveRx    = 1,
-    ActiveProbe  = 2,
-    Calibration  = 3,
+    Disabled = 0,
+    PassiveRx = 1,
+    ActiveProbe = 2,
+    Calibration = 3,
 }
 
 /// Named capture profiles, mirror of `rv_capture_profile_t`.
@@ -35,10 +35,10 @@ pub enum RadioMode {
 #[repr(u8)]
 pub enum CaptureProfile {
     PassiveLowRate = 0,
-    ActiveProbe    = 1,
-    RespHighSens   = 2,
-    FastMotion     = 3,
-    Calibration    = 4,
+    ActiveProbe = 1,
+    RespHighSens = 2,
+    FastMotion = 3,
+    Calibration = 4,
 }
 
 impl TryFrom<u8> for CaptureProfile {
@@ -59,12 +59,12 @@ impl TryFrom<u8> for CaptureProfile {
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct RadioHealth {
     pub pkt_yield_per_sec: u16,
-    pub send_fail_count:   u16,
-    pub rssi_median_dbm:   i8,
-    pub noise_floor_dbm:   i8,
-    pub current_channel:   u8,
-    pub current_bw_mhz:    u8,
-    pub current_profile:   u8,
+    pub send_fail_count: u16,
+    pub rssi_median_dbm: i8,
+    pub noise_floor_dbm: i8,
+    pub current_channel: u8,
+    pub current_bw_mhz: u8,
+    pub current_profile: u8,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -95,12 +95,12 @@ pub trait RadioOps: Send + Sync {
 /// A zero-hardware radio backend for host tests and CI.
 #[derive(Debug, Clone, Default)]
 pub struct MockRadio {
-    pub health:        RadioHealth,
-    pub init_count:    u32,
+    pub health: RadioHealth,
+    pub init_count: u32,
     pub channel_calls: Vec<(u8, u8)>,
     pub profile_calls: Vec<CaptureProfile>,
-    pub mode_calls:    Vec<RadioMode>,
-    pub csi_enabled:   bool,
+    pub mode_calls: Vec<RadioMode>,
+    pub csi_enabled: bool,
 }
 
 impl RadioOps for MockRadio {
@@ -111,7 +111,7 @@ impl RadioOps for MockRadio {
     fn set_channel(&mut self, ch: u8, bw: u8) -> Result<(), RadioError> {
         self.channel_calls.push((ch, bw));
         self.health.current_channel = ch;
-        self.health.current_bw_mhz  = bw;
+        self.health.current_bw_mhz = bw;
         Ok(())
     }
     fn set_mode(&mut self, mode: RadioMode) -> Result<(), RadioError> {
@@ -137,9 +137,9 @@ impl RadioOps for MockRadio {
 // ---------------------------------------------------------------------------
 
 /// `RV_MESH_MAGIC` from rv_mesh.h.
-pub const MESH_MAGIC: u32   = 0xC511_8100;
+pub const MESH_MAGIC: u32 = 0xC511_8100;
 /// `RV_MESH_VERSION` from rv_mesh.h.
-pub const MESH_VERSION: u8  = 1;
+pub const MESH_VERSION: u8 = 1;
 /// `RV_MESH_MAX_PAYLOAD` from rv_mesh.h.
 pub const MESH_MAX_PAYLOAD: usize = 256;
 /// `sizeof(rv_mesh_header_t)`.
@@ -149,9 +149,9 @@ pub const MESH_HEADER_SIZE: usize = 16;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum MeshRole {
-    Unassigned  = 0,
-    Anchor      = 1,
-    Observer    = 2,
+    Unassigned = 0,
+    Anchor = 1,
+    Observer = 2,
     FusionRelay = 3,
     Coordinator = 4,
 }
@@ -174,13 +174,13 @@ impl TryFrom<u8> for MeshRole {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum MeshMsgType {
-    TimeSync         = 0x01,
-    RoleAssign       = 0x02,
-    ChannelPlan      = 0x03,
+    TimeSync = 0x01,
+    RoleAssign = 0x02,
+    ChannelPlan = 0x03,
     CalibrationStart = 0x04,
-    FeatureDelta     = 0x05,
-    Health           = 0x06,
-    AnomalyAlert     = 0x07,
+    FeatureDelta = 0x05,
+    Health = 0x06,
+    AnomalyAlert = 0x07,
 }
 
 impl TryFrom<u8> for MeshMsgType {
@@ -194,7 +194,7 @@ impl TryFrom<u8> for MeshMsgType {
             0x05 => Ok(MeshMsgType::FeatureDelta),
             0x06 => Ok(MeshMsgType::Health),
             0x07 => Ok(MeshMsgType::AnomalyAlert),
-            _    => Err(MeshError::UnknownMsgType(v)),
+            _ => Err(MeshError::UnknownMsgType(v)),
         }
     }
 }
@@ -203,44 +203,44 @@ impl TryFrom<u8> for MeshMsgType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum AuthClass {
-    None         = 0,
-    HmacSession  = 1,
+    None = 0,
+    HmacSession = 1,
     Ed25519Batch = 2,
 }
 
 /// `rv_mesh_header_t`, 16 bytes.
 #[derive(Debug, Clone, Copy)]
 pub struct MeshHeader {
-    pub msg_type:    MeshMsgType,
+    pub msg_type: MeshMsgType,
     pub sender_role: MeshRole,
-    pub auth_class:  AuthClass,
-    pub epoch:       u32,
+    pub auth_class: AuthClass,
+    pub epoch: u32,
     pub payload_len: u16,
 }
 
 /// `rv_node_status_t`, 28 bytes.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NodeStatus {
-    pub node_id:         [u8; 8],
-    pub local_time_us:   u64,
-    pub role:            MeshRole,
+    pub node_id: [u8; 8],
+    pub local_time_us: u64,
+    pub role: MeshRole,
     pub current_channel: u8,
-    pub current_bw:      u8,
+    pub current_bw: u8,
     pub noise_floor_dbm: i8,
-    pub pkt_yield:       u16,
-    pub sync_error_us:   u16,
-    pub health_flags:    u16,
+    pub pkt_yield: u16,
+    pub sync_error_us: u16,
+    pub health_flags: u16,
 }
 
 /// `rv_anomaly_alert_t`, 28 bytes.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AnomalyAlert {
-    pub node_id:       [u8; 8],
-    pub ts_us:         u64,
-    pub severity:      u8,
-    pub reason:        u8,
+    pub node_id: [u8; 8],
+    pub ts_us: u64,
+    pub severity: u8,
+    pub reason: u8,
     pub anomaly_score: f32,
-    pub motion_score:  f32,
+    pub motion_score: f32,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -262,7 +262,11 @@ pub enum MeshError {
     #[error("unknown auth class: {0}")]
     UnknownAuth(u8),
     #[error("payload size mismatch for {which}: got {got}, want {want}")]
-    PayloadSizeMismatch { which: &'static str, got: usize, want: usize },
+    PayloadSizeMismatch {
+        which: &'static str,
+        got: usize,
+        want: usize,
+    },
 }
 
 /// IEEE CRC32 — matches the bit-by-bit implementation in
@@ -287,15 +291,19 @@ pub fn decode_mesh(buf: &[u8]) -> Result<(MeshHeader, &[u8]), MeshError> {
     }
 
     let magic = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
-    if magic != MESH_MAGIC { return Err(MeshError::BadMagic(magic)); }
+    if magic != MESH_MAGIC {
+        return Err(MeshError::BadMagic(magic));
+    }
 
     let version = buf[4];
-    if version != MESH_VERSION { return Err(MeshError::BadVersion(version)); }
+    if version != MESH_VERSION {
+        return Err(MeshError::BadVersion(version));
+    }
 
-    let ty          = buf[5];
+    let ty = buf[5];
     let sender_role = buf[6];
-    let auth_class  = buf[7];
-    let epoch       = u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]);
+    let auth_class = buf[7];
+    let epoch = u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]);
     let payload_len = u16::from_le_bytes([buf[12], buf[13]]);
 
     if payload_len as usize > MESH_MAX_PAYLOAD {
@@ -303,20 +311,28 @@ pub fn decode_mesh(buf: &[u8]) -> Result<(MeshHeader, &[u8]), MeshError> {
     }
 
     let total = MESH_HEADER_SIZE + payload_len as usize + 4;
-    if buf.len() < total { return Err(MeshError::TooShort(buf.len())); }
-
-    let want_crc = crc32_ieee(&buf[..MESH_HEADER_SIZE + payload_len as usize]);
-    let crc_off  = MESH_HEADER_SIZE + payload_len as usize;
-    let got_crc  = u32::from_le_bytes([
-        buf[crc_off], buf[crc_off + 1], buf[crc_off + 2], buf[crc_off + 3],
-    ]);
-    if got_crc != want_crc {
-        return Err(MeshError::CrcMismatch { got: got_crc, want: want_crc });
+    if buf.len() < total {
+        return Err(MeshError::TooShort(buf.len()));
     }
 
-    let msg_type    = MeshMsgType::try_from(ty)?;
+    let want_crc = crc32_ieee(&buf[..MESH_HEADER_SIZE + payload_len as usize]);
+    let crc_off = MESH_HEADER_SIZE + payload_len as usize;
+    let got_crc = u32::from_le_bytes([
+        buf[crc_off],
+        buf[crc_off + 1],
+        buf[crc_off + 2],
+        buf[crc_off + 3],
+    ]);
+    if got_crc != want_crc {
+        return Err(MeshError::CrcMismatch {
+            got: got_crc,
+            want: want_crc,
+        });
+    }
+
+    let msg_type = MeshMsgType::try_from(ty)?;
     let sender_role = MeshRole::try_from(sender_role)?;
-    let auth_class  = match auth_class {
+    let auth_class = match auth_class {
         0 => AuthClass::None,
         1 => AuthClass::HmacSession,
         2 => AuthClass::Ed25519Batch,
@@ -324,8 +340,14 @@ pub fn decode_mesh(buf: &[u8]) -> Result<(MeshHeader, &[u8]), MeshError> {
     };
 
     Ok((
-        MeshHeader { msg_type, sender_role, auth_class, epoch, payload_len },
-        &buf[MESH_HEADER_SIZE .. MESH_HEADER_SIZE + payload_len as usize],
+        MeshHeader {
+            msg_type,
+            sender_role,
+            auth_class,
+            epoch,
+            payload_len,
+        },
+        &buf[MESH_HEADER_SIZE..MESH_HEADER_SIZE + payload_len as usize],
     ))
 }
 
@@ -333,24 +355,24 @@ pub fn decode_mesh(buf: &[u8]) -> Result<(MeshHeader, &[u8]), MeshError> {
 pub fn decode_node_status(p: &[u8]) -> Result<NodeStatus, MeshError> {
     if p.len() != 28 {
         return Err(MeshError::PayloadSizeMismatch {
-            which: "HEALTH", got: p.len(), want: 28,
+            which: "HEALTH",
+            got: p.len(),
+            want: 28,
         });
     }
     let mut node_id = [0u8; 8];
     node_id.copy_from_slice(&p[0..8]);
-    let local_time_us = u64::from_le_bytes([
-        p[8], p[9], p[10], p[11], p[12], p[13], p[14], p[15],
-    ]);
+    let local_time_us = u64::from_le_bytes([p[8], p[9], p[10], p[11], p[12], p[13], p[14], p[15]]);
     Ok(NodeStatus {
         node_id,
         local_time_us,
         role: MeshRole::try_from(p[16])?,
         current_channel: p[17],
-        current_bw:      p[18],
+        current_bw: p[18],
         noise_floor_dbm: p[19] as i8,
-        pkt_yield:       u16::from_le_bytes([p[20], p[21]]),
-        sync_error_us:   u16::from_le_bytes([p[22], p[23]]),
-        health_flags:    u16::from_le_bytes([p[24], p[25]]),
+        pkt_yield: u16::from_le_bytes([p[20], p[21]]),
+        sync_error_us: u16::from_le_bytes([p[22], p[23]]),
+        health_flags: u16::from_le_bytes([p[24], p[25]]),
     })
 }
 
@@ -358,31 +380,29 @@ pub fn decode_node_status(p: &[u8]) -> Result<NodeStatus, MeshError> {
 pub fn decode_anomaly_alert(p: &[u8]) -> Result<AnomalyAlert, MeshError> {
     if p.len() != 28 {
         return Err(MeshError::PayloadSizeMismatch {
-            which: "ANOMALY_ALERT", got: p.len(), want: 28,
+            which: "ANOMALY_ALERT",
+            got: p.len(),
+            want: 28,
         });
     }
     let mut node_id = [0u8; 8];
     node_id.copy_from_slice(&p[0..8]);
-    let ts_us = u64::from_le_bytes([
-        p[8], p[9], p[10], p[11], p[12], p[13], p[14], p[15],
-    ]);
+    let ts_us = u64::from_le_bytes([p[8], p[9], p[10], p[11], p[12], p[13], p[14], p[15]]);
     let anomaly_score = f32::from_le_bytes([p[20], p[21], p[22], p[23]]);
-    let motion_score  = f32::from_le_bytes([p[24], p[25], p[26], p[27]]);
+    let motion_score = f32::from_le_bytes([p[24], p[25], p[26], p[27]]);
     Ok(AnomalyAlert {
-        node_id, ts_us,
+        node_id,
+        ts_us,
         severity: p[16],
-        reason:   p[17],
-        anomaly_score, motion_score,
+        reason: p[17],
+        anomaly_score,
+        motion_score,
     })
 }
 
 /// Encode a `HEALTH` payload. Produces the 16-byte header, 28-byte
 /// payload, and 4-byte CRC — bit-identical to what the firmware emits.
-pub fn encode_health(
-    sender_role: MeshRole,
-    epoch: u32,
-    status: &NodeStatus,
-) -> Vec<u8> {
+pub fn encode_health(sender_role: MeshRole, epoch: u32, status: &NodeStatus) -> Vec<u8> {
     let payload_len: u16 = 28;
     let mut buf = Vec::with_capacity(MESH_HEADER_SIZE + payload_len as usize + 4);
 
@@ -394,7 +414,7 @@ pub fn encode_health(
     buf.push(AuthClass::None as u8);
     buf.extend_from_slice(&epoch.to_le_bytes());
     buf.extend_from_slice(&payload_len.to_le_bytes());
-    buf.extend_from_slice(&0u16.to_le_bytes());  // reserved
+    buf.extend_from_slice(&0u16.to_le_bytes()); // reserved
 
     // payload
     buf.extend_from_slice(&status.node_id);
@@ -406,7 +426,7 @@ pub fn encode_health(
     buf.extend_from_slice(&status.pkt_yield.to_le_bytes());
     buf.extend_from_slice(&status.sync_error_us.to_le_bytes());
     buf.extend_from_slice(&status.health_flags.to_le_bytes());
-    buf.extend_from_slice(&0u16.to_le_bytes());  // reserved
+    buf.extend_from_slice(&0u16.to_le_bytes()); // reserved
 
     let crc = crc32_ieee(&buf);
     buf.extend_from_slice(&crc.to_le_bytes());
@@ -444,8 +464,8 @@ mod tests {
     fn crc32_matches_firmware_vectors() {
         // Same vectors as test_rv_feature_state.c
         assert_eq!(crc32_ieee(b"123456789"), 0xCBF43926);
-        assert_eq!(crc32_ieee(&[]),           0x00000000);
-        assert_eq!(crc32_ieee(&[0u8]),        0xD202EF8D);
+        assert_eq!(crc32_ieee(&[]), 0x00000000);
+        assert_eq!(crc32_ieee(&[0u8]), 0xD202EF8D);
     }
 
     #[test]
@@ -490,7 +510,7 @@ mod tests {
             health_flags: 0,
         };
         let mut wire = encode_health(MeshRole::Observer, 0, &st);
-        let p0 = MESH_HEADER_SIZE;  // first payload byte
+        let p0 = MESH_HEADER_SIZE; // first payload byte
         wire[p0] ^= 0xFF;
         let err = decode_mesh(&wire).unwrap_err();
         assert!(matches!(err, MeshError::CrcMismatch { .. }));

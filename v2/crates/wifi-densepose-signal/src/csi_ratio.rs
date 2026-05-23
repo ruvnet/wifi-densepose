@@ -45,7 +45,9 @@ pub fn conjugate_multiply(
 /// Input: `csi_complex` is (num_antennas × num_subcarriers) complex CSI.
 /// Output: For each pair (i, j) where j > i, a row of conjugate-multiplied values.
 /// Returns (num_pairs × num_subcarriers) matrix.
-pub fn compute_ratio_matrix(csi_complex: &Array2<Complex64>) -> Result<Array2<Complex64>, CsiRatioError> {
+pub fn compute_ratio_matrix(
+    csi_complex: &Array2<Complex64>,
+) -> Result<Array2<Complex64>, CsiRatioError> {
     let (n_ant, n_sc) = csi_complex.dim();
     if n_ant < 2 {
         return Err(CsiRatioError::InsufficientAntennas { count: n_ant });
@@ -170,16 +172,16 @@ mod tests {
             assert!(
                 (phase[[0, j]] - (-path_diff_phase)).abs() < 1e-10,
                 "Subcarrier {} phase={}, expected={}",
-                j, phase[[0, j]], -path_diff_phase
+                j,
+                phase[[0, j]],
+                -path_diff_phase
             );
         }
     }
 
     #[test]
     fn test_single_antenna_error() {
-        let csi = Array2::from_shape_fn((1, 10), |(_, j)| {
-            Complex64::new(j as f64, 0.0)
-        });
+        let csi = Array2::from_shape_fn((1, 10), |(_, j)| Complex64::new(j as f64, 0.0));
         assert!(matches!(
             compute_ratio_matrix(&csi),
             Err(CsiRatioError::InsufficientAntennas { .. })

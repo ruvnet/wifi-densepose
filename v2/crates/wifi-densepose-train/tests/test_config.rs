@@ -155,7 +155,8 @@ fn default_config_needs_interpolation() {
 fn equal_subcarrier_counts_means_no_interpolation_needed() {
     let mut cfg = TrainingConfig::default();
     cfg.native_subcarriers = cfg.num_subcarriers; // e.g., both = 56
-    cfg.validate().expect("config with equal subcarrier counts must be valid");
+    cfg.validate()
+        .expect("config with equal subcarrier counts must be valid");
     assert_eq!(
         cfg.native_subcarriers, cfg.num_subcarriers,
         "after setting equal counts, native ({}) must equal target ({})",
@@ -173,10 +174,8 @@ fn equal_subcarrier_counts_means_no_interpolation_needed() {
 #[test]
 fn csi_flat_size_matches_expected() {
     let cfg = TrainingConfig::default();
-    let expected = cfg.window_frames
-        * cfg.num_antennas_tx
-        * cfg.num_antennas_rx
-        * cfg.num_subcarriers;
+    let expected =
+        cfg.window_frames * cfg.num_antennas_tx * cfg.num_antennas_rx * cfg.num_subcarriers;
     // Default: 100 * 3 * 3 * 56 = 50400
     assert_eq!(
         expected, 50_400,
@@ -188,14 +187,9 @@ fn csi_flat_size_matches_expected() {
 #[test]
 fn csi_flat_size_positive_for_valid_config() {
     let cfg = TrainingConfig::default();
-    let flat_size = cfg.window_frames
-        * cfg.num_antennas_tx
-        * cfg.num_antennas_rx
-        * cfg.num_subcarriers;
-    assert!(
-        flat_size > 0,
-        "CSI flat size must be > 0, got {flat_size}"
-    );
+    let flat_size =
+        cfg.window_frames * cfg.num_antennas_tx * cfg.num_antennas_rx * cfg.num_subcarriers;
+    assert!(flat_size > 0, "CSI flat size must be > 0, got {flat_size}");
 }
 
 // ---------------------------------------------------------------------------
@@ -313,7 +307,10 @@ fn config_json_roundtrip_identical() {
         loaded.save_top_k, original.save_top_k,
         "save_top_k must survive round-trip"
     );
-    assert_eq!(loaded.use_gpu, original.use_gpu, "use_gpu must survive round-trip");
+    assert_eq!(
+        loaded.use_gpu, original.use_gpu,
+        "use_gpu must survive round-trip"
+    );
     assert_eq!(
         loaded.gpu_device_id, original.gpu_device_id,
         "gpu_device_id must survive round-trip"
@@ -334,26 +331,38 @@ fn config_json_roundtrip_modified_values() {
     let tmp = tempdir().expect("tempdir must be created");
     let path = tmp.path().join("modified.json");
 
-    let mut cfg = TrainingConfig::default();
-    cfg.batch_size = 16;
-    cfg.learning_rate = 5e-4;
-    cfg.num_epochs = 100;
-    cfg.warmup_epochs = 10;
-    cfg.lr_milestones = vec![50, 80];
-    cfg.seed = 99;
+    let cfg = TrainingConfig {
+        batch_size: 16,
+        learning_rate: 5e-4,
+        num_epochs: 100,
+        warmup_epochs: 10,
+        lr_milestones: vec![50, 80],
+        seed: 99,
+        ..TrainingConfig::default()
+    };
 
-    cfg.validate().expect("modified config must be valid before serialization");
+    cfg.validate()
+        .expect("modified config must be valid before serialization");
     cfg.to_json(&path).expect("to_json must succeed");
 
     let loaded = TrainingConfig::from_json(&path).expect("from_json must succeed");
 
-    assert_eq!(loaded.batch_size, 16, "batch_size must match after round-trip");
+    assert_eq!(
+        loaded.batch_size, 16,
+        "batch_size must match after round-trip"
+    );
     assert!(
         (loaded.learning_rate - 5e-4_f64).abs() < 1e-12,
         "learning_rate must match after round-trip"
     );
-    assert_eq!(loaded.num_epochs, 100, "num_epochs must match after round-trip");
-    assert_eq!(loaded.warmup_epochs, 10, "warmup_epochs must match after round-trip");
+    assert_eq!(
+        loaded.num_epochs, 100,
+        "num_epochs must match after round-trip"
+    );
+    assert_eq!(
+        loaded.warmup_epochs, 10,
+        "warmup_epochs must match after round-trip"
+    );
     assert_eq!(
         loaded.lr_milestones,
         vec![50, 80],
@@ -369,8 +378,10 @@ fn config_json_roundtrip_modified_values() {
 /// Setting num_subcarriers to 0 must produce a validation error.
 #[test]
 fn zero_num_subcarriers_is_invalid() {
-    let mut cfg = TrainingConfig::default();
-    cfg.num_subcarriers = 0;
+    let cfg = TrainingConfig {
+        num_subcarriers: 0,
+        ..TrainingConfig::default()
+    };
     assert!(
         cfg.validate().is_err(),
         "num_subcarriers = 0 must be rejected by validate()"
@@ -380,8 +391,10 @@ fn zero_num_subcarriers_is_invalid() {
 /// Setting native_subcarriers to 0 must produce a validation error.
 #[test]
 fn zero_native_subcarriers_is_invalid() {
-    let mut cfg = TrainingConfig::default();
-    cfg.native_subcarriers = 0;
+    let cfg = TrainingConfig {
+        native_subcarriers: 0,
+        ..TrainingConfig::default()
+    };
     assert!(
         cfg.validate().is_err(),
         "native_subcarriers = 0 must be rejected by validate()"
@@ -391,8 +404,10 @@ fn zero_native_subcarriers_is_invalid() {
 /// Setting batch_size to 0 must produce a validation error.
 #[test]
 fn zero_batch_size_is_invalid() {
-    let mut cfg = TrainingConfig::default();
-    cfg.batch_size = 0;
+    let cfg = TrainingConfig {
+        batch_size: 0,
+        ..TrainingConfig::default()
+    };
     assert!(
         cfg.validate().is_err(),
         "batch_size = 0 must be rejected by validate()"
@@ -402,8 +417,10 @@ fn zero_batch_size_is_invalid() {
 /// A negative learning rate must produce a validation error.
 #[test]
 fn negative_learning_rate_is_invalid() {
-    let mut cfg = TrainingConfig::default();
-    cfg.learning_rate = -0.001;
+    let cfg = TrainingConfig {
+        learning_rate: -0.001,
+        ..TrainingConfig::default()
+    };
     assert!(
         cfg.validate().is_err(),
         "learning_rate < 0 must be rejected by validate()"
@@ -413,8 +430,11 @@ fn negative_learning_rate_is_invalid() {
 /// warmup_epochs >= num_epochs must produce a validation error.
 #[test]
 fn warmup_exceeding_epochs_is_invalid() {
-    let mut cfg = TrainingConfig::default();
-    cfg.warmup_epochs = cfg.num_epochs; // equal, which is still invalid
+    let default = TrainingConfig::default();
+    let cfg = TrainingConfig {
+        warmup_epochs: default.num_epochs,
+        ..default
+    };
     assert!(
         cfg.validate().is_err(),
         "warmup_epochs >= num_epochs must be rejected by validate()"
@@ -424,10 +444,12 @@ fn warmup_exceeding_epochs_is_invalid() {
 /// All loss weights set to 0.0 must produce a validation error.
 #[test]
 fn all_zero_loss_weights_are_invalid() {
-    let mut cfg = TrainingConfig::default();
-    cfg.lambda_kp = 0.0;
-    cfg.lambda_dp = 0.0;
-    cfg.lambda_tr = 0.0;
+    let cfg = TrainingConfig {
+        lambda_kp: 0.0,
+        lambda_dp: 0.0,
+        lambda_tr: 0.0,
+        ..TrainingConfig::default()
+    };
     assert!(
         cfg.validate().is_err(),
         "all-zero loss weights must be rejected by validate()"
@@ -437,8 +459,10 @@ fn all_zero_loss_weights_are_invalid() {
 /// Non-increasing lr_milestones must produce a validation error.
 #[test]
 fn non_increasing_milestones_are_invalid() {
-    let mut cfg = TrainingConfig::default();
-    cfg.lr_milestones = vec![40, 30]; // wrong order
+    let cfg = TrainingConfig {
+        lr_milestones: vec![40, 30],
+        ..TrainingConfig::default()
+    };
     assert!(
         cfg.validate().is_err(),
         "non-increasing lr_milestones must be rejected by validate()"

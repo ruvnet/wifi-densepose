@@ -14,9 +14,7 @@
 //! - ADR-030 Tier 6: Invisible Interaction Layer
 //! - ADR-032a Section 6.4: midstreamer-temporal-compare integration
 
-use midstreamer_temporal_compare::{
-    ComparisonAlgorithm, Sequence, TemporalComparator,
-};
+use midstreamer_temporal_compare::{ComparisonAlgorithm, Sequence, TemporalComparator};
 
 use super::gesture::{GestureConfig, GestureError, GestureResult, GestureTemplate};
 
@@ -99,10 +97,7 @@ pub struct TemporalGestureClassifier {
 impl TemporalGestureClassifier {
     /// Create a new temporal gesture classifier.
     pub fn new(config: TemporalGestureConfig) -> Self {
-        let comparator = TemporalComparator::new(
-            config.cache_capacity,
-            config.max_sequence_length,
-        );
+        let comparator = TemporalComparator::new(config.cache_capacity, config.max_sequence_length);
         Self {
             config,
             templates: Vec::new(),
@@ -112,10 +107,7 @@ impl TemporalGestureClassifier {
     }
 
     /// Register a gesture template.
-    pub fn add_template(
-        &mut self,
-        template: GestureTemplate,
-    ) -> Result<(), GestureError> {
+    pub fn add_template(&mut self, template: GestureTemplate) -> Result<(), GestureError> {
         if template.name.is_empty() {
             return Err(GestureError::InvalidTemplateName(
                 "Template name cannot be empty".into(),
@@ -181,9 +173,7 @@ impl TemporalGestureClassifier {
         let mut best_idx: Option<usize> = None;
 
         for (idx, template_seq) in self.template_sequences.iter().enumerate() {
-            let result = self
-                .comparator
-                .compare(&query_seq, template_seq, algo);
+            let result = self.comparator.compare(&query_seq, template_seq, algo);
             // Use distance from ComparisonResult (lower = better match)
             let distance = match result {
                 Ok(cr) => cr.distance,
@@ -283,8 +273,8 @@ impl std::fmt::Debug for TemporalGestureClassifier {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::gesture::GestureType;
+    use super::*;
 
     fn make_template(
         name: &str,
@@ -385,7 +375,13 @@ mod tests {
     fn test_temporal_classify_too_short() {
         let mut classifier = TemporalGestureClassifier::new(small_config());
         classifier
-            .add_template(make_template("wave", GestureType::Wave, 10, 4, wave_pattern))
+            .add_template(make_template(
+                "wave",
+                GestureType::Wave,
+                10,
+                4,
+                wave_pattern,
+            ))
             .unwrap();
         let seq: Vec<Vec<f64>> = (0..3).map(|_| vec![0.0; 4]).collect();
         assert!(matches!(
@@ -407,17 +403,32 @@ mod tests {
         let result = classifier.classify(&seq, 1, 100_000).unwrap();
         assert!(result.recognized, "Exact match should be recognized");
         assert_eq!(result.gesture_type, Some(GestureType::Wave));
-        assert!(result.distance < 1e-6, "Exact match should have near-zero distance");
+        assert!(
+            result.distance < 1e-6,
+            "Exact match should have near-zero distance"
+        );
     }
 
     #[test]
     fn test_temporal_classify_best_of_two() {
         let mut classifier = TemporalGestureClassifier::new(small_config());
         classifier
-            .add_template(make_template("wave", GestureType::Wave, 10, 4, wave_pattern))
+            .add_template(make_template(
+                "wave",
+                GestureType::Wave,
+                10,
+                4,
+                wave_pattern,
+            ))
             .unwrap();
         classifier
-            .add_template(make_template("push", GestureType::Push, 10, 4, push_pattern))
+            .add_template(make_template(
+                "push",
+                GestureType::Push,
+                10,
+                4,
+                push_pattern,
+            ))
             .unwrap();
 
         let seq: Vec<Vec<f64>> = (0..10)
@@ -452,7 +463,13 @@ mod tests {
         };
         let mut classifier = TemporalGestureClassifier::new(config);
         classifier
-            .add_template(make_template("wave", GestureType::Wave, 10, 4, wave_pattern))
+            .add_template(make_template(
+                "wave",
+                GestureType::Wave,
+                10,
+                4,
+                wave_pattern,
+            ))
             .unwrap();
 
         let seq: Vec<Vec<f64>> = (0..10)
@@ -471,7 +488,13 @@ mod tests {
         };
         let mut classifier = TemporalGestureClassifier::new(config);
         classifier
-            .add_template(make_template("wave", GestureType::Wave, 10, 4, wave_pattern))
+            .add_template(make_template(
+                "wave",
+                GestureType::Wave,
+                10,
+                4,
+                wave_pattern,
+            ))
             .unwrap();
 
         let seq: Vec<Vec<f64>> = (0..10)

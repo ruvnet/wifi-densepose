@@ -8,18 +8,18 @@
 //! - Real-time CSI introspection / low-latency tap (`introspection`, ADR-099)
 
 pub mod bearer_auth;
+pub mod dataset;
 pub mod edge_registry;
+#[allow(dead_code)]
+pub mod embedding;
+pub mod graph_transformer;
 pub mod host_validation;
 pub mod introspection;
 pub mod path_safety;
-pub mod vital_signs;
 pub mod rvf_container;
 pub mod rvf_pipeline;
-pub mod graph_transformer;
-#[allow(dead_code)]
-pub mod trainer;
-pub mod dataset;
 pub mod sona;
 pub mod sparse_inference;
 #[allow(dead_code)]
-pub mod embedding;
+pub mod trainer;
+pub mod vital_signs;

@@ -162,13 +162,10 @@ impl MetricsAccumulator {
     /// - `visibility`: `[17]`   – 0 = invisible, 1/2 = visible.
     ///
     /// Keypoints with `visibility == 0` are skipped.
-    pub fn update(
-        &mut self,
-        pred_kp: &Array2<f32>,
-        gt_kp: &Array2<f32>,
-        visibility: &Array1<f32>,
-    ) {
-        let num_joints = pred_kp.shape()[0].min(gt_kp.shape()[0]).min(visibility.len());
+    pub fn update(&mut self, pred_kp: &Array2<f32>, gt_kp: &Array2<f32>, visibility: &Array1<f32>) {
+        let num_joints = pred_kp.shape()[0]
+            .min(gt_kp.shape()[0])
+            .min(visibility.len());
 
         // Compute bounding-box diagonal from visible ground-truth keypoints.
         let bbox_diag = bounding_box_diagonal(gt_kp, visibility, num_joints);
@@ -269,11 +266,7 @@ impl MetricsAccumulator {
 /// The bounding box is defined by the axis-aligned extent of all keypoints
 /// that have `visibility[j] >= 0.5`.  Returns 0.0 if there are no visible
 /// keypoints or all are co-located.
-fn bounding_box_diagonal(
-    kp: &Array2<f32>,
-    visibility: &Array1<f32>,
-    num_joints: usize,
-) -> f32 {
+fn bounding_box_diagonal(kp: &Array2<f32>, visibility: &Array1<f32>, num_joints: usize) -> f32 {
     let mut x_min = f32::MAX;
     let mut x_max = f32::MIN;
     let mut y_min = f32::MAX;
@@ -385,10 +378,7 @@ pub fn compute_per_joint_pck(
     let mut correct = [0_usize; 17];
     let mut total = [0_usize; 17];
 
-    for (pred, (gt, vis)) in pred_batch
-        .iter()
-        .zip(gt_batch.iter().zip(vis_batch.iter()))
-    {
+    for (pred, (gt, vis)) in pred_batch.iter().zip(gt_batch.iter().zip(vis_batch.iter())) {
         let torso = torso_diameter_pck(gt, vis);
         let norm = if torso > 1e-6 { torso } else { 1.0_f32 };
         let dist_thr = threshold * norm;
@@ -725,10 +715,18 @@ impl DynamicPersonMatcher {
         let inner = if edges.is_empty() {
             MinCutBuilder::new().exact().build().unwrap()
         } else {
-            MinCutBuilder::new().exact().with_edges(edges).build().unwrap()
+            MinCutBuilder::new()
+                .exact()
+                .with_edges(edges)
+                .build()
+                .unwrap()
         };
 
-        DynamicPersonMatcher { inner, n_pred, n_gt }
+        DynamicPersonMatcher {
+            inner,
+            n_pred,
+            n_gt,
+        }
     }
 
     /// Update matching when a new person enters the scene.
@@ -997,7 +995,11 @@ pub fn compute_oks_v2(
         let ki = COCO_KPT_SIGMAS[j];
         numerator += (-d_sq / (2.0 * s * s * ki * ki)).exp();
     }
-    if denominator == 0.0 { 0.0 } else { numerator / denominator }
+    if denominator == 0.0 {
+        0.0
+    } else {
+        numerator / denominator
+    }
 }
 
 // ── Min-cost bipartite matching (petgraph DiGraph + SPFA) ────────────────────
@@ -1078,7 +1080,9 @@ fn run_spfa_mcf(
     let src = source.index();
     let snk = sink.index();
 
-    let mut cap: Vec<i32> = (0..n_edges).map(|i| if i % 2 == 0 { 1 } else { 0 }).collect();
+    let mut cap: Vec<i32> = (0..n_edges)
+        .map(|i| if i % 2 == 0 { 1 } else { 0 })
+        .collect();
     let mut total_cost = 0.0f32;
     let mut assignments: Vec<(usize, usize)> = Vec::new();
 
@@ -1245,11 +1249,7 @@ impl Default for MetricsAccumulatorV2 {
 }
 
 /// Estimate bounding-box area (pixels²) from visible GT keypoints.
-fn kpt_bbox_area_v2(
-    gt: ArrayView2<f32>,
-    vis: ArrayView1<f32>,
-    image_size: (usize, usize),
-) -> f32 {
+fn kpt_bbox_area_v2(gt: ArrayView2<f32>, vis: ArrayView1<f32>, image_size: (usize, usize)) -> f32 {
     let (w, h) = image_size;
     let (wf, hf) = (w as f32, h as f32);
     let mut x_min = f32::INFINITY;
@@ -1280,12 +1280,16 @@ fn kpt_bbox_area_v2(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::{array, Array1, Array2};
     use approx::assert_abs_diff_eq;
+    use ndarray::{array, Array1, Array2};
 
     fn perfect_prediction(n_joints: usize) -> (Array2<f32>, Array2<f32>, Array1<f32>) {
         let gt = Array2::from_shape_fn((n_joints, 2), |(j, c)| {
-            if c == 0 { j as f32 * 0.05 } else { j as f32 * 0.04 }
+            if c == 0 {
+                j as f32 * 0.05
+            } else {
+                j as f32 * 0.04
+            }
         });
         let vis = Array1::from_elem(n_joints, 2.0_f32);
         (gt.clone(), gt, vis)
@@ -1332,7 +1336,11 @@ mod tests {
         acc.update(&pred, &gt, &vis);
         let result = acc.finalize().unwrap();
         // PCK should be well below 1.0
-        assert!(result.pck < 0.5, "PCK should be low for wrong predictions, got {}", result.pck);
+        assert!(
+            result.pck < 0.5,
+            "PCK should be low for wrong predictions, got {}",
+            result.pck
+        );
     }
 
     #[test]
@@ -1373,8 +1381,18 @@ mod tests {
 
     #[test]
     fn metrics_result_is_better_than() {
-        let good = MetricsResult { pck: 0.9, oks: 0.8, num_keypoints: 100, num_samples: 10 };
-        let bad  = MetricsResult { pck: 0.5, oks: 0.4, num_keypoints: 100, num_samples: 10 };
+        let good = MetricsResult {
+            pck: 0.9,
+            oks: 0.8,
+            num_keypoints: 100,
+            num_samples: 10,
+        };
+        let bad = MetricsResult {
+            pck: 0.5,
+            oks: 0.4,
+            num_keypoints: 100,
+            num_samples: 10,
+        };
         assert!(good.is_better_than(&bad));
         assert!(!bad.is_better_than(&good));
     }
@@ -1506,11 +1524,7 @@ mod tests {
     #[test]
     fn hungarian_rectangular_fewer_gt_than_pred() {
         // 3 predicted, 2 GT → only 2 assignments.
-        let cost = vec![
-            vec![5.0_f32, 9.0],
-            vec![4.0, 6.0],
-            vec![3.0, 1.0],
-        ];
+        let cost = vec![vec![5.0_f32, 9.0], vec![4.0, 6.0], vec![3.0, 1.0]];
         let assignments = hungarian_assignment(&cost);
         assert_eq!(assignments.len(), 2);
         // GT indices must be unique.
@@ -1529,7 +1543,11 @@ mod tests {
         let vis: Vec<Array1<f32>> = (0..3).map(|_| all_visible_17()).collect();
         let mat = build_oks_cost_matrix(&persons, &persons, &vis);
         for i in 0..3 {
-            assert!(mat[i][i] < 1e-4, "cost[{i}][{i}]={} should be ≈0", mat[i][i]);
+            assert!(
+                mat[i][i] < 1e-4,
+                "cost[{i}][{i}]={} should be ≈0",
+                mat[i][i]
+            );
         }
     }
 
@@ -1537,10 +1555,7 @@ mod tests {
 
     #[test]
     fn find_augmenting_path_basic() {
-        let adj: Vec<Vec<(usize, f32)>> = vec![
-            vec![(0, 1.0)],
-            vec![(1, 1.0)],
-        ];
+        let adj: Vec<Vec<(usize, f32)>> = vec![vec![(0, 1.0)], vec![(1, 1.0)]];
         let mut matching = vec![None; 2];
         let mut visited = vec![false; 2];
         let found = find_augmenting_path(&adj, 0, 2, &mut visited, &mut matching);
@@ -1558,7 +1573,8 @@ mod tests {
             kpts[[j, 1]] = 0.5;
         }
         let vis = Array1::ones(17_usize);
-        let (pck, per_joint) = compute_pck_v2(kpts.view(), kpts.view(), vis.view(), 0.2, (256, 256));
+        let (pck, per_joint) =
+            compute_pck_v2(kpts.view(), kpts.view(), vis.view(), 0.2, (256, 256));
         assert!((pck - 1.0).abs() < 1e-5, "pck={pck}");
         for j in 0..17 {
             assert_eq!(per_joint[j], 1.0, "joint {j}");
@@ -1609,9 +1625,13 @@ mod tests {
         let cost = ndarray::array![[-0.9_f32, -0.1], [-0.2, -0.8]];
         let assignments = hungarian_assignment_v2(&cost);
         // Two distinct gt indices should be assigned.
-        let unique: std::collections::HashSet<usize> =
-            assignments.iter().cloned().collect();
-        assert_eq!(unique.len(), 2, "both GT should be assigned: {:?}", assignments);
+        let unique: std::collections::HashSet<usize> = assignments.iter().cloned().collect();
+        assert_eq!(
+            unique.len(),
+            2,
+            "both GT should be assigned: {:?}",
+            assignments
+        );
     }
 
     #[test]
@@ -1632,7 +1652,11 @@ mod tests {
         let mut acc = MetricsAccumulatorV2::new();
         acc.update(kpts.view(), kpts.view(), vis.view(), (256, 256));
         let result = acc.finalize();
-        assert!((result.pck_02 - 1.0).abs() < 1e-5, "pck_02={}", result.pck_02);
+        assert!(
+            (result.pck_02 - 1.0).abs() < 1e-5,
+            "pck_02={}",
+            result.pck_02
+        );
         assert!((result.oks - 1.0).abs() < 1e-5, "oks={}", result.oks);
         assert_eq!(result.num_samples, 1);
         assert_eq!(result.num_visible_keypoints, 17);

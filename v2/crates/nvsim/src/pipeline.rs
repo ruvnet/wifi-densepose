@@ -18,7 +18,7 @@ use crate::sensor::{NvSensor, NvSensorConfig};
 use crate::source::scene_field_at;
 
 /// Pipeline configuration.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub struct PipelineConfig {
     /// Sensor / digitiser sampling parameters.
     pub digitiser: DigitiserConfig,
@@ -26,16 +26,6 @@ pub struct PipelineConfig {
     pub sensor: NvSensorConfig,
     /// Per-sample integration time (s). Default 1/f_s.
     pub dt_s: Option<f64>,
-}
-
-impl Default for PipelineConfig {
-    fn default() -> Self {
-        Self {
-            digitiser: DigitiserConfig::default(),
-            sensor: NvSensorConfig::default(),
-            dt_s: None,
-        }
-    }
 }
 
 /// Forward-only NV-diamond pipeline.
@@ -50,14 +40,21 @@ impl Pipeline {
     /// Construct a pipeline. `seed` makes shot-noise reproducible — same
     /// `(scene, config, seed)` produces byte-identical output.
     pub fn new(scene: Scene, config: PipelineConfig, seed: u64) -> Self {
-        Self { scene, config, seed }
+        Self {
+            scene,
+            config,
+            seed,
+        }
     }
 
     /// Run `n_samples` of the pipeline. Returns one [`MagFrame`] per
     /// (sensor × sample) — i.e. `n_samples · scene.sensors.len()` frames
     /// in scene-major / sample-minor order.
     pub fn run(&self, n_samples: usize) -> Vec<MagFrame> {
-        let dt = self.config.dt_s.unwrap_or(1.0 / self.config.digitiser.f_s_hz);
+        let dt = self
+            .config
+            .dt_s
+            .unwrap_or(1.0 / self.config.digitiser.f_s_hz);
         let dt_us = (dt * 1.0e6) as u64;
         let nv = NvSensor::new(self.config.sensor);
 
@@ -82,11 +79,11 @@ impl Pipeline {
                 // saturation flag if any axis clips.
                 let mut adc_sat = false;
                 let mut b_pt = [0.0_f32; 3];
-                for k in 0..3 {
+                for (k, b) in b_pt.iter_mut().enumerate() {
                     let (code, sat) = adc_quantise(reading.b_recovered[k]);
                     adc_sat |= sat;
                     let recovered_t = code as f64 * crate::digitiser::ADC_LSB_T;
-                    b_pt[k] = (recovered_t * 1.0e12) as f32; // T → pT
+                    *b = (recovered_t * 1.0e12) as f32; // T → pT
                 }
                 let sigma_pt = [
                     (reading.sigma_per_axis[0] * 1.0e12) as f32,
@@ -98,8 +95,7 @@ impl Pipeline {
                 frame.t_us = (sample as u64) * dt_us;
                 frame.b_pt = b_pt;
                 frame.sigma_pt = sigma_pt;
-                frame.noise_floor_pt_sqrt_hz =
-                    (reading.noise_floor_t_sqrt_hz * 1.0e12) as f32;
+                frame.noise_floor_pt_sqrt_hz = (reading.noise_floor_t_sqrt_hz * 1.0e12) as f32;
                 frame.temperature_k = 295.0;
                 if near_field {
                     frame.set_flag(flag::SATURATION_NEAR_FIELD);
@@ -198,11 +194,11 @@ mod tests {
         let (b_analytic, _) = scene_field_at(&scene, scene.sensors[0]);
         for f in &frames {
             assert!(f.has_flag(flag::SHOT_NOISE_DISABLED));
-            for k in 0..3 {
-                let recovered_t = f.b_pt[k] as f64 * 1.0e-12;
+            for (k, (&b_pt, &b_ref)) in f.b_pt.iter().zip(b_analytic.iter()).enumerate() {
+                let recovered_t = b_pt as f64 * 1.0e-12;
                 let lsb_t = crate::digitiser::ADC_LSB_T;
                 assert!(
-                    (recovered_t - b_analytic[k]).abs() <= lsb_t,
+                    (recovered_t - b_ref).abs() <= lsb_t,
                     "noise-off recovery error > 1 LSB for axis {k}"
                 );
             }

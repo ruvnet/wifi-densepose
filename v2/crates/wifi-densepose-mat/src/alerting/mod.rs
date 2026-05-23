@@ -1,9 +1,9 @@
 //! Alerting module for emergency notifications.
 
-mod generator;
 mod dispatcher;
+mod generator;
 mod triage_service;
 
+pub use dispatcher::{AlertConfig, AlertDispatcher};
 pub use generator::AlertGenerator;
-pub use dispatcher::{AlertDispatcher, AlertConfig};
-pub use triage_service::{TriageService, PriorityCalculator};
+pub use triage_service::{PriorityCalculator, TriageService};

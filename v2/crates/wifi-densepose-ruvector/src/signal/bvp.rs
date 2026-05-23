@@ -67,7 +67,11 @@ mod tests {
         let n_velocity_bins = 8;
 
         let stft_rows: Vec<Vec<f32>> = (0..n_subcarriers)
-            .map(|sc| (0..n_velocity_bins).map(|v| (sc * n_velocity_bins + v) as f32 * 0.1).collect())
+            .map(|sc| {
+                (0..n_velocity_bins)
+                    .map(|v| (sc * n_velocity_bins + v) as f32 * 0.1)
+                    .collect()
+            })
             .collect();
         let sensitivity = vec![0.5_f32, 0.3, 0.8];
 

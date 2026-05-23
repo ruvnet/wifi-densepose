@@ -36,69 +36,69 @@
 //! let mut receiver = UdpCsiReceiver::new(config).await?;
 //! ```
 
-mod signal_adapter;
-mod neural_adapter;
-mod hardware_adapter;
 pub mod csi_receiver;
+mod hardware_adapter;
+mod neural_adapter;
+mod signal_adapter;
 
-pub use signal_adapter::SignalAdapter;
-pub use neural_adapter::NeuralAdapter;
 pub use hardware_adapter::{
+    AntennaConfig,
+    AtherosDriver,
+    Bandwidth,
+    ChannelConfig,
+    CsiMetadata,
+    // CSI data types
+    CsiReadings,
+    CsiStream,
+    DeviceSettings,
+    DeviceType,
+    FlowControl,
+    FrameControlType,
     // Main adapter
     HardwareAdapter,
     // Configuration types
     HardwareConfig,
-    DeviceType,
-    DeviceSettings,
-    AtherosDriver,
-    ChannelConfig,
-    Bandwidth,
-    // Serial settings
-    SerialSettings,
-    Parity,
-    FlowControl,
-    // Network interface settings
-    NetworkInterfaceSettings,
-    AntennaConfig,
-    // UDP settings
-    UdpSettings,
-    // PCAP settings
-    PcapSettings,
-    // Sensor types
-    SensorInfo,
-    SensorStatus,
-    // CSI data types
-    CsiReadings,
-    CsiMetadata,
-    SensorCsiReading,
-    FrameControlType,
-    CsiStream,
     // Health and stats
     HardwareHealth,
     HealthStatus,
+    // Network interface settings
+    NetworkInterfaceSettings,
+    Parity,
+    // PCAP settings
+    PcapSettings,
+    SensorCsiReading,
+    // Sensor types
+    SensorInfo,
+    SensorStatus,
+    // Serial settings
+    SerialSettings,
     StreamingStats,
+    // UDP settings
+    UdpSettings,
 };
+pub use neural_adapter::NeuralAdapter;
+pub use signal_adapter::SignalAdapter;
 
 pub use csi_receiver::{
-    // Receiver types
-    UdpCsiReceiver,
-    SerialCsiReceiver,
-    PcapCsiReader,
-    // Configuration
-    ReceiverConfig,
-    CsiSource,
-    UdpSourceConfig,
-    SerialSourceConfig,
-    PcapSourceConfig,
-    SerialParity,
     // Packet types
     CsiPacket,
-    CsiPacketMetadata,
     CsiPacketFormat,
+    CsiPacketMetadata,
     // Parser
     CsiParser,
+    CsiSource,
+    PcapCsiReader,
+    PcapSourceConfig,
+    // Configuration
+    ReceiverConfig,
     // Stats
     ReceiverStats,
+    SerialCsiReceiver,
+    SerialParity,
+    SerialSourceConfig,
+    // Receiver types
+    UdpCsiReceiver,
+    UdpSourceConfig,
 };
 
 /// Configuration for integration layer
@@ -181,16 +181,8 @@ pub enum AdapterError {
 /// Prelude module for convenient imports
 pub mod prelude {
     pub use super::{
-        AdapterError,
-        HardwareAdapter,
-        HardwareConfig,
-        DeviceType,
-        AtherosDriver,
-        Bandwidth,
-        CsiReadings,
-        CsiPacket,
-        CsiPacketFormat,
-        IntegrationConfig,
+        AdapterError, AtherosDriver, Bandwidth, CsiPacket, CsiPacketFormat, CsiReadings,
+        DeviceType, HardwareAdapter, HardwareConfig, IntegrationConfig,
     };
 }
 

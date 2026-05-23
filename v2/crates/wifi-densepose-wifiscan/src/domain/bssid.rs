@@ -134,11 +134,9 @@ impl RadioType {
         let lower = s.trim().to_ascii_lowercase();
         if lower.contains("802.11be") || lower.contains("be") {
             Some(Self::Be)
-        } else if lower.contains("802.11ax") || lower.contains("ax") || lower.contains("wi-fi 6")
-        {
+        } else if lower.contains("802.11ax") || lower.contains("ax") || lower.contains("wi-fi 6") {
             Some(Self::Ax)
-        } else if lower.contains("802.11ac") || lower.contains("ac") || lower.contains("wi-fi 5")
-        {
+        } else if lower.contains("802.11ac") || lower.contains("ac") || lower.contains("wi-fi 5") {
             Some(Self::Ac)
         } else if lower.contains("802.11n") || lower.contains("wi-fi 4") {
             Some(Self::N)

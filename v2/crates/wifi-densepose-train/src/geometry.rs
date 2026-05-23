@@ -19,6 +19,7 @@ struct Linear {
     weights: Vec<f32>,
     bias: Vec<f32>,
     in_f: usize,
+    #[allow(dead_code)]
     out_f: usize,
 }
 
@@ -37,13 +38,14 @@ impl Linear {
     fn forward(&self, x: &[f32]) -> Vec<f32> {
         debug_assert_eq!(x.len(), self.in_f);
         let mut y = self.bias.clone();
-        for j in 0..self.out_f {
+        for (j, yj) in y.iter_mut().enumerate() {
             let off = j * self.in_f;
-            let mut s = 0.0f32;
-            for i in 0..self.in_f {
-                s += x[i] * self.weights[off + i];
-            }
-            y[j] += s;
+            let s: f32 = x
+                .iter()
+                .zip(self.weights[off..off + self.in_f].iter())
+                .map(|(&xi, &wi)| xi * wi)
+                .sum();
+            *yj += s;
         }
         y
     }
@@ -66,7 +68,9 @@ fn det_uniform(n: usize, lo: f32, hi: f32, seed: u64) -> Vec<f32> {
 
 fn relu(v: &mut [f32]) {
     for x in v.iter_mut() {
-        if *x < 0.0 { *x = 0.0; }
+        if *x < 0.0 {
+            *x = 0.0;
+        }
     }
 }
 
@@ -89,7 +93,12 @@ pub struct MeridianGeometryConfig {
 
 impl Default for MeridianGeometryConfig {
     fn default() -> Self {
-        MeridianGeometryConfig { n_frequencies: 10, scale: 1.0, geometry_dim: GEOMETRY_DIM, seed: 42 }
+        MeridianGeometryConfig {
+            n_frequencies: 10,
+            scale: 1.0,
+            geometry_dim: GEOMETRY_DIM,
+            seed: 42,
+        }
     }
 }
 
@@ -110,7 +119,11 @@ pub struct FourierPositionalEncoding {
 impl FourierPositionalEncoding {
     /// Create from config.
     pub fn new(cfg: &MeridianGeometryConfig) -> Self {
-        FourierPositionalEncoding { n_frequencies: cfg.n_frequencies, scale: cfg.scale, output_dim: cfg.geometry_dim }
+        FourierPositionalEncoding {
+            n_frequencies: cfg.n_frequencies,
+            scale: cfg.scale,
+            output_dim: cfg.geometry_dim,
+        }
     }
 
     /// Encode `[x, y, z]` into a fixed-length vector of `geometry_dim` elements.
@@ -145,21 +158,32 @@ impl DeepSets {
     /// Create from config.
     pub fn new(cfg: &MeridianGeometryConfig) -> Self {
         let d = cfg.geometry_dim;
-        DeepSets { phi: Linear::new(d, d, cfg.seed.wrapping_add(1)), rho: Linear::new(d, d, cfg.seed.wrapping_add(2)), dim: d }
+        DeepSets {
+            phi: Linear::new(d, d, cfg.seed.wrapping_add(1)),
+            rho: Linear::new(d, d, cfg.seed.wrapping_add(2)),
+            dim: d,
+        }
     }
 
     /// Encode a set of embeddings (each of length `geometry_dim`) into one vector.
     pub fn encode(&self, ap_embeddings: &[Vec<f32>]) -> Vec<f32> {
-        assert!(!ap_embeddings.is_empty(), "DeepSets: input set must be non-empty");
+        assert!(
+            !ap_embeddings.is_empty(),
+            "DeepSets: input set must be non-empty"
+        );
         let n = ap_embeddings.len() as f32;
         let mut pooled = vec![0.0f32; self.dim];
         for emb in ap_embeddings {
             debug_assert_eq!(emb.len(), self.dim);
             let mut t = self.phi.forward(emb);
             relu(&mut t);
-            for (p, v) in pooled.iter_mut().zip(t.iter()) { *p += *v; }
+            for (p, v) in pooled.iter_mut().zip(t.iter()) {
+                *p += *v;
+            }
         }
-        for p in pooled.iter_mut() { *p /= n; }
+        for p in pooled.iter_mut() {
+            *p /= n;
+        }
         let mut out = self.rho.forward(&pooled);
         relu(&mut out);
         out
@@ -179,12 +203,18 @@ pub struct GeometryEncoder {
 impl GeometryEncoder {
     /// Build from config.
     pub fn new(cfg: &MeridianGeometryConfig) -> Self {
-        GeometryEncoder { pos_embed: FourierPositionalEncoding::new(cfg), set_encoder: DeepSets::new(cfg) }
+        GeometryEncoder {
+            pos_embed: FourierPositionalEncoding::new(cfg),
+            set_encoder: DeepSets::new(cfg),
+        }
     }
 
     /// Encode variable-count AP positions `[x,y,z]` into a fixed-dim vector.
     pub fn encode(&self, ap_positions: &[[f32; 3]]) -> Vec<f32> {
-        let embs: Vec<Vec<f32>> = ap_positions.iter().map(|p| self.pos_embed.encode(p)).collect();
+        let embs: Vec<Vec<f32>> = ap_positions
+            .iter()
+            .map(|p| self.pos_embed.encode(p))
+            .collect();
         self.set_encoder.encode(&embs)
     }
 }
@@ -204,15 +234,25 @@ impl FilmLayer {
     pub fn new(cfg: &MeridianGeometryConfig) -> Self {
         let d = cfg.geometry_dim;
         let mut gamma_proj = Linear::new(d, d, cfg.seed.wrapping_add(3));
-        for b in gamma_proj.bias.iter_mut() { *b = 1.0; }
-        FilmLayer { gamma_proj, beta_proj: Linear::new(d, d, cfg.seed.wrapping_add(4)) }
+        for b in gamma_proj.bias.iter_mut() {
+            *b = 1.0;
+        }
+        FilmLayer {
+            gamma_proj,
+            beta_proj: Linear::new(d, d, cfg.seed.wrapping_add(4)),
+        }
     }
 
     /// Modulate `features` by `geometry`: `gamma(geometry) * features + beta(geometry)`.
     pub fn modulate(&self, features: &[f32], geometry: &[f32]) -> Vec<f32> {
         let gamma = self.gamma_proj.forward(geometry);
         let beta = self.beta_proj.forward(geometry);
-        features.iter().zip(gamma.iter()).zip(beta.iter()).map(|((&f, &g), &b)| g * f + b).collect()
+        features
+            .iter()
+            .zip(gamma.iter())
+            .zip(beta.iter())
+            .map(|((&f, &g), &b)| g * f + b)
+            .collect()
     }
 }
 
@@ -224,7 +264,9 @@ impl FilmLayer {
 mod tests {
     use super::*;
 
-    fn cfg() -> MeridianGeometryConfig { MeridianGeometryConfig::default() }
+    fn cfg() -> MeridianGeometryConfig {
+        MeridianGeometryConfig::default()
+    }
 
     #[test]
     fn fourier_output_dimension_is_64() {
@@ -240,13 +282,18 @@ mod tests {
         let b = enc.encode(&[1.0, 0.0, 0.0]);
         let c = enc.encode(&[0.0, 1.0, 0.0]);
         let d = enc.encode(&[0.0, 0.0, 1.0]);
-        assert_ne!(a, b); assert_ne!(a, c); assert_ne!(a, d); assert_ne!(b, c);
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+        assert_ne!(a, d);
+        assert_ne!(b, c);
     }
 
     #[test]
     fn fourier_values_bounded() {
         let out = FourierPositionalEncoding::new(&cfg()).encode(&[5.5, -3.2, 0.1]);
-        for &v in &out { assert!(v.abs() <= 1.0 + 1e-6, "got {v}"); }
+        for &v in &out {
+            assert!(v.abs() <= 1.0 + 1e-6, "got {v}");
+        }
     }
 
     #[test]
@@ -254,13 +301,27 @@ mod tests {
         let c = cfg();
         let enc = FourierPositionalEncoding::new(&c);
         let ds = DeepSets::new(&c);
-        let (a, b, d) = (enc.encode(&[1.0,0.0,0.0]), enc.encode(&[0.0,2.0,0.0]), enc.encode(&[0.0,0.0,3.0]));
+        let (a, b, d) = (
+            enc.encode(&[1.0, 0.0, 0.0]),
+            enc.encode(&[0.0, 2.0, 0.0]),
+            enc.encode(&[0.0, 0.0, 3.0]),
+        );
         let abc = ds.encode(&[a.clone(), b.clone(), d.clone()]);
         let cba = ds.encode(&[d.clone(), b.clone(), a.clone()]);
         let bac = ds.encode(&[b.clone(), a.clone(), d.clone()]);
         for i in 0..c.geometry_dim {
-            assert!((abc[i] - cba[i]).abs() < 1e-5, "dim {i}: abc={} cba={}", abc[i], cba[i]);
-            assert!((abc[i] - bac[i]).abs() < 1e-5, "dim {i}: abc={} bac={}", abc[i], bac[i]);
+            assert!(
+                (abc[i] - cba[i]).abs() < 1e-5,
+                "dim {i}: abc={} cba={}",
+                abc[i],
+                cba[i]
+            );
+            assert!(
+                (abc[i] - bac[i]).abs() < 1e-5,
+                "dim {i}: abc={} bac={}",
+                abc[i],
+                bac[i]
+            );
         }
     }
 
@@ -269,30 +330,45 @@ mod tests {
         let c = cfg();
         let enc = FourierPositionalEncoding::new(&c);
         let ds = DeepSets::new(&c);
-        let one = ds.encode(&[enc.encode(&[1.0,0.0,0.0])]);
+        let one = ds.encode(&[enc.encode(&[1.0, 0.0, 0.0])]);
         assert_eq!(one.len(), c.geometry_dim);
-        let three = ds.encode(&[enc.encode(&[1.0,0.0,0.0]), enc.encode(&[0.0,2.0,0.0]), enc.encode(&[0.0,0.0,3.0])]);
+        let three = ds.encode(&[
+            enc.encode(&[1.0, 0.0, 0.0]),
+            enc.encode(&[0.0, 2.0, 0.0]),
+            enc.encode(&[0.0, 0.0, 3.0]),
+        ]);
         assert_eq!(three.len(), c.geometry_dim);
         let six = ds.encode(&[
-            enc.encode(&[1.0,0.0,0.0]), enc.encode(&[0.0,2.0,0.0]), enc.encode(&[0.0,0.0,3.0]),
-            enc.encode(&[-1.0,0.0,0.0]), enc.encode(&[0.0,-2.0,0.0]), enc.encode(&[0.0,0.0,-3.0]),
+            enc.encode(&[1.0, 0.0, 0.0]),
+            enc.encode(&[0.0, 2.0, 0.0]),
+            enc.encode(&[0.0, 0.0, 3.0]),
+            enc.encode(&[-1.0, 0.0, 0.0]),
+            enc.encode(&[0.0, -2.0, 0.0]),
+            enc.encode(&[0.0, 0.0, -3.0]),
         ]);
         assert_eq!(six.len(), c.geometry_dim);
-        assert_ne!(one, three); assert_ne!(three, six);
+        assert_ne!(one, three);
+        assert_ne!(three, six);
     }
 
     #[test]
     fn geometry_encoder_end_to_end() {
         let c = cfg();
-        let g = GeometryEncoder::new(&c).encode(&[[1.0,0.0,2.5],[0.0,3.0,2.5],[-2.0,1.0,2.5]]);
+        let g =
+            GeometryEncoder::new(&c).encode(&[[1.0, 0.0, 2.5], [0.0, 3.0, 2.5], [-2.0, 1.0, 2.5]]);
         assert_eq!(g.len(), c.geometry_dim);
-        for &v in &g { assert!(v.is_finite()); }
+        for &v in &g {
+            assert!(v.is_finite());
+        }
     }
 
     #[test]
     fn geometry_encoder_single_ap() {
         let c = cfg();
-        assert_eq!(GeometryEncoder::new(&c).encode(&[[0.0,0.0,0.0]]).len(), c.geometry_dim);
+        assert_eq!(
+            GeometryEncoder::new(&c).encode(&[[0.0, 0.0, 0.0]]).len(),
+            c.geometry_dim
+        );
     }
 
     #[test]
@@ -304,7 +380,12 @@ mod tests {
         assert_eq!(out.len(), c.geometry_dim);
         // gamma_proj(0) = bias = [1.0], beta_proj(0) = bias = [0.0] => identity
         for i in 0..c.geometry_dim {
-            assert!((out[i] - feat[i]).abs() < 1e-5, "dim {i}: expected {}, got {}", feat[i], out[i]);
+            assert!(
+                (out[i] - feat[i]).abs() < 1e-5,
+                "dim {i}: expected {}, got {}",
+                feat[i],
+                out[i]
+            );
         }
     }
 
@@ -313,16 +394,26 @@ mod tests {
         let c = cfg();
         let film = FilmLayer::new(&c);
         let feat: Vec<f32> = (0..c.geometry_dim).map(|i| i as f32 * 0.1).collect();
-        let geom: Vec<f32> = (0..c.geometry_dim).map(|i| (i as f32 - 32.0) * 0.01).collect();
+        let geom: Vec<f32> = (0..c.geometry_dim)
+            .map(|i| (i as f32 - 32.0) * 0.01)
+            .collect();
         let out = film.modulate(&feat, &geom);
         assert_eq!(out.len(), c.geometry_dim);
-        assert!(out.iter().zip(feat.iter()).any(|(o, f)| (o - f).abs() > 1e-6));
-        for &v in &out { assert!(v.is_finite()); }
+        assert!(out
+            .iter()
+            .zip(feat.iter())
+            .any(|(o, f)| (o - f).abs() > 1e-6));
+        for &v in &out {
+            assert!(v.is_finite());
+        }
     }
 
     #[test]
     fn film_explicit_gamma_beta() {
-        let c = MeridianGeometryConfig { geometry_dim: 4, ..cfg() };
+        let c = MeridianGeometryConfig {
+            geometry_dim: 4,
+            ..cfg()
+        };
         let mut film = FilmLayer::new(&c);
         film.gamma_proj.weights = vec![0.0; 16];
         film.gamma_proj.bias = vec![2.0, 3.0, 0.5, 1.0];
@@ -330,7 +421,9 @@ mod tests {
         film.beta_proj.bias = vec![10.0, 20.0, 30.0, 40.0];
         let out = film.modulate(&[1.0, 2.0, 3.0, 4.0], &[999.0; 4]);
         let exp = [12.0, 26.0, 31.5, 44.0];
-        for i in 0..4 { assert!((out[i] - exp[i]).abs() < 1e-5, "dim {i}"); }
+        for i in 0..4 {
+            assert!((out[i] - exp[i]).abs() < 1e-5, "dim {i}");
+        }
     }
 
     #[test]
@@ -344,22 +437,31 @@ mod tests {
 
     #[test]
     fn config_serde_round_trip() {
-        let c = MeridianGeometryConfig { n_frequencies: 8, scale: 0.5, geometry_dim: 32, seed: 123 };
+        let c = MeridianGeometryConfig {
+            n_frequencies: 8,
+            scale: 0.5,
+            geometry_dim: 32,
+            seed: 123,
+        };
         let j = serde_json::to_string(&c).unwrap();
         let d: MeridianGeometryConfig = serde_json::from_str(&j).unwrap();
-        assert_eq!(d.n_frequencies, 8); assert!((d.scale - 0.5).abs() < 1e-6);
-        assert_eq!(d.geometry_dim, 32); assert_eq!(d.seed, 123);
+        assert_eq!(d.n_frequencies, 8);
+        assert!((d.scale - 0.5).abs() < 1e-6);
+        assert_eq!(d.geometry_dim, 32);
+        assert_eq!(d.seed, 123);
     }
 
     #[test]
     fn linear_forward_dim() {
-        assert_eq!(Linear::new(8, 4, 0).forward(&vec![1.0; 8]).len(), 4);
+        assert_eq!(Linear::new(8, 4, 0).forward(&[1.0; 8]).len(), 4);
     }
 
     #[test]
     fn linear_zero_input_gives_bias() {
         let lin = Linear::new(4, 3, 0);
         let out = lin.forward(&[0.0; 4]);
-        for i in 0..3 { assert!((out[i] - lin.bias[i]).abs() < 1e-6); }
+        for (oi, bi) in out.iter().zip(lin.bias.iter()) {
+            assert!((oi - bi).abs() < 1e-6);
+        }
     }
 }

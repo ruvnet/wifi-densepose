@@ -238,9 +238,6 @@ mod tests {
             let x = (2.0 * std::f64::consts::PI * f_off * t).cos();
             last = lockin.process(x);
         }
-        assert!(
-            last.abs() < 0.1,
-            "off-resonance output {last} should be ~0"
-        );
+        assert!(last.abs() < 0.1, "off-resonance output {last} should be ~0");
     }
 }

@@ -189,7 +189,12 @@ mod tests {
         let r1 = est.estimate(&zero, &w, &d);
         let r2 = est.estimate(&zero, &w, &d);
         // Score should decay
-        assert!(r2.score < r1.score, "EMA should decay: {} < {}", r2.score, r1.score);
+        assert!(
+            r2.score < r1.score,
+            "EMA should decay: {} < {}",
+            r2.score,
+            r1.score
+        );
     }
 
     #[test]

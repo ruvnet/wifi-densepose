@@ -1,7 +1,7 @@
 //! CLI argument definitions and early-exit mode handlers.
 
-use std::path::PathBuf;
 use clap::Parser;
+use std::path::PathBuf;
 
 /// CLI arguments for the sensing server.
 #[derive(Parser, Debug)]

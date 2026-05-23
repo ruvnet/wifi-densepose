@@ -257,7 +257,11 @@ impl CorrelationFeatures {
         Self {
             matrix,
             mean_correlation,
-            max_correlation: if max_correlation.is_finite() { max_correlation } else { 0.0 },
+            max_correlation: if max_correlation.is_finite() {
+                max_correlation
+            } else {
+                0.0
+            },
             correlation_spread,
         }
     }
@@ -276,7 +280,8 @@ impl CorrelationFeatures {
         let stds: Vec<f64> = (0..nrows)
             .map(|i| {
                 let mean = means[i];
-                let var: f64 = data.row(i).iter().map(|x| (x - mean).powi(2)).sum::<f64>() / ncols as f64;
+                let var: f64 =
+                    data.row(i).iter().map(|x| (x - mean).powi(2)).sum::<f64>() / ncols as f64;
                 var.sqrt()
             })
             .collect();
@@ -294,7 +299,11 @@ impl CorrelationFeatures {
                     cov /= ncols as f64;
 
                     let std_prod = stds[i] * stds[j];
-                    corr[[i, j]] = if std_prod > 1e-10 { cov / std_prod } else { 0.0 };
+                    corr[[i, j]] = if std_prod > 1e-10 {
+                        cov / std_prod
+                    } else {
+                        0.0
+                    };
                 }
             }
         }
@@ -705,12 +714,9 @@ mod tests {
     use ndarray::Array2;
 
     fn create_test_csi_data() -> CsiData {
-        let amplitude = Array2::from_shape_fn((4, 64), |(i, j)| {
-            1.0 + 0.5 * ((i + j) as f64 * 0.1).sin()
-        });
-        let phase = Array2::from_shape_fn((4, 64), |(i, j)| {
-            0.5 * ((i + j) as f64 * 0.15).sin()
-        });
+        let amplitude =
+            Array2::from_shape_fn((4, 64), |(i, j)| 1.0 + 0.5 * ((i + j) as f64 * 0.1).sin());
+        let phase = Array2::from_shape_fn((4, 64), |(i, j)| 0.5 * ((i + j) as f64 * 0.15).sin());
 
         CsiData::builder()
             .amplitude(amplitude)

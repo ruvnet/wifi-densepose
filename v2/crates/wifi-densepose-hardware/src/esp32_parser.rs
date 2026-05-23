@@ -113,10 +113,9 @@ impl Esp32CsiParser {
         let mut cursor = Cursor::new(data);
 
         // Magic (offset 0, 4 bytes)
-        let magic = cursor.read_u32::<LittleEndian>().map_err(|_| ParseError::InsufficientData {
-            needed: 4,
-            got: 0,
-        })?;
+        let magic = cursor
+            .read_u32::<LittleEndian>()
+            .map_err(|_| ParseError::InsufficientData { needed: 4, got: 0 })?;
 
         if magic != ESP32_CSI_MAGIC {
             return Err(ParseError::InvalidMagic {
@@ -142,10 +141,13 @@ impl Esp32CsiParser {
         }
 
         // Number of subcarriers (offset 6, 2 bytes LE)
-        let n_subcarriers = cursor.read_u16::<LittleEndian>().map_err(|_| ParseError::ByteError {
-            offset: 6,
-            message: "Failed to read subcarrier count".into(),
-        })? as usize;
+        let n_subcarriers =
+            cursor
+                .read_u16::<LittleEndian>()
+                .map_err(|_| ParseError::ByteError {
+                    offset: 6,
+                    message: "Failed to read subcarrier count".into(),
+                })? as usize;
 
         if n_subcarriers > MAX_SUBCARRIERS {
             return Err(ParseError::InvalidSubcarrierCount {
@@ -155,16 +157,21 @@ impl Esp32CsiParser {
         }
 
         // Frequency MHz (offset 8, 4 bytes LE)
-        let channel_freq_mhz = cursor.read_u32::<LittleEndian>().map_err(|_| ParseError::ByteError {
-            offset: 8,
-            message: "Failed to read frequency".into(),
-        })?;
+        let channel_freq_mhz =
+            cursor
+                .read_u32::<LittleEndian>()
+                .map_err(|_| ParseError::ByteError {
+                    offset: 8,
+                    message: "Failed to read frequency".into(),
+                })?;
 
         // Sequence number (offset 12, 4 bytes LE)
-        let sequence = cursor.read_u32::<LittleEndian>().map_err(|_| ParseError::ByteError {
-            offset: 12,
-            message: "Failed to read sequence number".into(),
-        })?;
+        let sequence = cursor
+            .read_u32::<LittleEndian>()
+            .map_err(|_| ParseError::ByteError {
+                offset: 12,
+                message: "Failed to read sequence number".into(),
+            })?;
 
         // RSSI (offset 16, 1 byte signed)
         let rssi_dbm = cursor.read_i8().map_err(|_| ParseError::ByteError {
@@ -179,10 +186,12 @@ impl Esp32CsiParser {
         })?;
 
         // Reserved (offset 18, 2 bytes) — skip
-        let _reserved = cursor.read_u16::<LittleEndian>().map_err(|_| ParseError::ByteError {
-            offset: 18,
-            message: "Failed to read reserved bytes".into(),
-        })?;
+        let _reserved = cursor
+            .read_u16::<LittleEndian>()
+            .map_err(|_| ParseError::ByteError {
+                offset: 18,
+                message: "Failed to read reserved bytes".into(),
+            })?;
 
         // I/Q data: n_antennas * n_subcarriers * 2 bytes
         let iq_pair_count = n_antennas as usize * n_subcarriers;
@@ -390,11 +399,17 @@ mod tests {
             RUVIEW_FEATURE_STATE_MAGIC,
             RUVIEW_TEMPORAL_MAGIC,
         ] {
-            assert!(ruview_sibling_packet_name(m).is_some(), "{m:#010x} unclassified");
+            assert!(
+                ruview_sibling_packet_name(m).is_some(),
+                "{m:#010x} unclassified"
+            );
             let mut data = vec![0u8; 24];
             data[0..4].copy_from_slice(&m.to_le_bytes());
             assert!(
-                matches!(Esp32CsiParser::parse_frame(&data), Err(ParseError::NonCsiPacket { .. })),
+                matches!(
+                    Esp32CsiParser::parse_frame(&data),
+                    Err(ParseError::NonCsiPacket { .. })
+                ),
                 "{m:#010x} should parse as NonCsiPacket"
             );
         }

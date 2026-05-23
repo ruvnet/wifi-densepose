@@ -107,7 +107,10 @@ async fn main() -> Result<()> {
             } else {
                 let cloud = depth::demo_depth_cloud();
                 pointcloud::write_ply(&cloud, &output)?;
-                println!("No camera — wrote {} demo points to {output}", cloud.points.len());
+                println!(
+                    "No camera — wrote {} demo points to {output}",
+                    cloud.points.len()
+                );
             }
         }
         Commands::Demo => {
@@ -161,8 +164,13 @@ async fn demo() -> Result<()> {
 
     let occupancy = fusion::demo_occupancy();
     let wifi_cloud = fusion::occupancy_to_pointcloud(&occupancy);
-    println!("WiFi occupancy: {}x{}x{} voxels → {} points",
-        occupancy.nx, occupancy.ny, occupancy.nz, wifi_cloud.points.len());
+    println!(
+        "WiFi occupancy: {}x{}x{} voxels → {} points",
+        occupancy.nx,
+        occupancy.ny,
+        occupancy.nz,
+        wifi_cloud.points.len()
+    );
 
     let depth_cloud = depth::demo_depth_cloud();
     println!("Camera depth: {} points", depth_cloud.points.len());
@@ -207,13 +215,11 @@ async fn train(data_dir: &str, brain_url: Option<&str>) -> Result<()> {
                 let depth = depth::estimate_depth(&frame.rgb, frame.width, frame.height)?;
                 // Score based on depth variance (good frames have varied depth)
                 let mean: f32 = depth.iter().sum::<f32>() / depth.len() as f32;
-                let variance: f32 = depth.iter().map(|d| (d - mean).powi(2)).sum::<f32>() / depth.len() as f32;
+                let variance: f32 =
+                    depth.iter().map(|d| (d - mean).powi(2)).sum::<f32>() / depth.len() as f32;
                 let quality = (variance / 2.0).min(1.0);
 
-                session.add_sample(
-                    Some(depth), frame.width, frame.height,
-                    None, None, quality,
-                );
+                session.add_sample(Some(depth), frame.width, frame.height, None, None, quality);
                 println!("  Frame {}: quality={:.2}", i, quality);
             }
             std::thread::sleep(std::time::Duration::from_millis(500));
@@ -223,16 +229,23 @@ async fn train(data_dir: &str, brain_url: Option<&str>) -> Result<()> {
         for i in 0..10 {
             let w = 160u32;
             let h = 120u32;
-            let depth: Vec<f32> = (0..w * h).map(|j| 1.0 + (j as f32 / (w * h) as f32) * 4.0 + (i as f32 * 0.1)).collect();
+            let depth: Vec<f32> = (0..w * h)
+                .map(|j| 1.0 + (j as f32 / (w * h) as f32) * 4.0 + (i as f32 * 0.1))
+                .collect();
             let quality = if i < 7 { 0.8 } else { 0.2 };
             let gt = if i % 3 == 0 {
                 Some(training::GroundTruth {
-                    reference_distances: vec![
-                        training::ReferencePoint { name: "wall".into(), x_pixel: 80, y_pixel: 60, true_distance_m: 3.0 },
-                    ],
+                    reference_distances: vec![training::ReferencePoint {
+                        name: "wall".into(),
+                        x_pixel: 80,
+                        y_pixel: 60,
+                        true_distance_m: 3.0,
+                    }],
                     occupancy_label: Some(if i < 5 { "occupied" } else { "empty" }.into()),
                 })
-            } else { None };
+            } else {
+                None
+            };
             session.add_sample(Some(depth), w, h, None, gt, quality);
         }
     }
@@ -242,14 +255,19 @@ async fn train(data_dir: &str, brain_url: Option<&str>) -> Result<()> {
     // Calibrate depth
     println!("\n==> Calibrating depth estimation...");
     let cal = session.calibrate_depth()?;
-    println!("  Result: scale={:.2} offset={:.2} gamma={:.2} RMSE={:.4}m",
-        cal.scale, cal.offset, cal.gamma, cal.rmse);
+    println!(
+        "  Result: scale={:.2} offset={:.2} gamma={:.2} RMSE={:.4}m",
+        cal.scale, cal.offset, cal.gamma, cal.rmse
+    );
 
     // Train occupancy
     println!("\n==> Training occupancy model...");
     let occ_cal = session.train_occupancy()?;
-    println!("  Result: threshold={:.2} accuracy={:.1}%",
-        occ_cal.density_threshold, occ_cal.accuracy * 100.0);
+    println!(
+        "  Result: threshold={:.2} accuracy={:.1}%",
+        occ_cal.density_threshold,
+        occ_cal.accuracy * 100.0
+    );
 
     // Export preference pairs
     println!("\n==> Exporting preference pairs...");

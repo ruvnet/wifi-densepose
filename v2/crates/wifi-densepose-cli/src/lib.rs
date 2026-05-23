@@ -31,7 +31,11 @@ pub mod mat;
 /// WiFi-DensePose Command Line Interface
 #[derive(Parser, Debug)]
 #[command(name = "wifi-densepose")]
-#[command(author, version, about = "WiFi-based pose estimation and disaster response")]
+#[command(
+    author,
+    version,
+    about = "WiFi-based pose estimation and disaster response"
+)]
 #[command(propagate_version = true)]
 pub struct Cli {
     /// Command to execute

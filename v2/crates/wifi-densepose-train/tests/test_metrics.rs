@@ -94,9 +94,21 @@ mod eval_metrics_tests {
     /// `mpjpe` must increase monotonically with prediction error.
     #[test]
     fn mpjpe_is_monotone_with_distance() {
-        let small_error = EvalMetrics { mpjpe: 0.01, pck_at_05: 0.99, gps: 0.1 };
-        let medium_error = EvalMetrics { mpjpe: 0.10, pck_at_05: 0.70, gps: 1.0 };
-        let large_error = EvalMetrics { mpjpe: 0.50, pck_at_05: 0.20, gps: 5.0 };
+        let small_error = EvalMetrics {
+            mpjpe: 0.01,
+            pck_at_05: 0.99,
+            gps: 0.1,
+        };
+        let medium_error = EvalMetrics {
+            mpjpe: 0.10,
+            pck_at_05: 0.70,
+            gps: 1.0,
+        };
+        let large_error = EvalMetrics {
+            mpjpe: 0.50,
+            pck_at_05: 0.20,
+            gps: 5.0,
+        };
 
         assert!(
             small_error.mpjpe < medium_error.mpjpe,
@@ -126,18 +138,27 @@ mod eval_metrics_tests {
     /// GPS must increase monotonically as prediction quality degrades.
     #[test]
     fn gps_monotone_with_distance() {
-        let perfect = EvalMetrics { mpjpe: 0.0, pck_at_05: 1.0, gps: 0.0 };
-        let imperfect = EvalMetrics { mpjpe: 0.1, pck_at_05: 0.8, gps: 2.0 };
-        let poor = EvalMetrics { mpjpe: 0.5, pck_at_05: 0.3, gps: 8.0 };
+        let perfect = EvalMetrics {
+            mpjpe: 0.0,
+            pck_at_05: 1.0,
+            gps: 0.0,
+        };
+        let imperfect = EvalMetrics {
+            mpjpe: 0.1,
+            pck_at_05: 0.8,
+            gps: 2.0,
+        };
+        let poor = EvalMetrics {
+            mpjpe: 0.5,
+            pck_at_05: 0.3,
+            gps: 8.0,
+        };
 
         assert!(
             perfect.gps < imperfect.gps,
             "perfect GPS must be < imperfect GPS"
         );
-        assert!(
-            imperfect.gps < poor.gps,
-            "imperfect GPS must be < poor GPS"
-        );
+        assert!(imperfect.gps < poor.gps, "imperfect GPS must be < poor GPS");
     }
 }
 
@@ -169,8 +190,9 @@ fn pck_computation_perfect_prediction() {
     let num_joints = 17_usize;
     let threshold = 0.5_f64;
 
-    let pred: Vec<[f64; 2]> =
-        (0..num_joints).map(|j| [j as f64 * 0.05, j as f64 * 0.04]).collect();
+    let pred: Vec<[f64; 2]> = (0..num_joints)
+        .map(|j| [j as f64 * 0.05, j as f64 * 0.04])
+        .collect();
     let gt = pred.clone();
 
     let pck = compute_pck(&pred, &gt, threshold);
@@ -249,8 +271,7 @@ fn oks_perfect_prediction_is_one() {
     let sigma = 0.05_f64;
     let scale = 1.0_f64;
 
-    let pred: Vec<[f64; 2]> =
-        (0..num_joints).map(|j| [j as f64 * 0.05, 0.3]).collect();
+    let pred: Vec<[f64; 2]> = (0..num_joints).map(|j| [j as f64 * 0.05, 0.3]).collect();
     let gt = pred.clone();
 
     let oks = compute_oks(&pred, &gt, sigma, scale);
@@ -365,7 +386,9 @@ fn metrics_accumulator_perfect_batch_pck() {
     let num_samples = 5_usize;
     let threshold = 0.5_f64;
 
-    let kps: Vec<[f64; 2]> = (0..num_kp).map(|j| [j as f64 * 0.05, j as f64 * 0.04]).collect();
+    let kps: Vec<[f64; 2]> = (0..num_kp)
+        .map(|j| [j as f64 * 0.05, j as f64 * 0.04])
+        .collect();
     let total_joints = num_samples * num_kp;
 
     let total_correct: usize = (0..num_samples)
@@ -393,7 +416,13 @@ fn metrics_accumulator_is_additive_half_correct() {
 
     // 3 correct + 3 wrong = 6 total.
     let pairs: Vec<([f64; 2], [f64; 2])> = (0..6)
-        .map(|i| if i < 3 { (gt_kp, gt_kp) } else { (wrong_kp, gt_kp) })
+        .map(|i| {
+            if i < 3 {
+                (gt_kp, gt_kp)
+            } else {
+                (wrong_kp, gt_kp)
+            }
+        })
         .collect();
 
     let correct: usize = pairs

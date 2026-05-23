@@ -3,10 +3,7 @@
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use super::{
-    Coordinates3D, TriageStatus, VitalSignsReading, ScanZoneId,
-    triage::TriageCalculator,
-};
+use super::{triage::TriageCalculator, Coordinates3D, ScanZoneId, TriageStatus, VitalSignsReading};
 
 /// Unique identifier for a survivor
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -138,9 +135,7 @@ impl VitalSignsHistory {
         if self.readings.is_empty() {
             return 0.0;
         }
-        let sum: f64 = self.readings.iter()
-            .map(|r| r.confidence.value())
-            .sum();
+        let sum: f64 = self.readings.iter().map(|r| r.confidence.value()).sum();
         sum / self.readings.len() as f64
     }
 
@@ -153,17 +148,18 @@ impl VitalSignsHistory {
         let recent: Vec<_> = self.readings.iter().rev().take(3).collect();
 
         // Check breathing trend
-        let breathing_declining = recent.windows(2).all(|w| {
-            match (&w[0].breathing, &w[1].breathing) {
-                (Some(a), Some(b)) => a.rate_bpm < b.rate_bpm,
-                _ => false,
-            }
-        });
+        let breathing_declining =
+            recent
+                .windows(2)
+                .all(|w| match (&w[0].breathing, &w[1].breathing) {
+                    (Some(a), Some(b)) => a.rate_bpm < b.rate_bpm,
+                    _ => false,
+                });
 
         // Check confidence trend
-        let confidence_declining = recent.windows(2).all(|w| {
-            w[0].confidence.value() < w[1].confidence.value()
-        });
+        let confidence_declining = recent
+            .windows(2)
+            .all(|w| w[0].confidence.value() < w[1].confidence.value());
 
         breathing_declining || confidence_declining
     }

@@ -15,16 +15,16 @@ pub mod macos_scanner;
 #[cfg(target_os = "linux")]
 pub mod linux_scanner;
 
-pub use netsh_scanner::NetshBssidScanner;
 pub use netsh_scanner::parse_netsh_output;
+pub use netsh_scanner::NetshBssidScanner;
 pub use wlanapi_scanner::WlanApiScanner;
 
 #[cfg(target_os = "macos")]
-pub use macos_scanner::MacosCoreWlanScanner;
-#[cfg(target_os = "macos")]
 pub use macos_scanner::parse_macos_scan_output;
+#[cfg(target_os = "macos")]
+pub use macos_scanner::MacosCoreWlanScanner;
 
 #[cfg(target_os = "linux")]
-pub use linux_scanner::LinuxIwScanner;
-#[cfg(target_os = "linux")]
 pub use linux_scanner::parse_iw_scan_output;
+#[cfg(target_os = "linux")]
+pub use linux_scanner::LinuxIwScanner;

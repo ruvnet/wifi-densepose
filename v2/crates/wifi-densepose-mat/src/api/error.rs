@@ -2,6 +2,7 @@
 //!
 //! This module provides a unified error type that maps to appropriate HTTP status codes
 //! and JSON error responses for the API.
+#![allow(missing_docs)]
 
 use axum::{
     http::StatusCode,
@@ -23,10 +24,7 @@ use uuid::Uuid;
 pub enum ApiError {
     /// Resource not found (404)
     #[error("Resource not found: {resource_type} with id {id}")]
-    NotFound {
-        resource_type: String,
-        id: String,
-    },
+    NotFound { resource_type: String, id: String },
 
     /// Invalid request data (400)
     #[error("Bad request: {message}")]
@@ -45,9 +43,7 @@ pub enum ApiError {
 
     /// Conflict with existing resource (409)
     #[error("Conflict: {message}")]
-    Conflict {
-        message: String,
-    },
+    Conflict { message: String },
 
     /// Resource is in invalid state for operation (409)
     #[error("Invalid state: {message}")]
@@ -66,9 +62,7 @@ pub enum ApiError {
 
     /// Service unavailable (503)
     #[error("Service unavailable: {message}")]
-    ServiceUnavailable {
-        message: String,
-    },
+    ServiceUnavailable { message: String },
 
     /// Domain error from business logic
     #[error("Domain error: {0}")]

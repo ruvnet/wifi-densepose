@@ -17,7 +17,12 @@ pub struct Coordinates3D {
 impl Coordinates3D {
     /// Create new coordinates with uncertainty
     pub fn new(x: f64, y: f64, z: f64, uncertainty: LocationUncertainty) -> Self {
-        Self { x, y, z, uncertainty }
+        Self {
+            x,
+            y,
+            z,
+            uncertainty,
+        }
     }
 
     /// Create coordinates with default uncertainty
@@ -76,9 +81,9 @@ pub struct LocationUncertainty {
 impl Default for LocationUncertainty {
     fn default() -> Self {
         Self {
-            horizontal_error: 2.0,  // 2 meter default uncertainty
-            vertical_error: 1.0,    // 1 meter vertical uncertainty
-            confidence: 0.95,       // 95% confidence
+            horizontal_error: 2.0, // 2 meter default uncertainty
+            vertical_error: 1.0,   // 1 meter vertical uncertainty
+            confidence: 0.95,      // 95% confidence
         }
     }
 }
@@ -118,11 +123,11 @@ impl LocationUncertainty {
         // Combined uncertainty is reduced when multiple estimates agree
         let h_var1 = self.horizontal_error * self.horizontal_error;
         let h_var2 = other.horizontal_error * other.horizontal_error;
-        let combined_h_var = 1.0 / (1.0/h_var1 + 1.0/h_var2);
+        let combined_h_var = 1.0 / (1.0 / h_var1 + 1.0 / h_var2);
 
         let v_var1 = self.vertical_error * self.vertical_error;
         let v_var2 = other.vertical_error * other.vertical_error;
-        let combined_v_var = 1.0 / (1.0/v_var1 + 1.0/v_var2);
+        let combined_v_var = 1.0 / (1.0 / v_var1 + 1.0 / v_var2);
 
         LocationUncertainty {
             horizontal_error: combined_h_var.sqrt(),
@@ -225,8 +230,10 @@ impl DebrisProfile {
 
     /// Check if debris allows good signal penetration
     pub fn is_penetrable(&self) -> bool {
-        !matches!(self.metal_content, MetalContent::High | MetalContent::Blocking)
-            && self.primary_material.attenuation_coefficient() < 5.0
+        !matches!(
+            self.metal_content,
+            MetalContent::High | MetalContent::Blocking
+        ) && self.primary_material.attenuation_coefficient() < 5.0
     }
 }
 

@@ -12,8 +12,10 @@ pub async fn locate_by_ip() -> Result<GeoPoint> {
     // Primary: ip-api.com (free, 45 req/min)
     let resp: serde_json::Value = client
         .get("http://ip-api.com/json/?fields=lat,lon,city,regionName,country")
-        .send().await?
-        .json().await?;
+        .send()
+        .await?
+        .json()
+        .await?;
 
     let lat = resp.get("lat").and_then(|v| v.as_f64()).unwrap_or(0.0);
     let lon = resp.get("lon").and_then(|v| v.as_f64()).unwrap_or(0.0);

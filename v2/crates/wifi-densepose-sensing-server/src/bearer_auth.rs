@@ -48,7 +48,9 @@ impl AuthState {
         if s.is_empty() {
             AuthState { token: None }
         } else {
-            AuthState { token: Some(Arc::new(s)) }
+            AuthState {
+                token: Some(Arc::new(s)),
+            }
         }
     }
 
@@ -133,8 +135,7 @@ mod tests {
     }
 
     fn wrap(auth: AuthState) -> Router {
-        ok_handler()
-            .layer(axum::middleware::from_fn_with_state(auth, require_bearer))
+        ok_handler().layer(axum::middleware::from_fn_with_state(auth, require_bearer))
     }
 
     async fn status(router: Router, method: &str, path: &str, auth: Option<&str>) -> StatusCode {
@@ -153,16 +154,31 @@ mod tests {
     #[tokio::test]
     async fn middleware_is_no_op_when_token_unset() {
         let r = wrap(AuthState::default());
-        assert_eq!(status(r.clone(), "GET", "/api/v1/info", None).await, StatusCode::OK);
-        assert_eq!(status(r.clone(), "POST", "/api/v1/sensitive", None).await, StatusCode::OK);
-        assert_eq!(status(r.clone(), "GET", "/health", None).await, StatusCode::OK);
-        assert_eq!(status(r, "GET", "/ui/index.html", None).await, StatusCode::OK);
+        assert_eq!(
+            status(r.clone(), "GET", "/api/v1/info", None).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            status(r.clone(), "POST", "/api/v1/sensitive", None).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            status(r.clone(), "GET", "/health", None).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            status(r, "GET", "/ui/index.html", None).await,
+            StatusCode::OK
+        );
     }
 
     #[tokio::test]
     async fn enabled_blocks_api_without_bearer() {
         let r = wrap(AuthState::from_token("s3cr3t"));
-        assert_eq!(status(r.clone(), "GET", "/api/v1/info", None).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            status(r.clone(), "GET", "/api/v1/info", None).await,
+            StatusCode::UNAUTHORIZED
+        );
         assert_eq!(
             status(r, "POST", "/api/v1/sensitive", None).await,
             StatusCode::UNAUTHORIZED
@@ -184,7 +200,10 @@ mod tests {
             .unwrap();
         req.headers_mut()
             .insert(AUTHORIZATION, "Basic s3cr3t".parse().unwrap());
-        assert_eq!(r.oneshot(req).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            r.oneshot(req).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     #[tokio::test]
@@ -205,15 +224,21 @@ mod tests {
         let r = wrap(AuthState::from_token("s3cr3t"));
         // Even with auth ON, `/health` and `/ui/*` are reachable without a token:
         // orchestrator probes and the local UI need to load unchallenged.
-        assert_eq!(status(r.clone(), "GET", "/health", None).await, StatusCode::OK);
-        assert_eq!(status(r, "GET", "/ui/index.html", None).await, StatusCode::OK);
+        assert_eq!(
+            status(r.clone(), "GET", "/health", None).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            status(r, "GET", "/ui/index.html", None).await,
+            StatusCode::OK
+        );
     }
 
     #[test]
     fn ct_eq_basics() {
         assert!(ct_eq(b"abc", b"abc"));
         assert!(!ct_eq(b"abc", b"abd"));
-        assert!(!ct_eq(b"abc", b"ab"));   // length mismatch
+        assert!(!ct_eq(b"abc", b"ab")); // length mismatch
         assert!(!ct_eq(b"", b"x"));
         assert!(ct_eq(b"", b""));
     }

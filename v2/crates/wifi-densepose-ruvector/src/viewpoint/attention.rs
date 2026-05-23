@@ -61,16 +61,26 @@ impl std::fmt::Display for AttentionError {
         match self {
             AttentionError::EmptyViewpoints => write!(f, "no viewpoint embeddings provided"),
             AttentionError::DimensionMismatch { expected, actual } => {
-                write!(f, "embedding dimension mismatch: expected {expected}, got {actual}")
+                write!(
+                    f,
+                    "embedding dimension mismatch: expected {expected}, got {actual}"
+                )
             }
-            AttentionError::BiasDimensionMismatch { n_viewpoints, bias_rows, bias_cols } => {
+            AttentionError::BiasDimensionMismatch {
+                n_viewpoints,
+                bias_rows,
+                bias_cols,
+            } => {
                 write!(
                     f,
                     "geometric bias matrix is {bias_rows}x{bias_cols} but {n_viewpoints} viewpoints require {n_viewpoints}x{n_viewpoints}"
                 )
             }
             AttentionError::WeightDimensionMismatch { expected, actual } => {
-                write!(f, "weight matrix dimension mismatch: expected {expected}, got {actual}")
+                write!(
+                    f,
+                    "weight matrix dimension mismatch: expected {expected}, got {actual}"
+                )
             }
         }
     }
@@ -126,7 +136,11 @@ pub struct ViewpointGeometry {
 impl GeometricBias {
     /// Create a new geometric bias with the given parameters.
     pub fn new(w_angle: f32, w_dist: f32, d_ref: f32) -> Self {
-        GeometricBias { w_angle, w_dist, d_ref }
+        GeometricBias {
+            w_angle,
+            w_dist,
+            d_ref,
+        }
     }
 
     /// Compute the bias value for a single viewpoint pair.
@@ -241,7 +255,13 @@ impl ProjectionWeights {
                 actual: w_v.len(),
             });
         }
-        Ok(ProjectionWeights { w_q, w_k, w_v, d_in, d_out })
+        Ok(ProjectionWeights {
+            w_q,
+            w_k,
+            w_v,
+            d_in,
+            d_out,
+        })
     }
 
     /// Project a single embedding vector through a weight matrix.
@@ -262,17 +282,26 @@ impl ProjectionWeights {
 
     /// Project all viewpoint embeddings through W_q.
     pub fn project_queries(&self, embeddings: &[Vec<f32>]) -> Vec<Vec<f32>> {
-        embeddings.iter().map(|e| self.project(&self.w_q, e)).collect()
+        embeddings
+            .iter()
+            .map(|e| self.project(&self.w_q, e))
+            .collect()
     }
 
     /// Project all viewpoint embeddings through W_k.
     pub fn project_keys(&self, embeddings: &[Vec<f32>]) -> Vec<Vec<f32>> {
-        embeddings.iter().map(|e| self.project(&self.w_k, e)).collect()
+        embeddings
+            .iter()
+            .map(|e| self.project(&self.w_k, e))
+            .collect()
     }
 
     /// Project all viewpoint embeddings through W_v.
     pub fn project_values(&self, embeddings: &[Vec<f32>]) -> Vec<Vec<f32>> {
-        embeddings.iter().map(|e| self.project(&self.w_v, e)).collect()
+        embeddings
+            .iter()
+            .map(|e| self.project(&self.w_v, e))
+            .collect()
     }
 }
 
@@ -393,8 +422,8 @@ impl CrossViewpointAttention {
             let mut output = vec![0.0_f32; d];
             for j in 0..n {
                 let w = attention_weights[i * n + j];
-                for k in 0..d {
-                    output[k] += w * values[j][k];
+                for (out_k, &val_k) in output.iter_mut().zip(values[j].iter()) {
+                    *out_k += w * val_k;
                 }
             }
             attended.push(output);
@@ -427,13 +456,13 @@ impl CrossViewpointAttention {
         let mut fused = vec![0.0_f32; d];
 
         for row in &attended {
-            for k in 0..d {
-                fused[k] += row[k];
+            for (fk, &rk) in fused.iter_mut().zip(row.iter()) {
+                *fk += rk;
             }
         }
         let n_f = n as f32;
-        for k in 0..d {
-            fused[k] /= n_f;
+        for fk in fused.iter_mut() {
+            *fk /= n_f;
         }
 
         Ok(fused)
@@ -511,7 +540,9 @@ mod tests {
     fn make_test_embeddings(n: usize, dim: usize) -> Vec<Vec<f32>> {
         (0..n)
             .map(|i| {
-                (0..dim).map(|d| ((i * dim + d) as f32 * 0.01).sin()).collect()
+                (0..dim)
+                    .map(|d| ((i * dim + d) as f32 * 0.01).sin())
+                    .collect()
             })
             .collect()
     }
@@ -593,12 +624,18 @@ mod tests {
         let bias = GeometricBias::new(1.0, 1.0, 5.0);
         // Same position: theta=0, d=0 -> cos(0) + exp(0) = 2.0
         let val = bias.compute_pair(0.0, 0.0);
-        assert!((val - 2.0).abs() < 1e-5, "self-bias should be 2.0, got {val}");
+        assert!(
+            (val - 2.0).abs() < 1e-5,
+            "self-bias should be 2.0, got {val}"
+        );
 
         // Orthogonal, far apart: theta=PI/2, d=5.0
         let val_orth = bias.compute_pair(std::f32::consts::FRAC_PI_2, 5.0);
         // cos(PI/2) ~ 0 + exp(-1) ~ 0.368
-        assert!(val_orth < 1.0, "orthogonal far-apart viewpoints should have low bias");
+        assert!(
+            val_orth < 1.0,
+            "orthogonal far-apart viewpoints should have low bias"
+        );
     }
 
     #[test]
@@ -641,8 +678,8 @@ mod tests {
         let dim = 4;
         // Swap first two dimensions in Q.
         let mut w_q = vec![0.0_f32; dim * dim];
-        w_q[0 * dim + 1] = 1.0; // row 0 picks dim 1
-        w_q[1 * dim + 0] = 1.0; // row 1 picks dim 0
+        w_q[1] = 1.0; // row 0 picks dim 1 (0 * dim + 1)
+        w_q[dim] = 1.0; // row 1 picks dim 0 (1 * dim + 0)
         w_q[2 * dim + 2] = 1.0;
         w_q[3 * dim + 3] = 1.0;
         let w_id = {
@@ -662,6 +699,9 @@ mod tests {
         let bias = GeometricBias::new(0.0, 1.0, 2.0); // only distance component
         let close = bias.compute_pair(0.0, 0.5);
         let far = bias.compute_pair(0.0, 10.0);
-        assert!(close > far, "closer viewpoints should have higher distance bias");
+        assert!(
+            close > far,
+            "closer viewpoints should have higher distance bias"
+        );
     }
 }

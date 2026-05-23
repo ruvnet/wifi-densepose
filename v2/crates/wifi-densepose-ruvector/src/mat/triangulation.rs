@@ -46,8 +46,7 @@ pub fn solve_triangulation(
         col0.push(xi - xj);
         col1.push(yi - yj);
         b.push(
-            C * tdoa / 2.0
-                + ((xi * xi - xj * xj) + (yi * yi - yj * yj)) / 2.0
+            C * tdoa / 2.0 + ((xi * xi - xj * xj) + (yi * yi - yj * yj)) / 2.0
                 - x_ref * (xi - xj)
                 - y_ref * (yi - yj),
         );
@@ -99,9 +98,8 @@ mod tests {
             ((survivor.0 - ap.0).powi(2) + (survivor.1 - ap.1).powi(2)).sqrt()
         };
 
-        let tdoa = |i: usize, j: usize| -> f32 {
-            (dist(ap_positions[i]) - dist(ap_positions[j])) / c
-        };
+        let tdoa =
+            |i: usize, j: usize| -> f32 { (dist(ap_positions[i]) - dist(ap_positions[j])) / c };
 
         let measurements = vec![
             (1, 0, tdoa(1, 0)),
@@ -133,6 +131,9 @@ mod tests {
     fn triangulation_too_few_measurements_returns_none() {
         let ap_positions = vec![(0.0_f32, 0.0), (10.0, 0.0), (10.0, 10.0)];
         let result = solve_triangulation(&[(0, 1, 1e-9), (1, 2, 1e-9)], &ap_positions);
-        assert!(result.is_none(), "fewer than 3 measurements must return None");
+        assert!(
+            result.is_none(),
+            "fewer than 3 measurements must return None"
+        );
     }
 }

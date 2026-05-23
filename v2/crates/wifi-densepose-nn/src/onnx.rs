@@ -122,12 +122,14 @@ impl OnnxSession {
     /// Run inference
     pub fn run(&mut self, inputs: HashMap<String, Tensor>) -> NnResult<HashMap<String, Tensor>> {
         // Get the first input tensor
-        let first_input_name = self.input_names.first()
+        let first_input_name = self
+            .input_names
+            .first()
             .ok_or_else(|| NnError::inference("No input names defined"))?;
 
-        let tensor = inputs
-            .get(first_input_name)
-            .ok_or_else(|| NnError::invalid_input(format!("Missing input: {}", first_input_name)))?;
+        let tensor = inputs.get(first_input_name).ok_or_else(|| {
+            NnError::invalid_input(format!("Missing input: {}", first_input_name))
+        })?;
 
         let arr = tensor.as_array4()?;
 
@@ -143,7 +145,8 @@ impl OnnxSession {
         let session_inputs = ort::inputs![first_input_name.as_str() => ort_tensor];
 
         // Run session
-        let session_outputs = self.session
+        let session_outputs = self
+            .session
             .run(session_inputs)
             .map_err(|e| NnError::inference(format!("Inference failed: {}", e)))?;
 
@@ -161,14 +164,14 @@ impl OnnxSession {
                         let arr4 = ndarray::Array4::from_shape_vec(
                             (dims[0], dims[1], dims[2], dims[3]),
                             data.to_vec(),
-                        ).map_err(|e| NnError::tensor_op(format!("Shape error: {}", e)))?;
+                        )
+                        .map_err(|e| NnError::tensor_op(format!("Shape error: {}", e)))?;
                         result.insert(name.clone(), Tensor::Float4D(arr4));
                     } else {
                         // Handle other dimensionalities
-                        let arr_dyn = ndarray::ArrayD::from_shape_vec(
-                            ndarray::IxDyn(&dims),
-                            data.to_vec(),
-                        ).map_err(|e| NnError::tensor_op(format!("Shape error: {}", e)))?;
+                        let arr_dyn =
+                            ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&dims), data.to_vec())
+                                .map_err(|e| NnError::tensor_op(format!("Shape error: {}", e)))?;
                         result.insert(name.clone(), Tensor::FloatND(arr_dyn));
                     }
                 }
@@ -205,7 +208,10 @@ impl OnnxBackend {
     }
 
     /// Create backend from file with options
-    pub fn from_file_with_options<P: AsRef<Path>>(path: P, options: InferenceOptions) -> NnResult<Self> {
+    pub fn from_file_with_options<P: AsRef<Path>>(
+        path: P,
+        options: InferenceOptions,
+    ) -> NnResult<Self> {
         let session = OnnxSession::from_file(path, &options)?;
         Ok(Self {
             session: Arc::new(parking_lot::RwLock::new(session)),
@@ -331,24 +337,20 @@ pub fn load_model_info<P: AsRef<Path>>(path: P) -> NnResult<OnnxModelInfo> {
     let inputs: Vec<TensorSpec> = session
         .inputs()
         .iter()
-        .map(|input| {
-            TensorSpec {
-                name: input.name().to_string(),
-                shape: vec![],
-                dtype: "float32".to_string(),
-            }
+        .map(|input| TensorSpec {
+            name: input.name().to_string(),
+            shape: vec![],
+            dtype: "float32".to_string(),
         })
         .collect();
 
     let outputs: Vec<TensorSpec> = session
         .outputs()
         .iter()
-        .map(|output| {
-            TensorSpec {
-                name: output.name().to_string(),
-                shape: vec![],
-                dtype: "float32".to_string(),
-            }
+        .map(|output| TensorSpec {
+            name: output.name().to_string(),
+            shape: vec![],
+            dtype: "float32".to_string(),
         })
         .collect();
 
@@ -440,10 +442,7 @@ mod tests {
 
     #[test]
     fn test_onnx_backend_builder() {
-        let builder = OnnxBackendBuilder::new()
-            .cpu()
-            .threads(4)
-            .optimize(true);
+        let builder = OnnxBackendBuilder::new().cpu().threads(4).optimize(true);
 
         // Can't test build without a real model
         assert!(builder.model_path.is_none());

@@ -1,6 +1,6 @@
 //! Depth estimation through debris layers.
 
-use crate::domain::{DebrisProfile, DepthEstimate, DebrisMaterial, MoistureLevel};
+use crate::domain::{DebrisMaterial, DebrisProfile, DepthEstimate, MoistureLevel};
 
 /// Configuration for depth estimation
 #[derive(Debug, Clone)]
@@ -20,7 +20,7 @@ impl Default for DepthEstimatorConfig {
         Self {
             max_depth: 10.0,
             min_attenuation: 3.0,
-            frequency_ghz: 5.8, // 5.8 GHz WiFi
+            frequency_ghz: 5.8,       // 5.8 GHz WiFi
             free_space_loss_1m: 47.0, // FSPL at 1m for 5.8 GHz
         }
     }
@@ -45,8 +45,8 @@ impl DepthEstimator {
     /// Estimate depth from signal attenuation
     pub fn estimate_depth(
         &self,
-        signal_attenuation: f64,  // Total attenuation in dB
-        distance_2d: f64,         // Horizontal distance in meters
+        signal_attenuation: f64, // Total attenuation in dB
+        distance_2d: f64,        // Horizontal distance in meters
         debris_profile: &DebrisProfile,
     ) -> Option<DepthEstimate> {
         if signal_attenuation < self.config.min_attenuation {
@@ -178,7 +178,7 @@ impl DepthEstimator {
     pub fn estimate_from_multipath(
         &self,
         direct_path_attenuation: f64,
-        reflected_paths: &[(f64, f64)],  // (attenuation, delay)
+        reflected_paths: &[(f64, f64)], // (attenuation, delay)
         debris_profile: &DebrisProfile,
     ) -> Option<DepthEstimate> {
         // Use path differences to estimate depth
@@ -191,7 +191,8 @@ impl DepthEstimator {
         let avg_extra_path: f64 = reflected_paths
             .iter()
             .map(|(_, delay)| delay * SPEED_OF_LIGHT / 2.0) // Round trip
-            .sum::<f64>() / reflected_paths.len() as f64;
+            .sum::<f64>()
+            / reflected_paths.len() as f64;
 
         // Extra path length is approximately related to depth
         // (reflections bounce off debris layers)
@@ -279,7 +280,10 @@ mod tests {
 
         // High multipath = concrete
         let profile2 = estimator.estimate_debris_profile(0.2, 0.8, 0.3);
-        assert!(matches!(profile2.primary_material, DebrisMaterial::HeavyConcrete));
+        assert!(matches!(
+            profile2.primary_material,
+            DebrisMaterial::HeavyConcrete
+        ));
     }
 
     #[test]

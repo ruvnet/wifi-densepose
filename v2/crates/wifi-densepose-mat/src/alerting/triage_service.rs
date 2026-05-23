@@ -1,8 +1,7 @@
 //! Triage service for calculating and updating survivor priority.
 
 use crate::domain::{
-    Priority, Survivor, TriageStatus, VitalSignsReading,
-    triage::TriageCalculator,
+    triage::TriageCalculator, Priority, Survivor, TriageStatus, VitalSignsReading,
 };
 
 /// Service for triage operations
@@ -16,10 +15,7 @@ impl TriageService {
 
     /// Check if survivor should be upgraded
     pub fn should_upgrade(survivor: &Survivor) -> bool {
-        TriageCalculator::should_upgrade(
-            survivor.triage_status(),
-            survivor.is_deteriorating(),
-        )
+        TriageCalculator::should_upgrade(survivor.triage_status(), survivor.is_deteriorating())
     }
 
     /// Get upgraded status
@@ -189,9 +185,14 @@ impl MassCasualtyAssessment {
              Total: {} (Living: {}, Deceased: {})\n\
              Immediate: {}, Delayed: {}, Minor: {}\n\
              Severity: {:?}, Resources: {:?}",
-            self.total, self.living(), self.deceased,
-            self.immediate, self.delayed, self.minor,
-            self.severity, self.resource_level
+            self.total,
+            self.living(),
+            self.deceased,
+            self.immediate,
+            self.delayed,
+            self.minor,
+            self.severity,
+            self.resource_level
         )
     }
 }
@@ -227,9 +228,7 @@ pub enum ResourceLevel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{
-        BreathingPattern, BreathingType, ConfidenceScore, ScanZoneId,
-    };
+    use crate::domain::{BreathingPattern, BreathingType, ConfidenceScore, ScanZoneId};
     use chrono::Utc;
 
     fn create_test_vitals(rate_bpm: f32) -> VitalSignsReading {
@@ -278,12 +277,14 @@ mod tests {
     fn test_mass_casualty_assessment() {
         let survivors: Vec<Survivor> = (0..10)
             .map(|i| {
-                let rate = if i < 3 { 35.0 } else if i < 6 { 16.0 } else { 18.0 };
-                Survivor::new(
-                    ScanZoneId::new(),
-                    create_test_vitals(rate),
-                    None,
-                )
+                let rate = if i < 3 {
+                    35.0
+                } else if i < 6 {
+                    16.0
+                } else {
+                    18.0
+                };
+                Survivor::new(ScanZoneId::new(), create_test_vitals(rate), None)
             })
             .collect();
 
@@ -297,21 +298,13 @@ mod tests {
     #[test]
     fn test_priority_with_factors() {
         // Deteriorating patient should be upgraded
-        let priority = PriorityCalculator::calculate_with_factors(
-            &TriageStatus::Delayed,
-            true,
-            0,
-            None,
-        );
+        let priority =
+            PriorityCalculator::calculate_with_factors(&TriageStatus::Delayed, true, 0, None);
         assert_eq!(priority, Priority::Critical);
 
         // Deep burial should upgrade
-        let priority = PriorityCalculator::calculate_with_factors(
-            &TriageStatus::Delayed,
-            false,
-            0,
-            Some(4.0),
-        );
+        let priority =
+            PriorityCalculator::calculate_with_factors(&TriageStatus::Delayed, false, 0, Some(4.0));
         assert_eq!(priority, Priority::Critical);
     }
 }

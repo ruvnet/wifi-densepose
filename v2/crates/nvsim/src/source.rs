@@ -132,7 +132,11 @@ pub fn scene_field_at(scene: &Scene, sensor_pos: Vec3) -> (Vec3, bool) {
 
 /// Total field at every sensor location in a scene, in scene order.
 pub fn scene_field_at_sensors(scene: &Scene) -> Vec<(Vec3, bool)> {
-    scene.sensors.iter().map(|&p| scene_field_at(scene, p)).collect()
+    scene
+        .sensors
+        .iter()
+        .map(|&p| scene_field_at(scene, p))
+        .collect()
 }
 
 // ────────────────────── vec3 helpers ─────────────────────────────────────

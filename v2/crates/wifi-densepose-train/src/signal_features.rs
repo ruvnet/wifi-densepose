@@ -58,7 +58,11 @@ const DEFAULT_BANDWIDTH_HZ: f64 = 40.0e6;
 /// `0.0` so callers can rely on the vector being usable as a model feature.
 pub fn extract_signal_features(amplitude: &Array4<f32>, phase: &Array4<f32>) -> Array1<f32> {
     let (n_t, n_tx, n_rx, n_sc) = amplitude.dim();
-    debug_assert_eq!(amplitude.dim(), phase.dim(), "amplitude/phase shape mismatch");
+    debug_assert_eq!(
+        amplitude.dim(),
+        phase.dim(),
+        "amplitude/phase shape mismatch"
+    );
     if n_t == 0 || n_tx == 0 || n_rx == 0 || n_sc == 0 {
         return Array1::zeros(FEATURE_LEN);
     }
@@ -66,7 +70,10 @@ pub fn extract_signal_features(amplitude: &Array4<f32>, phase: &Array4<f32>) -> 
     let t = n_t / 2;
 
     let to_2d = |src: &Array4<f32>| -> Vec<f64> {
-        src.slice(s![t, .., .., ..]).iter().map(|&v| f64::from(v)).collect()
+        src.slice(s![t, .., .., ..])
+            .iter()
+            .map(|&v| f64::from(v))
+            .collect()
     };
     let amp2d = match ndarray::Array2::from_shape_vec((n_ant, n_sc), to_2d(amplitude)) {
         Ok(a) => a,
@@ -150,6 +157,9 @@ mod tests {
         let phase = Array4::<f32>::from_elem((4, 3, 3, 56), 0.25);
         let f = extract_signal_features(&amp, &phase);
         assert_eq!(f.len(), FEATURE_LEN);
-        assert!(f.iter().all(|v| v.is_finite()), "features must be finite: {f:?}");
+        assert!(
+            f.iter().all(|v| v.is_finite()),
+            "features must be finite: {f:?}"
+        );
     }
 }

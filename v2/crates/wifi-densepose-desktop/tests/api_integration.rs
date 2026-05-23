@@ -10,23 +10,44 @@
 fn test_serial_port_detection_logic() {
     // Test ESP32 VID/PID detection
     // CP210x (Silicon Labs)
-    assert!(is_esp32_vid_pid(0x10C4, 0xEA60), "CP2102 should be detected");
-    assert!(is_esp32_vid_pid(0x10C4, 0xEA70), "CP2104 should be detected");
+    assert!(
+        is_esp32_vid_pid(0x10C4, 0xEA60),
+        "CP2102 should be detected"
+    );
+    assert!(
+        is_esp32_vid_pid(0x10C4, 0xEA70),
+        "CP2104 should be detected"
+    );
 
     // CH340/CH341 (QinHeng)
     assert!(is_esp32_vid_pid(0x1A86, 0x7523), "CH340 should be detected");
     assert!(is_esp32_vid_pid(0x1A86, 0x5523), "CH341 should be detected");
 
     // FTDI
-    assert!(is_esp32_vid_pid(0x0403, 0x6001), "FTDI FT232 should be detected");
-    assert!(is_esp32_vid_pid(0x0403, 0x6010), "FTDI FT2232 should be detected");
+    assert!(
+        is_esp32_vid_pid(0x0403, 0x6001),
+        "FTDI FT232 should be detected"
+    );
+    assert!(
+        is_esp32_vid_pid(0x0403, 0x6010),
+        "FTDI FT2232 should be detected"
+    );
 
     // ESP32 native USB
-    assert!(is_esp32_vid_pid(0x303A, 0x1001), "ESP32-S2/S3 native should be detected");
+    assert!(
+        is_esp32_vid_pid(0x303A, 0x1001),
+        "ESP32-S2/S3 native should be detected"
+    );
 
     // Unknown device
-    assert!(!is_esp32_vid_pid(0x0000, 0x0000), "Unknown VID/PID should not be detected");
-    assert!(!is_esp32_vid_pid(0x1234, 0x5678), "Random VID/PID should not be detected");
+    assert!(
+        !is_esp32_vid_pid(0x0000, 0x0000),
+        "Unknown VID/PID should not be detected"
+    );
+    assert!(
+        !is_esp32_vid_pid(0x1234, 0x5678),
+        "Random VID/PID should not be detected"
+    );
 }
 
 fn is_esp32_vid_pid(vid: u16, pid: u16) -> bool {
@@ -39,7 +60,9 @@ fn is_esp32_vid_pid(vid: u16, pid: u16) -> bool {
         return true;
     }
     // FTDI
-    if vid == 0x0403 && (pid == 0x6001 || pid == 0x6010 || pid == 0x6011 || pid == 0x6014 || pid == 0x6015) {
+    if vid == 0x0403
+        && (pid == 0x6001 || pid == 0x6010 || pid == 0x6011 || pid == 0x6014 || pid == 0x6015)
+    {
         return true;
     }
     // ESP32-S2/S3 native USB
@@ -78,8 +101,14 @@ fn test_settings_structure() {
 
     // Check default values
     assert!(!settings.theme.is_empty(), "Theme should have a default");
-    assert!(settings.discover_interval_ms > 0, "Discovery interval should be positive");
-    assert!(settings.auto_discover, "Auto-discover should default to true");
+    assert!(
+        settings.discover_interval_ms > 0,
+        "Discovery interval should be positive"
+    );
+    assert!(
+        settings.auto_discover,
+        "Auto-discover should default to true"
+    );
     assert_eq!(settings.server_http_port, 8080);
 }
 
@@ -128,7 +157,10 @@ fn test_chip_variants() {
 
     for chip in chips {
         let name = format!("{:?}", chip).to_lowercase();
-        assert!(name.starts_with("esp32"), "All chips should be ESP32 variants");
+        assert!(
+            name.starts_with("esp32"),
+            "All chips should be ESP32 variants"
+        );
     }
 }
 
@@ -152,7 +184,7 @@ fn test_progress_parsing() {
 
 #[test]
 fn test_sha256_hash() {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
 
     let data = b"test firmware data";
     let mut hasher = Sha256::new();
@@ -178,7 +210,11 @@ fn test_hmac_signature() {
     let result = mac.finalize();
     let signature = hex::encode(result.into_bytes());
 
-    assert_eq!(signature.len(), 64, "HMAC-SHA256 should produce 64 hex characters");
+    assert_eq!(
+        signature.len(),
+        64,
+        "HMAC-SHA256 should produce 64 hex characters"
+    );
 }
 
 // ============================================================================
@@ -305,11 +341,7 @@ fn test_discovery_method_variants() {
 fn test_mesh_role_variants() {
     use wifi_densepose_desktop::domain::node::MeshRole;
 
-    let roles = vec![
-        MeshRole::Coordinator,
-        MeshRole::Aggregator,
-        MeshRole::Node,
-    ];
+    let roles = vec![MeshRole::Coordinator, MeshRole::Aggregator, MeshRole::Node];
 
     for role in roles {
         let json = serde_json::to_string(&role).expect("Should serialize");
@@ -343,14 +375,18 @@ fn test_wifi_config_command_format() {
 }
 
 #[test]
+#[allow(clippy::const_is_empty)]
 fn test_wifi_credentials_validation() {
     // SSID: 1-32 characters
     let valid_ssid = "MyNetwork";
     let empty_ssid = "";
     let long_ssid = "A".repeat(33);
 
-    assert!(!valid_ssid.is_empty() && valid_ssid.len() <= 32);
-    assert!(empty_ssid.is_empty());
+    assert!(
+        !valid_ssid.is_empty() && valid_ssid.len() <= 32,
+        "SSID length must be 1-32"
+    );
+    assert!(empty_ssid.is_empty(), "empty_ssid must be empty");
     assert!(long_ssid.len() > 32);
 
     // Password: 8-63 characters for WPA2
@@ -370,7 +406,7 @@ fn test_wifi_credentials_validation() {
 #[test]
 fn test_node_registry() {
     use wifi_densepose_desktop::domain::node::{
-        DiscoveredNode, MacAddress, NodeRegistry, HealthStatus, Chip, MeshRole, DiscoveryMethod
+        Chip, DiscoveredNode, DiscoveryMethod, HealthStatus, MacAddress, MeshRole, NodeRegistry,
     };
 
     let mut registry = NodeRegistry::new();

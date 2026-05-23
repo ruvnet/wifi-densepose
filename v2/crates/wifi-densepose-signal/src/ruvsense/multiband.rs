@@ -29,7 +29,10 @@ pub enum MultiBandError {
 
     /// Frequency list length does not match frame count.
     #[error("Frequency count ({freq_count}) does not match frame count ({frame_count})")]
-    FrequencyCountMismatch { freq_count: usize, frame_count: usize },
+    FrequencyCountMismatch {
+        freq_count: usize,
+        frame_count: usize,
+    },
 
     /// Duplicate frequency in channel list.
     #[error("Duplicate frequency {freq_mhz} MHz at index {idx}")]
@@ -97,11 +100,7 @@ impl MultiBandBuilder {
     }
 
     /// Add a channel observation at the given center frequency.
-    pub fn add_channel(
-        mut self,
-        frame: CanonicalCsiFrame,
-        freq_mhz: u32,
-    ) -> Self {
+    pub fn add_channel(mut self, frame: CanonicalCsiFrame, freq_mhz: u32) -> Self {
         self.frames.push(frame);
         self.frequencies.push(freq_mhz);
         self
@@ -152,8 +151,7 @@ impl MultiBandBuilder {
 
         let sorted_frames: Vec<CanonicalCsiFrame> =
             indices.iter().map(|&i| self.frames[i].clone()).collect();
-        let sorted_freqs: Vec<u32> =
-            indices.iter().map(|&i| self.frequencies[i]).collect();
+        let sorted_freqs: Vec<u32> = indices.iter().map(|&i| self.frequencies[i]).collect();
 
         self.frames = sorted_frames;
         self.frequencies = sorted_freqs;
@@ -185,10 +183,7 @@ fn compute_cross_channel_coherence(frames: &[CanonicalCsiFrame]) -> f32 {
 
     for i in 0..frames.len() {
         for j in (i + 1)..frames.len() {
-            let corr = pearson_correlation_f32(
-                &frames[i].amplitude,
-                &frames[j].amplitude,
-            );
+            let corr = pearson_correlation_f32(&frames[i].amplitude, &frames[j].amplitude);
             total_corr += corr as f64;
             pair_count += 1;
         }
@@ -328,7 +323,10 @@ mod tests {
             .add_channel(make_frame(56, 1.0), 2412)
             .add_channel(make_frame(30, 1.0), 2437)
             .build();
-        assert!(matches!(result, Err(MultiBandError::SubcarrierMismatch { .. })));
+        assert!(matches!(
+            result,
+            Err(MultiBandError::SubcarrierMismatch { .. })
+        ));
     }
 
     #[test]
@@ -337,7 +335,10 @@ mod tests {
             .add_channel(make_frame(56, 1.0), 2412)
             .add_channel(make_frame(56, 1.0), 2412)
             .build();
-        assert!(matches!(result, Err(MultiBandError::DuplicateFrequency { .. })));
+        assert!(matches!(
+            result,
+            Err(MultiBandError::DuplicateFrequency { .. })
+        ));
     }
 
     #[test]

@@ -137,7 +137,10 @@ mod tests {
         let residuals = pp.process(&frame).unwrap();
         assert_eq!(residuals.len(), 3);
         for &r in &residuals {
-            assert!((r - 0.0).abs() < f64::EPSILON, "first frame residual should be 0");
+            assert!(
+                (r - 0.0).abs() < f64::EPSILON,
+                "first frame residual should be 0"
+            );
         }
     }
 
@@ -156,7 +159,10 @@ mod tests {
         }
 
         for &r in &last_residuals {
-            assert!(r.abs() < 0.01, "residuals should converge to ~0 for static signal, got {r}");
+            assert!(
+                r.abs() < 0.01,
+                "residuals should converge to ~0 for static signal, got {r}"
+            );
         }
     }
 
@@ -174,7 +180,11 @@ mod tests {
         // Step change
         let frame2 = make_frame(vec![20.0], 1);
         let residuals = pp.process(&frame2).unwrap();
-        assert!(residuals[0] > 5.0, "step change should produce large residual, got {}", residuals[0]);
+        assert!(
+            residuals[0] > 5.0,
+            "step change should produce large residual, got {}",
+            residuals[0]
+        );
     }
 
     #[test]

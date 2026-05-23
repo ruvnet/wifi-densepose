@@ -4,21 +4,20 @@
 //! PCK/OKS validation metrics, numerical gradient estimation, and checkpointing.
 //! All arithmetic uses f32. No external ML framework dependencies.
 
-use std::path::Path;
-use crate::graph_transformer::{CsiToPoseTransformer, TransformerConfig};
-use crate::embedding::{CsiAugmenter, ProjectionHead, info_nce_loss};
 use crate::dataset;
+use crate::embedding::{info_nce_loss, CsiAugmenter, ProjectionHead};
+use crate::graph_transformer::{CsiToPoseTransformer, TransformerConfig};
 use crate::sona::EwcRegularizer;
+use std::path::Path;
 
 /// Standard COCO keypoint sigmas for OKS (17 keypoints).
 pub const COCO_KEYPOINT_SIGMAS: [f32; 17] = [
-    0.026, 0.025, 0.025, 0.035, 0.035, 0.079, 0.079, 0.072, 0.072, 0.062,
-    0.062, 0.107, 0.107, 0.087, 0.087, 0.089, 0.089,
+    0.026, 0.025, 0.025, 0.035, 0.035, 0.079, 0.079, 0.072, 0.072, 0.062, 0.062, 0.107, 0.107,
+    0.087, 0.087, 0.089, 0.089,
 ];
 
 /// Symmetric keypoint pairs (left, right) indices into 17-keypoint COCO layout.
-const SYMMETRY_PAIRS: [(usize, usize); 5] =
-    [(5, 6), (7, 8), (9, 10), (11, 12), (13, 14)];
+const SYMMETRY_PAIRS: [(usize, usize); 5] = [(5, 6), (7, 8), (9, 10), (11, 12), (13, 14)];
 
 /// Individual loss terms from the composite loss (6 supervised + 1 contrastive).
 #[derive(Debug, Clone, Default)]
@@ -49,33 +48,49 @@ pub struct LossWeights {
 impl Default for LossWeights {
     fn default() -> Self {
         Self {
-            keypoint: 1.0, body_part: 0.5, uv: 0.5, temporal: 0.1,
-            edge: 0.2, symmetry: 0.1, contrastive: 0.0,
+            keypoint: 1.0,
+            body_part: 0.5,
+            uv: 0.5,
+            temporal: 0.1,
+            edge: 0.2,
+            symmetry: 0.1,
+            contrastive: 0.0,
         }
     }
 }
 
 /// Mean squared error on keypoints (x, y, confidence).
 pub fn keypoint_mse(pred: &[(f32, f32, f32)], target: &[(f32, f32, f32)]) -> f32 {
-    if pred.is_empty() || target.is_empty() { return 0.0; }
+    if pred.is_empty() || target.is_empty() {
+        return 0.0;
+    }
     let n = pred.len().min(target.len());
-    let sum: f32 = pred.iter().zip(target.iter()).take(n).map(|(p, t)| {
-        (p.0 - t.0).powi(2) + (p.1 - t.1).powi(2) + (p.2 - t.2).powi(2)
-    }).sum();
+    let sum: f32 = pred
+        .iter()
+        .zip(target.iter())
+        .take(n)
+        .map(|(p, t)| (p.0 - t.0).powi(2) + (p.1 - t.1).powi(2) + (p.2 - t.2).powi(2))
+        .sum();
     sum / n as f32
 }
 
 /// Cross-entropy loss for body part classification.
 /// `pred` = raw logits (length `n_samples * n_parts`), `target` = class indices.
 pub fn body_part_cross_entropy(pred: &[f32], target: &[u8], n_parts: usize) -> f32 {
-    if target.is_empty() || n_parts == 0 || pred.len() < n_parts { return 0.0; }
+    if target.is_empty() || n_parts == 0 || pred.len() < n_parts {
+        return 0.0;
+    }
     let n_samples = target.len().min(pred.len() / n_parts);
-    if n_samples == 0 { return 0.0; }
+    if n_samples == 0 {
+        return 0.0;
+    }
     let mut total = 0.0f32;
     for i in 0..n_samples {
         let logits = &pred[i * n_parts..(i + 1) * n_parts];
         let class = target[i] as usize;
-        if class >= n_parts { continue; }
+        if class >= n_parts {
+            continue;
+        }
         let max_l = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         let lse = logits.iter().map(|&l| (l - max_l).exp()).sum::<f32>().ln() + max_l;
         total += -logits[class] + lse;
@@ -86,53 +101,81 @@ pub fn body_part_cross_entropy(pred: &[f32], target: &[u8], n_parts: usize) -> f
 /// L1 loss on UV coordinates.
 pub fn uv_regression_loss(pu: &[f32], pv: &[f32], tu: &[f32], tv: &[f32]) -> f32 {
     let n = pu.len().min(pv.len()).min(tu.len()).min(tv.len());
-    if n == 0 { return 0.0; }
-    let s: f32 = (0..n).map(|i| (pu[i] - tu[i]).abs() + (pv[i] - tv[i]).abs()).sum();
+    if n == 0 {
+        return 0.0;
+    }
+    let s: f32 = (0..n)
+        .map(|i| (pu[i] - tu[i]).abs() + (pv[i] - tv[i]).abs())
+        .sum();
     s / n as f32
 }
 
 /// Temporal consistency loss: penalizes large frame-to-frame keypoint jumps.
 pub fn temporal_consistency_loss(prev: &[(f32, f32, f32)], curr: &[(f32, f32, f32)]) -> f32 {
     let n = prev.len().min(curr.len());
-    if n == 0 { return 0.0; }
-    let s: f32 = prev.iter().zip(curr.iter()).take(n)
-        .map(|(p, c)| (c.0 - p.0).powi(2) + (c.1 - p.1).powi(2)).sum();
+    if n == 0 {
+        return 0.0;
+    }
+    let s: f32 = prev
+        .iter()
+        .zip(curr.iter())
+        .take(n)
+        .map(|(p, c)| (c.0 - p.0).powi(2) + (c.1 - p.1).powi(2))
+        .sum();
     s / n as f32
 }
 
 /// Graph edge loss: penalizes deviation of bone lengths from expected values.
-pub fn graph_edge_loss(
-    kp: &[(f32, f32, f32)], edges: &[(usize, usize)], expected: &[f32],
-) -> f32 {
-    if edges.is_empty() || edges.len() != expected.len() { return 0.0; }
+pub fn graph_edge_loss(kp: &[(f32, f32, f32)], edges: &[(usize, usize)], expected: &[f32]) -> f32 {
+    if edges.is_empty() || edges.len() != expected.len() {
+        return 0.0;
+    }
     let (mut sum, mut cnt) = (0.0f32, 0usize);
     for (i, &(a, b)) in edges.iter().enumerate() {
-        if a >= kp.len() || b >= kp.len() { continue; }
+        if a >= kp.len() || b >= kp.len() {
+            continue;
+        }
         let d = ((kp[a].0 - kp[b].0).powi(2) + (kp[a].1 - kp[b].1).powi(2)).sqrt();
         sum += (d - expected[i]).powi(2);
         cnt += 1;
     }
-    if cnt == 0 { 0.0 } else { sum / cnt as f32 }
+    if cnt == 0 {
+        0.0
+    } else {
+        sum / cnt as f32
+    }
 }
 
 /// Symmetry loss: penalizes asymmetry between left-right limb pairs.
 pub fn symmetry_loss(kp: &[(f32, f32, f32)]) -> f32 {
-    if kp.len() < 15 { return 0.0; }
+    if kp.len() < 15 {
+        return 0.0;
+    }
     let (mut sum, mut cnt) = (0.0f32, 0usize);
     for &(l, r) in &SYMMETRY_PAIRS {
-        if l >= kp.len() || r >= kp.len() { continue; }
+        if l >= kp.len() || r >= kp.len() {
+            continue;
+        }
         let ld = ((kp[l].0 - kp[0].0).powi(2) + (kp[l].1 - kp[0].1).powi(2)).sqrt();
         let rd = ((kp[r].0 - kp[0].0).powi(2) + (kp[r].1 - kp[0].1).powi(2)).sqrt();
         sum += (ld - rd).powi(2);
         cnt += 1;
     }
-    if cnt == 0 { 0.0 } else { sum / cnt as f32 }
+    if cnt == 0 {
+        0.0
+    } else {
+        sum / cnt as f32
+    }
 }
 
 /// Weighted composite loss from individual components.
 pub fn composite_loss(c: &LossComponents, w: &LossWeights) -> f32 {
-    w.keypoint * c.keypoint + w.body_part * c.body_part + w.uv * c.uv
-        + w.temporal * c.temporal + w.edge * c.edge + w.symmetry * c.symmetry
+    w.keypoint * c.keypoint
+        + w.body_part * c.body_part
+        + w.uv * c.uv
+        + w.temporal * c.temporal
+        + w.edge * c.edge
+        + w.symmetry * c.symmetry
         + w.contrastive * c.contrastive
 }
 
@@ -148,7 +191,12 @@ pub struct SgdOptimizer {
 
 impl SgdOptimizer {
     pub fn new(lr: f32, momentum: f32, weight_decay: f32) -> Self {
-        Self { lr, momentum, weight_decay, velocity: Vec::new() }
+        Self {
+            lr,
+            momentum,
+            weight_decay,
+            velocity: Vec::new(),
+        }
     }
 
     /// v = mu*v + grad + wd*param; param -= lr*v
@@ -163,45 +211,75 @@ impl SgdOptimizer {
         }
     }
 
-    pub fn set_lr(&mut self, lr: f32) { self.lr = lr; }
-    pub fn state(&self) -> Vec<f32> { self.velocity.clone() }
-    pub fn load_state(&mut self, state: Vec<f32>) { self.velocity = state; }
+    pub fn set_lr(&mut self, lr: f32) {
+        self.lr = lr;
+    }
+    pub fn state(&self) -> Vec<f32> {
+        self.velocity.clone()
+    }
+    pub fn load_state(&mut self, state: Vec<f32>) {
+        self.velocity = state;
+    }
 }
 
 // ── Learning rate schedulers ───────────────────────────────────────────────
 
 /// Cosine annealing: decays LR from initial to min over total_steps.
-pub struct CosineScheduler { initial_lr: f32, min_lr: f32, total_steps: usize }
+pub struct CosineScheduler {
+    initial_lr: f32,
+    min_lr: f32,
+    total_steps: usize,
+}
 
 impl CosineScheduler {
     pub fn new(initial_lr: f32, min_lr: f32, total_steps: usize) -> Self {
-        Self { initial_lr, min_lr, total_steps }
+        Self {
+            initial_lr,
+            min_lr,
+            total_steps,
+        }
     }
     pub fn get_lr(&self, step: usize) -> f32 {
-        if self.total_steps == 0 { return self.initial_lr; }
+        if self.total_steps == 0 {
+            return self.initial_lr;
+        }
         let p = step.min(self.total_steps) as f32 / self.total_steps as f32;
-        self.min_lr + (self.initial_lr - self.min_lr) * (1.0 + (std::f32::consts::PI * p).cos()) / 2.0
+        self.min_lr
+            + (self.initial_lr - self.min_lr) * (1.0 + (std::f32::consts::PI * p).cos()) / 2.0
     }
 }
 
 /// Warmup + cosine annealing: linear ramp 0->initial_lr then cosine decay.
 pub struct WarmupCosineScheduler {
-    warmup_steps: usize, initial_lr: f32, min_lr: f32, total_steps: usize,
+    warmup_steps: usize,
+    initial_lr: f32,
+    min_lr: f32,
+    total_steps: usize,
 }
 
 impl WarmupCosineScheduler {
     pub fn new(warmup_steps: usize, initial_lr: f32, min_lr: f32, total_steps: usize) -> Self {
-        Self { warmup_steps, initial_lr, min_lr, total_steps }
+        Self {
+            warmup_steps,
+            initial_lr,
+            min_lr,
+            total_steps,
+        }
     }
     pub fn get_lr(&self, step: usize) -> f32 {
         if step < self.warmup_steps {
-            if self.warmup_steps == 0 { return self.initial_lr; }
+            if self.warmup_steps == 0 {
+                return self.initial_lr;
+            }
             return self.initial_lr * (step as f32 / self.warmup_steps as f32);
         }
         let cs = self.total_steps.saturating_sub(self.warmup_steps);
-        if cs == 0 { return self.min_lr; }
+        if cs == 0 {
+            return self.min_lr;
+        }
         let p = (step - self.warmup_steps).min(cs) as f32 / cs as f32;
-        self.min_lr + (self.initial_lr - self.min_lr) * (1.0 + (std::f32::consts::PI * p).cos()) / 2.0
+        self.min_lr
+            + (self.initial_lr - self.min_lr) * (1.0 + (std::f32::consts::PI * p).cos()) / 2.0
     }
 }
 
@@ -210,40 +288,69 @@ impl WarmupCosineScheduler {
 /// Percentage of Correct Keypoints at a distance threshold.
 pub fn pck_at_threshold(pred: &[(f32, f32, f32)], target: &[(f32, f32, f32)], thr: f32) -> f32 {
     let n = pred.len().min(target.len());
-    if n == 0 { return 0.0; }
+    if n == 0 {
+        return 0.0;
+    }
     let (mut correct, mut total) = (0usize, 0usize);
     for i in 0..n {
-        if target[i].2 <= 0.0 { continue; }
+        if target[i].2 <= 0.0 {
+            continue;
+        }
         total += 1;
         let d = ((pred[i].0 - target[i].0).powi(2) + (pred[i].1 - target[i].1).powi(2)).sqrt();
-        if d <= thr { correct += 1; }
+        if d <= thr {
+            correct += 1;
+        }
     }
-    if total == 0 { 0.0 } else { correct as f32 / total as f32 }
+    if total == 0 {
+        0.0
+    } else {
+        correct as f32 / total as f32
+    }
 }
 
 /// Object Keypoint Similarity for a single instance.
 pub fn oks_single(
-    pred: &[(f32, f32, f32)], target: &[(f32, f32, f32)], sigmas: &[f32], area: f32,
+    pred: &[(f32, f32, f32)],
+    target: &[(f32, f32, f32)],
+    sigmas: &[f32],
+    area: f32,
 ) -> f32 {
     let n = pred.len().min(target.len()).min(sigmas.len());
-    if n == 0 || area <= 0.0 { return 0.0; }
+    if n == 0 || area <= 0.0 {
+        return 0.0;
+    }
     let (mut sum, mut vis) = (0.0f32, 0usize);
     for i in 0..n {
-        if target[i].2 <= 0.0 { continue; }
+        if target[i].2 <= 0.0 {
+            continue;
+        }
         vis += 1;
         let dsq = (pred[i].0 - target[i].0).powi(2) + (pred[i].1 - target[i].1).powi(2);
         let var = 2.0 * sigmas[i] * sigmas[i] * area;
-        if var > 0.0 { sum += (-dsq / (2.0 * var)).exp(); }
+        if var > 0.0 {
+            sum += (-dsq / (2.0 * var)).exp();
+        }
     }
-    if vis == 0 { 0.0 } else { sum / vis as f32 }
+    if vis == 0 {
+        0.0
+    } else {
+        sum / vis as f32
+    }
 }
 
 /// Mean OKS over multiple predictions (simplified mAP).
 pub fn oks_map(preds: &[Vec<(f32, f32, f32)>], targets: &[Vec<(f32, f32, f32)>]) -> f32 {
     let n = preds.len().min(targets.len());
-    if n == 0 { return 0.0; }
-    let s: f32 = preds.iter().zip(targets.iter()).take(n)
-        .map(|(p, t)| oks_single(p, t, &COCO_KEYPOINT_SIGMAS, 1.0)).sum();
+    if n == 0 {
+        return 0.0;
+    }
+    let s: f32 = preds
+        .iter()
+        .zip(targets.iter())
+        .take(n)
+        .map(|(p, t)| oks_single(p, t, &COCO_KEYPOINT_SIGMAS, 1.0))
+        .sum();
     s / n as f32
 }
 
@@ -288,19 +395,35 @@ pub struct TrainingSample {
 pub fn from_dataset_sample(ds: &dataset::TrainingSample) -> TrainingSample {
     let csi_features = ds.csi_window.clone();
     let target_keypoints: Vec<(f32, f32, f32)> = ds.pose_label.keypoints.to_vec();
-    let target_body_parts: Vec<u8> = ds.pose_label.body_parts.iter()
+    let target_body_parts: Vec<u8> = ds
+        .pose_label
+        .body_parts
+        .iter()
         .map(|bp| bp.part_id)
         .collect();
     let (tu, tv) = if ds.pose_label.body_parts.is_empty() {
         (Vec::new(), Vec::new())
     } else {
-        let u: Vec<f32> = ds.pose_label.body_parts.iter()
-            .flat_map(|bp| bp.u_coords.iter().copied()).collect();
-        let v: Vec<f32> = ds.pose_label.body_parts.iter()
-            .flat_map(|bp| bp.v_coords.iter().copied()).collect();
+        let u: Vec<f32> = ds
+            .pose_label
+            .body_parts
+            .iter()
+            .flat_map(|bp| bp.u_coords.iter().copied())
+            .collect();
+        let v: Vec<f32> = ds
+            .pose_label
+            .body_parts
+            .iter()
+            .flat_map(|bp| bp.v_coords.iter().copied())
+            .collect();
         (u, v)
     };
-    TrainingSample { csi_features, target_keypoints, target_body_parts, target_uv: (tu, tv) }
+    TrainingSample {
+        csi_features,
+        target_keypoints,
+        target_body_parts,
+        target_uv: (tu, tv),
+    }
 }
 
 // ── Checkpoint ─────────────────────────────────────────────────────────────
@@ -308,10 +431,18 @@ pub fn from_dataset_sample(ds: &dataset::TrainingSample) -> TrainingSample {
 /// Serializable version of EpochStats for checkpoint storage.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EpochStatsSerializable {
-    pub epoch: usize, pub train_loss: f32, pub val_loss: f32,
-    pub pck_02: f32, pub oks_map: f32, pub lr: f32,
-    pub loss_keypoint: f32, pub loss_body_part: f32, pub loss_uv: f32,
-    pub loss_temporal: f32, pub loss_edge: f32, pub loss_symmetry: f32,
+    pub epoch: usize,
+    pub train_loss: f32,
+    pub val_loss: f32,
+    pub pck_02: f32,
+    pub oks_map: f32,
+    pub lr: f32,
+    pub loss_keypoint: f32,
+    pub loss_body_part: f32,
+    pub loss_uv: f32,
+    pub loss_temporal: f32,
+    pub loss_edge: f32,
+    pub loss_symmetry: f32,
 }
 
 /// Serializable training checkpoint.
@@ -326,14 +457,12 @@ pub struct Checkpoint {
 
 impl Checkpoint {
     pub fn save_to_file(&self, path: &Path) -> std::io::Result<()> {
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         std::fs::write(path, json)
     }
     pub fn load_from_file(path: &Path) -> std::io::Result<Self> {
         let json = std::fs::read_to_string(path)?;
-        serde_json::from_str(&json)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+        serde_json::from_str(&json).map_err(std::io::Error::other)
     }
 }
 
@@ -353,10 +482,18 @@ impl EpochStats {
     fn to_serializable(&self) -> EpochStatsSerializable {
         let c = &self.loss_components;
         EpochStatsSerializable {
-            epoch: self.epoch, train_loss: self.train_loss, val_loss: self.val_loss,
-            pck_02: self.pck_02, oks_map: self.oks_map, lr: self.lr,
-            loss_keypoint: c.keypoint, loss_body_part: c.body_part, loss_uv: c.uv,
-            loss_temporal: c.temporal, loss_edge: c.edge, loss_symmetry: c.symmetry,
+            epoch: self.epoch,
+            train_loss: self.train_loss,
+            val_loss: self.val_loss,
+            pck_02: self.pck_02,
+            oks_map: self.oks_map,
+            lr: self.lr,
+            loss_keypoint: c.keypoint,
+            loss_body_part: c.body_part,
+            loss_uv: c.uv,
+            loss_temporal: c.temporal,
+            loss_edge: c.edge,
+            loss_symmetry: c.symmetry,
         }
     }
 }
@@ -393,8 +530,15 @@ pub struct TrainerConfig {
 impl Default for TrainerConfig {
     fn default() -> Self {
         Self {
-            epochs: 100, batch_size: 32, lr: 0.01, momentum: 0.9, weight_decay: 1e-4,
-            warmup_epochs: 5, min_lr: 1e-6, early_stop_patience: 10, checkpoint_every: 10,
+            epochs: 100,
+            batch_size: 32,
+            lr: 0.01,
+            momentum: 0.9,
+            weight_decay: 1e-4,
+            warmup_epochs: 5,
+            min_lr: 1e-6,
+            early_stop_patience: 10,
+            checkpoint_every: 10,
             loss_weights: LossWeights::default(),
             contrastive_loss_weight: 0.0,
             pretrain_temperature: 0.07,
@@ -429,14 +573,27 @@ impl Trainer {
     pub fn new(config: TrainerConfig) -> Self {
         let optimizer = SgdOptimizer::new(config.lr, config.momentum, config.weight_decay);
         let scheduler = WarmupCosineScheduler::new(
-            config.warmup_epochs, config.lr, config.min_lr, config.epochs,
+            config.warmup_epochs,
+            config.lr,
+            config.min_lr,
+            config.epochs,
         );
-        let params: Vec<f32> = (0..64).map(|i| (i as f32 * 0.7 + 0.3).sin() * 0.1).collect();
+        let params: Vec<f32> = (0..64)
+            .map(|i| (i as f32 * 0.7 + 0.3).sin() * 0.1)
+            .collect();
         let best_params = params.clone();
         Self {
-            config, optimizer, scheduler, params, history: Vec::new(),
-            best_val_loss: f32::MAX, best_epoch: 0, epochs_without_improvement: 0,
-            best_params, transformer: None, transformer_config: None,
+            config,
+            optimizer,
+            scheduler,
+            params,
+            history: Vec::new(),
+            best_val_loss: f32::MAX,
+            best_epoch: 0,
+            epochs_without_improvement: 0,
+            best_params,
+            transformer: None,
+            transformer_config: None,
             embedding_ewc: None,
         }
     }
@@ -447,26 +604,43 @@ impl Trainer {
         let params = transformer.flatten_weights();
         let optimizer = SgdOptimizer::new(config.lr, config.momentum, config.weight_decay);
         let scheduler = WarmupCosineScheduler::new(
-            config.warmup_epochs, config.lr, config.min_lr, config.epochs,
+            config.warmup_epochs,
+            config.lr,
+            config.min_lr,
+            config.epochs,
         );
         let tc = transformer.config().clone();
         let best_params = params.clone();
         Self {
-            config, optimizer, scheduler, params, history: Vec::new(),
-            best_val_loss: f32::MAX, best_epoch: 0, epochs_without_improvement: 0,
-            best_params, transformer: Some(transformer), transformer_config: Some(tc),
+            config,
+            optimizer,
+            scheduler,
+            params,
+            history: Vec::new(),
+            best_val_loss: f32::MAX,
+            best_epoch: 0,
+            epochs_without_improvement: 0,
+            best_params,
+            transformer: Some(transformer),
+            transformer_config: Some(tc),
             embedding_ewc: None,
         }
     }
 
     /// Access the transformer (if any).
-    pub fn transformer(&self) -> Option<&CsiToPoseTransformer> { self.transformer.as_ref() }
+    pub fn transformer(&self) -> Option<&CsiToPoseTransformer> {
+        self.transformer.as_ref()
+    }
 
     /// Get a mutable reference to the transformer.
-    pub fn transformer_mut(&mut self) -> Option<&mut CsiToPoseTransformer> { self.transformer.as_mut() }
+    pub fn transformer_mut(&mut self) -> Option<&mut CsiToPoseTransformer> {
+        self.transformer.as_mut()
+    }
 
     /// Return current flattened params (transformer or simple).
-    pub fn params(&self) -> &[f32] { &self.params }
+    pub fn params(&self) -> &[f32] {
+        &self.params
+    }
 
     pub fn train_epoch(&mut self, samples: &[TrainingSample]) -> EpochStats {
         let epoch = self.history.len();
@@ -475,18 +649,16 @@ impl Trainer {
 
         let mut acc = LossComponents::default();
         let bs = self.config.batch_size.max(1);
-        let nb = (samples.len() + bs - 1) / bs;
+        let nb = samples.len().div_ceil(bs);
         let tc = self.transformer_config.clone();
 
         for bi in 0..nb {
             let batch = &samples[bi * bs..(bi * bs + bs).min(samples.len())];
             let snap = self.params.clone();
             let w = self.config.loss_weights.clone();
-            let loss_fn = |p: &[f32]| {
-                match &tc {
-                    Some(tconf) => Self::batch_loss_with_transformer(p, batch, &w, tconf),
-                    None => Self::batch_loss(p, batch, &w),
-                }
+            let loss_fn = |p: &[f32]| match &tc {
+                Some(tconf) => Self::batch_loss_with_transformer(p, batch, &w, tconf),
+                None => Self::batch_loss(p, batch, &w),
             };
             let mut grad = estimate_gradient(loss_fn, &snap, 1e-4);
             clip_gradients(&mut grad, 1.0);
@@ -503,15 +675,24 @@ impl Trainer {
 
         if nb > 0 {
             let inv = 1.0 / nb as f32;
-            acc.keypoint *= inv; acc.body_part *= inv; acc.uv *= inv;
-            acc.temporal *= inv; acc.edge *= inv; acc.symmetry *= inv;
+            acc.keypoint *= inv;
+            acc.body_part *= inv;
+            acc.uv *= inv;
+            acc.temporal *= inv;
+            acc.edge *= inv;
+            acc.symmetry *= inv;
         }
 
         let train_loss = composite_loss(&acc, &self.config.loss_weights);
         let (pck, oks) = self.evaluate_metrics(samples);
         let stats = EpochStats {
-            epoch, train_loss, val_loss: train_loss, pck_02: pck, oks_map: oks,
-            lr, loss_components: acc,
+            epoch,
+            train_loss,
+            val_loss: train_loss,
+            pck_02: pck,
+            oks_map: oks,
+            lr,
+            loss_components: acc,
         };
         self.history.push(stats.clone());
         stats
@@ -525,7 +706,11 @@ impl Trainer {
         self.history.get(self.best_epoch)
     }
 
-    pub fn run_training(&mut self, train: &[TrainingSample], val: &[TrainingSample]) -> TrainingResult {
+    pub fn run_training(
+        &mut self,
+        train: &[TrainingSample],
+        val: &[TrainingSample],
+    ) -> TrainingResult {
         let start = std::time::Instant::now();
         for _ in 0..self.config.epochs {
             let mut stats = self.train_epoch(train);
@@ -533,7 +718,9 @@ impl Trainer {
             let val_loss = if !val.is_empty() {
                 let c = Self::batch_loss_components_impl(&self.params, val, tc.as_ref());
                 composite_loss(&c, &self.config.loss_weights)
-            } else { stats.train_loss };
+            } else {
+                stats.train_loss
+            };
             stats.val_loss = val_loss;
             if !val.is_empty() {
                 let (pck, oks) = self.evaluate_metrics(val);
@@ -553,17 +740,27 @@ impl Trainer {
             } else {
                 self.epochs_without_improvement += 1;
             }
-            if self.should_stop() { break; }
+            if self.should_stop() {
+                break;
+            }
         }
         // Restore best-epoch params for checkpoint and downstream use
         self.params = self.best_params.clone();
         let best = self.best_metrics().cloned().unwrap_or(EpochStats {
-            epoch: 0, train_loss: f32::MAX, val_loss: f32::MAX, pck_02: 0.0,
-            oks_map: 0.0, lr: self.config.lr, loss_components: LossComponents::default(),
+            epoch: 0,
+            train_loss: f32::MAX,
+            val_loss: f32::MAX,
+            pck_02: 0.0,
+            oks_map: 0.0,
+            lr: self.config.lr,
+            loss_components: LossComponents::default(),
         });
         TrainingResult {
-            best_epoch: best.epoch, best_pck: best.pck_02, best_oks: best.oks_map,
-            history: self.history.clone(), total_time_secs: start.elapsed().as_secs_f64(),
+            best_epoch: best.epoch,
+            best_pck: best.pck_02,
+            best_oks: best.oks_map,
+            history: self.history.clone(),
+            total_time_secs: start.elapsed().as_secs_f64(),
         }
     }
 
@@ -594,7 +791,7 @@ impl Trainer {
         self.optimizer.set_lr(lr);
 
         let bs = self.config.batch_size.max(1);
-        let nb = (csi_windows.len() + bs - 1) / bs;
+        let nb = csi_windows.len().div_ceil(bs);
         let mut total_loss = 0.0f32;
 
         let tc = self.transformer_config.clone();
@@ -624,7 +821,9 @@ impl Trainer {
 
             // Build augmented views for the batch
             let seed_base = (epoch * 10000 + bi) as u64;
-            let aug_pairs: Vec<_> = batch.iter().enumerate()
+            let aug_pairs: Vec<_> = batch
+                .iter()
+                .enumerate()
                 .map(|(k, w)| augmenter.augment_pair(w, seed_base + k as u64))
                 .collect();
 
@@ -649,20 +848,32 @@ impl Trainer {
                     let feats_a = t.embed(va);
                     let mut pooled_a = vec![0.0f32; d];
                     for f in &feats_a {
-                        for (p, &v) in pooled_a.iter_mut().zip(f.iter()) { *p += v; }
+                        for (p, &v) in pooled_a.iter_mut().zip(f.iter()) {
+                            *p += v;
+                        }
                     }
                     let n = feats_a.len() as f32;
-                    if n > 0.0 { for p in pooled_a.iter_mut() { *p /= n; } }
+                    if n > 0.0 {
+                        for p in pooled_a.iter_mut() {
+                            *p /= n;
+                        }
+                    }
                     embs_a.push(proj.forward(&pooled_a));
 
                     // Mean-pool body features for view B
                     let feats_b = t.embed(vb);
                     let mut pooled_b = vec![0.0f32; d];
                     for f in &feats_b {
-                        for (p, &v) in pooled_b.iter_mut().zip(f.iter()) { *p += v; }
+                        for (p, &v) in pooled_b.iter_mut().zip(f.iter()) {
+                            *p += v;
+                        }
                     }
                     let n = feats_b.len() as f32;
-                    if n > 0.0 { for p in pooled_b.iter_mut() { *p /= n; } }
+                    if n > 0.0 {
+                        for p in pooled_b.iter_mut() {
+                            *p /= n;
+                        }
+                    }
                     embs_b.push(proj.forward(&pooled_b));
                 }
 
@@ -673,11 +884,12 @@ impl Trainer {
             total_loss += batch_loss;
 
             // Estimate gradient via central differences on combined params
-            let mut grad = estimate_gradient(&loss_fn, &combined, 1e-4);
+            let mut grad = estimate_gradient(loss_fn, &combined, 1e-4);
             clip_gradients(&mut grad, 1.0);
 
             // Update transformer params
-            self.optimizer.step(&mut self.params, &grad[..t_param_count]);
+            self.optimizer
+                .step(&mut self.params, &grad[..t_param_count]);
 
             // Update projection head params
             let mut proj_params = proj_flat.clone();
@@ -693,16 +905,30 @@ impl Trainer {
     }
 
     pub fn checkpoint(&self) -> Checkpoint {
-        let m = self.history.last().map(|s| s.to_serializable()).unwrap_or(
-            EpochStatsSerializable {
-                epoch: 0, train_loss: 0.0, val_loss: 0.0, pck_02: 0.0,
-                oks_map: 0.0, lr: self.config.lr, loss_keypoint: 0.0, loss_body_part: 0.0,
-                loss_uv: 0.0, loss_temporal: 0.0, loss_edge: 0.0, loss_symmetry: 0.0,
-            },
-        );
+        let m =
+            self.history
+                .last()
+                .map(|s| s.to_serializable())
+                .unwrap_or(EpochStatsSerializable {
+                    epoch: 0,
+                    train_loss: 0.0,
+                    val_loss: 0.0,
+                    pck_02: 0.0,
+                    oks_map: 0.0,
+                    lr: self.config.lr,
+                    loss_keypoint: 0.0,
+                    loss_body_part: 0.0,
+                    loss_uv: 0.0,
+                    loss_temporal: 0.0,
+                    loss_edge: 0.0,
+                    loss_symmetry: 0.0,
+                });
         Checkpoint {
-            epoch: self.history.len(), params: self.params.clone(),
-            optimizer_state: self.optimizer.state(), best_loss: self.best_val_loss, metrics: m,
+            epoch: self.history.len(),
+            params: self.params.clone(),
+            optimizer_state: self.optimizer.state(),
+            best_loss: self.best_val_loss,
+            metrics: m,
         }
     }
 
@@ -711,9 +937,15 @@ impl Trainer {
     }
 
     fn batch_loss_with_transformer(
-        params: &[f32], batch: &[TrainingSample], w: &LossWeights, tc: &TransformerConfig,
+        params: &[f32],
+        batch: &[TrainingSample],
+        w: &LossWeights,
+        tc: &TransformerConfig,
     ) -> f32 {
-        composite_loss(&Self::batch_loss_components_impl(params, batch, Some(tc)), w)
+        composite_loss(
+            &Self::batch_loss_components_impl(params, batch, Some(tc)),
+            w,
+        )
     }
 
     fn batch_loss_components(params: &[f32], batch: &[TrainingSample]) -> LossComponents {
@@ -721,9 +953,13 @@ impl Trainer {
     }
 
     fn batch_loss_components_impl(
-        params: &[f32], batch: &[TrainingSample], tc: Option<&TransformerConfig>,
+        params: &[f32],
+        batch: &[TrainingSample],
+        tc: Option<&TransformerConfig>,
     ) -> LossComponents {
-        if batch.is_empty() { return LossComponents::default(); }
+        if batch.is_empty() {
+            return LossComponents::default();
+        }
         let mut acc = LossComponents::default();
         let mut prev_kp: Option<Vec<(f32, f32, f32)>> = None;
         for sample in batch {
@@ -733,16 +969,45 @@ impl Trainer {
             };
             acc.keypoint += keypoint_mse(&pred_kp, &sample.target_keypoints);
             let n_parts = 24usize;
-            let logits: Vec<f32> = sample.target_body_parts.iter().flat_map(|_| {
-                (0..n_parts).map(|j| if j < params.len() { params[j] * 0.1 } else { 0.0 })
-                    .collect::<Vec<f32>>()
-            }).collect();
+            let logits: Vec<f32> = sample
+                .target_body_parts
+                .iter()
+                .flat_map(|_| {
+                    (0..n_parts)
+                        .map(|j| {
+                            if j < params.len() {
+                                params[j] * 0.1
+                            } else {
+                                0.0
+                            }
+                        })
+                        .collect::<Vec<f32>>()
+                })
+                .collect();
             acc.body_part += body_part_cross_entropy(&logits, &sample.target_body_parts, n_parts);
             let (ref tu, ref tv) = sample.target_uv;
-            let pu: Vec<f32> = tu.iter().enumerate()
-                .map(|(i, &u)| u + if i < params.len() { params[i] * 0.01 } else { 0.0 }).collect();
-            let pv: Vec<f32> = tv.iter().enumerate()
-                .map(|(i, &v)| v + if i < params.len() { params[i] * 0.01 } else { 0.0 }).collect();
+            let pu: Vec<f32> = tu
+                .iter()
+                .enumerate()
+                .map(|(i, &u)| {
+                    u + if i < params.len() {
+                        params[i] * 0.01
+                    } else {
+                        0.0
+                    }
+                })
+                .collect();
+            let pv: Vec<f32> = tv
+                .iter()
+                .enumerate()
+                .map(|(i, &v)| {
+                    v + if i < params.len() {
+                        params[i] * 0.01
+                    } else {
+                        0.0
+                    }
+                })
+                .collect();
             acc.uv += uv_regression_loss(&pu, &pv, tu, tv);
             if let Some(ref prev) = prev_kp {
                 acc.temporal += temporal_consistency_loss(prev, &pred_kp);
@@ -751,37 +1016,50 @@ impl Trainer {
             prev_kp = Some(pred_kp);
         }
         let inv = 1.0 / batch.len() as f32;
-        acc.keypoint *= inv; acc.body_part *= inv; acc.uv *= inv;
-        acc.temporal *= inv; acc.symmetry *= inv;
+        acc.keypoint *= inv;
+        acc.body_part *= inv;
+        acc.uv *= inv;
+        acc.temporal *= inv;
+        acc.symmetry *= inv;
         acc
     }
 
     fn predict_keypoints(params: &[f32], sample: &TrainingSample) -> Vec<(f32, f32, f32)> {
         let n_kp = sample.target_keypoints.len().max(17);
-        let feats: Vec<f32> = sample.csi_features.iter().flat_map(|v| v.iter().copied()).collect();
-        (0..n_kp).map(|k| {
-            let base = k * 3;
-            let (mut x, mut y) = (0.0f32, 0.0f32);
-            for (i, &f) in feats.iter().take(params.len()).enumerate() {
-                let pi = (base + i) % params.len();
-                x += f * params[pi] * 0.01;
-                y += f * params[(pi + 1) % params.len()] * 0.01;
-            }
-            if base < params.len() {
-                x += params[base % params.len()];
-                y += params[(base + 1) % params.len()];
-            }
-            let c = if base + 2 < params.len() {
-                params[(base + 2) % params.len()].clamp(0.0, 1.0)
-            } else { 0.5 };
-            (x, y, c)
-        }).collect()
+        let feats: Vec<f32> = sample
+            .csi_features
+            .iter()
+            .flat_map(|v| v.iter().copied())
+            .collect();
+        (0..n_kp)
+            .map(|k| {
+                let base = k * 3;
+                let (mut x, mut y) = (0.0f32, 0.0f32);
+                for (i, &f) in feats.iter().take(params.len()).enumerate() {
+                    let pi = (base + i) % params.len();
+                    x += f * params[pi] * 0.01;
+                    y += f * params[(pi + 1) % params.len()] * 0.01;
+                }
+                if base < params.len() {
+                    x += params[base % params.len()];
+                    y += params[(base + 1) % params.len()];
+                }
+                let c = if base + 2 < params.len() {
+                    params[(base + 2) % params.len()].clamp(0.0, 1.0)
+                } else {
+                    0.5
+                };
+                (x, y, c)
+            })
+            .collect()
     }
 
     /// Predict keypoints using the graph transformer. Uses zero-init
     /// constructor (fast) then overwrites all weights from params.
     fn predict_keypoints_transformer(
-        params: &[f32], sample: &TrainingSample, tc: &TransformerConfig,
+        params: &[f32],
+        sample: &TrainingSample,
+        tc: &TransformerConfig,
     ) -> Vec<(f32, f32, f32)> {
         let mut t = CsiToPoseTransformer::zeros(tc.clone());
         if t.unflatten_weights(params).is_err() {
@@ -792,16 +1070,23 @@ impl Trainer {
     }
 
     fn evaluate_metrics(&self, samples: &[TrainingSample]) -> (f32, f32) {
-        if samples.is_empty() { return (0.0, 0.0); }
-        let preds: Vec<Vec<_>> = samples.iter().map(|s| {
-            match &self.transformer_config {
+        if samples.is_empty() {
+            return (0.0, 0.0);
+        }
+        let preds: Vec<Vec<_>> = samples
+            .iter()
+            .map(|s| match &self.transformer_config {
                 Some(tc) => Self::predict_keypoints_transformer(&self.params, s, tc),
                 None => Self::predict_keypoints(&self.params, s),
-            }
-        }).collect();
+            })
+            .collect();
         let targets: Vec<Vec<_>> = samples.iter().map(|s| s.target_keypoints.clone()).collect();
-        let pck = preds.iter().zip(targets.iter())
-            .map(|(p, t)| pck_at_threshold(p, t, 0.2)).sum::<f32>() / samples.len() as f32;
+        let pck = preds
+            .iter()
+            .zip(targets.iter())
+            .map(|(p, t)| pck_at_threshold(p, t, 0.2))
+            .sum::<f32>()
+            / samples.len() as f32;
         (pck, oks_map(&preds, &targets))
     }
 
@@ -860,13 +1145,18 @@ mod tests {
     use super::*;
 
     fn mkp(off: f32) -> Vec<(f32, f32, f32)> {
-        (0..17).map(|i| (i as f32 + off, i as f32 * 2.0 + off, 1.0)).collect()
+        (0..17)
+            .map(|i| (i as f32 + off, i as f32 * 2.0 + off, 1.0))
+            .collect()
     }
 
     fn symmetric_pose() -> Vec<(f32, f32, f32)> {
         let mut kp = vec![(0.0f32, 0.0f32, 1.0f32); 17];
         kp[0] = (5.0, 5.0, 1.0);
-        for &(l, r) in &SYMMETRY_PAIRS { kp[l] = (3.0, 5.0, 1.0); kp[r] = (7.0, 5.0, 1.0); }
+        for &(l, r) in &SYMMETRY_PAIRS {
+            kp[l] = (3.0, 5.0, 1.0);
+            kp[r] = (7.0, 5.0, 1.0);
+        }
         kp
     }
 
@@ -879,71 +1169,136 @@ mod tests {
         }
     }
 
-    #[test] fn keypoint_mse_zero_for_identical() { assert_eq!(keypoint_mse(&mkp(0.0), &mkp(0.0)), 0.0); }
-    #[test] fn keypoint_mse_positive_for_different() { assert!(keypoint_mse(&mkp(0.0), &mkp(1.0)) > 0.0); }
-    #[test] fn keypoint_mse_symmetric() {
-        let (ab, ba) = (keypoint_mse(&mkp(0.0), &mkp(1.0)), keypoint_mse(&mkp(1.0), &mkp(0.0)));
+    #[test]
+    fn keypoint_mse_zero_for_identical() {
+        assert_eq!(keypoint_mse(&mkp(0.0), &mkp(0.0)), 0.0);
+    }
+    #[test]
+    fn keypoint_mse_positive_for_different() {
+        assert!(keypoint_mse(&mkp(0.0), &mkp(1.0)) > 0.0);
+    }
+    #[test]
+    fn keypoint_mse_symmetric() {
+        let (ab, ba) = (
+            keypoint_mse(&mkp(0.0), &mkp(1.0)),
+            keypoint_mse(&mkp(1.0), &mkp(0.0)),
+        );
         assert!((ab - ba).abs() < 1e-6, "{ab} vs {ba}");
     }
-    #[test] fn temporal_consistency_zero_for_static() {
+    #[test]
+    fn temporal_consistency_zero_for_static() {
         assert_eq!(temporal_consistency_loss(&mkp(0.0), &mkp(0.0)), 0.0);
     }
-    #[test] fn temporal_consistency_positive_for_motion() {
+    #[test]
+    fn temporal_consistency_positive_for_motion() {
         assert!(temporal_consistency_loss(&mkp(0.0), &mkp(1.0)) > 0.0);
     }
-    #[test] fn symmetry_loss_zero_for_symmetric_pose() {
+    #[test]
+    fn symmetry_loss_zero_for_symmetric_pose() {
         assert!(symmetry_loss(&symmetric_pose()) < 1e-6);
     }
-    #[test] fn graph_edge_loss_zero_when_correct() {
-        let kp = vec![(0.0,0.0,1.0),(3.0,4.0,1.0),(6.0,0.0,1.0)];
-        assert!(graph_edge_loss(&kp, &[(0,1),(1,2)], &[5.0, 5.0]) < 1e-6);
+    #[test]
+    fn graph_edge_loss_zero_when_correct() {
+        let kp = vec![(0.0, 0.0, 1.0), (3.0, 4.0, 1.0), (6.0, 0.0, 1.0)];
+        assert!(graph_edge_loss(&kp, &[(0, 1), (1, 2)], &[5.0, 5.0]) < 1e-6);
     }
-    #[test] fn composite_loss_respects_weights() {
-        let c = LossComponents { keypoint:1.0, body_part:1.0, uv:1.0, temporal:1.0, edge:1.0, symmetry:1.0, contrastive:0.0 };
-        let w1 = LossWeights { keypoint:1.0, body_part:0.0, uv:0.0, temporal:0.0, edge:0.0, symmetry:0.0, contrastive:0.0 };
-        let w2 = LossWeights { keypoint:2.0, body_part:0.0, uv:0.0, temporal:0.0, edge:0.0, symmetry:0.0, contrastive:0.0 };
+    #[test]
+    fn composite_loss_respects_weights() {
+        let c = LossComponents {
+            keypoint: 1.0,
+            body_part: 1.0,
+            uv: 1.0,
+            temporal: 1.0,
+            edge: 1.0,
+            symmetry: 1.0,
+            contrastive: 0.0,
+        };
+        let w1 = LossWeights {
+            keypoint: 1.0,
+            body_part: 0.0,
+            uv: 0.0,
+            temporal: 0.0,
+            edge: 0.0,
+            symmetry: 0.0,
+            contrastive: 0.0,
+        };
+        let w2 = LossWeights {
+            keypoint: 2.0,
+            body_part: 0.0,
+            uv: 0.0,
+            temporal: 0.0,
+            edge: 0.0,
+            symmetry: 0.0,
+            contrastive: 0.0,
+        };
         assert!((composite_loss(&c, &w2) - 2.0 * composite_loss(&c, &w1)).abs() < 1e-6);
-        let wz = LossWeights { keypoint:0.0, body_part:0.0, uv:0.0, temporal:0.0, edge:0.0, symmetry:0.0, contrastive:0.0 };
+        let wz = LossWeights {
+            keypoint: 0.0,
+            body_part: 0.0,
+            uv: 0.0,
+            temporal: 0.0,
+            edge: 0.0,
+            symmetry: 0.0,
+            contrastive: 0.0,
+        };
         assert_eq!(composite_loss(&c, &wz), 0.0);
     }
-    #[test] fn cosine_scheduler_starts_at_initial() {
+    #[test]
+    fn cosine_scheduler_starts_at_initial() {
         assert!((CosineScheduler::new(0.01, 0.0001, 100).get_lr(0) - 0.01).abs() < 1e-6);
     }
-    #[test] fn cosine_scheduler_ends_at_min() {
+    #[test]
+    fn cosine_scheduler_ends_at_min() {
         assert!((CosineScheduler::new(0.01, 0.0001, 100).get_lr(100) - 0.0001).abs() < 1e-6);
     }
-    #[test] fn cosine_scheduler_midpoint() {
+    #[test]
+    fn cosine_scheduler_midpoint() {
         assert!((CosineScheduler::new(0.01, 0.0, 100).get_lr(50) - 0.005).abs() < 1e-4);
     }
-    #[test] fn warmup_starts_at_zero() {
+    #[test]
+    fn warmup_starts_at_zero() {
         assert!(WarmupCosineScheduler::new(10, 0.01, 0.0001, 100).get_lr(0) < 1e-6);
     }
-    #[test] fn warmup_reaches_initial_at_warmup_end() {
+    #[test]
+    fn warmup_reaches_initial_at_warmup_end() {
         assert!((WarmupCosineScheduler::new(10, 0.01, 0.0001, 100).get_lr(10) - 0.01).abs() < 1e-6);
     }
-    #[test] fn pck_perfect_prediction_is_1() {
+    #[test]
+    fn pck_perfect_prediction_is_1() {
         assert!((pck_at_threshold(&mkp(0.0), &mkp(0.0), 0.2) - 1.0).abs() < 1e-6);
     }
-    #[test] fn pck_all_wrong_is_0() {
+    #[test]
+    fn pck_all_wrong_is_0() {
         assert!(pck_at_threshold(&mkp(0.0), &mkp(100.0), 0.2) < 1e-6);
     }
-    #[test] fn oks_perfect_is_1() {
+    #[test]
+    fn oks_perfect_is_1() {
         assert!((oks_single(&mkp(0.0), &mkp(0.0), &COCO_KEYPOINT_SIGMAS, 1.0) - 1.0).abs() < 1e-6);
     }
-    #[test] fn sgd_step_reduces_simple_loss() {
+    #[test]
+    fn sgd_step_reduces_simple_loss() {
         let mut p = vec![5.0f32];
         let mut opt = SgdOptimizer::new(0.1, 0.0, 0.0);
         let init = p[0] * p[0];
-        for _ in 0..10 { let grad = vec![2.0 * p[0]]; opt.step(&mut p, &grad); }
+        for _ in 0..10 {
+            let grad = vec![2.0 * p[0]];
+            opt.step(&mut p, &grad);
+        }
         assert!(p[0] * p[0] < init);
     }
-    #[test] fn gradient_clipping_respects_max_norm() {
+    #[test]
+    fn gradient_clipping_respects_max_norm() {
         let mut g = vec![3.0, 4.0];
         clip_gradients(&mut g, 2.5);
-        assert!((g.iter().map(|x| x*x).sum::<f32>().sqrt() - 2.5).abs() < 1e-4);
+        assert!((g.iter().map(|x| x * x).sum::<f32>().sqrt() - 2.5).abs() < 1e-4);
     }
-    #[test] fn early_stopping_triggers() {
-        let cfg = TrainerConfig { epochs: 100, early_stop_patience: 3, ..Default::default() };
+    #[test]
+    fn early_stopping_triggers() {
+        let cfg = TrainerConfig {
+            epochs: 100,
+            early_stop_patience: 3,
+            ..Default::default()
+        };
         let mut t = Trainer::new(cfg);
         let s = vec![sample()];
         t.best_val_loss = -1.0;
@@ -951,11 +1306,15 @@ mod tests {
         for _ in 0..20 {
             t.train_epoch(&s);
             t.epochs_without_improvement += 1;
-            if t.should_stop() { stopped = true; break; }
+            if t.should_stop() {
+                stopped = true;
+                break;
+            }
         }
         assert!(stopped);
     }
-    #[test] fn checkpoint_round_trip() {
+    #[test]
+    fn checkpoint_round_trip() {
         let mut t = Trainer::new(TrainerConfig::default());
         t.train_epoch(&[sample()]);
         let ckpt = t.checkpoint();
@@ -981,7 +1340,8 @@ mod tests {
                 keypoints: {
                     let mut kp = [(0.0f32, 0.0f32, 1.0f32); 17];
                     for (i, k) in kp.iter_mut().enumerate() {
-                        k.0 = i as f32; k.1 = i as f32 * 2.0;
+                        k.0 = i as f32;
+                        k.1 = i as f32 * 2.0;
                     }
                     kp
                 },
@@ -1003,26 +1363,40 @@ mod tests {
     fn trainer_with_transformer_runs_epoch() {
         use crate::graph_transformer::{CsiToPoseTransformer, TransformerConfig};
         let tf_config = TransformerConfig {
-            n_subcarriers: 8, n_keypoints: 17, d_model: 8, n_heads: 2, n_gnn_layers: 1,
+            n_subcarriers: 8,
+            n_keypoints: 17,
+            d_model: 8,
+            n_heads: 2,
+            n_gnn_layers: 1,
         };
         let transformer = CsiToPoseTransformer::new(tf_config);
         let config = TrainerConfig {
-            epochs: 2, batch_size: 4, lr: 0.001,
-            warmup_epochs: 0, early_stop_patience: 100,
+            epochs: 2,
+            batch_size: 4,
+            lr: 0.001,
+            warmup_epochs: 0,
+            early_stop_patience: 100,
             ..Default::default()
         };
         let mut t = Trainer::with_transformer(config, transformer);
 
         // The params should be the transformer's flattened weights
-        assert!(t.params().len() > 100, "transformer should have many params");
+        assert!(
+            t.params().len() > 100,
+            "transformer should have many params"
+        );
 
         // Create samples matching the transformer's n_subcarriers=8
-        let samples: Vec<TrainingSample> = (0..8).map(|i| TrainingSample {
-            csi_features: vec![vec![(i as f32 * 0.1).sin(); 8]; 4],
-            target_keypoints: (0..17).map(|k| (k as f32 * 0.5, k as f32 * 0.3, 1.0)).collect(),
-            target_body_parts: vec![0, 1, 2],
-            target_uv: (vec![0.5; 3], vec![0.5; 3]),
-        }).collect();
+        let samples: Vec<TrainingSample> = (0..8)
+            .map(|i| TrainingSample {
+                csi_features: vec![vec![(i as f32 * 0.1).sin(); 8]; 4],
+                target_keypoints: (0..17)
+                    .map(|k| (k as f32 * 0.5, k as f32 * 0.3, 1.0))
+                    .collect(),
+                target_body_parts: vec![0, 1, 2],
+                target_uv: (vec![0.5; 3], vec![0.5; 3]),
+            })
+            .collect();
 
         let stats = t.train_epoch(&samples);
         assert!(stats.train_loss.is_finite(), "loss should be finite");
@@ -1032,26 +1406,39 @@ mod tests {
     fn trainer_with_transformer_loss_finite_after_training() {
         use crate::graph_transformer::{CsiToPoseTransformer, TransformerConfig};
         let tf_config = TransformerConfig {
-            n_subcarriers: 8, n_keypoints: 17, d_model: 8, n_heads: 2, n_gnn_layers: 1,
+            n_subcarriers: 8,
+            n_keypoints: 17,
+            d_model: 8,
+            n_heads: 2,
+            n_gnn_layers: 1,
         };
         let transformer = CsiToPoseTransformer::new(tf_config);
         let config = TrainerConfig {
-            epochs: 3, batch_size: 4, lr: 0.0001,
-            warmup_epochs: 0, early_stop_patience: 100,
+            epochs: 3,
+            batch_size: 4,
+            lr: 0.0001,
+            warmup_epochs: 0,
+            early_stop_patience: 100,
             ..Default::default()
         };
         let mut t = Trainer::with_transformer(config, transformer);
 
-        let samples: Vec<TrainingSample> = (0..4).map(|i| TrainingSample {
-            csi_features: vec![vec![(i as f32 * 0.2).sin(); 8]; 4],
-            target_keypoints: (0..17).map(|k| (k as f32 * 0.5, k as f32 * 0.3, 1.0)).collect(),
-            target_body_parts: vec![],
-            target_uv: (vec![], vec![]),
-        }).collect();
+        let samples: Vec<TrainingSample> = (0..4)
+            .map(|i| TrainingSample {
+                csi_features: vec![vec![(i as f32 * 0.2).sin(); 8]; 4],
+                target_keypoints: (0..17)
+                    .map(|k| (k as f32 * 0.5, k as f32 * 0.3, 1.0))
+                    .collect(),
+                target_body_parts: vec![],
+                target_uv: (vec![], vec![]),
+            })
+            .collect();
 
         let result = t.run_training(&samples, &[]);
-        assert!(result.history.iter().all(|s| s.train_loss.is_finite()),
-            "all losses should be finite");
+        assert!(
+            result.history.iter().all(|s| s.train_loss.is_finite()),
+            "all losses should be finite"
+        );
 
         // Sync weights back and verify transformer still works
         t.sync_transformer_weights();
@@ -1059,49 +1446,76 @@ mod tests {
             let out = tf.forward(&vec![vec![1.0; 8]; 4]);
             assert_eq!(out.keypoints.len(), 17);
             for (i, &(x, y, z)) in out.keypoints.iter().enumerate() {
-                assert!(x.is_finite() && y.is_finite() && z.is_finite(),
-                    "kp {i} not finite after training");
+                assert!(
+                    x.is_finite() && y.is_finite() && z.is_finite(),
+                    "kp {i} not finite after training"
+                );
             }
         }
     }
 
     #[test]
     fn test_pretrain_epoch_loss_decreases() {
+        use crate::embedding::{CsiAugmenter, EmbeddingConfig, ProjectionHead};
         use crate::graph_transformer::{CsiToPoseTransformer, TransformerConfig};
-        use crate::embedding::{CsiAugmenter, ProjectionHead, EmbeddingConfig};
 
         let tf_config = TransformerConfig {
-            n_subcarriers: 8, n_keypoints: 17, d_model: 8, n_heads: 2, n_gnn_layers: 1,
+            n_subcarriers: 8,
+            n_keypoints: 17,
+            d_model: 8,
+            n_heads: 2,
+            n_gnn_layers: 1,
         };
         let transformer = CsiToPoseTransformer::new(tf_config);
         let config = TrainerConfig {
-            epochs: 10, batch_size: 4, lr: 0.001,
-            warmup_epochs: 0, early_stop_patience: 100,
+            epochs: 10,
+            batch_size: 4,
+            lr: 0.001,
+            warmup_epochs: 0,
+            early_stop_patience: 100,
             pretrain_temperature: 0.5,
             ..Default::default()
         };
         let mut trainer = Trainer::with_transformer(config, transformer);
 
         let e_config = EmbeddingConfig {
-            d_model: 8, d_proj: 16, temperature: 0.5, normalize: true,
+            d_model: 8,
+            d_proj: 16,
+            temperature: 0.5,
+            normalize: true,
         };
         let mut projection = ProjectionHead::new(e_config);
         let augmenter = CsiAugmenter::new();
 
         // Synthetic CSI windows (8 windows, each 4 frames of 8 subcarriers)
-        let csi_windows: Vec<Vec<Vec<f32>>> = (0..8).map(|i| {
-            (0..4).map(|a| {
-                (0..8).map(|s| ((i * 7 + a * 3 + s) as f32 * 0.41).sin() * 0.5).collect()
-            }).collect()
-        }).collect();
+        let csi_windows: Vec<Vec<Vec<f32>>> = (0..8)
+            .map(|i| {
+                (0..4)
+                    .map(|a| {
+                        (0..8)
+                            .map(|s| ((i * 7 + a * 3 + s) as f32 * 0.41).sin() * 0.5)
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect();
 
         let loss_0 = trainer.pretrain_epoch(&csi_windows, &augmenter, &mut projection, 0.5, 0);
         let loss_1 = trainer.pretrain_epoch(&csi_windows, &augmenter, &mut projection, 0.5, 1);
         let loss_2 = trainer.pretrain_epoch(&csi_windows, &augmenter, &mut projection, 0.5, 2);
 
-        assert!(loss_0.is_finite(), "epoch 0 loss should be finite: {loss_0}");
-        assert!(loss_1.is_finite(), "epoch 1 loss should be finite: {loss_1}");
-        assert!(loss_2.is_finite(), "epoch 2 loss should be finite: {loss_2}");
+        assert!(
+            loss_0.is_finite(),
+            "epoch 0 loss should be finite: {loss_0}"
+        );
+        assert!(
+            loss_1.is_finite(),
+            "epoch 1 loss should be finite: {loss_1}"
+        );
+        assert!(
+            loss_2.is_finite(),
+            "epoch 2 loss should be finite: {loss_2}"
+        );
         // Loss should generally decrease (or at least the final loss should be less than initial)
         assert!(
             loss_2 <= loss_0 + 0.5,
@@ -1112,12 +1526,22 @@ mod tests {
     #[test]
     fn test_contrastive_loss_weight_in_composite() {
         let c = LossComponents {
-            keypoint: 0.0, body_part: 0.0, uv: 0.0,
-            temporal: 0.0, edge: 0.0, symmetry: 0.0, contrastive: 1.0,
+            keypoint: 0.0,
+            body_part: 0.0,
+            uv: 0.0,
+            temporal: 0.0,
+            edge: 0.0,
+            symmetry: 0.0,
+            contrastive: 1.0,
         };
         let w = LossWeights {
-            keypoint: 0.0, body_part: 0.0, uv: 0.0,
-            temporal: 0.0, edge: 0.0, symmetry: 0.0, contrastive: 0.5,
+            keypoint: 0.0,
+            body_part: 0.0,
+            uv: 0.0,
+            temporal: 0.0,
+            edge: 0.0,
+            symmetry: 0.0,
+            contrastive: 0.5,
         };
         assert!((composite_loss(&c, &w) - 0.5).abs() < 1e-6);
     }
@@ -1129,16 +1553,22 @@ mod tests {
         // Setup: create trainer, set params, consolidate, then train.
         // EWC penalty should resist large param changes.
         let config = TrainerConfig {
-            epochs: 5, batch_size: 4, lr: 0.01,
-            warmup_epochs: 0, early_stop_patience: 100,
+            epochs: 5,
+            batch_size: 4,
+            lr: 0.01,
+            warmup_epochs: 0,
+            early_stop_patience: 100,
             ..Default::default()
         };
         let mut trainer = Trainer::new(config);
-        let pretrained_params = trainer.params().to_vec();
+        let _pretrained_params = trainer.params().to_vec();
 
         // Consolidate pretrained state
         trainer.consolidate_pretrained();
-        assert!(trainer.embedding_ewc.is_some(), "EWC should be set after consolidation");
+        assert!(
+            trainer.embedding_ewc.is_some(),
+            "EWC should be set after consolidation"
+        );
 
         // Train a few epochs (params will change)
         let samples = vec![sample()];
@@ -1149,7 +1579,10 @@ mod tests {
         // With EWC penalty active, params should still be somewhat close
         // to pretrained values (EWC resists change)
         let penalty = trainer.ewc_penalty();
-        assert!(penalty > 0.0, "EWC penalty should be > 0 after params changed");
+        assert!(
+            penalty > 0.0,
+            "EWC penalty should be > 0 after params changed"
+        );
 
         // The penalty gradient should push params back toward pretrained values
         let grad = trainer.ewc_penalty_gradient();
@@ -1163,7 +1596,10 @@ mod tests {
         let mut trainer = Trainer::new(config);
 
         // Before consolidation, penalty should be 0
-        assert!((trainer.ewc_penalty()).abs() < 1e-10, "no EWC => zero penalty");
+        assert!(
+            (trainer.ewc_penalty()).abs() < 1e-10,
+            "no EWC => zero penalty"
+        );
 
         // Consolidate
         trainer.consolidate_pretrained();

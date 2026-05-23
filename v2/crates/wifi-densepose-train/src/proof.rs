@@ -25,7 +25,7 @@ use std::path::Path;
 use tch::{nn, nn::OptimizerConfig, Device, Kind, Tensor};
 
 use crate::config::TrainingConfig;
-use crate::dataset::{CsiDataset, SyntheticCsiDataset, SyntheticConfig};
+use crate::dataset::{CsiDataset, SyntheticConfig, SyntheticCsiDataset};
 use crate::losses::{generate_target_heatmaps, LossWeights, WiFiDensePoseLoss};
 use crate::model::WiFiDensePoseModel;
 use crate::trainer::make_batches;
@@ -154,9 +154,13 @@ pub fn run_proof(proof_dir: &Path) -> Result<ProofResult, Box<dyn std::error::Er
         let hm_size = cfg.heatmap_size;
 
         let kp_vec: Vec<f32> = Vec::<f64>::from(kp.to_kind(Kind::Double).flatten(0, -1))
-            .iter().map(|&x| x as f32).collect();
+            .iter()
+            .map(|&x| x as f32)
+            .collect();
         let vis_vec: Vec<f32> = Vec::<f64>::from(vis.to_kind(Kind::Double).flatten(0, -1))
-            .iter().map(|&x| x as f32).collect();
+            .iter()
+            .map(|&x| x as f32)
+            .collect();
 
         let kp_nd = ndarray::Array3::from_shape_vec((b, num_kp, 2), kp_vec)?;
         let vis_nd = ndarray::Array2::from_shape_vec((b, num_kp), vis_vec)?;
@@ -173,7 +177,12 @@ pub fn run_proof(proof_dir: &Path) -> Result<ProofResult, Box<dyn std::error::Er
             &output.keypoints,
             &target_hm,
             &vis_mask,
-            None, None, None, None, None, None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         );
 
         opt.zero_grad();
@@ -248,7 +257,10 @@ pub fn hash_model_weights(model: &WiFiDensePoseModel) -> String {
         hasher.update(name_bytes);
 
         // Serialise tensor values as little-endian f32.
-        let flat: Tensor = tensor.flatten(0, -1).to_kind(Kind::Float).to_device(Device::Cpu);
+        let flat: Tensor = tensor
+            .flatten(0, -1)
+            .to_kind(Kind::Float)
+            .to_device(Device::Cpu);
         let values: Vec<f32> = Vec::<f32>::from(&flat);
         let mut buf = vec![0u8; values.len() * 4];
         for (i, v) in values.iter().enumerate() {
@@ -409,7 +421,11 @@ mod tests {
         let m1 = WiFiDensePoseModel::new(&cfg, device);
         // Trigger weight creation.
         let dummy = Tensor::zeros(
-            [1, (cfg.window_frames * cfg.num_antennas_tx * cfg.num_antennas_rx) as i64, cfg.num_subcarriers as i64],
+            [
+                1,
+                (cfg.window_frames * cfg.num_antennas_tx * cfg.num_antennas_rx) as i64,
+                cfg.num_subcarriers as i64,
+            ],
             (Kind::Float, device),
         );
         let _ = m1.forward_inference(&dummy, &dummy);

@@ -67,7 +67,10 @@ pub struct AmplitudeStats {
 
 impl Default for AmplitudeStats {
     fn default() -> Self {
-        Self { mean: 0.0, std: 1.0 }
+        Self {
+            mean: 0.0,
+            std: 1.0,
+        }
     }
 }
 
@@ -92,7 +95,10 @@ pub struct HardwareNormalizer {
 impl HardwareNormalizer {
     /// Create a normalizer with default canonical subcarrier count (56).
     pub fn new() -> Self {
-        Self { canonical_subcarriers: 56, hw_stats: HashMap::new() }
+        Self {
+            canonical_subcarriers: 56,
+            hw_stats: HashMap::new(),
+        }
     }
 
     /// Create a normalizer with a custom canonical subcarrier count.
@@ -100,7 +106,10 @@ impl HardwareNormalizer {
         if count == 0 {
             return Err(HardwareNormError::InvalidCanonical(count));
         }
-        Ok(Self { canonical_subcarriers: count, hw_stats: HashMap::new() })
+        Ok(Self {
+            canonical_subcarriers: count,
+            hw_stats: HashMap::new(),
+        })
     }
 
     /// Register amplitude statistics for a specific hardware type.
@@ -161,16 +170,24 @@ impl HardwareNormalizer {
 }
 
 impl Default for HardwareNormalizer {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Resample a 1-D signal to `dst_len` using Catmull-Rom cubic interpolation.
 /// Identity passthrough when `src.len() == dst_len`.
 fn resample_cubic(src: &[f64], dst_len: usize) -> Vec<f64> {
     let n = src.len();
-    if n == dst_len { return src.to_vec(); }
-    if n == 0 || dst_len == 0 { return vec![0.0; dst_len]; }
-    if n == 1 { return vec![src[0]; dst_len]; }
+    if n == dst_len {
+        return src.to_vec();
+    }
+    if n == 0 || dst_len == 0 {
+        return vec![0.0; dst_len];
+    }
+    if n == 1 {
+        return vec![src[0]; dst_len];
+    }
 
     let ratio = (n - 1) as f64 / (dst_len - 1).max(1) as f64;
     (0..dst_len)
@@ -206,9 +223,13 @@ fn zscore_normalize(data: &[f64], hw_stats: Option<&AmplitudeStats>) -> Vec<f64>
 
 fn compute_mean_std(data: &[f64]) -> (f64, f64) {
     let n = data.len() as f64;
-    if n < 1.0 { return (0.0, 1.0); }
+    if n < 1.0 {
+        return (0.0, 1.0);
+    }
     let mean = data.iter().sum::<f64>() / n;
-    if n < 2.0 { return (mean, 1.0); }
+    if n < 2.0 {
+        return (mean, 1.0);
+    }
     let var = data.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
     (mean, var.sqrt())
 }
@@ -216,7 +237,9 @@ fn compute_mean_std(data: &[f64]) -> (f64, f64) {
 /// Sanitize phase: unwrap 2-pi discontinuities then remove linear trend.
 /// Mirrors `PhaseSanitizer::unwrap_1d` logic, adds least-squares detrend.
 fn sanitize_phase(phase: &[f64]) -> Vec<f64> {
-    if phase.is_empty() { return Vec::new(); }
+    if phase.is_empty() {
+        return Vec::new();
+    }
 
     // Unwrap
     let mut uw = phase.to_vec();
@@ -224,8 +247,11 @@ fn sanitize_phase(phase: &[f64]) -> Vec<f64> {
     let mut prev = uw[0];
     for i in 1..uw.len() {
         let diff = phase[i] - prev;
-        if diff > PI { correction -= 2.0 * PI; }
-        else if diff < -PI { correction += 2.0 * PI; }
+        if diff > PI {
+            correction -= 2.0 * PI;
+        } else if diff < -PI {
+            correction += 2.0 * PI;
+        }
         uw[i] = phase[i] + correction;
         prev = phase[i];
     }
@@ -242,7 +268,10 @@ fn sanitize_phase(phase: &[f64]) -> Vec<f64> {
     }
     let slope = if den.abs() > 1e-12 { num / den } else { 0.0 };
     let intercept = ym - slope * xm;
-    uw.iter().enumerate().map(|(i, &y)| y - (slope * i as f64 + intercept)).collect()
+    uw.iter()
+        .enumerate()
+        .map(|(i, &y)| y - (slope * i as f64 + intercept))
+        .collect()
 }
 
 #[cfg(test)]
@@ -251,10 +280,22 @@ mod tests {
 
     #[test]
     fn detect_hardware_and_properties() {
-        assert_eq!(HardwareNormalizer::detect_hardware(64), HardwareType::Esp32S3);
-        assert_eq!(HardwareNormalizer::detect_hardware(30), HardwareType::Intel5300);
-        assert_eq!(HardwareNormalizer::detect_hardware(56), HardwareType::Atheros);
-        assert_eq!(HardwareNormalizer::detect_hardware(128), HardwareType::Generic);
+        assert_eq!(
+            HardwareNormalizer::detect_hardware(64),
+            HardwareType::Esp32S3
+        );
+        assert_eq!(
+            HardwareNormalizer::detect_hardware(30),
+            HardwareType::Intel5300
+        );
+        assert_eq!(
+            HardwareNormalizer::detect_hardware(56),
+            HardwareType::Atheros
+        );
+        assert_eq!(
+            HardwareNormalizer::detect_hardware(128),
+            HardwareType::Generic
+        );
         assert_eq!(HardwareType::Esp32S3.subcarrier_count(), 64);
         assert_eq!(HardwareType::Esp32S3.mimo_streams(), 1);
         assert_eq!(HardwareType::Intel5300.subcarrier_count(), 30);
@@ -270,7 +311,10 @@ mod tests {
         let input: Vec<f64> = (0..56).map(|i| i as f64 * 0.1).collect();
         let output = resample_cubic(&input, 56);
         for (a, b) in input.iter().zip(output.iter()) {
-            assert!((a - b).abs() < 1e-12, "Identity resampling must be passthrough");
+            assert!(
+                (a - b).abs() < 1e-12,
+                "Identity resampling must be passthrough"
+            );
         }
     }
 
@@ -294,14 +338,17 @@ mod tests {
 
     #[test]
     fn resample_preserves_constant() {
-        for &v in &resample_cubic(&vec![3.14; 64], 56) {
-            assert!((v - 3.14).abs() < 1e-10);
+        let const_val = 3.0 + 0.14; // arbitrary non-PI constant
+        for &v in &resample_cubic(&vec![const_val; 64], 56) {
+            assert!((v - const_val).abs() < 1e-10);
         }
     }
 
     #[test]
     fn zscore_produces_zero_mean_unit_std() {
-        let data: Vec<f64> = (0..100).map(|i| 50.0 + 10.0 * (i as f64 * 0.1).sin()).collect();
+        let data: Vec<f64> = (0..100)
+            .map(|i| 50.0 + 10.0 * (i as f64 * 0.1).sin())
+            .collect();
         let z = zscore_normalize(&data, None);
         let n = z.len() as f64;
         let mean = z.iter().sum::<f64>() / n;
@@ -312,28 +359,42 @@ mod tests {
 
     #[test]
     fn zscore_with_hw_stats_and_constant() {
-        let z = zscore_normalize(&[10.0, 20.0, 30.0], Some(&AmplitudeStats { mean: 20.0, std: 10.0 }));
+        let z = zscore_normalize(
+            &[10.0, 20.0, 30.0],
+            Some(&AmplitudeStats {
+                mean: 20.0,
+                std: 10.0,
+            }),
+        );
         assert!((z[0] + 1.0).abs() < 1e-12);
         assert!(z[1].abs() < 1e-12);
         assert!((z[2] - 1.0).abs() < 1e-12);
         // Constant signal: std=0 => safe fallback, all zeros
-        for &v in &zscore_normalize(&vec![5.0; 50], None) { assert!(v.abs() < 1e-12); }
+        for &v in &zscore_normalize(&vec![5.0; 50], None) {
+            assert!(v.abs() < 1e-12);
+        }
     }
 
     #[test]
     fn phase_sanitize_removes_linear_trend() {
         let san = sanitize_phase(&(0..56).map(|i| 0.5 * i as f64).collect::<Vec<_>>());
         assert_eq!(san.len(), 56);
-        for &v in &san { assert!(v.abs() < 1e-10, "Detrended should be ~0, got {v}"); }
+        for &v in &san {
+            assert!(v.abs() < 1e-10, "Detrended should be ~0, got {v}");
+        }
     }
 
     #[test]
     fn phase_sanitize_unwrap() {
-        let raw: Vec<f64> = (0..40).map(|i| {
-            let mut w = (i as f64 * 0.4) % (2.0 * PI);
-            if w > PI { w -= 2.0 * PI; }
-            w
-        }).collect();
+        let raw: Vec<f64> = (0..40)
+            .map(|i| {
+                let mut w = (i as f64 * 0.4) % (2.0 * PI);
+                if w > PI {
+                    w -= 2.0 * PI;
+                }
+                w
+            })
+            .collect();
         let san = sanitize_phase(&raw);
         for i in 1..san.len() {
             assert!((san[i] - san[i - 1]).abs() < 1.0, "Phase jump at {i}");
@@ -349,7 +410,9 @@ mod tests {
     #[test]
     fn normalize_esp32_64_to_56() {
         let norm = HardwareNormalizer::new();
-        let amp: Vec<f64> = (0..64).map(|i| 20.0 + 5.0 * (i as f64 * 0.1).sin()).collect();
+        let amp: Vec<f64> = (0..64)
+            .map(|i| 20.0 + 5.0 * (i as f64 * 0.1).sin())
+            .collect();
         let ph: Vec<f64> = (0..64).map(|i| (i as f64 * 0.05).sin() * 0.5).collect();
         let r = norm.normalize(&amp, &ph, HardwareType::Esp32S3).unwrap();
         assert_eq!(r.amplitude.len(), 56);
@@ -361,22 +424,30 @@ mod tests {
 
     #[test]
     fn normalize_intel5300_30_to_56() {
-        let r = HardwareNormalizer::new().normalize(
-            &(0..30).map(|i| 15.0 + 3.0 * (i as f64 * 0.2).cos()).collect::<Vec<_>>(),
-            &(0..30).map(|i| (i as f64 * 0.1).sin() * 0.3).collect::<Vec<_>>(),
-            HardwareType::Intel5300,
-        ).unwrap();
+        let r = HardwareNormalizer::new()
+            .normalize(
+                &(0..30)
+                    .map(|i| 15.0 + 3.0 * (i as f64 * 0.2).cos())
+                    .collect::<Vec<_>>(),
+                &(0..30)
+                    .map(|i| (i as f64 * 0.1).sin() * 0.3)
+                    .collect::<Vec<_>>(),
+                HardwareType::Intel5300,
+            )
+            .unwrap();
         assert_eq!(r.amplitude.len(), 56);
         assert_eq!(r.hardware_type, HardwareType::Intel5300);
     }
 
     #[test]
     fn normalize_atheros_passthrough_count() {
-        let r = HardwareNormalizer::new().normalize(
-            &(0..56).map(|i| 10.0 + 2.0 * i as f64).collect::<Vec<_>>(),
-            &(0..56).map(|i| (i as f64 * 0.05).sin()).collect::<Vec<_>>(),
-            HardwareType::Atheros,
-        ).unwrap();
+        let r = HardwareNormalizer::new()
+            .normalize(
+                &(0..56).map(|i| 10.0 + 2.0 * i as f64).collect::<Vec<_>>(),
+                &(0..56).map(|i| (i as f64 * 0.05).sin()).collect::<Vec<_>>(),
+                HardwareType::Atheros,
+            )
+            .unwrap();
         assert_eq!(r.amplitude.len(), 56);
     }
 
@@ -384,16 +455,22 @@ mod tests {
     fn normalize_errors_and_custom_canonical() {
         let n = HardwareNormalizer::new();
         assert!(n.normalize(&[], &[], HardwareType::Generic).is_err());
-        assert!(matches!(n.normalize(&[1.0, 2.0], &[1.0], HardwareType::Generic),
-            Err(HardwareNormError::LengthMismatch { .. })));
-        assert!(matches!(HardwareNormalizer::with_canonical_subcarriers(0),
-            Err(HardwareNormError::InvalidCanonical(0))));
+        assert!(matches!(
+            n.normalize(&[1.0, 2.0], &[1.0], HardwareType::Generic),
+            Err(HardwareNormError::LengthMismatch { .. })
+        ));
+        assert!(matches!(
+            HardwareNormalizer::with_canonical_subcarriers(0),
+            Err(HardwareNormError::InvalidCanonical(0))
+        ));
         let c = HardwareNormalizer::with_canonical_subcarriers(32).unwrap();
-        let r = c.normalize(
-            &(0..64).map(|i| i as f64).collect::<Vec<_>>(),
-            &(0..64).map(|i| (i as f64 * 0.1).sin()).collect::<Vec<_>>(),
-            HardwareType::Esp32S3,
-        ).unwrap();
+        let r = c
+            .normalize(
+                &(0..64).map(|i| i as f64).collect::<Vec<_>>(),
+                &(0..64).map(|i| (i as f64 * 0.1).sin()).collect::<Vec<_>>(),
+                HardwareType::Esp32S3,
+            )
+            .unwrap();
         assert_eq!(r.amplitude.len(), 32);
     }
 }

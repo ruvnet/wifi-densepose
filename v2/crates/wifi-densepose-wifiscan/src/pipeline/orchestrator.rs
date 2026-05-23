@@ -427,6 +427,9 @@ mod tests {
         #[allow(clippy::cast_precision_loss)]
         let fps = n_frames as f64 / elapsed.as_secs_f64();
         println!("Pipeline throughput: {fps:.0} frames/sec ({elapsed:?} for {n_frames} frames)");
-        assert!(fps > 100.0, "Pipeline should process >100 frames/sec, got {fps:.0}");
+        assert!(
+            fps > 100.0,
+            "Pipeline should process >100 frames/sec, got {fps:.0}"
+        );
     }
 }

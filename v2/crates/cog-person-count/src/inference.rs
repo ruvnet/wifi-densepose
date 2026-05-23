@@ -67,7 +67,11 @@ impl CountPrediction {
         let mut acc = self.probs[mode];
         while acc < 0.95 && (lo > 0 || hi < COUNT_CLASSES - 1) {
             let left = if lo > 0 { self.probs[lo - 1] } else { -1.0 };
-            let right = if hi < COUNT_CLASSES - 1 { self.probs[hi + 1] } else { -1.0 };
+            let right = if hi < COUNT_CLASSES - 1 {
+                self.probs[hi + 1]
+            } else {
+                -1.0
+            };
             if left >= right && lo > 0 {
                 lo -= 1;
                 acc += self.probs[lo];
@@ -102,25 +106,57 @@ impl CountNet {
         let conf = vb.pp("conf_head");
 
         let c1 = candle_nn::conv1d(
-            56, 64, 3,
-            Conv1dConfig { padding: 1, stride: 1, dilation: 1, groups: 1, ..Default::default() },
+            56,
+            64,
+            3,
+            Conv1dConfig {
+                padding: 1,
+                stride: 1,
+                dilation: 1,
+                groups: 1,
+                ..Default::default()
+            },
             enc.pp("c1"),
         )?;
         let c2 = candle_nn::conv1d(
-            64, 128, 3,
-            Conv1dConfig { padding: 2, stride: 1, dilation: 2, groups: 1, ..Default::default() },
+            64,
+            128,
+            3,
+            Conv1dConfig {
+                padding: 2,
+                stride: 1,
+                dilation: 2,
+                groups: 1,
+                ..Default::default()
+            },
             enc.pp("c2"),
         )?;
         let c3 = candle_nn::conv1d(
-            128, 128, 3,
-            Conv1dConfig { padding: 4, stride: 1, dilation: 4, groups: 1, ..Default::default() },
+            128,
+            128,
+            3,
+            Conv1dConfig {
+                padding: 4,
+                stride: 1,
+                dilation: 4,
+                groups: 1,
+                ..Default::default()
+            },
             enc.pp("c3"),
         )?;
         let count_fc1 = candle_nn::linear(128, 64, count.pp("fc1"))?;
         let count_fc2 = candle_nn::linear(64, COUNT_CLASSES, count.pp("fc2"))?;
         let conf_fc1 = candle_nn::linear(128, 32, conf.pp("fc1"))?;
         let conf_fc2 = candle_nn::linear(32, 1, conf.pp("fc2"))?;
-        Ok(Self { c1, c2, c3, count_fc1, count_fc2, conf_fc1, conf_fc2 })
+        Ok(Self {
+            c1,
+            c2,
+            c3,
+            count_fc1,
+            count_fc2,
+            conf_fc1,
+            conf_fc2,
+        })
     }
 
     fn forward(&self, x: &Tensor) -> candle_core::Result<(Tensor, Tensor)> {
@@ -193,7 +229,10 @@ impl InferenceEngine {
             // model yet" honestly instead of pretending to know.
             let mut probs = [0.0f32; COUNT_CLASSES];
             probs[1] = 1.0; // mass on "1 person"
-            return Ok(CountPrediction { probs, confidence: 0.0 });
+            return Ok(CountPrediction {
+                probs,
+                confidence: 0.0,
+            });
         };
 
         let t = Tensor::from_slice(
@@ -204,25 +243,37 @@ impl InferenceEngine {
         let (probs_t, conf_t) = net.forward(&t)?;
         let flat: Vec<f32> = probs_t.flatten_all()?.to_vec1()?;
         if flat.len() != COUNT_CLASSES {
-            return Err(format!("count head produced {} probs, expected {}", flat.len(), COUNT_CLASSES).into());
+            return Err(format!(
+                "count head produced {} probs, expected {}",
+                flat.len(),
+                COUNT_CLASSES
+            )
+            .into());
         }
         let mut probs = [0.0f32; COUNT_CLASSES];
         probs.copy_from_slice(&flat[..COUNT_CLASSES]);
         let conf = conf_t.flatten_all()?.to_vec1::<f32>()?[0];
 
-        Ok(CountPrediction { probs, confidence: conf })
+        Ok(CountPrediction {
+            probs,
+            confidence: conf,
+        })
     }
 }
 
 pub struct SyntheticInput;
 
 impl Default for SyntheticInput {
-    fn default() -> Self { Self }
+    fn default() -> Self {
+        Self
+    }
 }
 
 impl SyntheticInput {
     pub fn as_window(&self) -> CsiWindow {
-        CsiWindow { data: vec![0.0; INPUT_SUBCARRIERS * INPUT_TIMESTEPS] }
+        CsiWindow {
+            data: vec![0.0; INPUT_SUBCARRIERS * INPUT_TIMESTEPS],
+        }
     }
 }
 

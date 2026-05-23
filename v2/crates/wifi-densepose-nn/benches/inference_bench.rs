@@ -1,12 +1,7 @@
 //! Benchmarks for neural network inference.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use wifi_densepose_nn::{
-    densepose::{DensePoseConfig, DensePoseHead},
-    inference::{EngineBuilder, InferenceOptions, MockBackend, Backend},
-    tensor::{Tensor, TensorShape},
-    translator::{ModalityTranslator, TranslatorConfig},
-};
+use wifi_densepose_nn::{inference::EngineBuilder, tensor::Tensor};
 
 fn bench_tensor_operations(c: &mut Criterion) {
     let mut group = c.benchmark_group("tensor_ops");
@@ -97,13 +92,9 @@ fn bench_batch_inference(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(*batch_size as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("batch", batch_size),
-            batch_size,
-            |b, _| {
-                b.iter(|| black_box(engine.infer_batch(&inputs).unwrap()))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("batch", batch_size), batch_size, |b, _| {
+            b.iter(|| black_box(engine.infer_batch(&inputs).unwrap()))
+        });
     }
 
     group.finish();

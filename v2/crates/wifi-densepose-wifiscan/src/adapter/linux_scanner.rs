@@ -60,6 +60,7 @@ impl LinuxIwScanner {
     }
 
     /// Use `scan dump` instead of `scan` to read cached results without root.
+    #[must_use]
     pub fn use_cached(mut self) -> Self {
         self.use_dump = true;
         self
@@ -83,24 +84,14 @@ impl LinuxIwScanner {
             vec!["dev", &self.interface, "scan"]
         };
 
-        let output = Command::new("iw")
-            .args(&args)
-            .output()
-            .map_err(|e| {
-                WifiScanError::ProcessError(format!(
-                    "failed to run `iw {}`: {e}",
-                    args.join(" ")
-                ))
-            })?;
+        let output = Command::new("iw").args(&args).output().map_err(|e| {
+            WifiScanError::ProcessError(format!("failed to run `iw {}`: {e}", args.join(" ")))
+        })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(WifiScanError::ScanFailed {
-                reason: format!(
-                    "iw exited with {}: {}",
-                    output.status,
-                    stderr.trim()
-                ),
+                reason: format!("iw exited with {}: {}", output.status, stderr.trim()),
             });
         }
 
@@ -137,9 +128,10 @@ impl BssStanza {
         let rssi_dbm = self.signal_dbm.unwrap_or(-90.0);
 
         // Determine channel from explicit field or frequency.
-        let channel = self.channel.or_else(|| {
-            self.freq_mhz.map(freq_to_channel)
-        }).unwrap_or(0);
+        let channel = self
+            .channel
+            .or_else(|| self.freq_mhz.map(freq_to_channel))
+            .unwrap_or(0);
 
         let band = BandType::from_channel(channel);
         let radio_type = infer_radio_type_from_freq(self.freq_mhz.unwrap_or(0));
@@ -172,7 +164,7 @@ pub fn parse_iw_scan_output(output: &str) -> Result<Vec<BssidObservation>, WifiS
 
     for line in output.lines() {
         // New BSS stanza starts with "BSS " at column 0.
-        if line.starts_with("BSS ") {
+        if let Some(rest) = line.strip_prefix("BSS ") {
             // Flush previous stanza.
             if let Some(stanza) = current.take() {
                 if let Some(obs) = stanza.flush(now) {
@@ -182,15 +174,16 @@ pub fn parse_iw_scan_output(output: &str) -> Result<Vec<BssidObservation>, WifiS
 
             // Parse BSSID from "BSS aa:bb:cc:dd:ee:ff(on wlan0)" or
             // "BSS aa:bb:cc:dd:ee:ff -- associated".
-            let rest = &line[4..];
-            let mac_end = rest.find(|c: char| !c.is_ascii_hexdigit() && c != ':')
+            let mac_end = rest
+                .find(|c: char| !c.is_ascii_hexdigit() && c != ':')
                 .unwrap_or(rest.len());
             let mac = &rest[..mac_end];
 
             if mac.len() == 17 {
-                let mut stanza = BssStanza::default();
-                stanza.bssid = Some(mac.to_lowercase());
-                current = Some(stanza);
+                current = Some(BssStanza {
+                    bssid: Some(mac.to_lowercase()),
+                    ..Default::default()
+                });
             }
             continue;
         }
@@ -226,13 +219,13 @@ pub fn parse_iw_scan_output(output: &str) -> Result<Vec<BssidObservation>, WifiS
 /// Convert a frequency in MHz to an 802.11 channel number.
 fn freq_to_channel(freq_mhz: u32) -> u8 {
     match freq_mhz {
-        // 2.4 GHz: channels 1-14.
-        2412..=2472 => ((freq_mhz - 2407) / 5) as u8,
+        // 2.4 GHz: channels 1-14.  Max result (2472-2407)/5 = 13 — fits u8.
+        2412..=2472 => u8::try_from((freq_mhz - 2407) / 5).unwrap_or(0),
         2484 => 14,
-        // 5 GHz: channels 36-177.
-        5170..=5885 => ((freq_mhz - 5000) / 5) as u8,
-        // 6 GHz (Wi-Fi 6E).
-        5955..=7115 => ((freq_mhz - 5950) / 5) as u8,
+        // 5 GHz: channels 36-177. Max result (5885-5000)/5 = 177 — fits u8.
+        5170..=5885 => u8::try_from((freq_mhz - 5000) / 5).unwrap_or(0),
+        // 6 GHz (Wi-Fi 6E).       Max result (7115-5950)/5 = 233 — fits u8.
+        5955..=7115 => u8::try_from((freq_mhz - 5950) / 5).unwrap_or(0),
         _ => 0,
     }
 }

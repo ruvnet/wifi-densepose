@@ -61,7 +61,8 @@ pub struct ElevationGrid {
 
 impl ElevationGrid {
     pub fn get(&self, lat: f64, lon: f64) -> Option<f32> {
-        let row = ((self.origin_lat + (self.rows as f64 * self.cell_size_deg) - lat) / self.cell_size_deg) as usize;
+        let row = ((self.origin_lat + (self.rows as f64 * self.cell_size_deg) - lat)
+            / self.cell_size_deg) as usize;
         let col = ((lon - self.origin_lon) / self.cell_size_deg) as usize;
         if row < self.rows && col < self.cols {
             Some(self.heights[row * self.cols + col])
@@ -97,7 +98,11 @@ pub struct GeoRegistration {
 impl Default for GeoRegistration {
     fn default() -> Self {
         Self {
-            origin: GeoPoint { lat: 0.0, lon: 0.0, alt: 0.0 },
+            origin: GeoPoint {
+                lat: 0.0,
+                lon: 0.0,
+                alt: 0.0,
+            },
             heading_deg: 0.0,
             scale: 1.0,
         }

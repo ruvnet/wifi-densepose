@@ -107,6 +107,8 @@ pub struct LeadSignal {
 #[derive(Debug, Clone)]
 struct TrajectoryPoint {
     embedding: Vec<f64>,
+    /// Timestamp in microseconds (reserved for future temporal reasoning).
+    #[allow(dead_code)]
     timestamp_us: u64,
 }
 

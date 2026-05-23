@@ -52,19 +52,29 @@ pub mod types;
 pub mod utils;
 
 // Re-export commonly used types at the crate root
-pub use error::{CoreError, CoreResult, SignalError, InferenceError, StorageError};
-pub use traits::{SignalProcessor, NeuralInference, DataStore};
+pub use error::{CoreError, CoreResult, InferenceError, SignalError, StorageError};
+pub use traits::{DataStore, NeuralInference, SignalProcessor};
 pub use types::{
-    // CSI types
-    CsiFrame, CsiMetadata, AntennaConfig,
-    // Signal types
-    ProcessedSignal, SignalFeatures, FrequencyBand,
-    // Pose types
-    PoseEstimate, PersonPose, Keypoint, KeypointType,
-    // Common types
-    Confidence, Timestamp, FrameId, DeviceId,
+    AntennaConfig,
     // Bounding box
     BoundingBox,
+    // Common types
+    Confidence,
+    // CSI types
+    CsiFrame,
+    CsiMetadata,
+    DeviceId,
+    FrameId,
+    FrequencyBand,
+    Keypoint,
+    KeypointType,
+    PersonPose,
+    // Pose types
+    PoseEstimate,
+    // Signal types
+    ProcessedSignal,
+    SignalFeatures,
+    Timestamp,
 };
 
 /// Crate version
@@ -97,20 +107,24 @@ pub mod prelude {
     };
 }
 
+// Compile-time assertions on module-level constants.
+const _: () = assert!(MAX_SUBCARRIERS > 0);
+const _: () = assert!(DEFAULT_CONFIDENCE_THRESHOLD > 0.0);
+const _: () = assert!(DEFAULT_CONFIDENCE_THRESHOLD < 1.0);
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_version_is_valid() {
-        assert!(!VERSION.is_empty());
+        // CARGO_PKG_VERSION is always non-empty; verify the constant is
+        // accessible and has a dot-separated semver shape.
+        assert!(VERSION.contains('.'), "version should be semver: {VERSION}");
     }
 
     #[test]
     fn test_constants() {
         assert_eq!(MAX_KEYPOINTS, 17);
-        assert!(MAX_SUBCARRIERS > 0);
-        assert!(DEFAULT_CONFIDENCE_THRESHOLD > 0.0);
-        assert!(DEFAULT_CONFIDENCE_THRESHOLD < 1.0);
     }
 }

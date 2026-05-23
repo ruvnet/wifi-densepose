@@ -2,16 +2,14 @@
 //!
 //! Run with: cargo bench --package wifi-densepose-signal
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use ndarray::Array2;
 use std::time::Duration;
 
 // Import from the crate
 use wifi_densepose_signal::{
-    CsiProcessor, CsiProcessorConfig, CsiData,
-    PhaseSanitizer, PhaseSanitizerConfig,
-    FeatureExtractor, FeatureExtractorConfig,
-    MotionDetector, MotionDetectorConfig,
+    CsiData, CsiProcessor, CsiProcessorConfig, FeatureExtractor, FeatureExtractorConfig,
+    MotionDetector, MotionDetectorConfig, PhaseSanitizer, PhaseSanitizerConfig,
 };
 
 /// Create realistic test CSI data
@@ -57,9 +55,7 @@ fn bench_csi_preprocessing(c: &mut Criterion) {
             BenchmarkId::new("preprocess", format!("{}x{}", antennas, subcarriers)),
             &csi_data,
             |b, data| {
-                b.iter(|| {
-                    processor.preprocess(black_box(data)).unwrap()
-                });
+                b.iter(|| processor.preprocess(black_box(data)).unwrap());
             },
         );
     }
@@ -82,7 +78,9 @@ fn bench_phase_sanitization(c: &mut Criterion) {
             for j in 0..size {
                 let t = j as f64 / size as f64;
                 // Create phase with wrapping
-                phase_data[[i, j]] = (t * 8.0 * std::f64::consts::PI) % (2.0 * std::f64::consts::PI) - std::f64::consts::PI;
+                phase_data[[i, j]] = (t * 8.0 * std::f64::consts::PI)
+                    % (2.0 * std::f64::consts::PI)
+                    - std::f64::consts::PI;
             }
         }
 
@@ -91,9 +89,7 @@ fn bench_phase_sanitization(c: &mut Criterion) {
             BenchmarkId::new("sanitize", format!("4x{}", size)),
             &phase_data,
             |b, data| {
-                b.iter(|| {
-                    sanitizer.sanitize_phase(&black_box(data.clone())).unwrap()
-                });
+                b.iter(|| sanitizer.sanitize_phase(&black_box(data.clone())).unwrap());
             },
         );
     }
@@ -116,9 +112,7 @@ fn bench_feature_extraction(c: &mut Criterion) {
             BenchmarkId::new("extract", format!("4x{}", subcarriers)),
             &csi_data,
             |b, data| {
-                b.iter(|| {
-                    extractor.extract(black_box(data))
-                });
+                b.iter(|| extractor.extract(black_box(data)));
             },
         );
     }
@@ -145,9 +139,7 @@ fn bench_motion_detection(c: &mut Criterion) {
 
     group.throughput(Throughput::Elements(1));
     group.bench_function("analyze_motion", |b| {
-        b.iter(|| {
-            detector.analyze_motion(black_box(&features))
-        });
+        b.iter(|| detector.analyze_motion(black_box(&features)));
     });
 
     group.finish();
@@ -182,7 +174,9 @@ fn bench_full_pipeline(c: &mut Criterion) {
             let processed = processor.preprocess(black_box(&csi_data)).unwrap();
 
             // 2. Sanitize phase
-            let sanitized = sanitizer.sanitize_phase(&black_box(processed.phase.clone())).unwrap();
+            let sanitized = sanitizer
+                .sanitize_phase(&black_box(processed.phase.clone()))
+                .unwrap();
 
             // 3. Extract features
             let features = extractor.extract(black_box(&csi_data));

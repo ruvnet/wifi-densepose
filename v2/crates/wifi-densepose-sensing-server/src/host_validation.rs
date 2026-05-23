@@ -109,7 +109,7 @@ impl HostAllowlist {
             .into_iter()
             .map(|s| s.as_ref().to_string())
             .collect();
-        HostAllowlist::with_extra(cli_vec.into_iter().chain(env_extras.into_iter()))
+        HostAllowlist::with_extra(cli_vec.into_iter().chain(env_extras))
     }
 
     /// Disable host-header validation entirely. Provided as an explicit escape
@@ -210,11 +210,7 @@ pub async fn require_allowed_host(
     let host_header = match host_header {
         Some(h) => h,
         None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                "missing Host header\n",
-            )
-                .into_response();
+            return (StatusCode::BAD_REQUEST, "missing Host header\n").into_response();
         }
     };
     if allowlist.is_allowed(&host_header) {
@@ -342,7 +338,12 @@ mod tests {
             StatusCode::OK,
         );
         assert_eq!(
-            status(r.clone(), "/api/v1/pose/current", Some("sensing.local:8080")).await,
+            status(
+                r.clone(),
+                "/api/v1/pose/current",
+                Some("sensing.local:8080")
+            )
+            .await,
             StatusCode::OK,
         );
         assert_eq!(

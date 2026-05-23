@@ -1,14 +1,16 @@
 //! Adapter for wifi-densepose-nn crate (neural network inference).
 
+use super::signal_adapter::VitalFeatures;
 use super::AdapterError;
 use crate::domain::{BreathingPattern, BreathingType, HeartbeatSignature, SignalStrength};
-use super::signal_adapter::VitalFeatures;
 
 /// Adapter for neural network-based vital signs detection
 pub struct NeuralAdapter {
     /// Whether to use GPU acceleration
+    #[allow(dead_code)]
     use_gpu: bool,
     /// Confidence threshold for valid detections
+    #[allow(dead_code)]
     confidence_threshold: f32,
     /// Model loaded status
     models_loaded: bool,
@@ -74,11 +76,7 @@ impl NeuralAdapter {
         let heartbeat = self.classify_heartbeat(features)?;
 
         // Calculate overall confidence
-        let confidence = self.calculate_confidence(
-            &breathing,
-            &heartbeat,
-            features.signal_quality,
-        );
+        let confidence = self.calculate_confidence(&breathing, &heartbeat, features.signal_quality);
 
         Ok(VitalsClassification {
             breathing,
@@ -106,7 +104,7 @@ impl NeuralAdapter {
         let rate_bpm = (peak_freq * 60.0) as f32;
 
         // Validate rate
-        if rate_bpm < 4.0 || rate_bpm > 60.0 {
+        if !(4.0..=60.0).contains(&rate_bpm) {
             return None;
         }
 
@@ -148,7 +146,7 @@ impl NeuralAdapter {
         let rate_bpm = (peak_freq * 60.0) as f32;
 
         // Validate rate (30-200 BPM)
-        if rate_bpm < 30.0 || rate_bpm > 200.0 {
+        if !(30.0..=200.0).contains(&rate_bpm) {
             return None;
         }
 
@@ -237,7 +235,7 @@ mod tests {
     fn create_weak_features() -> VitalFeatures {
         VitalFeatures {
             breathing_features: vec![0.25, 0.02, 0.05], // Weak
-            heartbeat_features: vec![1.2, 0.01, 0.02], // Very weak
+            heartbeat_features: vec![1.2, 0.01, 0.02],  // Very weak
             movement_features: vec![0.01, 0.005, 0.001],
             signal_quality: 0.3,
         }

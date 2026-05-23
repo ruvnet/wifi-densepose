@@ -506,7 +506,8 @@ pub trait AsyncDataStore: Send + Sync {
     async fn get_csi_frame(&self, id: &FrameId) -> Result<CsiFrame, StorageError>;
 
     /// Retrieves CSI frames matching the query options.
-    async fn query_csi_frames(&self, options: &QueryOptions) -> Result<Vec<CsiFrame>, StorageError>;
+    async fn query_csi_frames(&self, options: &QueryOptions)
+        -> Result<Vec<CsiFrame>, StorageError>;
 
     /// Stores a pose estimate.
     async fn store_pose_estimate(&self, estimate: &PoseEstimate) -> Result<(), StorageError>;
@@ -621,6 +622,9 @@ mod tests {
 
         assert_eq!(cpu, InferenceDevice::Cpu);
         assert!(matches!(cuda, InferenceDevice::Cuda { device_id: 0 }));
-        assert!(matches!(tensorrt, InferenceDevice::TensorRt { device_id: 1 }));
+        assert!(matches!(
+            tensorrt,
+            InferenceDevice::TensorRt { device_id: 1 }
+        ));
     }
 }

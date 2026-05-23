@@ -229,11 +229,9 @@ pub fn coherence_gate(phase_diffs: &[f32], threshold: f32) -> bool {
     if phase_diffs.is_empty() {
         return false;
     }
-    let (sum_cos, sum_sin) = phase_diffs
-        .iter()
-        .fold((0.0_f32, 0.0_f32), |(c, s), &dp| {
-            (c + dp.cos(), s + dp.sin())
-        });
+    let (sum_cos, sum_sin) = phase_diffs.iter().fold((0.0_f32, 0.0_f32), |(c, s), &dp| {
+        (c + dp.cos(), s + dp.sin())
+    });
     let n = phase_diffs.len() as f32;
     let coherence = ((sum_cos / n).powi(2) + (sum_sin / n).powi(2)).sqrt();
     coherence > threshold
@@ -246,11 +244,9 @@ pub fn compute_coherence(phase_diffs: &[f32]) -> f32 {
     if phase_diffs.is_empty() {
         return 0.0;
     }
-    let (sum_cos, sum_sin) = phase_diffs
-        .iter()
-        .fold((0.0_f32, 0.0_f32), |(c, s), &dp| {
-            (c + dp.cos(), s + dp.sin())
-        });
+    let (sum_cos, sum_sin) = phase_diffs.iter().fold((0.0_f32, 0.0_f32), |(c, s), &dp| {
+        (c + dp.cos(), s + dp.sin())
+    });
     let n = phase_diffs.len() as f32;
     ((sum_cos / n).powi(2) + (sum_sin / n).powi(2)).sqrt()
 }
@@ -268,7 +264,10 @@ mod tests {
         // All phase diffs are the same -> coherence ~ 1.0
         let phase_diffs = vec![0.5_f32; 100];
         let c = compute_coherence(&phase_diffs);
-        assert!(c > 0.99, "identical phases should give coherence ~ 1.0, got {c}");
+        assert!(
+            c > 0.99,
+            "identical phases should give coherence ~ 1.0, got {c}"
+        );
     }
 
     #[test]
@@ -279,7 +278,10 @@ mod tests {
             .map(|i| 2.0 * std::f32::consts::PI * i as f32 / n as f32)
             .collect();
         let c = compute_coherence(&phase_diffs);
-        assert!(c < 0.05, "uniformly spread phases should give coherence ~ 0.0, got {c}");
+        assert!(
+            c < 0.05,
+            "uniformly spread phases should give coherence ~ 0.0, got {c}"
+        );
     }
 
     #[test]
@@ -336,11 +338,17 @@ mod tests {
 
         // Coherence drops to 0.65 (below threshold but within hysteresis band).
         assert!(gate.evaluate(0.65));
-        assert!(gate.is_open(), "gate should stay open within hysteresis band");
+        assert!(
+            gate.is_open(),
+            "gate should stay open within hysteresis band"
+        );
 
         // Coherence drops below hysteresis boundary (0.7 - 0.1 = 0.6).
         assert!(!gate.evaluate(0.55));
-        assert!(!gate.is_open(), "gate should close below hysteresis boundary");
+        assert!(
+            !gate.is_open(),
+            "gate should close below hysteresis boundary"
+        );
     }
 
     #[test]

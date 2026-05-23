@@ -54,8 +54,11 @@ fn walkdir(path: &Path) -> u64 {
         .flatten()
         .filter_map(|e| e.ok())
         .map(|e| {
-            if e.path().is_dir() { walkdir(&e.path()) }
-            else { e.metadata().map(|m| m.len()).unwrap_or(0) }
+            if e.path().is_dir() {
+                walkdir(&e.path())
+            } else {
+                e.metadata().map(|m| m.len()).unwrap_or(0)
+            }
         })
         .sum()
 }

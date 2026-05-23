@@ -85,11 +85,17 @@ mod tests {
         let mut spec = CompressedHeartbeatSpectrogram::new(n_freq_bins);
 
         for i in 0..10 {
-            let column: Vec<f32> = (0..n_freq_bins).map(|b| (i * n_freq_bins + b) as f32 * 0.01).collect();
+            let column: Vec<f32> = (0..n_freq_bins)
+                .map(|b| (i * n_freq_bins + b) as f32 * 0.01)
+                .collect();
             spec.push_column(&column);
         }
 
-        assert_eq!(spec.frame_count(), 10, "frame_count must equal the number of pushed columns");
+        assert_eq!(
+            spec.frame_count(),
+            10,
+            "frame_count must equal the number of pushed columns"
+        );
     }
 
     #[test]

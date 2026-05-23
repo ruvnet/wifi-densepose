@@ -1,8 +1,8 @@
 //! Alert dispatching and delivery.
 
+use super::AlertGenerator;
 use crate::domain::{Alert, AlertId, Priority, Survivor};
 use crate::MatError;
-use super::AlertGenerator;
 use std::collections::HashMap;
 
 /// Configuration for alert dispatch
@@ -67,7 +67,9 @@ impl AlertDispatcher {
         let priority = alert.priority();
 
         // Store in pending alerts
-        self.pending_alerts.write().insert(alert_id.clone(), alert.clone());
+        self.pending_alerts
+            .write()
+            .insert(alert_id.clone(), alert.clone());
 
         // Log the alert
         tracing::info!(
@@ -121,7 +123,11 @@ impl AlertDispatcher {
     }
 
     /// Resolve an alert
-    pub fn resolve(&self, alert_id: &AlertId, resolution: crate::domain::AlertResolution) -> Result<(), MatError> {
+    pub fn resolve(
+        &self,
+        alert_id: &AlertId,
+        resolution: crate::domain::AlertResolution,
+    ) -> Result<(), MatError> {
         let mut alerts = self.pending_alerts.write();
 
         if let Some(alert) = alerts.remove(alert_id) {
@@ -191,7 +197,9 @@ impl AlertDispatcher {
 
     /// Escalate oldest pending alerts
     async fn escalate_oldest(&self) -> Result<(), MatError> {
-        let mut alerts: Vec<_> = self.pending_alerts.read()
+        let mut alerts: Vec<_> = self
+            .pending_alerts
+            .read()
             .iter()
             .map(|(id, alert)| (id.clone(), *alert.created_at()))
             .collect();
@@ -229,6 +237,7 @@ pub trait AlertHandler: Send + Sync {
 }
 
 /// Console/logging alert handler
+#[allow(dead_code)]
 pub struct ConsoleAlertHandler;
 
 #[async_trait::async_trait]
@@ -264,6 +273,7 @@ impl AlertHandler for ConsoleAlertHandler {
 /// Requires platform audio support. On systems without audio hardware
 /// (headless servers, embedded), this logs the alert pattern. On systems
 /// with audio, integrate with the platform's audio API.
+#[allow(dead_code)]
 pub struct AudioAlertHandler {
     /// Whether audio hardware is available
     audio_available: bool,
@@ -271,15 +281,19 @@ pub struct AudioAlertHandler {
 
 impl AudioAlertHandler {
     /// Create a new audio handler, auto-detecting audio support.
+    #[allow(dead_code)]
     pub fn new() -> Self {
-        let audio_available = std::env::var("DISPLAY").is_ok()
-            || std::env::var("PULSE_SERVER").is_ok();
+        let audio_available =
+            std::env::var("DISPLAY").is_ok() || std::env::var("PULSE_SERVER").is_ok();
         Self { audio_available }
     }
 
     /// Create with explicit audio availability flag.
+    #[allow(dead_code)]
     pub fn with_availability(available: bool) -> Self {
-        Self { audio_available: available }
+        Self {
+            audio_available: available,
+        }
     }
 }
 
@@ -320,7 +334,7 @@ impl AlertHandler for AudioAlertHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{SurvivorId, TriageStatus, AlertPayload};
+    use crate::domain::{AlertPayload, SurvivorId, TriageStatus};
 
     fn create_test_alert() -> Alert {
         Alert::new(
@@ -352,7 +366,9 @@ mod tests {
         assert!(result.is_ok());
 
         let pending = dispatcher.pending();
-        assert!(pending.iter().any(|a| a.id() == &alert_id && a.acknowledged_by() == Some("Team Alpha")));
+        assert!(pending
+            .iter()
+            .any(|a| a.id() == &alert_id && a.acknowledged_by() == Some("Team Alpha")));
     }
 
     #[tokio::test]

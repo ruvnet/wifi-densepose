@@ -14,8 +14,8 @@
 //! └── SubcarrierError  (frequency-axis resampling)
 //! ```
 
-use thiserror::Error;
 use std::path::PathBuf;
+use thiserror::Error;
 
 // ---------------------------------------------------------------------------
 // TrainResult
@@ -96,7 +96,10 @@ impl TrainError {
 
     /// Construct a [`TrainError::Checkpoint`].
     pub fn checkpoint<S: Into<String>>(msg: S, path: impl Into<PathBuf>) -> Self {
-        TrainError::Checkpoint { message: msg.into(), path: path.into() }
+        TrainError::Checkpoint {
+            message: msg.into(),
+            path: path.into(),
+        }
     }
 
     /// Construct a [`TrainError::NotImplemented`].
@@ -159,7 +162,10 @@ pub enum ConfigError {
 impl ConfigError {
     /// Construct a [`ConfigError::InvalidValue`].
     pub fn invalid_value<S: Into<String>>(field: &'static str, reason: S) -> Self {
-        ConfigError::InvalidValue { field, reason: reason.into() }
+        ConfigError::InvalidValue {
+            field,
+            reason: reason.into(),
+        }
     }
 }
 
@@ -206,9 +212,7 @@ pub enum DatasetError {
     },
 
     /// The number of subcarriers in the file doesn't match expectations.
-    #[error(
-        "Subcarrier count mismatch in `{path}`: file has {found}, expected {expected}"
-    )]
+    #[error("Subcarrier count mismatch in `{path}`: file has {found}, expected {expected}")]
     SubcarrierMismatch {
         /// Path of the offending file.
         path: PathBuf,
@@ -260,9 +264,7 @@ pub enum DatasetError {
     },
 
     /// No subjects matching the requested IDs were found.
-    #[error(
-        "No subjects found in `{data_dir}` for IDs: {requested:?}"
-    )]
+    #[error("No subjects found in `{data_dir}` for IDs: {requested:?}")]
     NoSubjectsFound {
         /// Root data directory.
         data_dir: PathBuf,
@@ -278,27 +280,43 @@ pub enum DatasetError {
 impl DatasetError {
     /// Construct a [`DatasetError::DataNotFound`].
     pub fn not_found<S: Into<String>>(path: impl Into<PathBuf>, msg: S) -> Self {
-        DatasetError::DataNotFound { path: path.into(), message: msg.into() }
+        DatasetError::DataNotFound {
+            path: path.into(),
+            message: msg.into(),
+        }
     }
 
     /// Construct a [`DatasetError::InvalidFormat`].
     pub fn invalid_format<S: Into<String>>(path: impl Into<PathBuf>, msg: S) -> Self {
-        DatasetError::InvalidFormat { path: path.into(), message: msg.into() }
+        DatasetError::InvalidFormat {
+            path: path.into(),
+            message: msg.into(),
+        }
     }
 
     /// Construct a [`DatasetError::IoError`].
     pub fn io_error(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
-        DatasetError::IoError { path: path.into(), source }
+        DatasetError::IoError {
+            path: path.into(),
+            source,
+        }
     }
 
     /// Construct a [`DatasetError::SubcarrierMismatch`].
     pub fn subcarrier_mismatch(path: impl Into<PathBuf>, found: usize, expected: usize) -> Self {
-        DatasetError::SubcarrierMismatch { path: path.into(), found, expected }
+        DatasetError::SubcarrierMismatch {
+            path: path.into(),
+            found,
+            expected,
+        }
     }
 
     /// Construct a [`DatasetError::NpyReadError`].
     pub fn npy_read<S: Into<String>>(path: impl Into<PathBuf>, msg: S) -> Self {
-        DatasetError::NpyReadError { path: path.into(), message: msg.into() }
+        DatasetError::NpyReadError {
+            path: path.into(),
+            message: msg.into(),
+        }
     }
 }
 

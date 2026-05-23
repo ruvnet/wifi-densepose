@@ -79,11 +79,7 @@ mod tests {
     use crate::csi_frame::{AntennaConfig, Bandwidth, CsiMetadata, SubcarrierData};
     use chrono::Utc;
 
-    fn make_frame(
-        node_id: u8,
-        n_antennas: u8,
-        subcarriers: Vec<SubcarrierData>,
-    ) -> CsiFrame {
+    fn make_frame(node_id: u8, n_antennas: u8, subcarriers: Vec<SubcarrierData>) -> CsiFrame {
         let n_subcarriers = if n_antennas == 0 {
             subcarriers.len()
         } else {
@@ -113,8 +109,16 @@ mod tests {
     #[test]
     fn test_bridge_from_known_iq() {
         let subs = vec![
-            SubcarrierData { i: 3, q: 4, index: -1 },  // amp = 5.0
-            SubcarrierData { i: 0, q: 10, index: 1 },   // amp = 10.0
+            SubcarrierData {
+                i: 3,
+                q: 4,
+                index: -1,
+            }, // amp = 5.0
+            SubcarrierData {
+                i: 0,
+                q: 10,
+                index: 1,
+            }, // amp = 10.0
         ];
         let frame = make_frame(1, 1, subs);
         let data: CsiData = frame.into();
@@ -128,12 +132,36 @@ mod tests {
     fn test_bridge_multi_antenna() {
         // 2 antennas, 3 subcarriers each = 6 total
         let subs = vec![
-            SubcarrierData { i: 1, q: 0, index: -1 },
-            SubcarrierData { i: 2, q: 0, index: 0 },
-            SubcarrierData { i: 3, q: 0, index: 1 },
-            SubcarrierData { i: 4, q: 0, index: -1 },
-            SubcarrierData { i: 5, q: 0, index: 0 },
-            SubcarrierData { i: 6, q: 0, index: 1 },
+            SubcarrierData {
+                i: 1,
+                q: 0,
+                index: -1,
+            },
+            SubcarrierData {
+                i: 2,
+                q: 0,
+                index: 0,
+            },
+            SubcarrierData {
+                i: 3,
+                q: 0,
+                index: 1,
+            },
+            SubcarrierData {
+                i: 4,
+                q: 0,
+                index: -1,
+            },
+            SubcarrierData {
+                i: 5,
+                q: 0,
+                index: 0,
+            },
+            SubcarrierData {
+                i: 6,
+                q: 0,
+                index: 1,
+            },
         ];
         let frame = make_frame(1, 2, subs);
         let data: CsiData = frame.into();
@@ -146,7 +174,11 @@ mod tests {
 
     #[test]
     fn test_bridge_snr_computation() {
-        let subs = vec![SubcarrierData { i: 1, q: 0, index: 0 }];
+        let subs = vec![SubcarrierData {
+            i: 1,
+            q: 0,
+            index: 0,
+        }];
         let frame = make_frame(1, 1, subs);
         let data: CsiData = frame.into();
 
@@ -156,7 +188,11 @@ mod tests {
 
     #[test]
     fn test_bridge_preserves_metadata() {
-        let subs = vec![SubcarrierData { i: 10, q: 20, index: 0 }];
+        let subs = vec![SubcarrierData {
+            i: 10,
+            q: 20,
+            index: 0,
+        }];
         let frame = make_frame(7, 1, subs);
         let data: CsiData = frame.into();
 

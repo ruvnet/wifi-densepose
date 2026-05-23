@@ -47,7 +47,10 @@ impl GateDecision {
 
     /// Returns true if this is a reject or recalibrate decision.
     pub fn is_rejected(&self) -> bool {
-        matches!(self, GateDecision::Reject | GateDecision::Recalibrate { .. })
+        matches!(
+            self,
+            GateDecision::Reject | GateDecision::Recalibrate { .. }
+        )
     }
 
     /// Returns the noise multiplier for accepted decisions, or None otherwise.
@@ -95,7 +98,8 @@ pub struct GatePolicy {
     reject_threshold: f32,
     /// Maximum stale frames before recalibration.
     max_stale_frames: u64,
-    /// Noise inflation for predict-only zone.
+    /// Noise inflation for predict-only zone (reserved for future tuning).
+    #[allow(dead_code)]
     predict_only_noise: f32,
     /// Running count of consecutive rejected/predict-only frames.
     consecutive_low: u64,
@@ -216,7 +220,9 @@ mod tests {
     fn accept_high_coherence() {
         let mut gate = GatePolicy::new(0.85, 0.5, 200);
         let decision = gate.evaluate(0.95, 0);
-        assert!(matches!(decision, GateDecision::Accept { noise_multiplier } if (noise_multiplier - 1.0).abs() < f32::EPSILON));
+        assert!(
+            matches!(decision, GateDecision::Accept { noise_multiplier } if (noise_multiplier - 1.0).abs() < f32::EPSILON)
+        );
         assert!(decision.allows_update());
         assert!(!decision.is_rejected());
     }
@@ -243,7 +249,10 @@ mod tests {
     fn recalibrate_after_stale_timeout() {
         let mut gate = GatePolicy::new(0.85, 0.5, 200);
         let decision = gate.evaluate(0.3, 200);
-        assert!(matches!(decision, GateDecision::Recalibrate { stale_frames: 200 }));
+        assert!(matches!(
+            decision,
+            GateDecision::Recalibrate { stale_frames: 200 }
+        ));
         assert!(decision.is_rejected());
     }
 
@@ -286,7 +295,9 @@ mod tests {
 
     #[test]
     fn noise_multiplier_accessor() {
-        let accept = GateDecision::Accept { noise_multiplier: 2.5 };
+        let accept = GateDecision::Accept {
+            noise_multiplier: 2.5,
+        };
         assert_eq!(accept.noise_multiplier(), Some(2.5));
 
         let reject = GateDecision::Reject;
@@ -305,7 +316,11 @@ mod tests {
     #[test]
     fn adaptive_noise_midpoint() {
         let mid = adaptive_noise_multiplier(0.675, 0.85, 0.5, 3.0);
-        assert!((mid - 2.0).abs() < 0.01, "Midpoint noise should be ~2.0, got {}", mid);
+        assert!(
+            (mid - 2.0).abs() < 0.01,
+            "Midpoint noise should be ~2.0, got {}",
+            mid
+        );
     }
 
     #[test]

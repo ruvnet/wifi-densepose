@@ -2,14 +2,14 @@
 //!
 //! These types are used for serializing/deserializing API requests and responses.
 //! They provide a clean separation between domain models and API contracts.
+#![allow(missing_docs)]
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::{
-    DisasterType, EventStatus, ZoneStatus, TriageStatus, Priority,
-    AlertStatus, SurvivorStatus,
+    AlertStatus, DisasterType, EventStatus, Priority, SurvivorStatus, TriageStatus, ZoneStatus,
 };
 
 // ============================================================================
@@ -206,9 +206,7 @@ pub enum ZoneBoundsDto {
         radius: f64,
     },
     /// Polygon boundary (list of vertices)
-    Polygon {
-        vertices: Vec<(f64, f64)>,
-    },
+    Polygon { vertices: Vec<(f64, f64)> },
 }
 
 /// Scan parameters for a zone.
@@ -232,9 +230,15 @@ pub struct ScanParametersDto {
     pub heartbeat_detection: bool,
 }
 
-fn default_sensitivity() -> f64 { 0.8 }
-fn default_max_depth() -> f64 { 5.0 }
-fn default_true() -> bool { true }
+fn default_sensitivity() -> f64 {
+    0.8
+}
+fn default_max_depth() -> f64 {
+    5.0
+}
+fn default_true() -> bool {
+    true
+}
 
 impl Default for ScanParametersDto {
     fn default() -> Self {
@@ -550,10 +554,7 @@ pub enum WebSocketMessage {
         survivor: SurvivorResponse,
     },
     /// Survivor lost (signal lost)
-    SurvivorLost {
-        event_id: Uuid,
-        survivor_id: Uuid,
-    },
+    SurvivorLost { event_id: Uuid, survivor_id: Uuid },
     /// New alert generated
     AlertCreated {
         event_id: Uuid,
@@ -577,14 +578,9 @@ pub enum WebSocketMessage {
         new_status: EventStatusDto,
     },
     /// Heartbeat/keep-alive
-    Heartbeat {
-        timestamp: DateTime<Utc>,
-    },
+    Heartbeat { timestamp: DateTime<Utc> },
     /// Error message
-    Error {
-        code: String,
-        message: String,
-    },
+    Error { code: String, message: String },
 }
 
 /// WebSocket subscription request.
@@ -592,19 +588,13 @@ pub enum WebSocketMessage {
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum WebSocketRequest {
     /// Subscribe to events for a disaster event
-    Subscribe {
-        event_id: Uuid,
-    },
+    Subscribe { event_id: Uuid },
     /// Unsubscribe from events
-    Unsubscribe {
-        event_id: Uuid,
-    },
+    Unsubscribe { event_id: Uuid },
     /// Subscribe to all events
     SubscribeAll,
     /// Request current state
-    GetState {
-        event_id: Uuid,
-    },
+    GetState { event_id: Uuid },
 }
 
 // ============================================================================
@@ -816,7 +806,9 @@ pub struct ListEventsQuery {
     pub page_size: usize,
 }
 
-fn default_page_size() -> usize { 20 }
+fn default_page_size() -> usize {
+    20
+}
 
 /// Query parameters for listing survivors.
 #[derive(Debug, Clone, Deserialize, Default)]

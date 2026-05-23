@@ -125,6 +125,7 @@ pub struct SegmentHeader {
 
 impl SegmentHeader {
     /// Create a new header with the given type and segment ID.
+    #[allow(dead_code)]
     fn new(seg_type: u8, segment_id: u64) -> Self {
         Self {
             magic: SEGMENT_MAGIC,
@@ -363,7 +364,7 @@ impl RvfBuilder {
             let written = SEGMENT_HEADER_SIZE + payload.len();
             let target = align_up(written);
             let pad = target - written;
-            buf.extend(std::iter::repeat(0u8).take(pad));
+            buf.extend(std::iter::repeat_n(0u8, pad));
         }
         buf
     }
@@ -505,8 +506,8 @@ impl RvfReader {
 
     /// Read an RVF container from a file.
     pub fn from_file(path: &std::path::Path) -> Result<Self, String> {
-        let data = std::fs::read(path)
-            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        let data =
+            std::fs::read(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
         Self::from_bytes(&data)
     }
 
@@ -758,7 +759,7 @@ mod tests {
 
     #[test]
     fn weights_round_trip() {
-        let weights: Vec<f32> = vec![1.0, -2.5, 3.14, 0.0, f32::MAX, f32::MIN];
+        let weights: Vec<f32> = vec![1.0, -2.5, 3.0 + 0.14, 0.0, f32::MAX, f32::MIN];
 
         let mut builder = RvfBuilder::new();
         builder.add_weights(&weights);
@@ -808,7 +809,9 @@ mod tests {
         let data = builder.build();
 
         let reader = RvfReader::from_bytes(&data).unwrap();
-        let decoded = reader.vital_config().expect("vital config should be present");
+        let decoded = reader
+            .vital_config()
+            .expect("vital config should be present");
         assert!((decoded.breathing_low_hz - 0.15).abs() < f64::EPSILON);
         assert_eq!(decoded.min_subcarriers, 64);
         assert_eq!(decoded.window_size, 1024);
@@ -1030,7 +1033,8 @@ mod tests {
         let reader = RvfReader::from_bytes(&data).unwrap();
         assert_eq!(reader.segment_count(), 2);
 
-        let (decoded_config, decoded_weights) = reader.embedding()
+        let (decoded_config, decoded_weights) = reader
+            .embedding()
             .expect("embedding segment should be present");
         assert_eq!(decoded_config["d_model"], 64);
         assert_eq!(decoded_config["d_proj"], 128);
@@ -1058,7 +1062,8 @@ mod tests {
         let profiles = reader.lora_profiles();
         assert_eq!(profiles, vec!["office-env"]);
 
-        let decoded = reader.lora_profile("office-env")
+        let decoded = reader
+            .lora_profile("office-env")
             .expect("LoRA profile should be present");
         assert_eq!(decoded.len(), weights.len());
         for (a, b) in decoded.iter().zip(weights.iter()) {

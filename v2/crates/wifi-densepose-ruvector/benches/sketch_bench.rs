@@ -107,12 +107,16 @@ fn bench_compare_cost(c: &mut Criterion) {
             });
         });
 
-        group.bench_with_input(BenchmarkId::new("sketch_hamming", dim), &dim, |bencher, _| {
-            bencher.iter(|| {
-                let d = black_box(&a_sketch).distance_unchecked(black_box(&b_sketch));
-                hint::black_box(d)
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("sketch_hamming", dim),
+            &dim,
+            |bencher, _| {
+                bencher.iter(|| {
+                    let d = black_box(&a_sketch).distance_unchecked(black_box(&b_sketch));
+                    hint::black_box(d)
+                });
+            },
+        );
 
         group.finish();
     }
@@ -138,7 +142,9 @@ fn bench_topk(c: &mut Criterion) {
     let query_sketch = Sketch::from_embedding(&query_vec, SKETCH_VERSION);
 
     // Build a parallel float bank for the baseline.
-    let float_bank: Vec<Vec<f32>> = (0..bank_size).map(|i| make_embedding(dim, i as u32)).collect();
+    let float_bank: Vec<Vec<f32>> = (0..bank_size)
+        .map(|i| make_embedding(dim, i as u32))
+        .collect();
 
     let mut group = c.benchmark_group(format!("topk_d{dim}_n{bank_size}_k{k}"));
     group.throughput(Throughput::Elements(bank_size as u64));
@@ -158,7 +164,9 @@ fn bench_topk(c: &mut Criterion) {
 
     group.bench_function("sketch_hamming_topk", |bencher| {
         bencher.iter(|| {
-            let result = black_box(&bank).topk(black_box(&query_sketch), k).expect("schema match");
+            let result = black_box(&bank)
+                .topk(black_box(&query_sketch), k)
+                .expect("schema match");
             hint::black_box(result)
         });
     });

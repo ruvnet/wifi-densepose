@@ -103,8 +103,12 @@ impl FresnelBreathingEstimator {
     /// variation matches the expected Fresnel model prediction for chest
     /// displacements in the breathing range.
     pub fn breathing_confidence(&self, observed_amplitude_variation: f64) -> f64 {
-        let min_expected = self.geometry.expected_amplitude_variation(self.min_displacement);
-        let max_expected = self.geometry.expected_amplitude_variation(self.max_displacement);
+        let min_expected = self
+            .geometry
+            .expected_amplitude_variation(self.min_displacement);
+        let max_expected = self
+            .geometry
+            .expected_amplitude_variation(self.max_displacement);
 
         let (low, high) = if min_expected < max_expected {
             (min_expected, max_expected)
@@ -190,7 +194,7 @@ impl FresnelBreathingEstimator {
         let fresnel_conf = self.breathing_confidence(amp_var);
 
         // Autocorrelation quality (>0.3 is good periodicity)
-        let autocorr_conf = best_corr.max(0.0).min(1.0);
+        let autocorr_conf = best_corr.clamp(0.0, 1.0);
 
         let confidence = fresnel_conf * 0.4 + autocorr_conf * 0.6;
 
@@ -245,10 +249,7 @@ fn amplitude_variation(signal: &[f64]) -> f64 {
 ///
 /// # Returns
 /// Some((d1, d2)) if solvable with ≥3 observations, None otherwise
-pub fn solve_fresnel_geometry(
-    observations: &[(f32, f32)],
-    d_total: f32,
-) -> Option<(f32, f32)> {
+pub fn solve_fresnel_geometry(observations: &[(f32, f32)], d_total: f32) -> Option<(f32, f32)> {
     let n = observations.len();
     if n < 3 {
         return None;
@@ -389,7 +390,10 @@ mod tests {
         // Signal matching expected breathing range → high confidence
         let expected_var = g.expected_amplitude_variation(0.007);
         let conf = estimator.breathing_confidence(expected_var);
-        assert!(conf > 0.5, "Expected breathing variation should give high confidence");
+        assert!(
+            conf > 0.5,
+            "Expected breathing variation should give high confidence"
+        );
 
         // Zero variation → low confidence
         let conf_zero = estimator.breathing_confidence(0.0);

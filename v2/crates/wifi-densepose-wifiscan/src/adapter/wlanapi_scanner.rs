@@ -118,8 +118,10 @@ impl WlanApiScanner {
     pub fn metrics(&self) -> ScanMetrics {
         let scan_count = self.scan_count.load(Ordering::Relaxed);
         let total_bssids_observed = self.total_bssids.load(Ordering::Relaxed);
-        let last_scan_duration =
-            *self.last_scan_duration.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let last_scan_duration = *self
+            .last_scan_duration
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let estimated_rate_hz = last_scan_duration.map(|d| {
             let secs = d.as_secs_f64();
             if secs > 0.0 {

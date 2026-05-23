@@ -64,27 +64,51 @@ impl PoseNet {
             56,
             64,
             3,
-            Conv1dConfig { padding: 1, stride: 1, dilation: 1, groups: 1, ..Default::default() },
+            Conv1dConfig {
+                padding: 1,
+                stride: 1,
+                dilation: 1,
+                groups: 1,
+                ..Default::default()
+            },
             enc.pp("c1"),
         )?;
         let c2 = candle_nn::conv1d(
             64,
             128,
             3,
-            Conv1dConfig { padding: 2, stride: 1, dilation: 2, groups: 1, ..Default::default() },
+            Conv1dConfig {
+                padding: 2,
+                stride: 1,
+                dilation: 2,
+                groups: 1,
+                ..Default::default()
+            },
             enc.pp("c2"),
         )?;
         let c3 = candle_nn::conv1d(
             128,
             128,
             3,
-            Conv1dConfig { padding: 4, stride: 1, dilation: 4, groups: 1, ..Default::default() },
+            Conv1dConfig {
+                padding: 4,
+                stride: 1,
+                dilation: 4,
+                groups: 1,
+                ..Default::default()
+            },
             enc.pp("c3"),
         )?;
         let fc1 = candle_nn::linear(128, 256, head.pp("fc1"))?;
         let fc2 = candle_nn::linear(256, 34, head.pp("fc2"))?;
 
-        Ok(Self { c1, c2, c3, fc1, fc2 })
+        Ok(Self {
+            c1,
+            c2,
+            c3,
+            fc1,
+            fc2,
+        })
     }
 
     /// Forward pass: `[B, 56, 20]` -> `[B, 34]` in `[0, 1]`.

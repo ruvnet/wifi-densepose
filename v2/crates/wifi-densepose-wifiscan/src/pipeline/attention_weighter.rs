@@ -98,8 +98,14 @@ mod tests {
         let keys = vec![vec![1.0]];
         let values = vec![vec![5.0]];
         let (output, scores) = weighter.weight(&query, &keys, &values);
-        assert!((scores[0] - 1.0).abs() < 1e-5, "single BSSID should have weight 1.0");
-        assert!((output[0] - 5.0).abs() < 1e-3, "output should equal the single value");
+        assert!(
+            (scores[0] - 1.0).abs() < 1e-5,
+            "single BSSID should have weight 1.0"
+        );
+        assert!(
+            (output[0] - 5.0).abs() < 1e-3,
+            "output should equal the single value"
+        );
     }
 
     #[test]
@@ -124,6 +130,9 @@ mod tests {
         let values = vec![vec![1.0], vec![2.0], vec![3.0]];
         let (_output, scores) = weighter.weight(&query, &keys, &values);
         let sum: f32 = scores.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-5, "scores should sum to 1.0, got {sum}");
+        assert!(
+            (sum - 1.0).abs() < 1e-5,
+            "scores should sum to 1.0, got {sum}"
+        );
     }
 }

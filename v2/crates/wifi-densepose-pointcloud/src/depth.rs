@@ -1,15 +1,15 @@
 //! Monocular depth estimation via MiDaS ONNX + backprojection to 3D points.
 #![allow(dead_code)]
 
-use crate::pointcloud::{PointCloud, ColorPoint};
+use crate::pointcloud::{ColorPoint, PointCloud};
 use anyhow::Result;
 
 /// Default camera intrinsics (approximate for HD webcam)
 pub struct CameraIntrinsics {
-    pub fx: f32,  // focal length x (pixels)
-    pub fy: f32,  // focal length y (pixels)
-    pub cx: f32,  // principal point x
-    pub cy: f32,  // principal point y
+    pub fx: f32, // focal length x (pixels)
+    pub fy: f32, // focal length y (pixels)
+    pub cx: f32, // principal point x
+    pub cy: f32, // principal point y
     pub width: u32,
     pub height: u32,
 }
@@ -17,9 +17,12 @@ pub struct CameraIntrinsics {
 impl Default for CameraIntrinsics {
     fn default() -> Self {
         Self {
-            fx: 525.0, fy: 525.0,   // typical webcam focal length
-            cx: 320.0, cy: 240.0,   // center of 640x480
-            width: 640, height: 480,
+            fx: 525.0,
+            fy: 525.0, // typical webcam focal length
+            cx: 320.0,
+            cy: 240.0, // center of 640x480
+            width: 640,
+            height: 480,
         }
     }
 }
@@ -45,7 +48,9 @@ pub fn backproject_depth(
             let z = depth_map[idx];
 
             // Skip invalid depths
-            if z <= 0.01 || z > 10.0 || z.is_nan() { continue; }
+            if z <= 0.01 || z > 10.0 || z.is_nan() {
+                continue;
+            }
 
             // Backproject: (u, v, z) → (X, Y, Z)
             let px = (x as f32 - intrinsics.cx) * z / intrinsics.fx;
@@ -61,10 +66,22 @@ pub fn backproject_depth(
             } else {
                 // Color by depth (blue=near, red=far)
                 let t = ((z - 0.5) / 4.0).clamp(0.0, 1.0);
-                ((t * 255.0) as u8, ((1.0 - t) * 128.0) as u8, ((1.0 - t) * 255.0) as u8)
+                (
+                    (t * 255.0) as u8,
+                    ((1.0 - t) * 128.0) as u8,
+                    ((1.0 - t) * 255.0) as u8,
+                )
             };
 
-            cloud.points.push(ColorPoint { x: px, y: py, z, r, g, b, intensity: 1.0 });
+            cloud.points.push(ColorPoint {
+                x: px,
+                y: py,
+                z,
+                r,
+                g,
+                b,
+                intensity: 1.0,
+            });
         }
     }
     cloud
@@ -73,11 +90,7 @@ pub fn backproject_depth(
 /// Run depth estimation on an image.
 ///
 /// Tries MiDaS GPU server (127.0.0.1:9885) first, falls back to luminance+edges.
-pub fn estimate_depth(
-    image_data: &[u8],
-    width: u32,
-    height: u32,
-) -> Result<Vec<f32>> {
+pub fn estimate_depth(image_data: &[u8], width: u32, height: u32) -> Result<Vec<f32>> {
     // Try MiDaS GPU server
     if let Ok(depth) = estimate_depth_midas_server(image_data, width, height) {
         return Ok(depth);
@@ -87,22 +100,28 @@ pub fn estimate_depth(
     let w = width as usize;
     let h = height as usize;
     let mut lum = vec![0.0f32; w * h];
-    for i in 0..w * h {
+    for (i, lum_i) in lum.iter_mut().enumerate() {
         let ri = i * 3;
         if ri + 2 < image_data.len() {
-            lum[i] = (0.299 * image_data[ri] as f32
-                    + 0.587 * image_data[ri + 1] as f32
-                    + 0.114 * image_data[ri + 2] as f32) / 255.0;
+            *lum_i = (0.299 * image_data[ri] as f32
+                + 0.587 * image_data[ri + 1] as f32
+                + 0.114 * image_data[ri + 2] as f32)
+                / 255.0;
         }
     }
     let mut edges = vec![0.0f32; w * h];
     for y in 1..h - 1 {
         for x in 1..w - 1 {
-            let gx = -lum[(y-1)*w+x-1] + lum[(y-1)*w+x+1]
-                   - 2.0*lum[y*w+x-1] + 2.0*lum[y*w+x+1]
-                   - lum[(y+1)*w+x-1] + lum[(y+1)*w+x+1];
-            let gy = -lum[(y-1)*w+x-1] - 2.0*lum[(y-1)*w+x] - lum[(y-1)*w+x+1]
-                   + lum[(y+1)*w+x-1] + 2.0*lum[(y+1)*w+x] + lum[(y+1)*w+x+1];
+            let gx = -lum[(y - 1) * w + x - 1] + lum[(y - 1) * w + x + 1]
+                - 2.0 * lum[y * w + x - 1]
+                + 2.0 * lum[y * w + x + 1]
+                - lum[(y + 1) * w + x - 1]
+                + lum[(y + 1) * w + x + 1];
+            let gy =
+                -lum[(y - 1) * w + x - 1] - 2.0 * lum[(y - 1) * w + x] - lum[(y - 1) * w + x + 1]
+                    + lum[(y + 1) * w + x - 1]
+                    + 2.0 * lum[(y + 1) * w + x]
+                    + lum[(y + 1) * w + x + 1];
             edges[y * w + x] = (gx * gx + gy * gy).sqrt().min(1.0);
         }
     }
@@ -118,7 +137,9 @@ pub fn estimate_depth(
 /// Call MiDaS depth server running on GPU (127.0.0.1:9885).
 fn estimate_depth_midas_server(rgb: &[u8], width: u32, height: u32) -> Result<Vec<f32>> {
     let expected = (width * height * 3) as usize;
-    if rgb.len() < expected { anyhow::bail!("rgb too small"); }
+    if rgb.len() < expected {
+        anyhow::bail!("rgb too small");
+    }
 
     // Send RGB as JSON array to depth server
     let rgb_list: Vec<u8> = rgb[..expected].to_vec();
@@ -130,7 +151,8 @@ fn estimate_depth_midas_server(rgb: &[u8], width: u32, height: u32) -> Result<Ve
     let body_bytes = serde_json::to_vec(&body)?;
 
     let client = std::net::TcpStream::connect_timeout(
-        &"127.0.0.1:9885".parse()?, std::time::Duration::from_millis(500)
+        &"127.0.0.1:9885".parse()?,
+        std::time::Duration::from_millis(500),
     )?;
     client.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
     client.set_write_timeout(Some(std::time::Duration::from_secs(2)))?;
@@ -149,14 +171,20 @@ fn estimate_depth_midas_server(rgb: &[u8], width: u32, height: u32) -> Result<Ve
     stream.read_to_end(&mut resp)?;
 
     // Skip HTTP headers
-    let body_start = resp.windows(4).position(|w| w == b"\r\n\r\n")
-        .map(|p| p + 4).unwrap_or(0);
+    let body_start = resp
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|p| p + 4)
+        .unwrap_or(0);
     let depth_bytes = &resp[body_start..];
 
     let n = (width * height) as usize;
-    if depth_bytes.len() < n * 4 { anyhow::bail!("depth response too small"); }
+    if depth_bytes.len() < n * 4 {
+        anyhow::bail!("depth response too small");
+    }
 
-    let depth: Vec<f32> = depth_bytes[..n * 4].chunks_exact(4)
+    let depth: Vec<f32> = depth_bytes[..n * 4]
+        .chunks_exact(4)
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
 
@@ -176,7 +204,7 @@ pub fn demo_depth_cloud() -> PointCloud {
     let intrinsics = CameraIntrinsics::default();
 
     // Simulate a depth map: room with walls at 3m, floor, and a person at 2m
-    let w = 160;  // downsampled
+    let w = 160; // downsampled
     let h = 120;
     let mut depth = vec![3.0f32; w * h];
 
@@ -218,8 +246,12 @@ mod tests {
     fn backproject_2x2_depth_yields_four_points() {
         // 2x2 image, depth=1m everywhere; trivial intrinsics.
         let intr = CameraIntrinsics {
-            fx: 1.0, fy: 1.0, cx: 0.5, cy: 0.5,
-            width: 2, height: 2,
+            fx: 1.0,
+            fy: 1.0,
+            cx: 0.5,
+            cy: 0.5,
+            width: 2,
+            height: 2,
         };
         let depth = vec![1.0f32; 4];
         let cloud = backproject_depth(&depth, &intr, None, 1);
@@ -239,25 +271,16 @@ mod tests {
     #[test]
     fn backproject_rejects_invalid_depth() {
         let intr = CameraIntrinsics {
-            fx: 1.0, fy: 1.0, cx: 0.5, cy: 0.5,
-            width: 2, height: 2,
+            fx: 1.0,
+            fy: 1.0,
+            cx: 0.5,
+            cy: 0.5,
+            width: 2,
+            height: 2,
         };
         // All pixels NaN → no points.
         let depth = vec![f32::NAN; 4];
         let cloud = backproject_depth(&depth, &intr, None, 1);
         assert_eq!(cloud.points.len(), 0);
     }
-}
-
-#[allow(dead_code)]
-fn find_midas_model() -> Result<String> {
-    let paths = [
-        dirs::home_dir().unwrap_or_default().join(".local/share/ruview/midas_v21_small_256.onnx"),
-        dirs::home_dir().unwrap_or_default().join(".cache/ruview/midas_v21_small_256.onnx"),
-        std::path::PathBuf::from("/usr/local/share/ruview/midas_v21_small_256.onnx"),
-    ];
-    for p in &paths {
-        if p.exists() { return Ok(p.to_string_lossy().to_string()); }
-    }
-    anyhow::bail!("MiDaS ONNX model not found. Download:\n  wget https://github.com/isl-org/MiDaS/releases/download/v3_1/midas_v21_small_256.onnx -O ~/.local/share/ruview/midas_v21_small_256.onnx")
 }

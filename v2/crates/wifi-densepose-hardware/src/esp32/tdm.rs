@@ -67,19 +67,38 @@ impl fmt::Display for TdmError {
                 write!(f, "Invalid node count: {} (max {})", count, max)
             }
             TdmError::SlotIndexOutOfBounds { index, num_slots } => {
-                write!(f, "Slot index {} out of bounds (schedule has {} slots)", index, num_slots)
+                write!(
+                    f,
+                    "Slot index {} out of bounds (schedule has {} slots)",
+                    index, num_slots
+                )
             }
             TdmError::UnknownNode { node_id } => {
                 write!(f, "Unknown node ID: {}", node_id)
             }
             TdmError::GuardIntervalTooLarge { guard_us, slot_us } => {
-                write!(f, "Guard interval {} us exceeds slot duration {} us", guard_us, slot_us)
+                write!(
+                    f,
+                    "Guard interval {} us exceeds slot duration {} us",
+                    guard_us, slot_us
+                )
             }
-            TdmError::CycleTooShort { needed_us, available_us } => {
-                write!(f, "Cycle too short: need {} us, have {} us", needed_us, available_us)
+            TdmError::CycleTooShort {
+                needed_us,
+                available_us,
+            } => {
+                write!(
+                    f,
+                    "Cycle too short: need {} us, have {} us",
+                    needed_us, available_us
+                )
             }
             TdmError::DriftExceedsGuard { drift_us, guard_us } => {
-                write!(f, "Drift {:.1} us exceeds guard interval {} us", drift_us, guard_us)
+                write!(
+                    f,
+                    "Drift {:.1} us exceeds guard interval {} us",
+                    drift_us, guard_us
+                )
             }
         }
     }
@@ -274,7 +293,10 @@ impl TdmSchedule {
     /// Check whether clock drift stays within the guard interval.
     pub fn drift_within_guard(&self) -> bool {
         let drift = self.max_drift_us();
-        let guard = self.slots.first().map_or(0, |s| s.guard_interval.as_micros() as u64);
+        let guard = self
+            .slots
+            .first()
+            .map_or(0, |s| s.guard_interval.as_micros() as u64);
         drift < guard as f64
     }
 }
@@ -644,7 +666,10 @@ mod tests {
         );
         assert_eq!(
             result.unwrap_err(),
-            TdmError::InvalidNodeCount { count: 0, max: MAX_NODES }
+            TdmError::InvalidNodeCount {
+                count: 0,
+                max: MAX_NODES
+            }
         );
     }
 
@@ -664,11 +689,14 @@ mod tests {
     fn test_guard_interval_too_large() {
         let result = TdmSchedule::uniform(
             &[0, 1],
-            Duration::from_millis(1),       // 1 ms slot
-            Duration::from_millis(2),        // 2 ms guard > slot
+            Duration::from_millis(1), // 1 ms slot
+            Duration::from_millis(2), // 2 ms guard > slot
             Duration::from_millis(30),
         );
-        assert!(matches!(result, Err(TdmError::GuardIntervalTooLarge { .. })));
+        assert!(matches!(
+            result,
+            Err(TdmError::GuardIntervalTooLarge { .. })
+        ));
     }
 
     #[test]

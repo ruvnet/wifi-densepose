@@ -17,8 +17,8 @@
 //! then feed CSI frames through the pipeline stages.
 
 use ruvector_crv::{
-    AOLDetection, ConvergenceResult, CrvConfig, CrvError, CrvSessionManager, GestaltType,
-    GeometricKind, SensoryModality, SketchElement, SpatialRelationType, SpatialRelationship,
+    AOLDetection, ConvergenceResult, CrvConfig, CrvError, CrvSessionManager, GeometricKind,
+    GestaltType, SensoryModality, SketchElement, SpatialRelationType, SpatialRelationship,
     StageIData, StageIIData, StageIIIData, StageIVData, StageVData, StageVIData,
 };
 use serde::{Deserialize, Serialize};
@@ -203,8 +203,7 @@ impl CsiGestaltClassifier {
         // Movement: high variance + periodic.
         // Suppress when water or energy are strong indicators.
         let movement_suppress = water_score.max(energy_score);
-        let movement_score = if variance > self.thresholds.variance_high
-            && movement_suppress < 0.6
+        let movement_score = if variance > self.thresholds.variance_high && movement_suppress < 0.6
         {
             0.6 + 0.4 * periodicity
         } else if variance > self.thresholds.variance_high {
@@ -241,13 +240,12 @@ impl CsiGestaltClassifier {
             .max(energy_score)
             .max(movement_score)
             .max(natural_score);
-        let manmade_score = if structure > self.thresholds.structure_threshold
-            && manmade_suppress < 0.5
-        {
-            0.5 + 0.5 * structure
-        } else {
-            0.15 * structure * (1.0 - manmade_suppress).max(0.0)
-        };
+        let manmade_score =
+            if structure > self.thresholds.structure_threshold && manmade_suppress < 0.5 {
+                0.5 + 0.5 * structure
+            } else {
+                0.15 * structure * (1.0 - manmade_suppress).max(0.0)
+            };
         scores[4] = (GestaltType::Manmade, manmade_score);
 
         // Pick the highest-scoring type.
@@ -346,10 +344,7 @@ impl CsiGestaltClassifier {
         }
 
         // Compute successive differences.
-        let diffs: Vec<f32> = amplitudes
-            .windows(2)
-            .map(|w| (w[1] - w[0]).abs())
-            .collect();
+        let diffs: Vec<f32> = amplitudes.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
         let mean_diff = diffs.iter().sum::<f32>() / diffs.len().max(1) as f32;
         let var_diff = if diffs.len() > 1 {
             diffs.iter().map(|d| (d - mean_diff).powi(2)).sum::<f32>() / (diffs.len() - 1) as f32
@@ -419,11 +414,7 @@ impl CsiSensoryEncoder {
     ///
     /// Returns a list of `(SensoryModality, descriptor_string)` pairs
     /// suitable for feeding into [`ruvector_crv::StageIIEncoder`].
-    pub fn extract(
-        &self,
-        amplitudes: &[f32],
-        phases: &[f32],
-    ) -> Vec<(SensoryModality, String)> {
+    pub fn extract(&self, amplitudes: &[f32], phases: &[f32]) -> Vec<(SensoryModality, String)> {
         let mut impressions = Vec::new();
 
         // Texture: amplitude roughness (high-freq variance).
@@ -605,11 +596,7 @@ impl WifiCrvPipeline {
     /// The `session_id` identifies the sensing session and `room_id`
     /// acts as the CRV target coordinate so that cross-session
     /// convergence can be computed per room.
-    pub fn create_session(
-        &mut self,
-        session_id: &str,
-        room_id: &str,
-    ) -> Result<(), CrvError> {
+    pub fn create_session(&mut self, session_id: &str, room_id: &str) -> Result<(), CrvError> {
         self.manager
             .create_session(session_id.to_string(), room_id.to_string())
     }
@@ -625,9 +612,7 @@ impl WifiCrvPipeline {
         phases: &[f32],
     ) -> Result<CsiCrvResult, CrvError> {
         if amplitudes.is_empty() {
-            return Err(CrvError::EmptyInput(
-                "CSI amplitudes are empty".to_string(),
-            ));
+            return Err(CrvError::EmptyInput("CSI amplitudes are empty".to_string()));
         }
 
         // Stage I: Gestalt classification.
@@ -789,9 +774,7 @@ impl WifiCrvPipeline {
         query_embedding: &[f32],
     ) -> Result<StageVData, CrvError> {
         if query_embedding.is_empty() {
-            return Err(CrvError::EmptyInput(
-                "Query embedding is empty".to_string(),
-            ));
+            return Err(CrvError::EmptyInput("Query embedding is empty".to_string()));
         }
 
         // Probe all stages 1-4 with the query.
@@ -814,10 +797,7 @@ impl WifiCrvPipeline {
     /// Uses MinCut to partition the accumulated session data into
     /// distinct target aspects -- in the WiFi sensing context these
     /// correspond to distinct persons or environment zones.
-    pub fn partition_persons(
-        &mut self,
-        session_id: &str,
-    ) -> Result<StageVIData, CrvError> {
+    pub fn partition_persons(&mut self, session_id: &str) -> Result<StageVIData, CrvError> {
         self.manager.run_stage_vi(session_id)
     }
 
@@ -876,7 +856,13 @@ mod tests {
     /// Generate a periodic amplitude signal.
     fn periodic_signal(n: usize, freq: f32, amplitude: f32) -> Vec<f32> {
         (0..n)
-            .map(|i| amplitude * (2.0 * std::f32::consts::PI * freq * i as f32 / n as f32).sin().abs() + 0.1)
+            .map(|i| {
+                amplitude
+                    * (2.0 * std::f32::consts::PI * freq * i as f32 / n as f32)
+                        .sin()
+                        .abs()
+                    + 0.1
+            })
             .collect()
     }
 
@@ -906,7 +892,10 @@ mod tests {
         let phases = linear_phases(64);
         let (gestalt, conf) = classifier.classify(&amps, &phases);
         assert_eq!(gestalt, GestaltType::Movement);
-        assert!(conf > 0.3, "movement confidence should be reasonable: {conf}");
+        assert!(
+            conf > 0.3,
+            "movement confidence should be reasonable: {conf}"
+        );
     }
 
     #[test]
@@ -951,7 +940,9 @@ mod tests {
             ..GestaltThresholds::default()
         });
         // Perfectly regular alternating pattern.
-        let amps: Vec<f32> = (0..64).map(|i| if i % 2 == 0 { 1.0 } else { 0.8 }).collect();
+        let amps: Vec<f32> = (0..64)
+            .map(|i| if i % 2 == 0 { 1.0 } else { 0.8 })
+            .collect();
         let phases = linear_phases(64);
         let (gestalt, conf) = classifier.classify(&amps, &phases);
         assert_eq!(gestalt, GestaltType::Manmade);
@@ -1024,7 +1015,9 @@ mod tests {
         let amps = static_signal(32, 1.0);
         let phases = vec![0.5f32; 32]; // identical phases = high coherence
         let impressions = encoder.extract(&amps, &phases);
-        let lum = impressions.iter().find(|(m, _)| *m == SensoryModality::Luminosity);
+        let lum = impressions
+            .iter()
+            .find(|(m, _)| *m == SensoryModality::Luminosity);
         assert!(lum.is_some());
         let desc = &lum.unwrap().1;
         assert!(
@@ -1039,7 +1032,9 @@ mod tests {
         let amps = static_signal(32, 0.01);
         let phases = linear_phases(32);
         let impressions = encoder.extract(&amps, &phases);
-        let temp = impressions.iter().find(|(m, _)| *m == SensoryModality::Temperature);
+        let temp = impressions
+            .iter()
+            .find(|(m, _)| *m == SensoryModality::Temperature);
         assert!(temp.is_some());
         assert!(
             temp.unwrap().1.contains("cold"),
@@ -1174,8 +1169,16 @@ mod tests {
 
         // Add mesh topology.
         let nodes = vec![
-            ApNode { id: "ap-1".into(), position: (0.0, 0.0), coverage_radius: 10.0 },
-            ApNode { id: "ap-2".into(), position: (5.0, 3.0), coverage_radius: 8.0 },
+            ApNode {
+                id: "ap-1".into(),
+                position: (0.0, 0.0),
+                coverage_radius: 10.0,
+            },
+            ApNode {
+                id: "ap-2".into(),
+                position: (5.0, 3.0),
+                coverage_radius: 8.0,
+            },
         ];
         let links = vec![ApLink {
             from: "ap-1".into(),
@@ -1252,9 +1255,7 @@ mod tests {
             .process_csi_frame("viewer-b", &amps, &phases)
             .unwrap();
 
-        let convergence = pipeline
-            .find_cross_room_convergence("room-1", 0.5)
-            .unwrap();
+        let convergence = pipeline.find_cross_room_convergence("room-1", 0.5).unwrap();
         assert!(
             !convergence.scores.is_empty(),
             "identical frames should converge"
@@ -1273,12 +1274,8 @@ mod tests {
         let amps_b = static_signal(32, 0.01);
         let phases = linear_phases(32);
 
-        pipeline
-            .process_csi_frame("a", &amps_a, &phases)
-            .unwrap();
-        pipeline
-            .process_csi_frame("b", &amps_b, &phases)
-            .unwrap();
+        pipeline.process_csi_frame("a", &amps_a, &phases).unwrap();
+        pipeline.process_csi_frame("b", &amps_b, &phases).unwrap();
 
         let convergence = pipeline.find_cross_room_convergence("room-2", 0.95);
         // May or may not converge at high threshold; the key is no panic.
@@ -1370,7 +1367,10 @@ mod tests {
     #[test]
     fn compute_null_fraction_all_zeros() {
         let f = CsiGestaltClassifier::compute_null_fraction(&[0.0; 32]);
-        assert!((f - 1.0).abs() < 1e-6, "all zeros should give null fraction 1.0");
+        assert!(
+            (f - 1.0).abs() < 1e-6,
+            "all zeros should give null fraction 1.0"
+        );
     }
 
     #[test]
@@ -1397,14 +1397,20 @@ mod tests {
     fn signal_energy_known() {
         let encoder = CsiSensoryEncoder::new();
         let energy = encoder.signal_energy(&[2.0, 2.0, 2.0, 2.0]);
-        assert!((energy - 4.0).abs() < 1e-6, "energy of [2,2,2,2] should be 4.0");
+        assert!(
+            (energy - 4.0).abs() < 1e-6,
+            "energy of [2,2,2,2] should be 4.0"
+        );
     }
 
     #[test]
     fn phase_coherence_identical() {
         let encoder = CsiSensoryEncoder::new();
         let c = encoder.phase_coherence(&[1.0; 100]);
-        assert!(c > 0.99, "identical phases should give coherence ~1.0, got {c}");
+        assert!(
+            c > 0.99,
+            "identical phases should give coherence ~1.0, got {c}"
+        );
     }
 
     #[test]
@@ -1418,7 +1424,10 @@ mod tests {
     fn subcarrier_spread_all_active() {
         let encoder = CsiSensoryEncoder::new();
         let spread = encoder.subcarrier_spread(&[1.0; 32]);
-        assert!((spread - 1.0).abs() < 1e-6, "all active should give spread 1.0");
+        assert!(
+            (spread - 1.0).abs() < 1e-6,
+            "all active should give spread 1.0"
+        );
     }
 
     #[test]

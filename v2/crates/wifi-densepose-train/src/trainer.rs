@@ -27,8 +27,8 @@ use tracing::{debug, info, warn};
 use crate::config::TrainingConfig;
 use crate::dataset::{CsiDataset, CsiSample};
 use crate::error::TrainError;
-use crate::losses::{LossWeights, WiFiDensePoseLoss};
 use crate::losses::generate_target_heatmaps;
+use crate::losses::{LossWeights, WiFiDensePoseLoss};
 use crate::metrics::{MetricsAccumulator, MetricsResult};
 use crate::model::WiFiDensePoseModel;
 
@@ -98,7 +98,11 @@ impl Trainer {
         tch::manual_seed(config.seed as i64);
 
         let model = WiFiDensePoseModel::new(&config, device);
-        Trainer { config, model, device }
+        Trainer {
+            config,
+            model,
+            device,
+        }
     }
 
     /// Run the full training loop.
@@ -146,8 +150,11 @@ impl Trainer {
             .truncate(true)
             .open(&csv_path)
             .map_err(|e| TrainError::training_step(format!("open csv log: {e}")))?;
-        writeln!(csv_file, "epoch,train_loss,train_kp_loss,val_pck,val_oks,lr,duration_secs")
-            .map_err(|e| TrainError::training_step(format!("write csv header: {e}")))?;
+        writeln!(
+            csv_file,
+            "epoch,train_loss,train_kp_loss,val_pck,val_oks,lr,duration_secs"
+        )
+        .map_err(|e| TrainError::training_step(format!("write csv header: {e}")))?;
 
         let mut training_history: Vec<EpochLog> = Vec::new();
         let mut best_pck: f32 = -1.0;
@@ -181,9 +188,8 @@ impl Trainer {
 
             // ── Warmup ─────────────────────────────────────────────────────
             if epoch <= self.config.warmup_epochs {
-                let warmup_lr = self.config.learning_rate
-                    * epoch as f64
-                    / self.config.warmup_epochs as f64;
+                let warmup_lr =
+                    self.config.learning_rate * epoch as f64 / self.config.warmup_epochs as f64;
                 opt.set_lr(warmup_lr);
                 current_lr = warmup_lr;
             }
@@ -222,7 +228,12 @@ impl Trainer {
                     &output.keypoints,
                     &target_hm,
                     &vis_mask,
-                    None, None, None, None, None, None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
                 );
 
                 opt.zero_grad();
@@ -337,10 +348,7 @@ impl Trainer {
         Ok(TrainResult {
             best_pck: best_pck.max(0.0),
             best_epoch,
-            final_train_loss: training_history
-                .last()
-                .map(|l| l.train_loss)
-                .unwrap_or(0.0),
+            final_train_loss: training_history.last().map(|l| l.train_loss).unwrap_or(0.0),
             training_history,
             checkpoint_path: best_checkpoint_path,
         })
@@ -410,7 +418,8 @@ impl Trainer {
             .file_stem()
             .and_then(|s| s.to_str())
             .and_then(|s| {
-                s.split("epoch").nth(1)
+                s.split("epoch")
+                    .nth(1)
                     .and_then(|rest| rest.split('_').next())
                     .and_then(|n| n.parse::<usize>().ok())
             })
@@ -522,11 +531,7 @@ pub fn collate(samples: &[CsiSample], device: Device) -> (Tensor, Tensor, Tensor
 
     for (bi, sample) in samples.iter().enumerate() {
         // Amplitude: [T, n_tx, n_rx, n_sub] → flatten to [T*n_tx*n_rx, n_sub]
-        let amp_flat: Vec<f32> = sample
-            .amplitude
-            .iter()
-            .copied()
-            .collect();
+        let amp_flat: Vec<f32> = sample.amplitude.iter().copied().collect();
         let ph_flat: Vec<f32> = sample.phase.iter().copied().collect();
 
         let stride = flat_ant * n_sub;
@@ -578,14 +583,16 @@ fn kp_to_heatmap_tensor(
 
     // Convert to ndarray for generate_target_heatmaps.
     let kp_vec: Vec<f32> = Vec::<f64>::from(kp_tensor.to_kind(Kind::Double).flatten(0, -1))
-        .iter().map(|&x| x as f32).collect();
+        .iter()
+        .map(|&x| x as f32)
+        .collect();
     let vis_vec: Vec<f32> = Vec::<f64>::from(vis_tensor.to_kind(Kind::Double).flatten(0, -1))
-        .iter().map(|&x| x as f32).collect();
+        .iter()
+        .map(|&x| x as f32)
+        .collect();
 
-    let kp_nd = ndarray::Array3::from_shape_vec((b, num_kp, 2), kp_vec)
-        .expect("kp shape");
-    let vis_nd = ndarray::Array2::from_shape_vec((b, num_kp), vis_vec)
-        .expect("vis shape");
+    let kp_nd = ndarray::Array3::from_shape_vec((b, num_kp, 2), kp_vec).expect("kp shape");
+    let vis_nd = ndarray::Array2::from_shape_vec((b, num_kp), vis_vec).expect("vis shape");
 
     let hm_nd = generate_target_heatmaps(&kp_nd, &vis_nd, heatmap_size, 2.0);
 
@@ -616,7 +623,7 @@ fn heatmap_to_keypoints(heatmaps: &Tensor) -> Tensor {
 
     // Decompose linear index into (row, col).
     let row = (&arg / w).to_kind(Kind::Float); // [B, 17]
-    let col = (&arg % w).to_kind(Kind::Float);  // [B, 17]
+    let col = (&arg % w).to_kind(Kind::Float); // [B, 17]
 
     // Normalize to [0, 1]
     let x = col / (w - 1) as f64;
@@ -633,7 +640,9 @@ fn extract_kp_ndarray(kp_tensor: &Tensor, batch_idx: usize) -> Array2<f32> {
     let num_kp = kp_tensor.size()[1] as usize;
     let row = kp_tensor.select(0, batch_idx as i64);
     let data: Vec<f32> = Vec::<f64>::from(row.to_kind(Kind::Double).flatten(0, -1))
-        .iter().map(|&v| v as f32).collect();
+        .iter()
+        .map(|&v| v as f32)
+        .collect();
     Array2::from_shape_vec((num_kp, 2), data).expect("kp ndarray shape")
 }
 
@@ -644,7 +653,9 @@ fn extract_vis_ndarray(vis_tensor: &Tensor, batch_idx: usize) -> Array1<f32> {
     let num_kp = vis_tensor.size()[1] as usize;
     let row = vis_tensor.select(0, batch_idx as i64);
     let data: Vec<f32> = Vec::<f64>::from(row.to_kind(Kind::Double))
-        .iter().map(|&v| v as f32).collect();
+        .iter()
+        .map(|&v| v as f32)
+        .collect();
     Array1::from_vec(data)
 }
 
@@ -656,7 +667,7 @@ fn extract_vis_ndarray(vis_tensor: &Tensor, batch_idx: usize) -> Array1<f32> {
 mod tests {
     use super::*;
     use crate::config::TrainingConfig;
-    use crate::dataset::{SyntheticCsiDataset, SyntheticConfig};
+    use crate::dataset::{SyntheticConfig, SyntheticCsiDataset};
 
     fn tiny_config() -> TrainingConfig {
         let mut cfg = TrainingConfig::default();
@@ -677,14 +688,17 @@ mod tests {
 
     fn tiny_synthetic_dataset(n: usize) -> SyntheticCsiDataset {
         let cfg = tiny_config();
-        SyntheticCsiDataset::new(n, SyntheticConfig {
-            num_subcarriers: cfg.num_subcarriers,
-            num_antennas_tx: cfg.num_antennas_tx,
-            num_antennas_rx: cfg.num_antennas_rx,
-            window_frames: cfg.window_frames,
-            num_keypoints: 17,
-            signal_frequency_hz: 2.4e9,
-        })
+        SyntheticCsiDataset::new(
+            n,
+            SyntheticConfig {
+                num_subcarriers: cfg.num_subcarriers,
+                num_antennas_tx: cfg.num_antennas_tx,
+                num_antennas_rx: cfg.num_antennas_rx,
+                window_frames: cfg.window_frames,
+                num_keypoints: 17,
+                signal_frequency_hz: 2.4e9,
+            },
+        )
     }
 
     #[test]

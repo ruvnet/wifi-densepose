@@ -33,14 +33,14 @@
 //! - `WS /ws/mat/stream` - Real-time survivor and alert stream
 
 pub mod dto;
-pub mod handlers;
 pub mod error;
+pub mod handlers;
 pub mod state;
 pub mod websocket;
 
 use axum::{
-    Router,
     routing::{get, post},
+    Router,
 };
 
 pub use dto::*;
@@ -64,21 +64,39 @@ pub use state::AppState;
 pub fn create_router(state: AppState) -> Router {
     Router::new()
         // Event endpoints
-        .route("/api/v1/mat/events", get(handlers::list_events).post(handlers::create_event))
+        .route(
+            "/api/v1/mat/events",
+            get(handlers::list_events).post(handlers::create_event),
+        )
         .route("/api/v1/mat/events/:event_id", get(handlers::get_event))
         // Zone endpoints
-        .route("/api/v1/mat/events/:event_id/zones", get(handlers::list_zones).post(handlers::add_zone))
+        .route(
+            "/api/v1/mat/events/:event_id/zones",
+            get(handlers::list_zones).post(handlers::add_zone),
+        )
         // Survivor endpoints
-        .route("/api/v1/mat/events/:event_id/survivors", get(handlers::list_survivors))
+        .route(
+            "/api/v1/mat/events/:event_id/survivors",
+            get(handlers::list_survivors),
+        )
         // Alert endpoints
-        .route("/api/v1/mat/events/:event_id/alerts", get(handlers::list_alerts))
-        .route("/api/v1/mat/alerts/:alert_id/acknowledge", post(handlers::acknowledge_alert))
+        .route(
+            "/api/v1/mat/events/:event_id/alerts",
+            get(handlers::list_alerts),
+        )
+        .route(
+            "/api/v1/mat/alerts/:alert_id/acknowledge",
+            post(handlers::acknowledge_alert),
+        )
         // Scan control endpoints (ADR-001: CSI data ingestion + pipeline control)
         .route("/api/v1/mat/scan/csi", post(handlers::push_csi_data))
         .route("/api/v1/mat/scan/control", post(handlers::scan_control))
         .route("/api/v1/mat/scan/status", get(handlers::pipeline_status))
         // Domain event store endpoint
-        .route("/api/v1/mat/events/domain", get(handlers::list_domain_events))
+        .route(
+            "/api/v1/mat/events/domain",
+            get(handlers::list_domain_events),
+        )
         // WebSocket endpoint
         .route("/ws/mat/stream", get(websocket::ws_handler))
         .with_state(state)

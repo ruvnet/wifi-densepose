@@ -1,6 +1,6 @@
 //! Coordinate transforms — WGS84, UTM, ENU, tile math.
 
-use crate::types::{GeoPoint, GeoBBox, TileCoord};
+use crate::types::{GeoBBox, GeoPoint, TileCoord};
 
 const WGS84_A: f64 = 6_378_137.0;
 #[allow(dead_code)]
@@ -55,9 +55,20 @@ pub fn tile_bounds(coord: &TileCoord) -> GeoBBox {
     let n = 2f64.powi(coord.z as i32);
     let west = coord.x as f64 / n * 360.0 - 180.0;
     let east = (coord.x + 1) as f64 / n * 360.0 - 180.0;
-    let north = (std::f64::consts::PI * (1.0 - 2.0 * coord.y as f64 / n)).sinh().atan().to_degrees();
-    let south = (std::f64::consts::PI * (1.0 - 2.0 * (coord.y + 1) as f64 / n)).sinh().atan().to_degrees();
-    GeoBBox { south, west, north, east }
+    let north = (std::f64::consts::PI * (1.0 - 2.0 * coord.y as f64 / n))
+        .sinh()
+        .atan()
+        .to_degrees();
+    let south = (std::f64::consts::PI * (1.0 - 2.0 * (coord.y + 1) as f64 / n))
+        .sinh()
+        .atan()
+        .to_degrees();
+    GeoBBox {
+        south,
+        west,
+        north,
+        east,
+    }
 }
 
 /// Get all tile coordinates covering a bounding box at a zoom level.

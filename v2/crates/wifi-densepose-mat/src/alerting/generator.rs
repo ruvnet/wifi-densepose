@@ -1,8 +1,6 @@
 //! Alert generation from survivor detections.
 
-use crate::domain::{
-    Alert, AlertPayload, Priority, Survivor, TriageStatus, ScanZoneId,
-};
+use crate::domain::{Alert, AlertPayload, Priority, ScanZoneId, Survivor, TriageStatus};
 use crate::MatError;
 
 /// Generator for alerts based on survivor status
@@ -40,10 +38,7 @@ impl AlertGenerator {
     ) -> Result<Alert, MatError> {
         let mut payload = self.create_payload(survivor);
         payload.title = format!("ESCALATED: {}", payload.title);
-        payload.message = format!(
-            "{}\n\nReason for escalation: {}",
-            payload.message, reason
-        );
+        payload.message = format!("{}\n\nReason for escalation: {}", payload.message, reason);
 
         // Escalated alerts are always at least high priority
         let priority = match survivor.triage_status() {
@@ -64,7 +59,8 @@ impl AlertGenerator {
 
         payload.title = format!(
             "Status Change: {} → {}",
-            previous_status, survivor.triage_status()
+            previous_status,
+            survivor.triage_status()
         );
 
         // Determine if this is an upgrade (worse) or downgrade (better)
@@ -97,7 +93,8 @@ impl AlertGenerator {
 
     /// Create alert payload from survivor data
     fn create_payload(&self, survivor: &Survivor) -> AlertPayload {
-        let zone_name = self.zone_names
+        let zone_name = self
+            .zone_names
             .get(survivor.zone_id())
             .map(String::as_str)
             .unwrap_or("Unknown Zone");
@@ -159,8 +156,7 @@ impl AlertGenerator {
 
             lines.push(format!(
                 "  Movement: {:?} (intensity: {:.1})",
-                reading.movement.movement_type,
-                reading.movement.intensity
+                reading.movement.movement_type, reading.movement.intensity
             ));
         } else {
             lines.push("  No recent readings".to_string());
@@ -183,9 +179,7 @@ impl AlertGenerator {
                     "  Position: ({:.1}, {:.1})\n\
                      Depth: {}\n\
                      Uncertainty: ±{:.1}m",
-                    loc.x, loc.y,
-                    depth_str,
-                    loc.uncertainty.horizontal_error
+                    loc.x, loc.y, depth_str, loc.uncertainty.horizontal_error
                 )
             }
             None => "  Position not yet determined".to_string(),
@@ -266,11 +260,15 @@ mod tests {
         let generator = AlertGenerator::new();
         let survivor = create_test_survivor();
 
-        let alert = generator.generate_escalation(&survivor, "Vital signs deteriorating")
+        let alert = generator
+            .generate_escalation(&survivor, "Vital signs deteriorating")
             .unwrap();
 
         assert!(alert.payload().title.contains("ESCALATED"));
-        assert!(matches!(alert.priority(), Priority::Critical | Priority::High));
+        assert!(matches!(
+            alert.priority(),
+            Priority::Critical | Priority::High
+        ));
     }
 
     #[test]
@@ -278,10 +276,9 @@ mod tests {
         let generator = AlertGenerator::new();
         let survivor = create_test_survivor();
 
-        let alert = generator.generate_status_change(
-            &survivor,
-            &TriageStatus::Minor,
-        ).unwrap();
+        let alert = generator
+            .generate_status_change(&survivor, &TriageStatus::Minor)
+            .unwrap();
 
         assert!(alert.payload().title.contains("Status Change"));
     }

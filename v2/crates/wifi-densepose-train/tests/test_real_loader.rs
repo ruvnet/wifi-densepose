@@ -45,16 +45,33 @@ fn mmfi_loads_real_npy_without_interpolation() {
     write_recording(tmp.path(), 8, 3, 3, 56);
 
     let ds = MmFiDataset::discover(tmp.path(), 8, 56, 17).expect("discover the recording");
-    assert!(ds.len() >= 1, "must discover at least one sample, got {}", ds.len());
+    assert!(
+        ds.len() >= 1,
+        "must discover at least one sample, got {}",
+        ds.len()
+    );
 
     let sample = ds.get(0).expect("sample 0");
     assert_eq!(sample.amplitude.shape(), &[8, 3, 3, 56], "amplitude shape");
     assert_eq!(sample.phase.shape(), &[8, 3, 3, 56], "phase shape");
     assert_eq!(sample.keypoints.shape(), &[17, 2], "keypoints shape");
-    assert_eq!(sample.keypoint_visibility.shape(), &[17], "visibility shape");
-    assert!(sample.amplitude.iter().all(|v| v.is_finite()), "amplitude must be finite");
-    assert!(sample.phase.iter().all(|v| v.is_finite()), "phase must be finite");
-    assert!(sample.keypoints.iter().all(|v| v.is_finite()), "keypoints must be finite");
+    assert_eq!(
+        sample.keypoint_visibility.shape(),
+        &[17],
+        "visibility shape"
+    );
+    assert!(
+        sample.amplitude.iter().all(|v| v.is_finite()),
+        "amplitude must be finite"
+    );
+    assert!(
+        sample.phase.iter().all(|v| v.is_finite()),
+        "phase must be finite"
+    );
+    assert!(
+        sample.keypoints.iter().all(|v| v.is_finite()),
+        "keypoints must be finite"
+    );
 }
 
 /// The loader resamples the subcarrier axis when the requested target differs
@@ -72,8 +89,15 @@ fn mmfi_resamples_subcarriers_on_load() {
         &[8, 3, 3, 28],
         "amplitude must be resampled to the requested 28 subcarriers"
     );
-    assert_eq!(sample.phase.shape(), &[8, 3, 3, 28], "phase must be resampled too");
-    assert!(sample.amplitude.iter().all(|v| v.is_finite()), "resampled amplitude must be finite");
+    assert_eq!(
+        sample.phase.shape(),
+        &[8, 3, 3, 28],
+        "phase must be resampled too"
+    );
+    assert!(
+        sample.amplitude.iter().all(|v| v.is_finite()),
+        "resampled amplitude must be finite"
+    );
 }
 
 /// An empty root directory yields an empty dataset (no panic, no spurious

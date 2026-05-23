@@ -79,11 +79,7 @@ impl MacosCoreWlanScanner {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(WifiScanError::ScanFailed {
-                reason: format!(
-                    "mac_wifi exited with {}: {}",
-                    output.status,
-                    stderr.trim()
-                ),
+                reason: format!("mac_wifi exited with {}: {}", output.status, stderr.trim()),
             });
         }
 
@@ -258,7 +254,9 @@ fn extract_number_field(json: &str, key: &str) -> Option<f64> {
     // Collect digits, sign, and decimal point.
     let num_str: String = after_colon
         .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '-' || *c == '.' || *c == '+' || *c == 'e' || *c == 'E')
+        .take_while(|c| {
+            c.is_ascii_digit() || *c == '-' || *c == '.' || *c == '+' || *c == 'e' || *c == 'E'
+        })
         .collect();
 
     num_str.parse().ok()

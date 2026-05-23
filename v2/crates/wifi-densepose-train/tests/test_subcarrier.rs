@@ -138,7 +138,7 @@ fn monotone_downsample_interpolates_linearly() {
 fn boundary_first_subcarrier_preserved_on_downsample() {
     // Fixed non-trivial values so we can verify the exact first element.
     let arr = Array4::<f32>::from_shape_fn((1, 1, 1, 114), |(_, _, _, k)| {
-        (k as f32 * 0.1 + 1.0).ln()   // deterministic, non-trivial
+        (k as f32 * 0.1 + 1.0).ln() // deterministic, non-trivial
     });
     let first_value = arr[[0, 0, 0, 0]];
 
@@ -155,9 +155,8 @@ fn boundary_first_subcarrier_preserved_on_downsample() {
 /// The last output subcarrier must equal the last input subcarrier exactly.
 #[test]
 fn boundary_last_subcarrier_preserved_on_downsample() {
-    let arr = Array4::<f32>::from_shape_fn((1, 1, 1, 114), |(_, _, _, k)| {
-        (k as f32 * 0.1 + 1.0).ln()
-    });
+    let arr =
+        Array4::<f32>::from_shape_fn((1, 1, 1, 114), |(_, _, _, k)| (k as f32 * 0.1 + 1.0).ln());
     let last_input = arr[[0, 0, 0, 113]];
 
     let out = interpolate_subcarriers(&arr, 56);
@@ -212,7 +211,7 @@ fn resample_is_deterministic() {
         let state_u64 = (6364136223846793005_u64)
             .wrapping_mul(idx as u64 + 42)
             .wrapping_add(1442695040888963407);
-        ((state_u64 >> 33) as f32) / (u32::MAX as f32)  // in [0, 1)
+        ((state_u64 >> 33) as f32) / (u32::MAX as f32) // in [0, 1)
     });
 
     let out1 = interpolate_subcarriers(&arr, 56);
@@ -285,7 +284,7 @@ fn compute_interp_weights_frac_in_unit_interval() {
     let weights = compute_interp_weights(114, 56);
     for (i, &(_, _, frac)) in weights.iter().enumerate() {
         assert!(
-            frac >= 0.0 && frac <= 1.0 + 1e-6,
+            (0.0..=1.0 + 1e-6).contains(&frac),
             "fractional weight at index {i} must be in [0, 1], got {frac}"
         );
     }
@@ -315,9 +314,7 @@ fn compute_interp_weights_indices_in_bounds() {
 /// `select_subcarriers_by_variance` must return exactly k indices.
 #[test]
 fn select_subcarriers_returns_k_indices() {
-    let arr = Array4::<f32>::from_shape_fn((20, 3, 3, 56), |(ti, _, _, k)| {
-        (ti * k) as f32
-    });
+    let arr = Array4::<f32>::from_shape_fn((20, 3, 3, 56), |(ti, _, _, k)| (ti * k) as f32);
     let selected = select_subcarriers_by_variance(&arr, 8);
     assert_eq!(
         selected.len(),
@@ -371,7 +368,11 @@ fn select_subcarriers_prefers_high_variance() {
             0.5_f32 // constant across time → zero variance
         } else {
             // High variance: alternating +100 / -100 depending on time.
-            if ti % 2 == 0 { 100.0 } else { -100.0 }
+            if ti % 2 == 0 {
+                100.0
+            } else {
+                -100.0
+            }
         }
     });
 

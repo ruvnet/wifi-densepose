@@ -5,14 +5,14 @@
 //! Both: capture to JPEG, decode to RGB, return raw pixel data
 
 use anyhow::{bail, Result};
-use std::process::Command;
 use std::path::PathBuf;
+use std::process::Command;
 
 /// Captured frame with raw RGB data.
 pub struct Frame {
     pub width: u32,
     pub height: u32,
-    pub rgb: Vec<u8>,      // row-major [height * width * 3]
+    pub rgb: Vec<u8>, // row-major [height * width * 3]
 }
 
 /// Camera source configuration.
@@ -25,7 +25,12 @@ pub struct CameraConfig {
 
 impl Default for CameraConfig {
     fn default() -> Self {
-        Self { device_index: 0, width: 640, height: 480, fps: 15 }
+        Self {
+            device_index: 0,
+            width: 640,
+            height: 480,
+            fps: 15,
+        }
     }
 }
 
@@ -63,29 +68,48 @@ fn capture_ffmpeg(config: &CameraConfig, tmp: &PathBuf) -> Result<Frame> {
         format!("/dev/video{}", config.device_index) // v4l2
     };
 
-    let format = if cfg!(target_os = "macos") { "avfoundation" } else { "v4l2" };
+    let format = if cfg!(target_os = "macos") {
+        "avfoundation"
+    } else {
+        "v4l2"
+    };
 
     let status = Command::new("ffmpeg")
         .args([
-            "-y", "-f", format,
-            "-video_size", &format!("{}x{}", config.width, config.height),
-            "-framerate", &config.fps.to_string(),
-            "-i", &input,
-            "-frames:v", "1",
-            "-f", "rawvideo",
-            "-pix_fmt", "rgb24",
+            "-y",
+            "-f",
+            format,
+            "-video_size",
+            &format!("{}x{}", config.width, config.height),
+            "-framerate",
+            &config.fps.to_string(),
+            "-i",
+            &input,
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
             tmp.to_str().unwrap_or("/tmp/ruview-frame.raw"),
         ])
         .output()?;
 
     if !status.status.success() {
-        bail!("ffmpeg capture failed: {}", String::from_utf8_lossy(&status.stderr));
+        bail!(
+            "ffmpeg capture failed: {}",
+            String::from_utf8_lossy(&status.stderr)
+        );
     }
 
     let rgb = std::fs::read(tmp)?;
     let expected = (config.width * config.height * 3) as usize;
     if rgb.len() < expected {
-        bail!("frame too small: {} bytes, expected {}", rgb.len(), expected);
+        bail!(
+            "frame too small: {} bytes, expected {}",
+            rgb.len(),
+            expected
+        );
     }
 
     let _ = std::fs::remove_file(tmp);
@@ -108,10 +132,17 @@ fn capture_v4l2(config: &CameraConfig, tmp: &PathBuf) -> Result<Frame> {
     // Use v4l2-ctl to grab a frame
     let status = Command::new("v4l2-ctl")
         .args([
-            "--device", &device,
-            "--set-fmt-video", &format!("width={},height={},pixelformat=MJPG", config.width, config.height),
-            "--stream-mmap", "--stream-count=1",
-            "--stream-to", tmp.to_str().unwrap_or("/tmp/frame.mjpg"),
+            "--device",
+            &device,
+            "--set-fmt-video",
+            &format!(
+                "width={},height={},pixelformat=MJPG",
+                config.width, config.height
+            ),
+            "--stream-mmap",
+            "--stream-count=1",
+            "--stream-to",
+            tmp.to_str().unwrap_or("/tmp/frame.mjpg"),
         ])
         .output()?;
 
@@ -192,7 +223,10 @@ pub fn list_cameras() -> Vec<String> {
     let mut cameras = Vec::new();
 
     if cfg!(target_os = "macos") {
-        if let Ok(output) = Command::new("system_profiler").args(["SPCameraDataType"]).output() {
+        if let Ok(output) = Command::new("system_profiler")
+            .args(["SPCameraDataType"])
+            .output()
+        {
             let text = String::from_utf8_lossy(&output.stdout);
             for line in text.lines() {
                 let trimmed = line.trim();

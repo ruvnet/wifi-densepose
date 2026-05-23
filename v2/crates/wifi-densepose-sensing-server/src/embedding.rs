@@ -10,8 +10,8 @@
 //!
 //! All arithmetic uses `f32`. No external ML dependencies.
 
-use crate::graph_transformer::{CsiToPoseTransformer, TransformerConfig, Linear};
-use crate::sona::{LoraAdapter, EnvironmentDetector, DriftInfo};
+use crate::graph_transformer::{CsiToPoseTransformer, Linear, TransformerConfig};
+use crate::sona::{DriftInfo, EnvironmentDetector, LoraAdapter};
 
 // ── SimpleRng (xorshift64) ──────────────────────────────────────────────────
 
@@ -22,7 +22,13 @@ struct SimpleRng {
 
 impl SimpleRng {
     fn new(seed: u64) -> Self {
-        Self { state: if seed == 0 { 0xBAAD_CAFE_DEAD_BEEFu64 } else { seed } }
+        Self {
+            state: if seed == 0 {
+                0xBAAD_CAFE_DEAD_BEEFu64
+            } else {
+                seed
+            },
+        }
     }
     fn next_u64(&mut self) -> u64 {
         let mut x = self.state;
@@ -61,7 +67,12 @@ pub struct EmbeddingConfig {
 
 impl Default for EmbeddingConfig {
     fn default() -> Self {
-        Self { d_model: 64, d_proj: 128, temperature: 0.07, normalize: true }
+        Self {
+            d_model: 64,
+            d_proj: 128,
+            temperature: 0.07,
+            normalize: true,
+        }
     }
 }
 
@@ -127,7 +138,9 @@ impl ProjectionHead {
         }
         // ReLU
         for v in h.iter_mut() {
-            if *v < 0.0 { *v = 0.0; }
+            if *v < 0.0 {
+                *v = 0.0;
+            }
         }
         let mut out = self.proj_2.forward(&h);
         if let Some(ref lora) = self.lora_2 {
@@ -155,7 +168,16 @@ impl ProjectionHead {
         offset += n;
         let (p2, n) = Linear::unflatten_from(&data[offset..], config.d_proj, config.d_proj);
         offset += n;
-        (Self { proj_1: p1, proj_2: p2, config: config.clone(), lora_1: None, lora_2: None }, offset)
+        (
+            Self {
+                proj_1: p1,
+                proj_2: p2,
+                config: config.clone(),
+                lora_1: None,
+                lora_2: None,
+            },
+            offset,
+        )
     }
 
     /// Total trainable parameters.
@@ -165,6 +187,7 @@ impl ProjectionHead {
 
     /// Merge LoRA deltas into the base Linear weights for fast inference.
     /// After merging, the LoRA adapters remain but are effectively accounted for.
+    #[allow(clippy::needless_range_loop)]
     pub fn merge_lora(&mut self) {
         if let Some(ref lora) = self.lora_1 {
             let delta = lora.delta_weights(); // (in_features, out_features)
@@ -193,6 +216,7 @@ impl ProjectionHead {
     }
 
     /// Reverse the LoRA merge to restore original base weights for continued training.
+    #[allow(clippy::needless_range_loop)]
     pub fn unmerge_lora(&mut self) {
         if let Some(ref lora) = self.lora_1 {
             let delta = lora.delta_weights();
@@ -228,7 +252,10 @@ impl ProjectionHead {
         let h = match self.lora_1 {
             Some(ref lora) => {
                 let delta = lora.forward(input);
-                delta.into_iter().map(|v| if v > 0.0 { v } else { 0.0 }).collect::<Vec<_>>()
+                delta
+                    .into_iter()
+                    .map(|v| if v > 0.0 { v } else { 0.0 })
+                    .collect::<Vec<_>>()
             }
             None => vec![0.0f32; d_proj],
         };
@@ -254,12 +281,20 @@ impl ProjectionHead {
     pub fn flatten_lora(&self) -> Vec<f32> {
         let mut out = Vec::new();
         if let Some(ref lora) = self.lora_1 {
-            for row in &lora.a { out.extend_from_slice(row); }
-            for row in &lora.b { out.extend_from_slice(row); }
+            for row in &lora.a {
+                out.extend_from_slice(row);
+            }
+            for row in &lora.b {
+                out.extend_from_slice(row);
+            }
         }
         if let Some(ref lora) = self.lora_2 {
-            for row in &lora.a { out.extend_from_slice(row); }
-            for row in &lora.b { out.extend_from_slice(row); }
+            for row in &lora.a {
+                out.extend_from_slice(row);
+            }
+            for row in &lora.b {
+                out.extend_from_slice(row);
+            }
         }
         out
     }
@@ -346,11 +381,7 @@ impl CsiAugmenter {
         (view_a, view_b)
     }
 
-    fn apply_temporal_jitter(
-        &self,
-        window: &[Vec<f32>],
-        rng: &mut SimpleRng,
-    ) -> Vec<Vec<f32>> {
+    fn apply_temporal_jitter(&self, window: &[Vec<f32>], rng: &mut SimpleRng) -> Vec<Vec<f32>> {
         if window.is_empty() || self.temporal_jitter == 0 {
             return window.to_vec();
         }
@@ -405,7 +436,9 @@ impl CsiAugmenter {
 }
 
 impl Default for CsiAugmenter {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ── Vector math utilities ───────────────────────────────────────────────────
@@ -427,7 +460,11 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = (0..n).map(|i| a[i] * b[i]).sum();
     let na = (0..n).map(|i| a[i] * a[i]).sum::<f32>().sqrt();
     let nb = (0..n).map(|i| b[i] * b[i]).sum::<f32>().sqrt();
-    if na > 1e-10 && nb > 1e-10 { dot / (na * nb) } else { 0.0 }
+    if na > 1e-10 && nb > 1e-10 {
+        dot / (na * nb)
+    } else {
+        0.0
+    }
 }
 
 // ── InfoNCE loss ────────────────────────────────────────────────────────────
@@ -450,16 +487,18 @@ pub fn info_nce_loss(
 
     for i in 0..n {
         // Compute similarity of anchor a_i with all b_j
-        let mut logits = Vec::with_capacity(n);
-        for j in 0..n {
-            logits.push(cosine_similarity(&embeddings_a[i], &embeddings_b[j]) / t);
-        }
+        let logits: Vec<f32> = embeddings_b
+            .iter()
+            .map(|b_j| cosine_similarity(&embeddings_a[i], b_j) / t)
+            .collect();
         // Numerically stable log-softmax
         let max_logit = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        let log_sum_exp = logits.iter()
+        let log_sum_exp = logits
+            .iter()
             .map(|&l| (l - max_logit).exp())
             .sum::<f32>()
-            .ln() + max_logit;
+            .ln()
+            + max_logit;
         total_loss += -logits[i] + log_sum_exp;
     }
 
@@ -508,7 +547,10 @@ pub struct FingerprintIndex {
 
 impl FingerprintIndex {
     pub fn new(index_type: IndexType) -> Self {
-        Self { entries: Vec::new(), index_type }
+        Self {
+            entries: Vec::new(),
+            index_type,
+        }
     }
 
     /// Insert an embedding with metadata and timestamp.
@@ -547,30 +589,41 @@ impl FingerprintIndex {
 
     /// Search for the top-k nearest embeddings by cosine distance.
     pub fn search(&self, query: &[f32], top_k: usize) -> Vec<SearchResult> {
-        let mut results: Vec<(usize, f32)> = self.entries.iter().enumerate()
+        let mut results: Vec<(usize, f32)> = self
+            .entries
+            .iter()
+            .enumerate()
             .map(|(i, e)| (i, 1.0 - cosine_similarity(query, &e.embedding)))
             .collect();
         results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         results.truncate(top_k);
-        results.into_iter().map(|(i, d)| SearchResult {
-            entry: i,
-            distance: d,
-            metadata: self.entries[i].metadata.clone(),
-        }).collect()
+        results
+            .into_iter()
+            .map(|(i, d)| SearchResult {
+                entry: i,
+                distance: d,
+                metadata: self.entries[i].metadata.clone(),
+            })
+            .collect()
     }
 
     /// Number of entries in the index.
-    pub fn len(&self) -> usize { self.entries.len() }
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
 
     /// Whether the index is empty.
-    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 
     /// Detect anomaly: returns true if query is farther than threshold from all entries.
     pub fn is_anomaly(&self, query: &[f32], threshold: f32) -> bool {
         if self.entries.is_empty() {
             return true;
         }
-        self.entries.iter()
+        self.entries
+            .iter()
             .all(|e| (1.0 - cosine_similarity(query, &e.embedding)) > threshold)
     }
 }
@@ -598,7 +651,10 @@ impl PoseEncoder {
 
     /// Forward pass: ReLU + L2-normalize.
     pub fn forward(&self, pose_flat: &[f32]) -> Vec<f32> {
-        let h: Vec<f32> = self.layer_1.forward(pose_flat).into_iter()
+        let h: Vec<f32> = self
+            .layer_1
+            .forward(pose_flat)
+            .into_iter()
             .map(|v| if v > 0.0 { v } else { 0.0 })
             .collect();
         let mut out = self.layer_2.forward(&h);
@@ -619,7 +675,14 @@ impl PoseEncoder {
         offset += n;
         let (l2, n) = Linear::unflatten_from(&data[offset..], d_proj, d_proj);
         offset += n;
-        (Self { layer_1: l1, layer_2: l2, d_proj }, offset)
+        (
+            Self {
+                layer_1: l1,
+                layer_2: l2,
+                d_proj,
+            },
+            offset,
+        )
     }
 
     /// Total trainable parameters.
@@ -713,7 +776,9 @@ impl EmbeddingExtractor {
 
     /// Whether an environment drift has been detected.
     pub fn drift_detected(&self) -> bool {
-        self.drift_detector.as_ref().map_or(false, |d| d.drift_detected())
+        self.drift_detector
+            .as_ref()
+            .is_some_and(|d| d.drift_detected())
     }
 
     /// Get drift information if a detector is present.
@@ -741,7 +806,10 @@ impl EmbeddingExtractor {
         if params.len() != expected {
             return Err(format!(
                 "expected {} params ({}+{}), got {}",
-                expected, t_count, p_count, params.len()
+                expected,
+                t_count,
+                p_count,
+                params.len()
             ));
         }
         self.transformer.unflatten_weights(&params[..t_count])?;
@@ -809,10 +877,10 @@ impl HardNegativeMiner {
 
         // Collect all negative pairs with their similarity
         let mut neg_pairs: Vec<(usize, usize, f32)> = Vec::new();
-        for i in 0..n {
+        for (i, row) in sim_matrix.iter().enumerate() {
             for j in 0..n {
                 if i != j {
-                    let sim = if j < sim_matrix[i].len() { sim_matrix[i][j] } else { 0.0 };
+                    let sim = row.get(j).copied().unwrap_or(0.0);
                     neg_pairs.push((i, j, sim));
                 }
             }
@@ -865,12 +933,15 @@ pub fn info_nce_loss_mined(
     };
 
     // Build similarity matrix for mining
-    let mut sim_matrix = vec![vec![0.0f32; n]; n];
-    for i in 0..n {
-        for j in 0..n {
-            sim_matrix[i][j] = cosine_similarity(&embeddings_a[i], &embeddings_b[j]);
-        }
-    }
+    let sim_matrix: Vec<Vec<f32>> = embeddings_a
+        .iter()
+        .map(|a_i| {
+            embeddings_b
+                .iter()
+                .map(|b_j| cosine_similarity(a_i, b_j))
+                .collect()
+        })
+        .collect();
 
     let mined_pairs = miner.mine(&sim_matrix, epoch);
 
@@ -896,10 +967,12 @@ pub fn info_nce_loss_mined(
 
         // Log-softmax for the positive (index 0)
         let max_logit = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        let log_sum_exp = logits.iter()
+        let log_sum_exp = logits
+            .iter()
             .map(|&l| (l - max_logit).exp())
             .sum::<f32>()
-            .ln() + max_logit;
+            .ln()
+            + max_logit;
         total_loss += -pos_sim + log_sum_exp;
     }
 
@@ -923,14 +996,16 @@ pub fn validate_quantized_embeddings(
     let n = embeddings_fp32.len();
 
     // 1. FP32 cosine distances
-    let fp32_distances: Vec<f32> = embeddings_fp32.iter()
+    let fp32_distances: Vec<f32> = embeddings_fp32
+        .iter()
         .map(|e| 1.0 - cosine_similarity(query_fp32, e))
         .collect();
 
     // 2. Quantize each embedding and query, compute approximate distances
     let query_quant = Quantizer::quantize_symmetric(query_fp32);
     let query_deq = Quantizer::dequantize(&query_quant);
-    let int8_distances: Vec<f32> = embeddings_fp32.iter()
+    let int8_distances: Vec<f32> = embeddings_fp32
+        .iter()
         .map(|e| {
             let eq = Quantizer::quantize_symmetric(e);
             let ed = Quantizer::dequantize(&eq);
@@ -943,7 +1018,9 @@ pub fn validate_quantized_embeddings(
     let int8_ranks = rank_array(&int8_distances);
 
     // 4. Spearman rank correlation: 1 - 6*sum(d^2) / (n*(n^2-1))
-    let d_sq_sum: f32 = fp32_ranks.iter().zip(int8_ranks.iter())
+    let d_sq_sum: f32 = fp32_ranks
+        .iter()
+        .zip(int8_ranks.iter())
         .map(|(&a, &b)| (a - b) * (a - b))
         .sum();
     let n_f = n as f32;
@@ -1024,10 +1101,7 @@ mod tests {
         let input = vec![1.0f32; 8];
         let output = proj.forward(&input);
         let norm: f32 = output.iter().map(|x| x * x).sum::<f32>().sqrt();
-        assert!(
-            (norm - 1.0).abs() < 1e-4,
-            "expected unit norm, got {norm}"
-        );
+        assert!((norm - 1.0).abs() < 1e-4, "expected unit norm, got {norm}");
     }
 
     #[test]
@@ -1068,18 +1142,9 @@ mod tests {
     #[test]
     fn test_info_nce_loss_random_pairs() {
         // Random embeddings should give higher loss than well-aligned ones
-        let aligned_a = vec![
-            vec![1.0, 0.0, 0.0, 0.0],
-            vec![0.0, 1.0, 0.0, 0.0],
-        ];
-        let aligned_b = vec![
-            vec![0.9, 0.1, 0.0, 0.0],
-            vec![0.1, 0.9, 0.0, 0.0],
-        ];
-        let random_b = vec![
-            vec![0.0, 0.0, 1.0, 0.0],
-            vec![0.0, 0.0, 0.0, 1.0],
-        ];
+        let aligned_a = vec![vec![1.0, 0.0, 0.0, 0.0], vec![0.0, 1.0, 0.0, 0.0]];
+        let aligned_b = vec![vec![0.9, 0.1, 0.0, 0.0], vec![0.1, 0.9, 0.0, 0.0]];
+        let random_b = vec![vec![0.0, 0.0, 1.0, 0.0], vec![0.0, 0.0, 0.0, 1.0]];
         let loss_aligned = info_nce_loss(&aligned_a, &aligned_b, 0.5);
         let loss_random = info_nce_loss(&aligned_a, &random_b, 0.5);
         assert!(
@@ -1104,7 +1169,9 @@ mod tests {
                     break;
                 }
             }
-            if any_diff { break; }
+            if any_diff {
+                break;
+            }
         }
         assert!(any_diff, "augmented views should differ");
     }
@@ -1141,7 +1208,8 @@ mod tests {
         assert_eq!(weights.len(), ext.param_count());
 
         let mut ext2 = EmbeddingExtractor::new(small_config(), small_embed_config());
-        ext2.unflatten_weights(&weights).expect("unflatten should succeed");
+        ext2.unflatten_weights(&weights)
+            .expect("unflatten should succeed");
 
         let csi = make_csi(4, 16, 42);
         let emb1 = ext.extract(&csi);
@@ -1184,7 +1252,10 @@ mod tests {
 
         // Normal query (similar to cluster)
         let normal = vec![1.0f32; 8];
-        assert!(!idx.is_anomaly(&normal, 0.1), "normal should not be anomaly");
+        assert!(
+            !idx.is_anomaly(&normal, 0.1),
+            "normal should not be anomaly"
+        );
 
         // Anomalous query (very different)
         let anomaly = vec![-1.0f32; 8];
@@ -1225,10 +1296,7 @@ mod tests {
         let pose_flat = vec![1.0f32; 51];
         let out = enc.forward(&pose_flat);
         let norm: f32 = out.iter().map(|x| x * x).sum::<f32>().sqrt();
-        assert!(
-            (norm - 1.0).abs() < 1e-4,
-            "expected unit norm, got {norm}"
-        );
+        assert!((norm - 1.0).abs() < 1e-4, "expected unit norm, got {norm}");
     }
 
     #[test]
@@ -1268,10 +1336,7 @@ mod tests {
         let query: Vec<f32> = (0..32).map(|_| rng.next_gaussian()).collect();
 
         let corr = validate_quantized_embeddings(&embeddings, &query, &Quantizer);
-        assert!(
-            corr > 0.90,
-            "rank correlation should be > 0.90, got {corr}"
-        );
+        assert!(corr > 0.90, "rank correlation should be > 0.90, got {corr}");
     }
 
     // ── Transformer embed() test ────────────────────────────────────────
@@ -1292,7 +1357,10 @@ mod tests {
     #[test]
     fn test_projection_head_with_lora_changes_output() {
         let config = EmbeddingConfig {
-            d_model: 64, d_proj: 128, temperature: 0.07, normalize: true,
+            d_model: 64,
+            d_proj: 128,
+            temperature: 0.07,
+            normalize: true,
         };
         let base = ProjectionHead::new(config.clone());
         let mut lora = ProjectionHead::with_lora(config, 4);
@@ -1314,7 +1382,10 @@ mod tests {
         let out_lora = lora.forward(&input);
         let mut any_diff = false;
         for (a, b) in out_base.iter().zip(out_lora.iter()) {
-            if (a - b).abs() > 1e-6 { any_diff = true; break; }
+            if (a - b).abs() > 1e-6 {
+                any_diff = true;
+                break;
+            }
         }
         assert!(any_diff, "LoRA should change the output");
     }
@@ -1322,15 +1393,20 @@ mod tests {
     #[test]
     fn test_projection_head_merge_unmerge_roundtrip() {
         let config = EmbeddingConfig {
-            d_model: 64, d_proj: 128, temperature: 0.07, normalize: false,
+            d_model: 64,
+            d_proj: 128,
+            temperature: 0.07,
+            normalize: false,
         };
         let mut proj = ProjectionHead::with_lora(config, 4);
         // Set non-zero LoRA weights
         if let Some(ref mut l) = proj.lora_1 {
-            l.a[0][0] = 1.0; l.b[0][0] = 0.5;
+            l.a[0][0] = 1.0;
+            l.b[0][0] = 0.5;
         }
         if let Some(ref mut l) = proj.lora_2 {
-            l.a[0][0] = 0.3; l.b[0][0] = 0.2;
+            l.a[0][0] = 0.3;
+            l.b[0][0] = 0.2;
         }
         let input = vec![0.3f32; 64];
         let out_before = proj.forward(&input);
@@ -1351,7 +1427,10 @@ mod tests {
     #[test]
     fn test_projection_head_lora_param_count() {
         let config = EmbeddingConfig {
-            d_model: 64, d_proj: 128, temperature: 0.07, normalize: true,
+            d_model: 64,
+            d_proj: 128,
+            temperature: 0.07,
+            normalize: true,
         };
         let proj = ProjectionHead::with_lora(config, 4);
         // lora_1: rank=4, in=64, out=128 => 4*(64+128) = 768
@@ -1363,13 +1442,18 @@ mod tests {
     #[test]
     fn test_projection_head_flatten_unflatten_lora() {
         let config = EmbeddingConfig {
-            d_model: 64, d_proj: 128, temperature: 0.07, normalize: true,
+            d_model: 64,
+            d_proj: 128,
+            temperature: 0.07,
+            normalize: true,
         };
         let mut proj = ProjectionHead::with_lora(config.clone(), 4);
         // Set recognizable LoRA weights
         if let Some(ref mut l) = proj.lora_1 {
-            l.a[0][0] = 1.5; l.a[1][1] = -0.3;
-            l.b[0][0] = 2.0; l.b[1][5] = -1.0;
+            l.a[0][0] = 1.5;
+            l.a[1][1] = -0.3;
+            l.b[0][0] = 2.0;
+            l.b[1][5] = -1.0;
         }
         if let Some(ref mut l) = proj.lora_2 {
             l.a[3][2] = 0.7;
@@ -1385,7 +1469,10 @@ mod tests {
         // Verify round-trip by re-flattening
         let flat2 = proj2.flatten_lora();
         for (a, b) in flat.iter().zip(flat2.iter()) {
-            assert!((a - b).abs() < 1e-6, "flatten/unflatten mismatch: {a} vs {b}");
+            assert!(
+                (a - b).abs() < 1e-6,
+                "flatten/unflatten mismatch: {a} vs {b}"
+            );
         }
     }
 
@@ -1448,15 +1535,17 @@ mod tests {
 
     #[test]
     fn test_embedding_extractor_drift_detection() {
-        let mut ext = EmbeddingExtractor::with_drift_detection(
-            small_config(), small_embed_config(), 10,
-        );
+        let mut ext =
+            EmbeddingExtractor::with_drift_detection(small_config(), small_embed_config(), 10);
         // Feed stable CSI for baseline
         for _ in 0..10 {
             let csi = vec![vec![1.0f32; 16]; 4];
             let _ = ext.extract(&csi);
         }
-        assert!(!ext.drift_detected(), "stable input should not trigger drift");
+        assert!(
+            !ext.drift_detected(),
+            "stable input should not trigger drift"
+        );
 
         // Feed shifted CSI
         for _ in 0..10 {
@@ -1485,14 +1574,16 @@ mod tests {
 
     #[test]
     fn test_drift_detector_stable_input_no_drift() {
-        let mut ext = EmbeddingExtractor::with_drift_detection(
-            small_config(), small_embed_config(), 10,
-        );
+        let mut ext =
+            EmbeddingExtractor::with_drift_detection(small_config(), small_embed_config(), 10);
         // All inputs are the same -- no drift should ever be detected
         for _ in 0..30 {
             let csi = vec![vec![0.5f32; 16]; 4];
             let _ = ext.extract(&csi);
         }
-        assert!(!ext.drift_detected(), "constant input should never trigger drift");
+        assert!(
+            !ext.drift_detected(),
+            "constant input should never trigger drift"
+        );
     }
 }

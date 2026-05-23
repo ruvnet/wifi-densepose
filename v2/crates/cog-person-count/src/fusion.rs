@@ -29,7 +29,10 @@ pub fn fuse_confidence_weighted(preds: &[CountPrediction]) -> CountPrediction {
     if preds.is_empty() {
         let mut probs = [0.0_f32; COUNT_CLASSES];
         probs[1] = 1.0;
-        return CountPrediction { probs, confidence: 0.0 };
+        return CountPrediction {
+            probs,
+            confidence: 0.0,
+        };
     }
     if preds.len() == 1 {
         return preds[0].clone();
@@ -44,9 +47,9 @@ pub fn fuse_confidence_weighted(preds: &[CountPrediction]) -> CountPrediction {
     // Log-sum.
     let mut log_p = [0.0_f32; COUNT_CLASSES];
     for (pred, &w) in preds.iter().zip(weights.iter()) {
-        for k in 0..COUNT_CLASSES {
-            let p = pred.probs[k].max(1e-9); // floor to avoid log(0)
-            log_p[k] += (w / weight_sum) * p.ln();
+        for (lp, &prob) in log_p.iter_mut().zip(pred.probs.iter()).take(COUNT_CLASSES) {
+            let p = prob.max(1e-9); // floor to avoid log(0)
+            *lp += (w / weight_sum) * p.ln();
         }
     }
 
@@ -54,19 +57,26 @@ pub fn fuse_confidence_weighted(preds: &[CountPrediction]) -> CountPrediction {
     let m = log_p.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
     let mut p = [0.0_f32; COUNT_CLASSES];
     let mut s = 0.0_f32;
-    for k in 0..COUNT_CLASSES {
-        p[k] = (log_p[k] - m).exp();
-        s += p[k];
+    for (pk, &lp) in p.iter_mut().zip(log_p.iter()) {
+        *pk = (lp - m).exp();
+        s += *pk;
     }
     if s > 0.0 {
-        for k in 0..COUNT_CLASSES { p[k] /= s; }
+        for pk in p.iter_mut() {
+            *pk /= s;
+        }
     } else {
         // Pathological — fall back to uniform.
-        for k in 0..COUNT_CLASSES { p[k] = 1.0 / COUNT_CLASSES as f32; }
+        for pk in p.iter_mut() {
+            *pk = 1.0 / COUNT_CLASSES as f32;
+        }
     }
 
     let conf = preds.iter().map(|x| x.confidence).fold(0.0_f32, f32::max);
-    CountPrediction { probs: p, confidence: conf }
+    CountPrediction {
+        probs: p,
+        confidence: conf,
+    }
 }
 
 /// **Stoer-Wagner-clipped fusion** — v0.2.0 hook.
@@ -106,7 +116,10 @@ mod tests {
     use approx::assert_relative_eq;
 
     fn pred(probs: [f32; 8], conf: f32) -> CountPrediction {
-        CountPrediction { probs, confidence: conf }
+        CountPrediction {
+            probs,
+            confidence: conf,
+        }
     }
 
     #[test]
@@ -133,14 +146,15 @@ mod tests {
         assert!(
             fused.probs[2] >= probs[2],
             "expected fusion to sharpen the peak: pre={} post={}",
-            probs[2], fused.probs[2]
+            probs[2],
+            fused.probs[2]
         );
     }
 
     #[test]
     fn high_confidence_node_overrides_low_confidence_disagreement() {
         let strong = [0.0, 0.95, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0]; // says 1
-        let weak   = [0.0, 0.1,  0.1,  0.1,  0.1,  0.1, 0.1, 0.4]; // weak, says 7
+        let weak = [0.0, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.4]; // weak, says 7
         let fused = fuse_confidence_weighted(&[pred(strong, 0.95), pred(weak, 0.05)]);
         assert_eq!(fused.argmax(), 1, "high-confidence vote should win");
     }
@@ -174,8 +188,19 @@ mod tests {
         let probs = [0.05, 0.6, 0.25, 0.05, 0.03, 0.01, 0.005, 0.005];
         let p = pred(probs, 0.9);
         let (lo, hi) = p.p95_range();
-        assert!(lo <= 1 && hi >= 1, "mode (1) must be inside [{}, {}]", lo, hi);
+        assert!(
+            lo <= 1 && hi >= 1,
+            "mode (1) must be inside [{}, {}]",
+            lo,
+            hi
+        );
         let mass: f32 = probs[lo..=hi].iter().sum();
-        assert!(mass >= 0.95, "[{}, {}] only covers {:.3}, need >= 0.95", lo, hi, mass);
+        assert!(
+            mass >= 0.95,
+            "[{}, {}] only covers {:.3}, need >= 0.95",
+            lo,
+            hi,
+            mass
+        );
     }
 }

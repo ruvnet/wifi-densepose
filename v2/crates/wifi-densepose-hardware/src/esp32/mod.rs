@@ -9,23 +9,18 @@
 //! - `quic_transport` -- QUIC-based authenticated transport for aggregator nodes
 //! - `secure_tdm` -- Secured TDM protocol with dual-mode (QUIC / manual crypto)
 
-pub mod tdm;
 pub mod quic_transport;
 pub mod secure_tdm;
+pub mod tdm;
 
-pub use tdm::{
-    TdmSchedule, TdmCoordinator, TdmSlot, TdmSlotCompleted,
-    SyncBeacon, TdmError,
-};
+pub use tdm::{SyncBeacon, TdmCoordinator, TdmError, TdmSchedule, TdmSlot, TdmSlotCompleted};
 
 pub use quic_transport::{
-    SecurityMode, QuicTransportConfig, QuicTransportHandle, QuicTransportError,
-    TransportStats, ConnectionState, MessageType, FramedMessage,
-    STREAM_BEACON, STREAM_CSI, STREAM_CONTROL,
+    ConnectionState, FramedMessage, MessageType, QuicTransportConfig, QuicTransportError,
+    QuicTransportHandle, SecurityMode, TransportStats, STREAM_BEACON, STREAM_CONTROL, STREAM_CSI,
 };
 
 pub use secure_tdm::{
-    SecureTdmCoordinator, SecureTdmConfig, SecureTdmError,
-    SecLevel, AuthenticatedBeacon, SecureCycleOutput,
-    ReplayWindow, AUTHENTICATED_BEACON_SIZE,
+    AuthenticatedBeacon, ReplayWindow, SecLevel, SecureCycleOutput, SecureTdmConfig,
+    SecureTdmCoordinator, SecureTdmError, AUTHENTICATED_BEACON_SIZE,
 };

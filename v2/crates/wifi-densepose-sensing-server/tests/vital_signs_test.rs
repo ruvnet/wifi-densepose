@@ -60,9 +60,7 @@ fn make_heartbeat_phase_variance(freq_hz: f64, t: f64) -> Vec<f64> {
 
 /// Generate constant-phase vector (no heartbeat signal).
 fn make_static_phase() -> Vec<f64> {
-    (0..N_SUBCARRIERS)
-        .map(|i| (i as f64 * 0.2).sin())
-        .collect()
+    (0..N_SUBCARRIERS).map(|i| (i as f64 * 0.2).sin()).collect()
 }
 
 /// Feed `n_frames` of synthetic breathing data to a detector.
@@ -163,7 +161,7 @@ fn test_heartbeat_detection_synthetic() {
     // physiological range (40-120 BPM).
     if let Some(bpm) = vitals.heart_rate_bpm {
         assert!(
-            bpm >= 40.0 && bpm <= 120.0,
+            (40.0..=120.0).contains(&bpm),
             "detected heart rate {:.1} BPM should be in physiological range [40, 120]",
             bpm
         );
@@ -211,7 +209,7 @@ fn test_combined_vital_signs() {
     // Heartbeat: verify it's in the valid range if detected
     if let Some(hb_bpm) = vitals.heart_rate_bpm {
         assert!(
-            hb_bpm >= 40.0 && hb_bpm <= 120.0,
+            (40.0..=120.0).contains(&hb_bpm),
             "heartbeat {:.1} BPM should be in range [40, 120]",
             hb_bpm
         );
@@ -339,8 +337,7 @@ fn test_confidence_increases_with_snr() {
                 let base = 15.0 + 5.0 * (i as f64 * 0.1).sin();
                 // Weak breathing signal (amplitude 0.1) + heavy noise
                 let noise = 3.0
-                    * ((i as f64 * 7.3 + t * 113.7).sin()
-                        + (i as f64 * 13.1 + t * 79.3).sin())
+                    * ((i as f64 * 7.3 + t * 113.7).sin() + (i as f64 * 13.1 + t * 79.3).sin())
                     / 2.0;
                 base + 0.1 * (2.0 * PI * breathing_freq * t).sin() + noise
             })
@@ -580,7 +577,10 @@ fn test_buffer_capacity_respected() {
 #[test]
 fn test_run_benchmark_function() {
     let (total, per_frame) = wifi_densepose_sensing_server::vital_signs::run_benchmark(50);
-    assert!(total.as_nanos() > 0, "benchmark total duration should be > 0");
+    assert!(
+        total.as_nanos() > 0,
+        "benchmark total duration should be > 0"
+    );
     assert!(
         per_frame.as_nanos() > 0,
         "benchmark per-frame duration should be > 0"
@@ -605,7 +605,7 @@ fn test_breathing_rate_in_physiological_range() {
 
     if let Some(bpm) = vitals.breathing_rate_bpm {
         assert!(
-            bpm >= 6.0 && bpm <= 30.0,
+            (6.0..=30.0).contains(&bpm),
             "breathing rate {:.1} BPM must be in range [6, 30]",
             bpm
         );

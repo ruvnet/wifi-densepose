@@ -48,11 +48,7 @@ impl FingerprintMatcher {
     /// # Errors
     ///
     /// Returns an error if the pattern dimension does not match `n_bssids`.
-    pub fn store_pattern(
-        &mut self,
-        pattern: Vec<f32>,
-        label: PostureClass,
-    ) -> Result<(), String> {
+    pub fn store_pattern(&mut self, pattern: Vec<f32>, label: PostureClass) -> Result<(), String> {
         if pattern.len() != self.n_bssids {
             return Err(format!(
                 "pattern dimension {} != expected {}",

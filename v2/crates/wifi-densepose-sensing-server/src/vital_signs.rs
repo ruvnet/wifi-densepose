@@ -211,12 +211,7 @@ impl VitalSignDetector {
 
     /// Find the dominant frequency in `buffer` within the [min_hz, max_hz] band
     /// using FFT. Returns (frequency_as_bpm, confidence).
-    pub fn compute_fft_peak(
-        &self,
-        buffer: &[f64],
-        min_hz: f64,
-        max_hz: f64,
-    ) -> (Option<f64>, f64) {
+    pub fn compute_fft_peak(&self, buffer: &[f64], min_hz: f64, max_hz: f64) -> (Option<f64>, f64) {
         if buffer.len() < 4 {
             return (None, 0.0);
         }
@@ -227,6 +222,7 @@ impl VitalSignDetector {
         signal[..buffer.len()].copy_from_slice(buffer);
 
         // Apply Hann window to reduce spectral leakage
+        #[allow(clippy::needless_range_loop)]
         for i in 0..buffer.len() {
             let w = 0.5 * (1.0 - (2.0 * PI * i as f64 / (buffer.len() as f64 - 1.0)).cos());
             signal[i] *= w;
@@ -252,6 +248,7 @@ impl VitalSignDetector {
         let mut band_sum = 0.0f64;
         let mut band_count = 0usize;
 
+        #[allow(clippy::needless_range_loop)]
         for bin in min_bin..=max_bin {
             let mag = spectrum[bin];
             band_sum += mag;
@@ -336,8 +333,7 @@ impl VitalSignDetector {
         };
 
         // Factor in buffer fill level (need enough history for reliable estimates)
-        let fill =
-            (self.breathing_buffer.len() as f64) / (self.breathing_capacity as f64).max(1.0);
+        let fill = (self.breathing_buffer.len() as f64) / (self.breathing_capacity as f64).max(1.0);
         let fill_factor = fill.clamp(0.0, 1.0);
 
         (quality * (0.3 + 0.7 * fill_factor)).clamp(0.0, 1.0)
@@ -414,6 +410,7 @@ pub fn bandpass_filter(data: &[f64], low_hz: f64, high_hz: f64, sample_rate: f64
     let mut coeffs = vec![0.0f64; filter_order];
 
     // BPF = LPF(high_norm) - LPF(low_norm) with Hamming window
+    #[allow(clippy::needless_range_loop)]
     for i in 0..filter_order {
         let n = i as f64 - half as f64;
         let lp_high = if n.abs() < f64::EPSILON {
@@ -447,6 +444,7 @@ pub fn bandpass_filter(data: &[f64], low_hz: f64, high_hz: f64, sample_rate: f64
 
     // Apply filter via convolution
     let mut output = vec![0.0f64; data.len()];
+    #[allow(clippy::needless_range_loop)]
     for i in 0..data.len() {
         let mut sum = 0.0;
         for (j, &coeff) in coeffs.iter().enumerate() {
@@ -603,7 +601,10 @@ pub fn run_benchmark(n_frames: usize) -> (std::time::Duration, std::time::Durati
         "  Breathing rate:       {:?} BPM",
         last_vital.breathing_rate_bpm
     );
-    eprintln!("  Heart rate:           {:?} BPM", last_vital.heart_rate_bpm);
+    eprintln!(
+        "  Heart rate:           {:?} BPM",
+        last_vital.heart_rate_bpm
+    );
     eprintln!(
         "  Breathing confidence: {:.3}",
         last_vital.breathing_confidence
@@ -612,10 +613,7 @@ pub fn run_benchmark(n_frames: usize) -> (std::time::Duration, std::time::Durati
         "  Heartbeat confidence: {:.3}",
         last_vital.heartbeat_confidence
     );
-    eprintln!(
-        "  Signal quality:       {:.3}",
-        last_vital.signal_quality
-    );
+    eprintln!("  Signal quality:       {:.3}", last_vital.signal_quality);
 
     (total, per_frame)
 }
@@ -669,8 +667,14 @@ mod tests {
         let amp = vec![1.0_f64; 8];
         // 8 subcarriers, all physically ~aligned at ~+/-pi, alternating sign.
         let phase = vec![
-            PI - 0.001, -PI + 0.001, PI - 0.001, -PI + 0.001,
-            PI - 0.001, -PI + 0.001, PI - 0.001, -PI + 0.001,
+            PI - 0.001,
+            -PI + 0.001,
+            PI - 0.001,
+            -PI + 0.001,
+            PI - 0.001,
+            -PI + 0.001,
+            PI - 0.001,
+            -PI + 0.001,
         ];
 
         detector.process_frame(&amp, &phase);
@@ -724,10 +728,9 @@ mod tests {
     fn test_fft_magnitude_sine() {
         // 16-point signal with a single sinusoid at bin 2
         let n = 16;
-        let mut signal = vec![0.0; n];
-        for i in 0..n {
-            signal[i] = (2.0 * PI * 2.0 * i as f64 / n as f64).sin();
-        }
+        let signal: Vec<f64> = (0..n)
+            .map(|i| (2.0 * PI * 2.0 * i as f64 / n as f64).sin())
+            .collect();
         let mag = fft_magnitude(&signal);
         // Peak should be at bin 2
         let peak_bin = mag

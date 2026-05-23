@@ -1,4 +1,5 @@
 //! Heartbeat detection from micro-Doppler signatures in CSI.
+#![allow(missing_docs)]
 
 use crate::domain::{HeartbeatSignature, SignalStrength};
 
@@ -31,7 +32,12 @@ impl CompressedHeartbeatSpectrogram {
             .map(|i| TemporalTensorCompressor::new(TierPolicy::default(), 1, i as u32))
             .collect();
         let encoded = vec![Vec::new(); n_freq_bins];
-        Self { bin_buffers, encoded, n_freq_bins, frame_count: 0 }
+        Self {
+            bin_buffers,
+            encoded,
+            n_freq_bins,
+            frame_count: 0,
+        }
     }
 
     /// Push one column of the spectrogram (one time step, all frequency bins).
@@ -71,11 +77,19 @@ impl CompressedHeartbeatSpectrogram {
             total += recent;
             count += 1;
         }
-        if count == 0 { 0.0 } else { total / count as f32 }
+        if count == 0 {
+            0.0
+        } else {
+            total / count as f32
+        }
     }
 
-    pub fn frame_count(&self) -> u64 { self.frame_count }
-    pub fn n_freq_bins(&self) -> usize { self.n_freq_bins }
+    pub fn frame_count(&self) -> u64 {
+        self.frame_count
+    }
+    pub fn n_freq_bins(&self) -> usize {
+        self.n_freq_bins
+    }
 }
 
 /// Configuration for heartbeat detection
@@ -98,8 +112,8 @@ pub struct HeartbeatDetectorConfig {
 impl Default for HeartbeatDetectorConfig {
     fn default() -> Self {
         Self {
-            min_rate_bpm: 30.0,   // Very slow (bradycardia)
-            max_rate_bpm: 200.0,  // Very fast (extreme tachycardia)
+            min_rate_bpm: 30.0,  // Very slow (bradycardia)
+            max_rate_bpm: 200.0, // Very fast (extreme tachycardia)
             min_signal_strength: 0.05,
             window_size: 1024,
             enhanced_processing: true,
@@ -161,12 +175,8 @@ impl HeartbeatDetector {
         let min_freq = self.config.min_rate_bpm as f64 / 60.0;
         let max_freq = self.config.max_rate_bpm as f64 / 60.0;
 
-        let (heart_freq, strength) = self.find_heartbeat_frequency(
-            &spectrum,
-            sample_rate,
-            min_freq,
-            max_freq,
-        )?;
+        let (heart_freq, strength) =
+            self.find_heartbeat_frequency(&spectrum, sample_rate, min_freq, max_freq)?;
 
         if strength < self.config.min_signal_strength {
             return None;
@@ -276,7 +286,7 @@ impl HeartbeatDetector {
 
     /// Compute micro-Doppler spectrum optimized for heartbeat detection
     fn compute_micro_doppler_spectrum(&self, signal: &[f64], _sample_rate: f64) -> Vec<f64> {
-        use rustfft::{FftPlanner, num_complex::Complex};
+        use rustfft::{num_complex::Complex, FftPlanner};
 
         let n = signal.len().next_power_of_two();
         let mut planner = FftPlanner::new();
@@ -288,8 +298,7 @@ impl HeartbeatDetector {
             .enumerate()
             .map(|(i, &x)| {
                 let n_f = signal.len() as f64;
-                let window = 0.42
-                    - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / n_f).cos()
+                let window = 0.42 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / n_f).cos()
                     + 0.08 * (4.0 * std::f64::consts::PI * i as f64 / n_f).cos();
                 Complex::new(x * window, 0.0)
             })
@@ -299,10 +308,7 @@ impl HeartbeatDetector {
         fft.process(&mut buffer);
 
         // Return power spectrum
-        buffer.iter()
-            .take(n / 2)
-            .map(|c| c.norm_sqr())
-            .collect()
+        buffer.iter().take(n / 2).map(|c| c.norm_sqr()).collect()
     }
 
     /// Find heartbeat frequency in spectrum
@@ -326,22 +332,24 @@ impl HeartbeatDetector {
         // Find the strongest peak
         let mut max_power = 0.0;
         let mut max_bin_idx = min_bin;
+        let upper = max_bin.min(spectrum.len() - 1);
 
-        for i in min_bin..=max_bin.min(spectrum.len() - 1) {
-            if spectrum[i] > max_power {
-                max_power = spectrum[i];
-                max_bin_idx = i;
+        for (i, &pwr) in spectrum[min_bin..=upper].iter().enumerate() {
+            let bin = min_bin + i;
+            if pwr > max_power {
+                max_power = pwr;
+                max_bin_idx = bin;
             }
         }
 
         // Check if it's a real peak (local maximum)
-        if max_bin_idx > 0 && max_bin_idx < spectrum.len() - 1 {
-            if spectrum[max_bin_idx] <= spectrum[max_bin_idx - 1]
-                || spectrum[max_bin_idx] <= spectrum[max_bin_idx + 1]
-            {
-                // Not a real peak
-                return None;
-            }
+        if max_bin_idx > 0
+            && max_bin_idx < spectrum.len() - 1
+            && (spectrum[max_bin_idx] <= spectrum[max_bin_idx - 1]
+                || spectrum[max_bin_idx] <= spectrum[max_bin_idx + 1])
+        {
+            // Not a real peak
+            return None;
         }
 
         let freq = max_bin_idx as f64 * freq_resolution;
@@ -404,11 +412,7 @@ impl HeartbeatDetector {
         let strength_score = (strength / 0.5).min(1.0) as f32;
 
         // Very low or very high HRV might indicate noise
-        let hrv_score = if hrv > 0.05 && hrv < 0.5 {
-            1.0
-        } else {
-            0.5
-        };
+        let hrv_score = if hrv > 0.05 && hrv < 0.5 { 1.0 } else { 0.5 };
 
         strength_score * 0.7 + hrv_score * 0.3
     }
@@ -434,8 +438,10 @@ mod heartbeat_buffer_tests {
         // Low bins (0..15) should have higher power than high bins (16..31)
         let low_power = spec.band_power(0, 15, 20);
         let high_power = spec.band_power(16, 31, 20);
-        assert!(low_power >= high_power,
-            "low_power={low_power} should >= high_power={high_power}");
+        assert!(
+            low_power >= high_power,
+            "low_power={low_power} should >= high_power={high_power}"
+        );
     }
 }
 

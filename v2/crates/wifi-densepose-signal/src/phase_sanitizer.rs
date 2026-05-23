@@ -259,7 +259,10 @@ impl PhaseSanitizer {
     }
 
     /// Validate phase data format and values
-    pub fn validate_phase_data(&self, phase_data: &Array2<f64>) -> Result<(), PhaseSanitizationError> {
+    pub fn validate_phase_data(
+        &self,
+        phase_data: &Array2<f64>,
+    ) -> Result<(), PhaseSanitizationError> {
         // Check if data is empty
         if phase_data.is_empty() {
             return Err(PhaseSanitizationError::InvalidData(
@@ -282,7 +285,10 @@ impl PhaseSanitizer {
     }
 
     /// Unwrap phase data to remove 2pi discontinuities
-    pub fn unwrap_phase(&self, phase_data: &Array2<f64>) -> Result<Array2<f64>, PhaseSanitizationError> {
+    pub fn unwrap_phase(
+        &self,
+        phase_data: &Array2<f64>,
+    ) -> Result<Array2<f64>, PhaseSanitizationError> {
         if phase_data.is_empty() {
             return Err(PhaseSanitizationError::UnwrapFailed(
                 "Cannot unwrap empty phase data".into(),
@@ -298,7 +304,10 @@ impl PhaseSanitizer {
     }
 
     /// Standard phase unwrapping (numpy-style)
-    fn unwrap_standard(&self, phase_data: &Array2<f64>) -> Result<Array2<f64>, PhaseSanitizationError> {
+    fn unwrap_standard(
+        &self,
+        phase_data: &Array2<f64>,
+    ) -> Result<Array2<f64>, PhaseSanitizationError> {
         let mut unwrapped = phase_data.clone();
         let (_nrows, ncols) = unwrapped.dim();
 
@@ -314,7 +323,10 @@ impl PhaseSanitizer {
     }
 
     /// Custom row-by-row phase unwrapping
-    fn unwrap_custom(&self, phase_data: &Array2<f64>) -> Result<Array2<f64>, PhaseSanitizationError> {
+    fn unwrap_custom(
+        &self,
+        phase_data: &Array2<f64>,
+    ) -> Result<Array2<f64>, PhaseSanitizationError> {
         let mut unwrapped = phase_data.clone();
         let ncols = unwrapped.ncols();
 
@@ -356,7 +368,10 @@ impl PhaseSanitizer {
     }
 
     /// Quality-guided phase unwrapping
-    fn unwrap_quality_guided(&self, phase_data: &Array2<f64>) -> Result<Array2<f64>, PhaseSanitizationError> {
+    fn unwrap_quality_guided(
+        &self,
+        phase_data: &Array2<f64>,
+    ) -> Result<Array2<f64>, PhaseSanitizationError> {
         // For now, use standard unwrapping with quality weighting
         // A full implementation would use phase derivatives as quality metric
         let mut unwrapped = phase_data.clone();
@@ -425,8 +440,8 @@ impl PhaseSanitizer {
         let mut correction = 0.0;
         let mut prev_wrapped = data[0];
 
-        for i in 1..data.len() {
-            let current_wrapped = data[i];
+        for elem in data.iter_mut().skip(1) {
+            let current_wrapped = *elem;
             // Calculate diff using original wrapped values
             let diff = current_wrapped - prev_wrapped;
 
@@ -436,7 +451,7 @@ impl PhaseSanitizer {
                 correction += 2.0 * PI;
             }
 
-            data[i] = current_wrapped + correction;
+            *elem = current_wrapped + correction;
             prev_wrapped = current_wrapped;
         }
     }
@@ -462,7 +477,10 @@ impl PhaseSanitizer {
     }
 
     /// Remove outliers from phase data using Z-score method
-    pub fn remove_outliers(&mut self, phase_data: &Array2<f64>) -> Result<Array2<f64>, PhaseSanitizationError> {
+    pub fn remove_outliers(
+        &mut self,
+        phase_data: &Array2<f64>,
+    ) -> Result<Array2<f64>, PhaseSanitizationError> {
         if !self.config.enable_outlier_removal {
             return Ok(phase_data.clone());
         }
@@ -477,7 +495,10 @@ impl PhaseSanitizer {
     }
 
     /// Detect outliers using Z-score method
-    fn detect_outliers(&mut self, phase_data: &Array2<f64>) -> Result<Array2<bool>, PhaseSanitizationError> {
+    fn detect_outliers(
+        &mut self,
+        phase_data: &Array2<f64>,
+    ) -> Result<Array2<bool>, PhaseSanitizationError> {
         let (nrows, ncols) = phase_data.dim();
         let mut outlier_mask = Array2::from_elem((nrows, ncols), false);
 
@@ -509,20 +530,15 @@ impl PhaseSanitizer {
 
         for i in 0..nrows {
             // Find valid (non-outlier) indices
-            let valid_indices: Vec<usize> = (0..ncols)
-                .filter(|&j| !outlier_mask[[i, j]])
-                .collect();
+            let valid_indices: Vec<usize> = (0..ncols).filter(|&j| !outlier_mask[[i, j]]).collect();
 
-            let outlier_indices: Vec<usize> = (0..ncols)
-                .filter(|&j| outlier_mask[[i, j]])
-                .collect();
+            let outlier_indices: Vec<usize> =
+                (0..ncols).filter(|&j| outlier_mask[[i, j]]).collect();
 
             if valid_indices.len() >= 2 && !outlier_indices.is_empty() {
                 // Extract valid values
-                let valid_values: Vec<f64> = valid_indices
-                    .iter()
-                    .map(|&j| phase_data[[i, j]])
-                    .collect();
+                let valid_values: Vec<f64> =
+                    valid_indices.iter().map(|&j| phase_data[[i, j]]).collect();
 
                 // Interpolate outliers
                 for &j in &outlier_indices {
@@ -568,7 +584,10 @@ impl PhaseSanitizer {
     }
 
     /// Smooth phase data using moving average
-    pub fn smooth_phase(&self, phase_data: &Array2<f64>) -> Result<Array2<f64>, PhaseSanitizationError> {
+    pub fn smooth_phase(
+        &self,
+        phase_data: &Array2<f64>,
+    ) -> Result<Array2<f64>, PhaseSanitizationError> {
         if !self.config.enable_smoothing {
             return Ok(phase_data.clone());
         }
@@ -598,7 +617,10 @@ impl PhaseSanitizer {
     }
 
     /// Filter noise using low-pass Butterworth filter
-    pub fn filter_noise(&self, phase_data: &Array2<f64>) -> Result<Array2<f64>, PhaseSanitizationError> {
+    pub fn filter_noise(
+        &self,
+        phase_data: &Array2<f64>,
+    ) -> Result<Array2<f64>, PhaseSanitizationError> {
         if !self.config.enable_noise_filtering {
             return Ok(phase_data.clone());
         }
@@ -631,37 +653,35 @@ impl PhaseSanitizer {
     }
 
     /// Complete sanitization pipeline
-    pub fn sanitize_phase(&mut self, phase_data: &Array2<f64>) -> Result<Array2<f64>, PhaseSanitizationError> {
+    pub fn sanitize_phase(
+        &mut self,
+        phase_data: &Array2<f64>,
+    ) -> Result<Array2<f64>, PhaseSanitizationError> {
         self.statistics.total_processed += 1;
 
         // Validate input
-        self.validate_phase_data(phase_data).map_err(|e| {
+        self.validate_phase_data(phase_data).inspect_err(|_| {
             self.statistics.sanitization_errors += 1;
-            e
         })?;
 
         // Unwrap phase
-        let unwrapped = self.unwrap_phase(phase_data).map_err(|e| {
+        let unwrapped = self.unwrap_phase(phase_data).inspect_err(|_| {
             self.statistics.sanitization_errors += 1;
-            e
         })?;
 
         // Remove outliers
-        let cleaned = self.remove_outliers(&unwrapped).map_err(|e| {
+        let cleaned = self.remove_outliers(&unwrapped).inspect_err(|_| {
             self.statistics.sanitization_errors += 1;
-            e
         })?;
 
         // Smooth phase
-        let smoothed = self.smooth_phase(&cleaned).map_err(|e| {
+        let smoothed = self.smooth_phase(&cleaned).inspect_err(|_| {
             self.statistics.sanitization_errors += 1;
-            e
         })?;
 
         // Filter noise
-        let filtered = self.filter_noise(&smoothed).map_err(|e| {
+        let filtered = self.filter_noise(&smoothed).inspect_err(|_| {
             self.statistics.sanitization_errors += 1;
-            e
         })?;
 
         Ok(filtered)
@@ -684,7 +704,8 @@ impl PhaseSanitizer {
         }
 
         let mean: f64 = data.iter().sum::<f64>() / data.len() as f64;
-        let variance: f64 = data.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / data.len() as f64;
+        let variance: f64 =
+            data.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / data.len() as f64;
         variance.sqrt()
     }
 }
@@ -785,7 +806,7 @@ mod tests {
 
         let mut data = create_test_phase_data();
         // Insert an outlier
-        data[[0, 10]] = 100.0 * data[[0, 10]];
+        data[[0, 10]] *= 100.0;
 
         // Need to use data within valid range
         let data = Array2::from_shape_fn((4, 64), |(i, j)| {

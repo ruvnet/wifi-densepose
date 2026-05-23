@@ -5,12 +5,12 @@
 //! - Depth estimation through debris
 //! - Position fusion combining multiple techniques
 
-mod triangulation;
 mod depth;
 mod fusion;
+mod triangulation;
 
-pub use triangulation::{Triangulator, TriangulationConfig};
+pub use depth::{DepthEstimator, DepthEstimatorConfig};
+pub use fusion::{LocalizationService, PositionFuser};
 #[cfg(feature = "ruvector")]
 pub use triangulation::solve_tdoa_triangulation;
-pub use depth::{DepthEstimator, DepthEstimatorConfig};
-pub use fusion::{PositionFuser, LocalizationService};
+pub use triangulation::{TriangulationConfig, Triangulator};

@@ -45,9 +45,9 @@ pub async fn provision_node(
 
     // Open serial port
     let port_settings = tokio_serial::SerialPortBuilderExt::open_native_async(
-        tokio_serial::new(&port, PROVISION_BAUD)
-            .timeout(Duration::from_millis(SERIAL_TIMEOUT_MS))
-    ).map_err(|e| format!("Failed to open serial port: {}", e))?;
+        tokio_serial::new(&port, PROVISION_BAUD).timeout(Duration::from_millis(SERIAL_TIMEOUT_MS)),
+    )
+    .map_err(|e| format!("Failed to open serial port: {}", e))?;
 
     let (mut reader, mut writer) = tokio::io::split(port_settings);
 
@@ -59,17 +59,19 @@ pub async fn provision_node(
     };
 
     let header_bytes = bincode_header(&header);
-    tokio::io::AsyncWriteExt::write_all(&mut writer, &header_bytes).await
+    tokio::io::AsyncWriteExt::write_all(&mut writer, &header_bytes)
+        .await
         .map_err(|e| format!("Failed to send header: {}", e))?;
 
     // Wait for ACK
     let mut ack_buf = [0u8; 4];
     tokio::time::timeout(
         Duration::from_millis(SERIAL_TIMEOUT_MS),
-        tokio::io::AsyncReadExt::read_exact(&mut reader, &mut ack_buf)
-    ).await
-        .map_err(|_| "Timeout waiting for device acknowledgment")?
-        .map_err(|e| format!("Failed to read ACK: {}", e))?;
+        tokio::io::AsyncReadExt::read_exact(&mut reader, &mut ack_buf),
+    )
+    .await
+    .map_err(|_| "Timeout waiting for device acknowledgment")?
+    .map_err(|e| format!("Failed to read ACK: {}", e))?;
 
     if &ack_buf != b"ACK\n" {
         return Err(format!("Invalid ACK response: {:?}", ack_buf));
@@ -78,7 +80,8 @@ pub async fn provision_node(
     // Send NVS data in chunks
     const CHUNK_SIZE: usize = 256;
     for chunk in nvs_data.chunks(CHUNK_SIZE) {
-        tokio::io::AsyncWriteExt::write_all(&mut writer, chunk).await
+        tokio::io::AsyncWriteExt::write_all(&mut writer, chunk)
+            .await
             .map_err(|e| format!("Failed to send data chunk: {}", e))?;
 
         // Small delay between chunks for device processing
@@ -86,20 +89,23 @@ pub async fn provision_node(
     }
 
     // Send checksum
-    tokio::io::AsyncWriteExt::write_all(&mut writer, checksum.as_bytes()).await
+    tokio::io::AsyncWriteExt::write_all(&mut writer, checksum.as_bytes())
+        .await
         .map_err(|e| format!("Failed to send checksum: {}", e))?;
 
-    tokio::io::AsyncWriteExt::write_all(&mut writer, b"\n").await
+    tokio::io::AsyncWriteExt::write_all(&mut writer, b"\n")
+        .await
         .map_err(|e| format!("Failed to send newline: {}", e))?;
 
     // Wait for confirmation
     let mut confirm_buf = [0u8; 32];
     let confirm_len = tokio::time::timeout(
         Duration::from_millis(SERIAL_TIMEOUT_MS * 2),
-        tokio::io::AsyncReadExt::read(&mut reader, &mut confirm_buf)
-    ).await
-        .map_err(|_| "Timeout waiting for confirmation")?
-        .map_err(|e| format!("Failed to read confirmation: {}", e))?;
+        tokio::io::AsyncReadExt::read(&mut reader, &mut confirm_buf),
+    )
+    .await
+    .map_err(|_| "Timeout waiting for confirmation")?
+    .map_err(|e| format!("Failed to read confirmation: {}", e))?;
 
     let confirm_str = String::from_utf8_lossy(&confirm_buf[..confirm_len]);
 
@@ -121,24 +127,26 @@ pub async fn provision_node(
 pub async fn read_nvs(port: String) -> Result<ProvisioningConfig, String> {
     // Open serial port
     let port_settings = tokio_serial::SerialPortBuilderExt::open_native_async(
-        tokio_serial::new(&port, PROVISION_BAUD)
-            .timeout(Duration::from_millis(SERIAL_TIMEOUT_MS))
-    ).map_err(|e| format!("Failed to open serial port: {}", e))?;
+        tokio_serial::new(&port, PROVISION_BAUD).timeout(Duration::from_millis(SERIAL_TIMEOUT_MS)),
+    )
+    .map_err(|e| format!("Failed to open serial port: {}", e))?;
 
     let (mut reader, mut writer) = tokio::io::split(port_settings);
 
     // Send read command
-    tokio::io::AsyncWriteExt::write_all(&mut writer, b"RUVIEW_NVS_READ\n").await
+    tokio::io::AsyncWriteExt::write_all(&mut writer, b"RUVIEW_NVS_READ\n")
+        .await
         .map_err(|e| format!("Failed to send read command: {}", e))?;
 
     // Read size header
     let mut size_buf = [0u8; 4];
     tokio::time::timeout(
         Duration::from_millis(SERIAL_TIMEOUT_MS),
-        tokio::io::AsyncReadExt::read_exact(&mut reader, &mut size_buf)
-    ).await
-        .map_err(|_| "Timeout waiting for NVS size")?
-        .map_err(|e| format!("Failed to read size: {}", e))?;
+        tokio::io::AsyncReadExt::read_exact(&mut reader, &mut size_buf),
+    )
+    .await
+    .map_err(|_| "Timeout waiting for NVS size")?
+    .map_err(|e| format!("Failed to read size: {}", e))?;
 
     let nvs_size = u32::from_le_bytes(size_buf) as usize;
 
@@ -150,10 +158,11 @@ pub async fn read_nvs(port: String) -> Result<ProvisioningConfig, String> {
     let mut nvs_data = vec![0u8; nvs_size];
     tokio::time::timeout(
         Duration::from_millis(SERIAL_TIMEOUT_MS * 2),
-        tokio::io::AsyncReadExt::read_exact(&mut reader, &mut nvs_data)
-    ).await
-        .map_err(|_| "Timeout reading NVS data")?
-        .map_err(|e| format!("Failed to read NVS data: {}", e))?;
+        tokio::io::AsyncReadExt::read_exact(&mut reader, &mut nvs_data),
+    )
+    .await
+    .map_err(|_| "Timeout reading NVS data")?
+    .map_err(|e| format!("Failed to read NVS data: {}", e))?;
 
     // Parse NVS data to config
     deserialize_nvs_config(&nvs_data)
@@ -164,24 +173,26 @@ pub async fn read_nvs(port: String) -> Result<ProvisioningConfig, String> {
 pub async fn erase_nvs(port: String) -> Result<ProvisionResult, String> {
     // Open serial port
     let port_settings = tokio_serial::SerialPortBuilderExt::open_native_async(
-        tokio_serial::new(&port, PROVISION_BAUD)
-            .timeout(Duration::from_millis(SERIAL_TIMEOUT_MS))
-    ).map_err(|e| format!("Failed to open serial port: {}", e))?;
+        tokio_serial::new(&port, PROVISION_BAUD).timeout(Duration::from_millis(SERIAL_TIMEOUT_MS)),
+    )
+    .map_err(|e| format!("Failed to open serial port: {}", e))?;
 
     let (mut reader, mut writer) = tokio::io::split(port_settings);
 
     // Send erase command
-    tokio::io::AsyncWriteExt::write_all(&mut writer, b"RUVIEW_NVS_ERASE\n").await
+    tokio::io::AsyncWriteExt::write_all(&mut writer, b"RUVIEW_NVS_ERASE\n")
+        .await
         .map_err(|e| format!("Failed to send erase command: {}", e))?;
 
     // Wait for confirmation
     let mut confirm_buf = [0u8; 32];
     let confirm_len = tokio::time::timeout(
         Duration::from_millis(SERIAL_TIMEOUT_MS * 3), // Erase takes longer
-        tokio::io::AsyncReadExt::read(&mut reader, &mut confirm_buf)
-    ).await
-        .map_err(|_| "Timeout waiting for erase confirmation")?
-        .map_err(|e| format!("Failed to read confirmation: {}", e))?;
+        tokio::io::AsyncReadExt::read(&mut reader, &mut confirm_buf),
+    )
+    .await
+    .map_err(|_| "Timeout waiting for erase confirmation")?
+    .map_err(|e| format!("Failed to read confirmation: {}", e))?;
 
     let confirm_str = String::from_utf8_lossy(&confirm_buf[..confirm_len]);
 
@@ -316,7 +327,8 @@ fn serialize_nvs_config(config: &ProvisioningConfig) -> Result<Vec<u8>, String> 
         write_u8(&mut data, "hop_count", hops);
     }
     if let Some(ref channels) = config.channel_list {
-        let ch_str: String = channels.iter()
+        let ch_str: String = channels
+            .iter()
             .map(|c| c.to_string())
             .collect::<Vec<_>>()
             .join(",");
@@ -359,8 +371,8 @@ fn deserialize_nvs_config(data: &[u8]) -> Result<ProvisioningConfig, String> {
             return Err("Invalid NVS data: truncated key".into());
         }
 
-        let key = std::str::from_utf8(&data[pos..pos + key_len])
-            .map_err(|_| "Invalid key encoding")?;
+        let key =
+            std::str::from_utf8(&data[pos..pos + key_len]).map_err(|_| "Invalid key encoding")?;
         pos += key_len;
 
         if pos + 2 > data.len() {
@@ -379,9 +391,15 @@ fn deserialize_nvs_config(data: &[u8]) -> Result<ProvisioningConfig, String> {
 
         // Parse based on key
         match key {
-            "wifi_ssid" => config.wifi_ssid = Some(String::from_utf8_lossy(value_bytes).to_string()),
-            "wifi_pass" => config.wifi_password = Some(String::from_utf8_lossy(value_bytes).to_string()),
-            "target_ip" => config.target_ip = Some(String::from_utf8_lossy(value_bytes).to_string()),
+            "wifi_ssid" => {
+                config.wifi_ssid = Some(String::from_utf8_lossy(value_bytes).to_string())
+            }
+            "wifi_pass" => {
+                config.wifi_password = Some(String::from_utf8_lossy(value_bytes).to_string())
+            }
+            "target_ip" => {
+                config.target_ip = Some(String::from_utf8_lossy(value_bytes).to_string())
+            }
             "target_port" if value_len == 2 => {
                 config.target_port = Some(u16::from_le_bytes([value_bytes[0], value_bytes[1]]));
             }
@@ -399,16 +417,18 @@ fn deserialize_nvs_config(data: &[u8]) -> Result<ProvisioningConfig, String> {
                 config.vital_window = Some(u16::from_le_bytes([value_bytes[0], value_bytes[1]]));
             }
             "vital_int" if value_len == 2 => {
-                config.vital_interval_ms = Some(u16::from_le_bytes([value_bytes[0], value_bytes[1]]));
+                config.vital_interval_ms =
+                    Some(u16::from_le_bytes([value_bytes[0], value_bytes[1]]));
             }
             "top_k" if value_len == 1 => config.top_k_count = Some(value_bytes[0]),
             "hop_count" if value_len == 1 => config.hop_count = Some(value_bytes[0]),
             "channels" => {
                 let ch_str = String::from_utf8_lossy(value_bytes);
                 config.channel_list = Some(
-                    ch_str.split(',')
+                    ch_str
+                        .split(',')
                         .filter_map(|s| s.trim().parse().ok())
-                        .collect()
+                        .collect(),
                 );
             }
             "power_duty" if value_len == 1 => config.power_duty = Some(value_bytes[0]),
@@ -484,9 +504,11 @@ mod tests {
 
     #[test]
     fn test_config_validation() {
-        let mut config = ProvisioningConfig::default();
-        config.tdm_slot = Some(5);
-        config.tdm_total = Some(4);
+        let config = ProvisioningConfig {
+            tdm_slot: Some(5),
+            tdm_total: Some(4),
+            ..ProvisioningConfig::default()
+        };
 
         let result = config.validate();
         assert!(result.is_err());

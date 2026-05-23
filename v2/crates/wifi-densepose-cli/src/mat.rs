@@ -16,8 +16,8 @@ use std::path::PathBuf;
 use tabled::{settings::Style, Table, Tabled};
 
 use wifi_densepose_mat::{
-    DisasterConfig, DisasterType, Priority, ScanZone, TriageStatus, ZoneBounds,
-    ZoneStatus, domain::alert::AlertStatus,
+    domain::alert::AlertStatus, DisasterConfig, DisasterType, Priority, ScanZone, TriageStatus,
+    ZoneBounds, ZoneStatus,
 };
 
 /// MAT subcommand
@@ -452,40 +452,21 @@ pub async fn execute(command: MatCommand) -> Result<()> {
 
 /// Execute the scan command
 async fn execute_scan(args: ScanArgs) -> Result<()> {
-    println!(
-        "{} Starting survivor scan...",
-        "[MAT]".bright_cyan().bold()
-    );
+    println!("{} Starting survivor scan...", "[MAT]".bright_cyan().bold());
     println!();
 
     // Display configuration
     println!("{}", "Configuration:".bold());
-    println!(
-        "  {} {:?}",
-        "Disaster Type:".dimmed(),
-        args.disaster_type
-    );
-    println!(
-        "  {} {:.1}",
-        "Sensitivity:".dimmed(),
-        args.sensitivity
-    );
-    println!(
-        "  {} {:.1}m",
-        "Max Depth:".dimmed(),
-        args.max_depth
-    );
+    println!("  {} {:?}", "Disaster Type:".dimmed(), args.disaster_type);
+    println!("  {} {:.1}", "Sensitivity:".dimmed(), args.sensitivity);
+    println!("  {} {:.1}m", "Max Depth:".dimmed(), args.max_depth);
     println!(
         "  {} {}",
         "Continuous:".dimmed(),
         if args.continuous { "Yes" } else { "No" }
     );
     if args.continuous {
-        println!(
-            "  {} {}ms",
-            "Interval:".dimmed(),
-            args.interval
-        );
+        println!("  {} {}ms", "Interval:".dimmed(), args.interval);
     }
     if let Some(ref zone) = args.zone {
         println!("  {} {}", "Zone:".dimmed(), zone);
@@ -516,10 +497,7 @@ async fn execute_scan(args: ScanArgs) -> Result<()> {
             "[INFO]".blue(),
             config.disaster_type
         );
-        println!(
-            "{} Waiting for hardware connection...",
-            "[INFO]".blue()
-        );
+        println!("{} Waiting for hardware connection...", "[INFO]".blue());
         println!();
         println!(
             "{} No hardware detected. Use --simulate for demo mode.",
@@ -538,7 +516,9 @@ async fn simulate_scan_output() -> Result<()> {
     let pb = ProgressBar::new(100);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")?
+            .template(
+                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
+            )?
             .progress_chars("#>-"),
     );
 
@@ -591,13 +571,10 @@ async fn simulate_scan_output() -> Result<()> {
         "3".green().bold()
     );
     println!(
-        "  {} {}  {} {}  {} {}",
+        "  {} 1  {} 1  {} 1",
         "IMMEDIATE:".red().bold(),
-        "1",
         "DELAYED:".yellow().bold(),
-        "1",
         "MINOR:".green().bold(),
-        "1"
     );
 
     Ok(())
@@ -674,11 +651,7 @@ async fn execute_status(args: StatusArgs) -> Result<()> {
                 status.active_zones,
                 status.total_zones
             );
-            println!(
-                "  {} {}",
-                "Disaster Type:".dimmed(),
-                status.disaster_type
-            );
+            println!("  {} {}", "Disaster Type:".dimmed(), status.disaster_type);
             println!(
                 "  {} {}",
                 "Survivors Detected:".dimmed(),
@@ -774,8 +747,10 @@ async fn execute_zones(args: ZonesArgs) -> Result<()> {
             match bounds_parsed {
                 Ok(zone_bounds) => {
                     let zone = if let Some(sens) = sensitivity {
-                        let mut params = wifi_densepose_mat::ScanParameters::default();
-                        params.sensitivity = sens;
+                        let params = wifi_densepose_mat::ScanParameters {
+                            sensitivity: sens,
+                            ..Default::default()
+                        };
                         ScanZone::with_parameters(&name, zone_bounds, params)
                     } else {
                         ScanZone::new(&name, zone_bounds)
@@ -806,26 +781,14 @@ async fn execute_zones(args: ZonesArgs) -> Result<()> {
                 );
                 println!("Use --force to confirm.");
             } else {
-                println!(
-                    "{} Zone '{}' removed.",
-                    "[OK]".green().bold(),
-                    zone.cyan()
-                );
+                println!("{} Zone '{}' removed.", "[OK]".green().bold(), zone.cyan());
             }
         }
         ZonesCommand::Pause { zone } => {
-            println!(
-                "{} Zone '{}' paused.",
-                "[OK]".green().bold(),
-                zone.cyan()
-            );
+            println!("{} Zone '{}' paused.", "[OK]".green().bold(), zone.cyan());
         }
         ZonesCommand::Resume { zone } => {
-            println!(
-                "{} Zone '{}' resumed.",
-                "[OK]".green().bold(),
-                zone.cyan()
-            );
+            println!("{} Zone '{}' resumed.", "[OK]".green().bold(), zone.cyan());
         }
     }
 
@@ -848,7 +811,9 @@ fn parse_bounds(zone_type: &ZoneType, bounds: &str) -> Result<ZoneBounds> {
                     parts.len()
                 );
             }
-            Ok(ZoneBounds::rectangle(parts[0], parts[1], parts[2], parts[3]))
+            Ok(ZoneBounds::rectangle(
+                parts[0], parts[1], parts[2], parts[3],
+            ))
         }
         ZoneType::Circle => {
             if parts.len() != 3 {
@@ -1036,7 +1001,10 @@ async fn execute_alerts(args: AlertsArgs) -> Result<()> {
             if filtered.is_empty() {
                 println!("No alerts.");
             } else {
-                let pending = filtered.iter().filter(|a| a.status.contains("Pending")).count();
+                let pending = filtered
+                    .iter()
+                    .filter(|a| a.status.contains("Pending"))
+                    .count();
                 if pending > 0 {
                     println!(
                         "{} {} pending alert(s) require attention!",

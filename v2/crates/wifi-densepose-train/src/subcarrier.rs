@@ -16,7 +16,7 @@
 //! assert_eq!(resampled.shape(), &[100, 3, 3, 56]);
 //! ```
 
-use ndarray::{Array4, s};
+use ndarray::{s, Array4};
 use ruvector_solver::neumann::NeumannSolver;
 use ruvector_solver::types::CsrMatrix;
 
@@ -159,12 +159,24 @@ pub fn interpolate_subcarriers_sparse(arr: &Array4<f32>, target_sc: usize) -> Ar
     let sigma_sq = sigma * sigma;
 
     // Source and target normalized positions in [0, 1]
-    let src_pos: Vec<f32> = (0..n_sc).map(|j| {
-        if n_sc == 1 { 0.0 } else { j as f32 / (n_sc - 1) as f32 }
-    }).collect();
-    let tgt_pos: Vec<f32> = (0..target_sc).map(|k| {
-        if target_sc == 1 { 0.0 } else { k as f32 / (target_sc - 1) as f32 }
-    }).collect();
+    let src_pos: Vec<f32> = (0..n_sc)
+        .map(|j| {
+            if n_sc == 1 {
+                0.0
+            } else {
+                j as f32 / (n_sc - 1) as f32
+            }
+        })
+        .collect();
+    let tgt_pos: Vec<f32> = (0..target_sc)
+        .map(|k| {
+            if target_sc == 1 {
+                0.0
+            } else {
+                k as f32 / (target_sc - 1) as f32
+            }
+        })
+        .collect();
 
     // Only include entries above a sparsity threshold
     let threshold = 1e-4_f32;
@@ -179,24 +191,29 @@ pub fn interpolate_subcarriers_sparse(arr: &Array4<f32>, target_sc: usize) -> Ar
     // (A^T A)[k1, k2] = sum_j A[j,k1] * A[j,k2]
     // This is dense but small (target_sc × target_sc, typically 56×56)
     let mut ata = vec![vec![0.0_f32; target_sc]; target_sc];
+    #[allow(clippy::needless_range_loop)]
     for j in 0..n_sc {
         for k1 in 0..target_sc {
             let diff1 = src_pos[j] - tgt_pos[k1];
             let a_jk1 = (-diff1 * diff1 / sigma_sq).exp();
-            if a_jk1 < threshold { continue; }
+            if a_jk1 < threshold {
+                continue;
+            }
             for k2 in 0..target_sc {
                 let diff2 = src_pos[j] - tgt_pos[k2];
                 let a_jk2 = (-diff2 * diff2 / sigma_sq).exp();
-                if a_jk2 < threshold { continue; }
+                if a_jk2 < threshold {
+                    continue;
+                }
                 ata[k1][k2] += a_jk1 * a_jk2;
             }
         }
     }
 
     // Add λI regularization and convert to COO
-    for k in 0..target_sc {
-        for k2 in 0..target_sc {
-            let val = ata[k][k2] + if k == k2 { lambda } else { 0.0 };
+    for (k, row) in ata.iter().enumerate() {
+        for (k2, &cell) in row.iter().enumerate() {
+            let val = cell + if k == k2 { lambda } else { 0.0 };
             if val.abs() > 1e-8 {
                 ata_coo.push((k, k2, val));
             }
@@ -282,10 +299,10 @@ pub fn select_subcarriers_by_variance(arr: &Array4<f32>, k: usize) -> Vec<usize>
 
     // Compute mean per subcarrier.
     let mut means = vec![0.0f64; n_sc];
-    for sc in 0..n_sc {
+    for (sc, mean_sc) in means.iter_mut().enumerate() {
         let col = arr.slice(s![.., .., .., sc]);
         let sum: f64 = col.iter().map(|&v| v as f64).sum();
-        means[sc] = sum / total_elems as f64;
+        *mean_sc = sum / total_elems as f64;
     }
 
     // Compute variance per subcarrier.
@@ -293,14 +310,18 @@ pub fn select_subcarriers_by_variance(arr: &Array4<f32>, k: usize) -> Vec<usize>
     for sc in 0..n_sc {
         let col = arr.slice(s![.., .., .., sc]);
         let mean = means[sc];
-        let var: f64 = col.iter().map(|&v| (v as f64 - mean).powi(2)).sum::<f64>()
-            / total_elems as f64;
+        let var: f64 =
+            col.iter().map(|&v| (v as f64 - mean).powi(2)).sum::<f64>() / total_elems as f64;
         variances[sc] = var;
     }
 
     // Rank subcarriers by descending variance.
     let mut ranked: Vec<usize> = (0..n_sc).collect();
-    ranked.sort_by(|&a, &b| variances[b].partial_cmp(&variances[a]).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.sort_by(|&a, &b| {
+        variances[b]
+            .partial_cmp(&variances[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Take top-k and sort ascending for a canonical representation.
     let mut selected: Vec<usize> = ranked[..k].to_vec();
@@ -319,9 +340,8 @@ mod tests {
 
     #[test]
     fn identity_resample() {
-        let arr = Array4::<f32>::from_shape_fn((4, 3, 3, 56), |(t, tx, rx, k)| {
-            (t + tx + rx + k) as f32
-        });
+        let arr =
+            Array4::<f32>::from_shape_fn((4, 3, 3, 56), |(t, tx, rx, k)| (t + tx + rx + k) as f32);
         let out = interpolate_subcarriers(&arr, 56);
         assert_eq!(out.shape(), arr.shape());
         // Identity resample must preserve all values exactly.
@@ -364,18 +384,14 @@ mod tests {
 
     #[test]
     fn select_subcarriers_returns_correct_count() {
-        let arr = Array4::<f32>::from_shape_fn((10, 3, 3, 56), |(t, _, _, k)| {
-            (t * k) as f32
-        });
+        let arr = Array4::<f32>::from_shape_fn((10, 3, 3, 56), |(t, _, _, k)| (t * k) as f32);
         let selected = select_subcarriers_by_variance(&arr, 8);
         assert_eq!(selected.len(), 8);
     }
 
     #[test]
     fn select_subcarriers_sorted_ascending() {
-        let arr = Array4::<f32>::from_shape_fn((10, 3, 3, 56), |(t, _, _, k)| {
-            (t * k) as f32
-        });
+        let arr = Array4::<f32>::from_shape_fn((10, 3, 3, 56), |(t, _, _, k)| (t * k) as f32);
         let selected = select_subcarriers_by_variance(&arr, 10);
         for w in selected.windows(2) {
             assert!(w[0] < w[1], "Indices must be sorted ascending");

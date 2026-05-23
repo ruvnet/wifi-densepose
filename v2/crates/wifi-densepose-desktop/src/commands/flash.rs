@@ -37,13 +37,16 @@ pub async fn flash_firmware(
     let firmware_hash = calculate_sha256(&firmware_path)?;
 
     // Emit flash started event
-    let _ = app.emit("flash-progress", FlashProgress {
-        phase: "connecting".into(),
-        progress_pct: 0.0,
-        bytes_written: 0,
-        bytes_total: firmware_size,
-        message: Some(format!("Connecting to {} ...", port)),
-    });
+    let _ = app.emit(
+        "flash-progress",
+        FlashProgress {
+            phase: "connecting".into(),
+            progress_pct: 0.0,
+            bytes_written: 0,
+            bytes_total: firmware_size,
+            message: Some(format!("Connecting to {} ...", port)),
+        },
+    );
 
     // Build espflash command
     let baud_rate = baud.unwrap_or(921600);
@@ -67,13 +70,12 @@ pub async fn flash_firmware(
     cmd.stderr(Stdio::piped());
 
     // Spawn the process
-    let mut child = cmd.spawn()
+    let mut child = cmd
+        .spawn()
         .map_err(|e| format!("Failed to start espflash: {}. Is espflash installed?", e))?;
 
-    let _stdout = child.stdout.take()
-        .ok_or("Failed to capture stdout")?;
-    let stderr = child.stderr.take()
-        .ok_or("Failed to capture stderr")?;
+    let _stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
+    let stderr = child.stderr.take().ok_or("Failed to capture stderr")?;
 
     // Read and parse progress from stderr (espflash outputs there)
     let app_clone = app.clone();
@@ -84,8 +86,8 @@ pub async fn flash_firmware(
         let mut last_phase = "connecting".to_string();
         let mut last_progress = 0.0f32;
 
-        for line in reader.lines() {
-            if let Ok(line) = line {
+        for line in reader.lines().map_while(Result::ok) {
+            {
                 // Parse espflash progress output
                 if line.contains("Connecting") {
                     last_phase = "connecting".to_string();
@@ -104,19 +106,24 @@ pub async fn flash_firmware(
                     last_progress = 95.0;
                 }
 
-                let _ = app_clone.emit("flash-progress", FlashProgress {
-                    phase: last_phase.clone(),
-                    progress_pct: last_progress,
-                    bytes_written: ((last_progress / 100.0) * firmware_size_clone as f32) as u64,
-                    bytes_total: firmware_size_clone,
-                    message: Some(line),
-                });
+                let _ = app_clone.emit(
+                    "flash-progress",
+                    FlashProgress {
+                        phase: last_phase.clone(),
+                        progress_pct: last_progress,
+                        bytes_written: ((last_progress / 100.0) * firmware_size_clone as f32)
+                            as u64,
+                        bytes_total: firmware_size_clone,
+                        message: Some(line),
+                    },
+                );
             }
         }
     });
 
     // Wait for completion
-    let status = child.wait()
+    let status = child
+        .wait()
         .map_err(|e| format!("Failed to wait for espflash: {}", e))?;
 
     // Wait for progress parsing to complete
@@ -126,13 +133,16 @@ pub async fn flash_firmware(
 
     if status.success() {
         // Emit completion
-        let _ = app.emit("flash-progress", FlashProgress {
-            phase: "completed".into(),
-            progress_pct: 100.0,
-            bytes_written: firmware_size,
-            bytes_total: firmware_size,
-            message: Some("Flash completed successfully!".into()),
-        });
+        let _ = app.emit(
+            "flash-progress",
+            FlashProgress {
+                phase: "completed".into(),
+                progress_pct: 100.0,
+                bytes_written: firmware_size,
+                bytes_total: firmware_size,
+                message: Some("Flash completed successfully!".into()),
+            },
+        );
 
         Ok(FlashResult {
             success: true,
@@ -141,13 +151,16 @@ pub async fn flash_firmware(
             firmware_hash: Some(firmware_hash),
         })
     } else {
-        let _ = app.emit("flash-progress", FlashProgress {
-            phase: "failed".into(),
-            progress_pct: 0.0,
-            bytes_written: 0,
-            bytes_total: firmware_size,
-            message: Some("Flash failed".into()),
-        });
+        let _ = app.emit(
+            "flash-progress",
+            FlashProgress {
+                phase: "failed".into(),
+                progress_pct: 0.0,
+                bytes_written: 0,
+                bytes_total: firmware_size,
+                message: Some("Flash failed".into()),
+            },
+        );
 
         Err(format!("espflash exited with status: {}", status))
     }
@@ -199,9 +212,7 @@ pub async fn check_espflash() -> Result<EspflashInfo, String> {
         .map_err(|_| "espflash not found. Please install: cargo install espflash")?;
 
     if output.status.success() {
-        let version = String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .to_string();
+        let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
         Ok(EspflashInfo {
             installed: true,
@@ -247,8 +258,7 @@ pub async fn supported_chips() -> Result<Vec<ChipInfo>, String> {
 
 /// Calculate SHA-256 hash of a file.
 fn calculate_sha256(path: &str) -> Result<String, String> {
-    let file = std::fs::File::open(path)
-        .map_err(|e| format!("Failed to open file: {}", e))?;
+    let file = std::fs::File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
 
     let mut reader = BufReader::new(file);
     let mut hasher = Sha256::new();
@@ -344,13 +354,11 @@ mod tests {
 
     #[test]
     fn test_chip_info() {
-        let chips = vec![
-            ChipInfo {
-                id: "esp32".into(),
-                name: "ESP32".into(),
-                description: "Test".into(),
-            },
-        ];
+        let chips = [ChipInfo {
+            id: "esp32".into(),
+            name: "ESP32".into(),
+            description: "Test".into(),
+        }];
         assert_eq!(chips.len(), 1);
         assert_eq!(chips[0].id, "esp32");
     }

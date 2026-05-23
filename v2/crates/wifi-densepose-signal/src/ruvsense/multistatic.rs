@@ -190,11 +190,7 @@ impl MultistaticFuser {
         let n_nodes = amplitudes.len();
         let (fused_amp, fused_ph, coherence) = if n_nodes == 1 {
             // Single-node fallback
-            (
-                amplitudes[0].to_vec(),
-                phases[0].to_vec(),
-                1.0_f32,
-            )
+            (amplitudes[0].to_vec(), phases[0].to_vec(), 1.0_f32)
         } else {
             // Multi-node attention-weighted fusion
             attention_weighted_fusion(&amplitudes, &phases, self.config.attention_temperature)
@@ -379,8 +375,7 @@ pub fn geometric_diversity(positions: &[[f32; 3]]) -> f32 {
     // Perfect coverage (N equidistant nodes): max_gap = 2*pi/N
     // Worst case (all co-located): max_gap = 2*pi
     let ideal_gap = 2.0 * std::f32::consts::PI / positions.len() as f32;
-    let diversity = (ideal_gap / max_gap.max(1e-6)).clamp(0.0, 1.0);
-    diversity
+    (ideal_gap / max_gap.max(1e-6)).clamp(0.0, 1.0)
 }
 
 /// Represents a cluster of TX-RX links attributed to one person.
@@ -513,7 +508,11 @@ mod tests {
     #[test]
     fn geometric_diversity_two_opposite() {
         let score = geometric_diversity(&[[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]]);
-        assert!(score > 0.8, "Two opposite nodes should have high diversity: {}", score);
+        assert!(
+            score > 0.8,
+            "Two opposite nodes should have high diversity: {}",
+            score
+        );
     }
 
     #[test]
@@ -524,7 +523,11 @@ mod tests {
             [5.0, 5.0, 0.0],
             [0.0, 5.0, 0.0],
         ]);
-        assert!(score > 0.7, "Four corners should have good diversity: {}", score);
+        assert!(
+            score > 0.7,
+            "Four corners should have good diversity: {}",
+            score
+        );
     }
 
     #[test]
@@ -538,7 +541,11 @@ mod tests {
     fn weight_coherence_single_dominant() {
         let weights = vec![0.97, 0.01, 0.01, 0.01];
         let c = compute_weight_coherence(&weights);
-        assert!(c < 0.3, "Single dominant node should have low coherence: {}", c);
+        assert!(
+            c < 0.3,
+            "Single dominant node should have low coherence: {}",
+            c
+        );
     }
 
     #[test]

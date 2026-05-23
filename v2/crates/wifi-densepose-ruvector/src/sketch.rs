@@ -141,10 +141,7 @@ impl Sketch {
     /// over-long input should fail loudly rather than silently
     /// produce a sketch that disagrees with its source on
     /// `embedding_dim`.
-    pub fn try_from_embedding(
-        embedding: &[f32],
-        sketch_version: u16,
-    ) -> Result<Self, SketchError> {
+    pub fn try_from_embedding(embedding: &[f32], sketch_version: u16) -> Result<Self, SketchError> {
         if embedding.len() > u16::MAX as usize {
             return Err(SketchError::EmbeddingDimOverflow {
                 got: embedding.len(),
@@ -376,7 +373,7 @@ impl WireSketch {
         let embedding_dim = u16::from_le_bytes(buf[8..10].try_into().expect("2-byte slice"));
         let nov_q15 = u16::from_le_bytes(buf[10..12].try_into().expect("2-byte slice"));
 
-        let expected_bits = ((embedding_dim as usize) + 7) / 8;
+        let expected_bits = (embedding_dim as usize).div_ceil(8);
         let got_bits = buf.len() - Self::HEADER_BYTES;
         if expected_bits != got_bits {
             return Err(WireSketchError::PayloadSizeMismatch {
@@ -566,10 +563,8 @@ impl SketchBank {
         }
         // Drain heap into a Vec — already in (Reverse) descending order;
         // sort to expose ascending-by-distance per the public contract.
-        let mut scored: Vec<(u32, u32)> = heap
-            .into_iter()
-            .map(|Reverse((d, id))| (id, d))
-            .collect();
+        let mut scored: Vec<(u32, u32)> =
+            heap.into_iter().map(|Reverse((d, id))| (id, d)).collect();
         scored.sort_by_key(|&(_, d)| d);
         Ok(scored)
     }
@@ -638,11 +633,14 @@ mod tests {
     fn bank_topk_returns_sorted_by_distance() {
         let mut bank = SketchBank::new();
         // id 10: identical
-        bank.insert(10, Sketch::from_embedding(&[0.5, 0.5, 0.5, 0.5], 1)).unwrap();
+        bank.insert(10, Sketch::from_embedding(&[0.5, 0.5, 0.5, 0.5], 1))
+            .unwrap();
         // id 20: 1 bit different (last dim flipped)
-        bank.insert(20, Sketch::from_embedding(&[0.5, 0.5, 0.5, -0.5], 1)).unwrap();
+        bank.insert(20, Sketch::from_embedding(&[0.5, 0.5, 0.5, -0.5], 1))
+            .unwrap();
         // id 30: 2 bits different
-        bank.insert(30, Sketch::from_embedding(&[-0.5, 0.5, -0.5, 0.5], 1)).unwrap();
+        bank.insert(30, Sketch::from_embedding(&[-0.5, 0.5, -0.5, 0.5], 1))
+            .unwrap();
 
         let query = Sketch::from_embedding(&[0.5, 0.5, 0.5, 0.5], 1);
         let topk = bank.topk(&query, 3).unwrap();
@@ -658,7 +656,8 @@ mod tests {
     #[test]
     fn bank_topk_zero_returns_empty() {
         let mut bank = SketchBank::new();
-        bank.insert(1, Sketch::from_embedding(&[0.5, 0.5], 1)).unwrap();
+        bank.insert(1, Sketch::from_embedding(&[0.5, 0.5], 1))
+            .unwrap();
         let q = Sketch::from_embedding(&[0.5, 0.5], 1);
         assert_eq!(bank.topk(&q, 0).unwrap().len(), 0);
     }
@@ -666,8 +665,10 @@ mod tests {
     #[test]
     fn bank_topk_more_than_size_returns_all() {
         let mut bank = SketchBank::new();
-        bank.insert(1, Sketch::from_embedding(&[0.5, 0.5], 1)).unwrap();
-        bank.insert(2, Sketch::from_embedding(&[-0.5, 0.5], 1)).unwrap();
+        bank.insert(1, Sketch::from_embedding(&[0.5, 0.5], 1))
+            .unwrap();
+        bank.insert(2, Sketch::from_embedding(&[-0.5, 0.5], 1))
+            .unwrap();
         let q = Sketch::from_embedding(&[0.5, 0.5], 1);
         assert_eq!(bank.topk(&q, 100).unwrap().len(), 2);
     }
@@ -675,7 +676,8 @@ mod tests {
     #[test]
     fn bank_locks_schema_on_first_insert() {
         let mut bank = SketchBank::new();
-        bank.insert(1, Sketch::from_embedding(&[0.5, 0.5, 0.5, 0.5], 1)).unwrap();
+        bank.insert(1, Sketch::from_embedding(&[0.5, 0.5, 0.5, 0.5], 1))
+            .unwrap();
         // Different version → reject
         let err = bank
             .insert(2, Sketch::from_embedding(&[0.5, 0.5, 0.5, 0.5], 2))
@@ -712,7 +714,8 @@ mod tests {
     fn novelty_is_proportional_to_min_distance() {
         let mut bank = SketchBank::new();
         // Bank has one sketch with all 8 dims positive.
-        bank.insert(1, Sketch::from_embedding(&[0.5; 8], 1)).unwrap();
+        bank.insert(1, Sketch::from_embedding(&[0.5; 8], 1))
+            .unwrap();
         // Query flips half the dims → 4 bit difference / 8 dims = 0.5.
         let query = Sketch::from_embedding(&[0.5, 0.5, 0.5, 0.5, -0.5, -0.5, -0.5, -0.5], 1);
         let novelty = bank.novelty(&query).unwrap();
@@ -796,7 +799,10 @@ mod tests {
         // Bump format_version to 99 — beyond what this build supports.
         bytes[4..6].copy_from_slice(&99_u16.to_le_bytes());
         let err = WireSketch::deserialize(&bytes).unwrap_err();
-        assert!(matches!(err, WireSketchError::UnsupportedVersion { got: 99, .. }));
+        assert!(matches!(
+            err,
+            WireSketchError::UnsupportedVersion { got: 99, .. }
+        ));
     }
 
     #[test]
@@ -823,13 +829,18 @@ mod tests {
         let v: Vec<f32> = (0..128).map(|i| (i as f32).sin()).collect();
         let sketch = Sketch::from_embedding(&v, 1);
         let bytes = WireSketch::serialize(&sketch, 0.5);
-        assert_eq!(bytes.len(), 28, "AETHER 128-d must wire to exactly 28 bytes");
+        assert_eq!(
+            bytes.len(),
+            28,
+            "AETHER 128-d must wire to exactly 28 bytes"
+        );
     }
 
     #[test]
     fn topk_rejects_query_with_wrong_schema() {
         let mut bank = SketchBank::with_schema(4, 1);
-        bank.insert(1, Sketch::from_embedding(&[0.5, 0.5, 0.5, 0.5], 1)).unwrap();
+        bank.insert(1, Sketch::from_embedding(&[0.5, 0.5, 0.5, 0.5], 1))
+            .unwrap();
         let bad_dim = Sketch::from_embedding(&[0.5, 0.5], 1);
         assert!(matches!(
             bank.topk(&bad_dim, 1).unwrap_err(),

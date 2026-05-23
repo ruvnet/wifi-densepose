@@ -3,6 +3,7 @@
 //! This module provides adapters for various WiFi CSI hardware:
 //! - ESP32 with CSI support via serial communication
 //! - Intel 5300 NIC with Linux CSI Tool
+#![allow(missing_docs)]
 //! - Atheros CSI extraction via ath9k/ath10k drivers
 //!
 //! # Example
@@ -362,6 +363,7 @@ struct DeviceState {
 }
 
 /// Device-specific runtime state
+#[allow(dead_code)]
 enum DeviceSpecificState {
     Esp32 {
         firmware_version: Option<String>,
@@ -444,7 +446,10 @@ impl HardwareAdapter {
 
     /// Initialize hardware communication
     pub async fn initialize(&mut self) -> Result<(), AdapterError> {
-        tracing::info!("Initializing hardware adapter for {:?}", self.config.device_type);
+        tracing::info!(
+            "Initializing hardware adapter for {:?}",
+            self.config.device_type
+        );
 
         match &self.config.device_type {
             DeviceType::Esp32 => self.initialize_esp32().await?,
@@ -468,10 +473,18 @@ impl HardwareAdapter {
     async fn initialize_esp32(&mut self) -> Result<(), AdapterError> {
         let settings = match &self.config.device_settings {
             DeviceSettings::Serial(s) => s,
-            _ => return Err(AdapterError::Config("ESP32 requires serial settings".into())),
+            _ => {
+                return Err(AdapterError::Config(
+                    "ESP32 requires serial settings".into(),
+                ))
+            }
         };
 
-        tracing::info!("Initializing ESP32 on {} at {} baud", settings.port, settings.baud_rate);
+        tracing::info!(
+            "Initializing ESP32 on {} at {} baud",
+            settings.port,
+            settings.baud_rate
+        );
 
         // Verify serial port exists
         #[cfg(unix)]
@@ -498,10 +511,17 @@ impl HardwareAdapter {
     async fn initialize_intel_5300(&mut self) -> Result<(), AdapterError> {
         let settings = match &self.config.device_settings {
             DeviceSettings::NetworkInterface(s) => s,
-            _ => return Err(AdapterError::Config("Intel 5300 requires network interface settings".into())),
+            _ => {
+                return Err(AdapterError::Config(
+                    "Intel 5300 requires network interface settings".into(),
+                ))
+            }
         };
 
-        tracing::info!("Initializing Intel 5300 on interface {}", settings.interface);
+        tracing::info!(
+            "Initializing Intel 5300 on interface {}",
+            settings.interface
+        );
 
         // Check if iwlwifi driver is loaded
         #[cfg(target_os = "linux")]
@@ -509,7 +529,9 @@ impl HardwareAdapter {
             let output = tokio::process::Command::new("lsmod")
                 .output()
                 .await
-                .map_err(|e| AdapterError::Hardware(format!("Failed to check kernel modules: {}", e)))?;
+                .map_err(|e| {
+                    AdapterError::Hardware(format!("Failed to check kernel modules: {}", e))
+                })?;
 
             let stdout = String::from_utf8_lossy(&output.stdout);
             if !stdout.contains("iwlwifi") {
@@ -536,7 +558,11 @@ impl HardwareAdapter {
     async fn initialize_atheros(&mut self, driver: AtherosDriver) -> Result<(), AdapterError> {
         let settings = match &self.config.device_settings {
             DeviceSettings::NetworkInterface(s) => s,
-            _ => return Err(AdapterError::Config("Atheros requires network interface settings".into())),
+            _ => {
+                return Err(AdapterError::Config(
+                    "Atheros requires network interface settings".into(),
+                ))
+            }
         };
 
         tracing::info!(
@@ -578,10 +604,18 @@ impl HardwareAdapter {
     async fn initialize_udp(&mut self) -> Result<(), AdapterError> {
         let settings = match &self.config.device_settings {
             DeviceSettings::Udp(s) => s,
-            _ => return Err(AdapterError::Config("UDP receiver requires UDP settings".into())),
+            _ => {
+                return Err(AdapterError::Config(
+                    "UDP receiver requires UDP settings".into(),
+                ))
+            }
         };
 
-        tracing::info!("Initializing UDP receiver on {}:{}", settings.bind_address, settings.port);
+        tracing::info!(
+            "Initializing UDP receiver on {}:{}",
+            settings.bind_address,
+            settings.port
+        );
 
         // Verify port is available
         let addr = format!("{}:{}", settings.bind_address, settings.port);
@@ -597,7 +631,9 @@ impl HardwareAdapter {
 
             socket
                 .join_multicast_v4(multicast_addr, std::net::Ipv4Addr::UNSPECIFIED)
-                .map_err(|e| AdapterError::Hardware(format!("Failed to join multicast group: {}", e)))?;
+                .map_err(|e| {
+                    AdapterError::Hardware(format!("Failed to join multicast group: {}", e))
+                })?;
         }
 
         // Socket will be recreated when streaming starts
@@ -638,7 +674,9 @@ impl HardwareAdapter {
             return Err(AdapterError::Hardware("Hardware not initialized".into()));
         }
 
-        let broadcaster = self.csi_broadcaster.as_ref()
+        let broadcaster = self
+            .csi_broadcaster
+            .as_ref()
             .ok_or_else(|| AdapterError::Hardware("CSI broadcaster not initialized".into()))?;
 
         // Create shutdown channel
@@ -1068,17 +1106,28 @@ impl HardwareAdapter {
     }
 
     /// Configure channel settings
-    pub async fn set_channel(&mut self, channel: u8, bandwidth: Bandwidth) -> Result<(), AdapterError> {
+    pub async fn set_channel(
+        &mut self,
+        channel: u8,
+        bandwidth: Bandwidth,
+    ) -> Result<(), AdapterError> {
         if !self.initialized {
             return Err(AdapterError::Hardware("Hardware not initialized".into()));
         }
 
         // Validate channel
         let valid_2g = (1..=14).contains(&channel);
-        let valid_5g = [36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144, 149, 153, 157, 161, 165].contains(&channel);
+        let valid_5g = [
+            36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140,
+            144, 149, 153, 157, 161, 165,
+        ]
+        .contains(&channel);
 
         if !valid_2g && !valid_5g {
-            return Err(AdapterError::Config(format!("Invalid WiFi channel: {}", channel)));
+            return Err(AdapterError::Config(format!(
+                "Invalid WiFi channel: {}",
+                channel
+            )));
         }
 
         self.config.channel_config.channel = channel;
@@ -1321,7 +1370,10 @@ mod tests {
     #[test]
     fn test_atheros_config() {
         let config = HardwareConfig::atheros("wlan0", AtherosDriver::Ath10k);
-        assert!(matches!(config.device_type, DeviceType::Atheros(AtherosDriver::Ath10k)));
+        assert!(matches!(
+            config.device_type,
+            DeviceType::Atheros(AtherosDriver::Ath10k)
+        ));
         assert_eq!(config.channel_config.num_subcarriers, 114);
     }
 

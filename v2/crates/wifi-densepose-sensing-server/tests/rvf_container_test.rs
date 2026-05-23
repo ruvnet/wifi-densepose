@@ -17,9 +17,7 @@
 //! - Witness/proof segment verification
 //! - Write/read benchmark for ~10MB container
 
-use wifi_densepose_sensing_server::rvf_container::{
-    RvfBuilder, RvfReader, VitalSignConfig,
-};
+use wifi_densepose_sensing_server::rvf_container::{RvfBuilder, RvfReader, VitalSignConfig};
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -74,17 +72,13 @@ fn test_rvf_round_trip() {
     assert_eq!(reader.segment_count(), 3);
 
     // Verify manifest
-    let manifest = reader
-        .manifest()
-        .expect("should have manifest");
+    let manifest = reader.manifest().expect("should have manifest");
     assert_eq!(manifest["model_id"], "vital-signs-v1");
     assert_eq!(manifest["version"], "0.1.0");
     assert_eq!(manifest["description"], "Vital sign detection model");
 
     // Verify weights
-    let decoded_weights = reader
-        .weights()
-        .expect("should have weights");
+    let decoded_weights = reader.weights().expect("should have weights");
     assert_eq!(decoded_weights.len(), weights.len());
     for (i, (&original, &decoded)) in weights.iter().zip(decoded_weights.iter()).enumerate() {
         assert_eq!(
@@ -95,9 +89,7 @@ fn test_rvf_round_trip() {
     }
 
     // Verify metadata
-    let decoded_meta = reader
-        .metadata()
-        .expect("should have metadata");
+    let decoded_meta = reader.metadata().expect("should have metadata");
     assert_eq!(decoded_meta["training_epochs"], 50);
     assert_eq!(decoded_meta["optimizer"], "adam");
 }
@@ -108,10 +100,7 @@ fn test_rvf_segment_types() {
     builder.add_manifest("test", "1.0", "test model");
     builder.add_weights(&[1.0, 2.0]);
     builder.add_metadata(&serde_json::json!({"key": "value"}));
-    builder.add_witness(
-        "sha256:abc123",
-        &serde_json::json!({"accuracy": 0.95}),
-    );
+    builder.add_witness("sha256:abc123", &serde_json::json!({"accuracy": 0.95}));
 
     let data = builder.build();
     let reader = RvfReader::from_bytes(&data).expect("should parse");
@@ -125,10 +114,7 @@ fn test_rvf_segment_types() {
     assert!(reader.witness().is_some(), "witness should be present");
 
     // Verify segment order via segment IDs (monotonically increasing)
-    let ids: Vec<u64> = reader
-        .segments()
-        .map(|(h, _)| h.segment_id)
-        .collect();
+    let ids: Vec<u64> = reader.segments().map(|(h, _)| h.segment_id).collect();
     assert_eq!(ids, vec![0, 1, 2, 3], "segment IDs should be 0,1,2,3");
 }
 
@@ -146,10 +132,7 @@ fn test_rvf_magic_validation() {
     data[3] = 0xEF;
 
     let result = RvfReader::from_bytes(&data);
-    assert!(
-        result.is_err(),
-        "corrupted magic should fail to parse"
-    );
+    assert!(result.is_err(), "corrupted magic should fail to parse");
 
     let err = result.unwrap_err();
     assert!(
@@ -175,7 +158,7 @@ fn test_rvf_weights_f32_precision() {
         1.0e-30,
         1.0e30,
         -0.0,
-        0.123456789,
+        0.123_456_8,
         1.0e-45, // subnormal
     ];
 
@@ -333,8 +316,7 @@ fn test_rvf_witness_proof() {
 
     let witness = reader.witness().expect("should have witness segment");
     assert_eq!(
-        witness["training_hash"],
-        training_hash,
+        witness["training_hash"], training_hash,
         "training hash should round-trip"
     );
     assert_eq!(witness["metrics"]["accuracy"], 0.957);
@@ -488,9 +470,7 @@ fn test_rvf_vital_config_round_trip() {
     let data = builder.build();
 
     let reader = RvfReader::from_bytes(&data).expect("should parse");
-    let decoded = reader
-        .vital_config()
-        .expect("should have vital config");
+    let decoded = reader.vital_config().expect("should have vital config");
 
     assert!(
         (decoded.breathing_low_hz - 0.15).abs() < f64::EPSILON,

@@ -107,7 +107,10 @@ pub fn extract_selected(
 
     for &idx in &selection.selected_indices {
         if idx >= n_sc {
-            return Err(SelectionError::IndexOutOfBounds { index: idx, max: n_sc });
+            return Err(SelectionError::IndexOutOfBounds {
+                index: idx,
+                max: n_sc,
+            });
         }
     }
 
@@ -263,9 +266,9 @@ mod tests {
     fn test_sensitive_subcarriers_ranked() {
         // 3 subcarriers: SC0 has high motion variance, SC1 low, SC2 medium
         let motion = Array2::from_shape_fn((100, 3), |(t, sc)| match sc {
-            0 => (t as f64 * 0.1).sin() * 5.0,  // high variance
-            1 => (t as f64 * 0.1).sin() * 0.1,  // low variance
-            2 => (t as f64 * 0.1).sin() * 2.0,  // medium variance
+            0 => (t as f64 * 0.1).sin() * 5.0, // high variance
+            1 => (t as f64 * 0.1).sin() * 0.1, // low variance
+            2 => (t as f64 * 0.1).sin() * 2.0, // medium variance
             _ => 0.0,
         });
         let statik = Array2::from_shape_fn((100, 3), |(_, _)| 0.01);
@@ -374,9 +377,14 @@ mod mincut_tests {
         // High-sensitivity indices should cluster together
         assert!(!sensitive.is_empty());
         assert!(!insensitive.is_empty());
-        let sens_mean: f32 = sensitive.iter().map(|&i| sensitivity[i]).sum::<f32>() / sensitive.len() as f32;
-        let insens_mean: f32 = insensitive.iter().map(|&i| sensitivity[i]).sum::<f32>() / insensitive.len() as f32;
-        assert!(sens_mean > insens_mean, "sensitive mean {sens_mean} should exceed insensitive mean {insens_mean}");
+        let sens_mean: f32 =
+            sensitive.iter().map(|&i| sensitivity[i]).sum::<f32>() / sensitive.len() as f32;
+        let insens_mean: f32 =
+            insensitive.iter().map(|&i| sensitivity[i]).sum::<f32>() / insensitive.len() as f32;
+        assert!(
+            sens_mean > insens_mean,
+            "sensitive mean {sens_mean} should exceed insensitive mean {insens_mean}"
+        );
     }
 
     #[test]

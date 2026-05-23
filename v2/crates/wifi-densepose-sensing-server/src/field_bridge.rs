@@ -7,7 +7,9 @@
 //! score-based heuristic in `score_to_person_count`.
 
 use std::collections::VecDeque;
-use wifi_densepose_signal::ruvsense::field_model::{CalibrationStatus, FieldModel, FieldModelConfig};
+use wifi_densepose_signal::ruvsense::field_model::{
+    CalibrationStatus, FieldModel, FieldModelConfig,
+};
 
 use super::score_to_person_count;
 
@@ -54,10 +56,9 @@ pub fn occupancy_or_fallback(
             }
 
             // Try eigenvalue-based occupancy first (best accuracy).
-            match field.estimate_occupancy(&frames) {
-                Ok(count) => return count,
-                Err(_) => {} // fall through to perturbation energy
-            }
+            if let Ok(count) = field.estimate_occupancy(&frames) {
+                return count;
+            } // else fall through to perturbation energy
 
             // Fallback: perturbation energy thresholds.
             // FieldModel expects [n_links][n_subcarriers] — we use n_links=1.
@@ -112,10 +113,16 @@ pub fn parse_node_positions(input: &str) -> Vec<[f32; 3]> {
         .filter_map(|(idx, triplet)| {
             let parts: Vec<&str> = triplet.split(',').collect();
             if parts.len() != 3 {
-                tracing::warn!("Skipping malformed node position entry {idx}: '{triplet}' (expected x,y,z)");
+                tracing::warn!(
+                    "Skipping malformed node position entry {idx}: '{triplet}' (expected x,y,z)"
+                );
                 return None;
             }
-            match (parts[0].parse::<f32>(), parts[1].parse::<f32>(), parts[2].parse::<f32>()) {
+            match (
+                parts[0].parse::<f32>(),
+                parts[1].parse::<f32>(),
+                parts[2].parse::<f32>(),
+            ) {
                 (Ok(x), Ok(y), Ok(z)) => Some([x, y, z]),
                 _ => {
                     tracing::warn!("Skipping unparseable node position entry {idx}: '{triplet}'");

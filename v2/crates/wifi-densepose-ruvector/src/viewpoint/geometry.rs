@@ -363,7 +363,12 @@ mod tests {
     #[test]
     fn gdi_uniform_spacing_is_optimal() {
         // 4 viewpoints at 0, 90, 180, 270 degrees
-        let azimuths = vec![0.0, std::f32::consts::FRAC_PI_2, std::f32::consts::PI, 3.0 * std::f32::consts::FRAC_PI_2];
+        let azimuths = vec![
+            0.0,
+            std::f32::consts::FRAC_PI_2,
+            std::f32::consts::PI,
+            3.0 * std::f32::consts::FRAC_PI_2,
+        ];
         let ids = vec![0, 1, 2, 3];
         let gdi = GeometricDiversityIndex::compute(&azimuths, &ids).unwrap();
         // Minimum separation = PI/2 for each viewpoint, so GDI = PI/2
@@ -399,13 +404,21 @@ mod tests {
         let azimuths = vec![0.0, 1.0, 2.0, 3.0];
         let ids = vec![0, 1, 2, 3];
         let gdi = GeometricDiversityIndex::compute(&azimuths, &ids).unwrap();
-        assert!(gdi.efficiency() > 0.0 && gdi.efficiency() <= 1.0,
-            "efficiency should be in (0, 1], got {}", gdi.efficiency());
+        assert!(
+            gdi.efficiency() > 0.0 && gdi.efficiency() <= 1.0,
+            "efficiency should be in (0, 1], got {}",
+            gdi.efficiency()
+        );
     }
 
     #[test]
     fn gdi_is_sufficient_for_uniform_layout() {
-        let azimuths = vec![0.0, std::f32::consts::FRAC_PI_2, std::f32::consts::PI, 3.0 * std::f32::consts::FRAC_PI_2];
+        let azimuths = vec![
+            0.0,
+            std::f32::consts::FRAC_PI_2,
+            std::f32::consts::PI,
+            3.0 * std::f32::consts::FRAC_PI_2,
+        ];
         let ids = vec![0, 1, 2, 3];
         let gdi = GeometricDiversityIndex::compute(&azimuths, &ids).unwrap();
         assert!(gdi.is_sufficient(), "uniform layout should be sufficient");
@@ -451,13 +464,21 @@ mod tests {
         let vp3: Vec<ViewpointPosition> = (0..3)
             .map(|i| {
                 let a = 2.0 * std::f32::consts::PI * i as f32 / 3.0;
-                ViewpointPosition { x: 5.0 * a.cos(), y: 5.0 * a.sin(), noise_std: 0.1 }
+                ViewpointPosition {
+                    x: 5.0 * a.cos(),
+                    y: 5.0 * a.sin(),
+                    noise_std: 0.1,
+                }
             })
             .collect();
         let vp6: Vec<ViewpointPosition> = (0..6)
             .map(|i| {
                 let a = 2.0 * std::f32::consts::PI * i as f32 / 6.0;
-                ViewpointPosition { x: 5.0 * a.cos(), y: 5.0 * a.sin(), noise_std: 0.1 }
+                ViewpointPosition {
+                    x: 5.0 * a.cos(),
+                    y: 5.0 * a.sin(),
+                    noise_std: 0.1,
+                }
             })
             .collect();
 
@@ -475,8 +496,16 @@ mod tests {
     fn crb_too_few_viewpoints_returns_none() {
         let target = (0.0, 0.0);
         let vps = vec![
-            ViewpointPosition { x: 1.0, y: 0.0, noise_std: 0.1 },
-            ViewpointPosition { x: 0.0, y: 1.0, noise_std: 0.1 },
+            ViewpointPosition {
+                x: 1.0,
+                y: 0.0,
+                noise_std: 0.1,
+            },
+            ViewpointPosition {
+                x: 0.0,
+                y: 1.0,
+                noise_std: 0.1,
+            },
         ];
         assert!(CramerRaoBound::estimate(target, &vps).is_none());
     }
@@ -487,13 +516,20 @@ mod tests {
         let vps: Vec<ViewpointPosition> = (0..4)
             .map(|i| {
                 let a = 2.0 * std::f32::consts::PI * i as f32 / 4.0;
-                ViewpointPosition { x: 3.0 * a.cos(), y: 3.0 * a.sin(), noise_std: 0.1 }
+                ViewpointPosition {
+                    x: 3.0 * a.cos(),
+                    y: 3.0 * a.sin(),
+                    noise_std: 0.1,
+                }
             })
             .collect();
         let crb = CramerRaoBound::estimate_regularised(target, &vps, 1e-4);
         // May return None if Neumann solver doesn't converge, but should not panic.
         if let Some(crb) = crb {
-            assert!(crb.rmse_lower_bound >= 0.0, "RMSE bound must be non-negative");
+            assert!(
+                crb.rmse_lower_bound >= 0.0,
+                "RMSE bound must be non-negative"
+            );
         }
     }
 }

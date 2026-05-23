@@ -72,7 +72,10 @@ mod tests {
         ];
 
         let result = solve_fresnel_geometry(&observations, d_total);
-        assert!(result.is_some(), "solver must return Some for 5 observations");
+        assert!(
+            result.is_some(),
+            "solver must return Some for 5 observations"
+        );
 
         let (d1, d2) = result.unwrap();
         let sum = d1 + d2;
@@ -87,6 +90,9 @@ mod tests {
     #[test]
     fn fresnel_too_few_observations_returns_none() {
         let result = solve_fresnel_geometry(&[(0.125, 0.3), (0.130, 0.25)], 5.0);
-        assert!(result.is_none(), "fewer than 3 observations must return None");
+        assert!(
+            result.is_none(),
+            "fewer than 3 observations must return None"
+        );
     }
 }

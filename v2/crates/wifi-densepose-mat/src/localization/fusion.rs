@@ -1,15 +1,15 @@
 //! Position fusion combining multiple localization techniques.
 
+use super::{DepthEstimator, DepthEstimatorConfig, TriangulationConfig, Triangulator};
 use crate::domain::{
-    Coordinates3D, LocationUncertainty, ScanZone, VitalSignsReading,
-    DepthEstimate, DebrisProfile,
+    Coordinates3D, DebrisProfile, DepthEstimate, LocationUncertainty, ScanZone, VitalSignsReading,
 };
-use super::{Triangulator, TriangulationConfig, DepthEstimator, DepthEstimatorConfig};
 
 /// Service for survivor localization
 pub struct LocalizationService {
     triangulator: Triangulator,
     depth_estimator: DepthEstimator,
+    #[allow(dead_code)]
     position_fuser: PositionFuser,
 }
 
@@ -56,11 +56,9 @@ impl LocalizationService {
         // Estimate depth
         let debris_profile = self.estimate_debris_profile(zone);
         let signal_attenuation = self.calculate_signal_attenuation(&rssi_values);
-        let depth_estimate = self.depth_estimator.estimate_depth(
-            signal_attenuation,
-            0.0,
-            &debris_profile,
-        )?;
+        let depth_estimate =
+            self.depth_estimator
+                .estimate_depth(signal_attenuation, 0.0, &debris_profile)?;
 
         // Combine into 3D position
         let position_3d = Coordinates3D::new(
@@ -105,8 +103,8 @@ impl LocalizationService {
         // Reference RSSI at surface (typical open-air value)
         const REFERENCE_RSSI: f64 = -30.0;
 
-        let avg_rssi: f64 = rssi_values.iter().map(|(_, r)| r).sum::<f64>()
-            / rssi_values.len() as f64;
+        let avg_rssi: f64 =
+            rssi_values.iter().map(|(_, r)| r).sum::<f64>() / rssi_values.len() as f64;
 
         (REFERENCE_RSSI - avg_rssi).max(0.0)
     }
@@ -283,13 +281,17 @@ impl PositionFuser {
         // Combined uncertainty is reduced with multiple estimates
         let n = estimates.len() as f64;
 
-        let avg_h_error: f64 = estimates.iter()
+        let avg_h_error: f64 = estimates
+            .iter()
             .map(|e| e.position.uncertainty.horizontal_error)
-            .sum::<f64>() / n;
+            .sum::<f64>()
+            / n;
 
-        let avg_v_error: f64 = estimates.iter()
+        let avg_v_error: f64 = estimates
+            .iter()
             .map(|e| e.position.uncertainty.vertical_error)
-            .sum::<f64>() / n;
+            .sum::<f64>()
+            / n;
 
         // Uncertainty reduction factor (more estimates = more confidence)
         let reduction = (1.0 / n.sqrt()).max(0.5);
@@ -312,7 +314,6 @@ impl Default for PositionFuser {
         Self::new()
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -379,7 +380,6 @@ mod tests {
     fn test_localization_service_creation() {
         let service = LocalizationService::new();
         // Just verify it creates without panic
-        assert!(true);
         drop(service);
     }
 }
