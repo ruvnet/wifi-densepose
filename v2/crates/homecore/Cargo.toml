@@ -41,3 +41,8 @@ once_cell = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros", "test-util"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "state_machine"
+harness = false
