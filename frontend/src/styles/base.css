@@ -1,0 +1,224 @@
+/**
+ * HOMECORE base styles — typography reset, page shell, nav layout.
+ * Component vocabulary mirrors cognitum-v0 (ADR-131 §3–4).
+ */
+
+@import './tokens.css';
+
+/* ── Reset ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html {
+  color-scheme: dark;
+  font-family: var(--hc-font-display);
+  font-size: 16px;
+  background: var(--hc-bg);
+  color: var(--hc-text);
+}
+
+body { min-height: 100dvh; }
+
+/* ── Typography scale ── */
+h1 { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.02em; }
+h2 { font-size: 1.125rem; font-weight: 700; letter-spacing: -0.02em; }
+h3 { font-size: 0.9375rem; font-weight: 600; letter-spacing: -0.02em; }
+h4 { font-size: 0.875rem; font-weight: 600; letter-spacing: -0.02em; }
+p  { font-size: 0.875rem; line-height: 1.45; }
+
+.mono { font-family: var(--hc-font-mono); }
+
+/* ── Page shell ── */
+.hc-wrap {
+  max-width: 1400px;
+  margin-inline: auto;
+  padding-inline: 1.25rem;
+  padding-block: 1.5rem;
+}
+
+/* ── Appbar ── */
+.hc-appbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: hsl(220 25% 6% / 0.9);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--hc-border);
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0 1.25rem;
+  height: 3.25rem;
+}
+
+.hc-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  font-size: 0.9375rem;
+  white-space: nowrap;
+  flex-shrink: 0;
+  text-decoration: none;
+  color: var(--hc-text);
+}
+
+.hc-brand-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 0.4rem;
+  background: var(--hc-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--hc-primary-fg);
+}
+
+.hc-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+  mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+  flex: 1;
+}
+
+.hc-nav::-webkit-scrollbar { display: none; }
+
+.hc-nav-link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.7rem;
+  border-radius: var(--hc-radius-sm);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--hc-text-muted);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 150ms, background 150ms;
+}
+
+.hc-nav-link:hover {
+  color: var(--hc-text);
+  background: hsl(220 20% 14%);
+}
+
+.hc-nav-link:focus-visible {
+  outline: 2px solid hsl(185 80% 50% / 0.6);
+  outline-offset: 1px;
+}
+
+.hc-nav-link:active { transform: translateY(1px); transition-duration: 50ms; }
+
+.hc-nav-link.active {
+  color: var(--hc-primary);
+}
+
+.hc-nav-link.active::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0.7rem;
+  right: 0.7rem;
+  height: 2px;
+  background: var(--hc-primary);
+  border-radius: 9999px;
+}
+
+/* ── Card ── */
+.hc-card {
+  background: var(--hc-gradient-card);
+  border: 1px solid hsl(220 15% 18% / 0.5);
+  border-radius: var(--hc-radius);
+  box-shadow: var(--hc-shadow-card);
+  padding: 1.25rem;
+  transition: transform 200ms, border-color 200ms;
+}
+
+.hc-card:hover {
+  transform: translateY(-2px);
+  border-color: hsl(185 80% 50% / 0.4);
+}
+
+/* ── Badge ── */
+.hc-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--hc-radius-pill);
+  border: 1px solid var(--hc-border);
+  font-family: var(--hc-font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.hc-badge.online  { color: var(--hc-accent);      border-color: hsl(142 70% 50% / 0.4); }
+.hc-badge.offline { color: var(--hc-destructive);  border-color: hsl(0 65% 50% / 0.4); }
+.hc-badge.warning { color: var(--hc-warning);      border-color: hsl(38 80% 60% / 0.4); }
+
+/* ── Button ── */
+.hc-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.875rem;
+  border-radius: var(--hc-radius-sm);
+  font-family: var(--hc-font-display);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  border: 1px solid var(--hc-border);
+  background: hsl(220 20% 14%);
+  color: var(--hc-text);
+  cursor: pointer;
+  transition: background 150ms, border-color 150ms;
+}
+
+.hc-btn:hover { background: hsl(220 20% 18%); }
+
+.hc-btn.primary {
+  background: var(--hc-primary);
+  color: var(--hc-primary-fg);
+  border-color: transparent;
+  font-weight: 600;
+  box-shadow: var(--hc-shadow-glow);
+}
+
+.hc-btn.primary:hover { background: hsl(185 80% 55%); }
+
+/* ── Section ── */
+.hc-section { margin-bottom: 1.5rem; }
+
+.hc-section-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--hc-text-muted);
+  margin-bottom: 0.75rem;
+}
+
+/* ── Grid helpers ── */
+.hc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0.75rem;
+}
+
+.hc-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 0.75rem;
+}
+
+/* ── Footer ── */
+.hc-footer {
+  border-top: 1px solid var(--hc-border);
+  text-align: center;
+  padding: 1rem 1.25rem;
+  font-size: 0.75rem;
+  color: var(--hc-text-muted);
+  font-family: var(--hc-font-mono);
+}

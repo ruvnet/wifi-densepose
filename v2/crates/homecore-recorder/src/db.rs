@@ -16,6 +16,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use thiserror::Error;
+use tokio::sync::RwLock;
 use tracing::debug;
 
 use homecore::entity::{EntityId, State};
@@ -41,12 +42,30 @@ pub enum RecorderError {
 ///
 /// The no-op [`NullSemanticIndex`] is used in P1. P2 ships a ruvector-backed
 /// implementation behind the `ruvector` feature flag.
+///
+/// ## P2 API change
+///
+/// The `insert_state` method now accepts a `state_id` (SQLite rowid) so the
+/// HNSW index can map vector results back to SQLite rows. `search` embeds a
+/// free-text query and returns `(state_id, score)` pairs.
 #[async_trait]
 pub trait SemanticIndex: Send + Sync {
-    /// Index a new state write. Called after the SQLite insert succeeds.
-    /// Implementations must be infallible from the caller's perspective:
-    /// if the index is unavailable the recorder keeps running.
-    async fn index_state(&self, state: &Arc<State>) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    /// Insert an embedding for `state` keyed by its SQLite `state_id`.
+    /// Called after the SQLite insert succeeds. Must not propagate errors
+    /// back to the recorder — failure is logged, not fatal.
+    async fn insert_state(
+        &mut self,
+        state_id: i64,
+        state: &State,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
+    /// Search for the `k` nearest states to the free-text `query`.
+    /// Returns `(state_id, score)` pairs sorted by ascending distance.
+    async fn search(
+        &self,
+        query: &str,
+        k: usize,
+    ) -> Result<Vec<(i64, f32)>, Box<dyn std::error::Error + Send + Sync>>;
 }
 
 /// No-op `SemanticIndex`. Used by default when the `ruvector` feature is off.
@@ -54,17 +73,33 @@ pub struct NullSemanticIndex;
 
 #[async_trait]
 impl SemanticIndex for NullSemanticIndex {
-    async fn index_state(&self, _state: &Arc<State>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn insert_state(
+        &mut self,
+        _state_id: i64,
+        _state: &State,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Ok(())
+    }
+
+    async fn search(
+        &self,
+        _query: &str,
+        _k: usize,
+    ) -> Result<Vec<(i64, f32)>, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(vec![])
     }
 }
 
 /// The recorder. Cheap to clone (Arc-backed pool). Pass copies to the
 /// `RecorderListener` and the API history handler.
+///
+/// The `semantic` field is wrapped in `Arc<RwLock<...>>` so that
+/// `insert_state` (which takes `&mut self` on the trait) can be called
+/// without requiring `&mut Recorder` from callers.
 #[derive(Clone)]
 pub struct Recorder {
     pool: SqlitePool,
-    semantic: Arc<dyn SemanticIndex>,
+    semantic: Arc<RwLock<dyn SemanticIndex>>,
 }
 
 impl Recorder {
@@ -75,13 +110,13 @@ impl Recorder {
     /// The schema DDL uses `CREATE TABLE IF NOT EXISTS` so calling this on an
     /// existing database is safe.
     pub async fn open(path: &str) -> Result<Self, RecorderError> {
-        Self::open_with_index(path, Arc::new(NullSemanticIndex)).await
+        Self::open_with_index(path, Arc::new(RwLock::new(NullSemanticIndex))).await
     }
 
     /// Open with a custom `SemanticIndex` (P2 entry point).
     pub async fn open_with_index(
         path: &str,
-        semantic: Arc<dyn SemanticIndex>,
+        semantic: Arc<RwLock<dyn SemanticIndex>>,
     ) -> Result<Self, RecorderError> {
         let options = path
             .parse::<SqliteConnectOptions>()
@@ -172,11 +207,78 @@ impl Recorder {
         let state_id = result.last_insert_rowid();
 
         // Best-effort semantic indexing — failure is logged, not propagated.
-        if let Err(e) = self.semantic.index_state(new_state).await {
-            tracing::warn!(error = %e, entity_id = %new_state.entity_id, "semantic indexing failed");
+        if let Err(e) = self
+            .semantic
+            .write()
+            .await
+            .insert_state(state_id, new_state)
+            .await
+        {
+            tracing::warn!(
+                error = %e,
+                entity_id = %new_state.entity_id,
+                "semantic indexing failed"
+            );
         }
 
         Ok(Some(state_id))
+    }
+
+    /// Search for state history rows that semantically match `query`.
+    ///
+    /// Uses the HNSW index to find the top-`k` nearest state embeddings,
+    /// then fetches the full `StateRow` from SQLite for each result.
+    /// Returns rows in ascending score (distance) order.
+    ///
+    /// With the default `NullSemanticIndex` (no `ruvector` feature) this
+    /// always returns an empty `Vec`.
+    pub async fn search_semantic(
+        &self,
+        query: &str,
+        k: usize,
+    ) -> Result<Vec<StateRow>, RecorderError> {
+        let hits = self
+            .semantic
+            .read()
+            .await
+            .search(query, k)
+            .await
+            .unwrap_or_default();
+
+        let mut rows = Vec::with_capacity(hits.len());
+        for (state_id, _score) in hits {
+            let row: Option<(String, String, Option<String>, f64, f64, Option<String>)> =
+                sqlx::query_as(
+                    "SELECT s.entity_id, s.state, sa.shared_attrs, \
+                             s.last_changed_ts, s.last_updated_ts, s.context_id \
+                     FROM states s \
+                     LEFT JOIN state_attributes sa ON s.attributes_id = sa.attributes_id \
+                     WHERE s.state_id = ?",
+                )
+                .bind(state_id)
+                .fetch_optional(&self.pool)
+                .await?;
+
+            if let Some((entity_id, state, shared_attrs, last_changed_ts, last_updated_ts, context_id)) = row {
+                let eid = EntityId::parse(&entity_id)
+                    .unwrap_or_else(|_| EntityId::parse("unknown.unknown").unwrap());
+                let attributes = shared_attrs
+                    .as_deref()
+                    .map(serde_json::from_str)
+                    .transpose()?
+                    .unwrap_or(serde_json::Value::Object(Default::default()));
+                rows.push(StateRow {
+                    state_id,
+                    entity_id: eid,
+                    state,
+                    attributes,
+                    last_changed_ts,
+                    last_updated_ts,
+                    context_id,
+                });
+            }
+        }
+        Ok(rows)
     }
 
     /// Persist a `DomainEvent`. Returns the `event_id`.

@@ -21,7 +21,7 @@ path = "src/lib.rs"
 
 [features]
 default = []
-ruvector = []
+ruvector = ["dep:ruvector-core", "dep:sha2"]
 
 [dependencies]
 homecore = { path = "../homecore", version = "0.1.0-alpha.0" }
@@ -52,6 +52,10 @@ tracing = "0.1"
 
 # Trait objects for SemanticIndex
 async-trait = "0.1"
+
+# P2: ruvector-core HNSW index + sha2 for hash-based embeddings (ruvector feature)
+ruvector-core = { version = "2.2.0", optional = true, default-features = false }
+sha2 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }

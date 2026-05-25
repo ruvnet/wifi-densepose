@@ -1,0 +1,24 @@
+{
+  "name": "@ruvnet/homecore-frontend",
+  "version": "0.1.0-alpha.0",
+  "description": "HOMECORE web UI — Lit + TypeScript + Vite, cognitum-v0 design system",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "lit": "^3.2.1",
+    "lucide": "^0.474.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "eslint": "^9.17.0",
+    "jsdom": "^25.0.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.6",
+    "vitest": "^2.1.8"
+  }
+}

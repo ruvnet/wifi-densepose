@@ -1,0 +1,45 @@
+/**
+ * HOMECORE design tokens — sourced from cognitum-v0 (ADR-131 §9).
+ * 16 CSS custom properties: 4 surfaces + 2 text + 6 accent/status + 2 border/ring + 2 radius.
+ * Dark-only; no light-mode overrides.
+ */
+
+:root {
+  /* ── Surfaces (darkest → lightest within dark palette) ── */
+  --hc-bg:               hsl(220 25% 6%);   /* #0b0e13 — page root */
+  --hc-surface-card:     hsl(220 20% 10%);  /* #14171e — card fill */
+  --hc-surface-elevated: hsl(220 20% 12%);  /* #181c24 — raised panel */
+  --hc-surface-overlay:  hsl(220 20% 8%);   /* #111318 — modal / sticky nav base */
+
+  /* ── Text ── */
+  --hc-text:             hsl(210 20% 92%);  /* #e6eaee — primary body text */
+  --hc-text-muted:       hsl(215 15% 55%);  /* #7b899d — secondary / labels / timestamps */
+
+  /* ── Accent palette ── */
+  --hc-primary:          hsl(185 80% 50%);  /* #19d4e5 — teal: active nav, CTA border, focus ring */
+  --hc-primary-fg:       hsl(220 25% 6%);   /* #0b0e13 — text on filled primary buttons */
+  --hc-accent:           hsl(142 70% 50%);  /* #26d867 — green: success / secondary CTA */
+  --hc-accent-fg:        hsl(220 25% 6%);   /* #0b0e13 — text on filled accent buttons */
+  --hc-destructive:      hsl(0 65% 50%);    /* #d22c2c — error / danger */
+  --hc-warning:          hsl(38 80% 60%);   /* #e69940 — warning / amber (elevated from inline) */
+
+  /* ── Borders & rings ── */
+  --hc-border:           hsl(220 15% 18%);  /* #272b34 — subtle 1px border */
+  --hc-ring:             hsl(185 80% 50%);  /* #19d4e5 — focus ring (same hue as primary) */
+
+  /* ── Radii ── */
+  --hc-radius:           0.75rem;           /* cards, modals */
+  --hc-radius-sm:        0.4rem;            /* buttons, inputs, chips */
+  --hc-radius-pill:      9999px;            /* badges, CTA pills */
+
+  /* ── Typography ── */
+  --hc-font-display:     'Outfit', system-ui, sans-serif;
+  --hc-font-mono:        'JetBrains Mono', monospace;
+
+  /* ── Shadows ── */
+  --hc-shadow-card:      0 8px 32px -8px hsl(220 25% 2% / 0.8);
+  --hc-shadow-glow:      0 0 60px -10px hsl(185 80% 50% / 0.3);
+
+  /* ── Gradients ── */
+  --hc-gradient-card:    linear-gradient(180deg, hsl(220 20% 12%) 0%, hsl(220 20% 8%) 100%);
+}
