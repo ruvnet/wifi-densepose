@@ -41,8 +41,21 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, RwLock};
 use tracing::{error, info, warn};
 
-use crate::recording::{RecordedFrame, RECORDINGS_DIR};
 use crate::rvf_container::RvfBuilder;
+
+// Inlined from recording.rs to avoid pulling that module into main.rs's tree
+// (recording.rs references `AppStateInner::recording_state`, which doesn't
+// exist on the production AppStateInner — main.rs uses flat recording_* fields).
+pub const RECORDINGS_DIR: &str = "data/recordings";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RecordedFrame {
+    pub timestamp: f64,
+    pub subcarriers: Vec<f64>,
+    pub rssi: f64,
+    pub noise_floor: f64,
+    pub features: serde_json::Value,
+}
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -243,7 +256,7 @@ async fn load_recording_frames(dataset_ids: &[String]) -> Vec<RecordedFrame> {
         // '/', '..', null bytes, or anything outside [A-Za-z0-9._-] BEFORE
         // building the format!() path. Otherwise an attacker could read any
         // file the server process can access via `dataset_ids: ["../../etc/passwd"]`.
-        let safe = match crate::path_safety::safe_id(id) {
+        let safe = match wifi_densepose_sensing_server::path_safety::safe_id(id) {
             Ok(s) => s,
             Err(e) => {
                 warn!("Skipping invalid dataset_id {id:?}: {e}");

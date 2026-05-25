@@ -18,6 +18,7 @@ pub mod pose;
 mod rvf_container;
 mod rvf_pipeline;
 mod tracker_bridge;
+mod training_api;
 pub mod types;
 mod vital_signs;
 
@@ -963,10 +964,11 @@ struct AppStateInner {
     /// Shutdown signal for the recording writer task.
     recording_stop_tx: Option<tokio::sync::watch::Sender<bool>>,
     // ── Training fields ─────────────────────────────────────────────────────
-    /// Training status: "idle", "running", "completed", "failed".
-    training_status: String,
-    /// Training configuration, if any.
-    training_config: Option<serde_json::Value>,
+    /// Full training-pipeline state used by training_api::routes().
+    training_state: training_api::TrainingState,
+    /// Broadcast channel for per-epoch training progress (consumed by
+    /// /ws/train/progress).
+    training_progress_tx: tokio::sync::broadcast::Sender<String>,
     // ── Adaptive classifier (environment-tuned) ──────────────────────────
     /// Trained adaptive model (loaded from data/adaptive_model.json or trained at runtime).
     adaptive_model: Option<adaptive_classifier::AdaptiveModel>,
@@ -3911,54 +3913,10 @@ fn scan_recording_files() -> Vec<serde_json::Value> {
 }
 
 // ── Training Endpoints ──────────────────────────────────────────────────────
-
-/// GET /api/v1/train/status — get training status.
-async fn train_status(State(state): State<SharedState>) -> Json<serde_json::Value> {
-    let s = state.read().await;
-    Json(serde_json::json!({
-        "status": s.training_status,
-        "config": s.training_config,
-    }))
-}
-
-/// POST /api/v1/train/start — start a training run.
-async fn train_start(
-    State(state): State<SharedState>,
-    Json(body): Json<serde_json::Value>,
-) -> Json<serde_json::Value> {
-    let mut s = state.write().await;
-    if s.training_status == "running" {
-        return Json(serde_json::json!({
-            "error": "training already running",
-            "success": false,
-        }));
-    }
-    s.training_status = "running".to_string();
-    s.training_config = Some(body.clone());
-    info!("Training started with config: {}", body);
-    Json(serde_json::json!({
-        "success": true,
-        "status": "running",
-        "message": "Training pipeline started. Use GET /api/v1/train/status to monitor.",
-    }))
-}
-
-/// POST /api/v1/train/stop — stop the current training run.
-async fn train_stop(State(state): State<SharedState>) -> Json<serde_json::Value> {
-    let mut s = state.write().await;
-    if s.training_status != "running" {
-        return Json(serde_json::json!({
-            "error": "no training in progress",
-            "success": false,
-        }));
-    }
-    s.training_status = "idle".to_string();
-    info!("Training stopped");
-    Json(serde_json::json!({
-        "success": true,
-        "status": "idle",
-    }))
-}
+// Training routes are provided by training_api::routes() merged into the http_app
+// router below. The stub train_status/train_start/train_stop handlers that used
+// to live here were no-op string flippers; replaced by the real pipeline
+// (real_training_loop) in training_api.rs.
 
 // ── Adaptive classifier endpoints ────────────────────────────────────────────
 
@@ -6030,8 +5988,11 @@ async fn main() {
         recording_current_id: None,
         recording_stop_tx: None,
         // Training
-        training_status: "idle".to_string(),
-        training_config: None,
+        training_state: training_api::TrainingState::default(),
+        training_progress_tx: {
+            let (t, _) = broadcast::channel::<String>(256);
+            t
+        },
         adaptive_model:
             adaptive_classifier::AdaptiveModel::load(&adaptive_classifier::model_path())
                 .ok()
@@ -6228,10 +6189,8 @@ async fn main() {
         .route("/api/v1/recording/start", post(start_recording))
         .route("/api/v1/recording/stop", post(stop_recording))
         .route("/api/v1/recording/{id}", delete(delete_recording))
-        // Training endpoints
-        .route("/api/v1/train/status", get(train_status))
-        .route("/api/v1/train/start", post(train_start))
-        .route("/api/v1/train/stop", post(train_stop))
+        // Training endpoints (real pipeline from training_api.rs)
+        .merge(training_api::routes())
         // Adaptive classifier endpoints
         .route("/api/v1/adaptive/train", post(adaptive_train))
         .route("/api/v1/adaptive/status", get(adaptive_status))
