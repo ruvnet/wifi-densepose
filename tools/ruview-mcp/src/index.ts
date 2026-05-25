@@ -45,6 +45,8 @@ import {
   jobStatus,
 } from "./tools/train-count.js";
 import { TOOL_INPUT_SCHEMAS } from "./schemas/index.js";
+import { bfldLastScan } from "./tools/bfld-last-scan.js";
+import { bfldSubscribe } from "./tools/bfld-subscribe.js";
 
 const PACKAGE_VERSION = "0.1.0";
 const SERVER_NAME = "rvagent";
@@ -217,6 +219,62 @@ const TOOLS = [
     handler: async (args: unknown, config: ReturnType<typeof loadConfig>) => {
       const input = jobStatusSchema.parse(args);
       return jobStatus(input, config);
+    },
+  },
+  // ── ADR-124 BFLD tools (Phase 4 Refinement) ──────────────────────────────
+  {
+    name: "ruview.bfld.last_scan",
+    description:
+      "Return the most recent BFLD scan result for a node (ADR-118/ADR-121). " +
+      "Fields: node_id, identity_risk_score [0,1], privacy_class, n_frames, timestamp_ms. " +
+      "Proxied from sensing-server GET /api/v1/bfld/<node_id>/last_scan which aggregates " +
+      "the MQTT state topics ruview/<node_id>/bfld/* (ADR-122 §2.2).",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        node_id: {
+          type: "string",
+          description: "Target node id. Omit to use the single active node.",
+        },
+        sensing_server_url: {
+          type: "string",
+          description: "Override sensing-server URL for this call only.",
+        },
+      },
+    },
+    handler: async (args: unknown, config: ReturnType<typeof loadConfig>) => {
+      return bfldLastScan(args as Parameters<typeof bfldLastScan>[0], config);
+    },
+  },
+  {
+    name: "ruview.bfld.subscribe",
+    description:
+      "Subscribe to BFLD events on ruview/<node_id>/bfld/* for duration_s seconds (ADR-122). " +
+      "Returns {ok, subscription_id, expires_at, topic}. When the sensing-server is unreachable, " +
+      "returns a synthetic envelope with ok:false,warn:true so the caller can distinguish " +
+      "a network error from an invalid request.",
+    inputSchema: {
+      type: "object" as const,
+      required: ["duration_s"],
+      properties: {
+        node_id: {
+          type: "string",
+          description: "Target node id. Omit to use the single active node.",
+        },
+        duration_s: {
+          type: "number",
+          minimum: 0,
+          maximum: 3600,
+          description: "Subscription duration in seconds (max 3600).",
+        },
+        sensing_server_url: {
+          type: "string",
+          description: "Override sensing-server URL for this call only.",
+        },
+      },
+    },
+    handler: async (args: unknown, config: ReturnType<typeof loadConfig>) => {
+      return bfldSubscribe(args as Parameters<typeof bfldSubscribe>[0], config);
     },
   },
 ] as const;
