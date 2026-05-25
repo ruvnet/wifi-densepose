@@ -20,6 +20,7 @@ mod bindings {
     pub mod bfld;
     pub mod keypoint;
     pub mod pose;
+    pub mod privacy_gate;
     pub mod vitals;
 }
 
@@ -80,5 +81,9 @@ fn wifi_densepose_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // P3.5 — BFLD bindings (stub Rust; future wifi-densepose-bfld crate
     // will replace the stub without changing the Python API).
     bindings::bfld::register(m)?;
+    // ADR-118 PrivacyClass + HAP/Matter eligibility gates (SOTA — backed by
+    // the published `wifi-densepose-bfld 0.3.0` crate, not the Python port).
+    // Closes ADR-125 §2.1.d at the binding boundary.
+    bindings::privacy_gate::register(m)?;
     Ok(())
 }

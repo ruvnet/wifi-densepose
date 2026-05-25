@@ -39,6 +39,13 @@ wifi-densepose-core = { version = "0.3.0", path = "../v2/crates/wifi-densepose-c
 # no tokio (Q5 audited 2026-05-24); safe to wrap in py.allow_threads.
 wifi-densepose-vitals = { version = "0.3.0", path = "../v2/crates/wifi-densepose-vitals" }
 
+# ADR-118 BFLD core — PrivacyClass enum + identity_risk scoring +
+# privacy gate. Exposed to Python via bindings/privacy_gate.rs so the
+# c6-presence-watcher.py runtime (currently using a Python port of the
+# same semantics) can switch to the canonical Rust implementation when
+# the wheel ships. ADR-125 §2.1.d invariant enforcement lives here.
+wifi-densepose-bfld = { version = "0.3.0", path = "../v2/crates/wifi-densepose-bfld" }
+
 # numpy bridge — needed for P3.5 BfldFrame (Complex64 ndarray) and for
 # the future P3 CsiFrame numpy round-trip.
 numpy = "0.22"
