@@ -1,16 +1,25 @@
 {
-  "name": "@ruv/ruview-mcp",
-  "version": "0.0.1",
-  "description": "RuView MCP server — expose WiFi-DensePose sensing capabilities as MCP tools for Claude Code, Cursor, and other MCP-compatible agents",
-  "private": true,
+  "name": "@ruvnet/rvagent",
+  "version": "0.1.0",
+  "description": "SENSE-BRIDGE: dual-transport MCP server (stdio + Streamable HTTP) exposing RuView WiFi-DensePose sensing primitives to AI agents",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
   "bin": {
+    "rvagent": "dist/index.js",
     "ruview-mcp": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsc",
@@ -22,14 +31,26 @@
   },
   "keywords": [
     "mcp",
+    "rvagent",
     "ruview",
     "wifi",
     "csi",
     "pose-estimation",
-    "cognitum"
+    "cognitum",
+    "sense-bridge",
+    "ruvnet"
   ],
   "author": "ruv <ruv@ruv.net>",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ruvnet/RuView.git",
+    "directory": "tools/ruview-mcp"
+  },
+  "homepage": "https://github.com/ruvnet/RuView/tree/main/tools/ruview-mcp",
+  "bugs": {
+    "url": "https://github.com/ruvnet/RuView/issues"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "zod": "^3.23.8"

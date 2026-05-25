@@ -43,8 +43,8 @@ import {
   jobStatus,
 } from "./tools/train-count.js";
 
-const PACKAGE_VERSION = "0.0.1";
-const SERVER_NAME = "ruview";
+const PACKAGE_VERSION = "0.1.0";
+const SERVER_NAME = "rvagent";
 
 // ── Tool registry ──────────────────────────────────────────────────────────
 
@@ -297,7 +297,7 @@ async function main(): Promise<void> {
 
   // Log to stderr so it doesn't interfere with the MCP stdio protocol.
   process.stderr.write(
-    `[ruview-mcp] Server v${PACKAGE_VERSION} started. ` +
+    `[@ruvnet/rvagent] Server v${PACKAGE_VERSION} started. ` +
       `Sensing server: ${config.sensingServerUrl}\n`
   );
 }
