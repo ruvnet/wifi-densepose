@@ -1221,6 +1221,140 @@ mod tests {
         assert!(reader.lora_profile("nonexistent").is_none());
     }
 
+    // ── JSONL RVF container tests (HuggingFace bundle compatibility) ────────
+
+    /// Mirrors the exact bytes that ship in `ruvnet/wifi-densepose-pretrained`
+    /// at `model.rvf.jsonl` (HuggingFace bundle, v1.0.0).
+    const SAMPLE_HF_JSONL: &str = concat!(
+        "{\"type\":\"metadata\",\"name\":\"wifi-densepose-csi-embedding\",",
+        "\"version\":\"1.0.0\",\"architecture\":\"csi-encoder-8-64-128\",",
+        "\"training\":{\"steps\":12212300,\"loss\":0.065,\"learningRate\":0.001},",
+        "\"custom\":{\"inputDim\":8,\"hiddenDim\":64,\"embeddingDim\":128}}\n",
+        "{\"type\":\"encoder\",\"w1_shape\":[8,64],\"w2_shape\":[64,128]}\n",
+        "{\"type\":\"lora\",\"config\":{\"rank\":8,\"alpha\":16}}\n",
+        "{\"type\":\"ewc\",\"stats\":{\"tasksLearned\":4}}\n",
+        "{\"type\":\"quantization\",\"default_bits\":4,\"variants\":[2,4,8]}\n",
+    );
+
+    #[test]
+    fn from_bytes_dispatches_to_jsonl_on_brace() {
+        let reader = RvfReader::from_bytes(SAMPLE_HF_JSONL.as_bytes())
+            .expect("HF JSONL bundle should load via sniff");
+
+        let manifest = reader.manifest().expect("manifest should be synthesised");
+        assert_eq!(manifest["model_id"], "wifi-densepose-csi-embedding");
+        assert_eq!(manifest["version"], "1.0.0");
+        assert_eq!(manifest["description"], "csi-encoder-8-64-128");
+    }
+
+    #[test]
+    fn jsonl_sniff_tolerates_leading_whitespace() {
+        let padded = format!("\n  \t{}", SAMPLE_HF_JSONL);
+        let reader = RvfReader::from_bytes(padded.as_bytes()).expect("whitespace prefix ok");
+        assert!(reader.manifest().is_some());
+    }
+
+    #[test]
+    fn jsonl_quantization_becomes_quant_segment() {
+        let reader = RvfReader::from_bytes(SAMPLE_HF_JSONL.as_bytes()).unwrap();
+        let q = reader
+            .quant_info()
+            .expect("quantization line should map to SEG_QUANT");
+        assert_eq!(q["default_bits"], 4);
+        assert_eq!(q["variants"], serde_json::json!([2, 4, 8]));
+    }
+
+    #[test]
+    fn jsonl_preserves_other_lines_in_metadata() {
+        let reader = RvfReader::from_bytes(SAMPLE_HF_JSONL.as_bytes()).unwrap();
+        let meta = reader.metadata().expect("aggregated metadata present");
+        assert_eq!(meta["source_format"], "rvf-jsonl");
+        let lines = meta["lines"]
+            .as_array()
+            .expect("lines must be an array");
+        // metadata + encoder + lora + ewc -> 4 entries (quantization went to SEG_QUANT)
+        assert!(lines.len() >= 4, "got {} lines", lines.len());
+        let types: Vec<&str> = lines
+            .iter()
+            .filter_map(|v| v["type"].as_str())
+            .collect();
+        assert!(types.contains(&"metadata"));
+        assert!(types.contains(&"encoder"));
+        assert!(types.contains(&"lora"));
+        assert!(types.contains(&"ewc"));
+    }
+
+    #[test]
+    fn jsonl_no_weights_segment_present() {
+        // The JSONL bundle deliberately ships its f32 matrices in companion
+        // safetensors / qN files, so the reader should not invent fake weights.
+        let reader = RvfReader::from_bytes(SAMPLE_HF_JSONL.as_bytes()).unwrap();
+        assert!(reader.weights().is_none(), "JSONL must not synthesise weights");
+        assert!(!reader.info().has_weights);
+    }
+
+    #[test]
+    fn jsonl_progressive_loader_layer_a_works() {
+        use crate::rvf_pipeline::ProgressiveLoader;
+        // This is the integration point that broke when the loader couldn't
+        // sniff JSONL — verify Layer A reports the real model name now.
+        let mut loader = ProgressiveLoader::new(SAMPLE_HF_JSONL.as_bytes())
+            .expect("progressive loader accepts JSONL bytes");
+        let la = loader
+            .load_layer_a()
+            .expect("layer A must populate from synthesised manifest");
+        assert_eq!(la.model_name, "wifi-densepose-csi-embedding");
+        assert_eq!(la.version, "1.0.0");
+        assert!(la.n_segments > 0);
+    }
+
+    #[test]
+    fn jsonl_invalid_json_line_is_explicit() {
+        let bad = b"{\"type\":\"metadata\",\"name\":\"x\"}\nthis is not json\n";
+        let err = RvfReader::from_bytes(bad).unwrap_err();
+        assert!(err.contains("JSONL RVF"), "got: {err}");
+        assert!(err.contains("line 2"), "got: {err}");
+    }
+
+    #[test]
+    fn jsonl_missing_type_field_is_explicit() {
+        let bad = b"{\"name\":\"no-type-here\"}\n";
+        let err = RvfReader::from_bytes(bad).unwrap_err();
+        assert!(err.contains("missing required string field `type`"), "got: {err}");
+    }
+
+    #[test]
+    fn binary_error_mentions_jsonl_hint() {
+        // Garbage bytes should now hint at JSONL when applicable.
+        let mut data = vec![0u8; 128];
+        data[0..4].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
+        let err = RvfReader::from_bytes(&data).unwrap_err();
+        assert!(err.contains("invalid magic"));
+        // Hint text travels with the binary-path error so operators can grep it.
+        assert!(err.contains("JSONL"), "expected JSONL hint, got: {err}");
+    }
+
+    #[test]
+    fn jsonl_minimal_metadata_only() {
+        let minimal = b"{\"type\":\"metadata\",\"name\":\"tiny\",\"version\":\"0.0.1\"}\n";
+        let reader = RvfReader::from_bytes(minimal).unwrap();
+        let m = reader.manifest().unwrap();
+        assert_eq!(m["model_id"], "tiny");
+        assert_eq!(m["version"], "0.0.1");
+    }
+
+    #[test]
+    fn jsonl_blank_lines_only_rejected() {
+        // A file made entirely of whitespace doesn't trip the JSONL sniff
+        // (no `{` ever appears) and parses as an empty binary container.
+        // A file that starts with `{` but only contains blank lines after the
+        // first non-blank line must be rejected with a clear error rather than
+        // silently producing an empty reader.
+        let only_blanks = b"{\n\n";
+        let err = RvfReader::from_bytes(only_blanks).unwrap_err();
+        assert!(err.contains("JSONL RVF"), "got: {err}");
+    }
+
     #[test]
     fn test_rvf_multiple_lora_profiles() {
         let w1: Vec<f32> = vec![1.0, 2.0, 3.0];
