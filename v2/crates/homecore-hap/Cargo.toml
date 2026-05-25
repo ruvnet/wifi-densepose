@@ -1,0 +1,36 @@
+# homecore-hap — Apple Home HomeKit Accessory Protocol bridge (ADR-125 P1 scaffold)
+#
+# P1 ships the trait surface, accessory/characteristic types, entity→HAP mapping,
+# bridge API, and an mDNS-advertise stub. The actual HAP-1.1 server and real
+# mDNS integration are feature-gated to P2 via the `hap-server` feature flag.
+
+[package]
+name = "homecore-hap"
+version = "0.1.0-alpha.0"
+edition = "2021"
+license = "MIT"
+authors = ["rUv <ruv@ruv.net>", "HOMECORE Contributors"]
+description = "Apple Home HomeKit Accessory Protocol bridge — ADR-125 P1 scaffold"
+repository = "https://github.com/ruvnet/wifi-densepose"
+
+[lib]
+name = "homecore_hap"
+path = "src/lib.rs"
+
+[features]
+default = []
+# P2: gates the actual hap = "0.1" crate integration + real mDNS via mdns-sd
+hap-server = []
+
+[dependencies]
+homecore = { path = "../homecore" }
+tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+async-trait = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros", "test-util"] }

@@ -31,6 +31,8 @@ members = [
     "crates/homecore",                 # ADR-127 — HOMECORE state machine
     "crates/homecore-plugins",         # ADR-128 — HOMECORE-PLUGINS WASM runtime (P1 scaffold)
     "crates/homecore-api",             # ADR-130 — HOMECORE REST + WS API
+    "crates/homecore-automation",         # ADR-129 — HOMECORE automation engine
+    "crates/homecore-recorder",        # ADR-132 — HOMECORE state recorder
     # ADR-100/ADR-101: Cognitum Cog packaging — first Cog from this repo.
     # Ships the wifi-densepose pose-estimation model as a signed binary +
     # JSONL manifest installable by the Cognitum V0 appliance (cognitum-v0,
@@ -55,6 +57,7 @@ members = [
     # `vendor/rvcsi` and published to crates.io as `rvcsi-*` 0.3.x. Depend on the
     # published crates (or the submodule's `crates/rvcsi-*` paths) — not as v2
     # workspace members, since `vendor/rvcsi/Cargo.toml` is its own workspace.
+    "crates/homecore-hap",         # ADR-125 — Apple Home HomeKit Accessory Protocol bridge
 ]
 # ADR-040: WASM edge crate targets wasm32-unknown-unknown (no_std),
 # excluded from workspace to avoid breaking `cargo test --workspace`.
