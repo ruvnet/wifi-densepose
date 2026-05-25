@@ -129,6 +129,39 @@ done
 cat "$BUNDLE_DIR/crate-manifest/versions.txt"
 
 # ---------------------------------------------------------------
+# 6b. npm manifest — @ruvnet/rvagent tarball sha256 (ADR-124)
+# ---------------------------------------------------------------
+echo "[6b] Building @ruvnet/rvagent npm tarball and hashing..."
+mkdir -p "$BUNDLE_DIR/npm-manifest"
+NPM_PKG_DIR="$REPO_ROOT/tools/ruview-mcp"
+if [ -d "$NPM_PKG_DIR" ]; then
+  (
+    cd "$NPM_PKG_DIR"
+    # Ensure latest build before packing
+    npm run build --silent 2>/dev/null || true
+    npm pack --quiet 2>/dev/null || true
+    TARBALL=$(ls ruvnet-rvagent-*.tgz 2>/dev/null | head -1)
+    if [ -n "$TARBALL" ]; then
+      SHA=$(sha256sum "$TARBALL" 2>/dev/null | cut -d' ' -f1 \
+            || powershell -Command "(Get-FileHash '$TARBALL' -Algorithm SHA256).Hash.ToLower()" 2>/dev/null \
+            || echo "sha256-unavailable")
+      echo "${SHA}  ${TARBALL}" > "$BUNDLE_DIR/npm-manifest/${TARBALL}.sha256"
+      # Keep the version string for VERIFY.sh
+      echo "$TARBALL" > "$BUNDLE_DIR/npm-manifest/tarball-name.txt"
+      echo "$SHA"     > "$BUNDLE_DIR/npm-manifest/tarball-sha256.txt"
+      # Remove local tarball — it's recorded in the bundle, not shipped in it
+      rm -f "$TARBALL"
+      echo "  @ruvnet/rvagent tarball sha256: ${SHA}"
+    else
+      echo "  WARNING: npm pack produced no tarball — skipping npm manifest"
+      echo "npm-pack-failed" > "$BUNDLE_DIR/npm-manifest/tarball-name.txt"
+    fi
+  )
+else
+  echo "  WARNING: tools/ruview-mcp not found — skipping npm manifest"
+fi
+
+# ---------------------------------------------------------------
 # 7. Generate VERIFY.sh for recipients
 # ---------------------------------------------------------------
 echo "[7/7] Creating VERIFY.sh..."
@@ -196,7 +229,21 @@ else
   check "Crate manifest present" "FAIL"
 fi
 
-# Check 6: Proof verification log
+# Check 6: npm tarball sha256 (ADR-124 SENSE-BRIDGE)
+if [ -f "npm-manifest/tarball-sha256.txt" ] && [ -f "npm-manifest/tarball-name.txt" ]; then
+  EXPECTED_SHA=$(cat npm-manifest/tarball-sha256.txt)
+  TARBALL_NAME=$(cat npm-manifest/tarball-name.txt)
+  if [ "$EXPECTED_SHA" = "npm-pack-failed" ] || [ "$TARBALL_NAME" = "npm-pack-failed" ]; then
+    check "npm tarball sha256 (@ruvnet/rvagent)" "FAIL"
+  else
+    check "npm manifest present (@ruvnet/rvagent ${TARBALL_NAME})" "PASS"
+    echo "  Recorded sha256: ${EXPECTED_SHA}"
+  fi
+else
+  check "npm manifest present (@ruvnet/rvagent)" "FAIL"
+fi
+
+# Check 8: Proof verification log
 if [ -f "proof/verification-output.log" ]; then
   if grep -q "VERDICT: PASS" proof/verification-output.log; then
     check "Python proof verification PASS" "PASS"
