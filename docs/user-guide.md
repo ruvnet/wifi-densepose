@@ -845,6 +845,39 @@ The `rumqttc 0.24` (`use-rustls`) backend ships behind the `mqtt` feature; `Rumq
 
 Detailed surface: [`v2/crates/wifi-densepose-bfld/README.md`](../v2/crates/wifi-densepose-bfld/README.md), [`docs/research/BFLD/`](research/BFLD/) (11 files, 13,544 words), [ADR-118 through ADR-123](adr/ADR-118-bfld-beamforming-feedback-layer-for-detection.md).
 
+### SENSE-BRIDGE — rvagent MCP server for AI agents (ADR-124)
+
+`@ruvnet/rvagent` is a dual-transport MCP server that makes RuView sensing primitives callable by Claude Code, Cursor, and ruflo swarms without bespoke HTTP client code.
+
+**Install (Claude Code)**:
+
+```bash
+claude mcp add rvagent -- npx @ruvnet/rvagent stdio
+# With a remote sensing-server:
+RUVIEW_SENSING_SERVER_URL=http://cognitum-v0:3000 claude mcp add rvagent -- npx @ruvnet/rvagent stdio
+```
+
+**Available tools (6 of 20 in v0.1.0)**:
+
+| Tool | Returns |
+|------|---------|
+| `ruview.presence.now` | `present`, `n_persons`, `confidence`, `timestamp_ms` |
+| `ruview.vitals.get_breathing` | `breathing_rate_bpm` (null if unavailable), `confidence` |
+| `ruview.vitals.get_heart_rate` | `heartrate_bpm` (null if unavailable), `confidence` |
+| `ruview.vitals.get_all` | Full `EdgeVitalsMessage` (all vitals in one call) |
+| `ruview.bfld.last_scan` | `identity_risk_score`, `privacy_class`, `n_frames`, `timestamp_ms` |
+| `ruview.bfld.subscribe` | `subscription_id`, `expires_at`, `topic` (MQTT wildcard) |
+
+**Streamable HTTP** (for remote ruflo swarms):
+
+```bash
+RVAGENT_HTTP_TOKEN=secret npx @ruvnet/rvagent http --port 3001
+# POST JSON-RPC to http://127.0.0.1:3001/mcp
+# Cross-origin requests are rejected with 403; missing/wrong token → 401.
+```
+
+Source: [`tools/ruview-mcp/`](../tools/ruview-mcp/README.md). Tracking issue: [#787](https://github.com/ruvnet/RuView/issues/787). Full ADR: [ADR-124](adr/ADR-124-rvagent-mcp-ruvector-npm-integration.md).
+
 ---
 
 ## Web UI
