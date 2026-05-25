@@ -33,6 +33,7 @@ members = [
     "crates/homecore-api",             # ADR-130 — HOMECORE REST + WS API
     "crates/homecore-automation",         # ADR-129 — HOMECORE automation engine
     "crates/homecore-recorder",        # ADR-132 — HOMECORE state recorder
+    "crates/homecore-migrate",         # ADR-134 — HOMECORE migration from Python HA
     # ADR-100/ADR-101: Cognitum Cog packaging — first Cog from this repo.
     # Ships the wifi-densepose pose-estimation model as a signed binary +
     # JSONL manifest installable by the Cognitum V0 appliance (cognitum-v0,
