@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ADR-125 §1.4 Tier 2 — launchd job for the RuView ↔ Shortcuts.app bridge.
+
+  Install:
+    cp ruview-watcher.plist ~/Library/LaunchAgents/com.ruvnet.ruview.watcher.plist
+    launchctl load ~/Library/LaunchAgents/com.ruvnet.ruview.watcher.plist
+    launchctl list | grep ruvnet
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.ruvnet.ruview.watcher.plist
+    rm ~/Library/LaunchAgents/com.ruvnet.ruview.watcher.plist
+
+  Runs as the *user* (LaunchAgent — not LaunchDaemon) because Shortcuts.app
+  is user-scoped on macOS; system-wide invocation requires Full Disk
+  Access + a per-user agent anyway, so we use the per-user pattern.
+
+  Operator: adjust the path to announce-via-homepod.sh below if you
+  cloned the repo somewhere other than ~/.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ruvnet.ruview.watcher</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <!-- Adjust this path to where announce-via-homepod.sh lives on
+             your Mac. The default ~/announce-via-homepod.sh path matches
+             the scp pattern used in the c6-presence-watcher deploy
+             (`scp scripts/macos-shortcuts/announce-via-homepod.sh ruv-mac-mini:~/`). -->
+        <string>/Users/cohen/announce-via-homepod.sh</string>
+        <string>--node-id</string>
+        <string>12</string>
+        <string>--event</string>
+        <string>unrecognized_activity_pattern</string>
+        <string>--shortcut-name</string>
+        <string>RuView Announce</string>
+        <string>--announcement</string>
+        <string>RuView detected an unrecognized activity pattern</string>
+        <string>--poll-interval</string>
+        <string>5</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>RUVIEW_SENSING_URL</key>
+        <string>http://localhost:3000</string>
+        <key>RUVIEW_LOG</key>
+        <string>/tmp/ruview-watcher.log</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/ruview-watcher.stdout</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/ruview-watcher.stderr</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
