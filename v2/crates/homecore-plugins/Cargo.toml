@@ -1,0 +1,57 @@
+# HOMECORE-PLUGINS — WASM integration plugin system.
+# Implements ADR-128 (HOMECORE-PLUGINS), P1 scaffold:
+#   - PluginManifest (serde-deserialised, superset of HA manifest.json)
+#   - HomeCorePlugin async trait + PluginId + PluginError
+#   - PluginRuntime trait + InProcessRuntime (native Rust, first-party plugins)
+#   - PluginRegistry (load / unload / list)
+#
+# P2 will add the `wasmtime` feature (gated below, default-off) for the real
+# Wasmtime JIT sandbox. wasm3 interpretation mode lands behind `--features wasm3`
+# in P3 for constrained-hardware targets.
+
+[package]
+name = "homecore-plugins"
+version = "0.1.0-alpha.0"
+edition = "2021"
+license = "MIT"
+authors = ["rUv <ruv@ruv.net>", "HOMECORE Contributors"]
+description = "WASM integration plugin runtime for HOMECORE (ADR-128 P1 scaffold)"
+repository = "https://github.com/ruvnet/RuView"
+
+[lib]
+name = "homecore_plugins"
+path = "src/lib.rs"
+
+[features]
+default = []
+# P2: real Wasmtime JIT sandbox (Cranelift; ~15 MB binary delta on Pi 5).
+# Do not enable in production until the host ABI is frozen (ADR-128 §8 risk).
+wasmtime = ["dep:wasmtime"]
+# P3: wasm3 interpretation mode for constrained hardware (~50 kB).
+wasm3 = ["dep:wasm3"]
+
+[dependencies]
+# HOMECORE state machine — local path (ADR-127).
+homecore = { path = "../homecore", version = "0.1.0-alpha.0" }
+
+# Async runtime — same version as workspace.
+tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros"] }
+
+# Async trait support for HomeCorePlugin.
+async-trait = "0.1"
+
+# Error handling.
+thiserror = "1"
+
+# Serialisation (manifest JSON + ABI call payloads).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Optional Wasmtime runtime (P2, default-off — 30 MB dep).
+wasmtime = { version = "25", optional = true }
+
+# Optional wasm3 interpretation runtime (P3, default-off).
+wasm3 = { version = "0.3", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros", "test-util"] }

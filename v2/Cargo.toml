@@ -29,6 +29,8 @@ members = [
     "crates/nvsim",
     "crates/nvsim-server",
     "crates/homecore",                 # ADR-127 — HOMECORE state machine
+    "crates/homecore-plugins",         # ADR-128 — HOMECORE-PLUGINS WASM runtime (P1 scaffold)
+    "crates/homecore-api",             # ADR-130 — HOMECORE REST + WS API
     # ADR-100/ADR-101: Cognitum Cog packaging — first Cog from this repo.
     # Ships the wifi-densepose pose-estimation model as a signed binary +
     # JSONL manifest installable by the Cognitum V0 appliance (cognitum-v0,
