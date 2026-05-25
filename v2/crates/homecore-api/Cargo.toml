@@ -1,0 +1,40 @@
+[package]
+name = "homecore-api"
+version = "0.1.0-alpha.0"
+edition = "2021"
+license = "MIT"
+authors = ["rUv <ruv@ruv.net>", "HOMECORE Contributors"]
+description = "Wire-compatible Axum REST + WebSocket port of Home Assistant's API (ADR-130)"
+repository = "https://github.com/ruvnet/RuView"
+
+[lib]
+name = "homecore_api"
+path = "src/lib.rs"
+
+[[bin]]
+name = "homecore-api-server"
+path = "src/bin/server.rs"
+
+[dependencies]
+homecore = { path = "../homecore", version = "0.1.0-alpha.0" }
+
+axum = { version = "0.7", features = ["ws", "json", "macros"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+uuid = { version = "1", features = ["v4", "serde"] }
+dashmap = "6"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+hyper = "1"
+http-body-util = "0.1"
