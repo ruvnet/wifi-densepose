@@ -47,6 +47,9 @@ thiserror = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# UUIDs for config entry IDs in host_abi.rs.
+uuid = { version = "1", features = ["v4"] }
+
 # Optional Wasmtime runtime (P2, default-off — 30 MB dep).
 wasmtime = { version = "25", optional = true }
 
@@ -55,3 +58,5 @@ wasm3 = { version = "0.3", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros", "test-util"] }
+# WAT text-format compiler for inline WASM unit tests (wasmtime feature only).
+wat = { version = "1", optional = false }

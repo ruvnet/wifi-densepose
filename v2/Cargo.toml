@@ -64,8 +64,13 @@ members = [
 # ADR-040: WASM edge crate targets wasm32-unknown-unknown (no_std),
 # excluded from workspace to avoid breaking `cargo test --workspace`.
 # Build separately: cargo build -p wifi-densepose-wasm-edge --target wasm32-unknown-unknown --release
+#
+# ADR-128 P2: example WASM plugin — also wasm32-only (no_std, cdylib),
+# excluded for the same reason. Build separately:
+#   cargo build --target wasm32-unknown-unknown --release -p homecore-plugin-example
 exclude = [
     "crates/wifi-densepose-wasm-edge",
+    "crates/homecore-plugin-example",
 ]
 
 [workspace.package]

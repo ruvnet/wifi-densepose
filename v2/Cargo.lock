@@ -3528,8 +3528,10 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
+ "uuid",
  "wasm3",
  "wasmtime",
+ "wat",
 ]
 
 [[package]]
@@ -3539,8 +3541,10 @@ dependencies = [
  "async-trait",
  "chrono",
  "homecore",
+ "ruvector-core",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "thiserror 1.0.69",
  "tokio",

@@ -1,0 +1,39 @@
+# homecore-plugin-example — example WASM plugin proving the ADR-128 host ABI.
+#
+# This crate targets wasm32-unknown-unknown and compiles to a `.wasm` binary
+# that is loaded by the `homecore-plugins` integration test. It is NOT a
+# workspace member (excluded below) because wasm32 targets cannot participate
+# in a mixed host/device workspace `cargo test --workspace`.
+#
+# Build with:
+#   rustup target add wasm32-unknown-unknown
+#   cargo build --target wasm32-unknown-unknown --release -p homecore-plugin-example
+#
+# The compiled binary lands at:
+#   target/wasm32-unknown-unknown/release/homecore_plugin_example.wasm
+
+[package]
+name = "homecore-plugin-example"
+version = "0.1.0-alpha.0"
+edition = "2021"
+license = "MIT"
+authors = ["rUv <ruv@ruv.net>", "HOMECORE Contributors"]
+description = "Example WASM plugin for HOMECORE — proves the ADR-128 P2 host ABI (guest side)"
+repository = "https://github.com/ruvnet/RuView"
+
+# Compile as a dynamic library so the WASM host can `Module::new` the bytes.
+[lib]
+name = "homecore_plugin_example"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+# No external dependencies — the plugin uses only std + manual JSON parsing.
+# Real plugins would pull in serde/serde_json for complex payloads.
+
+[profile.release]
+# Minimise binary size for WASM.
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"

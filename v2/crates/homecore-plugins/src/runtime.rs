@@ -85,35 +85,11 @@ impl PluginRuntime for InProcessRuntime {
     }
 }
 
-// ── Feature-gated Wasmtime stub (P2) ──────────────────────────────────────
-
-#[cfg(feature = "wasmtime")]
-pub mod wasmtime_rt {
-    //! Wasmtime JIT runtime — P2 stub.
-    //!
-    //! This module intentionally does not compile to a usable runtime yet.
-    //! It exists so that `cargo check --features wasmtime` exercises the
-    //! dependency graph and catches obvious breakage early.
-    //!
-    //! Full implementation tracked in ADR-128 §7 P2.
-
-    use super::*;
-
-    /// Wasmtime-backed plugin runtime (Cranelift JIT on Pi 5 and x86_64).
-    /// Not yet implemented — P2 work.
-    pub struct WasmtimeRuntime;
-
-    #[async_trait]
-    impl PluginRuntime for WasmtimeRuntime {
-        async fn load(
-            &self,
-            _id: PluginId,
-            _manifest: PluginManifest,
-            _plugin: Arc<dyn HomeCorePlugin>,
-        ) -> Result<LoadedPlugin, PluginError> {
-            Err(PluginError::RuntimeError(
-                "WasmtimeRuntime is not yet implemented (ADR-128 P2)".into(),
-            ))
-        }
-    }
-}
+// ── Feature-gated Wasmtime implementation (P2) ───────────────────────────
+//
+// The full `WasmtimeRuntime` lives in `crate::wasmtime_runtime` (P2).
+// It is re-exported from `crate::lib` as `WasmtimeRuntime` when the
+// `wasmtime` feature is enabled.  The `PluginRuntime` trait below is
+// kept intentionally narrow (in-process plugin contract) so the WASM
+// path can use its own `WasmPlugin` wrapper without forcing the trait
+// to carry WASM-specific concerns.

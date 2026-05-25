@@ -33,19 +33,24 @@
 //! | `wasm3` | off | wasm3 interpreter runtime for constrained hardware (P3) |
 
 pub mod error;
+pub mod host_abi;
 pub mod manifest;
 pub mod plugin;
 pub mod registry;
 pub mod runtime;
 
+#[cfg(feature = "wasmtime")]
+pub mod wasmtime_runtime;
+
 pub use error::PluginError;
+pub use host_abi::{ConfigEntryJson, StateChangedEventJson};
 pub use manifest::{IotClass, IntegrationType, PluginManifest};
 pub use plugin::{HomeCorePlugin, PluginId};
 pub use registry::PluginRegistry;
 pub use runtime::{InProcessRuntime, LoadedPlugin, PluginRuntime};
 
 #[cfg(feature = "wasmtime")]
-pub use runtime::wasmtime_rt::WasmtimeRuntime;
+pub use wasmtime_runtime::{WasmPlugin, WasmtimeRuntime};
 
 #[cfg(test)]
 mod tests;
