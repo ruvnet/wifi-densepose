@@ -1,0 +1,47 @@
+# HOMECORE-ASSIST — Voice/intent pipeline + ruflo agent bridge.
+# Implements ADR-133 (HOMECORE-ASSIST), P1 scaffold:
+#   - IntentName, Intent, IntentResponse types
+#   - IntentRecognizer trait + RegexIntentRecognizer (P1)
+#   - IntentHandler trait + 5 built-in HA-mirroring handlers
+#   - RufloRunner trait + NoopRunner (P1 stub; real subprocess in P2)
+#   - AssistPipeline: utterance → recognizer → handler → response
+
+[package]
+name = "homecore-assist"
+version = "0.1.0-alpha.0"
+edition = "2021"
+license = "MIT"
+authors = ["rUv <ruv@ruv.net>", "HOMECORE Contributors"]
+description = "HOMECORE voice/intent pipeline + ruflo agent bridge (ADR-133 P1 scaffold)"
+repository = "https://github.com/ruvnet/RuView"
+
+[lib]
+name = "homecore_assist"
+path = "src/lib.rs"
+
+[dependencies]
+# HOMECORE state machine — local path (ADR-127).
+homecore = { path = "../homecore", version = "0.1.0-alpha.0" }
+
+# Async runtime — same feature set as workspace.
+# tokio::process is used by the P2 runner; included now so the trait compiles.
+tokio = { version = "1", features = ["full"] }
+
+# Async trait support for IntentRecognizer, IntentHandler, RufloRunner.
+async-trait = "0.1"
+
+# Error handling.
+thiserror = "1"
+
+# Serialisation (intents, slots, ruflo request/response payloads).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Regex for P1 intent pattern matching.
+regex = "1"
+
+# Structured logging.
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
