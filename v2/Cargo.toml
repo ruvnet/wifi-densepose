@@ -59,6 +59,7 @@ members = [
     # published crates (or the submodule's `crates/rvcsi-*` paths) — not as v2
     # workspace members, since `vendor/rvcsi/Cargo.toml` is its own workspace.
     "crates/homecore-hap",         # ADR-125 — Apple Home HomeKit Accessory Protocol bridge
+    "crates/homecore-assist",      # ADR-133 — HOMECORE voice assistant + ruflo bridge
 ]
 # ADR-040: WASM edge crate targets wasm32-unknown-unknown (no_std),
 # excluded from workspace to avoid breaking `cargo test --workspace`.
