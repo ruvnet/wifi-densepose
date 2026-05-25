@@ -268,6 +268,37 @@ def main() -> int:
         except OSError:
             pass
 
+    # Companion contract for `scripts/ruview-sensing-server.py` (the
+    # @ruvnet/rvagent compatibility layer): write the full BFLD-gated
+    # feature snapshot so the sensing-server can serve EdgeVitalsMessage
+    # and BfldScanResponse without going back to the wire.
+    feature_path = "/tmp/ruview-last-feature.json"
+
+    def write_feature(gated: dict, motion: bool, occupancy: bool,
+                      privacy_cls: int) -> None:
+        try:
+            tmp = feature_path + ".tmp"
+            with open(tmp, "w") as fh:
+                json.dump({
+                    "node_id": str(gated["node_id"]),
+                    "timestamp_ms": int(time.time() * 1000),
+                    "presence": occupancy,           # sustained
+                    "motion": gated["motion"],        # 0..1 float
+                    "presence_score": gated["presence"],
+                    "n_persons": 1 if occupancy else 0,
+                    "confidence": min(1.0, max(0.0, gated["motion"])),
+                    "breathing_rate_bpm": (gated["resp_bpm"]
+                                           if gated.get("resp_bpm") else None),
+                    "heartrate_bpm": (gated["hb_bpm"]
+                                      if gated.get("hb_bpm") else None),
+                    "anomaly_score": gated.get("anomaly"),
+                    "privacy_class": privacy_cls,
+                    "ts": time.time(),
+                }, fh)
+            os.replace(tmp, feature_path)
+        except OSError:
+            pass
+
     while running:
         try:
             buf, _addr = sock.recvfrom(2048)
@@ -336,6 +367,8 @@ def main() -> int:
                         if (motion != prev_motion
                                 or not state_path.endswith(".disabled")):
                             write_state(motion, occupancy, last_anomaly_ts)
+                            write_feature(gated, motion, occupancy,
+                                          privacy_class)
 
         # Idle release — if the C6 stops sending entirely, clear motion
         # AND occupancy.
