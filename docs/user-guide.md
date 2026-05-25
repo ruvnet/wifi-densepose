@@ -995,14 +995,23 @@ The HF artifact is in **JSONL RVF** format (one JSON object per line: `metadata`
 
 | Consumer | Format it reads | Status |
 |----------|-----------------|--------|
-| Python / PyTorch training pipeline | `model.safetensors` | ✅ Works — load with `safetensors.torch.load_file` |
+| Python / PyTorch training pipeline | `model.safetensors` | ⚠️ **Broken header — strict readers reject** (see below). Patch with `scripts/fix-safetensors-header.py` then `safetensors.torch.load_file` works. |
 | RVF JSONL inspection / re-export | `model.rvf.jsonl` | ✅ Works — plain JSONL, parse line-by-line |
 | Sensing-server `--model <PATH>` flag | binary RVF (`RVFS` magic) | ⚠️ Does **not** accept the JSONL file yet — see gap below |
 
 **Known gap (tracked):** `v2/crates/wifi-densepose-sensing-server/src/rvf_container.rs` only parses the binary RVF segment format (magic `0x52564653`). Pointing `--model` at `model.rvf.jsonl` causes the progressive loader to error with `invalid magic at offset 0: expected 0x52564653, got 0x7974227B` (`0x7974227B` is the ASCII bytes `{"ty…` from the JSONL header), and the live pipeline degrades to null output rather than falling back to heuristic mode. Until a JSONL adapter lands (or the model is re-published as binary RVF), run the sensing-server **without** `--model` and consume the HF weights from Python or the training pipeline.
 
 ```bash
-# Works today — Python side (training, evaluation, embedding extraction):
+# Step 1 (REQUIRED until republish): patch the broken safetensors header in place.
+# The published file pads the 8-byte-aligned header with NUL bytes instead of the
+# spec-required 0x20 spaces, so strict readers reject it with
+# `SafetensorError: trailing characters at line 1 column 1462`. The fix only
+# touches padding bytes; tensor data and declared header length are unchanged.
+# See docs/huggingface/SAFETENSORS-HEADER-BUG.md for the full analysis.
+python scripts/fix-safetensors-header.py \
+    models/wifi-densepose-pretrained/model.safetensors
+
+# Step 2: load with the strict Python reader (training, evaluation, embedding extraction).
 python -c "
 from safetensors.torch import load_file
 state = load_file('models/wifi-densepose-pretrained/model.safetensors')
