@@ -438,7 +438,34 @@ pub struct RvfReader {
 
 impl RvfReader {
     /// Parse an RVF container from a byte slice.
+    ///
+    /// Sniffs the input to support two on-disk encodings:
+    /// - Binary segment format (default): 64-byte segment headers + payloads,
+    ///   identified by the leading `RVFS` magic (0x52564653, little-endian).
+    /// - Line-delimited JSON ("RVF JSONL"): one JSON object per line, identified
+    ///   by a leading `{` after stripping ASCII whitespace. Used by the
+    ///   HuggingFace release bundle (`model.rvf.jsonl`). Lines are mapped to
+    ///   equivalent binary segments in-memory so downstream code can use the
+    ///   same `RvfReader`/`ProgressiveLoader` plumbing.
+    ///
+    /// Returns a clear error if neither format is recognised, so callers can
+    /// surface that to the operator instead of silently degrading.
     pub fn from_bytes(data: &[u8]) -> Result<Self, String> {
+        // Sniff: first non-whitespace byte tells us which encoding to use.
+        let first_non_ws = data.iter().copied().find(|b| !b.is_ascii_whitespace());
+        if let Some(b) = first_non_ws {
+            if b == b'{' || b == b'[' {
+                return Self::from_jsonl_bytes(data);
+            }
+        }
+
+        Self::from_binary_bytes(data)
+    }
+
+    /// Parse the binary RVF segment format. Most callers should use
+    /// [`RvfReader::from_bytes`], which dispatches between formats based on a
+    /// magic-byte sniff.
+    fn from_binary_bytes(data: &[u8]) -> Result<Self, String> {
         let mut segments = Vec::new();
         let mut offset = 0;
 
@@ -454,7 +481,9 @@ impl RvfReader {
             if header.magic != SEGMENT_MAGIC {
                 return Err(format!(
                     "invalid magic at offset {offset}: expected 0x{SEGMENT_MAGIC:08X}, \
-                     got 0x{:08X}",
+                     got 0x{:08X} (tip: if this file starts with '{{', it is the JSONL \
+                     RVF format — pass the raw bytes through RvfReader::from_bytes so it \
+                     can be sniffed and converted)",
                     header.magic
                 ));
             }
@@ -504,11 +533,129 @@ impl RvfReader {
         })
     }
 
-    /// Read an RVF container from a file.
+    /// Read an RVF container from a file. Format is sniffed automatically; both
+    /// the binary `RVFS` container and the JSONL container shipped by the
+    /// HuggingFace release bundle are accepted.
     pub fn from_file(path: &std::path::Path) -> Result<Self, String> {
         let data =
             std::fs::read(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
         Self::from_bytes(&data)
+    }
+
+    /// Parse the JSONL RVF container format produced by the HuggingFace release
+    /// bundle (`model.rvf.jsonl`).
+    ///
+    /// Each non-blank line must be a JSON object with a `"type"` field. The
+    /// loader maps known line types onto equivalent binary segments so the rest
+    /// of the pipeline (manifest lookup, progressive loader, etc.) keeps
+    /// working unmodified:
+    ///
+    /// | JSONL `type`     | Binary segment      | Notes                                  |
+    /// |------------------|---------------------|----------------------------------------|
+    /// | `metadata`       | `SEG_MANIFEST`      | `name` → `model_id`, `version` carried |
+    /// | `quantization`   | `SEG_QUANT`         | Stored verbatim as JSON payload        |
+    /// | (anything else)  | `SEG_META`          | Stored verbatim — `wiflow`, `encoder`, |
+    /// |                  |                     | `lora`, `ewc`, etc. are all preserved  |
+    ///
+    /// The JSONL container does not carry the float weight matrix itself (the
+    /// HF bundle ships those separately in `model.safetensors` /
+    /// `model-qN.bin`), so the resulting `RvfReader` returns `None` from
+    /// [`RvfReader::weights`]. Downstream code that requires weights must read
+    /// them from one of the sibling artifacts; this matches the documented
+    /// behaviour of the HF bundle.
+    fn from_jsonl_bytes(data: &[u8]) -> Result<Self, String> {
+        let text = std::str::from_utf8(data)
+            .map_err(|e| format!("JSONL RVF: file is not valid UTF-8: {e}"))?;
+
+        let mut builder = RvfBuilder::new();
+        let mut saw_metadata = false;
+        let mut extra_meta: Vec<serde_json::Value> = Vec::new();
+        let mut line_no = 0usize;
+
+        for raw_line in text.lines() {
+            line_no += 1;
+            let line = raw_line.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            let value: serde_json::Value = serde_json::from_str(line).map_err(|e| {
+                format!("JSONL RVF: line {line_no} is not valid JSON: {e}")
+            })?;
+
+            let obj = value.as_object().ok_or_else(|| {
+                format!("JSONL RVF: line {line_no} must be a JSON object, got {value}")
+            })?;
+
+            let ty = obj
+                .get("type")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    format!("JSONL RVF: line {line_no} is missing required string field `type`")
+                })?
+                .to_string();
+
+            match ty.as_str() {
+                "metadata" => {
+                    // Map to a SEG_MANIFEST so manifest()/load_layer_a() find it.
+                    let model_id = obj
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let version = obj
+                        .get("version")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("0.0.0");
+                    let description = obj
+                        .get("architecture")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("wifi-densepose JSONL container");
+                    builder.add_manifest(model_id, version, description);
+
+                    // Preserve any extra metadata fields (training stats, custom
+                    // dims, etc.) by also emitting a SEG_META segment with the
+                    // full object.
+                    extra_meta.push(value.clone());
+                    saw_metadata = true;
+                }
+                "quantization" => {
+                    // Encode as JSON in a SEG_QUANT segment. Use the original
+                    // object verbatim — `quant_type` may be absent so we
+                    // synthesise one for readability.
+                    let mut quant = obj.clone();
+                    quant
+                        .entry("quant_type".to_string())
+                        .or_insert(serde_json::Value::String("rvf-jsonl".to_string()));
+                    builder
+                        .add_raw_segment(SEG_QUANT, &serde_json::to_vec(&quant).unwrap_or_default());
+                }
+                // Everything else (encoder, lora, ewc, wiflow, ...) goes into a
+                // SEG_META segment so it round-trips through `metadata()` and
+                // downstream introspection tooling.
+                _ => {
+                    extra_meta.push(value.clone());
+                }
+            }
+        }
+
+        if !saw_metadata && extra_meta.is_empty() {
+            return Err(
+                "JSONL RVF: file contained no JSON objects with a `type` field".to_string(),
+            );
+        }
+
+        // Bundle every non-quantization line into a single SEG_META segment so
+        // callers can recover the full picture via metadata() without us needing
+        // to invent a richer segment vocabulary just for the JSONL adapter.
+        let meta_payload = serde_json::json!({
+            "source_format": "rvf-jsonl",
+            "lines": extra_meta,
+        });
+        builder.add_metadata(&meta_payload);
+
+        // Round-trip via the binary path so we share validation + CRC checks.
+        let bytes = builder.build();
+        Self::from_binary_bytes(&bytes)
     }
 
     /// Find the first segment with the given type and return its payload.
