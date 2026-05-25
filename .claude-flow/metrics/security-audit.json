@@ -1,12 +1,84 @@
 {
-  "timestamp": "2026-03-06T13:17:27.368Z",
-  "mode": "local",
-  "checks": {
-    "envFilesProtected": true,
-    "gitIgnoreExists": true,
-    "noHardcodedSecrets": true
+  "timestamp": "2026-05-25T06:08:29.589Z",
+  "mode": "headless",
+  "workerType": "audit",
+  "model": "haiku",
+  "durationMs": 56168,
+  "executionId": "audit_1779689253421_dfflmb",
+  "success": true,
+  "findings": {
+    "vulnerabilities": [
+      {
+        "severity": "high",
+        "file": ".claude/helpers/github-safe.js",
+        "line": 50,
+        "description": "Command injection vulnerability in execSync call. User-controlled arguments in `newArgs` are joined without shell escaping. An attacker can inject shell metacharacters (e.g., `; rm -rf /`) via the body content or through command/subcommand parameters. The temp file approach is safe, but the command construction `gh ${command} ${subcommand} ${newArgs.join(' ')}` allows shell injection.",
+        "example": "gh issue comment 123 'test`whoami`' would execute whoami"
+      },
+      {
+        "severity": "high",
+        "file": "scripts/csi-spectrogram.js",
+        "line": 45,
+        "description": "Sensitive credential exposure via command-line arguments. The `--seed-token` parameter is passed as a CLI argument, which is visible in process listings (ps aux output). This violates secure credential handling practices. Tokens should be read from environment variables or secure config files, not command-line args.",
+        "example": "node scripts/csi-spectrogram.js --seed-token secret_abc_123 exposes token in process list"
+      },
+      {
+        "severity": "medium",
+        "file": "scripts/apnea-detector.js",
+        "line": 71,
+        "description": "Unsafe buffer reading without comprehensive length validation. The code checks `buf.length` at 32 bytes (line 70) but then reads at fixed offsets (lines 72-76) without validating that each read stays within bounds. If a malformed packet is received, `readInt8/readUInt16LE/readUInt32LE` may read unintended data or zeros.",
+        "example": "A 33-byte buffer would pass the check but reading UInt32LE at offset 8 would go out of bounds"
+      },
+      {
+        "severity": "medium",
+        "file": "scripts/benchmark-rf-scan.js",
+        "line": 110,
+        "description": "Potential out-of-bounds buffer access in parseCSIFrame. While the bounds check at line 107 is present, the `nSubcarriers` value from the packet is used to calculate required buffer size without validation of the value itself. A maliciously crafted packet with extremely large nSubcarriers could cause memory issues.",
+        "example": "Packet with nSubcarriers=999999 would request excessive buffer allocation"
+      },
+      {
+        "severity": "medium",
+        "file": "scripts/csi-spectrogram.js",
+        "line": 39,
+        "description": "Unsafe URL construction with untrusted `seed-url` parameter. The `--seed-url` argument is used directly for HTTPS requests without validation. This could allow SSRF (Server-Side Request Forgery) or DNS rebinding attacks if an attacker controls the seed URL.",
+        "example": "node scripts/csi-spectrogram.js --seed-url http://internal.local:9000 could access internal services"
+      },
+      {
+        "severity": "low",
+        "file": ".claude/helpers/statusline.js",
+        "line": 140,
+        "description": "Shell command injection risk in execSync calls. Commands like `ps aux 2>/dev/null | grep -c agentic-flow` use grep patterns that could be vulnerable if any variables are interpolated (though currently hardcoded). The `execSync` with shell=true is generally risky.",
+        "example": "If any pattern becomes user-controlled: `grep -c ${pattern}` could inject shell metacharacters"
+      },
+      {
+        "severity": "low",
+        "file": ".claude/helpers/memory.js",
+        "line": 10,
+        "description": "Unvalidated JSON parsing. The code parses JSON from MEMORY_FILE without try-catch in the loadMemory function (catches error but doesn't validate structure). Malformed JSON or corrupted memory file could cause issues.",
+        "example": "Memory file with circular JSON structure could cause issues when stringifying"
+      },
+      {
+        "severity": "low",
+        "file": "scripts/device-fingerprint.js",
+        "line": 72,
+        "description": "Hardcoded device fingerprints and network configuration. While not a traditional 'hardcoded secret', the KNOWN_DEVICES array contains identifiable SSIDs and MAC addresses that could be used to correlate network infrastructure. This data should be externalized or sanitized.",
+        "example": "SSID 'ruv.net' and 'Cohen-Guest' could identify specific installations"
+      }
+    ],
+    "riskScore": 42,
+    "recommendations": [
+      "**CRITICAL**: Replace `execSync` command construction in github-safe.js with proper shell escaping using `child_process.execFile()` instead of `execSync()`, or use the `shell: false` option with array arguments to avoid shell parsing entirely.",
+      "**CRITICAL**: Move `--seed-token` from CLI arguments to environment variable `SEED_TOKEN` in csi-spectrogram.js. Update documentation to instruct users: `export SEED_TOKEN=...` instead of passing via CLI.",
+      "**HIGH**: Add comprehensive buffer bounds validation in all UDP packet parsing functions (apnea-detector.js, benchmark-rf-scan.js, etc.). Validate both the buffer length AND the parsed header values before using them in calculations.",
+      "**HIGH**: Validate and sanitize the `--seed-url` parameter in csi-spectrogram.js. Whitelist allowed domains or restrict to localhost/internal IPs only. Add URL scheme validation (https only).",
+      "**MEDIUM**: Replace hardcoded device fingerprints (KNOWN_DEVICES) with externalized configuration or environment variables. Document that this data contains identifiable network information.",
+      "**MEDIUM**: Add input validation to `parseArgs()` results in all scripts. Validate numeric ranges, file paths, and enum values before use.",
+      "**LOW**: Wrap JSON.parse() calls in try-catch blocks throughout (memory.js, session.js) with explicit error handling and recovery.",
+      "**LOW**: Audit all uses of `require()` with dynamic paths. Ensure paths are always derived from fixed `__dirname` and not user-controlled.",
+      "**LOW**: Remove or sandbox the ability to pass arbitrary URLs via CLI. Consider using a configuration file (YAML/JSON) for endpoint URLs instead.",
+      "**INFO**: Add a pre-commit hook to detect hardcoded credentials using tools like `detect-secrets` or `truffleHog`."
+    ]
   },
-  "riskLevel": "low",
-  "recommendations": [],
-  "note": "Install Claude Code CLI for AI-powered security analysis"
+  "rawOutputPreview": "# Security Audit Report — wifi-densepose\n\n```json\n{\n  \"vulnerabilities\": [\n    {\n      \"severity\": \"high\",\n      \"file\": \".claude/helpers/github-safe.js\",\n      \"line\": 50,\n      \"description\": \"Command injection vulnerability in execSync call. User-controlled arguments in `newArgs` are joined without shell escaping. An attacker can inject shell metacharacters (e.g., `; rm -rf /`) via the body content or through command/subcommand parameters. The temp file approach is safe, but the command construction `gh ${command} ${subcommand} ${newArgs.join(' ')}` allows shell injection.\",\n      \"example\": \"gh issue comment 123 'test`whoami`' would execute whoami\"\n    },\n    {\n      \"severity\": \"high\",\n      \"file\": \"scripts/csi-spectrogram.js\",\n      \"line\": 45,\n      \"description\": \"Sensitive credential exposure via command-line arguments. The `--seed-token` parameter is passed as a CLI argument, which is visible in process listings (ps aux output). This violates secure credential handling practices. Tokens should be read from environment variables or secure config files, not command-line args.\",\n      \"example\": \"node scripts/csi-spectrogram.js --seed-token secret_abc_123 exposes token in process list\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"scripts/apnea-detector.js\",\n      \"line\": 71,\n      \"description\": \"Unsafe buffer reading without comprehensive length validation. The code checks `buf.length` at 32 bytes (line 70) but then reads at fixed offsets (lines 72-76) without validating that each read stays within bounds. If a malformed packet is received, `readInt8/readUInt16LE/readUInt32LE` may read unintended data or zeros.\",\n      \"example\": \"A 33-byte buffer would pass the check but reading UInt32LE at offset 8 would go out of bounds\"\n    },\n    {\n      \"severity\": \"medium\",\n      \"file\": \"scripts/benchmark-rf-scan.js\",\n      \"line\": 110,\n      \"description\": \"Potential out-of-bounds buffer access in parseCSIFrame. While the bounds check at line 107 is pres",
+  "rawOutputLength": 7077
 }

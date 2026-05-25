@@ -9397,7 +9397,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-sensing-server"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "axum",
  "chrono",
@@ -9427,7 +9427,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-signal"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "chrono",
  "criterion",
