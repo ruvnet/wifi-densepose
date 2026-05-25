@@ -99,6 +99,55 @@ def bfld_scan_for(node_id: str) -> dict | None:
 _PATH_VITALS = re.compile(r"^/api/v1/vitals/([^/]+)/latest$")
 _PATH_BFLD_SCAN = re.compile(r"^/api/v1/bfld/([^/]+)/last_scan$")
 _PATH_BFLD_SUBSCRIBE = re.compile(r"^/api/v1/bfld/([^/]+)/subscribe$")
+_PATH_SEMANTIC = re.compile(r"^/api/v1/semantic-events/([^/]+)/latest$")
+
+
+def semantic_events_for(node_id: str) -> dict | None:
+    """ADR-125 §2.1.d semantic-event surface.
+
+    The three named events that cross the HAP boundary. Each one is a
+    boolean + last-fire timestamp. Agents subscribe to this endpoint
+    rather than reasoning over raw scores — the naming is the contract.
+    """
+    f = _load_feature()
+    if f is None or f.get("node_id") != node_id:
+        return None
+    presence = bool(f.get("presence", False))
+    anomaly = float(f.get("anomaly_score") or 0.0)
+    return {
+        "node_id": f["node_id"],
+        "privacy_class": int(f.get("privacy_class", 2)),
+        "events": {
+            "unknown_presence": {
+                "active": presence,
+                "source": "BFLD presence_score (rolling 3s avg ≥ 0.30)",
+                "ts": f["ts"],
+            },
+            "unexpected_occupancy": {
+                # Placeholder: schedule-aware gating is future work.
+                # For now we surface raw occupancy and mark the gate
+                # as `schedule_aware=False` so agents know not to
+                # equate this with the full §2.1.d intent yet.
+                "active": presence,
+                "schedule_aware": False,
+                "ts": f["ts"],
+            },
+            "unrecognized_activity_pattern": {
+                "active": anomaly >= 0.7,
+                "anomaly_threshold": 0.7,
+                "anomaly_score": anomaly,
+                "ts": f["ts"],
+            },
+        },
+        # ADR-125 §2.1.d invariant restated at the HTTP boundary:
+        # identity_risk_score, soul_match_probability, and rf_signature_hash
+        # are NEVER published from this endpoint.
+        "redacted_fields": [
+            "identity_risk_score",
+            "soul_match_probability",
+            "rf_signature_hash",
+        ],
+    }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -178,6 +227,17 @@ class Handler(BaseHTTPRequestHandler):
             r = bfld_scan_for(node_id)
             if r is None:
                 self._json(503, {"error": f"no recent BFLD scan for {node_id}",
+                                 "hint": "watcher running? node_id correct?"})
+                return
+            self._json(200, r)
+            return
+
+        m = _PATH_SEMANTIC.match(path)
+        if m:
+            node_id = m.group(1)
+            r = semantic_events_for(node_id)
+            if r is None:
+                self._json(503, {"error": f"no recent semantic events for {node_id}",
                                  "hint": "watcher running? node_id correct?"})
                 return
             self._json(200, r)
