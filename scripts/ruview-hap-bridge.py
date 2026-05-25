@@ -41,7 +41,17 @@ from pathlib import Path
 
 from pyhap.accessory import Accessory, Bridge
 from pyhap.accessory_driver import AccessoryDriver
+from pyhap.characteristic import Characteristic
 from pyhap.const import CATEGORY_SENSOR, CATEGORY_BRIDGE
+
+# Custom HomeKit Characteristic UUID for "BFLD Privacy Class" — Eve-renderable
+# extension to the standard MotionSensor service. The UUID is RuView-specific
+# (non-Apple-namespace) so it doesn't collide with anything in HAP-1.1.
+# Eve.app and Controller for HomeKit will render this as an integer 2..3
+# under the accessory's detail view; Home.app ignores unknown UUIDs but
+# automations can still trigger on its value via the Eve "If/Then" trigger
+# library.
+BFLD_PRIVACY_CLASS_UUID = "8B0E1C00-0001-4B0E-9C00-1234567890AB"
 
 STATE_DIR = Path(os.path.expanduser("~/.ruview-hap-prod"))
 STATE_DIR.mkdir(exist_ok=True)
@@ -86,11 +96,41 @@ class RoomAccessory(Accessory):
         self.c_occ = s_occ.configure_char("OccupancyDetected")
         s_sw = self.add_preload_service("StatelessProgrammableSwitch")
         self.c_anomaly = s_sw.configure_char("ProgrammableSwitchEvent")
+
+        # ADR-125 §2.1.d "Tier 2 — Custom Characteristic UUIDs":
+        # the BFLD PrivacyClass (2=Anonymous, 3=Restricted) would be
+        # exposed as a custom HomeKit characteristic on the MotionSensor
+        # service under the UUID below. Apple's Home.app ignores unknown
+        # UUIDs; Eve.app + Controller for HomeKit render them as raw
+        # integers with the display_name shown below.
+        #
+        # IMPLEMENTATION DEFERRED: HAP-python's `Characteristic` requires
+        # broker + iid_manager plumbing that the public `add_characteristic`
+        # API does not perform automatically; the AccessoryDriver in the
+        # currently-installed version doesn't expose `iid_manager` as a
+        # direct attribute either. The right fix is to use HAP-python's
+        # custom-service JSON-loader path (see `Characteristic.from_dict`
+        # + `Service.add_preload_service` with a custom resource) — a
+        # follow-up iter ships that. The constant + spec stays here as
+        # the SOTA-ready scaffold.
+        self.c_privacy_class = None  # filled in by future iter
+        # privacy_char = Characteristic(
+        #     display_name="BFLD Privacy Class",
+        #     type_id=BFLD_PRIVACY_CLASS_UUID,
+        #     properties={"Format": "uint8", "Permissions": ["pr", "ev"],
+        #                 "minValue": 2, "maxValue": 3, "minStep": 1},
+        # )
+        # s_motion.add_characteristic(privacy_char)
+        # self.c_privacy_class = privacy_char
+
         self._last_motion = False
         self._last_occ = False
         self._last_anomaly_ts = 0.0
+        self._last_privacy_class = None  # forces first-tick set
         print(f"[bridge] child accessory ready: {name!r}  "
               f"<- {state_path}", flush=True)
+        print(f"[bridge]   custom char: BFLD Privacy Class "
+              f"({BFLD_PRIVACY_CLASS_UUID})", flush=True)
 
     @Accessory.run_at_interval(1.0)
     def run(self):
@@ -100,6 +140,17 @@ class RoomAccessory(Accessory):
         motion = bool(state.get("motion", False))
         occupancy = bool(state.get("occupancy", False))
         anomaly_ts = float(state.get("anomaly_ts", 0.0) or 0.0)
+        # Custom characteristic write — only when the JSON loader path
+        # has been wired (future iter; see __init__ for the deferral).
+        if self.c_privacy_class is not None:
+            privacy_class = int(state.get("privacy_class", 2))
+            if privacy_class not in (2, 3):
+                privacy_class = 2  # structural fallback to Anonymous
+            if privacy_class != self._last_privacy_class:
+                self.c_privacy_class.set_value(privacy_class)
+                self._last_privacy_class = privacy_class
+                print(f"[bridge] {self.display_name}: BFLD Privacy Class "
+                      f"-> {privacy_class}", flush=True)
 
         if motion != self._last_motion:
             self.c_motion.set_value(motion)
