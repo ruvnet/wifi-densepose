@@ -1,0 +1,43 @@
+# HOMECORE — Rust state machine, event bus, service registry, entity registry.
+# Implements ADR-127 (HOMECORE-CORE), the foundation of the HOMECORE Home
+# Assistant port (ADR-126 master + ADR-128/129/130/131/132/133/134 sub-ADRs).
+#
+# P1 scaffold (this commit): public types + DashMap-backed state machine +
+# Tokio broadcast event bus + minimal entity registry. Persistence and the
+# full HA-compat serde schema land in P2.
+
+[package]
+name = "homecore"
+version = "0.1.0-alpha.0"
+edition = "2021"
+license = "MIT"
+authors = ["rUv <ruv@ruv.net>", "HOMECORE Contributors"]
+description = "Rust state machine + event bus + service registry — the foundation of the HOMECORE Home Assistant port (ADR-127)"
+repository = "https://github.com/ruvnet/RuView"
+
+[lib]
+name = "homecore"
+path = "src/lib.rs"
+
+[dependencies]
+# Core async runtime — matches the rest of the v2/ workspace (sensing-server etc.)
+tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros"] }
+# DashMap for the concurrent state store — ADR-127 §2.1.
+dashmap = "6"
+# Typed event channels + service handler boxing
+futures = "0.3"
+async-trait = "0.1"
+# Time types matched to HA's UTC datetime usage
+chrono = { version = "0.4", features = ["serde"] }
+# Schema validation replacement for voluptuous (ADR-127 §3)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Unique IDs (Context, ConfigEntryId, DeviceId)
+uuid = { version = "1", features = ["v4", "serde"] }
+# Error handling
+thiserror = "1"
+# Read-only static catalogs (event type names etc.)
+once_cell = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros", "test-util"] }

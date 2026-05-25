@@ -28,6 +28,7 @@ members = [
     "crates/wifi-densepose-geo",
     "crates/nvsim",
     "crates/nvsim-server",
+    "crates/homecore",                 # ADR-127 — HOMECORE state machine
     # ADR-100/ADR-101: Cognitum Cog packaging — first Cog from this repo.
     # Ships the wifi-densepose pose-estimation model as a signed binary +
     # JSONL manifest installable by the Cognitum V0 appliance (cognitum-v0,
