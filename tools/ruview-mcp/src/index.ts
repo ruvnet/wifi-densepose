@@ -29,6 +29,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  McpError,
+  ErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
 
 import { loadConfig } from "./config.js";
@@ -42,6 +44,7 @@ import {
   jobStatusSchema,
   jobStatus,
 } from "./tools/train-count.js";
+import { TOOL_INPUT_SCHEMAS } from "./schemas/index.js";
 
 const PACKAGE_VERSION = "0.1.0";
 const SERVER_NAME = "rvagent";
@@ -244,7 +247,10 @@ async function main(): Promise<void> {
     })),
   }));
 
-  // Call tool handler.
+  // Call tool handler — uniform Zod validation gate (ADR-124 §3 Architecture).
+  // If TOOL_INPUT_SCHEMAS has a schema for the tool name, run safeParse first.
+  // Parse failures throw McpError(InvalidParams) so the client sees a typed
+  // JSON-RPC error rather than a wrapped string error.
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     const tool = TOOLS.find((t) => t.name === name);
@@ -264,6 +270,20 @@ async function main(): Promise<void> {
       };
     }
 
+    // Schema validation gate — applies to all tools registered in TOOL_INPUT_SCHEMAS.
+    const schemaEntry = Object.prototype.hasOwnProperty.call(TOOL_INPUT_SCHEMAS, name)
+      ? TOOL_INPUT_SCHEMAS[name as keyof typeof TOOL_INPUT_SCHEMAS]
+      : undefined;
+    if (schemaEntry !== undefined) {
+      const parsed = schemaEntry.safeParse(args ?? {});
+      if (!parsed.success) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `Invalid arguments for tool "${name}": ${parsed.error.message}`
+        );
+      }
+    }
+
     try {
       const result = await tool.handler(args ?? {}, config);
       return {
@@ -275,6 +295,7 @@ async function main(): Promise<void> {
         ],
       };
     } catch (e: unknown) {
+      if (e instanceof McpError) throw e; // propagate typed errors unchanged
       const message = e instanceof Error ? e.message : String(e);
       return {
         content: [
