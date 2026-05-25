@@ -1,10 +1,12 @@
 # homecore-recorder — SQLite state history + semantic search (ADR-132)
 #
 # P1 ships: SQLite structural persistence with HA-compat schema.
-# P2 (feature-gated): ruvector-backed SemanticIndex for embedding search.
+# P2 ships: ruvector-backed SemanticIndex — hash embeddings, HNSW search (ADR-132 P2, Iter-6 track C).
+# P3 plan:  replace hash embeddings with ruvector-attention sentence embeddings (dim → 384).
 #
-# Build: cargo build -p homecore-recorder --no-default-features
-# Test:  cargo test  -p homecore-recorder --no-default-features
+# Build:     cargo build -p homecore-recorder --features ruvector
+# Test (P2): cargo test  -p homecore-recorder --features ruvector   (20 tests)
+# Test (P1): cargo test  -p homecore-recorder --no-default-features (14 tests)
 
 [package]
 name = "homecore-recorder"
