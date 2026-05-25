@@ -3458,6 +3458,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "homecore-assist"
+version = "0.1.0-alpha.0"
+dependencies = [
+ "async-trait",
+ "homecore",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "homecore-automation"
 version = "0.1.0-alpha.0"
 dependencies = [

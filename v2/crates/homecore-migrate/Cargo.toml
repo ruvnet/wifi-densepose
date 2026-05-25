@@ -1,0 +1,60 @@
+# homecore-migrate — Migration tooling from Python Home Assistant.
+# Implements ADR-134 (HOMECORE-MIGRATE), P1 scaffold:
+#   - HaStorageDir + HaStorageEnvelope: reads `.storage/*.json` files
+#   - Versioned format parsers under `storage_format::v<N>`
+#   - entity_registry, device_registry, config_entries parsers
+#   - secrets.yaml + automations.yaml parsers
+#   - CLI: `homecore-migrate inspect` / `homecore-migrate import-entities`
+#
+# P2 will add homecore-recorder side-by-side DB export (feature-gated).
+
+[package]
+name = "homecore-migrate"
+version = "0.1.0-alpha.0"
+edition = "2021"
+license = "MIT"
+authors = ["rUv <ruv@ruv.net>", "HOMECORE Contributors"]
+description = "Migration tooling from Python Home Assistant to HOMECORE (ADR-134 P1 scaffold)"
+repository = "https://github.com/ruvnet/RuView"
+
+[[bin]]
+name = "homecore-migrate"
+path = "src/main.rs"
+
+[lib]
+name = "homecore_migrate"
+path = "src/lib.rs"
+
+[features]
+default = []
+# P2: enable when homecore-recorder ships (ADR-132). Exports side-by-side DB.
+recorder = []
+
+[dependencies]
+# HOMECORE state machine — local path (ADR-127).
+homecore = { path = "../homecore", version = "0.1.0-alpha.0" }
+
+# Async runtime.
+tokio = { version = "1", features = ["full"] }
+
+# Serialisation — JSON for .storage files, YAML for secrets/automations.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# Error handling.
+thiserror = "1"
+
+# Tracing/logging.
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# CLI argument parsing.
+clap = { version = "4", features = ["derive"] }
+
+# Error handling in main.rs
+anyhow = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+tempfile = "3"
