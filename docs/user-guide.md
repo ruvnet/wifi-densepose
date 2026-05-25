@@ -772,6 +772,79 @@ Open `/var/run/ruview-matter.txt` for the Matter pairing QR / 11-digit setup cod
 
 Detailed entity reference, blueprint catalog, troubleshooting recipe matrix: see [`docs/integrations/home-assistant.md`](integrations/home-assistant.md).
 
+### BFLD — privacy-gated WiFi BFI sensing layer (ADR-118)
+
+The `wifi-densepose-bfld` crate adds an explicit privacy-gating layer on top of the sensing pipeline. It ingests 802.11ac/ax Beamforming Feedback Information (BFI) and emits bounded, classified sensing events that HA / Matter / MQTT consumers can read **without** leaking identity-discriminative data.
+
+Three structural invariants enforced by the type system:
+
+- **I1** — Raw BFI never exits the node (`Sink` marker-trait hierarchy)
+- **I2** — Identity embedding is in-RAM-only (no `Serialize`/`Clone`/`Copy`; `Drop` zeroizes)
+- **I3** — Cross-site identity correlation is cryptographically impossible (per-site BLAKE3-keyed hash + daily epoch rotation)
+
+#### Minimal operator quickstart
+
+Two runnable examples ship with the crate:
+
+```bash
+# In-process consumer: build pipeline, send one frame, print event JSON
+cargo run -p wifi-densepose-bfld --example bfld_minimal
+
+# Worker thread + HA-DISCO: full publish lifecycle (availability + discovery + state + LWT)
+cargo run -p wifi-densepose-bfld --example bfld_handle
+```
+
+#### Production publish lifecycle (HA-DISCO + MQTT)
+
+```rust
+// Bootstrap (once at startup, retain=true messages):
+publish_availability_online(&mut retained_pub, "seed-01")?;
+publish_discovery(&mut retained_pub, "seed-01", PrivacyClass::Anonymous)?;
+
+// Per-frame:
+let handle = BfldPipelineHandle::spawn(pipeline, state_pub);
+handle.send(PipelineInput { inputs, embedding })?;
+```
+
+Six HA entities are auto-created per node (`binary_sensor.*_bfld_presence`, `sensor.*_bfld_motion`/`person_count`/`zone_activity`/`confidence`/`identity_risk`). The `identity_risk` entity is **only present at `PrivacyClass::Anonymous`**; class `Restricted` deployments (care homes, regulated environments) drop it entirely from both discovery and state topics.
+
+#### Three operator HA blueprints
+
+Under `v2/crates/cog-ha-matter/blueprints/bfld/`:
+
+- `presence-lighting.yaml` — `binary_sensor.*_bfld_presence` ⇒ `light.turn_on/off` with configurable hold time
+- `motion-hvac.yaml` — `sensor.*_bfld_motion > threshold` ⇒ `climate.set_temperature` ΔT
+- `identity-risk-anomaly.yaml` — rolling 7-day z-score notification (requires HA Statistics helper)
+
+Import via HA UI: Settings → Automations & Scenes → Blueprints → Import.
+
+#### Privacy class deployment matrix
+
+| Class | Identity fields | Use case |
+|-------|-----------------|----------|
+| `Raw` | full BFI matrix | local-only research (never networked) |
+| `Derived` | downsampled angles + risk score | operator-acknowledged LAN research mode |
+| `Anonymous` (default) | aggregate sensing only + risk score + rotating hash | production HA / Matter deployments |
+| `Restricted` | aggregate sensing only, identity fields stripped | care homes, GDPR/HIPAA-style regulated environments |
+
+The `enable_privacy_mode()` runtime toggle on `BfldPipeline` engages `Restricted` from any baseline without restarting the pipeline — useful for security-incident response.
+
+#### MQTT topic tree
+
+```
+ruview/<node_id>/bfld/availability         online / offline
+ruview/<node_id>/bfld/presence/state       true / false
+ruview/<node_id>/bfld/motion/state         0.000000..1.000000
+ruview/<node_id>/bfld/person_count/state   integer
+ruview/<node_id>/bfld/confidence/state     0.000000..1.000000
+ruview/<node_id>/bfld/zone_activity/state  "<zone_name>"  (if configured)
+ruview/<node_id>/bfld/identity_risk/state  0.000000..1.000000  (class 2 only)
+```
+
+The `rumqttc 0.24` (`use-rustls`) backend ships behind the `mqtt` feature; `RumqttPublisher::connect_with_lwt(node_id, opts, capacity)` pre-configures the Last Will and Testament so the broker auto-publishes `"offline"` on session drop.
+
+Detailed surface: [`v2/crates/wifi-densepose-bfld/README.md`](../v2/crates/wifi-densepose-bfld/README.md), [`docs/research/BFLD/`](research/BFLD/) (11 files, 13,544 words), [ADR-118 through ADR-123](adr/ADR-118-bfld-beamforming-feedback-layer-for-detection.md).
+
 ---
 
 ## Web UI
