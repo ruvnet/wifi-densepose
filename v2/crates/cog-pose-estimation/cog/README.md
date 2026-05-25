@@ -58,7 +58,7 @@ Loss curve: 0.181 (epoch 0) → 0.014 (epoch 399), eval loss 0.010. **400 epochs
 - Re-train with the same Candle pipeline (already validated to converge in seconds on RTX 5080).
 - Hailo HEF export via the Dataflow Compiler on a self-hosted runner.
 
-The cog's runtime inference path is currently a centred-skeleton stub returning `confidence=0`. Wiring the `pose_v1.safetensors` weights into `src/inference.rs` is the next code change — separate PR.
+The cog's runtime inference path now loads `pose_v1.safetensors` directly through Candle in `src/inference.rs` — see `InferenceEngine::with_weights` and the `weights_load_and_forward_produces_seventeen_keypoint_pairs` test in the same file. The forward pass mirrors the training script (`Conv1d 56→64→128→128` encoder with dilations `[1, 2, 4]`, `GlobalMeanPool`, `Linear 128→256→34`, sigmoid) and emits `[17, 2]` keypoints with the published `confidence = 0.185` (PCK@50). If the safetensors file is missing on disk, the engine logs a `tracing::warn!` and falls back to the centred-skeleton stub (`confidence = 0`) so the runtime contract is preserved and the dashboard surfaces "no model yet" instead of crashing. The 3% PCK@20 / 18.5% PCK@50 numbers above remain the right way to read this model — wiring the weights does not improve accuracy, only replaces the placeholder output with the trained values.
 
 ## See also
 
