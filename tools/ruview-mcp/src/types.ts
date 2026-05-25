@@ -126,6 +126,24 @@ export interface JobStatusResult {
   epochs_total?: number | undefined;
 }
 
+// ── Vitals (ADR-124 §6 Python surface parity: ws.py:74-88) ───────────────
+
+/**
+ * Mirrors python/wifi_densepose/client/ws.py EdgeVitalsMessage (ws.py:74-88).
+ * Returned by sensing-server GET /api/v1/vitals/<node_id>/latest.
+ */
+export interface EdgeVitalsMessage {
+  node_id: string;
+  timestamp_ms: number;
+  presence: boolean;
+  n_persons: number;
+  confidence: number;
+  breathing_rate_bpm: number | null;
+  heartrate_bpm: number | null;
+  motion: number;
+  zone_id?: string | undefined;
+}
+
 // ── Config ────────────────────────────────────────────────────────────────
 
 /** Runtime configuration, typically sourced from env vars. */
