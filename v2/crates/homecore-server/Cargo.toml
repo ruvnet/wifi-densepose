@@ -1,0 +1,46 @@
+# HOMECORE-SERVER — the integration binary that ties every HOMECORE
+# crate together into one process.
+#
+# Boots a HomeCore runtime, opens the SQLite recorder, mounts the
+# REST + WS API on :8123, initializes the plugin runtime, spins up
+# the automation engine subscribed to the state machine, and starts
+# the assist pipeline + HAP bridge surface.
+
+[package]
+name = "homecore-server"
+version = "0.1.0-alpha.0"
+edition = "2021"
+license = "MIT"
+authors = ["rUv <ruv@ruv.net>", "HOMECORE Contributors"]
+description = "HOMECORE integration server — wires HomeCore + API + Recorder + Plugins + Automation + Assist + HAP into one process"
+repository = "https://github.com/ruvnet/RuView"
+
+[[bin]]
+name = "homecore-server"
+path = "src/main.rs"
+
+[dependencies]
+# The 8 HOMECORE crates this binary integrates
+homecore           = { path = "../homecore",           version = "0.1.0-alpha.0" }
+homecore-api       = { path = "../homecore-api",       version = "0.1.0-alpha.0" }
+homecore-plugins   = { path = "../homecore-plugins",   version = "0.1.0-alpha.0" }
+homecore-hap       = { path = "../homecore-hap",       version = "0.1.0-alpha.0" }
+homecore-recorder  = { path = "../homecore-recorder",  version = "0.1.0-alpha.0" }
+homecore-automation = { path = "../homecore-automation", version = "0.1.0-alpha.0" }
+homecore-assist    = { path = "../homecore-assist",    version = "0.1.0-alpha.0" }
+# Migration crate is CLI-only; not linked here.
+
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive", "env"] }
+anyhow = "1"
+serde_json = "1"
+axum = { version = "0.7", features = ["macros"] }
+
+[features]
+default = []
+# Pull in ruvector-backed semantic memory.
+ruvector = ["homecore-recorder/ruvector"]
+# Pull in real Wasmtime plugin runtime (vs InProcessRuntime).
+wasmtime = ["homecore-plugins/wasmtime"]
