@@ -40,6 +40,7 @@ Usage:
 """
 from __future__ import annotations
 import argparse
+import json
 import os
 import signal
 import socket
@@ -47,6 +48,7 @@ import struct
 import sys
 import time
 import zlib
+from collections import deque
 
 RV_FEATURE_STATE_MAGIC = 0xC5110006
 RV_QFLAG_PRESENCE_VALID = 1 << 0
@@ -196,6 +198,16 @@ def main() -> int:
                    choices=["raw", "derived", "anonymous", "restricted"],
                    help="ADR-118 PrivacyClass; only anonymous/restricted "
                         "may cross the HAP boundary (ADR-125 §2.1.d).")
+    p.add_argument("--state-json", default="/tmp/ruview-state.json",
+                   help="JSON state IPC file written for the HAP daemon. "
+                        "Contains motion/occupancy/anomaly_ts.")
+    p.add_argument("--occupancy-window", type=float, default=3.0,
+                   help="Seconds of rolling presence_score average for "
+                        "OccupancyDetected (vs short-window MotionDetected).")
+    p.add_argument("--anomaly-threshold", type=float, default=0.7,
+                   help="anomaly_score crossing this fires the "
+                        "'Unrecognized Activity Pattern' event "
+                        "(Restricted class only; ADR-125 §2.1.d).")
     args = p.parse_args()
 
     privacy_class = PrivacyClass.from_str(args.privacy_class)
@@ -234,10 +246,27 @@ def main() -> int:
     signal.signal(signal.SIGINT, _stop)
 
     motion = os.path.exists(args.toggle)
+    occupancy = False
+    last_anomaly_ts = 0.0
     last_packet_ts = 0.0
     last_summary = time.time()
-    n_total = n_valid = n_crc_bad = 0
+    n_total = n_valid = n_crc_bad = n_anomaly_fires = 0
     presence_sum = motion_sum = 0.0
+    # Rolling window of (timestamp, presence_score) for occupancy detect
+    occ_window: deque[tuple[float, float]] = deque()
+    OCC_ON_THRESH = 0.30
+    OCC_OFF_THRESH = 0.15
+    state_path = args.state_json
+
+    def write_state(motion: bool, occupancy: bool, anomaly_ts: float) -> None:
+        try:
+            tmp = state_path + ".tmp"
+            with open(tmp, "w") as fh:
+                json.dump({"motion": motion, "occupancy": occupancy,
+                           "anomaly_ts": anomaly_ts, "ts": time.time()}, fh)
+            os.replace(tmp, state_path)
+        except OSError:
+            pass
 
     while running:
         try:
@@ -262,14 +291,59 @@ def main() -> int:
                         presence_sum += gated["presence"]
                         motion_sum += gated["motion"]
                         last_packet_ts = now
+                        # MotionDetected — short-window (each packet)
+                        prev_motion = motion
                         if not motion and gated["presence"] >= PRESENCE_ON_THRESHOLD:
                             motion = set_motion(args.toggle, True, motion)
                         elif motion and gated["presence"] <= PRESENCE_OFF_THRESHOLD:
                             motion = set_motion(args.toggle, False, motion)
 
-        # Idle release — if the C6 stops sending entirely, clear motion.
+                        # OccupancyDetected — rolling-window avg (§2.1.d
+                        # "Unexpected Occupancy" is a future iter; for now
+                        # we expose Occupancy as sustained presence).
+                        occ_window.append((now, gated["presence"]))
+                        cutoff = now - args.occupancy_window
+                        while occ_window and occ_window[0][0] < cutoff:
+                            occ_window.popleft()
+                        if occ_window:
+                            occ_avg = (sum(p for _, p in occ_window)
+                                       / len(occ_window))
+                            if not occupancy and occ_avg >= OCC_ON_THRESH:
+                                occupancy = True
+                                print(f"[{time.strftime('%H:%M:%S')}] "
+                                      f"Unknown Presence — Occupancy ON "
+                                      f"(rolling_avg={occ_avg:.2f})",
+                                      flush=True)
+                            elif occupancy and occ_avg <= OCC_OFF_THRESH:
+                                occupancy = False
+                                print(f"[{time.strftime('%H:%M:%S')}] "
+                                      f"Occupancy OFF "
+                                      f"(rolling_avg={occ_avg:.2f})",
+                                      flush=True)
+
+                        # Anomaly — only when class allows (Restricted
+                        # gate drops anomaly_score entirely; the dict
+                        # missing the key is the type-level enforcement).
+                        if ("anomaly" in gated
+                                and gated["anomaly"] >= args.anomaly_threshold):
+                            last_anomaly_ts = now
+                            n_anomaly_fires += 1
+                            print(f"[{time.strftime('%H:%M:%S')}] "
+                                  f"Unrecognized Activity Pattern "
+                                  f"(anomaly={gated['anomaly']:.2f})",
+                                  flush=True)
+
+                        if (motion != prev_motion
+                                or not state_path.endswith(".disabled")):
+                            write_state(motion, occupancy, last_anomaly_ts)
+
+        # Idle release — if the C6 stops sending entirely, clear motion
+        # AND occupancy.
         if motion and last_packet_ts and (now - last_packet_ts) > IDLE_RELEASE_S:
             motion = set_motion(args.toggle, False, motion)
+            occupancy = False
+            occ_window.clear()
+            write_state(motion, occupancy, last_anomaly_ts)
 
         # Periodic summary line (every 10 s) so we can see the watcher is alive
         if now - last_summary >= 10.0:
@@ -278,10 +352,12 @@ def main() -> int:
             print(
                 f"[{time.strftime('%H:%M:%S')}] 10s stats: "
                 f"pkts={n_total} valid={n_valid} crc_bad={n_crc_bad} "
-                f"avg_presence={avg_p:.2f} avg_motion={avg_m:.2f} motion={motion}",
+                f"avg_presence={avg_p:.2f} avg_motion={avg_m:.2f} "
+                f"motion={motion} occupancy={occupancy} "
+                f"anomaly_fires={n_anomaly_fires}",
                 flush=True,
             )
-            n_total = n_valid = n_crc_bad = 0
+            n_total = n_valid = n_crc_bad = n_anomaly_fires = 0
             presence_sum = motion_sum = 0.0
             last_summary = now
 
