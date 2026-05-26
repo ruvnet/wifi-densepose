@@ -1,18 +1,38 @@
-//! Bearer-token auth helper. P1 accepts any non-empty bearer; P2 wires
-//! in the long-lived token store. Mirrors HA's
-//! `Authorization: Bearer <token>` convention.
+//! Bearer-token auth helper. Validates against the
+//! [`LongLivedTokenStore`] on `SharedState` (audit fix HC-01/02).
+//!
+//! - P1 placeholder accepted any non-empty bearer
+//! - P2 (this commit) requires the token to be present in the store
+//! - DEV escape hatch: `LongLivedTokenStore::allow_any_non_empty()`
+//!   preserves the legacy behaviour for users mid-migration, with
+//!   a warn log on every check
 
 use axum::http::HeaderMap;
 use crate::error::ApiError;
+use crate::tokens::LongLivedTokenStore;
 
 #[derive(Clone, Debug)]
 pub struct BearerAuth(pub String);
 
 impl BearerAuth {
     /// Parse the `Authorization: Bearer <token>` header out of the
-    /// request. Returns `ApiError::Unauthorized` if missing, malformed,
-    /// or the token is empty.
-    pub fn from_headers(headers: &HeaderMap) -> Result<Self, ApiError> {
+    /// request AND validate it against the supplied token store.
+    /// Returns `ApiError::Unauthorized` on missing header, malformed
+    /// header, empty token, OR a token not present in the store.
+    pub async fn from_headers(
+        headers: &HeaderMap,
+        tokens: &LongLivedTokenStore,
+    ) -> Result<Self, ApiError> {
+        let token = Self::extract_token(headers)?;
+        if !tokens.is_valid(&token).await {
+            return Err(ApiError::Unauthorized);
+        }
+        Ok(Self(token))
+    }
+
+    /// Extract the bearer token from headers without validating it.
+    /// Used by the WS handshake which validates inline.
+    pub fn extract_token(headers: &HeaderMap) -> Result<String, ApiError> {
         let header = headers
             .get(axum::http::header::AUTHORIZATION)
             .ok_or(ApiError::Unauthorized)?;
@@ -25,7 +45,7 @@ impl BearerAuth {
         if token.is_empty() {
             return Err(ApiError::Unauthorized);
         }
-        Ok(Self(token))
+        Ok(token)
     }
 }
 
@@ -34,31 +54,64 @@ mod tests {
     use super::*;
     use axum::http::header::AUTHORIZATION;
 
-    #[test]
-    fn strips_bearer_prefix() {
+    fn mkheaders(value: &str) -> HeaderMap {
         let mut h = HeaderMap::new();
-        h.insert(AUTHORIZATION, "Bearer abc123".parse().unwrap());
-        let a = BearerAuth::from_headers(&h).unwrap();
-        assert_eq!(a.0, "abc123");
+        h.insert(AUTHORIZATION, value.parse().unwrap());
+        h
     }
 
     #[test]
-    fn rejects_missing_prefix() {
-        let mut h = HeaderMap::new();
-        h.insert(AUTHORIZATION, "abc123".parse().unwrap());
-        assert!(matches!(BearerAuth::from_headers(&h), Err(ApiError::Unauthorized)));
+    fn extract_strips_bearer_prefix() {
+        let h = mkheaders("Bearer abc123");
+        assert_eq!(BearerAuth::extract_token(&h).unwrap(), "abc123");
     }
 
     #[test]
-    fn rejects_missing_header() {
+    fn extract_rejects_missing_prefix() {
+        let h = mkheaders("abc123");
+        assert!(matches!(BearerAuth::extract_token(&h), Err(ApiError::Unauthorized)));
+    }
+
+    #[test]
+    fn extract_rejects_missing_header() {
         let h = HeaderMap::new();
-        assert!(matches!(BearerAuth::from_headers(&h), Err(ApiError::Unauthorized)));
+        assert!(matches!(BearerAuth::extract_token(&h), Err(ApiError::Unauthorized)));
     }
 
     #[test]
-    fn rejects_empty_token() {
-        let mut h = HeaderMap::new();
-        h.insert(AUTHORIZATION, "Bearer   ".parse().unwrap());
-        assert!(matches!(BearerAuth::from_headers(&h), Err(ApiError::Unauthorized)));
+    fn extract_rejects_empty_token() {
+        let h = mkheaders("Bearer   ");
+        assert!(matches!(BearerAuth::extract_token(&h), Err(ApiError::Unauthorized)));
+    }
+
+    #[tokio::test]
+    async fn from_headers_accepts_registered_token() {
+        let store = LongLivedTokenStore::empty();
+        store.register("good_token").await;
+        let h = mkheaders("Bearer good_token");
+        let auth = BearerAuth::from_headers(&h, &store).await.unwrap();
+        assert_eq!(auth.0, "good_token");
+    }
+
+    #[tokio::test]
+    async fn from_headers_rejects_unregistered_token() {
+        let store = LongLivedTokenStore::empty();
+        store.register("good_token").await;
+        let h = mkheaders("Bearer wrong_token");
+        assert!(matches!(BearerAuth::from_headers(&h, &store).await, Err(ApiError::Unauthorized)));
+    }
+
+    #[tokio::test]
+    async fn dev_mode_still_accepts_any_non_empty() {
+        let store = LongLivedTokenStore::allow_any_non_empty();
+        let h = mkheaders("Bearer literally-anything");
+        assert!(BearerAuth::from_headers(&h, &store).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn dev_mode_still_rejects_empty() {
+        let store = LongLivedTokenStore::allow_any_non_empty();
+        let h = mkheaders("Bearer ");
+        assert!(matches!(BearerAuth::from_headers(&h, &store).await, Err(ApiError::Unauthorized)));
     }
 }

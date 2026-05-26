@@ -25,7 +25,7 @@ pub struct ApiConfig {
 }
 
 pub async fn get_config(headers: HeaderMap, State(s): State<SharedState>) -> ApiResult<Json<ApiConfig>> {
-    let _ = BearerAuth::from_headers(&headers)?;
+    let _ = BearerAuth::from_headers(&headers, s.tokens()).await?;
     Ok(Json(ApiConfig {
         location_name: s.location_name().to_string(),
         version: s.version().to_string(),
@@ -69,7 +69,7 @@ impl StateView {
 }
 
 pub async fn get_states(headers: HeaderMap, State(s): State<SharedState>) -> ApiResult<Json<Vec<StateView>>> {
-    let _ = BearerAuth::from_headers(&headers)?;
+    let _ = BearerAuth::from_headers(&headers, s.tokens()).await?;
     let snapshots = s.homecore().states().all();
     Ok(Json(snapshots.iter().map(|x| StateView::from_state(x)).collect()))
 }
@@ -79,7 +79,7 @@ pub async fn get_state(
     State(s): State<SharedState>,
     Path(entity_id): Path<String>,
 ) -> ApiResult<Json<StateView>> {
-    let _ = BearerAuth::from_headers(&headers)?;
+    let _ = BearerAuth::from_headers(&headers, s.tokens()).await?;
     let id = EntityId::parse(entity_id.clone()).map_err(|e| ApiError::BadRequest(e.to_string()))?;
     let st = s.homecore().states().get(&id).ok_or_else(|| ApiError::NotFound(entity_id))?;
     Ok(Json(StateView::from_state(&st)))
@@ -98,7 +98,7 @@ pub async fn set_state(
     Path(entity_id): Path<String>,
     Json(body): Json<SetStateRequest>,
 ) -> ApiResult<(StatusCode, Json<StateView>)> {
-    let _ = BearerAuth::from_headers(&headers)?;
+    let _ = BearerAuth::from_headers(&headers, s.tokens()).await?;
     let id = EntityId::parse(entity_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
     let existed = s.homecore().states().get(&id).is_some();
     let attrs = if body.attributes.is_null() { serde_json::json!({}) } else { body.attributes };
@@ -114,7 +114,7 @@ pub struct ServiceDomainView {
 }
 
 pub async fn get_services(headers: HeaderMap, State(s): State<SharedState>) -> ApiResult<Json<Vec<ServiceDomainView>>> {
-    let _ = BearerAuth::from_headers(&headers)?;
+    let _ = BearerAuth::from_headers(&headers, s.tokens()).await?;
     let services = s.homecore().services().registered_services().await;
     let mut by_domain: std::collections::HashMap<String, serde_json::Map<String, serde_json::Value>> =
         std::collections::HashMap::new();
@@ -133,7 +133,7 @@ pub async fn call_service(
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
     use homecore::{ServiceCall, ServiceName};
-    let _ = BearerAuth::from_headers(&headers)?;
+    let _ = BearerAuth::from_headers(&headers, s.tokens()).await?;
     let call = ServiceCall {
         name: ServiceName::new(domain.clone(), service.clone()),
         data: body,

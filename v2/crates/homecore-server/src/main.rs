@@ -26,7 +26,7 @@ use clap::Parser;
 use tracing::{info, warn};
 
 use homecore::HomeCore;
-use homecore_api::{router, SharedState};
+use homecore_api::{router, LongLivedTokenStore, SharedState};
 use homecore_assist::pipeline::default_pipeline;
 use homecore_assist::RegexIntentRecognizer;
 use homecore_automation::AutomationEngine;
@@ -118,7 +118,25 @@ async fn main() -> Result<()> {
     let _ = hap_bridge;
 
     // ── 7. REST + WS API ────────────────────────────────────────────
-    let api_state = SharedState::with_metadata(hc.clone(), cli.location_name, env!("CARGO_PKG_VERSION"));
+    // Token provisioning closes audit findings HC-01/HC-02. If
+    // HOMECORE_TOKENS is set in the env, populate the store from
+    // its comma-separated list. Otherwise fall back to DEV mode
+    // (warn-on-each-request) so existing smoke tests still work.
+    let tokens = if std::env::var("HOMECORE_TOKENS").map(|v| !v.trim().is_empty()).unwrap_or(false) {
+        let s = LongLivedTokenStore::from_env();
+        let n = s.len().await;
+        info!("LongLivedTokenStore provisioned with {} bearer token(s) from HOMECORE_TOKENS", n);
+        s
+    } else {
+        warn!("HOMECORE_TOKENS not set — token store in DEV mode (any non-empty bearer accepted). Provision real tokens before exposing to the network.");
+        LongLivedTokenStore::allow_any_non_empty()
+    };
+    let api_state = SharedState::with_tokens(
+        hc.clone(),
+        cli.location_name,
+        env!("CARGO_PKG_VERSION"),
+        tokens,
+    );
     let app = router(api_state);
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;
     info!("HOMECORE-API listening on http://{} (HA-compat /api + /api/websocket)", cli.bind);
