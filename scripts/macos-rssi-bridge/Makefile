@@ -49,12 +49,20 @@ build-server:
 # process group, opens both UIs, waits for Ctrl-C, and kills both children
 # cleanly. The sensing-server is run with cwd=v2/ so its default --ui-path of
 # ../ui resolves; the bridge stays in this directory so ./mac_wifi works.
+#
+# --source esp32 is required: the server's "auto" probe only binds UDP if it
+# detects frames *before* the bridge starts sending. The bridge IS the ESP32
+# source (synthetic, but same wire format), so pin it explicitly. Otherwise
+# the server falls back to `simulate`, never binds UDP, and you get
+# ECONNREFUSED on the bridge + a UI showing simulated (fake) motion.
 start: build build-server
+	@$(MAKE) -s stop >/dev/null 2>&1 || true
 	@echo "[start] sensing-server + macos-rssi-bridge → $(SENSING_UI_URL)"
 	@trap 'echo; echo "[start] stopping…"; kill $$SERVER_PID $$BRIDGE_PID 2>/dev/null; wait 2>/dev/null; exit 0' INT TERM; \
-	  ( cd $(SENSING_SERVER_DIR) && ./$(SENSING_SERVER_BIN) --udp-port $(TARGET_PORT) ) & \
+	  ( cd $(SENSING_SERVER_DIR) && ./$(SENSING_SERVER_BIN) \
+	      --source esp32 --udp-port $(TARGET_PORT) ) & \
 	  SERVER_PID=$$!; \
-	  echo "[start] sensing-server pid=$$SERVER_PID — waiting 3s for UDP bind…"; \
+	  echo "[start] sensing-server pid=$$SERVER_PID (source=esp32) — waiting 3s for UDP bind…"; \
 	  sleep 3; \
 	  ./$(BRIDGE) --helper ./$(HELPER) --target-host $(TARGET_HOST) \
 	    --target-port $(TARGET_PORT) --interval $(INTERVAL) & \
