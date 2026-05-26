@@ -73,12 +73,12 @@ start: build build-server
 	  echo "[start] sensing-server pid=$$SERVER_PID (source=esp32) — waiting 3s for UDP bind…"; \
 	  sleep 3; \
 	  ./$(BRIDGE) --helper ./$(HELPER) --target-host $(TARGET_HOST) \
-	    --target-port $(TARGET_PORT) --interval $(INTERVAL) & \
+	    --target-port $(TARGET_PORT) --interval $(INTERVAL) --verbose & \
 	  BRIDGE_PID=$$!; \
 	  echo "[start] bridge pid=$$BRIDGE_PID — dashboard: $(BRIDGE_DASHBOARD) — waiting 2s for /aps…"; \
 	  sleep 2; \
 	  python3 presence_to_pose.py --bridge-url http://127.0.0.1:9090/aps \
-	    --server-url $(SENSING_UI_URL)/api/v1/pose/external & \
+	    --server-url $(SENSING_UI_URL)/api/v1/pose/external --verbose & \
 	  PRESENCE_PID=$$!; \
 	  echo "[start] presence injector pid=$$PRESENCE_PID — feeding /api/v1/pose/external @ 10 Hz"; \
 	  ( sleep 2; open $(SENSING_UI_URL) 2>/dev/null; open $(BRIDGE_DASHBOARD) 2>/dev/null ) & \

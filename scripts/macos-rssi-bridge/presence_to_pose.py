@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """
-presence_to_pose.py — RSSI tomography centroid → sensing-server pose injector.
+presence_to_pose.py — RSSI motion-energy → sensing-server presence injector.
 
-Polls the macos-rssi-bridge HTTP endpoint at /aps for live per-AP state,
-computes the multistatic tomography centroid the same way dashboard.html
-does (Gaussian perturbation strips along each AP↔laptop link, weighted by
-per-AP RSSI variance), and POSTs the result as a single PersonDetection
-to the sensing-server's /api/v1/pose/external endpoint.
-
-The sensing-server bypasses its heuristic skeleton when external pose is
-fresh (within EXTERNAL_POSE_TTL = 500ms), so the 3D Observatory renders
-one honest figure standing where the heatmap localizes you instead of
-five hallucinated skeletons.
+Polls the macos-rssi-bridge HTTP endpoint at /aps for live per-AP RSSI
+variance, and POSTs a single PersonDetection to the sensing-server's
+/api/v1/pose/external endpoint so the 3D Observatory renders one honest
+figure (instead of the heuristic five-skeleton fallback).
 
 Honest about what's real:
-  - Position: derived from real RSSI variance + Fresnel-zone geometry.
-  - Pose: STATIC standing skeleton (no joint estimation from RSSI; that
-    needs CSI hardware).
-  - Count: capped at 1 (single sensor, single observed environment).
+  - Position: PINNED at the laptop (origin). With one macOS RSSI receiver
+    and unknown AP locations, RSSI variance can only detect that *something*
+    moved in the environment — it cannot tell us where. Earlier versions
+    fabricated a centroid from hash-positioned APs; that produced wildly
+    wrong jumps and is gone.
+  - Confidence + motion: derived from total per-AP RSSI variance. Higher
+    variance → higher confidence and a more animated standing pose.
+  - Pose: STATIC standing skeleton. No joint estimation from RSSI; that
+    needs CSI hardware.
+  - Count: capped at 1.
 """
 from __future__ import annotations
 
@@ -29,35 +29,26 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-# Coordinate frame: observatory uses meters with the laptop near origin.
-# Standing keypoints in poseStanding() (figure-pool's pose-system.js) sit
-# at y ≈ 0..1.72; we put the figure at the room's floor level (y=0) and
-# let the pose-system raise the joints. Width of the playable area is
-# roughly ±4m.
-ROOM_HALF_X = 3.5
-ROOM_HALF_Z = 3.5
 
-# 17-point COCO standing-pose offsets, anchored at the figure's foot
-# centroid (px, 0, pz). We don't actually need to send these — the
-# observatory regenerates keypoints from `pose='standing'` + `position`.
-# We include a sane skeleton anyway so the basic /ui/index.html viewer
-# also renders something coherent.
 def standing_keypoints(
     px: float, pz: float, conf: float, motion: float, t: float
 ) -> list[dict[str, Any]]:
-    # In meters above floor. Mirrors PoseSystem.poseStanding() in
-    # ui/observatory/js/pose-system.js so both viewers agree.
-    #
-    # `motion` ∈ [0..1] modulates a subtle weight-shift sway so the figure
-    # looks alive when there's real RSSI motion. We're explicit that this
-    # is *not* derived pose — it's animation seeded by total motion energy
-    # so a frozen-looking figure doesn't suggest a frozen sensor.
-    sway_x = math.sin(t * 1.4) * 0.06 * motion
-    sway_z = math.cos(t * 0.9) * 0.04 * motion
-    head_turn = math.sin(t * 0.5) * 0.04 * (0.3 + motion)
-    shoulder_dip = math.sin(t * 1.4) * 0.025 * motion
-    knee_bend_l = max(0.0, math.sin(t * 1.4)) * 0.05 * motion
-    knee_bend_r = max(0.0, -math.sin(t * 1.4)) * 0.05 * motion
+    """17-point COCO standing skeleton anchored at (px, 0, pz).
+
+    Mirrors PoseSystem.poseStanding() in ui/observatory/js/pose-system.js
+    so the basic /ui/index.html viewer also renders something coherent.
+    `motion` ∈ [0..1] modulates a weight-shift sway so the figure looks
+    alive when there's real RSSI activity — explicitly *not* derived
+    pose, just animation seeded by motion energy so a frozen-looking
+    figure doesn't suggest a frozen sensor. Amplitudes are tuned for
+    visibility at the Observatory's orbit camera distance (~5–10 m).
+    """
+    sway_x = math.sin(t * 1.4) * 0.20 * motion
+    sway_z = math.cos(t * 0.9) * 0.14 * motion
+    head_turn = math.sin(t * 0.5) * 0.12 * (0.3 + motion)
+    shoulder_dip = math.sin(t * 1.4) * 0.08 * motion
+    knee_bend_l = max(0.0, math.sin(t * 1.4)) * 0.18 * motion
+    knee_bend_r = max(0.0, -math.sin(t * 1.4)) * 0.18 * motion
 
     layout = [
         ("nose",            (sway_x + head_turn, 1.72,  sway_z)),
@@ -84,52 +75,9 @@ def standing_keypoints(
     ]
 
 
-def stable_hash_angle(s: str) -> float:
-    """FNV-1a → angle in [0, 2π). Same as dashboard.html so AP layouts agree."""
-    h = 0x811c9dc5
-    for c in s.encode("utf-8"):
-        h ^= c
-        h = (h * 0x01000193) & 0xFFFFFFFF
-    return (h / 0x100000000) * math.tau
-
-
-def rssi_to_radius(rssi: float, max_r: float) -> float:
-    """Linear in dB. -30 dBm → close, -100 dBm → max_r away."""
-    t = max(0.0, min(1.0, (-rssi - 30.0) / 70.0))
-    return 0.4 + t * (max_r - 0.4)  # 0.4m floor so the figure isn't on top of the laptop
-
-
-def compute_centroid(aps: list[dict[str, Any]]) -> tuple[float, float, float]:
-    """Variance-weighted centroid in (x_m, z_m) plus a 'localization weight'."""
-    if not aps:
-        return 0.0, 0.0, 0.0
-    # 1. Place each AP in 2D using the same scheme as dashboard.html.
-    placed = []
-    for ap in aps:
-        angle = stable_hash_angle(ap["id"])
-        radius = rssi_to_radius(ap["rssi_dbm"], min(ROOM_HALF_X, ROOM_HALF_Z))
-        ax = math.cos(angle) * radius
-        az = math.sin(angle) * radius
-        placed.append((ax, az, ap.get("variance", 0.0)))
-
-    # 2. Centroid: along each AP↔laptop line, the most informative point is
-    # the midpoint (Fresnel zone widest there). Weight each midpoint by
-    # variance.
-    sum_w = 0.0
-    sum_x = 0.0
-    sum_z = 0.0
-    for ax, az, var in placed:
-        if var <= 0.01:
-            continue
-        # Midpoint between (0,0) (laptop) and (ax, az) (AP).
-        mx, mz = ax * 0.5, az * 0.5
-        sum_w += var
-        sum_x += var * mx
-        sum_z += var * mz
-    if sum_w < 1e-6:
-        # No motion — figure parks at the laptop.
-        return 0.0, 0.0, 0.0
-    return sum_x / sum_w, sum_z / sum_w, sum_w
+def total_variance(aps: list[dict[str, Any]]) -> float:
+    """Sum of per-AP RSSI variance — the only honest motion signal we have."""
+    return sum(max(0.0, ap.get("variance", 0.0)) for ap in aps)
 
 
 def main() -> int:
@@ -140,15 +88,10 @@ def main() -> int:
                     help="sensing-server pose ingestion endpoint")
     ap.add_argument("--rate-hz", type=float, default=10.0,
                     help="how often to POST a pose (Hz)")
-    ap.add_argument("--smooth", type=float, default=0.6,
-                    help="EMA factor for centroid smoothing (0..1, higher = snappier)")
-    ap.add_argument("--amplify", type=float, default=4.0,
-                    help="multiplier on the centroid coordinates so small RSSI shifts produce visible figure motion in the room")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
 
     period = 1.0 / args.rate_hz
-    sx, sz = 0.0, 0.0
     last_log = 0.0
     n_posted = 0
     n_fail = 0
@@ -169,38 +112,24 @@ def main() -> int:
             continue
 
         aps = snap.get("aps", [])
-        cx, cz, weight = compute_centroid(aps)
-
-        # Amplify the centroid so small RSSI shifts (a few cm of raw
-        # variance-weighted midpoint motion) produce visible motion in
-        # the room view. Without amplification the centroid only spans
-        # ~0.5m which is invisible at 7m room scale.
-        cx *= args.amplify
-        cz *= args.amplify
-
-        # Clamp to room half-extents so the figure never walks through walls.
-        cx = max(-ROOM_HALF_X + 0.5, min(ROOM_HALF_X - 0.5, cx))
-        cz = max(-ROOM_HALF_Z + 0.5, min(ROOM_HALF_Z - 0.5, cz))
-
-        # EMA smoothing — sensing-server runs at 10 Hz tick, so we want
-        # the figure to glide rather than jitter on every micro-fluctuation.
-        sx = sx * (1 - args.smooth) + cx * args.smooth
-        sz = sz * (1 - args.smooth) + cz * args.smooth
+        weight = total_variance(aps)
 
         # Confidence ~ how much variance is present. Caps at ~1.0 once
         # there's a few dB² of cumulative motion energy across APs.
         conf = max(0.3, min(1.0, 0.3 + weight / 10.0))
-
-        # Normalize motion intensity from cumulative variance.
         motion = max(0.0, min(1.0, weight / 5.0))
         t = time.time()
+
+        # Position is pinned at the laptop. RSSI variance from one receiver
+        # cannot localize — it can only flag that something moved.
+        px, pz = 0.0, 0.0
 
         person = {
             "id": 1,
             "confidence": conf,
-            "keypoints": standing_keypoints(sx, sz, conf, motion, t),
-            "bbox": {"x": sx - 0.4, "y": 0.0, "width": 0.8, "height": 1.85},
-            "zone": "rssi_localized",
+            "keypoints": standing_keypoints(px, pz, conf, motion, t),
+            "bbox": {"x": px - 0.4, "y": 0.0, "width": 0.8, "height": 1.85},
+            "zone": "rssi_presence",
         }
         body = json.dumps([person]).encode("utf-8")
 
@@ -222,8 +151,8 @@ def main() -> int:
         now = time.time()
         if args.verbose and now - last_log > 1.0:
             print(
-                f"[presence] aps={len(aps):>2} centroid=({sx:+.2f}, {sz:+.2f})m "
-                f"weight={weight:>5.2f} conf={conf:.2f} posted={n_posted} fail={n_fail}",
+                f"[presence] aps={len(aps):>2} weight={weight:>5.2f} "
+                f"conf={conf:.2f} motion={motion:.2f} posted={n_posted} fail={n_fail}",
                 flush=True,
             )
             last_log = now
