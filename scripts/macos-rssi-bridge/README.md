@@ -39,19 +39,30 @@ Toolchain: `swiftc` 6.0+ and Cargo 1.80+. Tested on macOS 26 (Tahoe) arm64.
 
 ## Run
 
-One command — builds both, launches the sensing-server and the bridge,
+One command — builds everything, launches the full three-process pipeline,
 opens both UIs, and cleans up on Ctrl-C:
 
 ```bash
-make start           # → sensing-server (:8080) + bridge (:9090/dashboard)
-make stop            # kill any leftover sensing-server / bridge process
+make start           # → sensing-server (:8080) + bridge (:9090/dashboard) + presence injector
+make stop            # kill any leftover process from the trio
 ```
 
-Or run them manually in two terminals if you want to see logs side-by-side.
-In one terminal, the sensing-server (provides UI + UDP receiver):
+The pipeline is three processes:
+
+1. **sensing-server** — UDP receiver, motion stats, WebSocket stream, UI
+   (pinned to `--source esp32` so it binds UDP and consumes the bridge's
+   frames instead of falling back to its simulation generator).
+2. **macos-rssi-bridge** — Swift scan → Rust UDP emitter → ESP32 frame format.
+3. **presence_to_pose.py** — polls the bridge's `/aps` endpoint and POSTs a
+   single honest pose to `/api/v1/pose/external` so the Observatory renders
+   one figure modulated by RSSI variance instead of the placeholder
+   five-skeleton fallback.
+
+Or run each manually if you want logs side-by-side. In one terminal, the
+sensing-server (UI + UDP receiver):
 
 ```bash
-cd ../../v2 && cargo run --release -p wifi-densepose-sensing-server --no-default-features
+cd ../../v2 && cargo run --release -p wifi-densepose-sensing-server --no-default-features -- --source esp32
 # UI: http://localhost:8080
 # WS: ws://localhost:8765/ws/sensing
 ```
@@ -61,6 +72,12 @@ In another, the bridge:
 ```bash
 make run             # default: target 127.0.0.1:5005, 1.5 s scan interval
 # or: make run-verbose   for per-frame stats on stderr
+```
+
+In a third, the presence injector (only needed for the 3D Observatory pose):
+
+```bash
+make run-presence    # polls :9090/aps, posts a pose to :8080/api/v1/pose/external
 ```
 
 Open http://localhost:8080 and walk around. Motion should register within a
