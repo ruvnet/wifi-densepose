@@ -1,4 +1,4 @@
-.PHONY: all build clean test scan run run-verbose listen install-helper help
+.PHONY: all build build-server clean start stop test scan run run-verbose listen install-helper dashboard help
 
 HELPER := mac_wifi
 BRIDGE := target/release/macos-rssi-bridge
@@ -8,12 +8,22 @@ TARGET_HOST ?= 127.0.0.1
 TARGET_PORT ?= 5005
 INTERVAL    ?= 1.5
 
+# Sensing-server (built from the v2 workspace and run from v2/ so it can
+# resolve its default --ui-path of ../ui).
+SENSING_SERVER_DIR := ../../v2
+SENSING_SERVER_BIN := target/release/sensing-server
+SENSING_UI_URL     := http://localhost:8080
+BRIDGE_DASHBOARD   := http://localhost:9090/dashboard
+
 all: build
 
 help:
 	@echo "macos-rssi-bridge — Mac WiFi card → RuView sensing-server bridge"
 	@echo ""
+	@echo "  make start         build + run everything: sensing-server + bridge + open UIs"
+	@echo "  make stop          kill any running sensing-server / bridge processes"
 	@echo "  make build         compile mac_wifi (Swift) + macos-rssi-bridge (Rust)"
+	@echo "  make build-server  compile the v2 sensing-server (release)"
 	@echo "  make scan          run a single multi-BSSID scan, print JSON"
 	@echo "  make run           start the bridge → udp://$(TARGET_HOST):$(TARGET_PORT) + http://localhost:9090"
 	@echo "  make run-verbose   same, with per-frame stats on stderr"
@@ -31,6 +41,32 @@ $(HELPER): mac_wifi.swift
 
 $(BRIDGE): src/main.rs Cargo.toml
 	cargo build --release
+
+build-server:
+	cd $(SENSING_SERVER_DIR) && cargo build --release -p wifi-densepose-sensing-server --no-default-features
+
+# One-shot: builds everything, starts sensing-server + bridge under a single
+# process group, opens both UIs, waits for Ctrl-C, and kills both children
+# cleanly. The sensing-server is run with cwd=v2/ so its default --ui-path of
+# ../ui resolves; the bridge stays in this directory so ./mac_wifi works.
+start: build build-server
+	@echo "[start] sensing-server + macos-rssi-bridge → $(SENSING_UI_URL)"
+	@trap 'echo; echo "[start] stopping…"; kill $$SERVER_PID $$BRIDGE_PID 2>/dev/null; wait 2>/dev/null; exit 0' INT TERM; \
+	  ( cd $(SENSING_SERVER_DIR) && ./$(SENSING_SERVER_BIN) --udp-port $(TARGET_PORT) ) & \
+	  SERVER_PID=$$!; \
+	  echo "[start] sensing-server pid=$$SERVER_PID — waiting 3s for UDP bind…"; \
+	  sleep 3; \
+	  ./$(BRIDGE) --helper ./$(HELPER) --target-host $(TARGET_HOST) \
+	    --target-port $(TARGET_PORT) --interval $(INTERVAL) & \
+	  BRIDGE_PID=$$!; \
+	  echo "[start] bridge pid=$$BRIDGE_PID — dashboard: $(BRIDGE_DASHBOARD)"; \
+	  ( sleep 2; open $(SENSING_UI_URL) 2>/dev/null; open $(BRIDGE_DASHBOARD) 2>/dev/null ) & \
+	  echo "[start] press Ctrl-C to stop both"; \
+	  wait
+
+stop:
+	-@pkill -f "$(SENSING_SERVER_BIN)" 2>/dev/null && echo "[stop] sensing-server killed" || echo "[stop] no sensing-server"
+	-@pkill -f "$(BRIDGE)"             2>/dev/null && echo "[stop] bridge killed"          || echo "[stop] no bridge"
 
 test:
 	cargo test --release

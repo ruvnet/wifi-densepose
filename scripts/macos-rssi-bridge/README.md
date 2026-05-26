@@ -39,6 +39,15 @@ Toolchain: `swiftc` 6.0+ and Cargo 1.80+. Tested on macOS 26 (Tahoe) arm64.
 
 ## Run
 
+One command — builds both, launches the sensing-server and the bridge,
+opens both UIs, and cleans up on Ctrl-C:
+
+```bash
+make start           # → sensing-server (:8080) + bridge (:9090/dashboard)
+make stop            # kill any leftover sensing-server / bridge process
+```
+
+Or run them manually in two terminals if you want to see logs side-by-side.
 In one terminal, the sensing-server (provides UI + UDP receiver):
 
 ```bash
