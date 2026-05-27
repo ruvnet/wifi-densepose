@@ -97,7 +97,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Signal processing
 ndarray = { version = "0.17", features = ["serde"] }
-ndarray-linalg = { version = "0.18", features = ["openblas-static"] }
 rustfft = "6.1"
 num-complex = "0.4"
 num-traits = "0.2"

@@ -15,7 +15,7 @@ readme = "README.md"
 default = ["eigenvalue"]
 ## Enable eigenvalue-based person counting (requires BLAS via ndarray-linalg).
 ## Disable with --no-default-features to use the diagonal fallback instead.
-eigenvalue = ["ndarray-linalg"]
+eigenvalue = ["dep:ndarray-linalg"]
 
 [dependencies]
 # Core utilities
@@ -26,7 +26,7 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Signal processing
 ndarray = { workspace = true }
-ndarray-linalg = { workspace = true, optional = true }
+ndarray-linalg = { version = "0.18", optional = true, default-features = false }
 rustfft.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true
@@ -59,3 +59,9 @@ harness = false
 [[bench]]
 name = "aether_prefilter_bench"
 harness = false
+
+[target.'cfg(windows)'.dependencies]
+ndarray-linalg = { version = "0.18", features = ["openblas-system"] }
+
+[target.'cfg(not(windows))'.dependencies]
+ndarray-linalg = { version = "0.18", features = ["openblas-static"] }
