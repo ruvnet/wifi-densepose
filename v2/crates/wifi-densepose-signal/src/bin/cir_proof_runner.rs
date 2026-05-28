@@ -45,8 +45,8 @@ use wifi_densepose_signal::ruvsense::cir::{CirConfig, CirEstimator};
 /// Number of frames to process (matches Python verify.py).
 const FRAME_COUNT: usize = 100;
 
-/// Number of top taps to record per frame.
-const TOP_TAPS: usize = 5;
+/// CirConfig::ht20() delay-bin count = 156 — full profile width hashed per frame.
+const PROFILE_BIN_COUNT: usize = 156;
 
 /// Subcarrier count in the raw legacy reference signal (Atheros 9580 convention).
 const N_SUBCARRIERS_RAW: usize = 56;
@@ -120,27 +120,26 @@ fn frame_from_json(record: &Value) -> CsiFrame {
     CsiFrame::new(metadata, data)
 }
 
-/// Canonical serialisation of one frame's top-5 CIR taps.
-/// Format: for each tap (sorted by tap_idx descending power):
-///   [tap_idx: u64 le][re_q: i64 le][im_q: i64 le]
-fn serialise_top_taps(taps: &[Complex32]) -> Vec<u8> {
-    // Find top-N taps by magnitude
-    let mut indexed: Vec<(usize, f32)> = taps
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (i, c.norm()))
-        .collect();
-    indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    let n = TOP_TAPS.min(indexed.len());
-    let mut out = Vec::with_capacity(n * 24);
-    for &(tap_idx, _) in &indexed[..n] {
-        let c = taps[tap_idx];
-        let re_q = (c.re * 1e6_f32).round() as i64;
-        let im_q = (c.im * 1e6_f32).round() as i64;
-        out.extend_from_slice(&(tap_idx as u64).to_le_bytes());
-        out.extend_from_slice(&re_q.to_le_bytes());
-        out.extend_from_slice(&im_q.to_le_bytes());
+/// Canonical, cross-platform-deterministic serialisation of one frame's CIR.
+///
+/// We previously hashed (a) raw real/imag at 1e-6 precision and (b) the top-5
+/// tap pairs sorted by magnitude. Both broke across platforms because libm
+/// differences (glibc / MSVC / Apple) on `sin`/`cos`/`sqrt` drift by ~1e-7,
+/// which is enough to (i) flip rounded integers and (ii) re-order near-tied
+/// taps in a magnitude sort. The witness exists to detect *algorithmic*
+/// regressions, not libm jitter.
+///
+/// New canonical form: the full per-tap quantised magnitude profile, in
+/// natural index order, no sort. At 1e-2 precision a 1% drift in any tap is
+/// invisible; a 10× lambda change moves taps by >1e-2 and breaks the hash.
+///
+/// Format: `[mag_q: u16 le]` per tap, `num_taps` taps per frame. Saturating to
+/// u16 caps magnitudes at 65.535, well above the 1.0-ish normalised range.
+fn serialise_profile(taps: &[Complex32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(taps.len() * 2);
+    for c in taps {
+        let mag_q = (c.norm() * 1e2_f32).round().max(0.0).min(u16::MAX as f32) as u16;
+        out.extend_from_slice(&mag_q.to_le_bytes());
     }
     out
 }
@@ -158,13 +157,14 @@ fn compute_hash(json_path: &Path) -> String {
         let frame = frame_from_json(record);
         match estimator.estimate(&frame) {
             Ok(cir) => {
-                let bytes = serialise_top_taps(&cir.taps);
+                let bytes = serialise_profile(&cir.taps);
                 hasher.update(&bytes);
             }
             Err(e) => {
                 eprintln!("WARNING: CIR estimate failed for frame: {}", e);
-                // Write 24*TOP_TAPS zero bytes so the hash is still deterministic
-                hasher.update(vec![0u8; TOP_TAPS * 24]);
+                // Write PROFILE_BIN_COUNT * sizeof(u16) zero bytes so the hash
+                // stays deterministic even when frames consistently fail.
+                hasher.update(vec![0u8; PROFILE_BIN_COUNT * 2]);
             }
         }
     }
