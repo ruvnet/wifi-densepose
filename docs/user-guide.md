@@ -313,6 +313,12 @@ Uses `netsh wlan` to capture RSSI from nearby access points. No special hardware
 ./target/release/sensing-server --source wifi --http-port 3000 --ws-port 3001 --tick-ms 500
 
 # Docker (requires --network host on Windows)
+# Note: On Windows, Docker does not pass CLI args directly.
+# Use either:
+#   docker run --network host ruvnet/wifi-densepose:latest -- --source wifi --tick-ms 500
+# Or set the entrypoint:
+#   docker run --network host --entrypoint /app/target/release/sensing-server ruvnet/wifi-densepose:latest --source wifi --tick-ms 500
+# See https://github.com/ruvnet/RuView/issues/676 for troubleshooting.
 docker run --network host ruvnet/wifi-densepose:latest --source wifi --tick-ms 500
 ```
 
