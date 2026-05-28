@@ -8,7 +8,7 @@ Dual codebase: Python v1 (`v1/`) and Rust port (`v2/`).
 | Crate | Description |
 |-------|-------------|
 | `wifi-densepose-core` | Core types, traits, error types, CSI frame primitives |
-| `wifi-densepose-signal` | SOTA signal processing + RuvSense multistatic sensing (14 modules) |
+| `wifi-densepose-signal` | SOTA signal processing + RuvSense multistatic sensing (15 modules) |
 | `wifi-densepose-nn` | Neural network inference (ONNX, PyTorch, Candle backends) |
 | `wifi-densepose-train` | Training pipeline with ruvector integration + ruview_metrics |
 | `wifi-densepose-mat` | Mass Casualty Assessment Tool — disaster survivor detection |
@@ -38,6 +38,7 @@ Dual codebase: Python v1 (`v1/`) and Rust port (`v2/`).
 | `cross_room.rs` | Environment fingerprinting, transition graph |
 | `gesture.rs` | DTW template matching gesture classifier |
 | `adversarial.rs` | Physically impossible signal detection, multi-link consistency |
+| `cir.rs` | ADR-134 CSI→CIR via ISTA L1 sparse recovery (NeumannSolver warm-start) |
 
 ### Cross-Viewpoint Fusion (`ruvector/src/viewpoint/`)
 | Module | Purpose |

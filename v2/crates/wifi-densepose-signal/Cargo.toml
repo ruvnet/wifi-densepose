@@ -16,6 +16,9 @@ default = ["eigenvalue"]
 ## Enable eigenvalue-based person counting (requires BLAS via ndarray-linalg).
 ## Disable with --no-default-features to use the diagonal fallback instead.
 eigenvalue = ["ndarray-linalg"]
+## ADR-134: CIR sparse recovery module (default-on; zero-cost if never instantiated).
+## ruvector-solver is already a mandatory dep so no additional dep needed here.
+cir = []
 
 [dependencies]
 # Core utilities
@@ -59,3 +62,20 @@ harness = false
 [[bench]]
 name = "aether_prefilter_bench"
 harness = false
+
+## ADR-134: CIR estimator throughput benchmarks
+[[bench]]
+name = "cir_bench"
+harness = false
+required-features = ["cir"]
+
+# ADR-134: CIR deterministic proof runner binary.
+[[bin]]
+name = "cir_proof_runner"
+path = "src/bin/cir_proof_runner.rs"
+
+# sha2 added for cir_proof_runner (ADR-134). In workspace root since v2/Cargo.toml:145.
+# Appended here to avoid touching existing [dependencies] entries owned by the
+# implementation agent; this addition is purely additive.
+[dependencies.sha2]
+workspace = true

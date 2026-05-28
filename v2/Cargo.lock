@@ -3429,6 +3429,7 @@ version = "0.1.0-alpha.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "criterion",
  "dashmap",
  "futures",
  "once_cell",
@@ -10818,6 +10819,7 @@ dependencies = [
  "ruvector-solver",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
  "wifi-densepose-core",
  "wifi-densepose-ruvector",

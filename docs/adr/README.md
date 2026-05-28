@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-This folder contains 44 Architecture Decision Records (ADRs) that document every significant technical choice in the RuView / WiFi-DensePose project.
+This folder contains 45 Architecture Decision Records (ADRs) that document every significant technical choice in the RuView / WiFi-DensePose project.
 
 ## Why ADRs?
 
@@ -63,6 +63,7 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-033](ADR-033-crv-signal-line-sensing-integration.md) | CRV Signal Line Sensing Integration | Proposed |
 | [ADR-037](ADR-037-multi-person-pose-detection.md) | Multi-Person Pose Detection from Single ESP32 | Proposed |
 | [ADR-042](ADR-042-coherent-human-channel-imaging.md) | Coherent Human Channel Imaging (beyond CSI) | Proposed |
+| [ADR-134](ADR-134-csi-to-cir-time-domain-multipath.md) | First-Class Channel Impulse Response (CIR) Support | Proposed |
 
 ### Machine learning and training
 

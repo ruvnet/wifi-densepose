@@ -123,6 +123,25 @@ jobs:
       working-directory: v2
       run: cargo test --workspace --no-default-features
 
+    # ADR-134 CIR tests are behind the `cir` feature so the bench dependency
+    # (Criterion) only pulls when actually exercised. Run them as a separate
+    # step so a CIR-only regression is unambiguously attributable.
+    - name: Run ADR-134 CIR tests
+      working-directory: v2
+      run: cargo test -p wifi-densepose-signal --no-default-features --features cir --tests
+
+    # ADR-134 + ADR-028 witness guard. The CIR proof runner produces a
+    # bit-deterministic SHA-256 over CirEstimator output on the synthetic
+    # reference signal. Any algorithmic regression — changes to ISTA
+    # convergence, sensing matrix construction, soft-thresholding, or input
+    # padding — breaks the hash and fails the build. To regenerate after an
+    # *intentional* change:
+    #   cd v2 && cargo run -p wifi-densepose-signal --bin cir_proof_runner \
+    #     --release --no-default-features -- --generate-hash \
+    #     > ../archive/v1/data/proof/expected_cir_features.sha256
+    - name: ADR-134 CIR witness proof (determinism guard)
+      run: bash scripts/verify-cir-proof.sh
+
   # Unit and Integration Tests
   # Python pytest matrix — runs against the archived v1 Python tree.
   # `continue-on-error: true` for the same reason as code-quality above:

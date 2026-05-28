@@ -63,6 +63,10 @@ pub use phase_sanitizer::{
     PhaseSanitizationError, PhaseSanitizer, PhaseSanitizerConfig, UnwrappingMethod,
 };
 
+// ADR-134: CIR top-level re-exports
+pub use ruvsense::cir;
+pub use ruvsense::cir::{Cir, CirConfig, CirError, CirEstimator};
+
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

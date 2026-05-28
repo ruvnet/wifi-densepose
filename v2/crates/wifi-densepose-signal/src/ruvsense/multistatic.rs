@@ -13,11 +13,22 @@
 //! 3. Multi-person separation via `ruvector-mincut::DynamicMinCut` builds
 //!    a cross-link correlation graph and partitions into K person clusters.
 //!
+//! # CIR Gate (ADR-134)
+//!
+//! When `MultistaticConfig::use_cir_gate` is true and a shared `CirEstimator`
+//! is attached, the fused coherence score is augmented with the dominant-tap
+//! ratio from the CIR of the first active link.  This isolates body-motion
+//! signatures to specific delay bins rather than across all subcarriers.
+//! Set `use_cir_gate = false` for the legacy CSI-domain-only path (A/B test).
+//!
 //! # RuVector Integration
 //!
 //! - `ruvector-attn-mincut` for cross-node spectrogram attention gating
 //! - `ruvector-mincut` for person separation (DynamicMinCut)
 
+use std::sync::Arc;
+
+use super::cir::{CirConfig, CirEstimator};
 use super::multiband::MultiBandCsiFrame;
 
 /// Errors from multistatic fusion.
@@ -83,6 +94,9 @@ pub struct MultistaticConfig {
     pub attention_temperature: f32,
     /// Whether to enable person separation via min-cut.
     pub enable_person_separation: bool,
+    /// Enable the CIR-domain coherence gate (ADR-134).
+    /// Set `false` to fall back to the legacy CSI-domain-only path (A/B test).
+    pub use_cir_gate: bool,
 }
 
 impl Default for MultistaticConfig {
@@ -92,6 +106,7 @@ impl Default for MultistaticConfig {
             min_nodes: 2,
             attention_temperature: 1.0,
             enable_person_separation: true,
+            use_cir_gate: true,
         }
     }
 }
@@ -100,11 +115,30 @@ impl Default for MultistaticConfig {
 ///
 /// Collects per-node multi-band frames and produces a single fused
 /// sensing frame per TDMA cycle.
-#[derive(Debug)]
+///
+/// # CIR gate (ADR-134)
+///
+/// A single `Arc<CirEstimator>` is shared across all links.  When
+/// `config.use_cir_gate` is true and a `CirEstimator` is attached, the fused
+/// `cross_node_coherence` is blended with the dominant-tap ratio from the
+/// first available CsiFrame's CIR estimate.  Set `use_cir_gate = false` to
+/// disable the CIR path and keep the legacy frequency-domain coherence only.
 pub struct MultistaticFuser {
     config: MultistaticConfig,
     /// Node positions in 3D space (meters).
     node_positions: Vec<[f32; 3]>,
+    /// Optional shared CIR estimator (ADR-134).  `None` = legacy path only.
+    cir_estimator: Option<Arc<CirEstimator>>,
+}
+
+impl std::fmt::Debug for MultistaticFuser {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MultistaticFuser")
+            .field("config", &self.config)
+            .field("node_positions", &self.node_positions)
+            .field("cir_estimator", &self.cir_estimator.is_some())
+            .finish()
+    }
 }
 
 impl MultistaticFuser {
@@ -113,6 +147,7 @@ impl MultistaticFuser {
         Self {
             config: MultistaticConfig::default(),
             node_positions: Vec::new(),
+            cir_estimator: None,
         }
     }
 
@@ -121,7 +156,26 @@ impl MultistaticFuser {
         Self {
             config,
             node_positions: Vec::new(),
+            cir_estimator: None,
         }
+    }
+
+    /// Attach a shared `CirEstimator` for CIR-domain coherence gating (ADR-134).
+    ///
+    /// One estimator is shared across all links.  Build it via
+    /// `CirEstimator::new(CirConfig::ht20())` for ESP32-S3 HT20 deployments.
+    /// Pass `None` to detach and fall back to the legacy path.
+    pub fn set_cir_estimator(&mut self, estimator: Option<Arc<CirEstimator>>) {
+        self.cir_estimator = estimator;
+    }
+
+    /// Create a fuser with a pre-built `CirEstimator` for HT20 (ADR-134 default).
+    ///
+    /// Equivalent to `new()` followed by `set_cir_estimator(Some(Arc::new(CirEstimator::new(CirConfig::ht20()))))`.
+    pub fn with_cir_ht20() -> Self {
+        let mut fuser = Self::new();
+        fuser.cir_estimator = Some(Arc::new(CirEstimator::new(CirConfig::ht20())));
+        fuser
     }
 
     /// Set node positions for geometric diversity computations.
@@ -188,13 +242,18 @@ impl MultistaticFuser {
         }
 
         let n_nodes = amplitudes.len();
-        let (fused_amp, fused_ph, coherence) = if n_nodes == 1 {
+        let (fused_amp, fused_ph, freq_coherence) = if n_nodes == 1 {
             // Single-node fallback
             (amplitudes[0].to_vec(), phases[0].to_vec(), 1.0_f32)
         } else {
             // Multi-node attention-weighted fusion
             attention_weighted_fusion(&amplitudes, &phases, self.config.attention_temperature)
         };
+
+        // ADR-134 CIR gate: blend freq-domain coherence with CIR dominant-tap
+        // ratio from the first available frame.  When use_cir_gate = false,
+        // the legacy freq-domain coherence is used unchanged (A/B switch).
+        let coherence = self.cir_gate_coherence(freq_coherence, node_frames);
 
         // Derive timestamp from median
         let mut timestamps: Vec<u64> = node_frames.iter().map(|f| f.timestamp_us).collect();
@@ -221,12 +280,81 @@ impl MultistaticFuser {
             cross_node_coherence: coherence,
         })
     }
+
+    /// Apply the CIR-domain coherence gate (ADR-134).
+    ///
+    /// When `use_cir_gate` is enabled and a `CirEstimator` is present, runs
+    /// the estimator on the first node's first channel frame and blends the
+    /// dominant-tap ratio into the frequency-domain coherence score.
+    ///
+    /// On `CirError::UnsanitizedPhase` the CIR result is dropped and the
+    /// frequency-domain coherence is returned unchanged (graceful fallback).
+    fn cir_gate_coherence(
+        &self,
+        freq_coherence: f32,
+        node_frames: &[MultiBandCsiFrame],
+    ) -> f32 {
+        if !self.config.use_cir_gate {
+            return freq_coherence;
+        }
+        let Some(ref estimator) = self.cir_estimator else {
+            return freq_coherence;
+        };
+
+        // Build a minimal CsiFrame from the first node's first channel frame.
+        // We use the amplitude+phase vectors to reconstruct complex values.
+        let Some(first_frame) = node_frames.first() else {
+            return freq_coherence;
+        };
+        let Some(cf) = first_frame.channel_frames.first() else {
+            return freq_coherence;
+        };
+
+        // Reconstruct Complex64 data from amplitude+phase for the CIR estimator.
+        let csi_frame = build_csi_frame_from_channel(cf);
+        match estimator.estimate(&csi_frame) {
+            Ok(cir) => {
+                // Blend: coherence = 0.7 · freq + 0.3 · dominant_tap_ratio.
+                // High dominant-tap ratio ≡ strong LOS → supports coherent gate.
+                0.7 * freq_coherence + 0.3 * cir.dominant_tap_ratio
+            }
+            Err(super::cir::CirError::UnsanitizedPhase { .. }) => {
+                // Frame not sanitized — fall back to freq-domain coherence.
+                freq_coherence
+            }
+            Err(_) => freq_coherence,
+        }
+    }
 }
 
 impl Default for MultistaticFuser {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Reconstruct a minimal `CsiFrame` from a `CanonicalCsiFrame` for CIR estimation.
+///
+/// Amplitude and phase are re-combined into `Complex64` values so that
+/// `CirEstimator::estimate()` can extract the active-subcarrier vector.
+fn build_csi_frame_from_channel(
+    cf: &crate::hardware_norm::CanonicalCsiFrame,
+) -> wifi_densepose_core::types::CsiFrame {
+    use ndarray::Array2;
+    use num_complex::Complex64;
+    use wifi_densepose_core::types::{CsiFrame, CsiMetadata, DeviceId, FrequencyBand};
+
+    let n = cf.amplitude.len();
+    let mut data = Array2::<Complex64>::zeros((1, n));
+    for (ki, (&amp, &ph)) in cf.amplitude.iter().zip(cf.phase.iter()).enumerate() {
+        data[[0, ki]] = Complex64::from_polar(amp as f64, ph as f64);
+    }
+    let meta = CsiMetadata::new(
+        DeviceId::new("multistatic-cir"),
+        FrequencyBand::Band2_4GHz,
+        6,
+    );
+    CsiFrame::new(meta, data)
 }
 
 /// Attention-weighted fusion of amplitude and phase vectors from multiple nodes.

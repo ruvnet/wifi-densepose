@@ -156,6 +156,25 @@ docker inspect ruvnet/wifi-densepose:python --format='{{.Size}}'
 # Expected: ~569 MB
 ```
 
+### Step 10b: Verify CIR Deterministic Proof (ADR-134)
+
+```bash
+bash scripts/verify-cir-proof.sh
+```
+
+**Expected:** `VERDICT: PASS (CIR hash matches)` once the `cir` module is implemented.
+
+Currently outputs `BLOCKED` because `expected_cir_features.sha256` contains a placeholder.
+After the CIR implementation lands, regenerate and commit the hash:
+
+```bash
+cd v2 && cargo run -p wifi-densepose-signal --bin cir_proof_runner \
+  --release --no-default-features -- --generate-hash \
+  > ../archive/v1/data/proof/expected_cir_features.sha256
+```
+
+---
+
 ### Step 11: Verify ESP32 Flash (requires hardware on COM7)
 
 ```bash
@@ -212,6 +231,7 @@ Each row is independently verifiable. Status reflects audit-time findings.
 | 31 | On-device ESP32 ML inference | No | **NO** | Firmware streams raw I/Q; inference runs on aggregator |
 | 32 | Real-world CSI dataset bundled | No | **NO** | Only synthetic reference signal (seed=42) |
 | 33 | 54,000 fps measured throughput | Claimed | **NOT MEASURED** | Criterion benchmarks exist but not run at audit time |
+| 34 | CIR estimation (ADR-134, ISTA via NeumannSolver) | Yes | **PENDING** | `archive/v1/data/proof/expected_cir_features.sha256`, `scripts/verify-cir-proof.sh`; regenerate hash after cir module impl lands: `cd v2 && cargo run -p wifi-densepose-signal --bin cir_proof_runner --release --no-default-features -- --generate-hash > ../archive/v1/data/proof/expected_cir_features.sha256` |
 
 ---
 
@@ -221,6 +241,7 @@ Each row is independently verifiable. Status reflects audit-time findings.
 |--------|-------|
 | Witness commit SHA | `96b01008f71f4cbe2c138d63acb0e9bc6825286e` |
 | Python proof hash (numpy 2.4.2, scipy 1.17.1) | `8c0680d7d285739ea9597715e84959d9c356c87ee3ad35b5f1e69a4ca41151c6` |
+| CIR proof hash (ADR-134) | `PLACEHOLDER — regenerate after cir module implementation lands` |
 | ESP32 frame magic | `0xC5110001` |
 | Workspace crate version | `0.2.0` |
 

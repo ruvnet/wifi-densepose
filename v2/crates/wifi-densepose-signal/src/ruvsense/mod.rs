@@ -55,6 +55,9 @@ pub mod multistatic;
 pub mod phase_align;
 pub mod pose_tracker;
 
+// ADR-134: CIR estimation (ISTA + NeumannSolver warm-start)
+pub mod cir;
+
 // Re-export core types for ergonomic access
 pub use coherence::CoherenceState;
 pub use coherence_gate::{GateDecision, GatePolicy};
