@@ -16,12 +16,14 @@ onnx = ["dep:ort"]
 simulation = []
 demo = ["simulation"]
 full = ["mavlink", "onnx", "demo", "itar-unrestricted"]
+ruflo = ["dep:reqwest", "dep:serde_json"]
 
 [dependencies]
 wifi-densepose-core = { path = "../wifi-densepose-core" }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", optional = true }
 toml = "0.8"
 
 # Async runtime
@@ -33,6 +35,9 @@ mavlink = { version = "0.13", optional = true }
 
 # ONNX Runtime (optional — for MARL actor inference)
 ort = { version = "2.0.0-rc.11", optional = true }
+
+# HTTP client (optional — for Ruflo HTTP backend)
+reqwest = { version = "0.12", features = ["json"], optional = true }
 
 # Crypto — MAVLink v2 HMAC-SHA256 signing
 hmac = "0.12"

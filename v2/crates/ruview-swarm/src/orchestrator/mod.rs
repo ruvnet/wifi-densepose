@@ -37,6 +37,13 @@ pub struct SwarmOrchestrator {
     pub peer_detections: Vec<CsiDetection>,
     /// Accumulated mission statistics.
     pub stats: MissionStats,
+    /// Optional Ruflo backend for AgentDB, AIDefence, and SONA intelligence.
+    /// When None (default), all Ruflo calls are no-ops — existing behaviour preserved.
+    #[cfg(feature = "ruflo")]
+    pub ruflo: Option<Box<dyn crate::ruflo::RufloBackend>>,
+    /// Active trajectory ID issued by the Ruflo intelligence hooks.
+    #[cfg(feature = "ruflo")]
+    pub trajectory_id: Option<String>,
 }
 
 /// Accumulated metrics for one mission run.
@@ -102,6 +109,10 @@ impl SwarmOrchestrator {
             peer_states: HashMap::new(),
             peer_detections: Vec::new(),
             stats: MissionStats::default(),
+            #[cfg(feature = "ruflo")]
+            ruflo: None,
+            #[cfg(feature = "ruflo")]
+            trajectory_id: None,
         }
     }
 
@@ -174,6 +185,94 @@ impl SwarmOrchestrator {
     /// Accept an incoming CSI detection from a peer.
     pub fn receive_peer_detection(&mut self, det: CsiDetection) {
         self.peer_detections.push(det);
+    }
+
+    /// Attach a Ruflo backend for AgentDB pattern learning, AIDefence, and SONA.
+    ///
+    /// Call after `new_demo()`:
+    /// ```ignore
+    /// let orch = SwarmOrchestrator::new_demo(...)
+    ///     .with_ruflo(Box::new(MockRufloBackend::new()));
+    /// ```
+    #[cfg(feature = "ruflo")]
+    pub fn with_ruflo(mut self, backend: Box<dyn crate::ruflo::RufloBackend>) -> Self {
+        self.ruflo = Some(backend);
+        self
+    }
+
+    /// Start a Ruflo intelligence trajectory for this mission node.
+    ///
+    /// Call before the mission loop begins. If no backend is attached this is a no-op.
+    #[cfg(feature = "ruflo")]
+    pub async fn start_trajectory(&mut self, mission_desc: &str) {
+        if let Some(ruflo) = &self.ruflo {
+            match ruflo.trajectory_start(mission_desc, "swarm-specialist").await {
+                Ok(tid) => self.trajectory_id = Some(tid),
+                Err(e) => tracing::warn!("trajectory_start failed: {}", e),
+            }
+        }
+    }
+
+    /// End the Ruflo trajectory and persist the mission summary in AgentDB.
+    ///
+    /// Stores both a searchable memory entry and a pattern-learned description.
+    /// If no backend is attached this is a no-op.
+    #[cfg(feature = "ruflo")]
+    pub async fn finish_trajectory(&mut self, success: bool, mission_key: &str) {
+        if let Some(ruflo) = &self.ruflo {
+            let tid = self.trajectory_id.take();
+            if let Some(tid) = &tid {
+                let _ = ruflo.trajectory_end(tid, success, None).await;
+            }
+            // Build and serialise mission summary.
+            let summary = crate::ruflo::MissionSummary::from_stats(
+                &self.stats,
+                &self.config.mission.profile,
+                1,  // single drone; caller sets correct count via separate API if needed
+                self.config.mission.area_width_m,
+                self.config.mission.area_height_m,
+                0,  // caller sets victims_total; 0 = unknown
+                self.probability_grid.coverage_pct(),
+            );
+            if let Ok(json) = serde_json::to_string(&summary) {
+                let _ = ruflo.store_mission(mission_key, &json, "swarm-missions").await;
+            }
+            let _ = ruflo.store_pattern(
+                &summary.to_pattern_description(),
+                summary.pattern_type(),
+                summary.pattern_confidence(),
+            ).await;
+        }
+    }
+
+    /// AIDefence-checked variant of `receive_peer_detection`.
+    ///
+    /// Returns `true` and enqueues the detection if it passes the safety check.
+    /// Returns `false` (and drops the detection) if AIDefence flags it as unsafe.
+    /// Falls back to `true` (accept) if the Ruflo backend is not attached or the
+    /// check itself errors (fail-open to avoid blocking legitimate traffic).
+    #[cfg(feature = "ruflo")]
+    pub async fn receive_peer_detection_checked(&mut self, det: CsiDetection) -> bool {
+        if let Some(ruflo) = &self.ruflo {
+            // Serialise the detection to a string for AIDefence inspection.
+            let repr = format!(
+                "drone_id={:?} confidence={:.3} victim={:?}",
+                det.drone_id, det.confidence, det.victim_position
+            );
+            match ruflo.mavlink_is_safe(&repr).await {
+                Ok(false) => {
+                    tracing::warn!(
+                        "aidefence rejected peer detection from {:?}",
+                        det.drone_id
+                    );
+                    return false;
+                }
+                Err(e) => tracing::debug!("aidefence check failed (proceeding): {}", e),
+                _ => {}
+            }
+        }
+        self.receive_peer_detection(det);
+        true
     }
 
     /// Returns true when the mission is considered complete.

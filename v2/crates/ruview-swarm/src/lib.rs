@@ -16,6 +16,7 @@ pub mod demo;
 pub mod integration;
 pub mod bench_support;
 pub mod orchestrator;
+pub mod ruflo;
 
 pub use types::{
     ClusterId, CsiDetection, DroneState, FailSafeState, GridCell, NodeId,
