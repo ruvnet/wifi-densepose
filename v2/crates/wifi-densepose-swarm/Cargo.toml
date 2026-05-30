@@ -1,0 +1,57 @@
+[package]
+name = "wifi-densepose-swarm"
+version = "0.1.0"
+edition = "2021"
+description = "Drone swarm control system — hierarchical-mesh topology, Raft consensus, MARL, CSI sensing integration (ADR-148)"
+license = "Apache-2.0"
+
+[features]
+default = []
+# ITAR/USML Category VIII(h)(12): swarming coordination features.
+# Must not be enabled in international distributions without export counsel review.
+itar-unrestricted = []
+mavlink = ["dep:mavlink"]
+ros2-dds = []
+onnx = ["dep:ort"]
+simulation = []
+demo = ["simulation"]
+full = ["mavlink", "onnx", "demo", "itar-unrestricted"]
+
+[dependencies]
+wifi-densepose-core = { path = "../wifi-densepose-core" }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# MAVLink v2 (optional)
+mavlink = { version = "0.13", optional = true }
+
+# ONNX Runtime (optional — for MARL actor inference)
+ort = { version = "2.0.0-rc.11", optional = true }
+
+# Crypto — MAVLink v2 HMAC-SHA256 signing
+hmac = "0.12"
+sha2 = "0.10"
+
+# Error handling
+thiserror = "2.0"
+
+# Logging
+tracing = "0.1"
+
+# Numerics
+nalgebra = "0.33"
+rand = "0.8"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+tokio-test = "0.4"
+
+[[bench]]
+name = "swarm_bench"
+harness = false
