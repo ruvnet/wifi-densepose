@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`ruview-swarm` crate (ADR-148)** — drone swarm control system with hierarchical-mesh topology, Raft consensus, MAPPO multi-agent reinforcement learning, and CSI sensing integration. 14 modules: topology (Raft/Gossip/Mesh), formation control (virtual-structure/leader-follower/Reynolds flocking), RRT-APF path planning, auction+FNN task allocation, MARL actor + PPO training loop, security (MAVLink v2 HMAC-SHA256 signing, UWB anti-spoofing, geofencing, Remote ID, FHSS anti-jamming), 10-state fail-safe machine, and SwarmOrchestrator. ITAR-gated coordination features (USML Category VIII(h)(12)) behind `itar-unrestricted` feature.
+- **Ruflo integration for `ruview-swarm`** — feature-gated (`ruflo`) AI-agent capability layer connecting to the claude-flow daemon: AgentDB mission memory (`memory_store`/`memory_search`), HNSW pattern learning (`agentdb_pattern-store`/`-search`), AIDefence MAVLink message scanning, and SONA intelligence trajectory hooks. `RufloBackend` trait with `HttpRufloBackend` (JSON-RPC 2.0) and `MockRufloBackend` implementations.
+
+### Performance
+- `ruview-swarm` benchmarks (criterion, release): MARL actor inference 3.3 µs, RRT-APF planning 0.043 ms, multi-view CSI fusion 58.5 ns, 3-view localization 1.732 m (beats Wi2SAR 5 m SOTA baseline), 4-drone SAR coverage 223 s for 400×400 m (under 240 s target).
+
+### Added
 - **ADR-147 — OccWorld world model integration** (`wifi-densepose-worldmodel` v0.3.0 published to crates.io). 15-frame trajectory prediction at 209 ms / 3.37 GB VRAM on RTX 5080. Phase 3 domain adapter `scripts/ruview_occ_dataset.py` (`RuViewOccDataset`) converts WorldGraph snapshots to OccWorld tensors with indoor class remapping + zero ego-poses (validated). Phase 5 retraining pipeline `scripts/occworld_retrain.py` — VQVAE + transformer fine-tuning on RuView occupancy snapshots. See [ADR-147](docs/adr/ADR-147-nvidia-cosmos-world-foundation-model-integration.md) · [benchmark proof](docs/adr/ADR-147-benchmark-proof.md).
 
 ### Added
