@@ -60,7 +60,7 @@ impl ProbabilityGrid {
             for cell in row {
                 let scanned_weight = if cell.last_scanned_ms > 0 { cell.pheromone } else { 0.0 };
                 let score = cell.victim_probability * (1.0 - scanned_weight);
-                if best.as_ref().map_or(true, |(_, bs)| score > *bs) {
+                if best.as_ref().is_none_or(|(_, bs)| score > *bs) {
                     best = Some(((cell.x_idx, cell.y_idx), score));
                 }
             }

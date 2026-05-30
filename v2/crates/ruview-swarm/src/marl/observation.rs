@@ -9,6 +9,7 @@ use crate::types::{DroneState, NodeId, Position3D, GridCell, CsiDetection};
 ///   - grid_tile:             25 (5×5 cell victim probabilities)
 ///   - csi_reading:            5 (confidence, est pos xyz, has_detection flag)
 ///   - task_encoding:          7 (target xyz, deadline_norm, task_type one-hot × 3)
+///
 ///   TOTAL:                   64
 #[derive(Debug, Clone)]
 pub struct LocalObservation {

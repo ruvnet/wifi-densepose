@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Which environment the MARL training loop runs against.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum TrainingMode {
     /// Pure Rust simulation — no real hardware or external simulator.
     Simulation,
@@ -10,11 +10,8 @@ pub enum TrainingMode {
     /// Hardware-in-the-loop: real drones, simulated mission world.
     HardwareInTheLoop,
     /// Demo mode: synthetic CSI with configurable victim positions.
+    #[default]
     Demo,
-}
-
-impl Default for TrainingMode {
-    fn default() -> Self { TrainingMode::Demo }
 }
 
 /// Full MAPPO training configuration.
