@@ -5,7 +5,12 @@
 
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use super::backend::*;
+
+/// Per-request timeout applied to every JSON-RPC call.
+/// A dead or slow daemon must not stall swarm operation loops.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct HttpRufloBackend {
     client:     reqwest::Client,
@@ -15,8 +20,12 @@ pub struct HttpRufloBackend {
 
 impl HttpRufloBackend {
     pub fn new(base_url: &str) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .expect("failed to build reqwest client");
         Self {
-            client:     reqwest::Client::new(),
+            client,
             base_url:   base_url.trim_end_matches('/').to_string(),
             request_id: AtomicU64::new(1),
         }
