@@ -13,6 +13,7 @@ pub mod security;
 pub mod failsafe;
 pub mod config;
 pub mod demo;
+pub mod evals;
 pub mod integration;
 pub mod bench_support;
 pub mod orchestrator;

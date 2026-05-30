@@ -78,3 +78,7 @@ harness = false
 [[bin]]
 name = "train_marl"
 required-features = ["train"]
+
+# ADR-149 Stage-1 evaluation CLI — pure Rust, no special feature needed.
+[[bin]]
+name = "eval_swarm"
