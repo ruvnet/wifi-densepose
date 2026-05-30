@@ -1,10 +1,10 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use wifi_densepose_swarm::marl::{MappoActor, ActorConfig};
-use wifi_densepose_swarm::marl::LocalObservation;
-use wifi_densepose_swarm::sensing::MultiViewFusion;
-use wifi_densepose_swarm::planning::RrtApfPlanner;
-use wifi_densepose_swarm::demo::{DemoScenario};
-use wifi_densepose_swarm::types::{CsiDetection, NodeId, Position3D};
+use ruview_swarm::marl::{MappoActor, ActorConfig};
+use ruview_swarm::marl::LocalObservation;
+use ruview_swarm::sensing::MultiViewFusion;
+use ruview_swarm::planning::RrtApfPlanner;
+use ruview_swarm::demo::{DemoScenario};
+use ruview_swarm::types::{CsiDetection, NodeId, Position3D};
 
 fn bench_marl_inference(c: &mut Criterion) {
     let actor = MappoActor::random_init(ActorConfig::default());
@@ -42,5 +42,29 @@ fn bench_demo_coverage_estimate(c: &mut Criterion) {
     c.bench_function("demo_coverage_estimate", |b| b.iter(|| scenario.estimate_coverage_time_secs()));
 }
 
-criterion_group!(benches, bench_marl_inference, bench_rrt_apf_plan, bench_multiview_fusion, bench_demo_coverage_estimate);
+fn bench_ppo_update(c: &mut Criterion) {
+    use ruview_swarm::marl::{MappoActor, ActorConfig, LocalObservation};
+    use ruview_swarm::marl::training_loop::{ReplayBuffer, Transition, PpoConfig, ppo_update};
+    use ruview_swarm::marl::actor::ActorAction;
+
+    let mut buf = ReplayBuffer::new(64);
+    for i in 0..64 {
+        buf.push(Transition {
+            obs: LocalObservation::zeros(),
+            action: ActorAction { delta_heading_rad: 0.1, delta_altitude_m: 0.0, speed_ms: 5.0, trigger_csi_scan: true },
+            reward: if i % 2 == 0 { 10.0 } else { -2.0 },
+            next_obs: LocalObservation::zeros(),
+            done: i == 63,
+        });
+    }
+    let cfg = PpoConfig::default();
+    c.bench_function("ppo_update_64transitions", |b| {
+        b.iter(|| {
+            let mut actor = MappoActor::random_init(ActorConfig::default());
+            ppo_update(&mut actor, &buf, &cfg)
+        })
+    });
+}
+
+criterion_group!(benches, bench_marl_inference, bench_rrt_apf_plan, bench_multiview_fusion, bench_demo_coverage_estimate, bench_ppo_update);
 criterion_main!(benches);
