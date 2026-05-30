@@ -7461,6 +7461,8 @@ name = "ruview-swarm"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "candle-core 0.9.2",
+ "candle-nn 0.9.2",
  "criterion",
  "hmac",
  "mavlink",

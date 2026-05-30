@@ -17,6 +17,10 @@ simulation = []
 demo = ["simulation"]
 full = ["mavlink", "onnx", "demo", "itar-unrestricted"]
 ruflo = ["dep:reqwest", "dep:serde_json"]
+# Heavy GPU-capable MARL training (real Candle autodiff PPO). Off by default so
+# the default build stays light and the existing test suite keeps passing.
+train = ["dep:candle-core", "dep:candle-nn"]
+cuda = ["candle-core/cuda", "candle-nn/cuda"]
 
 [dependencies]
 wifi-densepose-core = { path = "../wifi-densepose-core" }
@@ -35,6 +39,10 @@ mavlink = { version = "0.13", optional = true }
 
 # ONNX Runtime (optional — for MARL actor inference)
 ort = { version = "2.0.0-rc.11", optional = true }
+
+# Candle 0.9 — real autodiff PPO training (optional, behind `train` feature).
+candle-core = { version = "0.9", default-features = false, optional = true }
+candle-nn   = { version = "0.9", default-features = false, optional = true }
 
 # HTTP client (optional — for Ruflo HTTP backend)
 reqwest = { version = "0.12", features = ["json"], optional = true }
@@ -60,3 +68,9 @@ tokio-test = "0.4"
 [[bench]]
 name = "swarm_bench"
 harness = false
+
+# MARL training binary — requires the `train` feature (Candle autodiff).
+# Excluded from the default build so `cargo test`/CI stay light.
+[[bin]]
+name = "train_marl"
+required-features = ["train"]
