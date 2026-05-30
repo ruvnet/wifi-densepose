@@ -5300,6 +5300,31 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
         if let Ok(json) = serde_json::to_string(&update) {
             let _ = s.tx.send(json);
         }
+        #[cfg(feature = "mqtt")]
+        if let Some(ref vtx) = s.vitals_tx {
+            if vtx.receiver_count() > 0 {
+                use wifi_densepose_sensing_server::mqtt::state::VitalsSnapshot;
+                let vs = &s.latest_vitals;
+                let snap = VitalsSnapshot {
+                    node_id: "ruview".to_string(),
+                    timestamp_ms: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as i64,
+                    presence: update.classification.presence,
+                    fall_detected: false,
+                    motion: s.smoothed_motion,
+                    motion_energy: update.features.motion_band_power,
+                    presence_score: s.smoothed_person_score,
+                    breathing_rate_bpm: vs.breathing_rate_bpm,
+                    heartrate_bpm: vs.heart_rate_bpm,
+                    n_persons: s.person_count() as u32,
+                    rssi_dbm: update.nodes.first().map(|n| n.rssi_dbm),
+                    vital_confidence: (vs.breathing_confidence + vs.heartbeat_confidence) / 2.0,
+                };
+                let _ = vtx.send(snap);
+            }
+        }
         s.latest_update = Some(update);
     }
 }
