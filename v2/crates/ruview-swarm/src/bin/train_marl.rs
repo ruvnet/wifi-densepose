@@ -12,6 +12,7 @@
 //! 8× A100 box for this workload at ~1/20th the cost. See scripts/gcp/.
 
 use ruview_swarm::config::SwarmConfig;
+use ruview_swarm::integration::telemetry::{DroneFrame, TelemetryRecorder};
 use ruview_swarm::marl::candle_ppo::{CandlePpoConfig, CandleTrainer};
 use ruview_swarm::marl::observation::LocalObservation;
 use ruview_swarm::marl::reward::{RewardCalculator, RewardContext};
@@ -25,6 +26,8 @@ struct Args {
     steps_per_episode: usize,
     checkpoint_dir: String,
     checkpoint_every: usize,
+    telemetry: Option<String>,
+    telemetry_episode: usize,
 }
 
 impl Default for Args {
@@ -36,6 +39,8 @@ impl Default for Args {
             steps_per_episode: 200,
             checkpoint_dir: "./marl-checkpoints".to_string(),
             checkpoint_every: 100,
+            telemetry: None,
+            telemetry_episode: 0,
         }
     }
 }
@@ -71,6 +76,14 @@ fn parse_args() -> Args {
                 args.checkpoint_every = next().parse().unwrap_or(args.checkpoint_every);
                 i += 1;
             }
+            "--telemetry" => {
+                args.telemetry = Some(next());
+                i += 1;
+            }
+            "--telemetry-episode" => {
+                args.telemetry_episode = next().parse().unwrap_or(args.telemetry_episode);
+                i += 1;
+            }
             "-h" | "--help" => {
                 println!(
                     "train_marl — ruview-swarm MARL training (ADR-148 M4)\n\
@@ -80,7 +93,9 @@ fn parse_args() -> Args {
                      --profile NAME       sar|inspection|mine|agriculture (default sar)\n  \
                      --steps N            steps per episode (default 200)\n  \
                      --checkpoint-dir D   checkpoint output dir (default ./marl-checkpoints)\n  \
-                     --checkpoint-every N save every N episodes (default 100)"
+                     --checkpoint-every N save every N episodes (default 100)\n  \
+                     --telemetry FILE     write JSONL telemetry for viz/swarm_viz.html\n  \
+                     --telemetry-episode N which episode's steps to record spatially (default 0)"
                 );
                 std::process::exit(0);
             }
@@ -122,6 +137,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Position3D { x: cfg.mission.area_width_m * 0.2, y: cfg.mission.area_height_m * 0.3, z: 0.0 },
         Position3D { x: cfg.mission.area_width_m * 0.6, y: cfg.mission.area_height_m * 0.45, z: 0.0 },
     ];
+
+    // Optional telemetry recorder for the visualizer.
+    let mut telem = match &args.telemetry {
+        Some(path) => {
+            let mut rec = TelemetryRecorder::create(path)?;
+            rec.meta(
+                &args.profile,
+                args.drones,
+                cfg.mission.area_width_m,
+                cfg.mission.area_height_m,
+                &victims,
+            )?;
+            println!("telemetry → {path} (spatial steps from episode {})", args.telemetry_episode);
+            Some(rec)
+        }
+        None => None,
+    };
 
     let mut best_return = f32::MIN;
 
@@ -204,6 +236,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 value_buf.push(0.0); // bootstrap value (critic learns this)
                 done_buf.push(is_last);
             }
+
+            // Record spatial telemetry for the selected episode only (keeps the
+            // log small — one episode of step frames + metrics for every episode).
+            if let Some(rec) = telem.as_mut() {
+                if episode == args.telemetry_episode {
+                    let scan_w = cfg.planning.csi_scan_width_m;
+                    let frames: Vec<DroneFrame> = drones
+                        .iter()
+                        .map(|d| {
+                            let detected = victims
+                                .iter()
+                                .any(|v| d.state.position.distance_to(v) < scan_w);
+                            DroneFrame::from_state(&d.state, detected)
+                        })
+                        .collect();
+                    let coverage = drones
+                        .iter()
+                        .map(|d| d.probability_grid.coverage_pct())
+                        .sum::<f64>()
+                        / drones.len().max(1) as f64;
+                    let _ = rec.step(episode, step, step as f64, &frames, coverage);
+                }
+            }
         }
 
         // PPO update on the episode's rollout.
@@ -221,6 +276,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if mean_return > best_return {
             best_return = mean_return;
+        }
+
+        // Per-episode training-metric telemetry (every episode).
+        if let Some(rec) = telem.as_mut() {
+            let _ = rec.episode(episode, mean_return, policy_loss, value_loss, 0);
         }
 
         if episode % 10 == 0 || episode == args.episodes - 1 {
@@ -241,6 +301,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 println!("checkpoint saved: {path}");
             }
+        }
+    }
+
+    if let Some(rec) = telem.as_mut() {
+        rec.flush()?;
+        if let Some(path) = &args.telemetry {
+            println!("telemetry written: {path} — open viz/swarm_viz.html and load it");
         }
     }
 

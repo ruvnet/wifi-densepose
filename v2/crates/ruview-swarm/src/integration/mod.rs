@@ -3,8 +3,10 @@
 pub mod mavlink_messages;
 pub mod mission_report;
 pub mod swarm_sim;
+pub mod telemetry;
 
 pub use mission_report::{MissionReport, SotaComparison, VictimReport};
+pub use telemetry::{DroneFrame, TelemetryRecorder};
 
 pub use mavlink_messages::{
     SwarmNodeState, SwarmCsiReport, SwarmClusterHeartbeat, SwarmVictimConfirmed, SwarmMsgId,
