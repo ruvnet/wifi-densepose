@@ -7416,6 +7416,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "753a07254fa68db183949ec6c7575d890da4d42404afabc11d610a720fcf570c"
 
 [[package]]
+name = "ruview-swarm"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "criterion",
+ "hmac",
+ "mavlink",
+ "nalgebra",
+ "ort",
+ "rand 0.8.5",
+ "serde",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-test",
+ "toml 0.8.23",
+ "tracing",
+ "wifi-densepose-core",
+]
+
+[[package]]
 name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11008,27 +11029,6 @@ dependencies = [
  "uuid",
  "wifi-densepose-core",
  "wifi-densepose-ruvector",
-]
-
-[[package]]
-name = "wifi-densepose-swarm"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "criterion",
- "hmac",
- "mavlink",
- "nalgebra",
- "ort",
- "rand 0.8.5",
- "serde",
- "sha2",
- "thiserror 2.0.18",
- "tokio",
- "tokio-test",
- "toml 0.8.23",
- "tracing",
- "wifi-densepose-core",
 ]
 
 [[package]]

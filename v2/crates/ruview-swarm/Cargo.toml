@@ -1,8 +1,8 @@
 [package]
-name = "wifi-densepose-swarm"
+name = "ruview-swarm"
 version = "0.1.0"
 edition = "2021"
-description = "Drone swarm control system — hierarchical-mesh topology, Raft consensus, MARL, CSI sensing integration (ADR-148)"
+description = "RuView drone swarm control system — hierarchical-mesh topology, Raft consensus, MARL, CSI sensing integration (ADR-148)"
 license = "Apache-2.0"
 
 [features]

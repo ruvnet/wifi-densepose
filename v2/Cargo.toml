@@ -70,7 +70,7 @@ members = [
     "crates/homecore-hap",         # ADR-125 — Apple Home HomeKit Accessory Protocol bridge
     "crates/homecore-assist",      # ADR-133 — HOMECORE voice assistant + ruflo bridge
     "crates/homecore-server",      # iter-9 — HOMECORE integration binary (all 8 crates wired together)
-    "crates/wifi-densepose-swarm",                # ADR-148 — drone swarm control system
+    "crates/ruview-swarm",                         # ADR-148 — drone swarm control system
 ]
 # ADR-040: WASM edge crate targets wasm32-unknown-unknown (no_std),
 # excluded from workspace to avoid breaking `cargo test --workspace`.
