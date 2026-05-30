@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "RuView drone swarm control system — hierarchical-mesh topology, Raft consensus, MARL, CSI sensing integration (ADR-148)"
 license = "Apache-2.0"
+# Publishing disabled until: (1) PR #862 merges, (2) internal path-deps are
+# published in dependency order, (3) export-control sign-off on the ITAR-gated
+# coordination features (USML Category VIII(h)(12)). Flip to true deliberately.
+publish = false
 
 [features]
 default = []

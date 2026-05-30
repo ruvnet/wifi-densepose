@@ -314,6 +314,8 @@ pub async fn run_mission_with_report(
         // properly separated swarm records zero collision events.
         let min_sep = profile_config.formation.min_separation_m.max(1.5);
         let snapshot: Vec<Position3D> = drones.iter().map(|d| d.state.position).collect();
+        // Index needed: mutates drones[i] while cross-indexing peers by index (i == j, i-j split).
+        #[allow(clippy::needless_range_loop)]
         for i in 0..drones.len() {
             let mut push = (0.0_f64, 0.0_f64);
             for (j, other) in snapshot.iter().enumerate() {

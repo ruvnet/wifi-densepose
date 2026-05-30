@@ -10,9 +10,10 @@
 
 use crate::types::{NodeId, Position3D};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FlightPattern {
     Boustrophedon,
+    #[default]
     PartitionedLawnmower,
     Spiral,
     Pheromone,
@@ -20,13 +21,9 @@ pub enum FlightPattern {
     LevyFlight,
 }
 
-impl Default for FlightPattern {
-    fn default() -> Self {
-        FlightPattern::PartitionedLawnmower
-    }
-}
-
 impl FlightPattern {
+    // Intentional inherent infallible parser (returns Self, not Result); shipped API.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "boustrophedon" | "lawnmower" => FlightPattern::Boustrophedon,

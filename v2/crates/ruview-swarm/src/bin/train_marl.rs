@@ -284,6 +284,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let positions: Vec<(NodeId, Position3D)> =
                 states.iter().map(|s| (s.id, s.position)).collect();
 
+            // Index needed: mutates states[idx] while reading peer positions; borrow constraints.
+            #[allow(clippy::needless_range_loop)]
             for idx in 0..states.len() {
                 let prev_pos = states[idx].position;
                 let node_id = states[idx].id;

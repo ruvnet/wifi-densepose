@@ -44,14 +44,17 @@ impl FnnScorer {
     /// Default weights initialised to a simple identity-like setup.
     pub fn default_weights() -> Self {
         // Simple: w1 diagonalish, others small constant
+        // Index needed: diagonal/strided init uses i for both row and column.
         let mut w1 = [[0.0f32; 5]; 16];
+        #[allow(clippy::needless_range_loop)]
         for i in 0..5 {
             w1[i][i] = 1.0;
         }
-        for i in 5..16 {
-            w1[i][0] = 0.1;
+        for row in w1.iter_mut().take(16).skip(5) {
+            row[0] = 0.1;
         }
         let mut w2 = [[0.0f32; 16]; 8];
+        #[allow(clippy::needless_range_loop)]
         for i in 0..8 {
             w2[i][i * 2] = 1.0;
         }

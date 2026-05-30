@@ -13,9 +13,10 @@
 //! the gradient backend lives in `candle_ppo.rs` behind the `train` feature.
 
 /// Which self-learning strategy the swarm trains under. Selectable at runtime.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LearningPattern {
     /// Centralized critic, decentralized execution (CTDE).
+    #[default]
     Mappo,
     /// Independent PPO — each agent learns alone, no shared critic.
     Ippo,
@@ -25,15 +26,11 @@ pub enum LearningPattern {
     MetaRl,
 }
 
-impl Default for LearningPattern {
-    fn default() -> Self {
-        LearningPattern::Mappo
-    }
-}
-
 impl LearningPattern {
     /// Parse from a short identifier. Unknown strings fall back to the default
     /// (Mappo). Accepts both canonical names and friendly aliases.
+    // Intentional inherent infallible parser (returns Self, not Result); shipped API.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
             "mappo" => LearningPattern::Mappo,
@@ -122,7 +119,7 @@ impl CuriosityModule {
     pub fn visit_bonus(&mut self, x: f64, y: f64) -> f32 {
         let idx = self.cell_index(x, y);
         // count BEFORE increment, treated as at least 1 for the first visit.
-        let prior = self.counts[idx].max(0) + 1;
+        let prior = self.counts[idx] + 1;
         let bonus = self.beta / (prior as f32).sqrt();
         self.counts[idx] = self.counts[idx].saturating_add(1);
         bonus
@@ -169,8 +166,8 @@ impl MetaAdapter {
     /// leading dimensions; extra entries are ignored.
     pub fn adapt(&mut self, advantage: f32, feature_grad: &[f32]) {
         let n = self.fast.len().min(feature_grad.len());
-        for i in 0..n {
-            self.fast[i] += self.inner_lr * advantage * feature_grad[i];
+        for (f, &g) in self.fast.iter_mut().zip(feature_grad.iter()).take(n) {
+            *f += self.inner_lr * advantage * g;
         }
     }
 
