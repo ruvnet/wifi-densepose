@@ -180,6 +180,46 @@ struct Args {
     #[arg(long)]
     calibrate: bool,
 
+    // ─── ADR-115 §3.8 — MQTT publisher (HA-DISCO) ──────────────────────────
+    #[arg(long, env = "RUVIEW_MQTT")]
+    mqtt: bool,
+    #[arg(long, env = "RUVIEW_MQTT_HOST", default_value = "localhost")]
+    mqtt_host: String,
+    #[arg(long, env = "RUVIEW_MQTT_PORT")]
+    mqtt_port: Option<u16>,
+    #[arg(long, env = "RUVIEW_MQTT_USERNAME")]
+    mqtt_username: Option<String>,
+    #[arg(long, default_value = "MQTT_PASSWORD")]
+    mqtt_password_env: String,
+    #[arg(long, env = "RUVIEW_MQTT_CLIENT_ID")]
+    mqtt_client_id: Option<String>,
+    #[arg(long, env = "RUVIEW_MQTT_PREFIX", default_value = "homeassistant")]
+    mqtt_prefix: String,
+    #[arg(long, env = "RUVIEW_MQTT_TLS")]
+    mqtt_tls: bool,
+    #[arg(long, value_name = "PATH")]
+    mqtt_ca_file: Option<PathBuf>,
+    #[arg(long, value_name = "PATH")]
+    mqtt_client_cert: Option<PathBuf>,
+    #[arg(long, value_name = "PATH")]
+    mqtt_client_key: Option<PathBuf>,
+    #[arg(long, default_value = "600")]
+    mqtt_refresh_secs: u64,
+    #[arg(long, default_value = "0.2")]
+    mqtt_rate_vitals: f64,
+    #[arg(long, default_value = "1.0")]
+    mqtt_rate_motion: f64,
+    #[arg(long, default_value = "1.0")]
+    mqtt_rate_count: f64,
+    #[arg(long, default_value = "0.1")]
+    mqtt_rate_rssi: f64,
+    #[arg(long)]
+    mqtt_publish_pose: bool,
+    #[arg(long, default_value = "1.0")]
+    mqtt_rate_pose: f64,
+    #[arg(long, env = "RUVIEW_PRIVACY_MODE")]
+    privacy_mode: bool,
+
     // ---------------------------------------------------------------
     // ADR-102: Edge Module Registry — surface the canonical Cognitum
     // cog catalog via `GET /api/v1/edge/registry`.
@@ -6130,11 +6170,44 @@ async fn main() {
     #[cfg(feature = "mqtt")]
     if args.mqtt {
         use wifi_densepose_sensing_server::mqtt::{
-            config::MqttConfig,
+            config::{MqttConfig, PublishRates, TlsConfig},
             publisher::{spawn as mqtt_spawn, OwnedDiscoveryBuilder},
             state::VitalsSnapshot,
         };
-        let mqtt_cfg = MqttConfig::from_args(&args);
+        let password = std::env::var(&args.mqtt_password_env).ok();
+        let port = args.mqtt_port.unwrap_or(if args.mqtt_tls { 8883 } else { 1883 });
+        let tls = if !args.mqtt_tls {
+            TlsConfig::Off
+        } else {
+            match (args.mqtt_ca_file.as_ref(), args.mqtt_client_cert.as_ref(), args.mqtt_client_key.as_ref()) {
+                (Some(ca), Some(cert), Some(key)) => TlsConfig::MutualTls {
+                    ca_file: ca.clone(), client_cert: cert.clone(), client_key: key.clone(),
+                },
+                (Some(ca), None, None) => TlsConfig::PinnedCa { ca_file: ca.clone() },
+                _ => TlsConfig::SystemTrust,
+            }
+        };
+        let client_id = args.mqtt_client_id.clone()
+            .unwrap_or_else(|| format!("wifi-densepose-{}", std::process::id()));
+        let mqtt_cfg = MqttConfig {
+            host: args.mqtt_host.clone(),
+            port,
+            username: args.mqtt_username.clone(),
+            password,
+            client_id: client_id.clone(),
+            discovery_prefix: args.mqtt_prefix.clone(),
+            tls,
+            refresh_secs: args.mqtt_refresh_secs,
+            rates: PublishRates {
+                vitals_hz: args.mqtt_rate_vitals,
+                motion_hz: args.mqtt_rate_motion,
+                count_hz: args.mqtt_rate_count,
+                rssi_hz: args.mqtt_rate_rssi,
+                pose_hz: args.mqtt_rate_pose,
+            },
+            publish_pose: args.mqtt_publish_pose,
+            privacy_mode: args.privacy_mode,
+        };
         let can_start = match mqtt_cfg.validate() {
             Ok(()) => true,
             Err(ref e) if !e.is_fatal() => {
