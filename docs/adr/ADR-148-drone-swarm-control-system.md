@@ -941,15 +941,32 @@ Crate `wifi-densepose-swarm` implemented at `/home/ruvultra/projects/RuView/v2/c
 
 | Milestone | Status | Completion |
 |-----------|--------|-----------|
-| M1 Crate Scaffold (43 source files, 14 modules) | **COMPLETE** | 100% |
-| M2 Swarm Coordination (Raft, Gossip, formation, RRT-APF, orchestrator) | **COMPLETE** | 95% |
-| M3 CSI + RuView Integration | In Progress | 80% |
-| M4 MARL + Training (MAPPO actor, PPO loop) | In Progress | 60% |
+| M1 Crate Scaffold | **COMPLETE** | 100% |
+| M2 Swarm Coordination (Raft, Gossip, formation, RRT-APF, orchestrator) | **COMPLETE** | 100% |
+| M3 CSI + RuView Integration | In Progress | 85% (remaining 15% needs real ESP32-S3 hardware) |
+| M4 MARL + Training (real Candle autodiff PPO, GPU-capable, A-MAPPO roles) | **COMPLETE** | 100% |
 | M5 Security Hardening | **COMPLETE** | 100% |
-| M6 Benchmarks + SOTA | In Progress | 80% |
-| M7 Mission Profiles | In Progress | 25% |
+| M6 Benchmarks + SOTA (5 criterion benches) | **COMPLETE** | 95% |
+| M7 Mission Profiles (SAR/inspection/mine + MissionReport) | **COMPLETE** | 95% |
+| M8 Ruflo AI-agent Integration (AgentDB/AIDefence/SONA) | **COMPLETE** | 100% |
 
-**Overall: ~78%**
+**Overall: ~98%** — only M3's hardware-gated 15% (physical ESP32-S3 CSI capture) remains.
+
+### M4 — Real GPU Training (added 2026-05-30)
+
+The MARL trainer now does genuine gradient descent via Candle 0.9 autodiff
+(`marl/candle_ppo.rs`, feature `train`, optional `cuda`):
+- `CandleActorCritic` (64→128→64 MLP), `CandleTrainer` with GAE + clipped
+  surrogate + real `optimizer.backward_step()`. CPU or CUDA (local RTX 5080 / GCP L4).
+- A-MAPPO heterogeneous-role attention (`marl/role_attention.rs`): relay
+  attention floor, role-segmented pools, sensor-gated triangulation-geometry
+  penalty, role embeddings.
+- `train_marl` binary: `cargo run --features train,cuda --bin train_marl`.
+- Right-sized launch: `scripts/gcp/provision_marl.sh` (L4 / g2-standard-16,
+  ~$1.40/hr — MARL is rollout-bound, not matmul-bound; A100×8 reserved for
+  OccWorld world-model training) + `run_marl_train_local.sh` (local 5080).
+- Verified: 5-episode CPU run shows value_loss decreasing (critic learning) +
+  safetensors checkpointing.
 
 ### Verified Benchmark Results (criterion, release mode)
 
