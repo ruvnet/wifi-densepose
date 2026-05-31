@@ -34,6 +34,9 @@ Every WiFi router already fills your space with radio waves. When people move, b
 
 Built on [RuVector](https://github.com/ruvnet/ruvector/) and [Cognitum Seed](https://cognitum.one), RuView runs entirely on edge hardware — an ESP32 mesh (as low as $9 per node) paired with a Cognitum Seed for persistent memory, cryptographic attestation, and AI integration. No cloud, no cameras, no internet required.
 
+> [!IMPORTANT]
+> **Medical-use boundary.** RuView is a research and ambient-sensing project, not a medical device or clinical monitoring system. Vital-sign, fall-risk, apnea, distress, and triage outputs should be treated as experimental signals that require validation against regulated clinical equipment and clinician judgment before any health, anesthesia, emergency, ward, elder-care, or patient-care decision. Do not use RuView as the sole basis for diagnosis, treatment, alarm escalation, or continuous patient monitoring.
+
 The system learns each environment locally using spiking neural networks that adapt in under 30 seconds, with multi-frequency mesh scanning across 6 WiFi channels that uses your neighbors' routers as free radar illuminators. Every measurement is cryptographically attested via an Ed25519 witness chain.
 
 RuView turns ordinary WiFi into a contactless sensor. A $9 ESP32 board reads the radio reflections off the people in a room, and a small pretrained model — published on Hugging Face at [`ruvnet/wifi-densepose-pretrained`](https://huggingface.co/ruvnet/wifi-densepose-pretrained) — tells you who's there, how they're breathing, and how their heart rate is trending. The model fits in 8 KB (4-bit quantized), runs in microseconds on a Raspberry Pi, and reports 100% presence accuracy on the validation set. No cameras, no wearables, no app on the user's phone.
