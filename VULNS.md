@@ -68,4 +68,4 @@ Removed metadata files before commit:
 ## Branch & PR
 
 - **Branch:** `fix/heal-yabets4-RuView-1780227750`
-- **PR:** https://github.com/papi42/RuView/pull/3
+- **PR:** https://github.com/ruvnet/RuView/pull/884
