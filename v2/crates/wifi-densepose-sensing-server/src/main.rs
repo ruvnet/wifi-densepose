@@ -6182,11 +6182,12 @@ async fn main() {
             let mcfg = std::sync::Arc::new(mqtt::config::MqttConfig::from_args(&args.mqtt_opts));
             match mcfg.validate() {
                 Ok(()) => {
-                    let node_id = mcfg.client_id.clone();
+                    // Template builder only: the real node_id is set per-node by the
+                    // publisher from each snapshot's node_id.
                     let builder = mqtt::publisher::OwnedDiscoveryBuilder {
                         discovery_prefix: mcfg.discovery_prefix.clone(),
-                        node_id: node_id.clone(),
-                        node_friendly_name: Some("RuView".to_string()),
+                        node_id: "template".to_string(),
+                        node_friendly_name: None,
                         sw_version: env!("CARGO_PKG_VERSION").to_string(),
                         model: "RuView WiFi Sensing".to_string(),
                         via_device: None,
@@ -6200,37 +6201,37 @@ async fn main() {
                             let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) else {
                                 continue;
                             };
-                            let cls = &v["classification"];
-                            let vit = &v["vital_signs"];
-                            let presence = cls["presence"].as_bool().unwrap_or(false);
-                            let n_persons = v["persons"]
-                                .as_array()
-                                .map(|a| a.len() as u32)
-                                .or_else(|| v["estimated_persons"].as_u64().map(|x| x as u32))
-                                .unwrap_or(0);
-                            let motion = match cls["motion_level"].as_str() {
-                                Some("none") | Some("still") | Some("idle") | Some("") => 0.0,
-                                Some(_) => 1.0,
-                                None => 0.0,
+                            // Per-node fan-out: the sensing broadcast carries a
+                            // `nodes` array (same shape as REST /api/v1/nodes).
+                            // Emit one VitalsSnapshot per node, preserving ids.
+                            let Some(arr) = v["nodes"].as_array() else {
+                                continue;
                             };
-                            let snap = mqtt::state::VitalsSnapshot {
-                                node_id: node_id.clone(),
-                                timestamp_ms: (v["timestamp"].as_f64().unwrap_or(0.0) * 1000.0) as i64,
-                                presence,
-                                motion,
-                                presence_score: if presence {
-                                    cls["confidence"].as_f64().unwrap_or(1.0)
-                                } else {
-                                    0.0
-                                },
-                                breathing_rate_bpm: vit["breathing_rate_bpm"].as_f64(),
-                                heartrate_bpm: vit["heart_rate_bpm"].as_f64(),
-                                n_persons,
-                                rssi_dbm: v["nodes"][0]["rssi_dbm"].as_f64(),
-                                vital_confidence: cls["confidence"].as_f64().unwrap_or(0.0),
-                                ..Default::default()
-                            };
-                            let _ = vtx.send(snap);
+                            let ts_ms = (v["timestamp"].as_f64().unwrap_or(0.0) * 1000.0) as i64;
+                            for node in arr {
+                                let id = match node["node_id"].as_u64() {
+                                    Some(n) => n.to_string(),
+                                    None => continue,
+                                };
+                                let motion = match node["motion_level"].as_str() {
+                                    Some("absent") | Some("none") | Some("still")
+                                    | Some("idle") | Some("") | None => 0.0,
+                                    Some(_) => 1.0,
+                                };
+                                let presence = motion > 0.0
+                                    && node["status"].as_str() == Some("active");
+                                let snap = mqtt::state::VitalsSnapshot {
+                                    node_id: id,
+                                    timestamp_ms: ts_ms,
+                                    presence,
+                                    motion,
+                                    presence_score: if presence { 1.0 } else { 0.0 },
+                                    n_persons: node["person_count"].as_u64().unwrap_or(0) as u32,
+                                    rssi_dbm: node["rssi_dbm"].as_f64(),
+                                    ..Default::default()
+                                };
+                                let _ = vtx.send(snap);
+                            }
                         }
                     });
                     tracing::info!("MQTT publisher started -> {host}:{port}");
