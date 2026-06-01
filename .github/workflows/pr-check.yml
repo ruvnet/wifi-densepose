@@ -1,0 +1,33 @@
+name: PR build check (mqtt)
+
+# Baut den sensing-server mit aktiviertem mqtt-Feature, damit der
+# Per-Node-Discovery-Patch (#899) verifiziert wird.
+
+on:
+  push:
+    branches: [ "fix/per-node-mqtt-discovery" ]
+  pull_request:
+  workflow_dispatch:   # erlaubt manuelles Starten ueber den Actions-Tab
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: v2
+
+      - name: cargo check (mqtt feature)
+        working-directory: v2
+        run: cargo check -p wifi-densepose-sensing-server --features mqtt
+
+      - name: cargo build (mqtt feature)
+        working-directory: v2
+        run: cargo build -p wifi-densepose-sensing-server --features mqtt
