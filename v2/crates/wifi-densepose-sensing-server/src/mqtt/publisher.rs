@@ -181,6 +181,12 @@ async fn run(
     // One discovery identity + availability + rate limiter PER node id seen on
     // the stream. Nodes are discovered lazily: the first snapshot from a new
     // node id triggers its retained discovery + availability publish.
+    //
+    // NOTE: entries are never evicted — a node that goes silent keeps its HA
+    // device marked `online` (the broadcast carries no per-node "gone" signal).
+    // Bounded in practice by the deployment's physical node count. A future
+    // improvement could track last-seen per node and flip availability to
+    // `offline` after a timeout; intentionally out of scope for this fix.
     let mut nodes: HashMap<String, NodeEntry> = HashMap::new();
     let mut last_heartbeat = Instant::now();
     let mut last_refresh = Instant::now();
@@ -248,20 +254,22 @@ async fn run(
                     Ok(snap) => {
                         let elapsed = start_instant.elapsed();
 
-                        // Lazily register a brand-new node: publish its retained
-                        // discovery + availability exactly once, when first seen.
+                        // Lazily register a brand-new node the first time its id is
+                        // seen: publish retained discovery + availability once, then
+                        // insert. `contains_key` guards a single insert; the publish
+                        // borrows `client`/`entities` (not `nodes`), so there is no
+                        // borrow conflict with the `get_mut` below.
                         if !nodes.contains_key(&snap.node_id) {
                             let nb = builder_owned.for_node(&snap.node_id, None);
-                            let borrowed = nb.as_borrowed();
+                            let entry = NodeEntry::new(nb, &entities);
                             if let Err(e) =
-                                publish_all_discovery(&client, &borrowed, &entities).await
+                                publish_all_discovery(&client, &entry.builder.as_borrowed(), &entities).await
                             {
                                 warn!(
                                     "[mqtt] discovery publish failed for node {}: {e}",
                                     snap.node_id
                                 );
                             }
-                            let entry = NodeEntry::new(nb, &entities);
                             if let Err(e) =
                                 publish_availability(&client, &entry.avail, "online").await
                             {
@@ -274,6 +282,8 @@ async fn run(
                             nodes.insert(snap.node_id.clone(), entry);
                         }
 
+                        // Route the snapshot to its node's builder + rate limiter.
+                        // Always present here (just inserted above if it was new).
                         if let Some(entry) = nodes.get_mut(&snap.node_id) {
                             let b = entry.builder.as_borrowed();
                             publish_snapshot(

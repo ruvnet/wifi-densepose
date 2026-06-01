@@ -6209,9 +6209,12 @@ async fn main() {
                             };
                             let ts_ms = (v["timestamp"].as_f64().unwrap_or(0.0) * 1000.0) as i64;
                             for node in arr {
-                                let id = match node["node_id"].as_u64() {
-                                    Some(n) => n.to_string(),
-                                    None => continue,
+                                // node_id may arrive as a JSON number (REST shape)
+                                // or as a string; accept either, skip anything else.
+                                let id = match &node["node_id"] {
+                                    serde_json::Value::Number(n) => n.to_string(),
+                                    serde_json::Value::String(s) if !s.is_empty() => s.clone(),
+                                    _ => continue,
                                 };
                                 let motion = match node["motion_level"].as_str() {
                                     Some("absent") | Some("none") | Some("still")
@@ -6226,8 +6229,15 @@ async fn main() {
                                     presence,
                                     motion,
                                     presence_score: if presence { 1.0 } else { 0.0 },
-                                    n_persons: node["person_count"].as_u64().unwrap_or(0) as u32,
+                                    // person_count is u64 in the REST shape; clamp into u32.
+                                    n_persons: node["person_count"]
+                                        .as_u64()
+                                        .unwrap_or(0)
+                                        .min(u32::MAX as u64) as u32,
                                     rssi_dbm: node["rssi_dbm"].as_f64(),
+                                    // Remaining fields (motion_energy, breathing/heart rate,
+                                    // vital_confidence) are not part of the per-node summary
+                                    // emitted on this broadcast; Default (None/0.0) is correct.
                                     ..Default::default()
                                 };
                                 let _ = vtx.send(snap);
