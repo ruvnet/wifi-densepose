@@ -472,7 +472,7 @@ void csi_collector_init(void)
      * adds ~10 Hz probe responses from APs → ~20 Hz total, matching the
      * edge processing designed sample rate of 20 Hz. */
     wifi_promiscuous_filter_t filt = {
-        .filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT,
+        .filter_mask = WIFI_PROMIS_FILTER_MASK_ALL,
     };
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_filter(&filt));
 
