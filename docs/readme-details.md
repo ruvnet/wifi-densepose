@@ -122,7 +122,7 @@ node scripts/benchmark-ruvllm.js --model models/csi-ruvllm       # benchmark
 
 | What we measured | Result | Why it matters |
 |-----------------|--------|---------------|
-| **Presence detection** | **100% accuracy** | Never misses a person, never false alarms |
+| **CSI embedding quality** | **82.3% held-out temporal-triplet** | Honest label-free metric on the last 20% by time (v1's "100% presence" was a single-class recording — retracted, [#882](https://github.com/ruvnet/RuView/issues/882)) |
 | **Inference speed** | **0.008 ms** per embedding | 125,000x faster than real-time |
 | **Throughput** | **164,183 embeddings/sec** | One Mac Mini handles 1,600+ ESP32 nodes |
 | **Contrastive learning** | **51.6% improvement** | Strong pattern learning from real overnight data |
@@ -233,7 +233,7 @@ python firmware/esp32-csi-node/provision.py --port COM9 --hop-channels "1,6,11"
 | **kNN similarity search** | "Find the 10 most similar states to right now" — anomaly detection, fingerprinting | Cognitum Seed |
 | **Witness chain** | SHA-256 tamper-evident audit trail for every measurement (1,747 entries validated) | Cognitum Seed |
 | **Camera-free pose training** | 17 COCO keypoints from 10 sensor signals — PIR, RSSI triangulation, subcarrier asymmetry, vibration, BME280 | 2x ESP32 + Seed |
-| **Pre-trained model** | 82.8 KB (8 KB at 4-bit quantization), 100% presence accuracy, 0 skeleton violations | Download from release |
+| **Pre-trained model** | 82.8 KB (8 KB at 4-bit quantization), 82.3% held-out temporal-triplet accuracy (v1's "100% presence" was single-class — retracted, [#882](https://github.com/ruvnet/RuView/issues/882)) | Download from release |
 | **Sub-ms inference** | 0.012 ms latency, 171,472 embeddings/sec on M4 Pro | Any machine with Node.js |
 | **SONA adaptation** | Adapts to new rooms in <1ms without retraining | ruvllm runtime |
 | **LoRA room adapters** | Per-node fine-tuning with 2,048 parameters per adapter | Automatic |
@@ -262,7 +262,7 @@ node scripts/benchmark-ruvllm.js --model models/csi-ruvllm
 
 | What we measured | Result | Why it matters |
 |-----------------|--------|---------------|
-| **Presence detection** | **100% accuracy** | Never misses a person, never false alarms |
+| **CSI embedding quality** | **82.3% held-out temporal-triplet** | Honest label-free metric (v1's "100% presence" was single-class — retracted, [#882](https://github.com/ruvnet/RuView/issues/882)) |
 | **Person counting** | **24/24 correct** (MinCut) | Fixed the #1 user-reported issue |
 | **Inference speed** | **0.012 ms** per embedding | 83,000x faster than real-time |
 | **Throughput** | **171,472 embeddings/sec** | One Mac Mini handles 1,700+ ESP32 nodes |

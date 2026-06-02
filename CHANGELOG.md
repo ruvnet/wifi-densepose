@@ -430,7 +430,7 @@ Model release (no new firmware binary). Firmware remains at v0.6.0-esp32.
 - Security fix merged via PR #310.
 
 ### Performance
-- Presence detection: 100% accuracy on 60,630 overnight samples.
+- Presence detection: 100% accuracy on 60,630 overnight samples. *(Retracted — that recording was single-class (one sleeping person, 6,062/6,063 frames "present"), so a constant "yes" scores ~99.98%. Superseded by the honest 82.3% held-out temporal-triplet metric; see [#882](https://github.com/ruvnet/RuView/issues/882). Kept here as the in-place public record.)*
 - Inference: 0.008 ms per sample, 164K embeddings/sec.
 - Contrastive self-supervised training: 51.6% improvement over baseline.
 

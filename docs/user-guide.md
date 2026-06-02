@@ -1119,7 +1119,7 @@ What it ships (and what it does not):
 
 | Capability | Status |
 |------------|--------|
-| Presence detection (occupied / empty) | ✅ Trained head — 100% accuracy on validation |
+| Presence detection (occupied / empty) | ✅ Trained head — v2 encoder reports 82.3% held-out temporal-triplet acc (v1's "100% on validation" was a single-class recording — retracted, [#882](https://github.com/ruvnet/RuView/issues/882)) |
 | 128-dim CSI embeddings (re-ID, similarity, downstream training) | ✅ Trained encoder |
 | Single-person breathing / heart-rate | ⚠️ Server still uses heuristic DSP — model does not replace this yet |
 | 17-keypoint full-body pose | 🔬 No keypoint weights shipped yet — pose pipeline runs but without a learned head |
@@ -1824,7 +1824,7 @@ huggingface-cli download ruvnet/wifi-densepose-pretrained --local-dir models/pre
 #   model.safetensors    — 48 KB contrastive encoder
 #   model-q4.bin         — 8 KB quantized (recommended)
 #   model-q2.bin         — 4 KB ultra-compact (ESP32 edge)
-#   presence-head.json   — presence detection head (100% accuracy)
+#   presence-head.json   — presence detection head (v2 encoder: 82.3% held-out triplet acc)
 #   node-1.json          — LoRA adapter for room 1
 #   node-2.json          — LoRA adapter for room 2
 ```
@@ -1833,7 +1833,7 @@ huggingface-cli download ruvnet/wifi-densepose-pretrained --local-dir models/pre
 
 The pre-trained encoder converts 8-dim CSI feature vectors into 128-dim embeddings. These embeddings power all 17 sensing applications:
 
-- **Presence detection** — 100% accuracy, never misses, never false alarms
+- **Presence detection** — v2 encoder: 82.3% held-out temporal-triplet accuracy (v1's "100%" was a single-class recording — retracted, [#882](https://github.com/ruvnet/RuView/issues/882))
 - **Environment fingerprinting** — kNN search finds "states like this one"
 - **Anomaly detection** — embeddings that don't match known clusters = anomaly
 - **Activity classification** — different activities cluster in embedding space
