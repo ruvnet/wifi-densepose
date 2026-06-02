@@ -267,20 +267,15 @@ jobs:
         pip install -r requirements.txt
         pip install pytest   # the perf suite is pytest, not locust
 
-    - name: Start application
-      working-directory: archive/v1
-      env:
-        # No CSI hardware in CI — serve mock pose data so the pose endpoints
-        # respond 200 under load instead of erroring "requires real CSI data".
-        MOCK_POSE_DATA: "true"
-      run: |
-        uvicorn src.api.main:app --host 0.0.0.0 --port 8000 &
-        sleep 10
+    # No "Start application" step: the gated test (test_frame_budget.py) drives
+    # the CSIProcessor pipeline in-process and makes no HTTP calls, so the old
+    # uvicorn server + `sleep 10` were dead weight — they only existed for the
+    # now-excluded api_throughput/inference_speed tests, and on every run dumped
+    # ~50 misleading "router requires hardware setup" ERROR lines for a server
+    # no test touched. MOCK_POSE_DATA is server-only and unused here.
 
     - name: Run performance tests
       working-directory: archive/v1
-      env:
-        MOCK_POSE_DATA: "true"
       run: |
         # Gate only on the genuine, deterministic perf guard:
         # test_frame_budget.py times the *real* CSIProcessor pipeline against
