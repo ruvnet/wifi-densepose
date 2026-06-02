@@ -282,17 +282,26 @@ jobs:
       env:
         MOCK_POSE_DATA: "true"
       run: |
-        # The repo's performance suite is pytest (test_api_throughput.py,
-        # test_frame_budget.py, test_inference_speed.py) — there is no
-        # locustfile.py, so the old `locust -f tests/performance/locustfile.py`
-        # command always failed with "Could not find ...". Run the real suite.
-        # -o addopts="" drops the root pyproject's --cov/--cov-fail-under=100
-        # flags (pytest-cov isn't installed here and 100% cov is for unit tests).
+        # Gate only on the genuine, deterministic perf guard:
+        # test_frame_budget.py times the *real* CSIProcessor pipeline against
+        # the ADR 50 ms per-frame budget (single-frame, p95 over 100 frames,
+        # +Doppler) — a true regression signal.
+        #
+        # test_api_throughput.py / test_inference_speed.py are excluded: every
+        # test there is a TDD red-phase stub (suffix `_should_fail_initially`)
+        # that times a *mock that sleeps* — meaningless as a perf signal, with
+        # machine-dependent wall-clock asserts (e.g. `actual_rps >= 40`,
+        # `batch_time < individual_time`) that are inherently flaky on shared
+        # CI runners, plus a cross-class fixture-scope bug. Forcing them green
+        # would be manufacturing a false signal; they stay in-repo for local
+        # TDD but do not gate CI until the underlying features are implemented.
+        #
         # `python -m pytest` (not the bare `pytest` script) puts the cwd
-        # (archive/v1) on sys.path so test_frame_budget.py's `from src.core...`
-        # import resolves — the bare script omits cwd and raises
-        # ModuleNotFoundError: No module named 'src'.
-        python -m pytest tests/performance/ -o addopts="" -v --junitxml=perf-junit.xml
+        # (archive/v1) on sys.path so `from src.core...` resolves — the bare
+        # script omits cwd and raises ModuleNotFoundError: No module named 'src'.
+        # -o addopts="" drops the root pyproject's --cov/--cov-fail-under=100.
+        python -m pytest tests/performance/test_frame_budget.py \
+          -o addopts="" -v --junitxml=perf-junit.xml
 
     - name: Upload performance results
       if: always()
