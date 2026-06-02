@@ -288,7 +288,11 @@ jobs:
         # command always failed with "Could not find ...". Run the real suite.
         # -o addopts="" drops the root pyproject's --cov/--cov-fail-under=100
         # flags (pytest-cov isn't installed here and 100% cov is for unit tests).
-        pytest tests/performance/ -o addopts="" -v --junitxml=perf-junit.xml
+        # `python -m pytest` (not the bare `pytest` script) puts the cwd
+        # (archive/v1) on sys.path so test_frame_budget.py's `from src.core...`
+        # import resolves — the bare script omits cwd and raises
+        # ModuleNotFoundError: No module named 'src'.
+        python -m pytest tests/performance/ -o addopts="" -v --junitxml=perf-junit.xml
 
     - name: Upload performance results
       if: always()
