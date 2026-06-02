@@ -5619,6 +5619,16 @@ fn diagnose_model_load_error(path: &std::path::Path, data: &[u8], err: &str) -> 
     )
 }
 
+/// Whether `--export-rvf` should emit the placeholder container-format demo.
+///
+/// It must only do so **standalone**. Combined with `--train`/`--pretrain` the
+/// real model is produced by the training pipeline, so short-circuiting here
+/// would silently skip training and write placeholder weights — the #894 bug
+/// where the documented `--train … --export-rvf` workflow produced a fake model.
+fn export_emits_placeholder_demo(export_set: bool, train: bool, pretrain: bool) -> bool {
+    export_set && !train && !pretrain
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 /// If `--ui-path` points nowhere (wrong cwd), try common repo layouts relative to cwd.
@@ -5662,9 +5672,24 @@ async fn main() {
         return;
     }
 
-    // Handle --export-rvf mode: build an RVF container package and exit
-    if let Some(ref rvf_path) = args.export_rvf {
-        eprintln!("Exporting RVF container package...");
+    // Handle --export-rvf: writes a CONTAINER-FORMAT DEMO with placeholder
+    // weights — it is NOT a trained model. Only short-circuit when standalone:
+    // combined with --train/--pretrain the real model is exported by the
+    // training pipeline, and short-circuiting here would silently skip training
+    // and write placeholder weights (#894 — the documented `--train …
+    // --export-rvf` workflow produced a placeholder and never trained).
+    if export_emits_placeholder_demo(args.export_rvf.is_some(), args.train, args.pretrain) {
+        let rvf_path = args
+            .export_rvf
+            .as_ref()
+            .expect("export_emits_placeholder_demo implies export_rvf is set");
+        eprintln!(
+            "WARNING: --export-rvf writes a CONTAINER-FORMAT DEMO with placeholder \
+             weights — it is NOT a trained model. Train one with \
+             `--train --dataset <DIR>` (which exports a calibrated .rvf to the \
+             models/ directory), or download a pretrained encoder. See issue #894."
+        );
+        eprintln!("Exporting RVF container package (placeholder weights)...");
         use rvf_pipeline::RvfModelBuilder;
 
         let mut builder = RvfModelBuilder::new("wifi-densepose", "1.0.0");
@@ -5713,6 +5738,13 @@ async fn main() {
             }
         }
         return;
+    } else if args.export_rvf.is_some() {
+        // --export-rvf alongside --train/--pretrain: don't emit a placeholder.
+        // Fall through so training runs; it exports the real calibrated model.
+        eprintln!(
+            "Note: --export-rvf is ignored in training mode — the trained model \
+             is exported by the training pipeline to the models/ directory."
+        );
     }
 
     // Handle --pretrain mode: self-supervised contrastive pretraining (ADR-024)
@@ -7308,5 +7340,31 @@ mod model_load_diagnostic_tests {
         let msg = diagnose_model_load_error(Path::new("weird.dat"), &data, "x");
         assert!(msg.contains("RVF binary container"), "{msg}");
         assert!(msg.contains("wifi-densepose-train"), "{msg}");
+    }
+}
+
+#[cfg(test)]
+mod export_rvf_mode_tests {
+    use super::export_emits_placeholder_demo;
+
+    #[test]
+    fn standalone_export_emits_placeholder() {
+        // --export-rvf alone → the container-format demo (placeholder weights).
+        assert!(export_emits_placeholder_demo(true, false, false));
+    }
+
+    #[test]
+    fn export_with_train_does_not_short_circuit() {
+        // #894: `--train --export-rvf` must NOT emit a placeholder + skip
+        // training — it must fall through to the real training pipeline.
+        assert!(!export_emits_placeholder_demo(true, true, false));
+        assert!(!export_emits_placeholder_demo(true, false, true));
+        assert!(!export_emits_placeholder_demo(true, true, true));
+    }
+
+    #[test]
+    fn no_export_flag_never_emits() {
+        assert!(!export_emits_placeholder_demo(false, false, false));
+        assert!(!export_emits_placeholder_demo(false, true, false));
     }
 }

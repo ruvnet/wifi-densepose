@@ -1048,7 +1048,7 @@ The Rust sensing server binary accepts the following flags:
 | `--dataset` | (none) | Path to dataset directory (MM-Fi or Wi-Pose) |
 | `--dataset-type` | `mmfi` | Dataset format: `mmfi` or `wipose` |
 | `--epochs` | `100` | Training epochs |
-| `--export-rvf` | (none) | Export RVF model container and exit |
+| `--export-rvf` | (none) | Export a **placeholder** RVF container-format demo and exit — **not a trained model**. For a real model use `--train` (+ `--save-rvf`) or download a pretrained encoder. |
 | `--save-rvf` | (none) | Save model state to RVF on shutdown |
 | `--model` | (none) | Load a trained `.rvf` model for inference |
 | `--load-rvf` | (none) | Load model config from RVF container |
@@ -1359,7 +1359,7 @@ docker run --rm \
   -v $(pwd)/output:/output \
   --entrypoint /app/sensing-server \
   ruvnet/wifi-densepose:latest \
-  --train --dataset /data --epochs 100 --export-rvf /output/model.rvf
+  --train --dataset /data --epochs 100 --save-rvf /output/model.rvf
 ```
 
 The pipeline runs 10 phases:
