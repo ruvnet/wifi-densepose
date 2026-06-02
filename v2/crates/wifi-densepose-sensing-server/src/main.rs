@@ -5570,6 +5570,55 @@ fn vitals_snapshots_from_sensing_json(
     }
 }
 
+/// Turn a `ProgressiveLoader::new` failure into an actionable diagnostic (#894).
+///
+/// The published HuggingFace `ruvnet/wifi-densepose-pretrained` files
+/// (`model.safetensors`, `model-q{2,4,8}.bin`, `model.rvf.jsonl`) are a
+/// different *format* — and a different encoder architecture — than the RVF
+/// binary container the `--model` progressive loader expects (`RVFS` magic
+/// `0x52564653`). Feeding one to `--model` produced a bare
+/// "invalid magic at offset 0 …" that left users stuck. Detect the common
+/// cases and explain plainly what's loadable instead.
+fn diagnose_model_load_error(path: &std::path::Path, data: &[u8], err: &str) -> String {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    // safetensors: 8-byte LE header length, then a JSON object starting with '{'.
+    let looks_safetensors = ext == "safetensors" || (data.len() > 9 && data[8] == b'{');
+    // JSONL manifest: starts with '{' (or the well-known suffix).
+    let looks_jsonl =
+        ext == "jsonl" || name.ends_with(".rvf.jsonl") || data.first() == Some(&b'{');
+    // Quantized weight blob shipped on HF (model-q2/q4/q8.bin).
+    let looks_quant_bin = ext == "bin" || name.contains("-q");
+
+    let kind = if looks_safetensors {
+        "a safetensors weight file"
+    } else if looks_jsonl {
+        "a JSONL manifest, not the binary container"
+    } else if looks_quant_bin {
+        "a quantized weight blob (e.g. HuggingFace model-q4.bin)"
+    } else {
+        "not an RVF binary container"
+    };
+
+    format!(
+        "model `{}` could not be loaded: it is {kind}. The --model flag expects an \
+         RVF binary container (`RVFS` magic 0x52564653) produced by the \
+         wifi-densepose-train pipeline. The HuggingFace ruvnet/wifi-densepose-pretrained \
+         files are a different format and encoder architecture, so they do not load \
+         here directly (issue #894). Continuing with signal heuristics. (loader: {err})",
+        path.display()
+    )
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 /// If `--ui-path` points nowhere (wrong cwd), try common repo layouts relative to cwd.
@@ -6207,7 +6256,9 @@ async fn main() {
                         model_loaded = true;
                         progressive_loader = Some(loader);
                     }
-                    Err(e) => error!("Progressive loader init failed: {e}"),
+                    Err(e) => {
+                        error!("{}", diagnose_model_load_error(mp, &data, &e.to_string()))
+                    }
                 },
                 Err(e) => error!("Failed to read model file: {e}"),
             }
@@ -7214,5 +7265,48 @@ mod mqtt_bridge_tests {
         let snaps = vitals_snapshots_from_sensing_json(&v, "x");
         assert_eq!(snaps[0].motion, 0.0);
         assert!(!snaps[0].presence);
+    }
+}
+
+#[cfg(test)]
+mod model_load_diagnostic_tests {
+    use super::diagnose_model_load_error;
+    use std::path::Path;
+
+    #[test]
+    fn safetensors_is_named_and_points_at_894() {
+        // 8-byte LE header length then '{' — the safetensors signature.
+        let data = [0x10, 0, 0, 0, 0, 0, 0, 0, b'{', b'"'];
+        let msg = diagnose_model_load_error(
+            Path::new("models/wifi-densepose-pretrained/model.safetensors"),
+            &data,
+            "invalid magic at offset 0",
+        );
+        assert!(msg.contains("safetensors"), "{msg}");
+        assert!(msg.contains("#894"), "{msg}");
+        assert!(msg.contains("signal heuristics"), "{msg}");
+    }
+
+    #[test]
+    fn quantized_bin_is_identified() {
+        let data = [0x35, 0x57, 0x45, 0x77]; // the 0x77455735 the loader reports
+        let msg = diagnose_model_load_error(Path::new("model-q4.bin"), &data, "bad magic");
+        assert!(msg.contains("quantized weight blob"), "{msg}");
+        assert!(msg.contains("RVFS") || msg.contains("0x52564653"), "{msg}");
+    }
+
+    #[test]
+    fn jsonl_manifest_is_identified() {
+        let data = *b"{\"seg\":0}";
+        let msg = diagnose_model_load_error(Path::new("model.rvf.jsonl"), &data, "x");
+        assert!(msg.contains("JSONL manifest"), "{msg}");
+    }
+
+    #[test]
+    fn unknown_format_still_gives_guidance() {
+        let data = [0u8, 1, 2, 3];
+        let msg = diagnose_model_load_error(Path::new("weird.dat"), &data, "x");
+        assert!(msg.contains("RVF binary container"), "{msg}");
+        assert!(msg.contains("wifi-densepose-train"), "{msg}");
     }
 }
