@@ -439,8 +439,16 @@ pub fn extract_features_from_frame(
             .clamp(0.0, 1.0)
     };
 
-    let variance_motion = (temporal_variance / 10.0).clamp(0.0, 1.0);
-    let mbp_motion = (motion_band_power / 25.0).clamp(0.0, 1.0);
+    // Normalize the energy-based motion terms by signal power (mean_amp^2) so
+    // they are independent of absolute amplitude. Without this, adding external
+    // antennas raised amplitudes ~5x and these raw energies ~30x, pinning both
+    // terms at the 1.0 clamp — which saturates raw_motion and defeats the
+    // adaptive baseline subtraction in smooth_and_classify (an empty room then
+    // reads "present"). Same sqrt-of-power-ratio form as temporal_motion_score
+    // above. Field-model (--calibrate) path is unaffected.
+    let amp_ref = mean_amp * mean_amp + 1e-9;
+    let variance_motion = (temporal_variance / amp_ref).sqrt().clamp(0.0, 1.0);
+    let mbp_motion = (motion_band_power / amp_ref).sqrt().clamp(0.0, 1.0);
     let cp_motion = (change_points as f64 / 15.0).clamp(0.0, 1.0);
     let motion_score = (temporal_motion_score * 0.4
         + variance_motion * 0.2

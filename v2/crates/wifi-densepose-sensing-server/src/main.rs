@@ -1378,15 +1378,25 @@ fn parse_esp32_frame(buf: &[u8]) -> Option<Esp32Frame> {
     let n_antennas = buf[5];
     let n_subcarriers = buf[6];
     let freq_mhz = u16::from_le_bytes([buf[8], buf[9]]);
-    let sequence = u32::from_le_bytes([buf[10], buf[11], buf[12], buf[13]]);
-    let rssi_raw = buf[14] as i8;
+    // Header offsets MUST match firmware csi_collector.c csi_serialize_frame():
+    //   seq  -> memcpy(&buf[12], &seq, 4)   => [12..16)
+    //   rssi -> buf[16]
+    //   noise_floor -> buf[17]
+    // Previously these were read 2 bytes early ([10..14), buf[14], buf[15]), which
+    // sampled the high bytes of the sequence counter instead of rssi/noise_floor —
+    // the counter's byte 2 stays 0 for the first 65 536 frames, so rssi decoded as
+    // 0 dBm (an impossible WiFi level). That bogus rssi=0 then zeroed the RSSI-fusion
+    // weights and SNR-based signal_quality. The I/Q payload at byte 20 was already
+    // correct (CSI_HEADER_SIZE == 20), so amplitude-derived features were unaffected.
+    let sequence = u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]);
+    let rssi_raw = buf[16] as i8;
     // Fix RSSI sign: ensure it's always negative (dBm convention).
     let rssi = if rssi_raw > 0 {
         rssi_raw.saturating_neg()
     } else {
         rssi_raw
     };
-    let noise_floor = buf[15] as i8;
+    let noise_floor = buf[17] as i8;
 
     let iq_start = 20;
     let n_pairs = n_antennas as usize * n_subcarriers as usize;
@@ -1824,8 +1834,20 @@ fn extract_features_from_frame(
 
     // Blend temporal motion with variance-based motion for robustness.
     // Also factor in motion_band_power and change_points for ESP32 real-world sensitivity.
-    let variance_motion = (temporal_variance / 10.0).clamp(0.0, 1.0);
-    let mbp_motion = (motion_band_power / 25.0).clamp(0.0, 1.0);
+    //
+    // Normalize the two energy-based terms by signal power (mean_amp^2) so they are
+    // dimensionless ratios independent of absolute amplitude — the same sqrt-of-power-ratio
+    // form already used by `temporal_motion_score` above. Without this, the fixed divisors
+    // (/10, /25) were calibrated for the antenna-less regime; adding external IPEX antennas
+    // raised amplitudes ~5x and these raw energies ~30x, pinning BOTH terms at the 1.0 clamp.
+    // A saturated term carries no information and defeats the adaptive baseline subtraction
+    // in `smooth_and_classify` — so an empty room read "present" indefinitely. Making them
+    // ratios self-scales to any node/antenna/room and to future mesh nodes. (change_points is
+    // already a dimensionless count, so it keeps its fixed divisor.) Field-model (--calibrate)
+    // path is unaffected — it never used these terms.
+    let amp_ref = mean_amp * mean_amp + 1e-9;
+    let variance_motion = (temporal_variance / amp_ref).sqrt().clamp(0.0, 1.0);
+    let mbp_motion = (motion_band_power / amp_ref).sqrt().clamp(0.0, 1.0);
     let cp_motion = (change_points as f64 / 15.0).clamp(0.0, 1.0);
     let motion_score = (temporal_motion_score * 0.4
         + variance_motion * 0.2
@@ -7586,5 +7608,97 @@ mod export_rvf_mode_tests {
     fn no_export_flag_never_emits() {
         assert!(!export_emits_placeholder_demo(false, false, false));
         assert!(!export_emits_placeholder_demo(false, true, false));
+    }
+}
+
+/// Regression tests for the IPEX-antenna saturation bug: `motion_score` must be
+/// invariant to absolute signal amplitude so that adding external antennas (which
+/// raised amplitudes ~5x) does not peg the presence terms at their 1.0 clamp and
+/// make an empty room read "present". See `extract_features_from_frame`.
+#[cfg(test)]
+mod motion_score_antenna_tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    /// Minimal Esp32Frame carrying the given amplitude vector.
+    fn frame_with(amps: Vec<f64>) -> Esp32Frame {
+        let n = amps.len() as u8;
+        Esp32Frame {
+            magic: 0,
+            node_id: 1,
+            n_antennas: 1,
+            n_subcarriers: n,
+            freq_mhz: 2437,
+            sequence: 0,
+            rssi: -40,
+            noise_floor: -90,
+            phases: vec![0.0; amps.len()],
+            amplitudes: amps,
+        }
+    }
+
+    /// Deterministic 52-subcarrier amplitude pattern. `scale` multiplies the whole
+    /// signal (antenna gain); `jitter` controls per-frame deviation (motion); `seed`
+    /// varies the jitter from frame to frame.
+    fn pattern(scale: f64, jitter: f64, seed: f64) -> Vec<f64> {
+        (0..52)
+            .map(|i| {
+                let base = 18.0 + 6.0 * ((i as f64) * 0.3).sin();
+                let wobble = jitter * ((i as f64) * 0.7 + seed).sin();
+                (base + wobble) * scale
+            })
+            .collect()
+    }
+
+    /// motion_score (5th tuple element) for `current` preceded by `history` frames.
+    fn motion_score_for(history: &[Vec<f64>], current: Vec<f64>) -> f64 {
+        let hist: VecDeque<Vec<f64>> = history.iter().cloned().collect();
+        let (_f, _c, _b, _sv, motion_score) =
+            extract_features_from_frame(&frame_with(current), &hist, 10.0);
+        motion_score
+    }
+
+    #[test]
+    fn motion_score_is_amplitude_scale_invariant() {
+        // The core fix: an identical temporal pattern at 1x vs 5x amplitude (the
+        // antenna-gain regime) must yield the SAME motion_score. Every term is now a
+        // dimensionless ratio (variance/amp^2, mbp/amp^2, temporal diff/amp^2) or a
+        // relative-threshold count (change_points, dominant_freq), so amplitude cancels.
+        for &jitter in &[0.0_f64, 1.5, 5.0] {
+            let hist_1x: Vec<Vec<f64>> =
+                (0..6).map(|s| pattern(1.0, jitter, s as f64)).collect();
+            let hist_5x: Vec<Vec<f64>> =
+                (0..6).map(|s| pattern(5.0, jitter, s as f64)).collect();
+            let s1 = motion_score_for(&hist_1x, pattern(1.0, jitter, 6.0));
+            let s5 = motion_score_for(&hist_5x, pattern(5.0, jitter, 6.0));
+            assert!(
+                (s1 - s5).abs() < 1e-9,
+                "motion_score must be amplitude-invariant (jitter={jitter}): 1x={s1}, 5x={s5}"
+            );
+        }
+    }
+
+    #[test]
+    fn high_amplitude_quiet_signal_does_not_saturate() {
+        // A near-stationary signal at antenna-level amplitude must not peg motion_score
+        // at 1.0 (the pre-fix bug), and must score clearly below a moving signal at the
+        // SAME amplitude — proving dynamic range to distinguish empty from occupied.
+        let scale = 5.0;
+        let quiet = motion_score_for(
+            &(0..6).map(|s| pattern(scale, 0.05, s as f64)).collect::<Vec<_>>(),
+            pattern(scale, 0.05, 6.0),
+        );
+        let moving = motion_score_for(
+            &(0..6).map(|s| pattern(scale, 8.0, (s * 13) as f64)).collect::<Vec<_>>(),
+            pattern(scale, 8.0, 91.0),
+        );
+        assert!(
+            quiet < 0.5,
+            "quiet high-amplitude signal must not saturate, got {quiet}"
+        );
+        assert!(
+            moving > quiet + 0.1,
+            "moving must score above quiet (range preserved): quiet={quiet}, moving={moving}"
+        );
     }
 }
