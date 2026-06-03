@@ -172,6 +172,14 @@ impl EnsembleClassifier {
         let has_movement = reading.movement.movement_type != MovementType::None;
 
         if !has_breathing && !has_movement {
+            // SAFETY: a detectable heartbeat means the survivor is ALIVE. No
+            // sensed breathing/movement *with* a pulse is respiratory arrest —
+            // the most time-critical savable state (Immediate), never Deceased.
+            // Only the total absence of breathing, movement AND heartbeat is
+            // reported Deceased.
+            if reading.heartbeat.is_some() {
+                return TriageStatus::Immediate;
+            }
             return TriageStatus::Deceased;
         }
 
@@ -293,6 +301,27 @@ mod tests {
 
         let result = classifier.classify(&reading);
         assert_eq!(result.recommended_triage, TriageStatus::Deceased);
+    }
+
+    /// SAFETY regression: heartbeat present but no sensed breathing/movement is
+    /// respiratory arrest — Immediate, never Deceased. Only the *total* absence
+    /// of breathing, movement AND heartbeat (the test above) is Deceased.
+    #[test]
+    fn test_heartbeat_with_no_breathing_or_movement_is_immediate() {
+        // breathing: None, heartbeat: Some(72 bpm), movement: None
+        let reading = make_reading(None, Some(72.0), MovementType::None);
+
+        let classifier = EnsembleClassifier::new(EnsembleConfig {
+            min_ensemble_confidence: 0.0,
+            ..EnsembleConfig::default()
+        });
+
+        let result = classifier.classify(&reading);
+        assert_eq!(
+            result.recommended_triage,
+            TriageStatus::Immediate,
+            "a survivor with a pulse must never be triaged Deceased"
+        );
     }
 
     #[test]
