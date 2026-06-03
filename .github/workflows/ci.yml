@@ -108,16 +108,18 @@ jobs:
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
 
-    - name: Cache cargo
-      uses: actions/cache@v4
+    # Swatinem/rust-cache replaces a naive `actions/cache` of the whole
+    # `v2/target`. That manual cache of a 38-crate target dir (multi-GB) was an
+    # intermittent failure source — several CI runs this cycle died at the
+    # cache/setup step (after toolchain install, before "Run Rust tests"),
+    # needing a rerun. rust-cache is purpose-built for Rust: it caches the
+    # registry + git + a pruned target, evicts stale deps, and restores far more
+    # reliably (and faster) on large workspaces. `workspaces: v2` points it at
+    # the v2/ cargo workspace (keys on v2/Cargo.lock, caches v2/target).
+    - name: Cache cargo (Swatinem/rust-cache)
+      uses: Swatinem/rust-cache@v2
       with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          v2/target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('v2/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-
+        workspaces: v2
 
     - name: Run Rust tests
       working-directory: v2
