@@ -1,0 +1,32 @@
+# ESP32-S2 CSI Node — Flipper Zero WiFi Dev Board (ESP32-S2) Configuration
+# For Flipper Zero WiFi Dev boards (ESP32-S2).
+#
+# Build: ./ruview.py node build --chip esp32s2
+
+CONFIG_IDF_TARGET="esp32s2"
+
+# 4MB flash partition table
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_4mb.csv"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
+# Compiler: optimize for size
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# CSI support
+CONFIG_ESP_WIFI_CSI_ENABLED=y
+
+# Disable display and WASM to fit in 4MB
+# CONFIG_DISPLAY_ENABLE is not set
+# CONFIG_WASM_ENABLE is not set
+
+# Reduce logging to save flash
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+CONFIG_LWIP_SO_RCVBUF=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# ADR-081: adaptive_controller / stream_sender
+CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH=8192
