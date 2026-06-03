@@ -442,6 +442,11 @@ struct NodeState {
     /// Most recent novelty score in [0.0, 1.0] (0 = exact-match in bank,
     /// 1 = no overlap). Consumed by the model-wake gate downstream.
     pub(crate) last_novelty_score: Option<f32>,
+    /// CSI de-confounding (occupancy-blind fix): rolling P95 of per-frame spatial
+    /// CoV² ("frame richness"), used to exclude structureless/null frames.
+    frame_structure_p95: RollingP95,
+    /// Count of structureless/null frames excluded from the feature pipeline.
+    pub(crate) off_structure_frames: u64,
 }
 
 /// Default EMA alpha for temporal keypoint smoothing (RuVector Phase 2).
@@ -462,6 +467,44 @@ const NOVELTY_VECTOR_DIM: usize = 56;
 /// ADR-084 Pass 3 — number of past sketches retained per-node for
 /// novelty comparison. 64 frames ≈ 6.4 s at 10 Hz.
 const NOVELTY_HISTORY_CAPACITY: usize = 64;
+
+// ── CSI de-confounding (occupancy-blind fix) ─────────────────────────────────
+// Promiscuous capture interleaves structureless "null" frames (near-constant
+// amplitude vectors, spatial CoV² ≈ 0) with real CSI frames (CoV² ~0.4) at the
+// SAME subcarrier width and RSSI. Diffing a null frame against a real one in
+// `temporal_motion_score` fabricates large fake "motion", which is what makes the
+// presence signal bimodal and occupancy-blind. The gate admits a frame into the
+// feature pipeline only if its spatial CoV² is at least `DECONFOUND_FRACTION` of
+// the node's rolling-P95 CoV² — adaptive, so there is no brittle absolute
+// threshold and it self-calibrates per node. Disable with `SENSING_DECONFOUND=0`.
+const DECONFOUND_FRACTION: f64 = 0.1;
+const DECONFOUND_WINDOW: usize = 256;
+const DECONFOUND_MIN_SAMPLES: usize = 16;
+
+/// Scale-invariant spatial dispersion of one frame's amplitudes: `var / mean²`.
+/// ≈ 0 for a structureless/null frame; large for a real multipath CSI frame.
+fn frame_structure_cov2(amps: &[f64]) -> f64 {
+    if amps.is_empty() {
+        return 0.0;
+    }
+    let mean = amps.iter().sum::<f64>() / amps.len() as f64;
+    if mean.abs() < 1e-9 {
+        return 0.0;
+    }
+    let var = amps.iter().map(|a| (a - mean).powi(2)).sum::<f64>() / amps.len() as f64;
+    var / (mean * mean)
+}
+
+/// Whether CSI de-confounding is enabled (env `SENSING_DECONFOUND`, default on).
+fn deconfound_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("SENSING_DECONFOUND")
+            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+            .unwrap_or(true)
+    })
+}
 /// ADR-084 Pass 3 — feature-vector schema version. Bump on changes to
 /// subcarrier ordering / normalisation so banks reject stale data.
 const NOVELTY_SKETCH_VERSION: u16 = 1;
@@ -647,7 +690,26 @@ impl NodeState {
                 ),
             ),
             last_novelty_score: None,
+            frame_structure_p95: RollingP95::new(DECONFOUND_WINDOW, DECONFOUND_MIN_SAMPLES),
+            off_structure_frames: 0,
         }
+    }
+
+    /// CSI de-confounding gate (occupancy-blind fix). Returns `false` for a
+    /// structureless/"null" frame — one whose spatial CoV² (`cov2`) is far below
+    /// the node's recent rich-frame level — so it is excluded from the feature
+    /// pipeline (diffing it against a real frame would fabricate temporal
+    /// "motion"). Admits all frames during warmup. Tracks `off_structure_frames`.
+    pub(crate) fn admit_frame_structure(&mut self, cov2: f64) -> bool {
+        self.frame_structure_p95.push(cov2);
+        let admit = match self.frame_structure_p95.current() {
+            Some(p95) => cov2 >= DECONFOUND_FRACTION * p95,
+            None => true, // warmup: not enough samples to know the rich level yet
+        };
+        if !admit {
+            self.off_structure_frames = self.off_structure_frames.saturating_add(1);
+        }
+        admit
     }
 
     /// ADR-084 cluster-Pi novelty step. Truncates / zero-pads the
@@ -5253,8 +5315,32 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     s.source = "esp32".to_string();
                     s.last_esp32_frame = Some(std::time::Instant::now());
 
-                    // Also maintain global frame_history for backward compat
-                    // (simulation path, REST endpoints, etc.).
+                    let node_id = frame.node_id;
+                    // Clone adaptive model before the mutable borrow of node_states
+                    // below (avoids an unsafe raw pointer — review finding #2).
+                    let adaptive_model_clone = s.adaptive_model.clone();
+
+                    // ── CSI de-confounding (occupancy-blind fix) ───────────────
+                    // Exclude structureless/null frames so the feature pipeline
+                    // (global + per-node) sees a consistent stream — a null frame
+                    // diffed against a real one fabricates temporal "motion".
+                    {
+                        let cov2 = frame_structure_cov2(&frame.amplitudes);
+                        let ns = s.node_states.entry(node_id).or_insert_with(NodeState::new);
+                        // Advance the per-node fps EMA here (the gate is the single
+                        // per-frame entry point); the per-node block no longer does.
+                        ns.observe_csi_frame_arrival(std::time::Instant::now());
+                        if deconfound_enabled() && !ns.admit_frame_structure(cov2) {
+                            debug!(
+                                "node {node_id}: excluding structureless frame \
+                                 (cov2={cov2:.4}) from feature pipeline (de-confounding)"
+                            );
+                            continue;
+                        }
+                    }
+
+                    // Maintain global frame_history (admitted frames only) for the
+                    // person-count fallback / REST endpoints / simulation path.
                     s.frame_history.push_back(frame.amplitudes.clone());
                     if s.frame_history.len() > FRAME_HISTORY_CAPACITY {
                         s.frame_history.pop_front();
@@ -5285,20 +5371,12 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     }
 
                     // ── Per-node processing (issue #249) ──────────────────
-                    // Process entirely within per-node state so different
-                    // ESP32 nodes never mix their smoothing/vitals buffers.
-                    // We scope the mutable borrow of node_states so we can
-                    // access other AppStateInner fields afterward.
-                    let node_id = frame.node_id;
-                    // Clone adaptive model before mutable borrow of node_states
-                    // to avoid unsafe raw pointer (review finding #2).
-                    let adaptive_model_clone = s.adaptive_model.clone();
-
+                    // Process entirely within per-node state so different ESP32
+                    // nodes never mix their smoothing/vitals buffers. `node_id` /
+                    // `adaptive_model_clone` are bound above, and the per-node fps
+                    // EMA was already advanced in the de-confounding gate; just
+                    // re-borrow the node state here.
                     let ns = s.node_states.entry(node_id).or_insert_with(NodeState::new);
-                    // ADR-110 iter 19 — feed the per-node fps EMA from real
-                    // CSI arrivals. The helper sets `last_frame_time` as a
-                    // side effect, so the previous bare assignment is gone.
-                    ns.observe_csi_frame_arrival(std::time::Instant::now());
 
                     // ADR-084 Pass 3: cluster-Pi novelty sensor.
                     // Score this frame's feature vector against the per-node
@@ -7608,6 +7686,84 @@ mod export_rvf_mode_tests {
     fn no_export_flag_never_emits() {
         assert!(!export_emits_placeholder_demo(false, false, false));
         assert!(!export_emits_placeholder_demo(false, true, false));
+    }
+}
+
+/// Tests for the CSI de-confounding gate (occupancy-blind fix). Real promiscuous
+/// capture interleaves structureless "null" frames with real CSI frames at the
+/// same width/RSSI; diffing them fabricates temporal "motion". The gate excludes
+/// null frames so the feature pipeline sees a consistent stream.
+#[cfg(test)]
+mod deconfound_tests {
+    use super::*;
+
+    fn flat(n: usize, level: f64) -> Vec<f64> {
+        vec![level; n]
+    }
+    fn rich(n: usize, seed: f64) -> Vec<f64> {
+        (0..n).map(|i| 20.0 + 15.0 * ((i as f64) * 0.4 + seed).sin()).collect()
+    }
+
+    #[test]
+    fn cov2_zero_for_flat_large_for_structured_and_scale_invariant() {
+        assert!(frame_structure_cov2(&flat(56, 20.0)) < 1e-9, "constant vector → no structure");
+        assert!(frame_structure_cov2(&rich(56, 0.0)) > 0.1, "multipath vector → real structure");
+        let a = rich(56, 0.7);
+        let a5: Vec<f64> = a.iter().map(|x| x * 5.0).collect();
+        assert!(
+            (frame_structure_cov2(&a) - frame_structure_cov2(&a5)).abs() < 1e-9,
+            "CoV² is scale-invariant (independent of amplitude gain)"
+        );
+    }
+
+    #[test]
+    fn gate_excludes_null_frames_after_warmup() {
+        let mut ns = NodeState::new();
+        // warm the P95 on rich frames so it knows the node's real level
+        for j in 0..DECONFOUND_MIN_SAMPLES + 4 {
+            ns.admit_frame_structure(frame_structure_cov2(&rich(56, j as f64)));
+        }
+        assert!(ns.admit_frame_structure(frame_structure_cov2(&rich(56, 99.0))), "rich admitted");
+        let before = ns.off_structure_frames;
+        assert!(!ns.admit_frame_structure(frame_structure_cov2(&flat(56, 20.0))), "null excluded");
+        assert_eq!(ns.off_structure_frames, before + 1, "exclusion is counted");
+    }
+
+    #[test]
+    fn gating_removes_fabricated_temporal_motion() {
+        // frame-to-frame normalized diff energy (firmware temporal_motion_score form)
+        let motion = |frames: &[Vec<f64>]| -> f64 {
+            let (mut acc, mut k) = (0.0, 0usize);
+            for w in frames.windows(2) {
+                let (a, b) = (&w[0], &w[1]);
+                let m: f64 = a.iter().sum::<f64>() / a.len() as f64;
+                if m == 0.0 { continue; }
+                let de: f64 = a.iter().zip(b).map(|(x, y)| (x - y).powi(2)).sum::<f64>() / a.len() as f64;
+                acc += (de / (m * m)).sqrt();
+                k += 1;
+            }
+            if k > 0 { acc / k as f64 } else { 0.0 }
+        };
+        // alternating null/rich stream = the real-data pathology
+        let stream: Vec<Vec<f64>> = (0..200)
+            .map(|i| if i % 2 == 0 { rich(56, (i / 2) as f64 * 0.01) } else { flat(56, 20.0) })
+            .collect();
+        let confounded = motion(&stream);
+
+        let mut ns = NodeState::new();
+        for j in 0..DECONFOUND_MIN_SAMPLES + 4 {
+            ns.admit_frame_structure(frame_structure_cov2(&rich(56, j as f64)));
+        }
+        let admitted: Vec<Vec<f64>> = stream
+            .iter()
+            .filter(|a| ns.admit_frame_structure(frame_structure_cov2(a)))
+            .cloned()
+            .collect();
+        let deconfounded = motion(&admitted);
+        assert!(
+            deconfounded < confounded / 10.0,
+            "de-confounding must collapse fabricated motion: confounded={confounded:.3} deconfounded={deconfounded:.3}"
+        );
     }
 }
 
