@@ -1114,7 +1114,7 @@ fn parse_esp32_vitals(buf: &[u8]) -> Option<Esp32VitalsPacket> {
     })
 }
 
-// ── ADR-040: WASM Output Packet (magic 0xC511_0004) ───────────────────────────
+// ── ADR-040: WASM Output Packet (magic 0xC511_0007 — reassigned per #928) ─────
 
 /// Single WASM event (type + value).
 #[derive(Debug, Clone, Serialize)]
@@ -1131,13 +1131,14 @@ struct WasmOutputPacket {
     events: Vec<WasmEvent>,
 }
 
-/// Parse a WASM output packet (magic 0xC511_0004).
+/// Parse a WASM output packet (magic 0xC511_0007 — reassigned per issue #928;
+/// the original 0xC511_0004 was a collision with ADR-063 fused vitals).
 fn parse_wasm_output(buf: &[u8]) -> Option<WasmOutputPacket> {
     if buf.len() < 8 {
         return None;
     }
     let magic = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
-    if magic != 0xC511_0004 {
+    if magic != 0xC511_0007 {
         return None;
     }
 
@@ -1167,6 +1168,187 @@ fn parse_wasm_output(buf: &[u8]) -> Option<WasmOutputPacket> {
         module_id,
         events,
     })
+}
+
+// ── ADR-063: Edge Fused Vitals Packet (magic 0xC511_0004) ─────────────────────
+//
+// 48-byte packed struct emitted by the ESP32-C6 + MR60BHA2 mmWave config when
+// `mmwave_sensor_get_state().detected` is true. Byte layout from
+// `firmware/esp32-csi-node/main/edge_processing.h` line 129 — kept in lockstep
+// with the firmware's `_Static_assert(sizeof(edge_fused_vitals_pkt_t) == 48)`.
+// Issue #928 surfaced that this magic was being parsed as WASM output and the
+// fused vitals were silently lost. Adding the proper parser here.
+
+#[derive(Debug, Clone, Serialize)]
+struct EdgeFusedVitalsPacket {
+    node_id: u8,
+    /// Bit0=presence, Bit1=fall, Bit2=motion, Bit3=mmwave_present.
+    flags: u8,
+    /// Fused breathing rate in BPM (firmware sends BPM*100; we scale here).
+    breathing_rate_bpm: f32,
+    /// Fused heartrate in BPM (firmware sends BPM*10000; we scale here).
+    heartrate_bpm: f32,
+    rssi: i8,
+    n_persons: u8,
+    /// `mmwave_type_t` enum value from firmware.
+    mmwave_type: u8,
+    /// 0-100 fusion quality score.
+    fusion_confidence: u8,
+    motion_energy: f32,
+    presence_score: f32,
+    timestamp_ms: u32,
+    /// Raw mmWave heart rate (BPM).
+    mmwave_hr_bpm: f32,
+    /// Raw mmWave breathing rate (BPM).
+    mmwave_br_bpm: f32,
+    /// Distance to nearest target (cm).
+    mmwave_distance_cm: f32,
+    /// Target count from mmWave.
+    mmwave_targets: u8,
+    /// mmWave signal quality 0-100.
+    mmwave_confidence: u8,
+}
+
+/// Parse an ADR-063 edge fused vitals packet (magic 0xC511_0004, 48 bytes).
+fn parse_edge_fused_vitals(buf: &[u8]) -> Option<EdgeFusedVitalsPacket> {
+    if buf.len() < 48 {
+        return None;
+    }
+    let magic = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+    if magic != 0xC511_0004 {
+        return None;
+    }
+
+    let node_id = buf[4];
+    let flags = buf[5];
+    let breathing_raw = u16::from_le_bytes([buf[6], buf[7]]);
+    let heartrate_raw = u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]);
+    let rssi = buf[12] as i8;
+    let n_persons = buf[13];
+    let mmwave_type = buf[14];
+    let fusion_confidence = buf[15];
+    let motion_energy = f32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]);
+    let presence_score = f32::from_le_bytes([buf[20], buf[21], buf[22], buf[23]]);
+    let timestamp_ms = u32::from_le_bytes([buf[24], buf[25], buf[26], buf[27]]);
+    let mmwave_hr_bpm = f32::from_le_bytes([buf[28], buf[29], buf[30], buf[31]]);
+    let mmwave_br_bpm = f32::from_le_bytes([buf[32], buf[33], buf[34], buf[35]]);
+    let mmwave_distance_cm = f32::from_le_bytes([buf[36], buf[37], buf[38], buf[39]]);
+    let mmwave_targets = buf[40];
+    let mmwave_confidence = buf[41];
+    // buf[42..48] are firmware reserved fields (reserved3 u16 + reserved4 u32).
+
+    Some(EdgeFusedVitalsPacket {
+        node_id,
+        flags,
+        breathing_rate_bpm: breathing_raw as f32 / 100.0,
+        heartrate_bpm: heartrate_raw as f32 / 10000.0,
+        rssi,
+        n_persons,
+        mmwave_type,
+        fusion_confidence,
+        motion_energy,
+        presence_score,
+        timestamp_ms,
+        mmwave_hr_bpm,
+        mmwave_br_bpm,
+        mmwave_distance_cm,
+        mmwave_targets,
+        mmwave_confidence,
+    })
+}
+
+#[cfg(test)]
+mod issue_928_magic_collision_tests {
+    //! Issue #928 — `0xC511_0004` was being parsed as WASM output, eating the
+    //! C6+mmWave fused-vitals packets. After this fix, `0xC511_0004` routes to
+    //! `parse_edge_fused_vitals` and WASM output owns the freshly-allocated
+    //! `0xC511_0007` slot. Tests guard both halves of the swap.
+    use super::*;
+
+    /// Build a 48-byte synthetic fused-vitals packet matching the firmware's
+    /// `edge_fused_vitals_pkt_t` layout from `edge_processing.h:129`.
+    fn build_fused_vitals_packet() -> Vec<u8> {
+        let mut buf = vec![0u8; 48];
+        buf[0..4].copy_from_slice(&0xC511_0004u32.to_le_bytes());
+        buf[4] = 9;                                            // node_id
+        buf[5] = 0b0000_1001;                                   // flags: presence | mmwave_present
+        buf[6..8].copy_from_slice(&1600u16.to_le_bytes());      // breathing 16.00 BPM
+        buf[8..12].copy_from_slice(&720_000u32.to_le_bytes());  // heartrate 72.0 BPM
+        buf[12] = (-55i8) as u8;                                // rssi
+        buf[13] = 1;                                            // n_persons
+        buf[14] = 2;                                            // mmwave_type
+        buf[15] = 85;                                           // fusion_confidence
+        buf[16..20].copy_from_slice(&0.42f32.to_le_bytes());    // motion_energy
+        buf[20..24].copy_from_slice(&0.95f32.to_le_bytes());    // presence_score
+        buf[24..28].copy_from_slice(&1_234_567u32.to_le_bytes()); // timestamp_ms
+        buf[28..32].copy_from_slice(&71.5f32.to_le_bytes());    // mmwave_hr_bpm
+        buf[32..36].copy_from_slice(&15.8f32.to_le_bytes());    // mmwave_br_bpm
+        buf[36..40].copy_from_slice(&182.0f32.to_le_bytes());   // mmwave_distance_cm
+        buf[40] = 1;                                            // mmwave_targets
+        buf[41] = 90;                                           // mmwave_confidence
+        // bytes 42..48 — firmware reserved fields, left as zero
+        buf
+    }
+
+    #[test]
+    fn parse_edge_fused_vitals_extracts_fields_correctly() {
+        let buf = build_fused_vitals_packet();
+        let pkt = parse_edge_fused_vitals(&buf).expect("must parse a well-formed packet");
+        assert_eq!(pkt.node_id, 9);
+        assert_eq!(pkt.flags, 0b0000_1001);
+        assert!((pkt.breathing_rate_bpm - 16.0).abs() < 1e-3, "breathing scale 100");
+        assert!((pkt.heartrate_bpm - 72.0).abs() < 1e-3, "heartrate scale 10000");
+        assert_eq!(pkt.rssi, -55);
+        assert_eq!(pkt.n_persons, 1);
+        assert_eq!(pkt.mmwave_type, 2);
+        assert_eq!(pkt.fusion_confidence, 85);
+        assert!((pkt.motion_energy - 0.42).abs() < 1e-6);
+        assert!((pkt.presence_score - 0.95).abs() < 1e-6);
+        assert_eq!(pkt.timestamp_ms, 1_234_567);
+        assert!((pkt.mmwave_hr_bpm - 71.5).abs() < 1e-6);
+        assert!((pkt.mmwave_br_bpm - 15.8).abs() < 1e-3);
+        assert!((pkt.mmwave_distance_cm - 182.0).abs() < 1e-6);
+        assert_eq!(pkt.mmwave_targets, 1);
+        assert_eq!(pkt.mmwave_confidence, 90);
+    }
+
+    #[test]
+    fn parse_edge_fused_vitals_rejects_short_buffer() {
+        let buf = build_fused_vitals_packet();
+        // Truncate to 47 bytes — one short of the 48-byte minimum.
+        assert!(parse_edge_fused_vitals(&buf[..47]).is_none());
+    }
+
+    #[test]
+    fn parse_edge_fused_vitals_rejects_wrong_magic() {
+        let mut buf = build_fused_vitals_packet();
+        buf[0..4].copy_from_slice(&0xC511_0007u32.to_le_bytes()); // WASM magic, not fused
+        assert!(parse_edge_fused_vitals(&buf).is_none());
+    }
+
+    #[test]
+    fn parse_wasm_output_rejects_legacy_0004_magic() {
+        // The old WASM magic collided with fused vitals — must no longer be
+        // accepted. A real fused-vitals packet starts with 0xC511_0004 and
+        // would have been misparsed before this fix.
+        let buf = build_fused_vitals_packet();
+        assert!(parse_wasm_output(&buf).is_none(),
+                "issue #928: WASM parser must NOT accept 0xC511_0004");
+    }
+
+    #[test]
+    fn parse_wasm_output_accepts_new_0007_magic() {
+        // Build a tiny well-formed WASM output packet on the new magic.
+        let mut buf = vec![0u8; 8];
+        buf[0..4].copy_from_slice(&0xC511_0007u32.to_le_bytes());
+        buf[4] = 5;                                          // node_id
+        buf[5] = 1;                                          // module_id
+        buf[6..8].copy_from_slice(&0u16.to_le_bytes());      // event_count = 0
+        let pkt = parse_wasm_output(&buf).expect("0xC511_0007 must parse");
+        assert_eq!(pkt.node_id, 5);
+        assert_eq!(pkt.module_id, 1);
+        assert!(pkt.events.is_empty());
+    }
 }
 
 // ── ESP32 UDP frame parser ───────────────────────────────────────────────────
@@ -4979,7 +5161,45 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     }
                 }
 
-                // ADR-040: Try WASM output packet (magic 0xC511_0004).
+                // ADR-063: Try edge fused vitals packet (magic 0xC511_0004).
+                // Must come BEFORE the WASM parser — issue #928: these two
+                // packet types shared a magic and the WASM parser was eating
+                // fused-vitals frames on the C6+mmWave config. The reassign of
+                // WASM_OUTPUT_MAGIC → 0xC511_0007 (firmware side) plus this
+                // dedicated parser resolve the collision.
+                if let Some(fused) = parse_edge_fused_vitals(&buf[..len]) {
+                    debug!(
+                        "Edge fused vitals from {src}: node={} br={:.1} hr={:.1} \
+                         mmwave_targets={} fusion_conf={}",
+                        fused.node_id, fused.breathing_rate_bpm, fused.heartrate_bpm,
+                        fused.mmwave_targets, fused.fusion_confidence,
+                    );
+                    let s = state.write().await;
+                    if let Ok(json) = serde_json::to_string(&serde_json::json!({
+                        "type": "edge_fused_vitals",
+                        "node_id": fused.node_id,
+                        "breathing_rate_bpm": fused.breathing_rate_bpm,
+                        "heartrate_bpm": fused.heartrate_bpm,
+                        "n_persons": fused.n_persons,
+                        "fusion_confidence": fused.fusion_confidence,
+                        "mmwave": {
+                            "hr_bpm": fused.mmwave_hr_bpm,
+                            "br_bpm": fused.mmwave_br_bpm,
+                            "distance_cm": fused.mmwave_distance_cm,
+                            "targets": fused.mmwave_targets,
+                            "confidence": fused.mmwave_confidence,
+                            "type": fused.mmwave_type,
+                        },
+                        "motion_energy": fused.motion_energy,
+                        "presence_score": fused.presence_score,
+                        "timestamp_ms": fused.timestamp_ms,
+                    })) {
+                        let _ = s.tx.send(json);
+                    }
+                    continue;
+                }
+
+                // ADR-040: Try WASM output packet (magic 0xC511_0007 post-#928).
                 if let Some(wasm_output) = parse_wasm_output(&buf[..len]) {
                     debug!(
                         "WASM output from {src}: node={} module={} events={}",

@@ -43,7 +43,16 @@
 
 #define WASM_MAX_MODULE_SIZE (128 * 1024)  /**< Max .wasm binary size (128 KB). */
 #define WASM_STACK_SIZE      (8 * 1024)    /**< WASM execution stack (8 KB). */
-#define WASM_OUTPUT_MAGIC    0xC5110004    /**< WASM output packet magic. */
+/* Issue #928: WASM output was originally 0xC5110004, but that magic is
+ * canonically owned by ADR-063 fused vitals (edge_processing.h). Both packets
+ * were transmitted on the same magic, and the host parser only knew the WASM
+ * shape, so on the ESP32-C6 + MR60BHA2 mmWave config the 48-byte fused-vitals
+ * packet was being read as garbage WASM events. Reassigned to 0xC5110007 (next
+ * free slot in the registry — see rv_feature_state.h). Firmware older than
+ * this commit will silently lose its WASM event stream against an updated host
+ * — that's the deliberate "fail loud" choice over silent misparsing.
+ */
+#define WASM_OUTPUT_MAGIC    0xC5110007    /**< WASM output packet magic (post-#928). */
 #define WASM_MAX_EVENTS      16            /**< Max events per output packet. */
 
 /* ---- WASM Event (5 bytes: u8 type + f32 value) ---- */
@@ -54,7 +63,7 @@ typedef struct __attribute__((packed)) {
 
 /* ---- WASM Output Packet ---- */
 typedef struct __attribute__((packed)) {
-    uint32_t magic;         /**< WASM_OUTPUT_MAGIC = 0xC5110004. */
+    uint32_t magic;         /**< WASM_OUTPUT_MAGIC = 0xC5110007 (issue #928). */
     uint8_t  node_id;       /**< ESP32 node identifier. */
     uint8_t  module_id;     /**< Module slot index. */
     uint16_t event_count;   /**< Number of events in this packet. */

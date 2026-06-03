@@ -12,7 +12,8 @@
  *   0xC5110003 — ADR-069 feature vector (edge_processing.h)
  *   0xC5110004 — ADR-063 fused vitals   (edge_processing.h)
  *   0xC5110005 — ADR-039 compressed CSI (edge_processing.h)
- *   0xC5110006 — ADR-081 feature state  (this file) ← new
+ *   0xC5110006 — ADR-081 feature state  (this file)
+ *   0xC5110007 — ADR-040 WASM output    (wasm_runtime.h, reassigned per issue #928)
  */
 
 #ifndef RV_FEATURE_STATE_H
