@@ -23,6 +23,12 @@ services:
       - "5005:5005/udp"
     environment:
       - RUST_LOG=info
+      # Secure default: docker-entrypoint.sh refuses to bind the sensing
+      # server on 0.0.0.0 unless a token is configured, or unauthenticated
+      # trusted-LAN mode is explicitly acknowledged.
+      - RUVIEW_API_TOKEN=${RUVIEW_API_TOKEN:-}
+      # Uncomment only for intentionally trusted LAN deployments:
+      # - RUVIEW_ALLOW_UNAUTH_LAN=1
       # CSI_SOURCE controls the data source for the sensing server.
       # Options: auto (default) — probe for ESP32 UDP then fall back to simulation
       #          esp32          — receive real CSI frames from an ESP32 on UDP port 5005

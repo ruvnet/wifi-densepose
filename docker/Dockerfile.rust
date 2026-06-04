@@ -60,8 +60,9 @@ RUN set -e; \
     test -x /app/homecore-server || { echo "FATAL: /app/homecore-server is not executable"; exit 1; }; \
     echo "image assets OK"
 
-# Optional bearer-token auth on /api/v1/*: leave unset for LAN-mode (default),
-# set to enforce `Authorization: Bearer <token>` (see bearer_auth module, #443).
+# Bearer-token auth on /api/v1/*. Docker refuses a 0.0.0.0 sensing-server
+# bind when this is empty unless RUVIEW_ALLOW_UNAUTH_LAN=1 is set explicitly
+# for a trusted LAN deployment.
 #   docker run -e RUVIEW_API_TOKEN=$(openssl rand -hex 32) ...
 ENV RUVIEW_API_TOKEN=
 

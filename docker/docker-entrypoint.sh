@@ -13,7 +13,68 @@
 # Environment variables:
 #   CSI_SOURCE   — data source: auto (default), esp32, wifi, simulated
 #   MODELS_DIR   — directory to scan for .rvf model files (default: data/models)
+#   RUVIEW_API_TOKEN — bearer token for /api/v1/* when binding to the network
+#   RUVIEW_ALLOW_UNAUTH_LAN=1 — explicit opt-in for unauthenticated LAN mode
 set -e
+
+is_truthy() {
+    case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|on) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+is_unspecified_bind_addr() {
+    case "${1:-}" in
+        0.0.0.0|::|\[::\]) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+sensing_bind_addr() {
+    bind="${SENSING_BIND_ADDR:-127.0.0.1}"
+    expect_value=
+    for arg in "$@"; do
+        if [ "$expect_value" = "--bind-addr" ]; then
+            bind="$arg"
+            expect_value=
+            continue
+        fi
+        case "$arg" in
+            --bind-addr=*) bind="${arg#--bind-addr=}" ;;
+            --bind-addr) expect_value="--bind-addr" ;;
+        esac
+    done
+    printf '%s\n' "$bind"
+}
+
+guard_unauthenticated_network_bind() {
+    case "${1:-}" in
+        /app/sensing-server|sensing-server) ;;
+        *) return 0 ;;
+    esac
+
+    bind_addr="$(sensing_bind_addr "$@")"
+    if ! is_unspecified_bind_addr "$bind_addr"; then
+        return 0
+    fi
+    if [ -n "${RUVIEW_API_TOKEN:-}" ]; then
+        return 0
+    fi
+    if is_truthy "${RUVIEW_ALLOW_UNAUTH_LAN:-}"; then
+        echo "WARN: starting unauthenticated LAN mode on ${bind_addr} because RUVIEW_ALLOW_UNAUTH_LAN=1" >&2
+        return 0
+    fi
+
+    cat >&2 <<EOF
+FATAL: refusing to start sensing-server on ${bind_addr} without RUVIEW_API_TOKEN.
+
+The Docker image publishes the sensing HTTP/WebSocket surface. Set
+RUVIEW_API_TOKEN to enforce bearer auth on /api/v1/*, or set
+RUVIEW_ALLOW_UNAUTH_LAN=1 only for an intentionally trusted LAN deployment.
+EOF
+    exit 64
+}
 
 # Route to cog-ha-matter (ADR-116) when invoked as:
 #   docker run <image> cog-ha-matter [--flags]
@@ -52,4 +113,5 @@ if [ "${1#-}" != "$1" ] || [ -z "$1" ]; then
         "$@"
 fi
 
+guard_unauthenticated_network_bind "$@"
 exec "$@"
