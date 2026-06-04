@@ -1,0 +1,1566 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ITBwifi — Voyez sans regarder</title>
+  <style>
+    :root {
+      --bg: #020408;
+      --surface: rgba(255,255,255,0.03);
+      --border: rgba(255,255,255,0.08);
+      --accent: #00d4ff;
+      --accent2: #7c3aed;
+      --accent3: #06ffa5;
+      --text: #e2e8f0;
+      --muted: #64748b;
+      --glow: 0 0 60px rgba(0,212,255,0.15);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      overflow-x: hidden;
+      line-height: 1.6;
+    }
+
+    /* ─── CANVAS HERO ─── */
+    #hero-canvas {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    /* ─── NAV ─── */
+    nav {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1.2rem 3rem;
+      backdrop-filter: blur(20px);
+      background: rgba(2,4,8,0.6);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-logo {
+      font-size: 1.4rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      background: linear-gradient(90deg, var(--accent), var(--accent3));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 2rem;
+      list-style: none;
+    }
+
+    .nav-links a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.9rem;
+      transition: color 0.2s;
+    }
+
+    .nav-links a:hover { color: var(--text); }
+
+    .nav-cta {
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      color: #fff;
+      border: none;
+      padding: 0.6rem 1.6rem;
+      border-radius: 2rem;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.2s;
+    }
+
+    .nav-cta:hover { opacity: 0.85; transform: translateY(-1px); }
+
+    /* ─── HERO SECTION ─── */
+    .hero {
+      position: relative;
+      z-index: 1;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 8rem 2rem 4rem;
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(0,212,255,0.08);
+      border: 1px solid rgba(0,212,255,0.25);
+      border-radius: 2rem;
+      padding: 0.4rem 1rem;
+      font-size: 0.8rem;
+      color: var(--accent);
+      margin-bottom: 2rem;
+      animation: fadeUp 0.8s ease both;
+    }
+
+    .badge-dot {
+      width: 6px; height: 6px;
+      background: var(--accent3);
+      border-radius: 50%;
+      animation: pulse 2s ease infinite;
+    }
+
+    .hero-title {
+      font-size: clamp(3rem, 8vw, 7rem);
+      font-weight: 900;
+      letter-spacing: -0.04em;
+      line-height: 1.0;
+      margin-bottom: 1.5rem;
+      animation: fadeUp 0.9s 0.1s ease both;
+    }
+
+    .hero-title .line1 { display: block; color: #fff; }
+
+    .hero-title .line2 {
+      display: block;
+      background: linear-gradient(120deg, var(--accent) 0%, var(--accent2) 50%, var(--accent3) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero-subtitle {
+      max-width: 600px;
+      font-size: clamp(1rem, 2vw, 1.25rem);
+      color: var(--muted);
+      margin-bottom: 3rem;
+      animation: fadeUp 1s 0.2s ease both;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+      animation: fadeUp 1s 0.3s ease both;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      color: #fff;
+      border: none;
+      padding: 1rem 2.5rem;
+      border-radius: 3rem;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+      text-decoration: none;
+      display: inline-block;
+      box-shadow: 0 0 40px rgba(0,212,255,0.3);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 0 60px rgba(0,212,255,0.5);
+    }
+
+    .btn-secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 1rem 2.5rem;
+      border-radius: 3rem;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      text-decoration: none;
+      display: inline-block;
+      backdrop-filter: blur(10px);
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--accent);
+      background: rgba(0,212,255,0.05);
+    }
+
+    /* ─── SCROLL INDICATOR ─── */
+    .scroll-hint {
+      position: absolute;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--muted);
+      font-size: 0.75rem;
+      animation: fadeIn 2s 1s ease both;
+    }
+
+    .scroll-line {
+      width: 1px;
+      height: 40px;
+      background: linear-gradient(to bottom, var(--accent), transparent);
+      animation: scrollLine 2s ease infinite;
+    }
+
+    /* ─── STATS BAR ─── */
+    .stats-bar {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      background: var(--border);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .stat-item {
+      background: var(--bg);
+      padding: 2rem;
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 2.5rem;
+      font-weight: 900;
+      letter-spacing: -0.04em;
+      background: linear-gradient(90deg, var(--accent), var(--accent3));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .stat-label {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-top: 0.3rem;
+    }
+
+    /* ─── SECTIONS ─── */
+    section {
+      position: relative;
+      z-index: 1;
+      padding: 6rem 2rem;
+    }
+
+    .section-label {
+      text-align: center;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--accent);
+      margin-bottom: 1rem;
+    }
+
+    .section-title {
+      text-align: center;
+      font-size: clamp(2rem, 4vw, 3.5rem);
+      font-weight: 900;
+      letter-spacing: -0.03em;
+      line-height: 1.1;
+      margin-bottom: 1rem;
+    }
+
+    .section-sub {
+      text-align: center;
+      color: var(--muted);
+      max-width: 600px;
+      margin: 0 auto 4rem;
+      font-size: 1.05rem;
+    }
+
+    /* ─── HOW IT WORKS ─── */
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1.5rem;
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    .step-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 1.5rem;
+      padding: 2rem;
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.3s, transform 0.3s;
+    }
+
+    .step-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .step-card:hover {
+      border-color: rgba(0,212,255,0.3);
+      transform: translateY(-4px);
+    }
+
+    .step-card:hover::before { opacity: 1; }
+
+    .step-num {
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: 0.1em;
+      margin-bottom: 1rem;
+    }
+
+    .step-icon {
+      width: 56px;
+      height: 56px;
+      border-radius: 1rem;
+      background: rgba(0,212,255,0.08);
+      border: 1px solid rgba(0,212,255,0.15);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.8rem;
+      margin-bottom: 1.2rem;
+    }
+
+    .step-card h3 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      margin-bottom: 0.6rem;
+    }
+
+    .step-card p {
+      font-size: 0.9rem;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    /* ─── FEATURES BENTO ─── */
+    .bento {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      grid-template-rows: auto;
+      gap: 1rem;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .bento-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 1.5rem;
+      padding: 2rem;
+      overflow: hidden;
+      position: relative;
+      transition: border-color 0.3s;
+    }
+
+    .bento-card:hover { border-color: rgba(0,212,255,0.25); }
+
+    .bento-1 { grid-column: span 8; }
+    .bento-2 { grid-column: span 4; }
+    .bento-3 { grid-column: span 4; }
+    .bento-4 { grid-column: span 4; }
+    .bento-5 { grid-column: span 4; }
+    .bento-6 { grid-column: span 6; }
+    .bento-7 { grid-column: span 6; }
+
+    .bento-tag {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--accent);
+      background: rgba(0,212,255,0.08);
+      border: 1px solid rgba(0,212,255,0.2);
+      padding: 0.25rem 0.75rem;
+      border-radius: 2rem;
+      margin-bottom: 1rem;
+    }
+
+    .bento-card h3 {
+      font-size: 1.3rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.6rem;
+    }
+
+    .bento-1 h3 { font-size: 1.8rem; }
+
+    .bento-card p {
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.7;
+    }
+
+    .bento-visual {
+      margin-top: 1.5rem;
+      border-radius: 1rem;
+      overflow: hidden;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid var(--border);
+    }
+
+    /* ─── LIVE DEMO ─── */
+    .demo-section {
+      background: radial-gradient(ellipse at center, rgba(0,212,255,0.04) 0%, transparent 70%);
+    }
+
+    .demo-container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 2rem;
+      overflow: hidden;
+      box-shadow: 0 0 80px rgba(0,212,255,0.08);
+    }
+
+    .demo-header {
+      background: rgba(255,255,255,0.02);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .demo-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+    }
+
+    .demo-dot:nth-child(1) { background: #ff5f57; }
+    .demo-dot:nth-child(2) { background: #febc2e; }
+    .demo-dot:nth-child(3) { background: #28c840; }
+
+    .demo-title {
+      margin-left: 0.5rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    .demo-status {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.75rem;
+      color: var(--accent3);
+    }
+
+    .demo-status-dot {
+      width: 6px; height: 6px;
+      background: var(--accent3);
+      border-radius: 50%;
+      animation: pulse 1.5s ease infinite;
+    }
+
+    .demo-body {
+      padding: 2rem;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+    }
+
+    .demo-canvas-wrap {
+      background: rgba(0,0,0,0.4);
+      border-radius: 1rem;
+      border: 1px solid var(--border);
+      aspect-ratio: 4/3;
+      position: relative;
+      overflow: hidden;
+    }
+
+    #demo-3d {
+      width: 100%; height: 100%;
+    }
+
+    .demo-stats {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .demo-metric {
+      background: rgba(0,0,0,0.3);
+      border: 1px solid var(--border);
+      border-radius: 1rem;
+      padding: 1rem 1.2rem;
+    }
+
+    .demo-metric-label {
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 0.4rem;
+    }
+
+    .demo-metric-value {
+      font-size: 1.5rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+    }
+
+    .demo-metric-bar {
+      height: 4px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 2px;
+      margin-top: 0.6rem;
+      overflow: hidden;
+    }
+
+    .demo-metric-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--accent3));
+      border-radius: 2px;
+      transition: width 1s ease;
+    }
+
+    .demo-persons {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-top: 0.5rem;
+    }
+
+    .person-chip {
+      background: rgba(0,212,255,0.08);
+      border: 1px solid rgba(0,212,255,0.2);
+      border-radius: 2rem;
+      padding: 0.25rem 0.75rem;
+      font-size: 0.75rem;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+
+    .person-dot {
+      width: 5px; height: 5px;
+      background: var(--accent3);
+      border-radius: 50%;
+      animation: pulse 2s ease infinite;
+    }
+
+    /* ─── WIFI VISUALIZER ─── */
+    #wifi-canvas {
+      width: 100%;
+      height: 200px;
+      border-radius: 0.8rem;
+    }
+
+    /* ─── SKELETON 3D CANVAS ─── */
+    .skeleton-wrap {
+      width: 100%;
+      height: 280px;
+      position: relative;
+    }
+
+    #skeleton-canvas {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* ─── FEATURES GRID ─── */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.5rem;
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    .feature-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 1.5rem;
+      padding: 2rem;
+      transition: transform 0.3s, border-color 0.3s, box-shadow 0.3s;
+    }
+
+    .feature-card:hover {
+      transform: translateY(-6px);
+      border-color: rgba(124,58,237,0.4);
+      box-shadow: 0 20px 60px rgba(124,58,237,0.1);
+    }
+
+    .feature-icon {
+      font-size: 2.5rem;
+      margin-bottom: 1rem;
+    }
+
+    .feature-card h3 {
+      font-size: 1.2rem;
+      font-weight: 700;
+      margin-bottom: 0.6rem;
+    }
+
+    .feature-card p {
+      font-size: 0.9rem;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+
+    .feature-tag {
+      display: inline-block;
+      margin-top: 1rem;
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--accent2);
+      background: rgba(124,58,237,0.08);
+      border: 1px solid rgba(124,58,237,0.2);
+      padding: 0.2rem 0.6rem;
+      border-radius: 2rem;
+    }
+
+    /* ─── GLOWING DIVIDER ─── */
+    .glow-divider {
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      margin: 0;
+      opacity: 0.4;
+    }
+
+    /* ─── CTA SECTION ─── */
+    .cta-section {
+      text-align: center;
+      background: radial-gradient(ellipse at center, rgba(124,58,237,0.06) 0%, transparent 70%);
+      padding: 8rem 2rem;
+    }
+
+    .cta-section h2 {
+      font-size: clamp(2.5rem, 5vw, 4.5rem);
+      font-weight: 900;
+      letter-spacing: -0.04em;
+      line-height: 1.1;
+      margin-bottom: 1.5rem;
+    }
+
+    .cta-section p {
+      color: var(--muted);
+      font-size: 1.1rem;
+      max-width: 500px;
+      margin: 0 auto 3rem;
+    }
+
+    .cta-links {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-top: 1.5rem;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .cta-links a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .cta-links a:hover { text-decoration: underline; }
+
+    /* ─── FOOTER ─── */
+    footer {
+      position: relative;
+      z-index: 1;
+      border-top: 1px solid var(--border);
+      padding: 2rem 3rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .footer-logo {
+      font-weight: 800;
+      background: linear-gradient(90deg, var(--accent), var(--accent3));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    /* ─── ANIMATIONS ─── */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(30px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.5; transform: scale(0.85); }
+    }
+
+    @keyframes scrollLine {
+      0%   { transform: scaleY(0); transform-origin: top; }
+      50%  { transform: scaleY(1); transform-origin: top; }
+      51%  { transform: scaleY(1); transform-origin: bottom; }
+      100% { transform: scaleY(0); transform-origin: bottom; }
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0px); }
+      50%       { transform: translateY(-12px); }
+    }
+
+    /* ─── SCROLL REVEAL ─── */
+    .reveal {
+      opacity: 0;
+      transform: translateY(40px);
+      transition: opacity 0.8s ease, transform 0.8s ease;
+    }
+
+    .reveal.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* ─── RESPONSIVE ─── */
+    @media (max-width: 900px) {
+      nav { padding: 1rem 1.5rem; }
+      .nav-links { display: none; }
+      .stats-bar { grid-template-columns: repeat(2, 1fr); }
+      .bento { grid-template-columns: 1fr; }
+      .bento-1, .bento-2, .bento-3, .bento-4, .bento-5, .bento-6, .bento-7 { grid-column: span 1; }
+      .demo-body { grid-template-columns: 1fr; }
+      footer { flex-direction: column; gap: 1rem; text-align: center; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- CANVAS DE FOND (particules WiFi animées) -->
+<canvas id="hero-canvas"></canvas>
+
+<!-- ─── NAV ─── -->
+<nav>
+  <div class="nav-logo">ITBwifi</div>
+  <ul class="nav-links">
+    <li><a href="#comment">Comment ça marche</a></li>
+    <li><a href="#fonctionnalites">Fonctionnalités</a></li>
+    <li><a href="#demo">Démo live</a></li>
+    <li><a href="#docs">Docs API</a></li>
+  </ul>
+  <button class="nav-cta" onclick="document.getElementById('demo').scrollIntoView({behavior:'smooth'})">
+    Tester maintenant
+  </button>
+</nav>
+
+<!-- ─── HERO ─── -->
+<section class="hero">
+  <div class="hero-badge">
+    <span class="badge-dot"></span>
+    Détection temps réel active — mode mock
+  </div>
+
+  <h1 class="hero-title">
+    <span class="line1">Voyez à travers</span>
+    <span class="line2">les murs.</span>
+  </h1>
+
+  <p class="hero-subtitle">
+    ITBwifi transforme votre signal WiFi en capteur invisible.<br>
+    Détectez des personnes, mesurez leur respiration, suivez leurs mouvements —
+    <strong>sans caméra, sans wearable, sans lumière.</strong>
+  </p>
+
+  <div class="hero-actions">
+    <a href="#demo" class="btn-primary">Voir la démo live</a>
+    <a href="http://localhost:8000/docs" target="_blank" class="btn-secondary">Explorer l'API</a>
+  </div>
+
+  <div class="scroll-hint">
+    <span>Découvrir</span>
+    <div class="scroll-line"></div>
+  </div>
+</section>
+
+<!-- ─── STATS ─── -->
+<div class="stats-bar">
+  <div class="stat-item">
+    <div class="stat-value" data-count="82" data-suffix="%">0%</div>
+    <div class="stat-label">Précision de détection</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-value" data-count="17" data-suffix=" pts">0 pts</div>
+    <div class="stat-label">Points squelette détectés</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-value" data-count="9" data-prefix="$">$0</div>
+    <div class="stat-label">Coût du capteur ESP32</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-value" data-count="5" data-suffix=" m">0 m</div>
+    <div class="stat-label">Portée à travers les murs</div>
+  </div>
+</div>
+
+<div class="glow-divider"></div>
+
+<!-- ─── COMMENT ÇA MARCHE ─── -->
+<section id="comment">
+  <div class="section-label">Technologie</div>
+  <h2 class="section-title reveal">Comment ça marche</h2>
+  <p class="section-sub reveal">
+    Pas de magie. Juste de la physique. Votre WiFi rebondit sur les corps humains —
+    nous lisons ces micro-variations pour reconstituer ce qui se passe dans la pièce.
+  </p>
+
+  <div class="steps">
+    <div class="step-card reveal">
+      <div class="step-num">ÉTAPE 01</div>
+      <div class="step-icon">📡</div>
+      <h3>Le signal WiFi existe déjà</h3>
+      <p>Votre box émet des ondes radio en permanence. Ces ondes traversent les murs et rebondissent sur tout — y compris les humains.</p>
+    </div>
+
+    <div class="step-card reveal">
+      <div class="step-num">ÉTAPE 02</div>
+      <div class="step-icon">🔬</div>
+      <h3>On lit les perturbations</h3>
+      <p>Un capteur ESP32 à 9€ mesure comment le signal est modifié (CSI). Chaque mouvement, chaque respiration crée une signature unique.</p>
+    </div>
+
+    <div class="step-card reveal">
+      <div class="step-num">ÉTAPE 03</div>
+      <div class="step-icon">🧠</div>
+      <h3>L'IA reconstitue la scène</h3>
+      <p>Notre modèle de deep learning transforme ces données radio en squelette 3D avec 17 points de corps, en temps réel.</p>
+    </div>
+
+    <div class="step-card reveal">
+      <div class="step-num">ÉTAPE 04</div>
+      <div class="step-icon">⚡</div>
+      <h3>L'API vous donne les données</h3>
+      <p>Présence, posture, respiration, rythme cardiaque — tout est disponible via REST ou WebSocket, intégrable en quelques lignes.</p>
+    </div>
+  </div>
+</section>
+
+<div class="glow-divider"></div>
+
+<!-- ─── DEMO LIVE ─── -->
+<section id="demo" class="demo-section">
+  <div class="section-label">Démo interactive</div>
+  <h2 class="section-title reveal">Données en temps réel</h2>
+  <p class="section-sub reveal">
+    Connecté à l'API locale sur <code style="color:var(--accent)">localhost:8000</code> — mode simulation active.
+  </p>
+
+  <div class="demo-container reveal">
+    <div class="demo-header">
+      <div class="demo-dot"></div>
+      <div class="demo-dot"></div>
+      <div class="demo-dot"></div>
+      <span class="demo-title">ITBwifi — Sensing Dashboard</span>
+      <div class="demo-status">
+        <div class="demo-status-dot"></div>
+        <span id="conn-status">Connexion...</span>
+      </div>
+    </div>
+
+    <div class="demo-body">
+      <div class="demo-canvas-wrap">
+        <canvas id="demo-3d"></canvas>
+      </div>
+
+      <div class="demo-stats">
+        <div class="demo-metric">
+          <div class="demo-metric-label">Personnes détectées</div>
+          <div class="demo-metric-value" id="person-count" style="color:var(--accent)">—</div>
+          <div class="demo-persons" id="person-list"></div>
+        </div>
+
+        <div class="demo-metric">
+          <div class="demo-metric-label">Confiance moyenne</div>
+          <div class="demo-metric-value" id="confidence" style="color:var(--accent3)">—</div>
+          <div class="demo-metric-bar">
+            <div class="demo-metric-fill" id="conf-bar" style="width:0%"></div>
+          </div>
+        </div>
+
+        <div class="demo-metric">
+          <div class="demo-metric-label">Zones actives</div>
+          <div class="demo-metric-value" id="zones-active" style="color:var(--accent2)">—</div>
+        </div>
+
+        <div class="demo-metric">
+          <div class="demo-metric-label">Activité détectée</div>
+          <div class="demo-metric-value" id="activity" style="font-size:1rem;color:var(--text)">—</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="glow-divider"></div>
+
+<!-- ─── FONCTIONNALITES ─── -->
+<section id="fonctionnalites">
+  <div class="section-label">Fonctionnalités</div>
+  <h2 class="section-title reveal">Tout ce que vous pouvez faire</h2>
+  <p class="section-sub reveal">
+    Une API complète pour construire des applications de présence intelligente,
+    sans jamais avoir besoin d'une caméra.
+  </p>
+
+  <div class="features-grid">
+    <div class="feature-card reveal">
+      <div class="feature-icon">👁️</div>
+      <h3>Détection de présence</h3>
+      <p>Sachez instantanément si une pièce est occupée ou vide. Aucune caméra, aucune lumière requise — même dans le noir complet.</p>
+      <span class="feature-tag">REST API</span>
+    </div>
+
+    <div class="feature-card reveal">
+      <div class="feature-icon">🫀</div>
+      <h3>Signes vitaux</h3>
+      <p>Mesurez la fréquence respiratoire et le rythme cardiaque à distance. Idéal pour la surveillance de personnes âgées ou en convalescence.</p>
+      <span class="feature-tag">Temps réel</span>
+    </div>
+
+    <div class="feature-card reveal">
+      <div class="feature-icon">🦴</div>
+      <h3>Estimation de posture</h3>
+      <p>Reconstituez le squelette complet avec 17 points de corps. Détectez les chutes, analysez la posture, reconnaissez des gestes.</p>
+      <span class="feature-tag">17 keypoints</span>
+    </div>
+
+    <div class="feature-card reveal">
+      <div class="feature-icon">🗺️</div>
+      <h3>Tracking multi-zones</h3>
+      <p>Suivez simultanément plusieurs zones avec 3 à 6 capteurs. Cartographiez les flux de personnes dans un bâtiment entier.</p>
+      <span class="feature-tag">Multi-pièces</span>
+    </div>
+
+    <div class="feature-card reveal">
+      <div class="feature-icon">🏠</div>
+      <h3>Intégration Home Assistant</h3>
+      <p>Détection MQTT auto-discovery. Compatible Matter, Siri, Google Assistant, Alexa. Branchez-vous en 5 minutes sur votre domotique.</p>
+      <span class="feature-tag">MQTT / Matter</span>
+    </div>
+
+    <div class="feature-card reveal">
+      <div class="feature-icon">🔌</div>
+      <h3>WebSocket temps réel</h3>
+      <p>Recevez chaque frame de données en streaming. Construisez des dashboards, des alertes, des automatisations — sans polling.</p>
+      <span class="feature-tag">WebSocket</span>
+    </div>
+
+    <div class="feature-card reveal">
+      <div class="feature-icon">🔒</div>
+      <h3>100% privé</h3>
+      <p>Aucune donnée visuelle. Aucune image stockée. Aucun cloud. Tout tourne en local sur un Raspberry Pi ou votre serveur.</p>
+      <span class="feature-tag">Edge / Local</span>
+    </div>
+
+    <div class="feature-card reveal">
+      <div class="feature-icon">📊</div>
+      <h3>Données historiques</h3>
+      <p>Enregistrez et analysez les patterns d'occupation dans le temps. Optimisez l'énergie, détectez des anomalies.</p>
+      <span class="feature-tag">Analytics</span>
+    </div>
+
+    <div class="feature-card reveal">
+      <div class="feature-icon">🛠️</div>
+      <h3>API bien documentée</h3>
+      <p>Swagger UI, ReDoc, 25+ endpoints REST. SDK Python, client WebSocket. Intégrez en quelques lignes dans n'importe quel langage.</p>
+      <span class="feature-tag">OpenAPI 3.0</span>
+    </div>
+  </div>
+</section>
+
+<div class="glow-divider"></div>
+
+<!-- ─── BENTO ─── -->
+<section style="padding: 4rem 2rem;">
+  <div class="bento" style="max-width:1200px;margin:0 auto;">
+    <div class="bento-card bento-1 reveal">
+      <div class="bento-tag">Usage phare</div>
+      <h3>La surveillance des aînés réinventée</h3>
+      <p>Détectez une chute, une immobilité anormale, une respiration irrégulière — sans intrusion vidéo. L'intimité préservée, la sécurité garantie.</p>
+      <div class="bento-visual" style="padding:1.5rem;">
+        <canvas id="vitals-canvas" width="500" height="80"></canvas>
+      </div>
+    </div>
+
+    <div class="bento-card bento-2 reveal" style="background: radial-gradient(ellipse at top, rgba(0,212,255,0.06), transparent);">
+      <div class="bento-tag">Prix</div>
+      <h3 style="font-size:2.5rem; color:var(--accent);">9 €</h3>
+      <p>Le capteur ESP32-S3 complet. Pas de licence, pas d'abonnement. Open source.</p>
+    </div>
+
+    <div class="bento-card bento-3 reveal">
+      <div class="bento-tag">Retail</div>
+      <h3>Comptage en magasin</h3>
+      <p>Flux clients, zones chaudes, temps de présence — sans caméra et sans RGPD à gérer.</p>
+    </div>
+
+    <div class="bento-card bento-4 reveal">
+      <div class="bento-tag">Industrie</div>
+      <h3>Sécurité en zone dangereuse</h3>
+      <p>Détectez des opérateurs dans des zones à risque même dans l'obscurité ou la fumée.</p>
+    </div>
+
+    <div class="bento-card bento-5 reveal">
+      <div class="bento-tag">Smart home</div>
+      <h3>Domotique contextuelle</h3>
+      <p>Lumières, chauffage, alarmes — pilotés par présence réelle, pas par minuterie.</p>
+    </div>
+
+    <div class="bento-card bento-6 reveal">
+      <div class="bento-tag">Architecture</div>
+      <h3>Edge-first, cloud-optional</h3>
+      <p>Le traitement se fait en local. Un Raspberry Pi 4 suffit pour 3 zones simultanées. Aucune dépendance cloud, aucun abonnement.</p>
+    </div>
+
+    <div class="bento-card bento-7 reveal">
+      <div class="bento-tag">Standards</div>
+      <h3>Interopérable par design</h3>
+      <p>MQTT, WebSocket, REST, Matter, Home Assistant — ITBwifi parle tous les protocoles de l'écosystème IoT moderne.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ─── CTA ─── -->
+<section class="cta-section">
+  <div class="hero-badge" style="margin:0 auto 2rem;">
+    <span class="badge-dot"></span>
+    API disponible en local maintenant
+  </div>
+
+  <h2>
+    Prêt à voir<br>
+    <span style="background:linear-gradient(120deg,var(--accent),var(--accent2),var(--accent3));-webkit-background-clip:text;-webkit-text-fill-color:transparent;">
+      sans regarder ?
+    </span>
+  </h2>
+
+  <p>Explorez l'API, testez les endpoints, visualisez les données en temps réel — tout tourne sur votre machine dès maintenant.</p>
+
+  <div style="display:flex;gap:1rem;justify-content:center;flex-wrap:wrap;">
+    <a href="http://localhost:8000/docs" target="_blank" class="btn-primary">Swagger UI</a>
+    <a href="http://localhost:8000/api/v1/pose/current" target="_blank" class="btn-secondary">Voir les données brutes</a>
+  </div>
+
+  <div class="cta-links">
+    <a href="http://localhost:8000/api/v1/status" target="_blank">Status API</a>
+    <span>·</span>
+    <a href="http://localhost:8000/health/health" target="_blank">Health check</a>
+    <span>·</span>
+    <a href="http://localhost:8000/api/v1/info" target="_blank">API info</a>
+    <span>·</span>
+    <a href="http://localhost:3000/observatory.html" target="_blank">Observatory UI</a>
+  </div>
+</section>
+
+<!-- ─── FOOTER ─── -->
+<footer>
+  <div class="footer-logo">ITBwifi</div>
+  <div>Propulsé par WiFi-DensePose · MIT License · ESP32 + FastAPI + PyTorch</div>
+  <div>localhost:8000 · localhost:3000</div>
+</footer>
+
+<!-- ─── SCRIPTS ─── -->
+<script>
+// ══════════════════════════════════════════════════
+// 1. CANVAS HERO — Particules WiFi animées (WebGL-like via Canvas2D)
+// ══════════════════════════════════════════════════
+(function() {
+  const canvas = document.getElementById('hero-canvas');
+  const ctx = canvas.getContext('2d');
+  let W, H, particles = [], waves = [];
+  let animId;
+
+  function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+
+  function rand(a, b) { return a + Math.random() * (b - a); }
+
+  class Particle {
+    constructor() { this.reset(); }
+    reset() {
+      this.x = rand(0, W);
+      this.y = rand(0, H);
+      this.vx = rand(-0.3, 0.3);
+      this.vy = rand(-0.3, 0.3);
+      this.r = rand(1, 2.5);
+      this.alpha = rand(0.15, 0.5);
+      this.color = Math.random() < 0.6 ? '#00d4ff' : Math.random() < 0.5 ? '#7c3aed' : '#06ffa5';
+    }
+    update() {
+      this.x += this.vx;
+      this.y += this.vy;
+      if (this.x < 0 || this.x > W || this.y < 0 || this.y > H) this.reset();
+    }
+    draw() {
+      ctx.save();
+      ctx.globalAlpha = this.alpha;
+      ctx.fillStyle = this.color;
+      ctx.shadowColor = this.color;
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  class WaveRing {
+    constructor() { this.reset(); }
+    reset() {
+      this.x = rand(W * 0.1, W * 0.9);
+      this.y = rand(H * 0.1, H * 0.9);
+      this.r = 0;
+      this.maxR = rand(100, 300);
+      this.speed = rand(0.5, 1.5);
+      this.alpha = 0.3;
+      this.color = Math.random() < 0.5 ? '#00d4ff' : '#7c3aed';
+    }
+    update() {
+      this.r += this.speed;
+      this.alpha = 0.3 * (1 - this.r / this.maxR);
+      if (this.r >= this.maxR) this.reset();
+    }
+    draw() {
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, this.alpha);
+      ctx.strokeStyle = this.color;
+      ctx.lineWidth = 1;
+      ctx.shadowColor = this.color;
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  function init() {
+    resize();
+    particles = Array.from({length: 120}, () => new Particle());
+    waves = Array.from({length: 8}, () => new WaveRing());
+    // Stagger wave positions
+    waves.forEach((w, i) => {
+      w.r = (w.maxR / waves.length) * i;
+    });
+  }
+
+  function drawConnections() {
+    const maxDist = 120;
+    for (let i = 0; i < particles.length; i++) {
+      for (let j = i + 1; j < particles.length; j++) {
+        const dx = particles[i].x - particles[j].x;
+        const dy = particles[i].y - particles[j].y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < maxDist) {
+          ctx.save();
+          ctx.globalAlpha = (1 - dist / maxDist) * 0.08;
+          ctx.strokeStyle = '#00d4ff';
+          ctx.lineWidth = 0.5;
+          ctx.beginPath();
+          ctx.moveTo(particles[i].x, particles[i].y);
+          ctx.lineTo(particles[j].x, particles[j].y);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+    }
+  }
+
+  function loop() {
+    ctx.clearRect(0, 0, W, H);
+
+    // Grid pattern
+    ctx.save();
+    ctx.globalAlpha = 0.025;
+    ctx.strokeStyle = '#00d4ff';
+    ctx.lineWidth = 0.5;
+    const step = 80;
+    for (let x = 0; x < W; x += step) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    }
+    for (let y = 0; y < H; y += step) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+    ctx.restore();
+
+    waves.forEach(w => { w.update(); w.draw(); });
+    drawConnections();
+    particles.forEach(p => { p.update(); p.draw(); });
+
+    animId = requestAnimationFrame(loop);
+  }
+
+  init();
+  loop();
+  window.addEventListener('resize', init);
+})();
+
+// ══════════════════════════════════════════════════
+// 2. STATS COUNTER ANIMATION
+// ══════════════════════════════════════════════════
+function animateCount(el, target, prefix, suffix, duration) {
+  let start = null;
+  function step(ts) {
+    if (!start) start = ts;
+    const progress = Math.min((ts - start) / duration, 1);
+    const val = Math.floor(progress * target);
+    el.textContent = (prefix || '') + val + (suffix || '');
+    if (progress < 1) requestAnimationFrame(step);
+    else el.textContent = (prefix || '') + target + (suffix || '');
+  }
+  requestAnimationFrame(step);
+}
+
+const statObserver = new IntersectionObserver((entries) => {
+  entries.forEach(e => {
+    if (!e.isIntersecting) return;
+    const el = e.target;
+    const count = +el.dataset.count;
+    const prefix = el.dataset.prefix || '';
+    const suffix = el.dataset.suffix || '';
+    animateCount(el, count, prefix, suffix, 1500);
+    statObserver.unobserve(el);
+  });
+}, { threshold: 0.5 });
+
+document.querySelectorAll('[data-count]').forEach(el => statObserver.observe(el));
+
+// ══════════════════════════════════════════════════
+// 3. SCROLL REVEAL
+// ══════════════════════════════════════════════════
+const revealObserver = new IntersectionObserver((entries) => {
+  entries.forEach((e, i) => {
+    if (e.isIntersecting) {
+      setTimeout(() => e.target.classList.add('visible'), i * 80);
+    }
+  });
+}, { threshold: 0.1 });
+
+document.querySelectorAll('.reveal').forEach(el => revealObserver.observe(el));
+
+// ══════════════════════════════════════════════════
+// 4. DEMO 3D CANVAS — Squelette humain animé
+// ══════════════════════════════════════════════════
+(function() {
+  const canvas = document.getElementById('demo-3d');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  let W, H;
+
+  const CONNECTIONS = [
+    [0,1],[1,2],[2,3],[3,4],   // colonne vertébrale
+    [2,5],[5,6],[6,7],          // bras gauche
+    [2,8],[8,9],[9,10],         // bras droit
+    [3,11],[11,12],[12,13],     // jambe gauche
+    [3,14],[14,15],[15,16],     // jambe droite
+    [5,8],                      // épaules
+    [11,14],                    // hanches
+  ];
+
+  // Pose de base (normalisée 0-1)
+  const BASE_POSE = [
+    [0.5, 0.08],  // 0 nez
+    [0.5, 0.18],  // 1 cou
+    [0.5, 0.32],  // 2 milieu-poitrine
+    [0.5, 0.55],  // 3 bassin
+    [0.5, 0.65],  // 4 bas dos (virtuel)
+    [0.35,0.30],  // 5 épaule gauche
+    [0.22,0.46],  // 6 coude gauche
+    [0.12,0.60],  // 7 poignet gauche
+    [0.65,0.30],  // 8 épaule droite
+    [0.78,0.46],  // 9 coude droit
+    [0.88,0.60],  // 10 poignet droit
+    [0.39,0.55],  // 11 hanche gauche
+    [0.37,0.74],  // 12 genou gauche
+    [0.36,0.92],  // 13 cheville gauche
+    [0.61,0.55],  // 14 hanche droite
+    [0.63,0.74],  // 15 genou droit
+    [0.64,0.92],  // 16 cheville droite
+  ];
+
+  let t = 0;
+  let persons = [
+    { pose: BASE_POSE.map(p => [...p]), color: '#00d4ff', phase: 0, offsetX: -0.15, active: true },
+    { pose: BASE_POSE.map(p => [...p]), color: '#06ffa5', phase: 1.8, offsetX: 0.15, active: true },
+  ];
+
+  function resize() {
+    W = canvas.width = canvas.offsetWidth * window.devicePixelRatio;
+    H = canvas.height = canvas.offsetHeight * window.devicePixelRatio;
+    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+  }
+
+  function getPx(x, y) {
+    return [x * canvas.offsetWidth, y * canvas.offsetHeight];
+  }
+
+  function animatePose(person, t) {
+    const p = person.phase;
+    const ox = person.offsetX;
+    return BASE_POSE.map((pt, i) => {
+      let x = pt[0] + ox;
+      let y = pt[1];
+      // Breathing
+      y += Math.sin(t * 1.2 + p) * 0.008;
+      // Arm swing
+      if (i === 6 || i === 7) y += Math.sin(t * 0.8 + p) * 0.04;
+      if (i === 9 || i === 10) y -= Math.sin(t * 0.8 + p) * 0.04;
+      // Leg swing
+      if (i === 12 || i === 13) y += Math.sin(t * 0.6 + p) * 0.03;
+      if (i === 15 || i === 16) y -= Math.sin(t * 0.6 + p) * 0.03;
+      // Head bob
+      if (i === 0) y -= Math.abs(Math.sin(t * 1.2 + p)) * 0.01;
+      return [x, y];
+    });
+  }
+
+  function drawPerson(pts, color) {
+    // Skeleton glow
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 12;
+    ctx.lineCap = 'round';
+    CONNECTIONS.forEach(([a, b]) => {
+      const [ax, ay] = getPx(pts[a][0], pts[a][1]);
+      const [bx, by] = getPx(pts[b][0], pts[b][1]);
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+      ctx.stroke();
+    });
+    ctx.restore();
+
+    // Joint dots
+    pts.forEach((pt, i) => {
+      const [x, y] = getPx(pt[0], pt[1]);
+      ctx.save();
+      ctx.fillStyle = i === 0 ? '#fff' : color;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 16;
+      ctx.beginPath();
+      ctx.arc(x, y, i === 0 ? 5 : 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    });
+  }
+
+  function drawGrid() {
+    ctx.save();
+    ctx.globalAlpha = 0.04;
+    ctx.strokeStyle = '#00d4ff';
+    ctx.lineWidth = 0.5;
+    const W2 = canvas.offsetWidth, H2 = canvas.offsetHeight;
+    for (let x = 0; x < W2; x += 30) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H2); ctx.stroke();
+    }
+    for (let y = 0; y < H2; y += 30) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W2, y); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawScanLine() {
+    const y = ((t * 0.4) % 1) * canvas.offsetHeight;
+    const grad = ctx.createLinearGradient(0, y - 20, 0, y + 20);
+    grad.addColorStop(0, 'rgba(0,212,255,0)');
+    grad.addColorStop(0.5, 'rgba(0,212,255,0.08)');
+    grad.addColorStop(1, 'rgba(0,212,255,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, y - 20, canvas.offsetWidth, 40);
+  }
+
+  function loop() {
+    ctx.clearRect(0, 0, canvas.offsetWidth, canvas.offsetHeight);
+    drawGrid();
+    drawScanLine();
+
+    // Corner brackets
+    const c = '#00d4ff', W2 = canvas.offsetWidth, H2 = canvas.offsetHeight, s = 20, lw = 1.5;
+    ctx.strokeStyle = c; ctx.lineWidth = lw;
+    [[0,0],[W2,0],[0,H2],[W2,H2]].forEach(([x, y]) => {
+      ctx.beginPath();
+      ctx.moveTo(x + (x ? -s : s), y);
+      ctx.lineTo(x, y);
+      ctx.lineTo(x, y + (y ? -s : s));
+      ctx.stroke();
+    });
+
+    persons.forEach(person => {
+      if (!person.active) return;
+      const pts = animatePose(person, t);
+      drawPerson(pts, person.color);
+    });
+
+    // Confidence overlay
+    ctx.save();
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = '#020408';
+    ctx.fillRect(6, 6, 110, 24);
+    ctx.restore();
+    ctx.fillStyle = '#00d4ff';
+    ctx.font = '10px monospace';
+    ctx.fillText('SCAN_ACTIVE ▮', 12, 22);
+
+    t += 0.016;
+    requestAnimationFrame(loop);
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+  loop();
+})();
+
+// ══════════════════════════════════════════════════
+// 5. VITALS CANVAS — Courbe de fréquence cardiaque
+// ══════════════════════════════════════════════════
+(function() {
+  const canvas = document.getElementById('vitals-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  let t = 0;
+  const DATA = [];
+
+  function heartbeat(t) {
+    const cycle = t % (Math.PI * 2);
+    if (cycle < 0.3) return Math.sin(cycle / 0.3 * Math.PI) * 0.9;
+    if (cycle < 0.5) return -Math.sin((cycle - 0.3) / 0.2 * Math.PI) * 0.25;
+    if (cycle < 0.7) return Math.sin((cycle - 0.5) / 0.2 * Math.PI) * 0.6;
+    return Math.sin((cycle - 0.7) / (Math.PI * 2 - 0.7) * Math.PI) * 0.05;
+  }
+
+  function loop() {
+    const W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+
+    DATA.push(heartbeat(t * 3));
+    if (DATA.length > W) DATA.shift();
+
+    // Background
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.fillRect(0, 0, W, H);
+
+    // Grid
+    ctx.globalAlpha = 0.06;
+    ctx.strokeStyle = '#06ffa5';
+    ctx.lineWidth = 0.5;
+    for (let x = 0; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+    for (let y = 0; y < H; y += 20) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+    ctx.globalAlpha = 1;
+
+    // Glow line
+    const grad = ctx.createLinearGradient(0, 0, W, 0);
+    grad.addColorStop(0, 'rgba(6,255,165,0)');
+    grad.addColorStop(0.7, 'rgba(6,255,165,0.6)');
+    grad.addColorStop(1, '#06ffa5');
+
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = 2;
+    ctx.shadowColor = '#06ffa5';
+    ctx.shadowBlur = 8;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    DATA.forEach((v, i) => {
+      const x = (i / DATA.length) * W;
+      const y = H / 2 - v * (H * 0.38);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // Label
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#06ffa5';
+    ctx.font = 'bold 11px monospace';
+    ctx.fillText('RYTHME CARDIAQUE  72 bpm', 10, H - 8);
+
+    t += 0.05;
+    requestAnimationFrame(loop);
+  }
+  loop();
+})();
+
+// ══════════════════════════════════════════════════
+// 6. FETCH DONNÉES LIVE depuis localhost:8000
+// ══════════════════════════════════════════════════
+async function fetchPoseData() {
+  try {
+    const res = await fetch('http://localhost:8000/api/v1/pose/current', { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    document.getElementById('conn-status').textContent = 'Connecté — mode mock';
+
+    const persons = data.persons || [];
+    document.getElementById('person-count').textContent = persons.length;
+
+    const avgConf = persons.length
+      ? Math.round(persons.reduce((s, p) => s + p.confidence, 0) / persons.length * 100)
+      : 0;
+    document.getElementById('confidence').textContent = avgConf + '%';
+    document.getElementById('conf-bar').style.width = avgConf + '%';
+
+    const list = document.getElementById('person-list');
+    list.innerHTML = '';
+    persons.slice(0, 4).forEach((p, i) => {
+      const chip = document.createElement('div');
+      chip.className = 'person-chip';
+      chip.innerHTML = `<div class="person-dot"></div> P${i+1} · ${Math.round(p.confidence*100)}%`;
+      list.appendChild(chip);
+    });
+
+    // Zones
+    const zonesRes = await fetch('http://localhost:8000/api/v1/pose/zones/summary', { signal: AbortSignal.timeout(3000) });
+    const zones = await zonesRes.json();
+    const active = Object.values(zones.zones || {}).filter(z => z.status === 'active').length;
+    document.getElementById('zones-active').textContent = active + ' / ' + Object.keys(zones.zones || {}).length;
+
+    const activities = ['Debout', 'Assis', 'En mouvement', 'Allongé', 'Marche'];
+    document.getElementById('activity').textContent = activities[Math.floor(Math.random() * activities.length)];
+
+  } catch(e) {
+    document.getElementById('conn-status').textContent = 'Serveur local requis';
+    document.getElementById('person-count').textContent = '—';
+  }
+}
+
+fetchPoseData();
+setInterval(fetchPoseData, 2000);
+</script>
+</body>
+</html>
