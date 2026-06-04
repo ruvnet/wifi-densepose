@@ -276,6 +276,13 @@ pub struct FieldNormalMode {
     pub geometry_hash: u64,
     /// Baseline eigenvalue count above Marcenko-Pastur threshold (empty-room).
     pub baseline_eigenvalue_count: usize,
+    /// Baseline noise variance estimate (median of bottom-half positive
+    /// eigenvalues from the calibration covariance). Persisted so that
+    /// `estimate_occupancy` can anchor its Marcenko-Pastur threshold to the
+    /// calibration noise floor instead of letting it drift with the
+    /// per-window sample size. Defaults to 0.0 in the diagonal-fallback path.
+    /// Issue #942.
+    pub baseline_noise_var: f64,
 }
 
 /// Body perturbation extracted from a CSI observation.
@@ -504,7 +511,11 @@ impl FieldModel {
         let baseline: Vec<Vec<f64>> = self.link_stats.iter().map(|ls| ls.mean_vector()).collect();
 
         // --- True eigenvalue decomposition (with diagonal fallback) ---
-        let (mode_energies, environmental_modes, baseline_eig_count) =
+        // Returns: (energies, modes, baseline_count, baseline_noise_var).
+        // The noise_var slot is 0.0 in the diagonal-fallback paths; the
+        // estimation hot path treats 0.0 as "no anchored noise floor" and
+        // falls back to per-window noise_var, preserving pre-#942 behavior.
+        let (mode_energies, environmental_modes, baseline_eig_count, baseline_noise_var) =
             if let Some(ref cov_sum) = self.covariance_sum {
                 if self.covariance_count > 1 {
                     // Compute sample covariance from raw outer products:
@@ -588,23 +599,28 @@ impl FieldModel {
                             let baseline_count =
                                 eigenvalues.iter().filter(|&&ev| ev > mp_threshold).count();
 
-                            (energies, modes, baseline_count)
+                            (energies, modes, baseline_count, noise_var)
                         }
                         Err(_) => {
                             // Fallback to diagonal approximation on SVD failure
-                            diagonal_fallback(&self.link_stats, n_sc, n_modes)
+                            let (e, m, b) =
+                                diagonal_fallback(&self.link_stats, n_sc, n_modes);
+                            (e, m, b, 0.0_f64)
                         }
                     }
                     // When eigenvalue feature is disabled, use diagonal fallback
                     #[cfg(not(feature = "eigenvalue"))]
                     {
-                        diagonal_fallback(&self.link_stats, n_sc, n_modes)
+                        let (e, m, b) = diagonal_fallback(&self.link_stats, n_sc, n_modes);
+                        (e, m, b, 0.0_f64)
                     }
                 } else {
-                    diagonal_fallback(&self.link_stats, n_sc, n_modes)
+                    let (e, m, b) = diagonal_fallback(&self.link_stats, n_sc, n_modes);
+                    (e, m, b, 0.0_f64)
                 }
             } else {
-                diagonal_fallback(&self.link_stats, n_sc, n_modes)
+                let (e, m, b) = diagonal_fallback(&self.link_stats, n_sc, n_modes);
+                (e, m, b, 0.0_f64)
             };
 
         // Compute variance explained using the same centered covariance as modes.
@@ -648,6 +664,7 @@ impl FieldModel {
             calibrated_at_us: timestamp_us,
             geometry_hash,
             baseline_eigenvalue_count: baseline_eig_count,
+            baseline_noise_var,
         };
 
         self.modes = Some(field_mode);
@@ -794,7 +811,7 @@ impl FieldModel {
         // Marcenko-Pastur noise estimate: median of POSITIVE eigenvalues
         // in the bottom half. Excludes zeros from rank-deficient matrices
         // (common when n_subcarriers > n_frames, e.g. 56 subcarriers / 50 frames).
-        let noise_var = {
+        let local_noise_var = {
             let mut positive: Vec<f64> =
                 eigenvalues.iter().copied().filter(|&e| e > 1e-10).collect();
             positive.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -807,6 +824,22 @@ impl FieldModel {
                 return Ok(0); // All zero eigenvalues — can't estimate
             }
         };
+
+        // Issue #942: anchor the noise floor to the calibration's noise_var
+        // when it's available. Per-window noise_var drifts with sample size —
+        // a short estimation window can produce a small local_noise_var that
+        // inflates `significant` and breaks the test_estimate_occupancy_noise_only
+        // invariant. The max of (calibration noise, local noise) keeps the
+        // threshold from collapsing on small windows while still letting the
+        // per-window noise dominate when it's the larger estimate. Falls back
+        // to local_noise_var when baseline_noise_var == 0 (diagonal-fallback
+        // calibration path, or pre-#942 stored modes).
+        let noise_var = if modes.baseline_noise_var > 0.0 {
+            local_noise_var.max(modes.baseline_noise_var)
+        } else {
+            local_noise_var
+        };
+
         let ratio = n as f64 / count as f64;
         let mp_threshold = noise_var * (1.0 + ratio.sqrt()).powi(2);
 
