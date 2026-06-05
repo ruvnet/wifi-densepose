@@ -21,6 +21,9 @@
 #include "esp_wifi.h"
 #include "esp_timer.h"
 #include "sdkconfig.h"
+#include "esp_netif.h"
+#include "ping/ping_sock.h"
+#include "lwip/ip_addr.h"
 
 /* ADR-060: Access the global NVS config for MAC filter and channel override. */
 extern nvs_config_t g_nvs_config;
@@ -251,9 +254,10 @@ static void wifi_csi_callback(void *ctx, wifi_csi_info_t *info)
  * Promiscuous mode callback — required for CSI to fire on all received frames.
  * We don't need the packet content, just the CSI triggered by reception.
  */
-static void wifi_promiscuous_cb(void *buf, wifi_promiscuous_pkt_type_t type)
+static void __attribute__((unused))
+wifi_promiscuous_cb(void *buf, wifi_promiscuous_pkt_type_t type)
 {
-    /* No-op: CSI callback is registered separately and fires in parallel. */
+    /* Retained for reference; promiscuous mode is no longer enabled (#521/#954). */
     (void)buf;
     (void)type;
 }
@@ -274,6 +278,60 @@ void csi_collector_set_node_id(uint8_t node_id)
         ESP_LOGI(TAG, "Early capture filter_mac=%02x:%02x:%02x:%02x:%02x:%02x",
                  s_filter_mac[0], s_filter_mac[1], s_filter_mac[2],
                  s_filter_mac[3], s_filter_mac[4], s_filter_mac[5]);
+    }
+}
+
+/* ---- RuView#521/#954: connected-STA CSI traffic source ---- */
+
+static esp_ping_handle_t s_self_ping = NULL;
+static void csi_ping_cb_noop(esp_ping_handle_t hdl, void *args) { (void)hdl; (void)args; }
+
+/*
+ * The ESP32 CSI engine only produces CSI for received OFDM frames (L-LTF/HT-LTF).
+ * The previous MGMT-only promiscuous path (#396 workaround) only ever captured
+ * beacons, which most APs transmit at non-OFDM DSSS rates — so the CSI callback
+ * never fired (yield=0pps -> DEGRADED -> motion=0; see #521, #954). The NDP/probe
+ * "injection" referenced in comments was an uncalled TX-only stub.
+ *
+ * Espressif's reference (esp-csi/examples/get-started/csi_recv_router) instead
+ * uses plain connected-STA CSI and pings the router so its OFDM replies arrive at
+ * the station and drive the CSI engine. We mirror that here.
+ */
+static void csi_start_self_ping(void)
+{
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t ip;
+    if (sta == NULL || esp_netif_get_ip_info(sta, &ip) != ESP_OK || ip.gw.addr == 0) {
+        ESP_LOGW(TAG, "self-ping: no gateway IP yet; CSI may stay starved");
+        return;
+    }
+
+    char gw_str[16];
+    esp_ip4addr_ntoa(&ip.gw, gw_str, sizeof(gw_str));
+
+    ip_addr_t target;
+    memset(&target, 0, sizeof(target));
+    ipaddr_aton(gw_str, &target);
+
+    esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
+    cfg.target_addr     = target;
+    cfg.count           = ESP_PING_COUNT_INFINITE;
+    cfg.interval_ms     = 20;     /* 50 Hz -> ~50 received OFDM replies/sec */
+    cfg.data_size       = 1;
+    cfg.task_stack_size = 4096;
+
+    esp_ping_callbacks_t cbs = {
+        .cb_args         = NULL,
+        .on_ping_success = csi_ping_cb_noop,
+        .on_ping_timeout = csi_ping_cb_noop,
+        .on_ping_end     = csi_ping_cb_noop,
+    };
+
+    if (esp_ping_new_session(&cfg, &cbs, &s_self_ping) == ESP_OK && s_self_ping != NULL) {
+        esp_ping_start(s_self_ping);
+        ESP_LOGI(TAG, "self-ping started -> %s @50Hz (CSI OFDM source, fix #521/#954)", gw_str);
+    } else {
+        ESP_LOGW(TAG, "self-ping: esp_ping_new_session failed");
     }
 }
 
@@ -351,25 +409,16 @@ void csi_collector_init(void)
         ESP_LOGI(TAG, "WiFi modem sleep disabled (WIFI_PS_NONE) for CSI capture");
     }
 
-    /* Enable promiscuous mode — required for reliable CSI callbacks.
-     * Without this, CSI only fires on frames destined to this station,
-     * which may be very infrequent on a quiet network. */
-    ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
-    ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(wifi_promiscuous_cb));
-
-    /* MGMT-only promiscuous filter + active probe injection (RuView#396).
+    /* RuView#521/#954: promiscuous mode DISABLED.
      *
-     * DATA frames cause 100-500+ WiFi HW interrupts/sec which crashes Core 0
-     * in wDev_ProcessFiq (SPI flash cache race in ESP-IDF WiFi blob).
-     * MGMT-only gives ~10 Hz (beacons). Probe request injection at 10 Hz
-     * adds ~10 Hz probe responses from APs → ~20 Hz total, matching the
-     * edge processing designed sample rate of 20 Hz. */
-    wifi_promiscuous_filter_t filt = {
-        .filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT,
-    };
-    ESP_ERROR_CHECK(esp_wifi_set_promiscuous_filter(&filt));
-
-    ESP_LOGI(TAG, "Promiscuous mode enabled (MGMT-only, RuView#396)");
+     * The MGMT-only promiscuous path (#396 DATA-sniff crash workaround) only ever
+     * captured beacons, which APs transmit at non-OFDM DSSS rates carrying no
+     * L-LTF/HT-LTF — so the CSI engine produced ZERO callbacks (yield=0pps ->
+     * DEGRADED -> motion=0). We now use plain connected-STA CSI plus the
+     * csi_start_self_ping() traffic source (called after CSI is enabled below),
+     * matching Espressif's esp-csi csi_recv_router reference. Running without
+     * promiscuous also sidesteps the #396 Core-0 DATA-sniff crash entirely. */
+    ESP_LOGI(TAG, "Promiscuous DISABLED — connected-STA CSI + self-ping (fix #521/#954)");
 
 #if CONFIG_SOC_WIFI_HE_SUPPORT
     /* Wi-Fi 6 targets (e.g. ESP32-C6): wifi_csi_config_t is wifi_csi_acquire_config_t
@@ -419,6 +468,10 @@ void csi_collector_init(void)
 
     ESP_LOGI(TAG, "CSI collection initialized (node_id=%u, channel=%u)",
              (unsigned)s_node_id, (unsigned)csi_channel);
+
+    /* RuView#521/#954: start the connected-STA traffic source so the CSI engine
+     * actually receives OFDM frames (DSSS beacons alone produce no CSI). */
+    csi_start_self_ping();
 }
 
 /* Accessor for other modules that need the authoritative runtime node_id. */
