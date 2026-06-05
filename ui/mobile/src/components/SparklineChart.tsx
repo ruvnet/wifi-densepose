@@ -28,14 +28,10 @@ export const SparklineChart = ({
     [normalizedData],
   );
 
-  const yValues = normalizedData.map((value) => Number(value) || 0);
-  const yMin = Math.min(...yValues);
-  const yMax = Math.max(...yValues);
-  const yPadding = yMax - yMin === 0 ? 1 : (yMax - yMin) * 0.2;
-
   return (
     <View style={style}>
       <View
+        accessible
         accessibilityRole="image"
         style={{
           height,

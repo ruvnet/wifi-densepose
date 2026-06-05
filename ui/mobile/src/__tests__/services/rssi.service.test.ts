@@ -1,6 +1,6 @@
 // In the Jest environment (jsdom/node), Platform.OS defaults to a value that
 // causes rssi.service.ts to load the web implementation. We test the web
-// version which provides synthetic data.
+// version which reports unavailable RSSI without generating fake data.
 
 jest.mock('react-native', () => {
   const RN = jest.requireActual('react-native');
@@ -44,7 +44,7 @@ describe('RssiService (web)', () => {
   });
 
   describe('startScanning / stopScanning', () => {
-    it('startScanning delivers network data to subscribers', () => {
+    it('startScanning delivers an empty network list to subscribers', () => {
       const listener = jest.fn();
       rssiService.subscribe(listener);
       rssiService.startScanning(1000);
@@ -53,9 +53,7 @@ describe('RssiService (web)', () => {
       expect(listener).toHaveBeenCalled();
       const networks = listener.mock.calls[0][0];
       expect(Array.isArray(networks)).toBe(true);
-      expect(networks.length).toBeGreaterThan(0);
-      expect(networks[0]).toHaveProperty('ssid');
-      expect(networks[0]).toHaveProperty('level');
+      expect(networks).toEqual([]);
     });
 
     it('stopScanning stops delivering data', () => {

@@ -7,17 +7,14 @@ export interface MatState {
   survivors: Survivor[];
   alerts: Alert[];
   selectedEventId: string | null;
-  /** Whether data comes from real sensors or simulation. */
-  dataSource: 'real' | 'simulated';
-  /** Whether the user has dismissed the simulation warning overlay. */
-  simulationAcknowledged: boolean;
+  /** Whether data comes from real sensors or is currently unavailable. */
+  dataSource: 'real' | 'unavailable';
   upsertEvent: (event: DisasterEvent) => void;
   addZone: (zone: ScanZone) => void;
   upsertSurvivor: (survivor: Survivor) => void;
   addAlert: (alert: Alert) => void;
   setSelectedEvent: (id: string | null) => void;
-  setDataSource: (source: 'real' | 'simulated') => void;
-  acknowledgeSimulation: () => void;
+  setDataSource: (source: 'real' | 'unavailable') => void;
 }
 
 export const useMatStore = create<MatState>((set) => ({
@@ -26,8 +23,7 @@ export const useMatStore = create<MatState>((set) => ({
   survivors: [],
   alerts: [],
   selectedEventId: null,
-  dataSource: 'simulated',
-  simulationAcknowledged: false,
+  dataSource: 'unavailable',
 
   upsertEvent: (event) => {
     set((state) => {
@@ -84,7 +80,4 @@ export const useMatStore = create<MatState>((set) => ({
     set({ dataSource: source });
   },
 
-  acknowledgeSimulation: () => {
-    set({ simulationAcknowledged: true });
-  },
 }));

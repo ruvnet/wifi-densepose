@@ -127,9 +127,10 @@ describe('usePoseStore', () => {
       expect(usePoseStore.getState().connectionStatus).toBe('connected');
     });
 
-    it('sets isSimulated true for simulated status', () => {
+    it('normalizes simulated status to disconnected', () => {
       usePoseStore.getState().setConnectionStatus('simulated');
-      expect(usePoseStore.getState().isSimulated).toBe(true);
+      expect(usePoseStore.getState().connectionStatus).toBe('disconnected');
+      expect(usePoseStore.getState().isSimulated).toBe(false);
     });
 
     it('sets isSimulated false for connected status', () => {

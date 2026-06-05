@@ -733,7 +733,6 @@ export const GaussianSplatWebViewWeb = ({ onReady, onFps, onError, frame }: Prop
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Failed to initialize 3D renderer');
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

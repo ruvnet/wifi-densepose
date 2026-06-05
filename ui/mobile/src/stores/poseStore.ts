@@ -49,8 +49,8 @@ export const usePoseStore = create<PoseState>((set) => ({
 
   setConnectionStatus: (status: ConnectionStatus) => {
     set({
-      connectionStatus: status,
-      isSimulated: status === 'simulated',
+      connectionStatus: status === 'simulated' ? 'disconnected' : status,
+      isSimulated: false,
     });
   },
 

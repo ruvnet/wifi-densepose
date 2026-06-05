@@ -8,18 +8,6 @@ jest.mock('@/stores/poseStore', () => ({
   },
 }));
 
-jest.mock('@/services/simulation.service', () => ({
-  generateSimulatedData: jest.fn(() => ({
-    type: 'sensing_update',
-    timestamp: Date.now(),
-    source: 'simulated',
-    nodes: [],
-    features: { mean_rssi: -45, variance: 1 },
-    classification: { motion_level: 'absent', presence: false, confidence: 0.5 },
-    signal_field: { grid_size: [20, 1, 20], values: [] },
-  })),
-}));
-
 // Create a fresh WsService for each test to avoid shared state
 function createWsService() {
   // Use jest.isolateModules to get a fresh module instance
@@ -69,7 +57,7 @@ describe('WsService', () => {
 
         // Test with port 3000
         ws.connect('http://192.168.1.10:3000');
-        expect(capturedUrls[capturedUrls.length - 1]).toBe('ws://192.168.1.10:3000/ws/sensing');
+        expect(capturedUrls[capturedUrls.length - 1]).toBe('ws://192.168.1.10:3000/api/v1/stream/pose');
 
         // Clean up, create another service
         ws.disconnect();
@@ -77,19 +65,19 @@ describe('WsService', () => {
 
         // Test with port 8080
         ws2.connect('http://myserver.local:8080');
-        expect(capturedUrls[capturedUrls.length - 1]).toBe('ws://myserver.local:8080/ws/sensing');
+        expect(capturedUrls[capturedUrls.length - 1]).toBe('ws://myserver.local:8080/api/v1/stream/pose');
         ws2.disconnect();
 
         // Test HTTPS -> WSS upgrade (port 443 is default for HTTPS so host drops it)
         const ws3 = createWsService();
         ws3.connect('https://secure.example.com:443');
-        expect(capturedUrls[capturedUrls.length - 1]).toBe('wss://secure.example.com/ws/sensing');
+        expect(capturedUrls[capturedUrls.length - 1]).toBe('wss://secure.example.com/api/v1/stream/pose');
         ws3.disconnect();
 
         // Test WSS input
         const ws4 = createWsService();
         ws4.connect('wss://secure.example.com');
-        expect(capturedUrls[capturedUrls.length - 1]).toBe('wss://secure.example.com/ws/sensing');
+        expect(capturedUrls[capturedUrls.length - 1]).toBe('wss://secure.example.com/api/v1/stream/pose');
         ws4.disconnect();
 
         // Verify port 3001 is NOT hardcoded anywhere
@@ -103,10 +91,10 @@ describe('WsService', () => {
   });
 
   describe('connect with empty URL', () => {
-    it('falls back to simulation mode when URL is empty', () => {
+    it('stays disconnected when URL is empty', () => {
       const ws = createWsService();
       ws.connect('');
-      expect(ws.getStatus()).toBe('simulated');
+      expect(ws.getStatus()).toBe('disconnected');
       ws.disconnect();
     });
   });
@@ -121,18 +109,15 @@ describe('WsService', () => {
       ws.disconnect();
     });
 
-    it('listener receives simulated frames', () => {
+    it('does not generate frames without a live URL', () => {
       const ws = createWsService();
       const listener = jest.fn();
       ws.subscribe(listener);
       ws.connect('');
 
-      // Advance timer to trigger simulation
       jest.advanceTimersByTime(600);
 
-      expect(listener).toHaveBeenCalled();
-      const frame = listener.mock.calls[0][0];
-      expect(frame).toHaveProperty('type', 'sensing_update');
+      expect(listener).not.toHaveBeenCalled();
       ws.disconnect();
     });
 
@@ -154,7 +139,7 @@ describe('WsService', () => {
     it('clears state and sets status to disconnected', () => {
       const ws = createWsService();
       ws.connect('');
-      expect(ws.getStatus()).toBe('simulated');
+      expect(ws.getStatus()).toBe('disconnected');
       ws.disconnect();
       expect(ws.getStatus()).toBe('disconnected');
     });

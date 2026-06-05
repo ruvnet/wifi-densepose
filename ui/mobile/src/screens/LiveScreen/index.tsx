@@ -9,19 +9,26 @@ import { colors, spacing } from '@/theme';
 import type { ConnectionStatus, SensingFrame } from '@/types/sensing';
 import { LiveHUD } from './LiveHUD';
 
-type LiveMode = 'LIVE' | 'SIM' | 'RSSI';
+type LiveMode = 'LIVE' | 'OFFLINE' | 'RSSI';
 
 const getMode = (
   status: ConnectionStatus,
   isSimulated: boolean,
   frame: SensingFrame | null,
 ): LiveMode => {
-  if (isSimulated || frame?.source === 'simulated') return 'SIM';
+  if (isSimulated || frame?.source === 'simulated') return 'OFFLINE';
   if (status === 'connected') return 'LIVE';
   return 'RSSI';
 };
 
 const isWeb = Platform.OS === 'web';
+
+const getPersonCount = (frame: SensingFrame | null): number => {
+  if (!frame?.classification?.presence) return 0;
+  if (typeof frame.estimated_persons === 'number') return Math.max(0, Math.floor(frame.estimated_persons));
+  if (Array.isArray(frame.persons)) return frame.persons.length;
+  return 1;
+};
 
 type ViewerProps = {
   frame: SensingFrame | null;
@@ -43,7 +50,7 @@ const WebLiveViewer = ({ frame, onReady, onFps, onError }: ViewerProps) => {
   return <Viewer frame={frame} onReady={onReady} onFps={onFps} onError={onError} />;
 };
 
-const NativeLiveViewer = ({ frame, onReady, onFps, onError }: ViewerProps) => {
+const NativeLiveViewer = ({ onReady, onFps, onError }: ViewerProps) => {
   const webViewRef = useRef(null);
   const [WVComponent, setWVComponent] = useState<React.ComponentType<any> | null>(null);
 
@@ -89,7 +96,7 @@ export const LiveScreen = () => {
   const handleRetry = useCallback(() => { setError(null); setReady(false); setFps(0); setViewerKey((v) => v + 1); }, []);
 
   const rssi = lastFrame?.features?.mean_rssi;
-  const personCount = lastFrame?.classification?.presence ? 1 : 0;
+  const personCount = getPersonCount(lastFrame);
   const mode = getMode(connectionStatus, isSimulated, lastFrame);
 
   if (error) {
@@ -135,7 +142,7 @@ export default LiveScreen;
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
-  loadingWrap: { ...StyleSheet.absoluteFillObject, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center', gap: spacing.md },
+  loadingWrap: { ...StyleSheet.absoluteFill, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center', gap: spacing.md },
   loadingText: { color: colors.textSecondary },
   fallbackWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md, padding: spacing.lg },
   errorText: { textAlign: 'center' },

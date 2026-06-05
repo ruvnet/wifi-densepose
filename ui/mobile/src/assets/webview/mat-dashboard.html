@@ -204,9 +204,7 @@
 
             const selectedZone =
               zoneKey
-                || (this.zones.size > 0
-                  ? [...this.zones.values()][Math.floor(Math.random() * Math.max(1, this.zones.size))]
-                  : null);
+                || null;
 
             const bounds = this._pickPointInZone(selectedZone);
             const triageStatus = this.inferTriage(vital_signs, confidence);
@@ -227,7 +225,7 @@
               zone_id,
               x: bounds.x,
               y: bounds.y,
-              depth: -Math.abs(isNumber(vital_signs.depth) ? vital_signs.depth : Math.random() * 3),
+              depth: isNumber(vital_signs.depth) ? -Math.abs(vital_signs.depth) : null,
               triage_status: triageStatus,
               triage_color: toRgba(triageStatus),
               confidence,
@@ -255,25 +253,18 @@
           }
 
           _pickPointInZone(zone) {
-            if (!zone) {
-              return {
-                x: 220 + Math.random() * 80,
-                y: 120 + Math.random() * 80,
-              };
-            }
+            if (!zone) return { x: 0, y: 0 };
 
             if (zone.zone_type === 'circle') {
-              const angle = Math.random() * Math.PI * 2;
-              const radius = Math.random() * (zone.radius || 20);
               return {
-                x: Math.max(10, Math.min(560, zone.center_x + Math.cos(angle) * radius)),
-                y: Math.max(10, Math.min(280, zone.center_y + Math.sin(angle) * radius)),
+                x: Math.max(10, Math.min(560, zone.center_x)),
+                y: Math.max(10, Math.min(280, zone.center_y)),
               };
             }
 
             return {
-              x: Math.max(zone.x || 5, Math.min((zone.x || 5) + (zone.width || 40), (zone.x || 5) + Math.random() * (zone.width || 40))),
-              y: Math.max(zone.y || 5, Math.min((zone.y || 5) + (zone.height || 40), (zone.y || 5) + Math.random() * (zone.height || 40))),
+              x: Math.max(zone.x || 5, Math.min((zone.x || 5) + (zone.width || 40), (zone.x || 5) + ((zone.width || 40) / 2))),
+              y: Math.max(zone.y || 5, Math.min((zone.y || 5) + (zone.height || 40), (zone.y || 5) + ((zone.height || 40) / 2))),
             };
           }
 
@@ -327,10 +318,8 @@
             this.motionVector = { x: xDelta || 0, y: yDelta || 0 };
 
             for (const survivor of this.survivors.values()) {
-              const jitterX = (Math.random() - 0.5) * 2;
-              const jitterY = (Math.random() - 0.5) * 2;
-              survivor.x = Math.max(5, Math.min(560, survivor.x + this.motionVector.x + jitterX));
-              survivor.y = Math.max(5, Math.min(280, survivor.y + this.motionVector.y + jitterY));
+              survivor.x = Math.max(5, Math.min(560, survivor.x + this.motionVector.x));
+              survivor.y = Math.max(5, Math.min(280, survivor.y + this.motionVector.y));
               survivor.last_updated = new Date().toISOString();
             }
           }
@@ -382,7 +371,7 @@
               ctx.arc(survivor.x, survivor.y, radius, 0, Math.PI * 2);
               ctx.stroke();
 
-              if (survivor.depth < 0) {
+              if (typeof survivor.depth === 'number' && survivor.depth < 0) {
                 ctx.fillStyle = '#ffffff';
                 ctx.font = '9px monospace';
                 ctx.fillText(`${Math.abs(survivor.depth).toFixed(1)}m`, survivor.x + radius + 4, survivor.y + 4);
@@ -442,20 +431,12 @@
         };
 
         const startup = () => {
-          dashboard.createEvent('earthquake', 37.7749, -122.4194, 'Training Scenario');
-          dashboard.addRectangleZone('Zone A', 60, 45, 170, 120);
-          dashboard.addCircleZone('Zone B', 300, 170, 70);
-          dashboard.processSurvivorDetection('Zone A', 0.94, { breathing_rate: 11, hr: 128 });
-          dashboard.processSurvivorDetection('Zone A', 0.88, { breathing_rate: 16, hr: 118 });
-          dashboard.processSurvivorDetection('Zone B', 0.71, { breathing_rate: 9, hr: 142 });
           status.textContent = 'MAT dashboard ready';
           dashboard.postMessage({ type: 'READY' });
         };
 
         const loop = () => {
-          if (dashboard.zones.size > 0) {
-            dashboard.render(ctx, canvas.width, canvas.height);
-          }
+          dashboard.render(ctx, canvas.width, canvas.height);
           requestAnimationFrame(loop);
         };
 

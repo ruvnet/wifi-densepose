@@ -1,23 +1,15 @@
 import type { RssiService, WifiNetwork } from './rssi.service';
 
 class IosRssiService implements RssiService {
-  private timer: ReturnType<typeof setInterval> | null = null;
   private listeners = new Set<(networks: WifiNetwork[]) => void>();
 
-  startScanning(intervalMs: number): void {
-    console.warn('iOS RSSI scanning not available; returning synthetic network data.');
+  startScanning(): void {
+    console.warn('iOS RSSI scanning not available; no generated network data will be emitted.');
     this.stopScanning();
-    this.timer = setInterval(() => {
-      this.broadcast([{ ssid: 'WiFi-DensePose', bssid: undefined, level: -60 }]);
-    }, intervalMs);
-    this.broadcast([{ ssid: 'WiFi-DensePose', bssid: undefined, level: -60 }]);
+    this.broadcast([]);
   }
 
   stopScanning(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
   }
 
   subscribe(listener: (networks: WifiNetwork[]) => void): () => void {
