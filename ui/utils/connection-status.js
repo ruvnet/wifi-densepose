@@ -51,9 +51,13 @@ export class ConnectionStatus {
     const state = sensingService.state;
     const source = sensingService.dataSource;
 
-    if (state === 'connected' || state === 'streaming') {
+    if (source === 'live') {
+      this.setStatus('connected', 'Live');
+    } else if (source === 'stale') {
+      this.setStatus('reconnecting', 'Stale');
+    } else if (state === 'connected' || state === 'streaming') {
       const label = source === 'live' ? 'Live' :
-                    source === 'server-simulated' ? 'Simulated' :
+                    source === 'server-simulated' ? 'Offline' :
                     'Connected';
       this.setStatus('connected', label);
     } else if (state === 'connecting' || state === 'reconnecting') {

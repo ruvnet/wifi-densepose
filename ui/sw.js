@@ -1,7 +1,7 @@
 // RuView Service Worker - Offline caching for the dashboard shell
 // Strategy: Network-first for API calls, Cache-first for static assets
 
-const CACHE_NAME = 'ruview-v1';
+const CACHE_NAME = 'ruview-v11';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
@@ -74,8 +74,25 @@ self.addEventListener('fetch', (event) => {
   // Skip cross-origin requests
   if (url.origin !== self.location.origin) return;
 
-  // API calls: network-first with cache fallback
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/health/')) {
+  // API calls and launch-critical JS/config: network-first with cache fallback.
+  if (
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/health/') ||
+    url.pathname === '/index.html' ||
+    url.pathname === '/observatory.html' ||
+    url.pathname === '/observatory/css/observatory.css' ||
+    url.pathname === '/style.css' ||
+    url.pathname === '/app.js' ||
+    url.pathname === '/sw.js' ||
+    url.pathname === '/config/api.config.js' ||
+    url.pathname === '/components/DashboardTab.js' ||
+    url.pathname === '/components/LiveDemoTab.js' ||
+    url.pathname === '/components/SensingTab.js' ||
+    url.pathname === '/services/sensing.service.js' ||
+    url.pathname === '/observatory/js/main.js' ||
+    url.pathname === '/utils/connection-status.js' ||
+    url.pathname === '/utils/backend-detector.js'
+  ) {
     event.respondWith(networkFirst(request));
     return;
   }

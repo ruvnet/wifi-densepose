@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>RuView Observatory — WiFi DensePose</title>
-  <link rel="stylesheet" href="observatory/css/observatory.css">
+  <link rel="stylesheet" href="observatory/css/observatory.css?v=11">
 </head>
 <body>
   <canvas id="observatory-canvas"></canvas>
@@ -21,25 +21,13 @@
     <!-- Top-right: Connection + status + gear -->
     <div id="status-bar">
       <div id="data-source-badge">
-        <span class="dot dot--demo"></span>
-        <span id="data-source-label">DEMO</span>
+        <span class="dot dot--offline"></span>
+        <span id="data-source-label">OFFLINE</span>
       </div>
       <div id="scenario-area">
         <span id="autoplay-icon" title="Auto-cycling">&#9654;</span>
-        <select id="scenario-quick-select" title="Change scenario">
-          <option value="auto">Auto-Cycle</option>
-          <option value="empty_room">Empty Room</option>
-          <option value="single_breathing">Vital Signs</option>
-          <option value="two_walking">Multi-Person</option>
-          <option value="fall_event">Fall Detect</option>
-          <option value="sleep_monitoring">Sleep Monitor</option>
-          <option value="intrusion_detect">Intrusion</option>
-          <option value="gesture_control">Gesture Ctrl</option>
-          <option value="crowd_occupancy">Crowd (4 ppl)</option>
-          <option value="search_rescue">Search Rescue</option>
-          <option value="elderly_care">Elderly Care</option>
-          <option value="fitness_tracking">Fitness</option>
-          <option value="security_patrol">Security Patrol</option>
+        <select id="scenario-quick-select" title="Cycle focused live node">
+          <option value="live">Live Nodes</option>
         </select>
       </div>
       <div id="scenario-description"></div>
@@ -47,13 +35,14 @@
       <button id="settings-btn" title="Settings">&#9881;</button>
     </div>
 
-    <!-- Left panel: Vital Signs -->
+    <!-- Left panel: sensor-estimated vital signs -->
     <div id="panel-vitals" class="data-panel">
-      <div class="panel-header">Vital Signs</div>
+      <div class="panel-header">Sensor-Estimated Vitals</div>
+      <div class="panel-note">WiFi inference estimates, not medical measurements.</div>
       <div class="vital-row">
         <div class="vital-icon">&#9825;</div>
         <div class="vital-data">
-          <div class="vital-label">Heart Rate</div>
+          <div class="vital-label">Heart Rate Estimate</div>
           <div class="vital-value"><span id="hr-value">--</span> <span class="vital-unit">BPM</span></div>
           <div class="vital-bar"><div id="hr-bar" class="vital-bar-fill vital-bar--hr"></div></div>
         </div>
@@ -61,7 +50,7 @@
       <div class="vital-row">
         <div class="vital-icon">&#9788;</div>
         <div class="vital-data">
-          <div class="vital-label">Respiration</div>
+          <div class="vital-label">Respiration Estimate</div>
           <div class="vital-value"><span id="br-value">--</span> <span class="vital-unit">RPM</span></div>
           <div class="vital-bar"><div id="br-bar" class="vital-bar-fill vital-bar--br"></div></div>
         </div>
@@ -69,7 +58,7 @@
       <div class="vital-row">
         <div class="vital-icon">&#9878;</div>
         <div class="vital-data">
-          <div class="vital-label">Confidence</div>
+          <div class="vital-label">Inference Confidence</div>
           <div class="vital-value"><span id="conf-value">--</span><span class="vital-unit">%</span></div>
           <div class="vital-bar"><div id="conf-bar" class="vital-bar-fill vital-bar--conf"></div></div>
         </div>
@@ -120,10 +109,11 @@
     <!-- Bottom-right: keyboard hints -->
     <div id="key-hints">
       <span class="key-hint">[A] Orbit</span>
-      <span class="key-hint">[D] Scenario</span>
+      <span class="key-hint">[D] Node</span>
       <span class="key-hint">[F] FPS</span>
+      <span class="key-hint">[R] Reconnect</span>
       <span class="key-hint">[S] Settings</span>
-      <span class="key-hint">[Space] Pause</span>
+      <span class="key-hint">[Space] Freeze</span>
     </div>
   </div>
 
@@ -265,29 +255,7 @@
         <label class="setting-row">
           <span>Scenario</span>
           <select id="opt-scenario">
-            <option value="auto">Auto-Cycle (30s)</option>
-            <optgroup label="Core Sensing">
-              <option value="empty_room">Empty Room</option>
-              <option value="single_breathing">Vital Signs (Breathing)</option>
-              <option value="two_walking">Multi-Person Tracking</option>
-              <option value="fall_event">Fall Detection</option>
-            </optgroup>
-            <optgroup label="Medical / Health">
-              <option value="sleep_monitoring">Sleep Monitoring (Apnea)</option>
-              <option value="elderly_care">Elderly Care (Gait)</option>
-              <option value="fitness_tracking">Fitness Tracking</option>
-            </optgroup>
-            <optgroup label="Security">
-              <option value="intrusion_detect">Intrusion Detection</option>
-              <option value="security_patrol">Security Patrol</option>
-            </optgroup>
-            <optgroup label="Building / Retail">
-              <option value="crowd_occupancy">Crowd Occupancy (4 ppl)</option>
-              <option value="gesture_control">Gesture Control (DTW)</option>
-            </optgroup>
-            <optgroup label="Disaster / Tactical">
-              <option value="search_rescue">Search &amp; Rescue (WiFi-Mat)</option>
-            </optgroup>
+            <option value="live">Live Nodes</option>
           </select>
         </label>
         <label class="setting-row">
@@ -310,7 +278,7 @@
         <label class="setting-row">
           <span>Data Source</span>
           <select id="opt-data-source">
-            <option value="demo" selected>Demo Generator</option>
+            <option value="http" selected>Live HTTP</option>
             <option value="ws">Live WebSocket</option>
           </select>
         </label>
@@ -335,6 +303,6 @@
   }
   </script>
 
-  <script type="module" src="observatory/js/main.js"></script>
+  <script type="module" src="observatory/js/main.js?v=11"></script>
 </body>
 </html>

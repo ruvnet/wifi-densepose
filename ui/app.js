@@ -3,13 +3,12 @@
 import { TabManager } from './components/TabManager.js';
 import { DashboardTab } from './components/DashboardTab.js';
 import { HardwareTab } from './components/HardwareTab.js';
-import { LiveDemoTab } from './components/LiveDemoTab.js';
-import { SensingTab } from './components/SensingTab.js';
+import { LiveDemoTab } from './components/LiveDemoTab.js?v=9';
+import { SensingTab } from './components/SensingTab.js?v=9';
 import { apiService } from './services/api.service.js';
 import { wsService } from './services/websocket.service.js';
 import { healthService } from './services/health.service.js';
 import { sensingService } from './services/sensing.service.js';
-import { backendDetector } from './utils/backend-detector.js';
 import { KeyboardShortcuts } from './utils/keyboard-shortcuts.js';
 import { PerfMonitor } from './utils/perf-monitor.js';
 import { toastManager } from './utils/toast.js';
@@ -18,7 +17,7 @@ import { CommandPalette } from './utils/command-palette.js';
 import { ActivityLog } from './utils/activity-log.js';
 import { DataExport } from './utils/data-export.js';
 import { FullscreenManager } from './utils/fullscreen.js';
-import { ConnectionStatus } from './utils/connection-status.js';
+import { ConnectionStatus } from './utils/connection-status.js?v=9';
 import { MobileNav } from './utils/mobile-nav.js';
 import { Router } from './utils/router.js';
 import { Onboarding } from './utils/onboarding.js';
@@ -75,33 +74,20 @@ class WiFiDensePoseApp {
       return response;
     });
 
-    // Detect backend availability and initialize accordingly
-    const useMock = await backendDetector.shouldUseMockServer();
-    
-    if (useMock) {
-      console.log('🧪 Initializing with mock server for testing');
-      // Import and start mock server only when needed
-      const { mockServer } = await import('./utils/mock-server.js');
-      mockServer.start();
-      
-      // Show notification to user
-      this.showBackendStatus('Mock server active - testing mode', 'warning');
-    } else {
-      console.log('🔌 Connecting to backend...');
+    console.log('🔌 Connecting to backend...');
 
-      try {
-        const health = await healthService.checkLiveness();
-        console.log('✅ Backend responding:', health);
-        this.showBackendStatus('Connected to Rust sensing server', 'success');
-      } catch (error) {
-        console.warn('⚠️ Backend not available:', error.message);
-        this.showBackendStatus('Backend unavailable — start sensing-server', 'warning');
-      }
-
-      // Start the sensing WebSocket service early so the dashboard and
-      // live-demo tabs can show the correct data-source status immediately.
-      sensingService.start();
+    try {
+      const health = await healthService.checkLiveness();
+      console.log('✅ Backend responding:', health);
+      this.showBackendStatus('Connected to sensing server', 'success');
+    } catch (error) {
+      console.warn('⚠️ Backend not available:', error.message);
+      this.showBackendStatus('Backend unavailable — no live data', 'warning');
     }
+
+    // Start hardware status polling even when the optional WebSocket backend is
+    // absent; it does not generate fallback frames.
+    sensingService.start();
   }
 
   // Initialize UI components
