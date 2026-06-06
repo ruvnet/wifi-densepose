@@ -38,7 +38,7 @@
     <!-- Left panel: sensor-estimated vital signs -->
     <div id="panel-vitals" class="data-panel">
       <div class="panel-header">Sensor-Estimated Vitals</div>
-      <div class="panel-note">WiFi inference estimates, not medical measurements.</div>
+      <div class="panel-note" role="note">Sensor/inference-derived estimates only. Not medical-grade measurements.</div>
       <div class="vital-row">
         <div class="vital-icon">&#9825;</div>
         <div class="vital-data">
@@ -101,7 +101,7 @@
     <div id="capabilities-bar">
       <div class="cap-item"><span class="cap-icon">&#9898;</span><span>Human Pose Estimation</span></div>
       <div class="cap-divider"></div>
-      <div class="cap-item"><span class="cap-icon">&#9829;</span><span>Vital Sign Monitoring</span></div>
+      <div class="cap-item"><span class="cap-icon">&#9829;</span><span>Vital Estimates</span></div>
       <div class="cap-divider"></div>
       <div class="cap-item"><span class="cap-icon">&#9784;</span><span>Presence Detection</span></div>
     </div>
@@ -272,14 +272,15 @@
             <option value="minimal">Minimal / Clean</option>
             <option value="neon">Neon Glow</option>
             <option value="tactical">Tactical / Military</option>
-            <option value="medical">Medical Monitor</option>
+            <option value="medical">Clinical-Inspired Estimate View</option>
           </select>
         </label>
         <label class="setting-row">
           <span>Data Source</span>
           <select id="opt-data-source">
-            <option value="http" selected>Live HTTP</option>
-            <option value="ws">Live WebSocket</option>
+            <option value="ws" selected>Live WebSocket</option>
+            <option value="http">HTTP Status Polling</option>
+            <option value="canvas">Local Canvas Fallback</option>
           </select>
         </label>
         <label class="setting-row" id="ws-url-row" style="display:none">
@@ -303,6 +304,6 @@
   }
   </script>
 
-  <script type="module" src="observatory/js/main.js?v=11"></script>
+  <script type="module" src="observatory/js/main.js?v=12"></script>
 </body>
 </html>

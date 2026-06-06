@@ -30,6 +30,12 @@ const C = {
   bgDeep:     0x080c14,
 };
 
+const WS_PORT_BY_HTTP_PORT = {
+  '3000': '3001',
+  '8080': '8765',
+};
+const WS_CONNECT_TIMEOUT_MS = 1400;
+
 // SCENARIO_NAMES, DEFAULTS, SETTINGS_VERSION, PRESETS imported from hud-controller.js
 
 // ---- Main Class ----
@@ -126,6 +132,9 @@ class Observatory {
     // WebSocket for live data — always try auto-detect on startup
     this._ws = null;
     this._liveData = null;
+    this._httpPollTimer = null;
+    this._httpFallbackBase = null;
+    this._connectSeq = 0;
     this._autoDetectLive();
 
     // Input
@@ -438,76 +447,195 @@ class Observatory {
   // ---- WebSocket live data ----
 
   _autoDetectLive() {
-    // Probe sensing server health on same origin, then common ports
+    const connectSeq = ++this._connectSeq;
+    this._clearHttpPolling();
+    this._disconnectWS();
+
+    // Probe sensing server health on same origin, then common ports.
+    // For each base, try the low-latency WebSocket first. If it cannot open,
+    // fall through to HTTP status polling. If neither path exists, keep the
+    // local canvas visible with empty live readouts.
     const host = window.location.hostname || 'localhost';
     const candidates = [
       window.location.origin,                   // same origin (e.g. :3000)
+      `http://${host}:3001`,                     // Docker / desktop WS stream
       `http://${host}:8765`,                     // default WS port
       `http://${host}:3000`,                     // default HTTP port
+      `http://${host}:8080`,                     // Python sensing UI
     ];
-    // Deduplicate
     const unique = [...new Set(candidates)];
 
-    const tryNext = (i) => {
+    const tryNext = async (i) => {
+      if (connectSeq !== this._connectSeq) return;
       if (i >= unique.length) {
         console.log('[Observatory] No sensing server detected; live-only mode is waiting');
-        this.settings.dataSource = 'live';
-        this._currentData = null;
-        this._hud.updateSourceBadge('offline', null);
+        this._enterCanvasFallback();
         return;
       }
       const base = unique[i];
-      fetch(`${base}/health`, { signal: AbortSignal.timeout(1500) })
-        .then(r => r.ok ? r.json() : Promise.reject())
-        .then(data => {
-          if (data && data.status === 'ok') {
-            const wsProto = base.startsWith('https') ? 'wss:' : 'ws:';
-            const urlObj = new URL(base);
-            const wsUrl = `${wsProto}//${urlObj.host}/ws/sensing`;
-            console.log('[Observatory] Sensing server detected at', base, '→', wsUrl);
-            this.settings.dataSource = 'ws';
-            this.settings.wsUrl = wsUrl;
-            this._connectWS(wsUrl);
-          } else if (data && (data.ok === true || data.status === 'alive' || data.status === 'healthy')) {
-            console.log('[Observatory] HTTP API detected at', base, 'polling live status');
-            this.settings.dataSource = 'http';
-            this.settings.apiBase = base;
-            this._startHttpPolling(base);
-          } else {
-            tryNext(i + 1);
-          }
-        })
-        .catch(() => tryNext(i + 1));
+
+      let health = null;
+      try {
+        const resp = await fetch(`${base}/health`, { signal: AbortSignal.timeout(1500) });
+        if (resp.ok) health = await resp.json();
+      } catch {}
+
+      const httpAvailable = Boolean(
+        health && (health.ok === true || ['ok', 'alive', 'healthy'].includes(health.status))
+      );
+      const wsUrls = this._wsUrlsForBase(base);
+      for (const wsUrl of wsUrls) {
+        const connected = await this._connectWS(wsUrl, {
+          fallbackBase: httpAvailable ? base : null,
+          timeoutMs: WS_CONNECT_TIMEOUT_MS,
+        });
+        if (connectSeq !== this._connectSeq || connected) return;
+      }
+
+      if (httpAvailable) {
+        console.log('[Observatory] HTTP API detected at', base, 'polling live status');
+        this._startHttpPolling(base);
+        return;
+      }
+
+      tryNext(i + 1);
     };
     tryNext(0);
   }
 
-  _connectWS(url) {
-    this._disconnectWS();
+  _defaultWsUrl() {
+    return this._wsUrlsForBase(window.location.origin)[0];
+  }
+
+  _wsUrlsForBase(base) {
     try {
-      this._ws = new WebSocket(url);
-      this._ws.onopen = () => {
-        console.log('[Observatory] WebSocket connected');
-        this._hud.updateSourceBadge('ws', this._ws);
+      const urlObj = new URL(base);
+      const wsProto = urlObj.protocol === 'https:' ? 'wss:' : 'ws:';
+      const urls = [];
+      const mappedPort = WS_PORT_BY_HTTP_PORT[urlObj.port];
+      if (mappedPort) urls.push(`${wsProto}//${urlObj.hostname}:${mappedPort}/ws/sensing`);
+      urls.push(`${wsProto}//${urlObj.host}/ws/sensing`);
+      return [...new Set(urls)];
+    } catch {
+      return ['ws://localhost:3001/ws/sensing'];
+    }
+  }
+
+  _connectWS(url, { fallbackBase = null, timeoutMs = 0 } = {}) {
+    this._disconnectWS();
+    return new Promise((resolve) => {
+      let opened = false;
+      let settled = false;
+      let timeout = null;
+      const settle = (ok) => {
+        if (settled) return;
+        settled = true;
+        if (timeout) clearTimeout(timeout);
+        resolve(ok);
       };
-      this._ws.onmessage = (evt) => { try { this._liveData = JSON.parse(evt.data); } catch {} };
-      this._ws.onclose = () => {
-        console.log('[Observatory] WebSocket closed; live-only mode is waiting');
-        this._ws = null;
-        this._currentData = null;
-        this._hud.updateSourceBadge('offline', null);
-      };
-      this._ws.onerror = () => {};
-    } catch {}
+
+      try {
+        const ws = new WebSocket(url);
+        this._ws = ws;
+        ws.onopen = () => {
+          if (this._ws !== ws) return;
+          console.log('[Observatory] WebSocket connected');
+          opened = true;
+          this._clearHttpPolling();
+          this._httpFallbackBase = fallbackBase;
+          this.settings.dataSource = 'ws';
+          this.settings.wsUrl = url;
+          const dsSel = document.getElementById('opt-data-source');
+          if (dsSel) dsSel.value = 'ws';
+          const wsInput = document.getElementById('opt-ws-url');
+          if (wsInput) wsInput.value = url;
+          this._hud.updateSourceBadge('ws', ws);
+          settle(true);
+        };
+        ws.onmessage = (evt) => {
+          if (this._ws !== ws) return;
+          try { this._liveData = JSON.parse(evt.data); } catch {}
+        };
+        ws.onclose = () => {
+          console.log('[Observatory] WebSocket closed');
+          if (this._ws !== ws) {
+            if (!opened) settle(false);
+            return;
+          }
+          this._ws = null;
+          if (!opened) {
+            settle(false);
+            return;
+          }
+          if (this._httpFallbackBase) {
+            console.log('[Observatory] Falling back to HTTP status polling at', this._httpFallbackBase);
+            this._startHttpPolling(this._httpFallbackBase);
+          } else {
+            this._enterCanvasFallback();
+          }
+        };
+        ws.onerror = () => {
+          if (!opened) {
+            settle(false);
+            if (this._ws === ws) this._ws = null;
+            try { ws.close(); } catch {}
+          }
+        };
+        if (timeoutMs > 0) {
+          timeout = setTimeout(() => {
+            if (!opened) {
+              settle(false);
+              if (this._ws === ws) {
+                this._ws = null;
+                try { ws.close(); } catch {}
+              }
+            }
+          }, timeoutMs);
+        }
+      } catch {
+        settle(false);
+      }
+    });
   }
 
   _disconnectWS() {
-    if (this._ws) { this._ws.close(); this._ws = null; }
+    if (this._ws) {
+      const ws = this._ws;
+      this._ws = null;
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onclose = null;
+      ws.onerror = null;
+      try { ws.close(); } catch {}
+    }
     this._liveData = null;
   }
 
+  _clearHttpPolling() {
+    if (this._httpPollTimer) {
+      clearInterval(this._httpPollTimer);
+      this._httpPollTimer = null;
+    }
+  }
+
+  _enterCanvasFallback() {
+    this._disconnectWS();
+    this._clearHttpPolling();
+    this.settings.dataSource = 'canvas';
+    this._liveData = null;
+    this._currentData = null;
+    const dsSel = document.getElementById('opt-data-source');
+    if (dsSel) dsSel.value = 'canvas';
+    this._hud.updateSourceBadge('canvas', null);
+  }
+
   _startHttpPolling(base) {
-    if (this._httpPollTimer) clearInterval(this._httpPollTimer);
+    this._disconnectWS();
+    this._clearHttpPolling();
+    this.settings.dataSource = 'http';
+    this.settings.apiBase = base;
+    const dsSel = document.getElementById('opt-data-source');
+    if (dsSel) dsSel.value = 'http';
     const poll = () => {
       fetch(`${base}/api/v1/cardputer/status`, { cache: 'no-store' })
         .then(r => r.ok ? r.json() : Promise.reject())

@@ -13,8 +13,8 @@
 // ---- Constants ----
 
 export const SCENARIO_NAMES = [
-  'EMPTY ROOM','VITAL SIGNS','MULTI-PERSON','FALL DETECT',
-  'SLEEP MONITOR','INTRUSION','GESTURE CTRL','CROWD OCCUPANCY',
+  'EMPTY ROOM','VITAL ESTIMATES','MULTI-PERSON','FALL DETECT',
+  'SLEEP SENSING','INTRUSION','GESTURE CTRL','CROWD OCCUPANCY',
   'SEARCH RESCUE','ELDERLY CARE','FITNESS','SECURITY PATROL',
 ];
 
@@ -25,10 +25,10 @@ export const DEFAULTS = {
   wireColor: '#00d878', jointColor: '#ff4060', aura: 0.02,
   field: 0.45, waves: 0.4, ambient: 0.7, reflect: 0.2,
   fov: 50, orbitSpeed: 0.15, grid: true, room: true,
-  scenario: 'auto', cycle: 30, dataSource: 'demo', wsUrl: '',
+  scenario: 'live', cycle: 30, dataSource: 'ws', wsUrl: '',
 };
 
-export const SETTINGS_VERSION = '6';
+export const SETTINGS_VERSION = '7';
 
 export const PRESETS = {
   foundation: {},
@@ -68,10 +68,10 @@ export const PRESETS = {
 const SCENARIO_DESCRIPTIONS = {
   auto:              'Auto-cycling through all sensing scenarios.',
   empty_room:        'Baseline calibration with no human presence in the monitored zone.',
-  single_breathing:  'Detecting vital signs through WiFi signal micro-variations.',
+  single_breathing:  'Estimating respiration and heart-rate proxies from WiFi signal micro-variations.',
   two_walking:       'Tracking multiple people simultaneously via CSI multiplex separation.',
   fall_event:        'Sudden posture-change detection using acceleration feature analysis.',
-  sleep_monitoring:  'Monitoring breathing patterns and apnea events during sleep.',
+  sleep_monitoring:  'Estimating sleep breathing patterns from WiFi inference signals.',
   intrusion_detect:  'Passive perimeter monitoring -- no cameras, pure RF sensing.',
   gesture_control:   'DTW-based gesture recognition from hand/arm motion signatures.',
   crowd_occupancy:   'Estimating room occupancy count from aggregate CSI variance.',
@@ -206,7 +206,7 @@ export class HudController {
       obs._camera.updateProjectionMatrix();
     });
     this._bindRange('opt-orbit-speed', 'orbitSpeed');
-    this._bindRange('opt-cycle', 'cycle', v => { obs._demoData.setCycleDuration(v); });
+    this._bindRange('opt-cycle', 'cycle');
 
     // Color pickers
     document.getElementById('opt-wire-color').value = s.wireColor;
@@ -230,21 +230,24 @@ export class HudController {
 
     // Scenario select
     const scenarioSel = document.getElementById('opt-scenario');
-    scenarioSel.value = s.scenario;
-    scenarioSel.addEventListener('change', (e) => {
-      s.scenario = e.target.value;
-      obs._demoData.setScenario(e.target.value);
-      this.saveSettings();
-    });
+    if (scenarioSel) {
+      scenarioSel.value = 'live';
+      scenarioSel.disabled = true;
+    }
 
     // Data source
     const dsSel = document.getElementById('opt-data-source');
-    dsSel.value = s.dataSource;
+    dsSel.value = ['ws', 'http', 'canvas'].includes(s.dataSource) ? s.dataSource : 'ws';
     dsSel.addEventListener('change', (e) => {
       s.dataSource = e.target.value;
       document.getElementById('ws-url-row').style.display = e.target.value === 'ws' ? 'flex' : 'none';
-      if (e.target.value === 'ws' && s.wsUrl) obs._connectWS(s.wsUrl);
-      else obs._disconnectWS();
+      if (e.target.value === 'ws') {
+        obs._connectWS(s.wsUrl || obs._defaultWsUrl(), { fallbackBase: s.apiBase || window.location.origin });
+      } else if (e.target.value === 'http') {
+        obs._startHttpPolling(s.apiBase || window.location.origin);
+      } else {
+        obs._enterCanvasFallback();
+      }
       this.updateSourceBadge(s.dataSource, obs._ws);
       this.saveSettings();
     });
@@ -254,7 +257,7 @@ export class HudController {
     wsInput.value = s.wsUrl;
     wsInput.addEventListener('change', (e) => {
       s.wsUrl = e.target.value;
-      if (s.dataSource === 'ws') obs._connectWS(e.target.value);
+      if (s.dataSource === 'ws') obs._connectWS(e.target.value, { fallbackBase: s.apiBase || window.location.origin });
       this.saveSettings();
     });
 
@@ -292,12 +295,10 @@ export class HudController {
   initQuickSelect() {
     const sel = document.getElementById('scenario-quick-select');
     if (!sel) return;
-    sel.addEventListener('change', (e) => {
-      this._obs._demoData.setScenario(e.target.value);
-      const settingsSel = document.getElementById('opt-scenario');
-      if (settingsSel) settingsSel.value = e.target.value;
-      this._obs.settings.scenario = e.target.value;
-      this.saveSettings();
+    sel.innerHTML = '<option value="live">Live Nodes</option>';
+    sel.value = 'live';
+    sel.addEventListener('change', () => {
+      this._obs._cycleLiveNode();
     });
   }
 
@@ -351,7 +352,6 @@ export class HudController {
     obs._floorMat.metalness = obs.settings.reflect * 0.5;
     obs._camera.fov = obs.settings.fov;
     obs._camera.updateProjectionMatrix();
-    obs._demoData.setCycleDuration(obs.settings.cycle);
     obs._applyColors();
   }
 
@@ -363,28 +363,38 @@ export class HudController {
     const dot = document.querySelector('#data-source-badge .dot');
     const label = document.getElementById('data-source-label');
     if (dataSource === 'ws' && ws?.readyState === WebSocket.OPEN) {
-      dot.className = 'dot dot--live'; label.textContent = 'LIVE';
+      dot.className = 'dot dot--live'; label.textContent = 'LIVE WS';
+    } else if (dataSource === 'http') {
+      dot.className = 'dot dot--live'; label.textContent = 'LIVE HTTP';
+    } else if (dataSource === 'canvas') {
+      dot.className = 'dot dot--offline'; label.textContent = 'CANVAS';
     } else {
-      dot.className = 'dot dot--demo'; label.textContent = 'DEMO';
+      dot.className = 'dot dot--offline'; label.textContent = 'OFFLINE';
     }
+  }
+
+  updatePauseBadge(paused) {
+    const label = document.getElementById('data-source-label');
+    if (label && paused) label.textContent = 'PAUSED';
+    if (!paused) this.updateSourceBadge(this._obs.settings.dataSource, this._obs._ws);
   }
 
   // ============================================================
   // HUD update (called every frame)
   // ============================================================
 
-  updateHUD(data, demoData) {
-    if (!data) return;
+  updateHUD(data) {
+    if (!data) {
+      this._clearLiveReadouts();
+      return;
+    }
     const vs = data.vital_signs || {};
     const feat = data.features || {};
     const cls = data.classification || {};
 
     // Sync scenario dropdown
-    const quickSel = document.getElementById('scenario-quick-select');
-    const cur = demoData._autoMode ? 'auto' : demoData.currentScenario;
-    if (quickSel && quickSel.value !== cur) quickSel.value = cur;
     const autoIcon = document.getElementById('autoplay-icon');
-    if (autoIcon) autoIcon.className = demoData._autoMode ? '' : 'hidden';
+    if (autoIcon) autoIcon.className = 'hidden';
 
     const targetHr = vs.heart_rate_bpm || 0;
     const targetBr = vs.breathing_rate_bpm || 0;
@@ -417,7 +427,7 @@ export class HudController {
     this._setBarColor('br-bar', vitalColor('br', this._lerpBr));
     this._setBarColor('conf-bar', vitalColor('conf', this._lerpConf));
 
-    this._setText('rssi-value', `${Math.round(feat.mean_rssi || 0)} dBm`);
+    this._setText('rssi-value', Number.isFinite(feat.mean_rssi) ? `${Math.round(feat.mean_rssi)} dBm` : '-- dBm');
     this._setText('var-value', (feat.variance || 0).toFixed(2));
     this._setText('motion-value', (feat.motion_band_power || 0).toFixed(3));
 
@@ -439,7 +449,7 @@ export class HudController {
     if (fallEl) fallEl.style.display = cls.fall_detected ? 'block' : 'none';
 
     // Scenario description and edge modules
-    const scenarioKey = demoData._autoMode ? (demoData.currentScenario || 'auto') : (demoData.currentScenario || 'auto');
+    const scenarioKey = data.scenario || 'live';
     if (scenarioKey !== this._currentScenarioKey) {
       this._currentScenarioKey = scenarioKey;
       this._updateScenarioDescription(scenarioKey);
@@ -509,6 +519,30 @@ export class HudController {
     if (e) e.style.background = color;
   }
 
+  _clearLiveReadouts() {
+    this._lerpHr = 0;
+    this._lerpBr = 0;
+    this._lerpConf = 0;
+    this._setText('hr-value', '--');
+    this._setText('br-value', '--');
+    this._setText('conf-value', '--');
+    this._setWidth('hr-bar', 0);
+    this._setWidth('br-bar', 0);
+    this._setWidth('conf-bar', 0);
+    this._setText('rssi-value', '-- dBm');
+    this._setText('var-value', '--');
+    this._setText('motion-value', '--');
+    this._updatePersonDots(0);
+    const presEl = document.getElementById('presence-indicator');
+    const presLabel = document.getElementById('presence-label');
+    if (presEl) {
+      presEl.className = 'presence-state presence--absent';
+      if (presLabel) presLabel.textContent = 'NO LIVE DATA';
+    }
+    const fallEl = document.getElementById('fall-alert');
+    if (fallEl) fallEl.style.display = 'none';
+  }
+
   _bindRange(id, key, applyFn) {
     const el = document.getElementById(id);
     const valEl = document.getElementById(`${id}-val`);
@@ -546,6 +580,14 @@ export class HudController {
   _updateScenarioDescription(scenarioKey) {
     const el = document.getElementById('scenario-description');
     if (!el) return;
+    if (String(scenarioKey).startsWith('live_node_')) {
+      el.textContent = `Focused ${String(scenarioKey).replace('live_node_', 'Node ')}`;
+      return;
+    }
+    if (scenarioKey === 'live') {
+      el.textContent = 'Waiting for live RuView telemetry.';
+      return;
+    }
     el.textContent = SCENARIO_DESCRIPTIONS[scenarioKey] || '';
   }
 
