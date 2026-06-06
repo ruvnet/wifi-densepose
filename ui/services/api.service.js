@@ -64,13 +64,27 @@ export class ApiService {
     return processedResponse;
   }
 
+  errorMessageFromPayload(payload, response = null) {
+    if (!payload || typeof payload !== 'object') {
+      return response
+        ? `HTTP ${response.status}: ${response.statusText}`
+        : 'Request failed';
+    }
+
+    return payload.message
+      || payload.detail
+      || payload.error
+      || payload.reason
+      || (response ? `HTTP ${response.status}: ${response.statusText}` : 'Request failed');
+  }
+
   // Generic request method
   async request(url, options = {}) {
     try {
       // Process request through interceptors
       const processed = await this.processRequest(url, options);
 
-      // Determine the correct base URL (real backend vs mock)
+      // Determine the live backend base URL.
       let finalUrl = processed.url;
       if (processed.url.startsWith(API_CONFIG.BASE_URL)) {
         const baseUrl = await backendDetector.getBaseUrl();
@@ -91,11 +105,14 @@ export class ApiService {
         const error = await processedResponse.json().catch(() => ({
           message: `HTTP ${processedResponse.status}: ${processedResponse.statusText}`
         }));
-        throw new Error(error.message || error.detail || 'Request failed');
+        throw new Error(this.errorMessageFromPayload(error, processedResponse));
       }
 
       // Parse JSON response
       const data = await processedResponse.json().catch(() => null);
+      if (data && typeof data === 'object' && (data.success === false || data.status === 'error')) {
+        throw new Error(this.errorMessageFromPayload(data, processedResponse));
+      }
       return data;
 
     } catch (error) {

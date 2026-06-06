@@ -4,56 +4,60 @@
 import { trainingService } from '../services/training.service.js';
 
 const TP_STYLES = `
-.tp-panel{background:rgba(17,24,39,.9);border:1px solid rgba(56,68,89,.6);border-radius:8px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#e0e0e0;overflow:hidden}
-.tp-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:rgba(13,17,23,.95);border-bottom:1px solid rgba(56,68,89,.6)}
-.tp-title{font-size:14px;font-weight:600;color:#e0e0e0}
-.tp-badge{font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px}
-.tp-badge-idle{background:rgba(108,117,125,.2);color:#8899aa;border:1px solid rgba(108,117,125,.3)}
-.tp-badge-active{background:rgba(40,167,69,.2);color:#51cf66;border:1px solid rgba(40,167,69,.3);animation:tp-pulse 1.5s ease-in-out infinite}
-.tp-badge-done{background:rgba(102,126,234,.2);color:#8ea4f0;border:1px solid rgba(102,126,234,.3)}
-@keyframes tp-pulse{0%,100%{opacity:1}50%{opacity:.6}}
-.tp-error{background:rgba(220,53,69,.15);color:#f5a0a8;border:1px solid rgba(220,53,69,.3);border-radius:4px;padding:8px 12px;margin:10px 12px 0;font-size:12px}
-.tp-section{padding:12px;border-bottom:1px solid rgba(56,68,89,.3)}
+.tp-panel{background:var(--color-surface);border:1px solid var(--color-card-border);border-radius:8px;color:var(--color-text);overflow:hidden}
+.tp-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--color-card-border-inner);background:var(--color-background)}
+.tp-title{font-size:14px;font-weight:650;color:var(--color-text)}
+.tp-badge{font-size:11px;font-weight:650;padding:3px 9px;border-radius:999px;border:1px solid var(--color-border);text-transform:uppercase}
+.tp-badge-idle{background:var(--color-secondary);color:var(--color-text-secondary)}
+.tp-badge-active{background:rgba(var(--color-success-rgb),.14);color:var(--color-success);border-color:rgba(var(--color-success-rgb),.3);animation:tp-pulse 1.5s ease-in-out infinite}
+.tp-badge-done{background:rgba(var(--color-primary-rgb,33,128,141),.14);color:var(--color-primary);border-color:rgba(var(--color-primary-rgb,33,128,141),.3)}
+@keyframes tp-pulse{0%,100%{opacity:1}50%{opacity:.65}}
+.tp-error{background:rgba(var(--color-error-rgb),.1);color:var(--color-error);border:1px solid rgba(var(--color-error-rgb),.28);border-radius:6px;padding:9px 12px;margin:12px 14px 0;font-size:12px}
+.tp-section{padding:14px 16px;border-bottom:1px solid var(--color-card-border-inner)}
 .tp-section:last-child{border-bottom:none}
-.tp-section-title{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#8899aa;margin-bottom:8px}
-.tp-empty{color:#6b7a8d;font-size:12px;padding:12px 0;text-align:center}
-.tp-rec-row{display:flex;align-items:center;justify-content:space-between;padding:6px 8px;margin-bottom:4px;background:rgba(13,17,23,.6);border:1px solid rgba(56,68,89,.3);border-radius:4px}
-.tp-rec-info{display:flex;flex-direction:column;gap:2px}
-.tp-rec-name{font-size:12px;color:#c8d0dc;font-weight:500}
-.tp-rec-meta{font-size:10px;color:#6b7a8d}
-.tp-rec-actions{margin-top:8px}
-.tp-config-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
-.tp-config-form{display:flex;flex-direction:column;gap:6px}
-.tp-label{font-size:12px;color:#8899aa;display:block;margin-bottom:2px}
-.tp-input-row{display:flex;justify-content:space-between;align-items:center;gap:8px}
-.tp-input-row .tp-label{flex:1;margin-bottom:0}
-.tp-input{width:110px;padding:4px 8px;background:rgba(30,40,60,.8);border:1px solid rgba(56,68,89,.6);border-radius:4px;color:#c8d0dc;font-size:12px}
-.tp-input:focus{outline:none;border-color:#667eea}
-.tp-ds-container{display:flex;flex-direction:column;gap:4px;margin-bottom:4px;max-height:100px;overflow-y:auto}
-.tp-ds-item{display:flex;align-items:center;gap:6px;font-size:12px;color:#c8d0dc;cursor:pointer}
-.tp-ds-item input{width:14px;height:14px}
-.tp-train-actions{display:flex;gap:6px;margin-top:10px}
-.tp-progress-bar{height:6px;background:rgba(30,40,60,.8);border-radius:3px;overflow:hidden;margin-bottom:4px}
-.tp-progress-fill{height:100%;background:linear-gradient(90deg,#667eea,#764ba2);border-radius:3px;transition:width .3s}
-.tp-progress-label{font-size:11px;color:#8899aa;text-align:center;margin-bottom:10px}
-.tp-chart-row{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
-.tp-chart-row canvas{border:1px solid rgba(56,68,89,.4);border-radius:4px;flex:1;min-width:120px}
-.tp-metrics-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
-.tp-metric-cell{background:rgba(13,17,23,.6);border:1px solid rgba(56,68,89,.3);border-radius:4px;padding:6px 8px}
-.tp-metric-label{font-size:10px;color:#6b7a8d;text-transform:uppercase;letter-spacing:.3px}
-.tp-metric-value{font-size:13px;color:#c8d0dc;font-weight:500;margin-top:2px}
-.tp-btn{padding:5px 12px;border-radius:4px;font-size:12px;font-weight:500;cursor:pointer;border:1px solid transparent;transition:all .15s}
+.tp-section-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0;color:var(--color-text-secondary);margin-bottom:10px}
+.tp-readme{display:grid;gap:10px;padding:14px 16px;border-bottom:1px solid var(--color-card-border-inner);background:var(--color-background)}
+.tp-readme-title{font-size:13px;font-weight:700;color:var(--color-text)}
+.tp-readme-copy{font-size:12px;line-height:1.45;color:var(--color-text-secondary);margin:0}
+.tp-readme-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0;padding:0;list-style:none}
+.tp-readme-list li{font-size:12px;color:var(--color-text);background:var(--color-surface);border:1px solid var(--color-card-border-inner);border-radius:6px;padding:8px 9px;min-width:0}
+.tp-empty{color:var(--color-text-secondary);font-size:12px;padding:14px 0;text-align:center}
+.tp-rec-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;padding:9px 10px;margin-bottom:8px;background:var(--color-background);border:1px solid var(--color-card-border-inner);border-radius:6px}
+.tp-rec-info{display:flex;flex-direction:column;gap:2px;min-width:0}
+.tp-rec-name{font-size:12px;color:var(--color-text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tp-rec-meta{font-size:11px;color:var(--color-text-secondary)}
+.tp-rec-actions{margin-top:10px}
+.tp-config-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.tp-config-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px}
+.tp-label{font-size:12px;color:var(--color-text-secondary);display:block;margin-bottom:4px}
+.tp-input-row{display:flex;flex-direction:column;gap:4px}
+.tp-input{width:100%;padding:8px 10px;background:var(--color-background);border:1px solid var(--color-border);border-radius:6px;color:var(--color-text);font-size:13px}
+.tp-input:focus{outline:none;border-color:var(--color-primary);box-shadow:var(--focus-ring)}
+.tp-ds-container{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin-bottom:2px;max-height:132px;overflow-y:auto}
+.tp-ds-item{display:flex;align-items:center;gap:8px;padding:7px 9px;border:1px solid var(--color-card-border-inner);border-radius:6px;background:var(--color-background);font-size:12px;color:var(--color-text);cursor:pointer;min-width:0}
+.tp-ds-item span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tp-ds-item input{width:14px;height:14px;flex:0 0 auto}
+.tp-train-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.tp-progress-bar{height:8px;background:var(--color-secondary);border-radius:999px;overflow:hidden;margin-bottom:6px}
+.tp-progress-fill{height:100%;background:var(--color-primary);border-radius:999px;transition:width .3s}
+.tp-progress-label{font-size:12px;color:var(--color-text-secondary);text-align:right;margin-bottom:12px}
+.tp-chart-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.tp-chart-row canvas{border:1px solid var(--color-card-border-inner);border-radius:6px;width:100%;min-width:0;background:var(--color-background)}
+.tp-metrics-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.tp-metric-cell{background:var(--color-background);border:1px solid var(--color-card-border-inner);border-radius:6px;padding:8px 10px;min-width:0}
+.tp-metric-label{font-size:10px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0}
+.tp-metric-value{font-size:14px;color:var(--color-text);font-weight:650;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tp-btn{padding:7px 12px;border-radius:6px;font-size:12px;font-weight:650;cursor:pointer;border:1px solid transparent;transition:background .15s,border-color .15s,color .15s}
 .tp-btn:disabled{opacity:.5;cursor:not-allowed}
-.tp-btn-success{background:rgba(40,167,69,.2);color:#51cf66;border-color:rgba(40,167,69,.3)}
-.tp-btn-success:hover:not(:disabled){background:rgba(40,167,69,.35)}
-.tp-btn-danger{background:rgba(220,53,69,.2);color:#ff6b6b;border-color:rgba(220,53,69,.3)}
-.tp-btn-danger:hover:not(:disabled){background:rgba(220,53,69,.35)}
-.tp-btn-secondary{background:rgba(30,40,60,.8);color:#b0b8c8;border-color:rgba(56,68,89,.6)}
-.tp-btn-secondary:hover:not(:disabled){background:rgba(40,50,75,.9)}
-.tp-btn-rec{background:rgba(220,53,69,.15);color:#ff6b6b;border-color:rgba(220,53,69,.3)}
-.tp-btn-rec:hover:not(:disabled){background:rgba(220,53,69,.3)}
-.tp-btn-muted{background:transparent;color:#6b7a8d;border-color:rgba(56,68,89,.4);font-size:11px;padding:3px 8px}
-.tp-btn-muted:hover:not(:disabled){color:#b0b8c8;border-color:rgba(56,68,89,.8)}
+.tp-btn-success{background:var(--color-primary);color:var(--color-btn-primary-text);border-color:var(--color-primary)}
+.tp-btn-success:hover:not(:disabled){background:var(--color-primary-hover)}
+.tp-btn-danger{background:rgba(var(--color-error-rgb),.1);color:var(--color-error);border-color:rgba(var(--color-error-rgb),.28)}
+.tp-btn-danger:hover:not(:disabled){background:rgba(var(--color-error-rgb),.18)}
+.tp-btn-secondary,.tp-btn-rec{background:var(--color-secondary);color:var(--color-text);border-color:var(--color-border)}
+.tp-btn-secondary:hover:not(:disabled),.tp-btn-rec:hover:not(:disabled){background:var(--color-secondary-hover)}
+.tp-btn-muted{background:transparent;color:var(--color-text-secondary);border-color:var(--color-border);font-size:11px;padding:4px 8px}
+.tp-btn-muted:hover:not(:disabled){color:var(--color-text);border-color:var(--color-primary)}
+@media(max-width:760px){.tp-config-form,.tp-chart-row,.tp-metrics-grid,.tp-readme-list{grid-template-columns:1fr}.tp-progress-label{text-align:left}}
 `;
 
 export default class TrainingPanel {
@@ -142,7 +146,6 @@ export default class TrainingPanel {
     this._set({ loading: true, error: null });
     this.progressData = { losses: [], pcks: [] };
     try {
-      trainingService.connectProgressStream();
       const payload = {
         dataset_ids: this.config.selectedRecordings,
         config: {
@@ -152,7 +155,10 @@ export default class TrainingPanel {
           ...extraCfg
         }
       };
-      await trainingService[method](payload);
+      const data = await trainingService[method](payload);
+      if (data?.active !== false && data?.status !== 'completed') {
+        trainingService.connectProgressStream();
+      }
       await this.refresh();
     } catch (e) { this._set({ loading: false, error: `Training failed: ${e.message}` }); }
   }
@@ -172,6 +178,7 @@ export default class TrainingPanel {
     el.innerHTML = '';
     const panel = this._el('div', 'tp-panel');
     panel.appendChild(this._renderHeader());
+    panel.appendChild(this._renderReadme());
     if (this.state.error) panel.appendChild(this._el('div', 'tp-error', this.state.error));
     panel.appendChild(this._renderRecordings());
     const ts = this.state.trainingStatus;
@@ -192,6 +199,24 @@ export default class TrainingPanel {
     else if (ts && !ts.active && this.progressData.losses.length > 0) { cls = 'tp-badge tp-badge-done'; txt = 'Completed'; }
     h.appendChild(this._el('span', cls, txt));
     return h;
+  }
+
+  _renderReadme() {
+    const s = this._el('div', 'tp-readme');
+    s.appendChild(this._el('div', 'tp-readme-title', 'Training README'));
+    s.appendChild(this._el('p', 'tp-readme-copy',
+      'This page turns live RuView CSI packets into reusable datasets, then uses those datasets to request pose-model training and manage exported .rvf model files.'
+    ));
+    const list = this._el('ul', 'tp-readme-list');
+    [
+      'Record: capture live CSI frames into data/recordings as .csi.jsonl sessions.',
+      'Select: choose recorded sessions as the dataset for supervised, pretraining, or LoRA runs.',
+      'Train: send normalized training requests and show loss, PCK, OKS, learning rate, and phase.',
+      'Models: list, load, unload, delete, and inspect .rvf model files from data/models.',
+      'How data is used: recordings become datasets; training output becomes .rvf models; loaded models can consume live features for inference.'
+    ].forEach(item => list.appendChild(this._el('li', null, item)));
+    s.appendChild(list);
+    return s;
   }
 
   _renderRecordings() {
@@ -340,8 +365,8 @@ export default class TrainingPanel {
   // --- Chart drawing ---
 
   _drawCharts() {
-    this._drawChart('tp-loss-chart', this.progressData.losses, { color: '#ff6b6b', label: 'Loss', yMin: 0, yMax: null });
-    this._drawChart('tp-pck-chart', this.progressData.pcks, { color: '#51cf66', label: 'PCK', yMin: 0, yMax: 1 });
+    this._drawChart('tp-loss-chart', this.progressData.losses, { color: '#c0152f', label: 'Loss', yMin: 0, yMax: null });
+    this._drawChart('tp-pck-chart', this.progressData.pcks, { color: '#21808d', label: 'PCK', yMin: 0, yMax: 1 });
   }
 
   _drawChart(id, data, opts) {
@@ -349,23 +374,23 @@ export default class TrainingPanel {
     if (!cv) return;
     const ctx = cv.getContext('2d'), w = cv.width, h = cv.height;
     const p = { t: 20, r: 10, b: 24, l: 44 };
-    ctx.fillStyle = '#0d1117'; ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = '#8899aa'; ctx.font = '11px -apple-system,sans-serif'; ctx.fillText(opts.label, p.l, 14);
-    if (!data.length) { ctx.fillStyle = '#6b7a8d'; ctx.fillText('No data', w / 2 - 20, h / 2); return; }
+    ctx.fillStyle = '#f7f7f4'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#626c71'; ctx.font = '11px -apple-system,sans-serif'; ctx.fillText(opts.label, p.l, 14);
+    if (!data.length) { ctx.fillStyle = '#626c71'; ctx.fillText('No data', w / 2 - 20, h / 2); return; }
     const pw = w - p.l - p.r, ph = h - p.t - p.b;
     let yMin = opts.yMin ?? Math.min(...data), yMax = opts.yMax ?? Math.max(...data);
     if (yMax === yMin) yMax = yMin + 1;
-    ctx.strokeStyle = 'rgba(255,255,255,.08)'; ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(94,82,64,.18)'; ctx.lineWidth = 1;
     for (let i = 0; i <= 4; i++) {
       const y = p.t + (ph / 4) * i;
       ctx.beginPath(); ctx.moveTo(p.l, y); ctx.lineTo(w - p.r, y); ctx.stroke();
       const v = yMax - ((yMax - yMin) / 4) * i;
-      ctx.fillStyle = '#6b7a8d'; ctx.font = '9px sans-serif'; ctx.fillText(v.toFixed(v >= 1 ? 2 : 3), 2, y + 3);
+      ctx.fillStyle = '#626c71'; ctx.font = '9px sans-serif'; ctx.fillText(v.toFixed(v >= 1 ? 2 : 3), 2, y + 3);
     }
     const xl = Math.min(data.length, 5);
     for (let i = 0; i < xl; i++) {
       const idx = Math.round((data.length - 1) * (i / (xl - 1 || 1)));
-      ctx.fillStyle = '#6b7a8d'; ctx.fillText(String(idx + 1), p.l + (pw * idx) / (data.length - 1 || 1) - 4, h - 4);
+      ctx.fillStyle = '#626c71'; ctx.fillText(String(idx + 1), p.l + (pw * idx) / (data.length - 1 || 1) - 4, h - 4);
     }
     ctx.strokeStyle = opts.color; ctx.lineWidth = 1.5; ctx.beginPath();
     data.forEach((v, i) => {

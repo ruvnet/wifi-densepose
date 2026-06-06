@@ -4,39 +4,41 @@
 import { modelService } from '../services/model.service.js';
 
 const MP_STYLES = `
-.mp-panel{background:rgba(17,24,39,.9);border:1px solid rgba(56,68,89,.6);border-radius:8px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#e0e0e0;overflow:hidden}
-.mp-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:rgba(13,17,23,.95);border-bottom:1px solid rgba(56,68,89,.6)}
-.mp-title{font-size:14px;font-weight:600;color:#e0e0e0}
-.mp-badge{background:rgba(102,126,234,.2);color:#8ea4f0;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;border:1px solid rgba(102,126,234,.3)}
-.mp-error{background:rgba(220,53,69,.15);color:#f5a0a8;border:1px solid rgba(220,53,69,.3);border-radius:4px;padding:8px 12px;margin:10px 12px 0;font-size:12px}
-.mp-active-card{margin:12px;padding:12px;background:rgba(13,17,23,.8);border:1px solid rgba(56,68,89,.6);border-left:3px solid #28a745;border-radius:6px}
-.mp-active-name{font-size:14px;font-weight:600;color:#c8d0dc;margin-bottom:6px}
+.mp-panel{background:var(--color-surface);border:1px solid var(--color-card-border);border-radius:8px;color:var(--color-text);overflow:hidden}
+.mp-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:var(--color-background);border-bottom:1px solid var(--color-card-border-inner)}
+.mp-title{font-size:14px;font-weight:650;color:var(--color-text)}
+.mp-badge{background:var(--color-secondary);color:var(--color-text-secondary);font-size:11px;font-weight:650;padding:3px 9px;border-radius:999px;border:1px solid var(--color-border)}
+.mp-error{background:rgba(var(--color-error-rgb),.1);color:var(--color-error);border:1px solid rgba(var(--color-error-rgb),.28);border-radius:6px;padding:9px 12px;margin:12px 14px 0;font-size:12px}
+.mp-active-card{margin:14px 16px;padding:12px;background:var(--color-background);border:1px solid var(--color-card-border-inner);border-left:4px solid var(--color-success);border-radius:6px}
+.mp-active-name{font-size:14px;font-weight:650;color:var(--color-text);margin-bottom:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mp-active-meta{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
-.mp-active-stats{font-size:12px;color:#8899aa;margin-bottom:10px}
-.mp-stat-label{color:#8899aa}.mp-stat-value{color:#c8d0dc;font-weight:500}.mp-stat-sep{color:rgba(56,68,89,.8);margin:0 6px}
+.mp-active-stats{font-size:12px;color:var(--color-text-secondary);margin-bottom:10px}
+.mp-stat-label{color:var(--color-text-secondary)}.mp-stat-value{color:var(--color-text);font-weight:650}.mp-stat-sep{color:var(--color-border);margin:0 6px}
 .mp-lora-row{display:flex;align-items:center;gap:8px;margin-bottom:10px}
-.mp-lora-label{font-size:12px;color:#8899aa}
-.mp-lora-select{flex:1;padding:4px 8px;background:rgba(30,40,60,.8);border:1px solid rgba(56,68,89,.6);border-radius:4px;color:#c8d0dc;font-size:12px}
-.mp-list-section{padding:0 12px 12px}
-.mp-section-title{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#8899aa;padding:10px 0 8px}
-.mp-model-card{padding:10px;margin-bottom:8px;background:rgba(13,17,23,.6);border:1px solid rgba(56,68,89,.4);border-radius:6px;transition:border-color .2s}
-.mp-model-card:hover{border-color:rgba(102,126,234,.4)}
-.mp-card-name{font-size:13px;font-weight:500;color:#c8d0dc;margin-bottom:4px}
-.mp-card-meta{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
-.mp-meta-tag{background:rgba(30,40,60,.8);color:#8899aa;font-size:10px;padding:2px 6px;border-radius:3px;border:1px solid rgba(56,68,89,.4)}
-.mp-card-actions{display:flex;gap:6px}
-.mp-empty{color:#6b7a8d;font-size:12px;padding:16px 0;text-align:center;line-height:1.5}
-.mp-footer{padding:10px 12px;border-top:1px solid rgba(56,68,89,.4);display:flex;justify-content:flex-end}
-.mp-btn{padding:5px 12px;border-radius:4px;font-size:12px;font-weight:500;cursor:pointer;border:1px solid transparent;transition:all .15s}
+.mp-lora-label{font-size:12px;color:var(--color-text-secondary)}
+.mp-lora-select{flex:1;padding:8px 10px;background:var(--color-background);border:1px solid var(--color-border);border-radius:6px;color:var(--color-text);font-size:12px;min-width:0}
+.mp-list-section{padding:0 16px 14px}
+.mp-section-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0;color:var(--color-text-secondary);padding:12px 0 8px}
+.mp-model-card{padding:10px;margin-bottom:8px;background:var(--color-background);border:1px solid var(--color-card-border-inner);border-radius:6px;transition:border-color .2s,background .2s}
+.mp-model-card:hover{border-color:var(--color-primary)}
+.mp-card-name{font-size:13px;font-weight:600;color:var(--color-text);margin-bottom:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mp-card-meta{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.mp-meta-tag{background:var(--color-secondary);color:var(--color-text-secondary);font-size:10px;padding:3px 7px;border-radius:999px;border:1px solid var(--color-border)}
+.mp-card-actions{display:flex;gap:8px;flex-wrap:wrap}
+.mp-empty{color:var(--color-text-secondary);font-size:12px;padding:18px 0;text-align:center;line-height:1.45}
+.mp-readme{margin:12px 16px;padding:10px 12px;background:var(--color-background);border:1px solid var(--color-card-border-inner);border-radius:6px;color:var(--color-text-secondary);font-size:12px;line-height:1.45}
+.mp-readme strong{color:var(--color-text)}
+.mp-footer{padding:12px 16px;border-top:1px solid var(--color-card-border-inner);display:flex;justify-content:flex-end}
+.mp-btn{padding:7px 12px;border-radius:6px;font-size:12px;font-weight:650;cursor:pointer;border:1px solid transparent;transition:background .15s,border-color .15s,color .15s}
 .mp-btn:disabled{opacity:.5;cursor:not-allowed}
-.mp-btn-success{background:rgba(40,167,69,.2);color:#51cf66;border-color:rgba(40,167,69,.3)}
-.mp-btn-success:hover:not(:disabled){background:rgba(40,167,69,.35)}
-.mp-btn-danger{background:rgba(220,53,69,.2);color:#ff6b6b;border-color:rgba(220,53,69,.3)}
-.mp-btn-danger:hover:not(:disabled){background:rgba(220,53,69,.35)}
-.mp-btn-secondary{background:rgba(30,40,60,.8);color:#b0b8c8;border-color:rgba(56,68,89,.6)}
-.mp-btn-secondary:hover:not(:disabled){background:rgba(40,50,75,.9)}
-.mp-btn-muted{background:transparent;color:#6b7a8d;border-color:rgba(56,68,89,.4);font-size:11px;padding:4px 8px}
-.mp-btn-muted:hover:not(:disabled){color:#ff6b6b;border-color:rgba(220,53,69,.3)}
+.mp-btn-success{background:var(--color-primary);color:var(--color-btn-primary-text);border-color:var(--color-primary)}
+.mp-btn-success:hover:not(:disabled){background:var(--color-primary-hover)}
+.mp-btn-danger{background:rgba(var(--color-error-rgb),.1);color:var(--color-error);border-color:rgba(var(--color-error-rgb),.28)}
+.mp-btn-danger:hover:not(:disabled){background:rgba(var(--color-error-rgb),.18)}
+.mp-btn-secondary{background:var(--color-secondary);color:var(--color-text);border-color:var(--color-border)}
+.mp-btn-secondary:hover:not(:disabled){background:var(--color-secondary-hover)}
+.mp-btn-muted{background:transparent;color:var(--color-text-secondary);border-color:var(--color-border);font-size:11px;padding:5px 9px}
+.mp-btn-muted:hover:not(:disabled){color:var(--color-error);border-color:rgba(var(--color-error-rgb),.35)}
 `;
 
 export default class ModelPanel {
@@ -113,6 +115,9 @@ export default class ModelPanel {
     hdr.appendChild(this._el('span', 'mp-title', 'Model Library'));
     hdr.appendChild(this._el('span', 'mp-badge', String(this.state.models.length)));
     panel.appendChild(hdr);
+    const readme = this._el('div', 'mp-readme');
+    readme.innerHTML = '<strong>How data is used:</strong> .rvf files are loaded as inference models, LoRA profiles adjust the active model, and live features are evaluated only after a model is loaded.';
+    panel.appendChild(readme);
 
     if (this.state.error) panel.appendChild(this._el('div', 'mp-error', this.state.error));
 

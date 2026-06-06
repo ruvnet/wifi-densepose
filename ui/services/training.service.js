@@ -42,12 +42,48 @@ export class TrainingService {
     });
   }
 
+  normalizeTrainingRequest(payload = {}) {
+    const config = payload.config || {};
+    return {
+      dataset_ids: payload.dataset_ids || [],
+      config: {
+        epochs: Number(config.epochs) || 100,
+        batch_size: Number(config.batch_size) || 32,
+        learning_rate: Number(config.learning_rate) || 3e-4,
+        early_stopping_patience: Number(config.early_stopping_patience ?? config.patience) || 15,
+        pretrained_rvf: config.pretrained_rvf || config.base_model || null,
+        lora_profile: config.lora_profile || config.lora_profile_name || null
+      }
+    };
+  }
+
+  normalizePretrainRequest(payload = {}) {
+    const config = payload.config || {};
+    return {
+      dataset_ids: payload.dataset_ids || [],
+      epochs: Number(config.epochs) || 50,
+      lr: Number(config.learning_rate) || 3e-4
+    };
+  }
+
+  normalizeLoraRequest(payload = {}) {
+    const config = payload.config || {};
+    return {
+      dataset_ids: payload.dataset_ids || [],
+      base_model_id: config.base_model_id || config.base_model || config.pretrained_rvf || '',
+      profile_name: config.profile_name || config.lora_profile_name || config.lora_profile || 'default',
+      rank: Number(config.rank) || 8,
+      epochs: Number(config.epochs) || 30
+    };
+  }
+
   // --- Training API methods ---
 
   async startTraining(config) {
     try {
-      this.logger.info('Starting training', { config });
-      const data = await apiService.post('/api/v1/train/start', config);
+      const request = this.normalizeTrainingRequest(config);
+      this.logger.info('Starting training', { request });
+      const data = await apiService.post('/api/v1/train/start', request);
       this.emit('training-started', data);
       return data;
     } catch (error) {
@@ -80,8 +116,9 @@ export class TrainingService {
 
   async startPretraining(config) {
     try {
-      this.logger.info('Starting pretraining', { config });
-      const data = await apiService.post('/api/v1/train/pretrain', config);
+      const request = this.normalizePretrainRequest(config);
+      this.logger.info('Starting pretraining', { request });
+      const data = await apiService.post('/api/v1/train/pretrain', request);
       this.emit('training-started', data);
       return data;
     } catch (error) {
@@ -92,8 +129,9 @@ export class TrainingService {
 
   async startLoraTraining(config) {
     try {
-      this.logger.info('Starting LoRA training', { config });
-      const data = await apiService.post('/api/v1/train/lora', config);
+      const request = this.normalizeLoraRequest(config);
+      this.logger.info('Starting LoRA training', { request });
+      const data = await apiService.post('/api/v1/train/lora', request);
       this.emit('training-started', data);
       return data;
     } catch (error) {
