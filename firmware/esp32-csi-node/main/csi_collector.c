@@ -466,17 +466,17 @@ void csi_collector_init(void)
 
     /* MGMT-only promiscuous filter + active probe injection (RuView#396).
      *
-     * DATA frames cause 100-500+ WiFi HW interrupts/sec which crashes Core 0
-     * in wDev_ProcessFiq (SPI flash cache race in ESP-IDF WiFi blob).
-     * MGMT-only gives ~10 Hz (beacons). Probe request injection at 10 Hz
-     * adds ~10 Hz probe responses from APs → ~20 Hz total, matching the
-     * edge processing designed sample rate of 20 Hz. */
+    /* ALL-frames promiscuous filter for maximum CSI data rate.
+     * Captures MGMT + DATA + CTRL frames → much higher yield in
+     * environments with WiFi traffic (phones, IoT devices, etc.).
+     * Previous MGMT-only mode (RuView#396) gave ~0-1 pps in quiet
+     * 2.4 GHz channels; ALL-frames gives 10-50+ pps with active traffic. */
     wifi_promiscuous_filter_t filt = {
-        .filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT,
+        .filter_mask = WIFI_PROMIS_FILTER_MASK_ALL,
     };
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_filter(&filt));
 
-    ESP_LOGI(TAG, "Promiscuous mode enabled (MGMT-only, RuView#396)");
+    ESP_LOGI(TAG, "Promiscuous mode enabled (ALL-frames, high CSI yield)");
 
 #if CONFIG_SOC_WIFI_HE_SUPPORT
     /* Wi-Fi 6 targets (e.g. ESP32-C6): wifi_csi_config_t is wifi_csi_acquire_config_t
