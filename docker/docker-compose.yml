@@ -24,10 +24,13 @@ services:
     environment:
       - RUST_LOG=info
       # CSI_SOURCE controls the data source for the sensing server.
-      # Options: auto (default) — probe for ESP32 UDP then fall back to simulation
+      # Options: auto (default) — probe for ESP32 UDP then host WiFi; **fail
+      #                           hard with exit 78 if neither is detected**.
+      #                           Synthetic data is no longer a silent fallback
+      #                           (issue #937 fix) — operators must opt in.
       #          esp32          — receive real CSI frames from an ESP32 on UDP port 5005
       #          wifi           — use host Wi-Fi RSSI/scan data (Windows netsh)
-      #          simulated      — generate synthetic CSI data (no hardware required)
+      #          simulated      — explicitly generate synthetic CSI for demo mode
       - CSI_SOURCE=${CSI_SOURCE:-auto}
       # MODELS_DIR controls where the server scans for .rvf model files.
       # Mount a host directory and set this to make models visible:

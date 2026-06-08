@@ -6421,7 +6421,17 @@ async fn main() {
     info!("  UI path:   {}", args.ui_path.display());
     info!("  Source:    {}", args.source);
 
-    // Auto-detect data source
+    // Auto-detect data source.
+    //
+    // Issue #937 / sibling fix: previously `auto` silently fell back to the
+    // synthetic data source when no ESP32 or Windows WiFi was reachable, with
+    // only an `info!` log line as the signal. Downstream API consumers
+    // (`/api/v1/sensing/latest`, `/ws/sensing`) had no in-band way to know they
+    // were being served fake CSI tagged as production telemetry. That is the
+    // exact "where's the real data?" pattern external reviewers (#943, #934)
+    // cited as the most damaging evidence of the project misrepresenting its
+    // posture. Synthetic-data is now opt-in only — operators who want demo
+    // mode must explicitly set `--source simulated` or `CSI_SOURCE=simulated`.
     let source = match args.source.as_str() {
         "auto" => {
             info!("Auto-detecting data source...");
@@ -6432,10 +6442,23 @@ async fn main() {
                 info!("  Windows WiFi detected");
                 "wifi"
             } else {
-                info!("  No hardware detected, using simulation");
-                "simulate"
+                error!(
+                    "No real CSI source detected. Auto-detection refuses to silently \
+                     fall back to synthetic data because that would expose downstream \
+                     consumers (/api/v1/sensing/latest, /ws/sensing) to fake telemetry \
+                     tagged as production. To run with synthetic data, set the source \
+                     explicitly: --source simulated (or CSI_SOURCE=simulated in Docker). \
+                     To use real hardware: provision an ESP32 to emit CSI on UDP :{} or \
+                     install the Windows WiFi capture driver. See \
+                     https://github.com/ruvnet/RuView/issues/937 for context.",
+                    args.udp_port
+                );
+                std::process::exit(78); // EX_CONFIG
             }
         }
+        // "simulate" is a synonym for "simulated" (back-compat alias kept so
+        // existing operators who already opted in don't get broken by this fix).
+        "simulate" => "simulated",
         other => other,
     };
 

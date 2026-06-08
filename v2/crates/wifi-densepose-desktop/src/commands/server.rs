@@ -108,8 +108,14 @@ pub async fn start_server(
         cmd.args(["--log-level", log_level]);
     }
 
-    // Set data source (default to "simulate" if not specified for demo mode)
-    let source = config.source.as_deref().unwrap_or("simulate");
+    // Default to explicit "simulated" demo mode when the desktop user hasn't
+    // chosen a source — this is the *Tauri demo* app, not a production
+    // sensing endpoint, so the demo default is correct here. Critically, the
+    // value passed downstream is the **explicit** "simulated", not "auto",
+    // which means the sensing-server will tag the data as synthetic in its
+    // API responses rather than silently fall back (issue #937 fix in
+    // sensing-server's `auto` handler).
+    let source = config.source.as_deref().unwrap_or("simulated");
     cmd.args(["--source", source]);
 
     // Redirect stdout/stderr to pipes for monitoring
@@ -317,7 +323,7 @@ pub async fn restart_server(
             log_level: None,
             bind_address: None,
             server_path: None,
-            source: None, // Use default (simulate)
+            source: None, // Falls through to explicit "simulated" — Tauri demo default.
         }
     };
 
