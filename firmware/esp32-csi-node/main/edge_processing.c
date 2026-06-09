@@ -215,6 +215,111 @@ static float estimate_bpm_zero_crossing(const float *history, uint16_t len,
     return freq_hz * 60.0f;  /* Hz to BPM. */
 }
 
+/**
+ * Autocorrelation heart-rate estimator (RuView #954/#985 follow-up).
+ *
+ * Zero-crossing HR estimation parked at ~45 BPM for two reasons: (1) it used a
+ * stale fixed sample rate (10 Hz) after #985's self-ping raised the real CSI
+ * rate to a variable ~13-19 Hz, and (2) it locked onto breathing harmonics —
+ * a 0.25 Hz breathing fundamental puts its 3rd harmonic at ~0.74 Hz ≈ 44 BPM,
+ * right inside the HR band. This finds the dominant period in the HR band by
+ * autocorrelation, explicitly rejecting lags that coincide with breathing
+ * harmonics, and refines the peak with parabolic interpolation. Uses the
+ * MEASURED sample rate so the BPM is in real units.
+ *
+ * @param sig           HR-band-filtered signal (contiguous, oldest..newest).
+ * @param len           Number of samples.
+ * @param fs            Measured sample rate in Hz.
+ * @param breathing_bpm Current breathing estimate for harmonic rejection (0 = skip).
+ * @return Heart rate in BPM, or 0 if no confident peak.
+ */
+static float estimate_hr_autocorr(const float *sig, uint16_t len, float fs,
+                                  float breathing_bpm)
+{
+    if (len < 32 || fs <= 0.0f) return 0.0f;
+
+    /* HR search window 45-180 BPM -> lag bounds (samples). */
+    int lag_min = (int)(fs * 60.0f / 180.0f);
+    int lag_max = (int)(fs * 60.0f / 45.0f);
+    if (lag_min < 2) lag_min = 2;
+    if (lag_max >= (int)len) lag_max = (int)len - 1;
+    if (lag_max <= lag_min + 1) return 0.0f;
+
+    const float br_hz = breathing_bpm / 60.0f;
+
+    float r0 = 0.0f;
+    for (uint16_t i = 0; i < len; i++) r0 += sig[i] * sig[i];
+    if (r0 <= 1e-6f) return 0.0f;
+
+    float best = -1.0f;
+    int   best_lag = 0;
+
+    for (int lag = lag_min; lag <= lag_max; lag++) {
+        float f = fs / (float)lag;  /* candidate HR frequency (Hz) */
+
+        /* Reject candidates within 8% of a breathing harmonic k*f_br (k=1..6). */
+        if (br_hz > 0.0f) {
+            bool harmonic = false;
+            for (int k = 1; k <= 6; k++) {
+                float h = (float)k * br_hz;
+                if (fabsf(f - h) < 0.08f * h) { harmonic = true; break; }
+            }
+            if (harmonic) continue;
+        }
+
+        float acc = 0.0f;
+        for (int i = 0; i + lag < (int)len; i++) acc += sig[i] * sig[i + lag];
+        if (acc > best) { best = acc; best_lag = lag; }
+    }
+
+    if (best_lag == 0) return 0.0f;
+    /* Require a real periodicity, not a noise peak. */
+    if (best / r0 < 0.2f) return 0.0f;
+
+    /* Parabolic interpolation around best_lag for sub-sample period resolution. */
+    float lag_ref = (float)best_lag;
+    {
+        float a = 0.0f, c = 0.0f;
+        for (int i = 0; i + (best_lag - 1) < (int)len; i++) a += sig[i] * sig[i + best_lag - 1];
+        for (int i = 0; i + (best_lag + 1) < (int)len; i++) c += sig[i] * sig[i + best_lag + 1];
+        float denom = a - 2.0f * best + c;
+        if (fabsf(denom) > 1e-6f) {
+            float delta = 0.5f * (a - c) / denom;
+            if (delta > -1.0f && delta < 1.0f) lag_ref += delta;
+        }
+    }
+
+    return fs / lag_ref * 60.0f;
+}
+
+/* Median smoother for the emitted heart rate. The per-frame autocorr estimate
+ * still has occasional single-frame outliers (startup transient before the
+ * filters re-tune, momentary harmonic mis-locks); a median over the last few
+ * VALID estimates stops the reported HR from "dropping a lot" between frames
+ * without lagging real changes much. Only valid (in-range) estimates are
+ * pushed, so out-of-range/zero results never pollute the window. */
+#define HR_SMOOTH_N 9
+static float   s_hr_ring[HR_SMOOTH_N];
+static uint8_t s_hr_ring_n;
+static uint8_t s_hr_ring_idx;
+
+static float hr_smooth_push(float hr)
+{
+    s_hr_ring[s_hr_ring_idx] = hr;
+    s_hr_ring_idx = (uint8_t)((s_hr_ring_idx + 1) % HR_SMOOTH_N);
+    if (s_hr_ring_n < HR_SMOOTH_N) s_hr_ring_n++;
+
+    float tmp[HR_SMOOTH_N];
+    for (uint8_t i = 0; i < s_hr_ring_n; i++) tmp[i] = s_hr_ring[i];
+    for (uint8_t i = 1; i < s_hr_ring_n; i++) {       /* insertion sort, tiny N */
+        float v = tmp[i];
+        int j = (int)i - 1;
+        while (j >= 0 && tmp[j] > v) { tmp[j + 1] = tmp[j]; j--; }
+        tmp[j + 1] = v;
+    }
+    return tmp[s_hr_ring_n / 2];
+}
+
 /* ======================================================================
  * DSP Pipeline State
  * ====================================================================== */
@@ -245,6 +350,14 @@ static edge_biquad_t s_bq_heartrate;
 /** Filtered signal histories for BPM estimation. */
 static float s_breathing_filtered[EDGE_PHASE_HISTORY_LEN];
 static float s_heartrate_filtered[EDGE_PHASE_HISTORY_LEN];
+
+/** Measured CSI sample rate (Hz), smoothed from frame timestamps.
+ * #985's self-ping raised the callback rate above the old ~10 Hz beacon
+ * assumption and made it variable (~13-19 Hz); a fixed rate scaled BPM wrong
+ * and made HR swing with CSI yield. See update in process_csi_frame(). */
+static float    s_sample_rate_hz   = 15.0f;
+static float    s_filter_design_fs = 20.0f; /* fs the biquads were last designed at */
+static uint32_t s_last_frame_ts_us = 0;
 
 /** Latest vitals state. */
 static float    s_breathing_bpm;
@@ -535,7 +648,7 @@ static void update_multi_person_vitals(const uint8_t *iq_data, uint16_t n_sc,
             }
 
             float br = estimate_bpm_zero_crossing(s_scratch_br, buf_len, sample_rate);
-            float hr = estimate_bpm_zero_crossing(s_scratch_hr, buf_len, sample_rate);
+            float hr = estimate_hr_autocorr(s_scratch_hr, buf_len, sample_rate, br);
 
             /* Sanity clamp. */
             if (br >= 6.0f && br <= 40.0f) pv->breathing_bpm = br;
@@ -715,11 +828,36 @@ static void process_frame(const edge_ring_slot_t *slot)
     s_frame_count++;
     s_latest_rssi = slot->rssi;
 
-    /* CSI sample rate. MGMT-only promiscuous filter (RuView#396, csi_collector.c)
-     * yields ~10 Hz from beacons; keep this value aligned with csi_collector's
-     * effective callback rate or estimate_bpm_zero_crossing() reports the wrong
-     * BPM (2× rate mismatch → 2× wrong breathing/HR). */
-    const float sample_rate = 10.0f;
+    /* Measure the REAL CSI sample rate from inter-frame timestamps. #985's
+     * self-ping made the callback rate variable (~13-19 Hz); the old fixed
+     * 10 Hz both scaled BPM wrong (true ~87 BPM read as ~45) and made HR swing
+     * as CSI yield fluctuated. EMA-smooth and clamp to a plausible band. */
+    if (s_last_frame_ts_us != 0 && slot->timestamp_us > s_last_frame_ts_us) {
+        float dt = (float)(slot->timestamp_us - s_last_frame_ts_us) * 1e-6f;
+        if (dt > 0.02f && dt < 0.5f) {            /* 2-50 Hz plausible; reject gaps/hops */
+            float inst = 1.0f / dt;
+            s_sample_rate_hz += 0.05f * (inst - s_sample_rate_hz);
+            if (s_sample_rate_hz < 8.0f)  s_sample_rate_hz = 8.0f;
+            if (s_sample_rate_hz > 30.0f) s_sample_rate_hz = 30.0f;
+        }
+    }
+    s_last_frame_ts_us = slot->timestamp_us;
+
+    /* Re-tune the biquads if the measured rate has drifted from their design fs,
+     * so the breathing (0.1-0.5 Hz) and HR (0.8-2.0 Hz) passbands stay in real
+     * Hz. biquad_bandpass_design resets delay state, so only redesign on real
+     * drift (>15%) — the autocorr window averages over the one-time transient. */
+    if (fabsf(s_sample_rate_hz - s_filter_design_fs) > 0.15f * s_filter_design_fs) {
+        biquad_bandpass_design(&s_bq_breathing, s_sample_rate_hz, 0.1f, 0.5f);
+        biquad_bandpass_design(&s_bq_heartrate, s_sample_rate_hz, 0.8f, 2.0f);
+        for (uint8_t pp = 0; pp < EDGE_MAX_PERSONS; pp++) {
+            biquad_bandpass_design(&s_person_bq_br[pp], s_sample_rate_hz, 0.1f, 0.5f);
+            biquad_bandpass_design(&s_person_bq_hr[pp], s_sample_rate_hz, 0.8f, 2.0f);
+        }
+        s_filter_design_fs = s_sample_rate_hz;
+    }
+
+    const float sample_rate = s_sample_rate_hz;
 
     /* --- Step 1-2: Phase extraction + unwrapping per subcarrier --- */
     float phases[EDGE_MAX_SUBCARRIERS];
@@ -777,11 +915,11 @@ static void process_frame(const edge_ring_slot_t *slot)
         }
 
         float br_bpm = estimate_bpm_zero_crossing(s_scratch_br, buf_len, sample_rate);
-        float hr_bpm = estimate_bpm_zero_crossing(s_scratch_hr, buf_len, sample_rate);
+        float hr_bpm = estimate_hr_autocorr(s_scratch_hr, buf_len, sample_rate, br_bpm);
 
         /* Sanity clamp: breathing 6-40 BPM, heart rate 40-180 BPM. */
         if (br_bpm >= 6.0f && br_bpm <= 40.0f) s_breathing_bpm = br_bpm;
-        if (hr_bpm >= 40.0f && hr_bpm <= 180.0f) s_heartrate_bpm = hr_bpm;
+        if (hr_bpm >= 40.0f && hr_bpm <= 180.0f) s_heartrate_bpm = hr_smooth_push(hr_bpm);
     }
 
     /* --- Step 8: Motion energy (variance of recent phases) --- */
