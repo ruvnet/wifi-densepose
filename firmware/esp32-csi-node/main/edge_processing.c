@@ -216,7 +216,7 @@ static float estimate_bpm_zero_crossing(const float *history, uint16_t len,
 }
 
 /**
- * Autocorrelation heart-rate estimator (RuView #954/#985 follow-up).
+ * Autocorrelation periodicity estimator (RuView #954/#985/#987 follow-up).
  *
  * Zero-crossing HR estimation parked at ~45 BPM for two reasons: (1) it used a
  * stale fixed sample rate (10 Hz) after #985's self-ping raised the real CSI
@@ -227,25 +227,27 @@ static float estimate_bpm_zero_crossing(const float *history, uint16_t len,
  * harmonics, and refines the peak with parabolic interpolation. Uses the
  * MEASURED sample rate so the BPM is in real units.
  *
- * @param sig           HR-band-filtered signal (contiguous, oldest..newest).
- * @param len           Number of samples.
- * @param fs            Measured sample rate in Hz.
- * @param breathing_bpm Current breathing estimate for harmonic rejection (0 = skip).
- * @return Heart rate in BPM, or 0 if no confident peak.
+ * @param sig          Band-filtered signal (contiguous, oldest..newest).
+ * @param len          Number of samples.
+ * @param fs           Measured sample rate in Hz.
+ * @param bpm_lo       Low edge of the search band (BPM).
+ * @param bpm_hi       High edge of the search band (BPM).
+ * @param reject_br_hz Breathing fundamental (Hz) whose harmonics are rejected
+ *                     (k=1..6); pass 0 to disable rejection (fundamental search).
+ * @return Dominant rate in BPM within the band, or 0 if no confident peak.
  */
-static float estimate_hr_autocorr(const float *sig, uint16_t len, float fs,
-                                  float breathing_bpm)
+static float estimate_periodicity_autocorr(const float *sig, uint16_t len, float fs,
+                                            float bpm_lo, float bpm_hi, float reject_br_hz)
 {
-    if (len < 32 || fs <= 0.0f) return 0.0f;
+    if (len < 32 || fs <= 0.0f || bpm_hi <= bpm_lo) return 0.0f;
 
-    /* HR search window 45-180 BPM -> lag bounds (samples). */
-    int lag_min = (int)(fs * 60.0f / 180.0f);
-    int lag_max = (int)(fs * 60.0f / 45.0f);
+    int lag_min = (int)(fs * 60.0f / bpm_hi);
+    int lag_max = (int)(fs * 60.0f / bpm_lo);
     if (lag_min < 2) lag_min = 2;
     if (lag_max >= (int)len) lag_max = (int)len - 1;
     if (lag_max <= lag_min + 1) return 0.0f;
 
-    const float br_hz = breathing_bpm / 60.0f;
+    const float br_hz = reject_br_hz;
 
     float r0 = 0.0f;
     for (uint16_t i = 0; i < len; i++) r0 += sig[i] * sig[i];
@@ -298,7 +300,7 @@ static float estimate_hr_autocorr(const float *sig, uint16_t len, float fs,
  * VALID estimates stops the reported HR from "dropping a lot" between frames
  * without lagging real changes much. Only valid (in-range) estimates are
  * pushed, so out-of-range/zero results never pollute the window. */
-#define HR_SMOOTH_N 9
+#define HR_SMOOTH_N 13
 static float   s_hr_ring[HR_SMOOTH_N];
 static uint8_t s_hr_ring_n;
 static uint8_t s_hr_ring_idx;
@@ -648,7 +650,11 @@ static void update_multi_person_vitals(const uint8_t *iq_data, uint16_t n_sc,
             }
 
             float br = estimate_bpm_zero_crossing(s_scratch_br, buf_len, sample_rate);
-            float hr = estimate_hr_autocorr(s_scratch_hr, buf_len, sample_rate, br);
+            /* Robust breathing period (autocorr) drives HR harmonic rejection —
+             * the zero-crossing estimate is too noisy under motion and notched
+             * the wrong frequencies, letting HR lock onto a breathing harmonic. */
+            float br_rob = estimate_periodicity_autocorr(s_scratch_br, buf_len, sample_rate, 6.0f, 40.0f, 0.0f);
+            float hr = estimate_periodicity_autocorr(s_scratch_hr, buf_len, sample_rate, 45.0f, 180.0f, br_rob / 60.0f);
 
             /* Sanity clamp. */
             if (br >= 6.0f && br <= 40.0f) pv->breathing_bpm = br;
@@ -915,7 +921,9 @@ static void process_frame(const edge_ring_slot_t *slot)
         }
 
         float br_bpm = estimate_bpm_zero_crossing(s_scratch_br, buf_len, sample_rate);
-        float hr_bpm = estimate_hr_autocorr(s_scratch_hr, buf_len, sample_rate, br_bpm);
+        /* Robust breathing period (autocorr) drives HR harmonic rejection. */
+        float br_rob = estimate_periodicity_autocorr(s_scratch_br, buf_len, sample_rate, 6.0f, 40.0f, 0.0f);
+        float hr_bpm = estimate_periodicity_autocorr(s_scratch_hr, buf_len, sample_rate, 45.0f, 180.0f, br_rob / 60.0f);
 
         /* Sanity clamp: breathing 6-40 BPM, heart rate 40-180 BPM. */
         if (br_bpm >= 6.0f && br_bpm <= 40.0f) s_breathing_bpm = br_bpm;
