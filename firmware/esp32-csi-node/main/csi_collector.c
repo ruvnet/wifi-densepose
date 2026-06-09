@@ -23,6 +23,9 @@
 #include "esp_wifi.h"
 #include "esp_timer.h"
 #include "sdkconfig.h"
+#include "esp_netif.h"          /* #954: STA gateway lookup for self-ping CSI source */
+#include "ping/ping_sock.h"     /* #954: esp_ping gateway traffic generator */
+#include "lwip/ip_addr.h"       /* #954: ip_addr_t target for esp_ping */
 
 /* ADR-060: Access the global NVS config for MAC filter and channel override. */
 extern nvs_config_t g_nvs_config;
@@ -365,6 +368,67 @@ static void wifi_promiscuous_cb(void *buf, wifi_promiscuous_pkt_type_t type)
     (void)type;
 }
 
+/* ---- RuView#521/#954: connected-STA CSI traffic source (additive) ----
+ *
+ * The ESP32 CSI engine only produces CSI for received OFDM frames (L-LTF/HT-LTF).
+ * On a quiet network — or on a display-enabled build where the #893 MGMT->MGMT+DATA
+ * promiscuous upgrade is skipped (has_display=true) — the only CSI-eligible frames
+ * are sparse beacons (often non-OFDM DSSS), so wifi_csi_callback can starve to
+ * yield=0pps -> DEGRADED -> motion/presence=0 (#521, #954).
+ *
+ * This guarantees a ~50 Hz OFDM unicast floor by pinging the STA's own gateway:
+ * the router's ICMP echo replies are OFDM frames destined to this station, which
+ * drive the CSI engine regardless of promiscuous filter state or ambient traffic.
+ * It is ADDITIVE — promiscuous capture (#396/#893) is left fully intact so
+ * multistatic/multi-node sensing still hears other stations' frames. Mirrors
+ * Espressif's esp-csi csi_recv_router reference.
+ */
+static esp_ping_handle_t s_self_ping = NULL;
+static void csi_ping_cb_noop(esp_ping_handle_t hdl, void *args) { (void)hdl; (void)args; }
+
+static void csi_start_self_ping(void)
+{
+    if (s_self_ping != NULL) {
+        return;  /* already running */
+    }
+
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t ip;
+    if (sta == NULL || esp_netif_get_ip_info(sta, &ip) != ESP_OK || ip.gw.addr == 0) {
+        ESP_LOGW(TAG, "self-ping: no gateway IP yet; CSI relies on ambient frames (#954)");
+        return;
+    }
+
+    char gw_str[16];
+    esp_ip4addr_ntoa(&ip.gw, gw_str, sizeof(gw_str));
+
+    ip_addr_t target;
+    memset(&target, 0, sizeof(target));
+    ipaddr_aton(gw_str, &target);
+
+    esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
+    cfg.target_addr     = target;
+    cfg.count           = ESP_PING_COUNT_INFINITE;
+    cfg.interval_ms     = 20;     /* 50 Hz -> ~50 received OFDM replies/sec */
+    cfg.data_size       = 1;
+    cfg.task_stack_size = 4096;
+
+    esp_ping_callbacks_t cbs = {
+        .cb_args         = NULL,
+        .on_ping_success = csi_ping_cb_noop,
+        .on_ping_timeout = csi_ping_cb_noop,
+        .on_ping_end     = csi_ping_cb_noop,
+    };
+
+    if (esp_ping_new_session(&cfg, &cbs, &s_self_ping) == ESP_OK && s_self_ping != NULL) {
+        esp_ping_start(s_self_ping);
+        ESP_LOGI(TAG, "self-ping started -> %s @50Hz (CSI OFDM source, fix #521/#954)", gw_str);
+    } else {
+        ESP_LOGW(TAG, "self-ping: esp_ping_new_session failed");
+        s_self_ping = NULL;
+    }
+}
+
 void csi_collector_set_node_id(uint8_t node_id)
 {
     s_node_id = node_id;
@@ -526,6 +590,11 @@ void csi_collector_init(void)
 
     ESP_LOGI(TAG, "CSI collection initialized (node_id=%u, channel=%u)",
              (unsigned)s_node_id, (unsigned)csi_channel);
+
+    /* RuView#521/#954: start the connected-STA traffic source so the CSI engine
+     * receives a guaranteed OFDM unicast floor even when promiscuous capture is
+     * starved (display builds / quiet networks). Additive to #396/#893. */
+    csi_start_self_ping();
 }
 
 /* Accessor for other modules that need the authoritative runtime node_id. */
