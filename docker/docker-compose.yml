@@ -23,6 +23,15 @@ services:
       - "5005:5005/udp"
     environment:
       - RUST_LOG=info
+      # Bearer-token auth (#864). Secure-by-default: if RUVIEW_API_TOKEN is
+      # unset the container generates a random token at startup — retrieve it
+      # with `docker compose logs sensing-server`. Pin a known token by exporting
+      # RUVIEW_API_TOKEN in your shell / .env, or run open on a trusted, isolated
+      # LAN with RUVIEW_ALLOW_UNAUTHENTICATED=1.
+      #   REST: Authorization: Bearer <token>
+      #   WS:   ws://<host>:3001/ws/sensing?token=<token>
+      - RUVIEW_API_TOKEN=${RUVIEW_API_TOKEN:-}
+      - RUVIEW_ALLOW_UNAUTHENTICATED=${RUVIEW_ALLOW_UNAUTHENTICATED:-}
       # CSI_SOURCE controls the data source for the sensing server.
       # Options: auto (default) — probe for ESP32 UDP then host WiFi; **fail
       #                           hard with exit 78 if neither is detected**.

@@ -93,6 +93,52 @@ case "${1:-}" in
         ;;
 esac
 
+# ── #864: secure-by-default API auth for the sensing server ──────────────────
+#
+# The sensing server publishes a live RF-sensing REST API and WebSocket stream.
+# Historically the Docker image shipped with RUVIEW_API_TOKEN empty, which makes
+# bearer auth a no-op and exposes `/api/v1/*` and `/ws/sensing` to anyone who can
+# reach the published ports. We now fail closed: if no token is supplied we
+# generate a strong random one and print it, so the stream is never anonymous by
+# default. Operators on a trusted, isolated LAN can opt back into the open
+# posture explicitly with RUVIEW_ALLOW_UNAUTHENTICATED=1.
+generate_token() {
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 32
+    elif [ -r /proc/sys/kernel/random/uuid ]; then
+        # Two UUIDs (dashes stripped) → 64 hex chars of kernel randomness.
+        printf '%s%s' \
+            "$(cat /proc/sys/kernel/random/uuid)" \
+            "$(cat /proc/sys/kernel/random/uuid)" | tr -d '-'
+    else
+        head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
+    fi
+}
+
+if [ -z "${RUVIEW_API_TOKEN:-}" ]; then
+    case "${RUVIEW_ALLOW_UNAUTHENTICATED:-}" in
+        1|true|TRUE|yes|YES)
+            echo "WARNING: RUVIEW_ALLOW_UNAUTHENTICATED is set — the sensing API and" >&2
+            echo "         /ws/sensing stream will run UNAUTHENTICATED. Only do this on a" >&2
+            echo "         trusted, isolated network (issue #864)." >&2
+            ;;
+        *)
+            RUVIEW_API_TOKEN="$(generate_token)"
+            export RUVIEW_API_TOKEN
+            echo "============================================================" >&2
+            echo " RuView: no RUVIEW_API_TOKEN supplied — generated one for you:" >&2
+            echo "   RUVIEW_API_TOKEN=${RUVIEW_API_TOKEN}" >&2
+            echo "" >&2
+            echo "   REST: Authorization: Bearer <token>" >&2
+            echo "   WS:   ws://<host>:3001/ws/sensing?token=<token>" >&2
+            echo "" >&2
+            echo " Pin your own with -e RUVIEW_API_TOKEN=..., or run open on a" >&2
+            echo " trusted LAN with -e RUVIEW_ALLOW_UNAUTHENTICATED=1 (issue #864)." >&2
+            echo "============================================================" >&2
+            ;;
+    esac
+fi
+
 # If the first argument looks like a flag (starts with -), prepend the
 # server binary so users can just pass flags:
 #   docker run <image> --source esp32 --tick-ms 500

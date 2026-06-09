@@ -6761,7 +6761,10 @@ async fn main() {
     // every `/api/v1/*` request must carry `Authorization: Bearer <token>`.
     let bearer_auth_state = wifi_densepose_sensing_server::bearer_auth::AuthState::from_env();
     if bearer_auth_state.is_enabled() {
-        info!("API auth: bearer-token enforcement ON for /api/v1/* (RUVIEW_API_TOKEN set)");
+        info!(
+            "API auth: bearer-token enforcement ON for /api/v1/* and /ws/* (RUVIEW_API_TOKEN set). \
+             WebSocket clients pass it as ?token=<token>."
+        );
         if bind_ip.is_unspecified() {
             warn!(
                 "API auth ON but bind-addr is {} — consider --bind-addr 127.0.0.1 for LAN-only deployments",
@@ -6769,8 +6772,9 @@ async fn main() {
             );
         }
     } else {
-        info!(
-            "API auth: OFF — /api/v1/* is unauthenticated. Set RUVIEW_API_TOKEN=<token> to enforce bearer auth."
+        warn!(
+            "API auth: OFF — /api/v1/* and /ws/* sensing streams are UNAUTHENTICATED. \
+             Set RUVIEW_API_TOKEN=<token> to enforce bearer auth (the Docker image does this by default)."
         );
     }
 
@@ -6803,6 +6807,13 @@ async fn main() {
     let ws_app = Router::new()
         .route("/ws/sensing", get(ws_sensing_handler))
         .route("/health", get(health))
+        // #864: gate the live sensing stream with the API token when set. Reads
+        // `?token=` (browser-friendly) or `Authorization: Bearer`. No-op when
+        // RUVIEW_API_TOKEN is unset (LAN-mode default for local non-Docker runs).
+        .layer(axum::middleware::from_fn_with_state(
+            bearer_auth_state.clone(),
+            wifi_densepose_sensing_server::bearer_auth::require_ws_token,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             host_allowlist.clone(),
             wifi_densepose_sensing_server::host_validation::require_allowed_host,
@@ -6915,11 +6926,18 @@ async fn main() {
         ))
         // Opt-in bearer-token auth on `/api/v1/*` (#443). When `RUVIEW_API_TOKEN`
         // is unset/empty the middleware is a no-op — the default stays
-        // LAN-mode-friendly. `/health*`, `/ws/sensing`, and `/ui/*` are never
-        // gated (orchestrator probes + local browsers).
+        // LAN-mode-friendly. `/health*` and `/ui/*` are never gated
+        // (orchestrator probes + local browsers loading the static UI).
         .layer(axum::middleware::from_fn_with_state(
             bearer_auth_state.clone(),
             wifi_densepose_sensing_server::bearer_auth::require_bearer,
+        ))
+        // #864: gate the live `/ws/*` sensing + introspection streams with the
+        // same token. Browsers pass it as `?token=`; programmatic clients use
+        // `Authorization: Bearer`. No-op when RUVIEW_API_TOKEN is unset.
+        .layer(axum::middleware::from_fn_with_state(
+            bearer_auth_state.clone(),
+            wifi_densepose_sensing_server::bearer_auth::require_ws_token,
         ))
         // DNS-rebinding defense: applied last so it runs first on the request
         // path (axum layers run outermost-in). Rejects requests whose `Host`

@@ -118,6 +118,27 @@ void csi_collector_enable_data_capture(void);
 esp_err_t csi_inject_ndp_frame(void);
 
 /**
+ * Inject a broadcast 802.11 probe request (wildcard SSID) (RuView#866).
+ *
+ * Nearby APs answer with probe responses — management frames that pass the
+ * MGMT-only promiscuous filter and fire the CSI rx callback. This produces a
+ * controlled CSI rate independent of ambient beacon/data traffic, without
+ * re-enabling the DATA-frame interrupt storm that the MGMT-only filter avoids.
+ *
+ * @return ESP_OK on success, or an error code from esp_wifi_80211_tx().
+ */
+esp_err_t csi_inject_probe_request(void);
+
+/**
+ * Start the periodic probe-request injection timer (RuView#866).
+ *
+ * Fires every CONFIG_CSI_PROBE_INJECT_INTERVAL_MS (default 100 ms ⇒ ~10 Hz),
+ * calling csi_inject_probe_request(). Called automatically from
+ * csi_collector_init(); no-op if already running or if the interval is 0.
+ */
+void csi_collector_start_probe_timer(void);
+
+/**
  * Get the recent CSI callback rate (per second).
  *
  * Computed as a sliding 1-second window over the internal s_cb_count

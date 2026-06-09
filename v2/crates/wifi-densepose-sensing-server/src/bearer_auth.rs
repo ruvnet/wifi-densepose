@@ -34,6 +34,10 @@ pub const API_TOKEN_ENV: &str = "RUVIEW_API_TOKEN";
 /// Path prefix the middleware protects when auth is enabled.
 pub const PROTECTED_PREFIX: &str = "/api/v1/";
 
+/// Path prefix for the WebSocket sensing/introspection topics that
+/// [`require_ws_token`] protects when auth is enabled (#864).
+pub const WS_PREFIX: &str = "/ws/";
+
 /// Cheap, cloneable handle to the configured token (or `None`).
 #[derive(Debug, Clone, Default)]
 pub struct AuthState {
@@ -120,6 +124,71 @@ pub async fn require_bearer(
         (
             StatusCode::UNAUTHORIZED,
             "missing or invalid bearer token (set Authorization: Bearer <RUVIEW_API_TOKEN>)\n",
+        )
+            .into_response()
+    }
+}
+
+/// Extract a bearer token from a WebSocket-upgrade request. Browsers cannot set
+/// arbitrary headers on a WS handshake, so the token is accepted via the
+/// `?token=<t>` query parameter in addition to the `Authorization: Bearer`
+/// header that programmatic clients (wscat, curl) can send.
+///
+/// No percent-decoding is applied: generated tokens are URL-safe (hex from
+/// `openssl rand` / UUID concatenation). Operators who pin a custom token
+/// should keep it URL-safe.
+fn ws_supplied_token(request: &Request) -> Option<String> {
+    // 1. Authorization: Bearer <token> — for programmatic clients.
+    if let Some(t) = request
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+    {
+        return Some(t.to_string());
+    }
+    // 2. ?token=<token> query parameter — the only option browsers have on a
+    //    WebSocket handshake.
+    request.uri().query().and_then(token_from_query)
+}
+
+/// Find the `token` value in a `&`-separated `key=value` query string.
+fn token_from_query(query: &str) -> Option<String> {
+    query.split('&').find_map(|pair| {
+        let mut it = pair.splitn(2, '=');
+        match (it.next(), it.next()) {
+            (Some("token"), Some(v)) => Some(v.to_string()),
+            _ => None,
+        }
+    })
+}
+
+/// Axum middleware: enforces a valid token on `/ws/*` upgrade requests when
+/// [`AuthState::is_enabled`] returns `true` (#864). Mirrors [`require_bearer`]
+/// but reads the token from `?token=` (browser-friendly) or `Authorization`.
+/// When auth is disabled the middleware is a no-op, preserving the LAN-only
+/// default for non-Docker local runs.
+pub async fn require_ws_token(
+    State(auth): State<AuthState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let Some(expected) = auth.token.clone() else {
+        return next.run(request).await;
+    };
+    if !request.uri().path().starts_with(WS_PREFIX) {
+        return next.run(request).await;
+    }
+    let ok = ws_supplied_token(&request)
+        .map(|s| ct_eq(s.as_bytes(), expected.as_bytes()))
+        .unwrap_or(false);
+    if ok {
+        next.run(request).await
+    } else {
+        (
+            StatusCode::UNAUTHORIZED,
+            "missing or invalid token (append ?token=<RUVIEW_API_TOKEN> to the ws URL, \
+             or send Authorization: Bearer <token>)\n",
         )
             .into_response()
     }
@@ -291,5 +360,82 @@ mod tests {
         // These are documented in the issue body and the README; keep them locked.
         assert_eq!(API_TOKEN_ENV, "RUVIEW_API_TOKEN");
         assert_eq!(PROTECTED_PREFIX, "/api/v1/");
+        assert_eq!(WS_PREFIX, "/ws/");
+    }
+
+    // ── #864: WebSocket token enforcement ────────────────────────────────────
+
+    fn ws_router(auth: AuthState) -> Router {
+        Router::new()
+            .route("/ws/sensing", get(|| async { "stream" }))
+            .route("/ws/introspection", get(|| async { "stream" }))
+            .route("/health", get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn_with_state(auth, require_ws_token))
+    }
+
+    #[test]
+    fn token_from_query_parses_first_match() {
+        assert_eq!(token_from_query("token=abc").as_deref(), Some("abc"));
+        assert_eq!(token_from_query("a=1&token=abc&b=2").as_deref(), Some("abc"));
+        assert_eq!(token_from_query("a=1&b=2").as_deref(), None);
+        assert_eq!(token_from_query("").as_deref(), None);
+        // bare key with no value is not a token
+        assert_eq!(token_from_query("token").as_deref(), None);
+    }
+
+    #[tokio::test]
+    async fn ws_unprotected_when_token_unset() {
+        let r = ws_router(AuthState::default());
+        assert_eq!(
+            status(r, "GET", "/ws/sensing", None).await,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn ws_blocks_without_token() {
+        let r = ws_router(AuthState::from_token("s3cr3t"));
+        assert_eq!(
+            status(r.clone(), "GET", "/ws/sensing", None).await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            status(r, "GET", "/ws/introspection", None).await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn ws_allows_with_query_token() {
+        let r = ws_router(AuthState::from_token("s3cr3t"));
+        assert_eq!(
+            status(r, "GET", "/ws/sensing?token=s3cr3t", None).await,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn ws_allows_with_bearer_header() {
+        let r = ws_router(AuthState::from_token("s3cr3t"));
+        assert_eq!(
+            status(r, "GET", "/ws/sensing", Some("s3cr3t")).await,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn ws_blocks_with_wrong_query_token() {
+        let r = ws_router(AuthState::from_token("s3cr3t"));
+        assert_eq!(
+            status(r, "GET", "/ws/sensing?token=nope", None).await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn ws_middleware_never_gates_non_ws_paths() {
+        // /health rides on the same router (dedicated WS port) and must stay open.
+        let r = ws_router(AuthState::from_token("s3cr3t"));
+        assert_eq!(status(r, "GET", "/health", None).await, StatusCode::OK);
     }
 }

@@ -115,11 +115,12 @@ jobs:
       #      RUN guard catches missing ones at build time, this re-checks the
       #      pushed artifact post-hoc as belt-and-braces).
       #   2. /health is up.
-      #   3. /api/v1/info returns 200 with no auth (LAN-mode default).
-      #   4. With RUVIEW_API_TOKEN set, /api/v1/info returns 401 without a
-      #      Bearer header, 200 with the correct one (the #443 auth middleware).
+      #   3. Secure-by-default (#864): with NO token env, the entrypoint
+      #      generates one, so /api/v1/info returns 401 without a bearer.
+      #   4. Explicit LAN opt-out (RUVIEW_ALLOW_UNAUTHENTICATED=1) restores the
+      #      old unauthenticated 200 + serves the UI.
       # ---------------------------------------------------------------------
-      - name: Smoke-test image assets + LAN-mode HTTP
+      - name: Smoke-test image assets + secure-by-default HTTP
         run: |
           set -euo pipefail
           IMAGE="ghcr.io/ruvnet/wifi-densepose:sha-${GITHUB_SHA::7}"
@@ -128,17 +129,33 @@ jobs:
             'ls /app/ui/observatory.html /app/ui/pose-fusion.html /app/ui/index.html /app/ui/viz.html >/dev/null'
           docker run --rm "$IMAGE" sh -c 'ls -d /app/ui/observatory /app/ui/pose-fusion >/dev/null'
 
-          docker run -d --name sm -p 3000:3000 -e CSI_SOURCE=simulated "$IMAGE"
-          # Wait up to 30 s for /health.
+          # (a) Secure-by-default: no token env ⇒ entrypoint auto-generates one
+          #     ⇒ /api/v1/info is gated (401) even though we passed no token.
+          docker run -d --name secdef -p 3000:3000 -e CSI_SOURCE=simulated "$IMAGE"
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:3000/health >/dev/null 2>&1; then break; fi
             sleep 1
           done
-          curl -fsS http://127.0.0.1:3000/health
+          curl -fsS http://127.0.0.1:3000/health >/dev/null
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/v1/info)
+          test "$code" = "401" || { echo "secure-by-default broken: expected 401, got $code (#864)"; exit 1; }
+          # The auto-generated token is printed to the logs for operators.
+          docker logs secdef 2>&1 | grep -q "generated one for you" || \
+            { echo "expected generated-token banner in logs (#864)"; exit 1; }
+          docker stop secdef
+
+          # (b) Explicit opt-out for trusted LAN ⇒ unauthenticated 200 + UI.
+          docker run -d --name lan -p 3000:3000 -e CSI_SOURCE=simulated \
+            -e RUVIEW_ALLOW_UNAUTHENTICATED=1 "$IMAGE"
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/health >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:3000/health >/dev/null
           curl -fsS http://127.0.0.1:3000/api/v1/info >/dev/null
           curl -fsS http://127.0.0.1:3000/ui/observatory.html >/dev/null
           curl -fsS http://127.0.0.1:3000/ui/pose-fusion.html >/dev/null
-          docker stop sm
+          docker stop lan
 
       - name: Smoke-test the bearer-token auth path
         run: |

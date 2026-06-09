@@ -60,9 +60,12 @@ RUN set -e; \
     test -x /app/homecore-server || { echo "FATAL: /app/homecore-server is not executable"; exit 1; }; \
     echo "image assets OK"
 
-# Optional bearer-token auth on /api/v1/*: leave unset for LAN-mode (default),
-# set to enforce `Authorization: Bearer <token>` (see bearer_auth module, #443).
-#   docker run -e RUVIEW_API_TOKEN=$(openssl rand -hex 32) ...
+# Bearer-token auth on /api/v1/* and /ws/* (#443, #864). Secure-by-default:
+# when left unset the entrypoint GENERATES a random token at startup and prints
+# it to the logs, so the sensing API + WebSocket stream are never anonymous out
+# of the box. Pin a known token, or opt into the open LAN posture explicitly:
+#   docker run -e RUVIEW_API_TOKEN=$(openssl rand -hex 32) ...   # pin a token
+#   docker run -e RUVIEW_ALLOW_UNAUTHENTICATED=1 ...             # trusted LAN only
 ENV RUVIEW_API_TOKEN=
 
 # HTTP API

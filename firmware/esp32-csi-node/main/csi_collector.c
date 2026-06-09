@@ -104,6 +104,23 @@ static uint8_t  s_hop_index   = 0;
 /** Handle for the periodic hop timer. NULL when timer is not running. */
 static esp_timer_handle_t s_hop_timer = NULL;
 
+/** Handle for the periodic probe-request injection timer (RuView#866).
+ * NULL when not running. */
+static esp_timer_handle_t s_probe_timer = NULL;
+
+/* Probe-request injection cadence (RuView#866). The MGMT-only promiscuous
+ * filter (RuView#396) only surfaces management frames, so on a network with no
+ * nearby beaconing APs — or one saturated with DATA traffic that the filter
+ * drops — the CSI callback can starve (3 callbacks in 70 s was observed in
+ * #866). Injecting a broadcast probe request elicits probe *responses* (which
+ * ARE management frames) from every AP in range, giving a controlled, traffic-
+ * independent CSI rate without re-enabling the DATA-frame interrupt storm that
+ * MGMT-only exists to avoid. 100 ms ⇒ ~10 Hz, matching the 20 Hz edge sample
+ * rate once ambient beacons are added. Override at build time via Kconfig. */
+#ifndef CONFIG_CSI_PROBE_INJECT_INTERVAL_MS
+#define CONFIG_CSI_PROBE_INJECT_INTERVAL_MS 100
+#endif
+
 /**
  * Serialize CSI data into ADR-018 binary frame format.
  *
@@ -464,19 +481,37 @@ void csi_collector_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(wifi_promiscuous_cb));
 
-    /* MGMT-only promiscuous filter + active probe injection (RuView#396).
+    /* Promiscuous CSI filter (RuView#396 / RuView#866).
      *
-     * DATA frames cause 100-500+ WiFi HW interrupts/sec which crashes Core 0
-     * in wDev_ProcessFiq (SPI flash cache race in ESP-IDF WiFi blob).
-     * MGMT-only gives ~10 Hz (beacons). Probe request injection at 10 Hz
-     * adds ~10 Hz probe responses from APs → ~20 Hz total, matching the
-     * edge processing designed sample rate of 20 Hz. */
+     * History: DATA frames once crashed Core 0 in wDev_ProcessFiq (SPI-flash
+     * cache race in the WiFi blob) under a 100-500+ interrupt/sec storm, so the
+     * filter was pinned to MGMT-only. But MGMT-only starves on real networks:
+     * the associated AP's beacons do not reliably generate CSI on the C6, and
+     * broadcast probe injection (below) transmits fine yet elicits almost no
+     * capturable responses — #866 measured ~3 CSI callbacks in 70 s with 0 pps
+     * yield. Two mitigations for the original crash are now in place and active
+     * (confirmed in the boot log): WiFi RX/TX IRAM optimisations keep the ISR
+     * out of cacheable flash, and wifi_csi_callback() applies a 50 Hz early
+     * rate gate (CSI_MIN_PROCESS_INTERVAL_US) that caps ISR work regardless of
+     * arrival rate. With those guards we re-admit DATA frames so ambient/own
+     * traffic produces a dense, traffic-driven CSI stream. Operators who hit
+     * instability can fall back to MGMT-only via Kconfig.
+     *
+     * Probe injection (csi_collector_start_probe_timer) is retained: it keeps a
+     * ~10 Hz floor of management-frame CSI when the link is otherwise idle. */
+#ifdef CONFIG_CSI_PROMISC_MGMT_ONLY
+    uint32_t filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT;
+    const char *filter_desc = "MGMT-only (Kconfig override)";
+#else
+    uint32_t filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA;
+    const char *filter_desc = "MGMT+DATA (50 Hz-gated, RuView#866)";
+#endif
     wifi_promiscuous_filter_t filt = {
-        .filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT,
+        .filter_mask = filter_mask,
     };
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_filter(&filt));
 
-    ESP_LOGI(TAG, "Promiscuous mode enabled (MGMT-only, RuView#396)");
+    ESP_LOGI(TAG, "Promiscuous mode enabled (%s)", filter_desc);
 
 #if CONFIG_SOC_WIFI_HE_SUPPORT
     /* Wi-Fi 6 targets (e.g. ESP32-C6): wifi_csi_config_t is wifi_csi_acquire_config_t
@@ -526,6 +561,12 @@ void csi_collector_init(void)
 
     ESP_LOGI(TAG, "CSI collection initialized (node_id=%u, channel=%u)",
              (unsigned)s_node_id, (unsigned)csi_channel);
+
+    /* RuView#866: start active probe injection so CSI keeps flowing even when
+     * the MGMT-only filter would otherwise starve under heavy DATA traffic or
+     * a beacon-sparse environment. Safe to call here — WiFi is started and the
+     * CSI rx callback is registered above. */
+    csi_collector_start_probe_timer();
 }
 
 /* Accessor for other modules that need the authoritative runtime node_id. */
@@ -729,4 +770,104 @@ esp_err_t csi_inject_ndp_frame(void)
     }
 
     return err;
+}
+
+/* ---- RuView#866: active probe-request injection for traffic-independent CSI ---- */
+
+esp_err_t csi_inject_probe_request(void)
+{
+    /*
+     * Broadcast 802.11 probe request (wildcard SSID). Every AP in range answers
+     * with a probe response — a *management* frame that passes the MGMT-only
+     * promiscuous filter (RuView#396) and fires the CSI callback. This gives a
+     * controlled CSI rate that does not depend on ambient beacon/data traffic.
+     *
+     * Layout: 24-byte MAC header + tagged params (wildcard SSID + basic rates).
+     *   FC(2) Dur(2) A1/DA(6) A2/SA(6) A3/BSSID(6) SeqCtl(2) | SSID tag | Rates tag
+     */
+    uint8_t frame[] = {
+        0x40, 0x00,                         /* FC: Type=Mgmt(0), Subtype=ProbeReq(4) */
+        0x00, 0x00,                         /* Duration */
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, /* A1 DA: broadcast */
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* A2 SA: own MAC (filled below) */
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, /* A3 BSSID: broadcast */
+        0x00, 0x00,                         /* Sequence control (HW overwrites) */
+        0x00, 0x00,                         /* Tag: SSID, len 0 (wildcard) */
+        0x01, 0x04, 0x02, 0x04, 0x0b, 0x16, /* Tag: Supported Rates 1/2/5.5/11 Mbps */
+    };
+
+    /* The Wi-Fi driver requires A2 (source) to be this interface's own MAC for
+     * a self-originated management frame, otherwise esp_wifi_80211_tx rejects
+     * it with ESP_ERR_INVALID_ARG. */
+    uint8_t mac[6];
+    if (esp_wifi_get_mac(WIFI_IF_STA, mac) == ESP_OK) {
+        memcpy(&frame[10], mac, 6);
+    }
+
+    /* en_sys_seq=true: let the MAC assign the sequence number. */
+    esp_err_t err = esp_wifi_80211_tx(WIFI_IF_STA, frame, sizeof(frame), true);
+
+    /* Observability (RuView#866): track TX outcome so the per-second yield can
+     * be correlated with whether injection is actually reaching the air. The
+     * first few results are logged verbatim; thereafter a periodic summary. */
+    static uint32_t s_probe_ok = 0;
+    static uint32_t s_probe_fail = 0;
+    if (err == ESP_OK) {
+        s_probe_ok++;
+        if (s_probe_ok <= 3 || (s_probe_ok % 100) == 0) {
+            ESP_LOGI(TAG, "probe inject ok #%lu (fail=%lu)",
+                     (unsigned long)s_probe_ok, (unsigned long)s_probe_fail);
+        }
+    } else {
+        s_probe_fail++;
+        if (s_probe_fail <= 3 || (s_probe_fail % 50) == 0) {
+            ESP_LOGW(TAG, "probe inject failed: %s (fail #%lu, ok=%lu)",
+                     esp_err_to_name(err), (unsigned long)s_probe_fail,
+                     (unsigned long)s_probe_ok);
+        }
+    }
+    return err;
+}
+
+/** Timer callback: inject one probe request every CONFIG_CSI_PROBE_INJECT_INTERVAL_MS. */
+static void probe_timer_cb(void *arg)
+{
+    (void)arg;
+    csi_inject_probe_request();
+}
+
+void csi_collector_start_probe_timer(void)
+{
+    if (CONFIG_CSI_PROBE_INJECT_INTERVAL_MS == 0) {
+        ESP_LOGI(TAG, "Probe injection disabled (interval=0)");
+        return;
+    }
+    if (s_probe_timer != NULL) {
+        ESP_LOGW(TAG, "Probe timer already running");
+        return;
+    }
+
+    esp_timer_create_args_t timer_args = {
+        .callback = probe_timer_cb,
+        .arg      = NULL,
+        .name     = "csi_probe",
+    };
+    esp_err_t err = esp_timer_create(&timer_args, &s_probe_timer);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create probe timer: %s", esp_err_to_name(err));
+        return;
+    }
+
+    uint64_t period_us = (uint64_t)CONFIG_CSI_PROBE_INJECT_INTERVAL_MS * 1000;
+    err = esp_timer_start_periodic(s_probe_timer, period_us);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start probe timer: %s", esp_err_to_name(err));
+        esp_timer_delete(s_probe_timer);
+        s_probe_timer = NULL;
+        return;
+    }
+
+    ESP_LOGI(TAG, "Probe injection started: %d ms (~%d Hz) to keep CSI alive under MGMT-only filter",
+             CONFIG_CSI_PROBE_INJECT_INTERVAL_MS,
+             1000 / CONFIG_CSI_PROBE_INJECT_INTERVAL_MS);
 }
