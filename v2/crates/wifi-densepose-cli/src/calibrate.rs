@@ -261,13 +261,22 @@ pub(crate) fn parse_csi_packet(buf: &[u8], tier: &str) -> Option<CsiFrame> {
 
     let node_id       = buf[4];
     let n_antennas    = buf[5] as usize;
-    let n_subcarriers = buf[6] as usize;
+    let n_sub_raw     = buf[6] as usize;
     let freq_mhz      = u16::from_le_bytes([buf[8], buf[9]]);
     let _sequence     = u32::from_le_bytes([buf[10], buf[11], buf[12], buf[13]]);
     let rssi          = buf[14] as i8;
     let noise_floor   = buf[15] as i8;
 
-    let n_pairs = n_antennas * n_subcarriers;
+    // Firmware built with acquire-everything CSI (L-LTF + HT-LTF + STBC
+    // HT-LTF, 64 complex values each) sends 192 subcarriers per frame.
+    // Slice the HT-LTF segment so the 64-FFT HT20 tier configs line up.
+    let (seg_off, n_subcarriers) = if n_sub_raw == 192 {
+        (64usize, 64usize)
+    } else {
+        (0usize, n_sub_raw)
+    };
+
+    let n_pairs = n_antennas * n_sub_raw;
     let iq_start = 20usize;
     if buf.len() < iq_start + n_pairs * 2 {
         return None;
@@ -277,7 +286,7 @@ pub(crate) fn parse_csi_packet(buf: &[u8], tier: &str) -> Option<CsiFrame> {
     let mut data = Array2::<Complex64>::zeros((n_antennas.max(1), n_subcarriers.max(1)));
     for s in 0..n_antennas {
         for k in 0..n_subcarriers {
-            let idx = s * n_subcarriers + k;
+            let idx = s * n_sub_raw + seg_off + k;
             let i_val = buf[iq_start + idx * 2]     as i8 as f64;
             let q_val = buf[iq_start + idx * 2 + 1] as i8 as f64;
             data[[s, k]] = Complex64::new(i_val, q_val);
@@ -432,6 +441,30 @@ mod tests {
         let f = frame.unwrap();
         assert_eq!(f.num_spatial_streams(), 1);
         assert_eq!(f.num_subcarriers(), 2);
+    }
+
+    #[test]
+    fn test_parse_csi_packet_merged_ltf_slices_htltf_segment() {
+        // Firmware built with acquire-everything CSI (L-LTF + HT-LTF + STBC
+        // HT-LTF) reports 192 subcarriers per frame. The parser must slice
+        // the HT-LTF segment [64..128) so HT20 tier configs line up.
+        let mut buf = vec![0u8; 20 + 192 * 2];
+        buf[0] = 0x01; buf[1] = 0x00; buf[2] = 0x11; buf[3] = 0xC5;
+        buf[5] = 1;   // n_antennas
+        buf[6] = 192; // n_subcarriers (merged L-LTF + HT-LTF + STBC HT-LTF)
+        buf[8] = 0x85; buf[9] = 0x09; // 2437 MHz
+        // Mark each 64-value segment with a distinct I value: 1, 2, 3.
+        for k in 0..192 {
+            buf[20 + k * 2] = (k / 64 + 1) as u8; // I
+            buf[20 + k * 2 + 1] = 0;              // Q
+        }
+
+        let f = parse_csi_packet(&buf, "ht20").expect("merged-LTF frame must parse");
+        assert_eq!(f.num_subcarriers(), 64);
+        // Every value must come from the HT-LTF segment (I == 2).
+        for k in 0..64 {
+            assert_eq!(f.data[[0, k]].re, 2.0, "subcarrier {k} not from HT-LTF segment");
+        }
     }
 
     #[test]
