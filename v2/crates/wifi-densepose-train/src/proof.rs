@@ -153,11 +153,11 @@ pub fn run_proof(proof_dir: &Path) -> Result<ProofResult, Box<dyn std::error::Er
         let num_kp = kp.size()[1] as usize;
         let hm_size = cfg.heatmap_size;
 
-        let kp_vec: Vec<f32> = Vec::<f64>::from(kp.to_kind(Kind::Double).flatten(0, -1))
+        let kp_vec: Vec<f32> = Vec::<f64>::try_from(kp.to_kind(Kind::Double).flatten(0, -1))?
             .iter()
             .map(|&x| x as f32)
             .collect();
-        let vis_vec: Vec<f32> = Vec::<f64>::from(vis.to_kind(Kind::Double).flatten(0, -1))
+        let vis_vec: Vec<f32> = Vec::<f64>::try_from(vis.to_kind(Kind::Double).flatten(0, -1))?
             .iter()
             .map(|&x| x as f32)
             .collect();
@@ -261,7 +261,7 @@ pub fn hash_model_weights(model: &WiFiDensePoseModel) -> String {
             .flatten(0, -1)
             .to_kind(Kind::Float)
             .to_device(Device::Cpu);
-        let values: Vec<f32> = Vec::<f32>::from(&flat);
+        let values: Vec<f32> = Vec::<f32>::try_from(&flat).expect("tensor to Vec<f32>");
         let mut buf = vec![0u8; values.len() * 4];
         for (i, v) in values.iter().enumerate() {
             let bytes = v.to_le_bytes();

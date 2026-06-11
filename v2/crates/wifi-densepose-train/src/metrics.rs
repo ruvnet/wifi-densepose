@@ -19,6 +19,7 @@
 
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::visit::EdgeRef;
 use ruvector_mincut::{DynamicMinCut, MinCutBuilder};
 use std::collections::VecDeque;
 
