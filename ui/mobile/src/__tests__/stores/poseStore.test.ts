@@ -1,11 +1,17 @@
 import { usePoseStore } from '@/stores/poseStore';
-import type { SensingFrame } from '@/types/sensing';
+import type { SensingFrame, SensingNode } from '@/types/sensing';
+
+const makeNode = (nodeId: number, rssiDbm: number, position: [number, number, number] = [0, 0, 0]): SensingNode => ({
+  node_id: nodeId,
+  rssi_dbm: rssiDbm,
+  position,
+});
 
 const makeFrame = (overrides: Partial<SensingFrame> = {}): SensingFrame => ({
   type: 'sensing_update',
   timestamp: Date.now(),
   source: 'simulated',
-  nodes: [{ node_id: 1, rssi_dbm: -45, position: [0, 0, 0] }],
+  nodes: [makeNode(1, -45)],
   features: {
     mean_rssi: -45,
     variance: 1.5,
@@ -118,6 +124,28 @@ describe('usePoseStore', () => {
       const frame = makeFrame();
       usePoseStore.getState().handleFrame(frame);
       expect(usePoseStore.getState().lastFrame).toBe(frame);
+      expect(usePoseStore.getState().lastFrame?.nodes).toHaveLength(1);
+    });
+
+    it('stores frames with zero nodes', () => {
+      const frame = makeFrame({ nodes: [] });
+      usePoseStore.getState().handleFrame(frame);
+      expect(usePoseStore.getState().lastFrame?.nodes).toEqual([]);
+    });
+
+    it('stores frames with multiple nodes', () => {
+      const frame = makeFrame({
+        nodes: [
+          makeNode(1, -41, [0, 0, 0]),
+          makeNode(2, -49, [1.5, 0, 0.5]),
+          makeNode(3, -53, [-1.5, 0, 0.5]),
+        ],
+      });
+      usePoseStore.getState().handleFrame(frame);
+
+      const nodes = usePoseStore.getState().lastFrame?.nodes;
+      expect(nodes).toHaveLength(3);
+      expect(nodes).toEqual(frame.nodes);
     });
   });
 
@@ -147,6 +175,10 @@ describe('usePoseStore', () => {
 
     it('clears frame-derived state when disconnected', () => {
       const frame = makeFrame({
+        nodes: [
+          makeNode(1, -41, [0, 0, 0]),
+          makeNode(2, -49, [1, 0, 0]),
+        ],
         features: {
           mean_rssi: -41,
           variance: 1,
