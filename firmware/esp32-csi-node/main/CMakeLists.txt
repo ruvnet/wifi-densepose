@@ -31,10 +31,6 @@ set(REQUIRES
     esp_app_format
     esp_timer
     esp_pm
-    esp_driver_uart
-    esp_driver_gpio
-    esp_driver_spi
-    esp_driver_i2c
     driver
     lwip
     mbedtls

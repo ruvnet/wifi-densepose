@@ -28,7 +28,13 @@
 #include "power_mgmt.h"
 #include "wasm_runtime.h"
 #include "wasm_upload.h"
-#include "display_task.h"
+
+/* --- DISABLED FOR ESP32-S2 RAM OPTIMIZATION ---
+// #include "display_task.h"
+// #include "lvgl.h"
+// #include "esp_lcd_touch.h"
+*/
+
 #include "mmwave_sensor.h"
 #include "swarm_bridge.h"
 #include "rv_radio_ops.h"          /* ADR-081 Layer 1 — Radio Abstraction Layer. */
@@ -402,13 +408,14 @@ void app_main(void)
     /* Initialize power management. */
     power_mgmt_init(g_nvs_config.power_duty);
 
-    /* ADR-045: Start AMOLED display task (gracefully skips if no display). */
-#ifdef CONFIG_DISPLAY_ENABLE
-    esp_err_t disp_ret = display_task_start();
-    if (disp_ret != ESP_OK) {
-        ESP_LOGW(TAG, "Display init returned: %s", esp_err_to_name(disp_ret));
-    }
-#endif
+    /* --- DISABLED FOR ESP32-S2 RAM OPTIMIZATION ---
+    // #ifdef CONFIG_DISPLAY_ENABLE
+    // esp_err_t disp_ret = display_task_start();
+    // if (disp_ret != ESP_OK) {
+    //     ESP_LOGW(TAG, "Display init returned: %s", esp_err_to_name(disp_ret));
+    // }
+    // #endif
+    */
 
     /* RuView#893/#521: the MGMT-only promiscuous filter (set in
      * csi_collector_init as the #396 display-crash workaround) starves the CSI
@@ -416,11 +423,9 @@ void app_main(void)
      * looks dead despite being on the network. Now that the display probe has
      * run, boards with no AMOLED panel (no QSPI/SPI-flash cache contention)
      * upgrade the filter to capture DATA frames too, restoring CSI yield. */
-#ifdef CONFIG_DISPLAY_ENABLE
-    bool has_display = display_is_active();   /* runtime panel probe result */
-#else
-    bool has_display = false;                 /* display support not compiled in */
-#endif
+
+    bool has_display = false; /* Forced false since display support is disabled */
+
     if (!has_display) {
         csi_collector_enable_data_capture();
     }
