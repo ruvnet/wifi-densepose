@@ -196,8 +196,9 @@ fn print_banner(frames: usize, target: usize, score: &CalibrationDeviationScore)
         "no"
     };
     eprintln!(
-        "[calibrate] {}/{} frames | z_med={:.2} z_max={:.2} | motion: {}",
-        frames, target, score.amplitude_z_median, score.amplitude_z_max, motion_str
+        "[calibrate] {}/{} frames | z_med={:.2} z_p90={:.2} z_max={:.2} | motion: {}",
+        frames, target, score.amplitude_z_median, score.amplitude_z_p90, score.amplitude_z_max,
+        motion_str
     );
 }
 

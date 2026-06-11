@@ -8,8 +8,16 @@
 //!
 //! Quality is measured against the ADR-135 empty-room baseline via
 //! [`wifi_densepose_signal::BaselineCalibration::deviation`], whose
-//! `CalibrationDeviationScore` gives a per-frame amplitude z-score (presence
-//! strength).
+//! `CalibrationDeviationScore` gives per-frame amplitude z statistics
+//! (presence strength).
+//!
+//! **Presence is the per-frame p90 of |z|, NOT the median** (ADR-151
+//! presence-flatline bench, 2026-06-11): a person perturbs a *minority* of
+//! subcarriers strongly, so the median of |z| over all bins floors at
+//! `median(|N(0,1)|) ≈ 0.674` and never reaches presence gates — on real
+//! ESP32-C6 HE20 captures the median read empty ≈ 0.40–0.42 vs person-moving
+//! ≈ 0.74–0.75 (both below every gate), while the p90 separated cleanly:
+//! empty ≈ 1.27–1.33 vs person-moving ≈ 2.26–2.29.
 //!
 //! **Motion is NOT taken from the score's `motion_flagged`** (ADR-152 finding,
 //! "z-band squeeze"): that flag fires on `amplitude_z_median > 2.0` — deviation
@@ -18,19 +26,41 @@
 //! would be rejected as "too much motion". Instead the recorder derives motion
 //! from the frame-to-frame *change* in the deviation series (|Δz| and |Δφ|),
 //! which is presence-independent: a still strong reflector has high z but a
-//! flat z-series; a moving person has a jittery one.
+//! flat z-series; a moving person has a jittery one. The |Δφ| term only
+//! counts when the score reports `phase_usable` — an unsanitised phase
+//! channel (no `PhaseSanitizer` in the path) makes |Δφ| pure noise that
+//! inflates the motion rate to ~60–70 % on a still room (same bench).
 
 use wifi_densepose_core::types::CsiFrame;
 use wifi_densepose_signal::{BaselineCalibration, CalibrationDeviationScore};
 
 use crate::anchor::{Anchor, AnchorLabel, AnchorQuality};
 
+/// Default `empty` gate: maximum mean per-frame p90|z| for an empty room.
+///
+/// Re-derived from the ADR-151 presence-flatline bench (2026-06-11, real
+/// ESP32-C6 HE20 node-8 captures replayed against a same-epoch baseline):
+/// empty segments measured p90|z| ≈ 1.27–1.33; a person moving on the plate
+/// measured ≈ 2.26–2.29. 1.6 sits above the empty band with margin while
+/// rejecting the occupied band decisively. (The old gate of 1.0 was tuned to
+/// the median statistic, which floored at ≈ 0.674 and could never separate.)
+pub const EMPTY_MAX_Z: f32 = 1.6;
+
+/// Default presence gate: minimum mean per-frame p90|z| to call a person
+/// present. Same bench as [`EMPTY_MAX_Z`]: occupied ≈ 2.26–2.29, so 1.9
+/// detects with margin while staying above the empty band (≤ 1.33). (The old
+/// gate of 1.5 was unreachable by the median statistic — observed occupied
+/// values were ≈ 0.74–0.75.)
+pub const MIN_PRESENCE_Z: f32 = 1.9;
+
 /// Thresholds for accepting an anchor.
 #[derive(Debug, Clone, Copy)]
 pub struct AnchorQualityGate {
-    /// Minimum mean amplitude z-score to consider a person present.
+    /// Minimum mean per-frame p90 amplitude z-score to consider a person
+    /// present.
     pub min_presence_z: f32,
-    /// For `empty`: maximum mean z-score to consider the room truly empty.
+    /// For `empty`: maximum mean per-frame p90 z-score to consider the room
+    /// truly empty.
     pub empty_max_z: f32,
     /// For "still" anchors: maximum motion-flag rate tolerated.
     pub max_still_motion: f32,
@@ -43,8 +73,8 @@ pub struct AnchorQualityGate {
 impl Default for AnchorQualityGate {
     fn default() -> Self {
         Self {
-            min_presence_z: 1.5,
-            empty_max_z: 1.0,
+            min_presence_z: MIN_PRESENCE_Z,
+            empty_max_z: EMPTY_MAX_Z,
             max_still_motion: 0.6,
             min_move_motion: 0.3,
             min_frames: 60,
@@ -126,10 +156,14 @@ pub const PHASE_DELTA_MOTION: f32 = std::f32::consts::PI / 6.0;
 /// Accumulates per-frame deviation statistics for a single anchor capture.
 pub struct AnchorRecorder {
     label: AnchorLabel,
+    /// Sum of per-frame p90|z| (the ADR-151 presence statistic).
     z_sum: f64,
+    /// Sum of per-frame median|z| (legacy statistic, kept as a secondary
+    /// diagnostic — see [`Self::presence_z_median`]).
+    z_median_sum: f64,
     motion_count: u32,
     frames: u32,
-    /// Previous frame's (amplitude_z_median, phase_drift_median) for the
+    /// Previous frame's (amplitude_z_p90, phase_drift_median) for the
     /// delta-based motion measure (ADR-152 z-band-squeeze fix).
     prev: Option<(f32, f32)>,
 }
@@ -140,6 +174,7 @@ impl AnchorRecorder {
         Self {
             label,
             z_sum: 0.0,
+            z_median_sum: 0.0,
             motion_count: 0,
             frames: 0,
             prev: None,
@@ -158,20 +193,27 @@ impl AnchorRecorder {
 
     /// Record a pre-computed deviation score (caller runs `baseline.deviation`).
     ///
+    /// Presence accumulates the per-frame **p90** of |z| (ADR-151 — the
+    /// median floors at ≈ 0.674 and cannot separate; see module docs).
+    ///
     /// Motion is derived from the frame-to-frame change of the deviation
     /// series, NOT from `score.motion_flagged` — the flag conflates presence
     /// strength with motion (z-band squeeze, see module docs / ADR-152). The
-    /// first frame of a capture is never motion (no predecessor).
+    /// |Δφ| term only counts when `score.phase_usable` (unsanitised phase is
+    /// noise, ADR-151 bench). The first frame of a capture is never motion
+    /// (no predecessor).
     pub fn record_score(&mut self, score: &CalibrationDeviationScore) {
-        let z = score.amplitude_z_median;
+        let z = score.amplitude_z_p90;
         let phase = score.phase_drift_median;
         if let Some((pz, pp)) = self.prev {
-            if (z - pz).abs() > Z_DELTA_MOTION || (phase - pp).abs() > PHASE_DELTA_MOTION {
+            let phase_motion = score.phase_usable && (phase - pp).abs() > PHASE_DELTA_MOTION;
+            if (z - pz).abs() > Z_DELTA_MOTION || phase_motion {
                 self.motion_count += 1;
             }
         }
         self.prev = Some((z, phase));
         self.z_sum += z as f64;
+        self.z_median_sum += score.amplitude_z_median as f64;
         self.frames += 1;
     }
 
@@ -183,12 +225,23 @@ impl AnchorRecorder {
         }
     }
 
-    /// Mean presence z-score over the capture.
+    /// Mean presence z-score over the capture (per-frame p90|z|, ADR-151).
     pub fn presence_z(&self) -> f32 {
         if self.frames == 0 {
             0.0
         } else {
             (self.z_sum / self.frames as f64) as f32
+        }
+    }
+
+    /// Mean of the legacy per-frame median|z| over the capture. Diagnostic
+    /// only — floors at ≈ 0.674 with a person present (ADR-151); never gate
+    /// on it.
+    pub fn presence_z_median(&self) -> f32 {
+        if self.frames == 0 {
+            0.0
+        } else {
+            (self.z_median_sum / self.frames as f64) as f32
         }
     }
 
@@ -226,15 +279,22 @@ mod tests {
     use super::*;
 
     /// Build a score the way `BaselineCalibration::deviation` actually would:
-    /// `motion_flagged` is DERIVED from z (z > 2.0 ⇒ flagged), never free.
-    /// The old tests mocked `(z=3.0, motion=false)` — a combination the real
-    /// producer can never emit, which is exactly how the z-band squeeze hid.
+    /// `motion_flagged` is DERIVED from the median (z_med > 2.0 ⇒ flagged),
+    /// never free. The old tests mocked `(z=3.0, motion=false)` — a
+    /// combination the real producer can never emit, which is exactly how the
+    /// z-band squeeze hid. `z` parameterises the p90 (the presence statistic);
+    /// the median rides along at the real-data ratio (~0.33×, ADR-151 bench:
+    /// person p90 ≈ 2.26 with median ≈ 0.75) so any code that accidentally
+    /// gates on the median fails loudly.
     fn score(z: f32) -> CalibrationDeviationScore {
+        let z_med = z / 3.0;
         CalibrationDeviationScore {
-            amplitude_z_median: z,
+            amplitude_z_median: z_med,
+            amplitude_z_p90: z,
             amplitude_z_max: z + 1.0,
             phase_drift_median: 0.05,
-            motion_flagged: z > 2.0,
+            phase_usable: true,
+            motion_flagged: z_med > 2.0,
         }
     }
 
@@ -300,13 +360,59 @@ mod tests {
         // every frame — motion must be detected from the phase channel alone.
         let mut r = AnchorRecorder::new(AnchorLabel::LieDown);
         for i in 0..400 {
-            let mut s = score(1.8);
+            let mut s = score(2.5);
             s.phase_drift_median = if i % 2 == 0 { 0.0 } else { PHASE_DELTA_MOTION * 1.5 };
             r.record_score(&s);
         }
         let (a, reason) = r.finalize(&AnchorQualityGate::default(), 100);
         assert!(!a.quality.accepted);
         assert!(reason.unwrap().contains("motion"));
+    }
+
+    /// ADR-151: an UNSANITISED phase channel (`phase_usable = false`) must be
+    /// excluded from motion — the same swinging phase series as above, but
+    /// flagged unusable, must read still. (Bench: noise phase inflated the
+    /// motion rate to ~60–70 % on a still room.)
+    #[test]
+    fn unusable_phase_does_not_create_motion() {
+        let mut r = AnchorRecorder::new(AnchorLabel::LieDown);
+        for i in 0..400 {
+            let mut s = score(2.5);
+            s.phase_usable = false;
+            s.phase_drift_median = if i % 2 == 0 { 0.0 } else { PHASE_DELTA_MOTION * 1.5 };
+            r.record_score(&s);
+        }
+        let (a, reason) = r.finalize(&AnchorQualityGate::default(), 100);
+        assert!(a.quality.accepted, "noise phase counted as motion: {reason:?}");
+        assert!(a.quality.motion_rate < 0.05);
+    }
+
+    /// ADR-151 median-floor regression: presence must gate on the per-frame
+    /// p90, not the median. A real person reads p90 ≈ 2.26 with median ≈ 0.75
+    /// (bench 2026-06-11); the median is below EVERY gate, so gating on it
+    /// flatlines presence detection.
+    #[test]
+    fn presence_uses_p90_not_median_floor() {
+        // score(2.26) ⇒ p90 = 2.26, median = 0.753 — the bench's occupied frame.
+        let mut r = AnchorRecorder::new(AnchorLabel::StandStill);
+        for _ in 0..400 {
+            r.record_score(&score(2.26));
+        }
+        assert!((r.presence_z() - 2.26).abs() < 1e-3, "presence_z must be the p90 mean");
+        assert!(
+            (r.presence_z_median() - 2.26 / 3.0).abs() < 1e-3,
+            "median kept as a secondary diagnostic"
+        );
+        let (a, reason) = r.finalize(&AnchorQualityGate::default(), 100);
+        assert!(a.quality.accepted, "bench occupied level must pass presence: {reason:?}");
+
+        // The same person fed to the EMPTY anchor must be rejected…
+        let (occupied, reason) = run_still(AnchorLabel::Empty, 2.26, 400);
+        assert!(!occupied.quality.accepted, "occupied room accepted as empty");
+        assert!(reason.unwrap().contains("not empty"));
+        // …while the bench's empty band still passes.
+        let (empty, reason) = run_still(AnchorLabel::Empty, 1.33, 400);
+        assert!(empty.quality.accepted, "bench empty level rejected: {reason:?}");
     }
 
     #[test]

@@ -71,7 +71,7 @@ pub use ruvsense::cir::{Cir, CirConfig, CirError, CirEstimator};
 pub use ruvsense::calibration;
 pub use ruvsense::calibration::{
     BaselineCalibration, CalibrationConfig, CalibrationDeviationScore, CalibrationError,
-    CalibrationRecorder, PhyTier, SubcarrierBaseline,
+    CalibrationRecorder, PhyTier, SubcarrierBaseline, PHASE_DISPERSION_USABLE_MAX,
 };
 
 /// Library version

@@ -68,6 +68,17 @@ const N_SC: usize = 52;
 const FS_HZ: f32 = 20.0;
 /// Complex-noise std per quadrature ⇒ amplitude noise std ≈ NOISE_STD.
 const NOISE_STD: f32 = 0.01;
+/// Noise multiplier applied ONLY while capturing the empty-room baseline.
+///
+/// Real ESP32 baselines overestimate the instantaneous noise: the Welford
+/// variance integrates slow gain/thermal drift across the 30 s capture, so
+/// runtime z-scores are deflated relative to ideal i.i.d. noise. The ADR-151
+/// bench (2026-06-11) measured the empty-room per-frame p90|z| at 1.27–1.33,
+/// vs 1.645 for ideal N(0,1) — an effective z-scale of ≈ 0.8. Modelling that
+/// here (baseline noise 1.25× runtime noise ⇒ runtime z ~ N(0, 0.8²)) keeps
+/// the synthetic room consistent with the measured gates (EMPTY_MAX_Z = 1.6,
+/// MIN_PRESENCE_Z = 1.9).
+const BASELINE_NOISE_SCALE: f32 = 1.25;
 /// Capture length per enrollment anchor (20 s @ 20 Hz; gate needs ≥ 60).
 const ANCHOR_FRAMES: usize = 400;
 /// Baseline / runtime window length (30 s @ 20 Hz; recorder needs ≥ 600).
@@ -77,9 +88,12 @@ const WINDOW_FRAMES: usize = 600;
 #[derive(Clone, Copy, Default)]
 struct Person {
     /// Common amplitude offset in units of NOISE_STD (presence strength).
-    /// Anything ≥ 1.5 reads as present; values above 2.0 are explicitly
-    /// exercised to guard the ADR-152 z-band-squeeze fix (presence strength
-    /// must not read as motion).
+    /// With the baseline captured at BASELINE_NOISE_SCALE, the measured
+    /// per-frame p90|z| ≈ presence_z / 1.25 + 1.03, so the 1.6–1.7 values
+    /// here read ≈ 2.3 — matching the bench's occupied band (2.26–2.29) and
+    /// clearing the MIN_PRESENCE_Z = 1.9 gate. Values above 2.0 are
+    /// explicitly exercised to guard the ADR-152 z-band-squeeze fix
+    /// (presence strength must not read as motion).
     presence_z: f32,
     /// Per-frame common amplitude jitter (body sway / fidgeting), in NOISE_STD.
     sway_z: f32,
@@ -102,6 +116,9 @@ struct RoomSim {
     phase: Vec<f32>,
     /// Frame counter (continuous room clock).
     t: u64,
+    /// Noise multiplier (1.0 at runtime; [`BASELINE_NOISE_SCALE`] while the
+    /// empty-room baseline is being captured — see that constant).
+    noise_scale: f32,
 }
 
 impl RoomSim {
@@ -113,7 +130,7 @@ impl RoomSim {
         let phase = (0..N_SC)
             .map(|k| (k as f32 * 0.1).rem_euclid(2.0 * PI) - PI)
             .collect();
-        Self { rng: Rng::new(seed), amp, phase, t: 0 }
+        Self { rng: Rng::new(seed), amp, phase, t: 0, noise_scale: 1.0 }
     }
 
     /// Generate the next CSI frame for the given occupancy.
@@ -139,8 +156,9 @@ impl RoomSim {
                 }
             }
             let th = self.phase[k] + wobble;
-            let re = a * th.cos() + NOISE_STD * self.rng.next_normal();
-            let im = a * th.sin() + NOISE_STD * self.rng.next_normal();
+            let noise = NOISE_STD * self.noise_scale;
+            let re = a * th.cos() + noise * self.rng.next_normal();
+            let im = a * th.sin() + noise * self.rng.next_normal();
             data[(0, k)] = Complex64::new(re as f64, im as f64);
         }
 
@@ -240,6 +258,9 @@ fn full_loop_baseline_enroll_extract_train_infer() {
     let mut sim = RoomSim::new(42);
 
     // -- Stage 1: clean empty-room baseline capture (ADR-135) ----------------
+    // Baseline capture sees slightly noisier frames than runtime (drift
+    // integrated into the Welford variance — see BASELINE_NOISE_SCALE).
+    sim.noise_scale = BASELINE_NOISE_SCALE;
     let mut recorder = CalibrationRecorder::new(CalibrationConfig::ht20());
     let mut flagged_after_warmup = 0u32;
     for i in 0..WINDOW_FRAMES {
@@ -250,6 +271,7 @@ fn full_loop_baseline_enroll_extract_train_infer() {
             flagged_after_warmup += 1;
         }
     }
+    sim.noise_scale = 1.0;
     assert_eq!(recorder.frames_recorded(), WINDOW_FRAMES as u32);
     assert_eq!(
         flagged_after_warmup, 0,
@@ -288,9 +310,10 @@ fn full_loop_baseline_enroll_extract_train_infer() {
         );
         match label {
             AnchorLabel::Empty => assert!(
-                anchor.quality.presence_z < 1.0,
-                "empty room must read empty, got z {}",
-                anchor.quality.presence_z
+                anchor.quality.presence_z < gate.empty_max_z,
+                "empty room must read empty, got z {} (gate {})",
+                anchor.quality.presence_z,
+                gate.empty_max_z
             ),
             AnchorLabel::SmallMove => assert!(
                 anchor.quality.motion_rate >= 0.3,
@@ -298,10 +321,11 @@ fn full_loop_baseline_enroll_extract_train_infer() {
                 anchor.quality.motion_rate
             ),
             _ => assert!(
-                anchor.quality.presence_z >= 1.5,
-                "{} presence_z {} below gate",
+                anchor.quality.presence_z >= gate.min_presence_z,
+                "{} presence_z {} below gate {}",
                 label.as_str(),
-                anchor.quality.presence_z
+                anchor.quality.presence_z,
+                gate.min_presence_z
             ),
         }
         features.push(feat.expect("accepted anchor yields a feature"));
