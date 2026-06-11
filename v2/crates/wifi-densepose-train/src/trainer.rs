@@ -394,6 +394,73 @@ impl Trainer {
         acc.finalize().ok_or(TrainError::EmptyDataset)
     }
 
+    /// Evaluate like [`Trainer::evaluate`], additionally dumping per-sample
+    /// predicted + ground-truth keypoints as JSONL to `dump_path`.
+    ///
+    /// Each output line is
+    /// `{"idx":N,"pred":[[x,y],...17],"gt":[[x,y],...17],"vis":[...17]}` with
+    /// samples in dataset order (no shuffle), so `idx` equals the dataset
+    /// window index. Used by the `--eval-only --dump-preds` path of the
+    /// `train` binary for offline rendering / analysis.
+    pub fn evaluate_with_dump(
+        &self,
+        dataset: &dyn CsiDataset,
+        dump_path: &Path,
+    ) -> Result<MetricsResult, TrainError> {
+        if dataset.is_empty() {
+            return Err(TrainError::EmptyDataset);
+        }
+
+        let mut acc = MetricsAccumulator::default_threshold();
+        let mut dump = std::io::BufWriter::new(
+            std::fs::File::create(dump_path)
+                .map_err(|e| TrainError::training_step(format!("create dump file: {e}")))?,
+        );
+
+        let batches = make_batches(
+            dataset,
+            self.config.batch_size,
+            false, // no shuffle during evaluation
+            self.config.seed,
+            self.device,
+        );
+
+        let mut global_idx: usize = 0;
+        for (amp_batch, phase_batch, kp_batch, vis_batch) in &batches {
+            let output = self.model.forward_inference(amp_batch, phase_batch);
+            let pred_kps = heatmap_to_keypoints(&output.keypoints);
+
+            let batch_size = kp_batch.size()[0] as usize;
+            for b in 0..batch_size {
+                let pred_kp_np = extract_kp_ndarray(&pred_kps, b);
+                let gt_kp_np = extract_kp_ndarray(kp_batch, b);
+                let vis_np = extract_vis_ndarray(vis_batch, b);
+
+                acc.update(&pred_kp_np, &gt_kp_np, &vis_np);
+
+                let pred_v: Vec<[f32; 2]> = pred_kp_np
+                    .rows()
+                    .into_iter()
+                    .map(|r| [r[0], r[1]])
+                    .collect();
+                let gt_v: Vec<[f32; 2]> =
+                    gt_kp_np.rows().into_iter().map(|r| [r[0], r[1]]).collect();
+                let vis_v: Vec<f32> = vis_np.to_vec();
+                let line = serde_json::json!({
+                    "idx": global_idx,
+                    "pred": pred_v,
+                    "gt": gt_v,
+                    "vis": vis_v,
+                });
+                writeln!(dump, "{line}")
+                    .map_err(|e| TrainError::training_step(format!("write dump line: {e}")))?;
+                global_idx += 1;
+            }
+        }
+
+        acc.finalize().ok_or(TrainError::EmptyDataset)
+    }
+
     /// Save a training checkpoint.
     pub fn save_checkpoint(
         &self,
@@ -582,11 +649,13 @@ fn kp_to_heatmap_tensor(
     let num_kp = kp_tensor.size()[1] as usize;
 
     // Convert to ndarray for generate_target_heatmaps.
-    let kp_vec: Vec<f32> = Vec::<f64>::from(kp_tensor.to_kind(Kind::Double).flatten(0, -1))
+    let kp_vec: Vec<f32> = Vec::<f64>::try_from(kp_tensor.to_kind(Kind::Double).flatten(0, -1))
+        .expect("kp tensor to Vec<f64>")
         .iter()
         .map(|&x| x as f32)
         .collect();
-    let vis_vec: Vec<f32> = Vec::<f64>::from(vis_tensor.to_kind(Kind::Double).flatten(0, -1))
+    let vis_vec: Vec<f32> = Vec::<f64>::try_from(vis_tensor.to_kind(Kind::Double).flatten(0, -1))
+        .expect("vis tensor to Vec<f64>")
         .iter()
         .map(|&x| x as f32)
         .collect();
@@ -621,9 +690,11 @@ fn heatmap_to_keypoints(heatmaps: &Tensor) -> Tensor {
     // Argmax per joint → [B, 17]
     let arg = flat.argmax(-1, false);
 
-    // Decompose linear index into (row, col).
-    let row = (&arg / w).to_kind(Kind::Float); // [B, 17]
-    let col = (&arg % w).to_kind(Kind::Float); // [B, 17]
+    // Decompose linear index into (row, col). NB: `/` on an integer tensor
+    // is TRUE division in torch >= 1.6 (36 / 8 = 4.5), which skewed every
+    // decoded y by up to one row — use explicit floor division.
+    let row = arg.floor_divide_scalar(w).to_kind(Kind::Float); // [B, 17]
+    let col = arg.fmod(w).to_kind(Kind::Float); // [B, 17]
 
     // Normalize to [0, 1]
     let x = col / (w - 1) as f64;
@@ -639,7 +710,8 @@ fn heatmap_to_keypoints(heatmaps: &Tensor) -> Tensor {
 fn extract_kp_ndarray(kp_tensor: &Tensor, batch_idx: usize) -> Array2<f32> {
     let num_kp = kp_tensor.size()[1] as usize;
     let row = kp_tensor.select(0, batch_idx as i64);
-    let data: Vec<f32> = Vec::<f64>::from(row.to_kind(Kind::Double).flatten(0, -1))
+    let data: Vec<f32> = Vec::<f64>::try_from(row.to_kind(Kind::Double).flatten(0, -1))
+        .expect("kp tensor to Vec<f64>")
         .iter()
         .map(|&v| v as f32)
         .collect();
@@ -652,7 +724,8 @@ fn extract_kp_ndarray(kp_tensor: &Tensor, batch_idx: usize) -> Array2<f32> {
 fn extract_vis_ndarray(vis_tensor: &Tensor, batch_idx: usize) -> Array1<f32> {
     let num_kp = vis_tensor.size()[1] as usize;
     let row = vis_tensor.select(0, batch_idx as i64);
-    let data: Vec<f32> = Vec::<f64>::from(row.to_kind(Kind::Double))
+    let data: Vec<f32> = Vec::<f64>::try_from(row.to_kind(Kind::Double))
+        .expect("vis tensor to Vec<f64>")
         .iter()
         .map(|&v| v as f32)
         .collect();

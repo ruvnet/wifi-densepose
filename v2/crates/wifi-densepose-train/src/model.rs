@@ -182,7 +182,7 @@ impl WiFiDensePoseModel {
         self.vs
             .trainable_variables()
             .iter()
-            .map(|t| t.numel())
+            .map(|t| t.numel() as i64)
             .sum()
     }
 
@@ -297,7 +297,13 @@ fn apply_antenna_attention(x: &Tensor, lambda: f32) -> Tensor {
         let xi = x.select(0, bi as i64); // [n_ant, n_sc]
 
         // Move to CPU and convert to f32 for the pure-Rust attention kernel.
-        let flat: Vec<f32> = Vec::from(xi.to_kind(Kind::Float).to_device(Device::Cpu).contiguous());
+        let flat: Vec<f32> = Vec::<f32>::try_from(
+            xi.to_kind(Kind::Float)
+                .to_device(Device::Cpu)
+                .contiguous()
+                .flatten(0, -1),
+        )
+        .expect("tensor to Vec<f32>");
 
         // Q = K = V = the antenna features (self-attention over antenna paths).
         let out = attn_mincut(
@@ -350,7 +356,13 @@ fn apply_spatial_attention(x: &Tensor) -> Tensor {
     for bi in 0..b {
         // Extract [C, H*W] and transpose to [H*W, C].
         let xi = x.select(0, bi).reshape([c, h * w]).transpose(0, 1); // [H*W, C]
-        let flat: Vec<f32> = Vec::from(xi.to_kind(Kind::Float).to_device(Device::Cpu).contiguous());
+        let flat: Vec<f32> = Vec::<f32>::try_from(
+            xi.to_kind(Kind::Float)
+                .to_device(Device::Cpu)
+                .contiguous()
+                .flatten(0, -1),
+        )
+        .expect("tensor to Vec<f32>");
 
         // Build token slices — one per spatial position.
         let tokens: Vec<&[f32]> = (0..n_spatial).map(|i| &flat[i * d..(i + 1) * d]).collect();

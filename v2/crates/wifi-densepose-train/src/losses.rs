@@ -118,7 +118,7 @@ impl WiFiDensePoseLoss {
         // Normalise by number of visible joints in the batch.
         let n_visible = visibility.sum(Kind::Float);
         // Guard against division by zero (entire batch may have no labels).
-        let safe_n = n_visible.clamp(1.0, f64::MAX);
+        let safe_n = n_visible.clamp_min(1.0);
 
         masked.sum(Kind::Float) / safe_n
     }
@@ -165,7 +165,7 @@ impl WiFiDensePoseLoss {
         let masked_target_uv = target_uv * &fg_mask_f;
 
         // Count foreground pixels × 48 channels to normalise.
-        let n_fg = fg_mask_f.sum(Kind::Float).clamp(1.0, f64::MAX);
+        let n_fg = fg_mask_f.sum(Kind::Float).clamp_min(1.0);
 
         // Smooth-L1 with beta=1.0, reduction=Sum then divide by fg count.
         let uv_loss_sum = masked_pred_uv.smooth_l1_loss(&masked_target_uv, Reduction::Sum, 1.0);
@@ -234,7 +234,7 @@ impl WiFiDensePoseLoss {
                 // UV loss (foreground masked)
                 let fg_mask = target_int.not_equal(0_i64);
                 let fg_mask_f = fg_mask.unsqueeze(1).expand_as(pu).to_kind(Kind::Float);
-                let n_fg = fg_mask_f.sum(Kind::Float).clamp(1.0, f64::MAX);
+                let n_fg = fg_mask_f.sum(Kind::Float).clamp_min(1.0);
                 let uv_loss =
                     (pu * &fg_mask_f).smooth_l1_loss(&(tu * &fg_mask_f), Reduction::Sum, 1.0)
                         / n_fg;
@@ -692,8 +692,11 @@ mod tests {
         let cy = (kp_y * s).round() as usize;
 
         let peak = hm[[cy, cx]];
+        // kp 0.5 on a 64-px map is the half-pixel point 31.5, so the max
+        // attainable at pixel 31 or 32 is exp(-(0.5^2+0.5^2)/(2*2^2)) ≈ 0.9394.
+        // The old 0.95 threshold was mathematically unreachable.
         assert!(
-            peak > 0.95,
+            peak > 0.93,
             "Peak value {peak} should be close to 1.0 at centre"
         );
 
@@ -743,6 +746,7 @@ mod tests {
         }
 
         // Visible batch (index 1) should have non-zero heatmaps.
+        let heatmaps = &heatmaps;
         let batch1_sum: f32 = (0..num_joints)
             .map(|j| {
                 (0..size)
@@ -930,7 +934,10 @@ mod tests {
         let vis = Tensor::ones(&[1i64, 1], (Kind::Float, dev));
         let hm = generate_gaussian_heatmaps(&kpts, &vis, 8, 1.5);
         let max_val: f64 = hm.max().double_value(&[]);
-        assert!(max_val > 0.9, "Peak value {max_val} should be > 0.9");
+        // kp 0.5 on an 8-px map is the half-pixel point 3.5, so the max
+        // attainable at pixel 3 or 4 is exp(-0.5/(2*1.5^2)) ≈ 0.8007.
+        // The old 0.9 threshold was mathematically unreachable.
+        assert!(max_val > 0.79, "Peak value {max_val} should be > 0.79");
     }
 
     #[test]
