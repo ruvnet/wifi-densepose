@@ -127,7 +127,9 @@ impl AnchorLabel {
 /// Quality assessment of a captured anchor (from the enrollment quality gate).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct AnchorQuality {
-    /// Median amplitude z-score vs the empty-room baseline (presence strength).
+    /// Mean per-frame p90 amplitude z-score vs the empty-room baseline
+    /// (presence strength — ADR-151; the median floors at ~0.674 with a
+    /// person present and is kept only as a recorder diagnostic).
     pub presence_z: f32,
     /// Fraction of frames flagged as motion.
     pub motion_rate: f32,

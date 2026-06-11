@@ -40,6 +40,18 @@ const VERSION: u8 = 1;
 const HEADER_LEN: usize = 16; // magic(4) + version(1) + tier(1) + reserved(2) + unix_s(8)
 const SUBCARRIER_RECORD_LEN: usize = 16; // 4 × f32
 
+/// Baseline phase channel is considered usable only when the median Von Mises
+/// dispersion across subcarriers is at or below this value.
+///
+/// A sanitised pipeline (`PhaseSanitizer` + `phase_align.rs`) lands well under
+/// the `CalibrationConfig::max_phase_variance` default of 0.3. The CLI UDP
+/// path feeds *unsanitised* phase: the ADR-151 presence-flatline bench
+/// (2026-06-11, real ESP32-C6 HE20 captures) measured baseline
+/// `phase_dispersion` ≈ 0.965 — i.e. uniformly random phase — which makes
+/// `phase_drift_median` ≈ π/2 pure noise on every frame. Gating on this
+/// constant keeps the noise out of `motion_flagged`.
+pub const PHASE_DISPERSION_USABLE_MAX: f32 = 0.5;
+
 // ---------------------------------------------------------------------------
 // PHY tier
 // ---------------------------------------------------------------------------
@@ -254,10 +266,30 @@ impl BaselineCalibration {
             phase_drift.push(drift);
         }
         let amplitude_z_median = median_abs(&z_amp);
+        let amplitude_z_p90 = percentile_abs(&z_amp, 0.90);
         let amplitude_z_max = z_amp.iter().map(|v| v.abs()).fold(0.0_f32, f32::max);
         let phase_drift_median = median_slice(&phase_drift);
-        let motion_flagged = amplitude_z_median > 2.0 || phase_drift_median > std::f32::consts::PI / 6.0;
-        Ok(CalibrationDeviationScore { amplitude_z_median, amplitude_z_max, phase_drift_median, motion_flagged })
+        let phase_usable = self.phase_usable();
+        let motion_flagged = amplitude_z_median > 2.0
+            || (phase_usable && phase_drift_median > std::f32::consts::PI / 6.0);
+        Ok(CalibrationDeviationScore {
+            amplitude_z_median,
+            amplitude_z_p90,
+            amplitude_z_max,
+            phase_drift_median,
+            phase_usable,
+            motion_flagged,
+        })
+    }
+
+    /// Whether this baseline's phase channel carries signal (median Von Mises
+    /// dispersion ≤ [`PHASE_DISPERSION_USABLE_MAX`]). False when the capture
+    /// pipeline skipped `PhaseSanitizer` / `phase_align.rs` — see the constant's
+    /// doc for the bench evidence.
+    #[must_use]
+    pub fn phase_usable(&self) -> bool {
+        let disp: Vec<f32> = self.subcarriers.iter().map(|b| b.phase_dispersion).collect();
+        median_slice(&disp) <= PHASE_DISPERSION_USABLE_MAX
     }
 
     /// Deterministic calibration epoch id (ADR-137 `CalibrationId`), derived
@@ -409,12 +441,31 @@ impl BaselineCalibration {
 #[derive(Debug, Clone, Copy)]
 pub struct CalibrationDeviationScore {
     /// Median of `|z_amp[k]|` across active subcarriers.
+    ///
+    /// **Not a presence statistic.** A person perturbs a *minority* of
+    /// subcarriers strongly; the median of |z| over all bins floors at
+    /// `median(|N(0,1)|) ≈ 0.674` and barely moves when someone enters the
+    /// room (ADR-151 presence-flatline bench, 2026-06-11: empty ≈ 0.40–0.42
+    /// vs person-moving ≈ 0.74–0.75 on real ESP32-C6 HE20 captures). Kept for
+    /// drift scoring and backwards compatibility; presence gating uses
+    /// [`Self::amplitude_z_p90`].
     pub amplitude_z_median: f32,
+    /// 90th percentile of `|z_amp[k]|` across active subcarriers — the
+    /// ADR-151 presence statistic. The upper tail is where a body's multipath
+    /// perturbation lives: the same bench measured empty ≈ 1.27–1.33 vs
+    /// person-moving ≈ 2.26–2.29 (same-epoch baseline), a clean separation
+    /// the median never shows.
+    pub amplitude_z_p90: f32,
     /// Max single-subcarrier `|z_amp[k]|`.
     pub amplitude_z_max: f32,
     /// Median circular distance (radians) between live and baseline phase.
     pub phase_drift_median: f32,
-    /// Heuristic: `amplitude_z_median > 2.0 || phase_drift_median > π/6`.
+    /// Whether the baseline's phase channel carries signal (see
+    /// [`PHASE_DISPERSION_USABLE_MAX`]). When false, `phase_drift_median` is
+    /// noise and is excluded from `motion_flagged`.
+    pub phase_usable: bool,
+    /// Heuristic: `amplitude_z_median > 2.0 || (phase_usable &&
+    /// phase_drift_median > π/6)`.
     pub motion_flagged: bool,
 }
 
@@ -467,10 +518,21 @@ impl CalibrationRecorder {
             phase_drift.push(circular_distance(c.arg(), st.phase_mean() as f32));
         }
         let amplitude_z_median = median_slice(&z_amp_abs);
+        let amplitude_z_p90 = percentile_abs(&z_amp_abs, 0.90);
         let amplitude_z_max = z_amp_abs.iter().copied().fold(0.0_f32, f32::max);
         let phase_drift_median = median_slice(&phase_drift);
-        let motion_flagged = amplitude_z_median > 2.0 || phase_drift_median > std::f32::consts::PI / 6.0;
-        Ok(CalibrationDeviationScore { amplitude_z_median, amplitude_z_max, phase_drift_median, motion_flagged })
+        let disp: Vec<f32> = self.stats.iter().map(|st| st.phase_dispersion() as f32).collect();
+        let phase_usable = median_slice(&disp) <= PHASE_DISPERSION_USABLE_MAX;
+        let motion_flagged = amplitude_z_median > 2.0
+            || (phase_usable && phase_drift_median > std::f32::consts::PI / 6.0);
+        Ok(CalibrationDeviationScore {
+            amplitude_z_median,
+            amplitude_z_p90,
+            amplitude_z_max,
+            phase_drift_median,
+            phase_usable,
+            motion_flagged,
+        })
     }
 
     /// Number of frames recorded so far.
@@ -533,6 +595,22 @@ fn circular_distance(a: f32, b: f32) -> f32 {
 fn median_abs(v: &[f32]) -> f32 {
     let mut abs: Vec<f32> = v.iter().map(|x| x.abs()).collect();
     median_in_place(&mut abs)
+}
+
+/// `p`-quantile (`0.0..=1.0`) of the absolute values of a slice, with linear
+/// interpolation between order statistics (numpy's default convention — the
+/// ADR-151 bench thresholds were derived with it).
+fn percentile_abs(v: &[f32], p: f32) -> f32 {
+    if v.is_empty() {
+        return 0.0;
+    }
+    let mut abs: Vec<f32> = v.iter().map(|x| x.abs()).collect();
+    abs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let idx = p.clamp(0.0, 1.0) * (abs.len() - 1) as f32;
+    let lo = idx.floor() as usize;
+    let hi = idx.ceil() as usize;
+    let frac = idx - lo as f32;
+    abs[lo] + (abs[hi] - abs[lo]) * frac
 }
 
 /// Median of a slice (non-destructive clone).
