@@ -144,6 +144,30 @@ describe('usePoseStore', () => {
       usePoseStore.getState().setConnectionStatus('disconnected');
       expect(usePoseStore.getState().isSimulated).toBe(false);
     });
+
+    it('clears frame-derived state when disconnected', () => {
+      const frame = makeFrame({
+        features: {
+          mean_rssi: -41,
+          variance: 1,
+          motion_band_power: 0.2,
+          breathing_band_power: 0.1,
+          spectral_entropy: 0.7,
+        },
+      });
+
+      usePoseStore.getState().handleFrame(frame);
+      usePoseStore.getState().setConnectionStatus('disconnected');
+
+      const state = usePoseStore.getState();
+      expect(state.lastFrame).toBeNull();
+      expect(state.features).toBeNull();
+      expect(state.classification).toBeNull();
+      expect(state.signalField).toBeNull();
+      expect(state.rssiHistory).toEqual([]);
+      expect(state.uptimeStart).toBeNull();
+      expect(state.messageCount).toBe(1);
+    });
   });
 
   describe('reset', () => {

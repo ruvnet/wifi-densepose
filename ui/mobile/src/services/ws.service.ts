@@ -98,7 +98,7 @@ class WsService {
   }
 
   private handleStatusChange(status: ConnectionStatus): void {
-    if (status === this.status) {
+    if (status === this.status && status !== 'disconnected') {
       return;
     }
     this.status = status;

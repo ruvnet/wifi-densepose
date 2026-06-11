@@ -20,6 +20,21 @@ export interface PoseState {
 const MAX_RSSI_HISTORY = 60;
 const rssiHistory = new RingBuffer<number>(MAX_RSSI_HISTORY, (a, b) => a - b);
 
+const getDisconnectedState = () => {
+  rssiHistory.clear();
+
+  return {
+    connectionStatus: 'disconnected' as const,
+    isSimulated: false,
+    lastFrame: null,
+    rssiHistory: [],
+    features: null,
+    classification: null,
+    signalField: null,
+    uptimeStart: null,
+  };
+};
+
 export const usePoseStore = create<PoseState>((set) => ({
   connectionStatus: 'disconnected',
   isSimulated: false,
@@ -48,24 +63,23 @@ export const usePoseStore = create<PoseState>((set) => ({
   },
 
   setConnectionStatus: (status: ConnectionStatus) => {
+    const nextStatus = status === 'simulated' ? 'disconnected' : status;
+
+    if (nextStatus === 'disconnected') {
+      set(getDisconnectedState());
+      return;
+    }
+
     set({
-      connectionStatus: status === 'simulated' ? 'disconnected' : status,
+      connectionStatus: nextStatus,
       isSimulated: false,
     });
   },
 
   reset: () => {
-    rssiHistory.clear();
     set({
-      connectionStatus: 'disconnected',
-      isSimulated: false,
-      lastFrame: null,
-      rssiHistory: [],
-      features: null,
-      classification: null,
-      signalField: null,
+      ...getDisconnectedState(),
       messageCount: 0,
-      uptimeStart: null,
     });
   },
 }));
