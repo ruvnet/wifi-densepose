@@ -104,17 +104,14 @@ ipconfig getifaddr en0   # e.g. 192.168.16.105
   --target-ip 192.168.16.105
 ```
 
-### Two gotchas that will bite you
+### Gotcha that will bite you
 
-1. **2.4 GHz only.** The ESP32-S3 has no 5 GHz radio. Your SSID must broadcast a 2.4 GHz
-   band. Most dual-band routers use the *same* SSID on both bands — that's fine, the chip
-   picks 2.4 GHz automatically. Check with:
-   ```bash
-   system_profiler SPAirPortDataType | grep -E ":$|Channel" | grep -B1 "2GHz"
-   ```
-2. **zsh history expansion.** A password containing `!` inside **double** quotes triggers
-   zsh history substitution (`!12` → some old command). **Use single quotes**:
-   `--password 'pass!12word'`. (For a literal single-quote in the password: `'a'\''b'`.)
+**2.4 GHz only.** The ESP32-S3 has no 5 GHz radio. Your SSID must broadcast a 2.4 GHz
+band. Most dual-band routers use the *same* SSID on both bands — that's fine, the chip
+picks 2.4 GHz automatically. Check with:
+```bash
+system_profiler SPAirPortDataType | grep -E ":$|Channel" | grep -B1 "2GHz"
+```
 
 > `provision.py` writes the password in plaintext to `nvs_config.csv` in the repo dir.
 > **Delete it after:** `rm nvs_config.csv`.
@@ -259,6 +256,5 @@ That swing = the full chain (ESP32 → CSI → DSP → API) working end-to-end.
 | Port name changed mid-flow | chip reset re-enumerates USB | `ls /dev/cu.*`, use new name |
 | `miniterm` silent / `waiting for download` | native-USB DTR/RTS reset trap | don't use serial; unplug/replug to boot |
 | 0 UDP packets on :5005 | 5 GHz SSID / wrong creds / firewall | 2.4 GHz SSID, re-provision, allow UDP 5005 |
-| Password expands to old command | zsh history expansion on `!` | single-quote the password |
 | server exits "No real CSI source" | `--source auto` probe too short | `--source esp32` |
 | port 3000 in use | another app | `--http-port 3001` |
