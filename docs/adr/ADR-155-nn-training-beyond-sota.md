@@ -189,9 +189,36 @@ The gap review surfaced ~60 findings; this milestone scoped to the provable inte
 - **ONNX read-lock concurrency win** — blocked on an `ort` release exposing `&self` `Session::run` (§4.2); harness already committed.
 - **native-conv naive-loop** perf rewrite (§4).
 - **`rf_encoder.rs` `assert_eq!`-on-checkpoint** and any other **tch-gated** panic-on-input sites — require a libtorch host to compile/verify (`model.rs` `amp_fc1` unbounded alloc is *indirectly* guarded by the new `config.validate()` upper bounds, but a direct guard + test is deferred).
-- **`sensing-server/training_api.rs` PCK** — unify the live-server torso-height PCK with `pck_canonical` (crosses the service + tch boundary).
-- **`test_metrics.rs` reference kernels** — the integration test's local `compute_pck`/`compute_oks` are independent reference impls (not production); fold them onto the canonical definition.
+- ~~**`sensing-server/training_api.rs` PCK**~~ — **RESOLVED in Milestone-1b (see §8.1, Goal C).** Relabelled (not unified) — and the audit found the *real* live divergence is in `trainer.rs`, not the orphaned `training_api.rs`.
+- ~~**`test_metrics.rs` reference kernels**~~ — **RESOLVED in Milestone-1b (see §8.1, Goal B).** Canonical core hoisted to an un-gated module; the integration test now validates the production functions against hand-computed fixtures + a differential cross-check.
+- **`metrics.rs` `compute_pck_v2`/`compute_oks_v2`/`MetricsAccumulatorV2`/`evaluate_dataset_v2`/`hungarian_assignment_v2`** — confirmed to have **zero external callers** (only `evaluate_dataset_v2`→`MetricsAccumulatorV2` internally). They are already `#[deprecated]` and route through canonical, so they are not a *divergent-definition* risk, only dead weight. Left in place this pass (public API in a tch-gated module; deleting needs a deprecation-cycle + tch host to verify) — flagged here for a future cleanup, NOT deleted silently.
+- **`sensing-server/trainer.rs` `pck_at_threshold` (raw) + `oks_map(area=1.0)` and the `training_bench.rs` raw kernel** — relabelled in Milestone-1b (§8.1); true unification onto `pck_canonical`/`oks_canonical` (needs a torso scale + the train crate as a sensing-server dep) remains deferred.
 - The remaining ~40 lower-severity review findings (style, micro-opt, doc) from the NN/training gap review.
+
+### 8.1 Milestone-1b — metric-definition unification (the §8 metric subset) — RESOLVED
+
+This milestone closed the two metric-integrity items above. The work is pinned by tests, graded MEASURED, and surfaced findings the §1 table missed.
+
+**The complete, honest PCK / OKS audit map (every definition in `v2/`):**
+
+| Definition (file:line) | Normalization basis | Threshold convention | Status |
+|---|---|---|---|
+| `metrics_core.rs` `pck_canonical` (was `metrics.rs`) | **hip↔hip torso WIDTH** (bbox-diag fallback), `[0,1]` coords | `k·torso` | **CANONICAL** |
+| `metrics_core.rs` `oks_canonical` | `s=sqrt(area)` from GT pose extent | COCO kernel | **CANONICAL** |
+| `metrics.rs` `compute_pck` / `compute_per_joint_pck` / `compute_oks` | — (thin wrappers) | — | route to canonical |
+| `metrics.rs` `aggregate_metrics` / `MetricsAccumulator` | — | — | route to canonical |
+| `metrics.rs` `compute_pck_v2` / `compute_oks_v2` / `MetricsAccumulatorV2` | hip↔hip (folded) | — | **legacy-redundant, deprecated, NO callers** — route to canonical |
+| `tests/test_metrics.rs` local `compute_pck`/`compute_oks` (removed) | raw-threshold reimpl | raw | **was independent reimpl** → now validate canonical + 1 differential kernel |
+| `benches/training_bench.rs` `compute_pck` | raw-threshold | raw | distinct-by-design (bench-only), annotated DO-NOT-REPORT |
+| `sensing-server/training_api.rs` `compute_pck` | **torso-HEIGHT** (nose→hip), **pixel-space** | `ratio·torso_h`, 50px floor | **distinct-by-design** — and **ORPHAN file (not `mod`-declared, does not compile)**; relabelled `compute_pck_torso_height` |
+| `sensing-server/trainer.rs` `pck_at_threshold` | **RAW (no normalization)** | raw `thr` | **distinct, LIVE** (drives `best_pck`); **MISSED by §1 table**; relabelled `pck_raw@0.2` |
+| `sensing-server/trainer.rs` `oks_map`→`oks_single(area=1.0)` | `area=1.0` | COCO kernel | **fake-Gold, LIVE** (drives `best_oks`); **MISSED by §1 table**; relabelled `oks_map(area=1.0 proxy)` |
+
+**Findings the §1 seven-definition table under-counted (honest correction):** the live sensing-server claim surface is `trainer.rs` (in `lib.rs`), **not** the named `training_api.rs` — which is an **orphan file, never `mod`-declared, so it does not compile into the crate**. The live `best_pck` is a **raw, unnormalized** PCK and the live `best_oks` still uses the **`area=1.0` fake-Gold** path ADR-155 §2.1 reported as closed elsewhere. So the true metric landscape is **messier than §1 documented**: ≥3 PCK and ≥1 OKS live in `sensing-server`, two of them on the inflating side, and the file the ADR named for the fix was dead code. This is a finding, not a failure — recorded here rather than hidden.
+
+**Goal B (`test_metrics.rs`) — RESOLVED, MEASURED.** The canonical core (`pck_canonical`/`oks_canonical`/`canonical_torso_size`/sigmas/`bounding_box_diagonal`) was hoisted into a new **un-gated** `metrics_core` module (the full `metrics` module is `tch-backend`-gated, so the canonical definition was previously unreachable from the workspace test gate; `metrics` now re-exports it → still ONE implementation). `tests/test_metrics.rs` now asserts the **production** functions against hand-computed fixtures — `canonical_pck_matches_hand_computed_fixture` (3/4 correct ⇒ 0.75, hand-derived), zero-visible⇒0.0, hip↔hip normalizer pin, OKS perfect⇒1.0, the fake-Gold pin — plus `test_kernel_agrees_with_canonical`, a differential test where an independent raw-threshold reference must AGREE with canonical in the torso=1.0 regime. (10→12 tests.)
+
+**Goal C (`training_api.rs` PCK) — RESOLVED by RELABEL, MEASURED.** Torso-height is **load-bearing** (pixel-space, vertical nose→hip scale, `[17×3]` layout, no `ndarray`/train dep), so unifying would silently change the live numbers' meaning — exactly what to avoid. Resolution: relabel everywhere the metric surfaces so it is never read as canonical, in both the named `training_api.rs` (now `compute_pck_torso_height`, struct/JSON-field docs, `pck_torso_h@0.2` logs) **and** — the real fix — the LIVE `trainer.rs` path (`pck_at_threshold` documented raw-unnormalized; `oks_map` `area=1.0` flagged fake-Gold; `main.rs` prints `pck_raw@0.2` / `oks_map(area=1.0 proxy)`). No wire-format field or `pub`-fn renames (no silent API break). Pinned by `torso_pck_is_labelled_distinctly_from_canonical` (training_api) and `pck_at_threshold_is_raw_unnormalized_not_canonical` (the live kernel). True unification (route the live server through `pck_canonical`/`oks_canonical`) remains a deferred §8 item — it needs a torso scale on the live data and the train crate as a dep.
 
 ---
 
@@ -200,3 +227,5 @@ The gap review surfaced ~60 findings; this milestone scoped to the provable inte
 **Positive.** The training/metrics subsystem can now substantiate a clean accuracy claim: one documented metric used everywhere, a leak-free split, an honest TTA path, a proof that fails on noise and refuses to bless an unbaselined run, and two of the most claim-inflating bugs (false-perfect PCK, fake-Gold OKS) closed and pinned by regression tests. The unmeasured/unprovable parts are **disclosed**, not hidden.
 
 **Negative / honest.** The reportable-metric tch-gated code cannot be compiled on the dev host (libtorch absent), so its validation rests on routing through the workspace-tested canonical functions plus review; the Rust deterministic proof is in SKIP until a baseline is committed on a tch host; the ONNX concurrency win is blocked upstream; and ~45 findings are deferred. None of these is presented as done.
+
+**Picture changed by Milestone-1b (§8.1) — corrected, not hidden.** The §1 "seven divergent metrics" count was an **under-count**. The metric-unification audit (Goal A) found the live `wifi-densepose-sensing-server` carries additional, divergent definitions the §1 table omitted: a **raw, unnormalized** `pck_at_threshold` and an **`area=1.0` fake-Gold** `oks_map` in `trainer.rs` — and these, not the orphaned `training_api.rs` the backlog named, are what actually drive the live-reported `best_pck`/`best_oks`. Milestone-1b **relabelled** them (load-bearing math on different data; relabel beats false unification) and pinned the divergence with tests; full unification onto the canonical definition stays deferred. So the canonical *train/nn* metric is unified and test-validated end-to-end, but the *sensing-server* still computes (now clearly-labelled, non-canonical) progress proxies — disclosed here as the honest current state.
