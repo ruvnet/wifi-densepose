@@ -20,6 +20,16 @@
 //!   for spoken word recognition" IEEE TASSP
 
 // ---------------------------------------------------------------------------
+// Tuning constants (ADR-154 §7.4 — de-magicked; value unchanged)
+// ---------------------------------------------------------------------------
+
+/// Minimum second-best DTW distance below which the relative-margin
+/// confidence formula `1 - best/second_best` would divide by a near-zero
+/// denominator. Below this we fall back to the `max_distance`-relative
+/// confidence. Empirical guard, not a tuned operating point.
+const CONFIDENCE_SECOND_BEST_EPSILON: f64 = 1e-10;
+
+// ---------------------------------------------------------------------------
 // Error types
 // ---------------------------------------------------------------------------
 
@@ -236,7 +246,10 @@ impl GestureClassifier {
         let recognized = best_dist <= self.config.max_distance;
 
         // Confidence: how much better is the best match vs second best
-        let confidence = if recognized && second_best_dist.is_finite() && second_best_dist > 1e-10 {
+        let confidence = if recognized
+            && second_best_dist.is_finite()
+            && second_best_dist > CONFIDENCE_SECOND_BEST_EPSILON
+        {
             (1.0 - best_dist / second_best_dist).clamp(0.0, 1.0)
         } else if recognized {
             (1.0 - best_dist / self.config.max_distance).clamp(0.0, 1.0)
@@ -364,7 +377,24 @@ fn dtw_distance(seq_a: &[Vec<f64>], seq_b: &[Vec<f64>], band_width: usize) -> f6
 }
 
 /// Euclidean distance between two feature vectors.
+///
+/// # Caller contract (ADR-154 §7.4 #12)
+/// `a` and `b` are expected to have the **same** dimension (`feature_dim`).
+/// The implementation `zip`s the two slices, so on a length mismatch it
+/// **silently truncates to the shorter vector** rather than erroring. Every
+/// in-tree caller (`dtw_distance` over a single classifier's templates)
+/// already enforces equal `feature_dim`, so a mismatch indicates a
+/// construction bug; a `debug_assert!` makes that loud in debug builds while
+/// keeping the release operating path (and its output) unchanged.
 fn euclidean_distance(a: &[f64], b: &[f64]) -> f64 {
+    debug_assert_eq!(
+        a.len(),
+        b.len(),
+        "euclidean_distance: feature-vector length mismatch ({} vs {}) — \
+         zip() would silently truncate; callers must use a uniform feature_dim",
+        a.len(),
+        b.len()
+    );
     a.iter()
         .zip(b.iter())
         .map(|(x, y)| (x - y) * (x - y))
@@ -687,5 +717,35 @@ mod tests {
         assert_eq!(GestureType::Push.name(), "push");
         assert_eq!(GestureType::Circle.name(), "circle");
         assert_eq!(GestureType::Custom.name(), "custom");
+    }
+
+    // -- ADR-154 §7.4 #12 + de-magic: boundary / characterization tests.
+
+    /// De-magicked confidence epsilon must equal the prior literal.
+    #[test]
+    fn confidence_epsilon_unchanged_from_literal() {
+        assert_eq!(CONFIDENCE_SECOND_BEST_EPSILON, 1e-10);
+    }
+
+    /// `dtw_distance` returns +inf when EITHER sequence is empty. Pins the
+    /// n=0 / m=0 boundary (previously exercised only with n,m >= 3).
+    #[test]
+    fn dtw_empty_sequence_is_infinite() {
+        let nonempty: Vec<Vec<f64>> = vec![vec![1.0], vec![2.0]];
+        let empty: Vec<Vec<f64>> = vec![];
+        assert!(dtw_distance(&empty, &nonempty, 3).is_infinite());
+        assert!(dtw_distance(&nonempty, &empty, 3).is_infinite());
+        assert!(dtw_distance(&empty, &empty, 3).is_infinite());
+    }
+
+    /// `euclidean_distance` over equal-length vectors is the L2 norm of the
+    /// difference. Pins the documented same-dimension caller contract (#12);
+    /// the mismatch case is guarded by a debug_assert in debug builds and
+    /// truncates in release — not exercised here to keep the test
+    /// release/debug-agnostic.
+    #[test]
+    fn euclidean_distance_equal_length_is_l2() {
+        assert!((euclidean_distance(&[1.0, 2.0, 2.0], &[0.0, 0.0, 0.0]) - 3.0).abs() < 1e-12);
+        assert_eq!(euclidean_distance(&[], &[]), 0.0);
     }
 }
