@@ -174,5 +174,62 @@ fn bench_topk(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_compare_cost, bench_topk);
+/// ADR-156 §8 RaBitQ Pass-2 coverage measurement.
+///
+/// Not a timing bench — it prints the **measured top-K coverage** (Pass-1 vs
+/// Pass-2 rotation) on the deterministic anisotropic planted-cluster fixture
+/// from `wifi_densepose_ruvector::coverage`, so `cargo bench` surfaces the
+/// numbers quoted in ADR-156 §8 / ADR-084. The same harness backs the
+/// `pass2_coverage_report` unit test (single source of truth). Each criterion
+/// "benchmark" body computes the coverage once (cached) and the bench loop just
+/// reads it back, so the criterion timing is meaningless here on purpose — the
+/// value is the `println!` summary.
+fn bench_pass2_coverage(c: &mut Criterion) {
+    use wifi_densepose_ruvector::coverage::{measure_pass1, measure_pass2, CoverageParams};
+
+    let base = CoverageParams::aether_default(0xAD00_0084);
+    let rot_seed = 0x5EED_C0DE_1234_5678u64;
+
+    println!("\n=== ADR-156 §8 RaBitQ Pass-2 coverage (anisotropic planted clusters) ===");
+    println!(
+        "dim={} N={} K={} clusters={} noise={} queries={} master_seed=0x{:X} rot_seed=0x{:X}",
+        base.dim, base.n, base.k, base.n_clusters, base.noise, base.n_queries, base.seed, rot_seed
+    );
+    println!("(coverage = |sketch_topK ∩ float_cosine_topK| / K, ADR-084 bar = 90%)");
+    for &cand in &[8usize, 16, 24, 32, 64] {
+        let p = CoverageParams {
+            candidate_k: cand,
+            ..base
+        };
+        let p1 = measure_pass1(p).coverage;
+        let p2 = measure_pass2(p, rot_seed).coverage;
+        let flag = if p2 >= 0.90 { "Pass2≥90%" } else { "" };
+        println!(
+            "  candidate_k={cand:<3}  Pass1={:6.2}%  Pass2={:6.2}%  {flag}",
+            p1 * 100.0,
+            p2 * 100.0
+        );
+    }
+    println!("========================================================================\n");
+
+    // A minimal criterion group so `cargo bench` exercises the path under the
+    // harness (timing is not the point; the printed table above is).
+    let mut group = c.benchmark_group("pass2_coverage");
+    group.sample_size(10);
+    let p = CoverageParams {
+        n: 256,
+        n_queries: 16,
+        n_clusters: 16,
+        ..base
+    };
+    group.bench_function("measure_pass2_small", |b| {
+        b.iter(|| {
+            let r = measure_pass2(black_box(p), black_box(rot_seed));
+            hint::black_box(r.coverage)
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(benches, bench_compare_cost, bench_topk, bench_pass2_coverage);
 criterion_main!(benches);
