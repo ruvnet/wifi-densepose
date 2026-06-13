@@ -10835,7 +10835,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -11067,7 +11067,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-sensing-server"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "axum",
  "chrono",
@@ -11101,7 +11101,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-signal"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "chrono",
  "criterion",

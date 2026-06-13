@@ -71,6 +71,12 @@ harness = false
 name = "features_bench"
 harness = false
 
+## ADR-154 Milestone-2: P2 "bench-first" perf items (§7.4 #5/#6/#7/#8/#20).
+## #8 (field_model eigendecompose) is measured only under the eigenvalue feature.
+[[bench]]
+name = "dsp_perf_bench"
+harness = false
+
 ## ADR-134: CIR estimator throughput benchmarks
 [[bench]]
 name = "cir_bench"
