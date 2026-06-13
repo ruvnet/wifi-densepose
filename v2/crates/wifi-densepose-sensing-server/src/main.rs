@@ -24,7 +24,9 @@ pub mod types;
 mod vital_signs;
 
 // Training pipeline modules (exposed via lib.rs)
-use wifi_densepose_sensing_server::{dataset, embedding, graph_transformer, trainer};
+use wifi_densepose_sensing_server::{
+    dataset, embedding, error_response, graph_transformer, trainer,
+};
 
 use ruvector_mincut::{DynamicMinCut, MinCutBuilder};
 use std::collections::{HashMap, VecDeque};
@@ -4291,10 +4293,9 @@ async fn delete_model(
     let path = effective_models_dir().join(format!("{}.rvf", safe_id));
     if path.exists() {
         if let Err(e) = std::fs::remove_file(&path) {
-            warn!("Failed to delete model file {:?}: {}", path, e);
-            return Json(
-                serde_json::json!({ "error": format!("delete failed: {e}"), "success": false }),
-            );
+            // ADR-080 #2: log the OS error (incl. path) server-side only; the
+            // client gets a generic body + correlation id, no leaked path.
+            return error_response::internal_error_json("model delete", e);
         }
         // If this was the active model, unload it
         let mut s = state.write().await;
@@ -4434,11 +4435,9 @@ async fn start_recording(
     let file = match std::fs::File::create(&rec_path) {
         Ok(f) => f,
         Err(e) => {
-            warn!("Failed to create recording file {:?}: {}", rec_path, e);
-            return Json(serde_json::json!({
-                "error": format!("cannot create file: {e}"),
-                "success": false,
-            }));
+            // ADR-080 #2: the OS error can carry the recordings path; log it
+            // server-side only and return a generic body + correlation id.
+            return error_response::internal_error_json("recording create", e);
         }
     };
 
@@ -4561,10 +4560,8 @@ async fn delete_recording(
     let path = PathBuf::from("data/recordings").join(format!("{}.jsonl", safe_id));
     if path.exists() {
         if let Err(e) = std::fs::remove_file(&path) {
-            warn!("Failed to delete recording {:?}: {}", path, e);
-            return Json(
-                serde_json::json!({ "error": format!("delete failed: {e}"), "success": false }),
-            );
+            // ADR-080 #2: log the OS error (incl. path) server-side only.
+            return error_response::internal_error_json("recording delete", e);
         }
         let mut s = state.write().await;
         s.recordings
@@ -4773,10 +4770,8 @@ async fn calibration_start(State(state): State<SharedState>) -> Json<serde_json:
                 "message": "Calibration started — keep room empty while frames accumulate.",
             }))
         }
-        Err(e) => Json(serde_json::json!({
-            "success": false,
-            "error": format!("{e}"),
-        })),
+        // ADR-080 #2: FieldModel init error chain stays server-side only.
+        Err(e) => error_response::internal_error_json("calibration start", e),
     }
 }
 
@@ -4796,10 +4791,8 @@ async fn calibration_stop(State(state): State<SharedState>) -> Json<serde_json::
                     "frame_count": fm.calibration_frame_count(),
                 }))
             }
-            Err(e) => Json(serde_json::json!({
-                "success": false,
-                "error": format!("{e}"),
-            })),
+            // ADR-080 #2: finalize error chain stays server-side only.
+            Err(e) => error_response::internal_error_json("calibration stop", e),
         }
     } else {
         Json(serde_json::json!({
@@ -4895,26 +4888,13 @@ async fn edge_registry_endpoint(
         Ok(Ok(resp)) => Ok(Json(
             serde_json::to_value(resp).unwrap_or(serde_json::json!({})),
         )),
-        Ok(Err(err)) => {
-            tracing::warn!(error = %err, "edge_registry upstream fetch failed and no cache");
-            Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({
-                    "error": "edge_registry_upstream_unavailable",
-                    "detail": err.to_string()
-                })),
-            ))
-        }
-        Err(join_err) => {
-            tracing::error!(error = %join_err, "edge_registry spawn_blocking task panicked");
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": "edge_registry_internal_error",
-                    "detail": join_err.to_string()
-                })),
-            ))
-        }
+        // ADR-080 #2: the upstream error can carry an internal URL/connection
+        // detail — log it server-side only and return a generic 503.
+        Ok(Err(err)) => Err(error_response::upstream_unavailable("edge_registry", err)),
+        // ADR-080 #2: a panicked spawn_blocking surfaces "task … panicked" via
+        // JoinError::Display — never ship that to the client. Generic 500 +
+        // correlation id; the panic detail is logged server-side.
+        Err(join_err) => Err(error_response::internal_error("edge_registry", join_err)),
     }
 }
 

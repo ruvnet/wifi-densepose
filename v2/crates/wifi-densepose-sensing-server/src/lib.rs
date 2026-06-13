@@ -5,6 +5,7 @@
 //! - RVF (RuVector Format) binary container for model weights
 //! - Opt-in bearer-token auth for the `/api/v1/*` HTTP surface (`bearer_auth`)
 //! - Host-header allowlist / DNS-rebinding defense (`host_validation`)
+//! - Generic, leak-free internal-error responses (`error_response`, ADR-080 #2)
 //! - Real-time CSI introspection / low-latency tap (`introspection`, ADR-099)
 
 pub mod bearer_auth;
@@ -13,6 +14,7 @@ pub mod dataset;
 pub mod edge_registry;
 #[allow(dead_code)]
 pub mod embedding;
+pub mod error_response;
 pub mod graph_transformer;
 pub mod host_validation;
 pub mod introspection;
