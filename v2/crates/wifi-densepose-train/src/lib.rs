@@ -50,6 +50,10 @@ pub mod error;
 pub mod eval;
 pub mod geometry;
 pub mod mae;
+/// Canonical pose-metric core (ADR-155 §Tier-1.1) — `pck_canonical` /
+/// `oks_canonical`, available **without** the `tch-backend` feature so the
+/// single metric definition is reachable from the workspace test gate.
+pub mod metrics_core;
 pub mod rapid_adapt;
 pub mod ruview_metrics;
 pub mod signal_features;
@@ -79,6 +83,12 @@ pub mod occupancy_bench;
 pub mod trainer;
 
 // Convenient re-exports at the crate root.
+// Canonical metric (ADR-155 §Tier-1.1) — re-exported un-gated so the single
+// source of truth is reachable with or without `tch-backend`.
+pub use metrics_core::{
+    canonical_torso_size, oks_canonical, pck_canonical, CANON_LEFT_HIP, CANON_RIGHT_HIP,
+    COCO_KP_SIGMAS,
+};
 pub use config::TrainingConfig;
 pub use dataset::{
     CsiDataset, CsiSample, DataLoader, MmFiDataset, SyntheticConfig, SyntheticCsiDataset,
