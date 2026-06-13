@@ -145,8 +145,10 @@ pub enum CirError {
     #[error("subcarrier count mismatch: expected {expected}, got {got}")]
     SubcarrierMismatch { expected: usize, got: usize },
 
-    /// Phase variance exceeds 2π — frame appears unsanitized (ghost-tap risk).
-    #[error("CSI phase variance {variance:.3} suggests unsanitized input (ghost-tap risk)")]
+    /// Circular phase variance (V = 1 − R̄ ∈ [0,1]) is too high — the CSI phase
+    /// is near-uniformly spread across subcarriers, the signature of unsanitized
+    /// SFO/CFO (ghost-tap risk). See `GHOST_TAP_CIRCULAR_VARIANCE_MAX`.
+    #[error("CSI circular phase variance {variance:.3} suggests unsanitized input (ghost-tap risk)")]
     UnsanitizedPhase { variance: f32 },
 
     /// ISTA did not converge within the iteration budget.
@@ -567,9 +569,14 @@ impl CirEstimator {
 
         let y = self.extract_csi_vector(csi);
 
-        // Ghost-tap guard: phase variance > 2π signals unsanitized SFO/CFO.
+        // Ghost-tap guard: a near-uniform spread of CSI phase across subcarriers
+        // signals unsanitized SFO/CFO (raw hardware phase ramps that were never
+        // de-rotated). `phase_variance` is now Mardia's *circular* variance
+        // V = 1 − R̄ ∈ [0,1] (ADR-154 §7.4 #1), so the old `> TAU` (≈6.28)
+        // threshold — meaningful only for the unbounded linear variance — no
+        // longer applies. We compare against the bounded const below.
         let phase_var = phase_variance(&y);
-        if phase_var > std::f32::consts::TAU {
+        if phase_var > GHOST_TAP_CIRCULAR_VARIANCE_MAX {
             return Err(CirError::UnsanitizedPhase {
                 variance: phase_var,
             });
@@ -988,17 +995,64 @@ fn normalize_complex(v: &mut [Complex32]) {
     }
 }
 
-/// Variance of the instantaneous phase angles (rad) across a complex vector.
+/// Ghost-tap guard threshold on the **circular** phase variance (ADR-154 §7.4 #1).
+///
+/// `phase_variance` returns Mardia's circular variance V = 1 − R̄ ∈ [0,1].
+/// The guard rejects a frame as unsanitized when V exceeds this cutoff, i.e.
+/// when the mean resultant length R̄ falls below `1 − MAX`. At V = 0.99 the
+/// guard fires only when R̄ ≤ 0.01 — essentially uniform phase, the signature
+/// of raw SFO/CFO ramps the gate is meant to reject — while a sanitized,
+/// concentrated phase set (R̄ near 1, V near 0) passes comfortably.
+///
+/// **DATA-GATED (ADR-154 §7.4 #1):** this is a deliberately *conservative*
+/// default, not a calibrated operating point. A clean single-path channel with
+/// appreciable delay also sweeps the circle (high V), so V alone cannot cleanly
+/// separate "clean ramp" from "unsanitized noise" without labelled
+/// sanitized/unsanitized frames. The *metric* (circular variance) is MEASURED;
+/// this *value* awaits per-deployment calibration. Until then we err toward
+/// never false-rejecting a real frame — strictly more permissive at the wrap
+/// boundary than the old linear-variance guard, which is the bug being fixed.
+const GHOST_TAP_CIRCULAR_VARIANCE_MAX: f32 = 0.99;
+
+/// Circular variance of the instantaneous phase angles across a complex vector.
+///
+/// Phase angles live on the circle and wrap at ±π, so a *linear* sample variance
+/// (the previous implementation, ADR-154 §7.4 #1) reports spuriously HIGH
+/// dispersion for a tightly-clustered set straddling the ±π branch cut — e.g.
+/// `{+3.13, −3.13}` are 0.02 rad apart on the circle but ≈2π apart on the line.
+/// That made the `phase_variance > TAU` ghost-tap guard FALSE-TRIP on real,
+/// tightly-clustered CIR taps.
+///
+/// The correct metric is Mardia's circular variance:
+///
+///   R̄ = | (1/n) · Σ_k e^{iθ_k} |   (mean resultant length, ∈ [0,1])
+///   V  = 1 − R̄                     (circular variance, ∈ [0,1])
+///
+/// V = 0 ⇔ all angles identical (maximally concentrated); V = 1 ⇔ the unit
+/// phasors cancel (e.g. uniformly-spread angles → R̄ = 0). It is invariant to
+/// where the cluster sits on the circle, so the branch-cut artefact is gone.
+///
+/// Reference: Mardia & Jupp, *Directional Statistics* (2000), §1.3.
 #[inline]
 fn phase_variance(y: &[Complex32]) -> f32 {
     let n = y.len();
     if n < 2 {
         return 0.0;
     }
+    // Mean resultant vector of the *unit* phasors e^{iθ_k}. Normalising each
+    // term to unit magnitude makes this a pure phase statistic (amplitude does
+    // not bias the dispersion), matching the linear version which used only
+    // `arg()`.
+    let mut sx = 0.0f32;
+    let mut sy = 0.0f32;
+    for c in y {
+        let theta = c.arg();
+        sx += theta.cos();
+        sy += theta.sin();
+    }
     let nf = n as f32;
-    let phases: Vec<f32> = y.iter().map(|c| c.arg()).collect();
-    let mean = phases.iter().sum::<f32>() / nf;
-    phases.iter().map(|p| (p - mean) * (p - mean)).sum::<f32>() / nf
+    let r_bar = ((sx * sx + sy * sy).sqrt() / nf).clamp(0.0, 1.0);
+    1.0 - r_bar
 }
 
 // ---------------------------------------------------------------------------
@@ -1203,6 +1257,108 @@ mod tests {
     fn phase_variance_constant_phase() {
         let y: Vec<Complex32> = (0..52).map(|_| Complex32::new(1.0, 0.0)).collect();
         assert!(phase_variance(&y) < 1e-6);
+    }
+
+    // ── ADR-154 §7.4 #1: circular vs linear phase variance ──────────────────
+
+    /// Inline replica of the OLD linear sample variance over `arg()` — kept in
+    /// the test only, so we can show the exact contrast the fix removes.
+    fn old_linear_phase_variance(y: &[Complex32]) -> f32 {
+        let n = y.len();
+        if n < 2 {
+            return 0.0;
+        }
+        let nf = n as f32;
+        let phases: Vec<f32> = y.iter().map(|c| c.arg()).collect();
+        let mean = phases.iter().sum::<f32>() / nf;
+        phases.iter().map(|p| (p - mean) * (p - mean)).sum::<f32>() / nf
+    }
+
+    /// FAILS-ON-OLD: phases tightly clustered across the ±π branch cut. The old
+    /// LINEAR variance reports a huge value (≈π²) and would trip the `> TAU`
+    /// guard; the new CIRCULAR variance reports ≈0 (the cluster is 0.04 rad wide
+    /// on the circle) and the guard does NOT false-trip.
+    #[test]
+    fn phase_variance_circular_not_fooled_by_branch_cut() {
+        // 40 unit phasors split between +π−ε and −π+ε: true angular spread ≈0.04
+        // rad, but they straddle the wrap point.
+        let eps = 0.02_f32;
+        let y: Vec<Complex32> = (0..40)
+            .map(|i| {
+                let theta = if i % 2 == 0 {
+                    std::f32::consts::PI - eps
+                } else {
+                    -std::f32::consts::PI + eps
+                };
+                Complex32::new(theta.cos(), theta.sin())
+            })
+            .collect();
+
+        let old = old_linear_phase_variance(&y);
+        let new = phase_variance(&y);
+
+        // The OLD metric is spuriously huge (well past the old TAU≈6.28 guard).
+        assert!(
+            old > std::f32::consts::TAU,
+            "old linear variance should be large (>TAU) on wrap-straddling phases, was {old}"
+        );
+        // The NEW circular variance is ≈0 — the cluster is genuinely tight.
+        assert!(
+            new < 0.01,
+            "circular variance must be ~0 for a tight cluster across ±π, was {new}"
+        );
+        // And the guard must NOT false-trip on this (a real tight CIR tap).
+        assert!(
+            new <= GHOST_TAP_CIRCULAR_VARIANCE_MAX,
+            "ghost-tap guard must not false-trip on a tight wrap-straddling cluster"
+        );
+    }
+
+    /// Circular variance is bounded [0,1] for arbitrary (deterministic-random)
+    /// inputs, and hits its documented extremes: ≈0 for identical angles, ≈1
+    /// for uniformly-spread angles.
+    #[test]
+    fn phase_variance_circular_is_bounded_and_extremal() {
+        // Deterministic pseudo-random phases via an LCG — bounded check.
+        let mut s: u32 = 0x1234_5678;
+        let y: Vec<Complex32> = (0..200)
+            .map(|_| {
+                s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let u = (s >> 8) as f32 / (1u32 << 24) as f32; // [0,1)
+                let theta = u * std::f32::consts::TAU - std::f32::consts::PI;
+                Complex32::new(theta.cos(), theta.sin())
+            })
+            .collect();
+        let v = phase_variance(&y);
+        assert!((0.0..=1.0).contains(&v), "V must be in [0,1], was {v}");
+
+        // Identical angles → V ≈ 0.
+        let same: Vec<Complex32> = (0..64)
+            .map(|_| {
+                let t = 0.7_f32;
+                Complex32::new(t.cos(), t.sin())
+            })
+            .collect();
+        assert!(
+            phase_variance(&same) < 1e-5,
+            "identical angles must give V≈0, got {}",
+            phase_variance(&same)
+        );
+
+        // Angles spread uniformly around the full circle → resultant cancels,
+        // V ≈ 1.
+        let n = 360usize;
+        let uniform: Vec<Complex32> = (0..n)
+            .map(|k| {
+                let t = std::f32::consts::TAU * (k as f32) / (n as f32);
+                Complex32::new(t.cos(), t.sin())
+            })
+            .collect();
+        assert!(
+            phase_variance(&uniform) > 0.99,
+            "uniformly-spread angles must give V≈1, got {}",
+            phase_variance(&uniform)
+        );
     }
 
     /// Build a CsiFrame with a deterministic single-tap channel at `tau_sec`.
