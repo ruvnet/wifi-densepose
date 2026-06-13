@@ -185,17 +185,25 @@ fn bench_topk(c: &mut Criterion) {
 /// reads it back, so the criterion timing is meaningless here on purpose — the
 /// value is the `println!` summary.
 fn bench_pass2_coverage(c: &mut Criterion) {
-    use wifi_densepose_ruvector::coverage::{measure_pass1, measure_pass2, CoverageParams};
+    use wifi_densepose_ruvector::coverage::{
+        measure_estimator, measure_estimator_euclidean, measure_pass1, measure_pass2,
+        CoverageParams,
+    };
 
     let base = CoverageParams::aether_default(0xAD00_0084);
     let rot_seed = 0x5EED_C0DE_1234_5678u64;
 
-    println!("\n=== ADR-156 §8 RaBitQ Pass-2 coverage (anisotropic planted clusters) ===");
+    println!("\n=== ADR-156 §8/§11 RaBitQ coverage (anisotropic planted clusters) ===");
     println!(
         "dim={} N={} K={} clusters={} noise={} queries={} master_seed=0x{:X} rot_seed=0x{:X}",
         base.dim, base.n, base.k, base.n_clusters, base.noise, base.n_queries, base.seed, rot_seed
     );
     println!("(coverage = |sketch_topK ∩ float_cosine_topK| / K, ADR-084 bar = 90%)");
+    println!("estimator side info = 8 B/vec (residual_norm + x_dot_o, 2x f32)");
+    println!(
+        "  {:<12} {:>8} {:>8} {:>11} {:>11}",
+        "candidate_k", "P1-sign", "P2-sign", "Est-cosine", "Est-euclid"
+    );
     for &cand in &[8usize, 16, 24, 32, 64] {
         let p = CoverageParams {
             candidate_k: cand,
@@ -203,11 +211,17 @@ fn bench_pass2_coverage(c: &mut Criterion) {
         };
         let p1 = measure_pass1(p).coverage;
         let p2 = measure_pass2(p, rot_seed).coverage;
-        let flag = if p2 >= 0.90 { "Pass2≥90%" } else { "" };
+        let est_cos = measure_estimator(p, rot_seed).coverage;
+        let est_euc = measure_estimator_euclidean(p, rot_seed).coverage;
+        let flag = if est_cos >= 0.90 { "EST≥90%" } else { "" };
+        let strict = if cand == base.k { " STRICT" } else { "" };
         println!(
-            "  candidate_k={cand:<3}  Pass1={:6.2}%  Pass2={:6.2}%  {flag}",
+            "  {:<12} {:>7.2}% {:>7.2}% {:>10.2}% {:>10.2}%  {flag}{strict}",
+            cand,
             p1 * 100.0,
-            p2 * 100.0
+            p2 * 100.0,
+            est_cos * 100.0,
+            est_euc * 100.0
         );
     }
     println!("========================================================================\n");

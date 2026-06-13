@@ -289,6 +289,35 @@ ADR-156 §10. Summary:
   prior top-K acceptance number in this ADR depend on the fixed path; the
   ≥90% coverage criterion is only meaningful post-fix.
 
+## Pass 2b — RaBitQ unbiased distance estimator (ADR-156 §11, landed 2026-06)
+
+The **real** RaBitQ contribution (Gao & Long, SIGMOD 2024) — an
+**unbiased estimator of the inner product / distance** from the 1-bit
+code + per-vector side info, not just sign bits — is now implemented and
+**MEASURED against this ADR's ≥90% strict-K bar**:
+
+- **Implemented** — `crates/wifi-densepose-ruvector/src/estimator.rs`:
+  `EstimatorSketch` (Pass-2 sign code + 8 B/vec side info:
+  `residual_norm` + `x_dot_o = ⟨x̄, o'⟩`), `DistanceEstimator`
+  (`⟨o',q'⟩ ≈ ⟨x̄,q'⟩ / x_dot_o`, the paper's unbiased rescale), and
+  `EstimatorBank` reranking candidates by the estimate instead of raw
+  Hamming. **Zero-centroid simplification** (`c = 0`) documented;
+  paper-faithful centroid path also built (`with_centroid`). Additive —
+  Pass-1/Pass-2 and the wire format are unchanged.
+- **MEASURED strict-K coverage** (same fixture as §"Pass 2", cosine
+  ground truth): the estimator lifts the strict `candidate_k = K` bar
+  **46.39% (Pass-2 sign) → 49.71% (estimator, cosine rerank)** — a real
+  **+3.3 pp** lift, but **still ~40 pp short of the ≥90% strict bar.**
+  At over-fetch the estimator does better than sign (95.12% vs 91.60% at
+  candidate_k = 24). **Honest verdict: the unbiased estimator does NOT
+  clear the strict-K 90% bar on this distribution** — the binding
+  constraint is the 1-bit code's information ceiling, not estimator
+  variance. The ≥90% acceptance bar is still met only via the over-fetch
+  "candidate set" pattern this ADR's Decision specifies; the estimator
+  **reduces the over-fetch factor** needed but does not remove it. This
+  is a **published negative**, reported as such. Full numbers + reproduce
+  commands in ADR-156 §11.
+
 ## Open questions
 
 - **Does `BinaryQuantized` need a randomized rotation pre-pass for
