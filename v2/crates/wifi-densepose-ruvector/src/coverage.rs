@@ -33,6 +33,7 @@
 //! value derives from a seed via SplitMix64, so the whole harness is
 //! reproducible bit-for-bit.
 
+use crate::estimator::EstimatorBank;
 use crate::{Rotation, SketchBank};
 
 /// SplitMix64 step — reproducible PRNG for fixture generation (dependency-free).
@@ -203,6 +204,80 @@ pub fn measure_pass1(p: CoverageParams) -> CoverageResult {
 pub fn measure_pass2(p: CoverageParams, rotation_seed: u64) -> CoverageResult {
     let rot = Rotation::new(rotation_seed, p.dim);
     measure_inner(p, Some(rot))
+}
+
+/// Measure mean top-K coverage of the **RaBitQ unbiased estimator** rerank
+/// (ADR-156 Milestone-2) against the full-float top-K, on the **same**
+/// anisotropic synthetic fixture and query stream as [`measure_pass1`] /
+/// [`measure_pass2`].
+///
+/// This is the whole point of Milestone-2: instead of ranking candidates by
+/// raw Hamming over sign bits ([`measure_pass2`]), rank them by the RaBitQ
+/// *unbiased distance estimate* recovered from the 1-bit code + per-vector side
+/// info ([`crate::estimator`]). `rotation_seed` fixes the rotation (index and
+/// query share it). The fixture, cluster centres, query draws, and ground-truth
+/// cosine top-K are **bit-identical** to `measure_pass2`, so the only variable
+/// is sign-Hamming vs estimator-rerank — an honest apples-to-apples coverage
+/// comparison.
+pub fn measure_estimator(p: CoverageParams, rotation_seed: u64) -> CoverageResult {
+    // Cosine ground truth ⇒ rerank by the estimated COSINE key (the angular
+    // sensor's natural metric). See `measure_estimator_euclidean` for the
+    // squared-euclidean key, reported alongside for honesty.
+    measure_estimator_inner(p, rotation_seed, EstimatorRank::Cosine)
+}
+
+/// Same as [`measure_estimator`] but reranks by the estimated **squared
+/// euclidean** distance key instead of cosine. Reported alongside the cosine
+/// rerank so the ADR shows both honestly: against a *cosine* ground truth, the
+/// cosine key is the apples-to-apples comparison to sign-Hamming (also angular),
+/// while the euclidean key mixes in residual-norm and generally ranks worse here.
+pub fn measure_estimator_euclidean(p: CoverageParams, rotation_seed: u64) -> CoverageResult {
+    measure_estimator_inner(p, rotation_seed, EstimatorRank::Euclidean)
+}
+
+#[derive(Clone, Copy)]
+enum EstimatorRank {
+    Cosine,
+    Euclidean,
+}
+
+fn measure_estimator_inner(
+    p: CoverageParams,
+    rotation_seed: u64,
+    rank: EstimatorRank,
+) -> CoverageResult {
+    let rot = Rotation::new(rotation_seed, p.dim);
+    let float_bank = make_fixture(p);
+    let centres = cluster_centres(p.dim, p.n_clusters.max(1), p.seed);
+
+    // Estimator bank over the SAME fixture vectors.
+    let mut bank = EstimatorBank::new(rot);
+    for (i, v) in float_bank.iter().enumerate() {
+        bank.insert_embedding(i as u32, v);
+    }
+
+    let mut total = 0.0f64;
+    for q in 0..p.n_queries {
+        // IDENTICAL query draw to measure_inner (same seed expression).
+        let c = q % p.n_clusters.max(1);
+        let qv = realize(
+            &centres[c],
+            p.dim,
+            p.noise,
+            p.seed ^ 0xDEAD_0000_0000 ^ (q as u64).wrapping_mul(0x2545_F491),
+        );
+        let truth = float_topk(&float_bank, &qv, p.k);
+        let cand = match rank {
+            EstimatorRank::Cosine => bank.topk_estimated_cosine(&qv, p.candidate_k),
+            EstimatorRank::Euclidean => bank.topk_estimated(&qv, p.candidate_k),
+        };
+        let cand_ids: std::collections::HashSet<u32> = cand.into_iter().map(|(id, _)| id).collect();
+        let hit = truth.iter().filter(|id| cand_ids.contains(id)).count();
+        total += hit as f64 / p.k as f64;
+    }
+    CoverageResult {
+        coverage: total / p.n_queries as f64,
+    }
 }
 
 /// Measure mean top-K coverage of a **multi-bit (Pass-3)** rotated sketch:
@@ -407,6 +482,92 @@ mod tests {
             (p2 - mb1).abs() < 0.05,
             "1-bit multibit {mb1:.3} should track Pass-2 {p2:.3}"
         );
+    }
+
+    #[test]
+    fn estimator_rerank_not_worse_than_sign() {
+        // ADR-156 Milestone-2 core regression: on a fixed anisotropic fixture,
+        // reranking the candidate set by the RaBitQ unbiased ESTIMATE must be
+        // >= ranking by sign-only Hamming (Pass-2). The estimator must never
+        // make coverage WORSE — it strictly refines the same 1-bit codes with
+        // side info. (We assert >= here, not a hard 90% bar — the bar is the
+        // measured number reported in the ADR, not a unit invariant.)
+        let p = CoverageParams {
+            n: 512,
+            n_queries: 64,
+            n_clusters: 32,
+            ..CoverageParams::aether_default(0x00C0_FFEE)
+        };
+        let rot_seed = 0x1234_5678_9ABC_DEF0u64;
+        let sign = measure_pass2(p, rot_seed).coverage;
+        let est = measure_estimator(p, rot_seed).coverage;
+        assert!(
+            est + 1e-9 >= sign,
+            "estimator rerank coverage {est:.4} regressed below sign-only Pass-2 {sign:.4}"
+        );
+    }
+
+    #[test]
+    fn estimator_coverage_is_deterministic() {
+        // Same params + rotation seed ⇒ same measured coverage, twice.
+        let p = CoverageParams {
+            n: 256,
+            n_queries: 16,
+            n_clusters: 16,
+            ..CoverageParams::aether_default(0xE571_3A7E)
+        };
+        let a = measure_estimator(p, 0xFEED_FACE_0000_0001).coverage;
+        let b = measure_estimator(p, 0xFEED_FACE_0000_0001).coverage;
+        assert_eq!(a, b, "estimator coverage must be deterministic");
+        assert!((0.0..=1.0).contains(&a));
+    }
+
+    /// Deterministic, test-runnable coverage measurement that PRINTS the
+    /// Milestone-2 strict-K table: Pass-1 | Pass-2-sign | Pass-2+estimator, at
+    /// the strict bar (candidate_k == K) plus the over-fetch curve. Run with:
+    ///   cargo test -p wifi-densepose-ruvector --no-default-features \
+    ///     estimator_coverage_report -- --nocapture
+    #[test]
+    fn estimator_coverage_report() {
+        let base = CoverageParams::aether_default(0xAD00_0084);
+        let rot_seed = 0x5EED_C0DE_1234_5678u64;
+        println!(
+            "\n=== ADR-156 Milestone-2 RaBitQ estimator coverage (anisotropic synthetic) ==="
+        );
+        println!(
+            "dim={} N={} K={} queries={} clusters={} noise={} master_seed=0x{:X} rotation_seed=0x{:X}",
+            base.dim, base.n, base.k, base.n_queries, base.n_clusters, base.noise, base.seed, rot_seed
+        );
+        println!("side info = 8 B/vec (residual_norm + x_dot_o, 2x f32)");
+        println!(
+            "{:<12} {:>9} {:>9} {:>11} {:>11} {:>9}",
+            "candidate_k", "P1-sign", "P2-sign", "Est-cosine", "Est-euclid", "vs 90%"
+        );
+        for &c in &[base.k, 16usize, 24, 32, 64] {
+            let pc = CoverageParams {
+                candidate_k: c,
+                ..base
+            };
+            let p1 = measure_pass1(pc).coverage;
+            let p2 = measure_pass2(pc, rot_seed).coverage;
+            let est_cos = measure_estimator(pc, rot_seed).coverage;
+            let est_euc = measure_estimator_euclidean(pc, rot_seed).coverage;
+            let bar = if est_cos >= 0.90 { "EST≥90%" } else { "below" };
+            let strict = if c == base.k { " (STRICT)" } else { "" };
+            println!(
+                "{:<12} {:>8.2}% {:>8.2}% {:>10.2}% {:>10.2}% {:>9}{}",
+                c,
+                p1 * 100.0,
+                p2 * 100.0,
+                est_cos * 100.0,
+                est_euc * 100.0,
+                bar,
+                strict
+            );
+        }
+        println!("============================================================================\n");
+        let strict = measure_estimator(base, rot_seed).coverage;
+        assert!((0.0..=1.0).contains(&strict));
     }
 
     #[test]
