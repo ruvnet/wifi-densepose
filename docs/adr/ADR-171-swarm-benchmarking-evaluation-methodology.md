@@ -1,4 +1,4 @@
-# ADR-149: Drone Swarm Benchmarking & Evaluation Methodology — Metrics, Leaderboards, and Statistical Rigor
+# ADR-171: Drone Swarm Benchmarking & Evaluation Methodology — Metrics, Leaderboards, and Statistical Rigor
 
 | Field      | Value                                                                                   |
 |------------|-----------------------------------------------------------------------------------------|

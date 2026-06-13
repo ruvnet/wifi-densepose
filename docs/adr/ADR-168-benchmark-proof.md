@@ -1,4 +1,4 @@
-# ADR-147 Benchmark Proof — OccWorld on RTX 5080
+# ADR-168 Benchmark Proof — OccWorld on RTX 5080
 Date: 2026-05-29
 Hardware: NVIDIA GeForce RTX 5080 (15.47 GB VRAM), CUDA 12.8
 Model: OccWorld TransVQVAE (random weights — pre-domain-fine-tuning baseline)
