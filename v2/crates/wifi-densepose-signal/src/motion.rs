@@ -8,6 +8,66 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
+// ---------------------------------------------------------------------------
+// Tuning constants (ADR-154 §7.4 #18 — de-magicked; EMPIRICAL DEFAULTS).
+//
+// These were previously bare literals inside the scoring functions. They are
+// lifted to named, documented consts so the implicit weighting becomes
+// explicit and a future retune is a visible, tested change. The values are
+// **unchanged** from the original literals — boundary/characterization tests
+// pin the current behaviour. None of these is calibrated against labelled
+// occupancy data; they are heuristic fusion weights.
+// ---------------------------------------------------------------------------
+
+/// Motion-score fusion weights when a Doppler component is present.
+/// `(variance, correlation, phase, doppler)` — sums to 1.0.
+const MOTION_WEIGHTS_WITH_DOPPLER: (f64, f64, f64, f64) = (0.3, 0.2, 0.2, 0.3);
+
+/// Motion-score fusion weights with no Doppler component.
+/// `(variance, correlation, phase)` — sums to 1.0.
+const MOTION_WEIGHTS_NO_DOPPLER: (f64, f64, f64) = (0.4, 0.3, 0.3);
+
+/// Doppler magnitude (Hz-ish, arbitrary units) that maps to a full-scale
+/// (1.0) Doppler motion component. Larger magnitudes saturate at 1.0.
+const DOPPLER_FULL_SCALE_MAGNITUDE: f64 = 100.0;
+
+/// Reference variance that maps to a full-scale (1.0) heuristic motion score
+/// when no calibrated baseline is available. Empirical default.
+const VARIANCE_HEURISTIC_FULL_SCALE: f64 = 0.5;
+
+/// Reference phase variance that maps to a full-scale (1.0) phase motion
+/// component. Empirical default.
+const PHASE_VARIANCE_FULL_SCALE: f64 = 0.5;
+
+/// Blend weight between phase-variance and phase-coherence in the phase score.
+const PHASE_SCORE_VARIANCE_WEIGHT: f64 = 0.5;
+
+/// Reference dynamic range that maps to a full-scale (1.0) amplitude-quality
+/// confidence indicator. Empirical default.
+const AMP_QUALITY_FULL_SCALE_RANGE: f64 = 2.0;
+
+/// Confidence-indicator blend weights (`amplitude`, `phase`, `correlation`,
+/// `doppler`) — each is the fraction of total confidence that indicator
+/// contributes when present.
+const CONF_WEIGHT_AMPLITUDE: f64 = 0.3;
+const CONF_WEIGHT_PHASE: f64 = 0.3;
+const CONF_WEIGHT_CORRELATION: f64 = 0.2;
+const CONF_WEIGHT_DOPPLER: f64 = 0.2;
+
+/// Minimum baseline floor added before dividing by the calibration baseline
+/// variance, preventing a divide-by-zero on an all-constant calibration.
+const BASELINE_VARIANCE_FLOOR: f64 = 1e-10;
+
+/// Lower / upper clamp for the adaptive human-detection threshold
+/// (`mean + 1σ` of recent motion scores). Keeps the adaptive threshold inside
+/// a sane operating band. Empirical default.
+const ADAPTIVE_THRESHOLD_MIN: f64 = 0.3;
+const ADAPTIVE_THRESHOLD_MAX: f64 = 0.95;
+
+/// Minimum history length before the adaptive threshold engages; below this
+/// the configured fixed threshold is used.
+const ADAPTIVE_THRESHOLD_MIN_HISTORY: usize = 10;
+
 /// Motion score with component breakdown
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MotionScore {
@@ -37,12 +97,11 @@ impl MotionScore {
     ) -> Self {
         // Calculate weighted total
         let total = if let Some(doppler) = doppler_component {
-            0.3 * variance_component
-                + 0.2 * correlation_component
-                + 0.2 * phase_component
-                + 0.3 * doppler
+            let (wv, wc, wp, wd) = MOTION_WEIGHTS_WITH_DOPPLER;
+            wv * variance_component + wc * correlation_component + wp * phase_component + wd * doppler
         } else {
-            0.4 * variance_component + 0.3 * correlation_component + 0.3 * phase_component
+            let (wv, wc, wp) = MOTION_WEIGHTS_NO_DOPPLER;
+            wv * variance_component + wc * correlation_component + wp * phase_component
         };
 
         Self {
@@ -304,7 +363,7 @@ impl MotionDetector {
         // Calculate Doppler-based score if available
         let doppler_score = features.doppler.as_ref().map(|d| {
             // Normalize Doppler magnitude to 0-1 range
-            (d.mean_magnitude / 100.0).clamp(0.0, 1.0)
+            (d.mean_magnitude / DOPPLER_FULL_SCALE_MAGNITUDE).clamp(0.0, 1.0)
         });
 
         let motion_score = MotionScore::new(
@@ -355,11 +414,11 @@ impl MotionDetector {
 
         // Normalize using baseline if available
         if let Some(baseline) = self.baseline_variance {
-            let ratio = mean_variance / (baseline + 1e-10);
+            let ratio = mean_variance / (baseline + BASELINE_VARIANCE_FLOOR);
             (ratio - 1.0).max(0.0).tanh()
         } else {
             // Use heuristic normalization
-            (mean_variance / 0.5).clamp(0.0, 1.0)
+            (mean_variance / VARIANCE_HEURISTIC_FULL_SCALE).clamp(0.0, 1.0)
         }
     }
 
@@ -393,7 +452,9 @@ impl MotionDetector {
         let coherence_factor = 1.0 - phase.coherence.abs();
 
         // Combine factors
-        let score = 0.5 * (mean_variance / 0.5).clamp(0.0, 1.0) + 0.5 * coherence_factor;
+        let w = PHASE_SCORE_VARIANCE_WEIGHT;
+        let score = w * (mean_variance / PHASE_VARIANCE_FULL_SCALE).clamp(0.0, 1.0)
+            + (1.0 - w) * coherence_factor;
         score.clamp(0.0, 1.0)
     }
 
@@ -416,26 +477,27 @@ impl MotionDetector {
         let mut weight_sum = 0.0;
 
         // Amplitude quality indicator
-        let amp_quality = (features.amplitude.dynamic_range / 2.0).clamp(0.0, 1.0);
-        confidence += amp_quality * 0.3;
-        weight_sum += 0.3;
+        let amp_quality =
+            (features.amplitude.dynamic_range / AMP_QUALITY_FULL_SCALE_RANGE).clamp(0.0, 1.0);
+        confidence += amp_quality * CONF_WEIGHT_AMPLITUDE;
+        weight_sum += CONF_WEIGHT_AMPLITUDE;
 
         // Phase coherence indicator
         let phase_quality = features.phase.coherence.abs();
-        confidence += phase_quality * 0.3;
-        weight_sum += 0.3;
+        confidence += phase_quality * CONF_WEIGHT_PHASE;
+        weight_sum += CONF_WEIGHT_PHASE;
 
         // Correlation consistency indicator
         let corr_quality = (1.0 - features.correlation.correlation_spread).clamp(0.0, 1.0);
-        confidence += corr_quality * 0.2;
-        weight_sum += 0.2;
+        confidence += corr_quality * CONF_WEIGHT_CORRELATION;
+        weight_sum += CONF_WEIGHT_CORRELATION;
 
         // Doppler quality if available
         if let Some(ref doppler) = features.doppler {
             let doppler_quality =
                 (doppler.spread / doppler.mean_magnitude.max(1.0)).clamp(0.0, 1.0);
-            confidence += (1.0 - doppler_quality) * 0.2;
-            weight_sum += 0.2;
+            confidence += (1.0 - doppler_quality) * CONF_WEIGHT_DOPPLER;
+            weight_sum += CONF_WEIGHT_DOPPLER;
         }
 
         if weight_sum > 0.0 {
@@ -542,7 +604,7 @@ impl MotionDetector {
 
     /// Calculate adaptive threshold based on recent history
     fn calculate_adaptive_threshold(&self) -> f64 {
-        if self.motion_history.len() < 10 {
+        if self.motion_history.len() < ADAPTIVE_THRESHOLD_MIN_HISTORY {
             return self.config.human_detection_threshold;
         }
 
@@ -555,7 +617,7 @@ impl MotionDetector {
         };
 
         // Threshold is mean + 1 std deviation, clamped to reasonable range
-        (mean + std).clamp(0.3, 0.95)
+        (mean + std).clamp(ADAPTIVE_THRESHOLD_MIN, ADAPTIVE_THRESHOLD_MAX)
     }
 
     /// Update baseline variance (for calibration)
@@ -837,5 +899,128 @@ mod tests {
 
         let stats = detector.get_statistics();
         assert_eq!(stats.history_size, 10); // Should not exceed max
+    }
+
+    // -- ADR-154 §7.4 #18: de-magic-constant + boundary characterization tests.
+    // These pin CURRENT behaviour so a future retune is a visible, tested change.
+
+    /// The de-magicked tuning consts MUST equal the prior bare literals exactly
+    /// (this milestone is cleanup — operating values are unchanged).
+    #[test]
+    fn motion_tuning_consts_unchanged_from_literals() {
+        assert_eq!(MOTION_WEIGHTS_WITH_DOPPLER, (0.3, 0.2, 0.2, 0.3));
+        assert_eq!(MOTION_WEIGHTS_NO_DOPPLER, (0.4, 0.3, 0.3));
+        assert_eq!(DOPPLER_FULL_SCALE_MAGNITUDE, 100.0);
+        assert_eq!(VARIANCE_HEURISTIC_FULL_SCALE, 0.5);
+        assert_eq!(PHASE_VARIANCE_FULL_SCALE, 0.5);
+        assert_eq!(PHASE_SCORE_VARIANCE_WEIGHT, 0.5);
+        assert_eq!(AMP_QUALITY_FULL_SCALE_RANGE, 2.0);
+        assert_eq!(CONF_WEIGHT_AMPLITUDE, 0.3);
+        assert_eq!(CONF_WEIGHT_PHASE, 0.3);
+        assert_eq!(CONF_WEIGHT_CORRELATION, 0.2);
+        assert_eq!(CONF_WEIGHT_DOPPLER, 0.2);
+        assert_eq!(BASELINE_VARIANCE_FLOOR, 1e-10);
+        assert_eq!(ADAPTIVE_THRESHOLD_MIN, 0.3);
+        assert_eq!(ADAPTIVE_THRESHOLD_MAX, 0.95);
+        assert_eq!(ADAPTIVE_THRESHOLD_MIN_HISTORY, 10);
+        // Fusion weights are a convex combination (sum to 1.0).
+        let (wv, wc, wp, wd) = MOTION_WEIGHTS_WITH_DOPPLER;
+        assert!((wv + wc + wp + wd - 1.0).abs() < 1e-12);
+        let (wv, wc, wp) = MOTION_WEIGHTS_NO_DOPPLER;
+        assert!((wv + wc + wp - 1.0).abs() < 1e-12);
+    }
+
+    /// Doppler component saturates at full scale (`/100.0` then clamp(0,1)).
+    /// Pins behaviour at/just-below/just-above the full-scale magnitude.
+    #[test]
+    fn doppler_component_saturates_at_full_scale() {
+        use crate::features::DopplerFeatures;
+        use ndarray::Array1;
+        let make = |mag: f64| DopplerFeatures {
+            shifts: Array1::zeros(1),
+            peak_frequency: 0.0,
+            mean_magnitude: mag,
+            spread: 0.0,
+        };
+        let detector = MotionDetector::default_config();
+        // just below full scale -> < 1.0
+        let mut features = create_test_features(0.5);
+        features.doppler = Some(make(DOPPLER_FULL_SCALE_MAGNITUDE - 1.0));
+        let below = detector.analyze_motion(&features).score.doppler_component.unwrap();
+        assert!(below < 1.0 && below > 0.98);
+        // exactly full scale -> 1.0
+        features.doppler = Some(make(DOPPLER_FULL_SCALE_MAGNITUDE));
+        let at = detector.analyze_motion(&features).score.doppler_component.unwrap();
+        assert_eq!(at, 1.0);
+        // above full scale -> clamped to 1.0
+        features.doppler = Some(make(DOPPLER_FULL_SCALE_MAGNITUDE * 10.0));
+        let above = detector.analyze_motion(&features).score.doppler_component.unwrap();
+        assert_eq!(above, 1.0);
+    }
+
+    /// `calculate_correlation_score` returns 0.0 for n<2 (the small-matrix
+    /// guard) and a finite, clamped value for n>=2. Pins the n=1 boundary.
+    #[test]
+    fn correlation_score_zero_below_n2_boundary() {
+        use crate::features::CorrelationFeatures;
+        use ndarray::Array2;
+        let detector = MotionDetector::default_config();
+        let one = CorrelationFeatures {
+            matrix: Array2::from_elem((1, 1), 1.0),
+            mean_correlation: 0.0,
+            max_correlation: 0.0,
+            correlation_spread: 0.0,
+        };
+        assert_eq!(detector.calculate_correlation_score(&one), 0.0);
+        let two = CorrelationFeatures {
+            matrix: Array2::from_shape_fn((2, 2), |(i, j)| if i == j { 1.0 } else { 0.0 }),
+            mean_correlation: 0.0,
+            max_correlation: 0.0,
+            correlation_spread: 0.0,
+        };
+        let s = detector.calculate_correlation_score(&two);
+        assert!(s.is_finite() && (0.0..=1.0).contains(&s));
+    }
+
+    /// `calculate_temporal_variance` returns 0.0 with fewer than 2 history
+    /// entries, finite otherwise. Pins the len<2 boundary.
+    #[test]
+    fn temporal_variance_zero_below_two_history() {
+        let mut detector = MotionDetector::default_config();
+        assert_eq!(detector.calculate_temporal_variance(), 0.0); // 0 entries
+        detector
+            .motion_history
+            .push_back(MotionScore::new(0.5, 0.5, 0.5, None));
+        assert_eq!(detector.calculate_temporal_variance(), 0.0); // 1 entry
+        detector
+            .motion_history
+            .push_back(MotionScore::new(0.1, 0.1, 0.1, None));
+        assert!(detector.calculate_temporal_variance() > 0.0); // 2 entries
+    }
+
+    /// The adaptive threshold engages only at/after `ADAPTIVE_THRESHOLD_MIN_HISTORY`
+    /// history entries; below it falls back to the configured fixed threshold.
+    /// Pins the history=9 (fixed) vs history=10 (adaptive) boundary.
+    #[test]
+    fn adaptive_threshold_engages_at_history_boundary() {
+        let config = MotionDetectorConfig::builder()
+            .adaptive_threshold(true)
+            .human_detection_threshold(0.8)
+            .history_size(50)
+            .build();
+        let mut detector = MotionDetector::new(config);
+        // Push exactly 9 entries: still uses the fixed configured threshold.
+        for _ in 0..(ADAPTIVE_THRESHOLD_MIN_HISTORY - 1) {
+            detector
+                .motion_history
+                .push_back(MotionScore::new(0.5, 0.5, 0.5, None));
+        }
+        assert_eq!(detector.calculate_adaptive_threshold(), 0.8);
+        // 10th entry: adaptive band kicks in, clamped to [MIN, MAX].
+        detector
+            .motion_history
+            .push_back(MotionScore::new(0.5, 0.5, 0.5, None));
+        let t = detector.calculate_adaptive_threshold();
+        assert!((ADAPTIVE_THRESHOLD_MIN..=ADAPTIVE_THRESHOLD_MAX).contains(&t));
     }
 }
