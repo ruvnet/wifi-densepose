@@ -105,6 +105,10 @@ impl WelfordStats {
     }
 
     /// Population variance (biased). Returns 0.0 if count < 2.
+    ///
+    /// The `count < 2` guard is the n=0 NaN guard (ADR-154 §7.4 #10): at n=0,
+    /// `m2 = 0` and `count = 0` would yield `0.0/0.0 = NaN`. Pinned by
+    /// `welford_finite_at_n0_and_n1`.
     pub fn variance(&self) -> f64 {
         if self.count < 2 {
             0.0
@@ -119,6 +123,10 @@ impl WelfordStats {
     }
 
     /// Sample variance (unbiased). Returns 0.0 if count < 2.
+    ///
+    /// The `count < 2` guard is load-bearing (ADR-154 §7.4 #10): at n=0 the
+    /// `(self.count - 1)` term would underflow `0usize − 1` and at n=1 it would
+    /// divide by zero. Pinned by `welford_finite_at_n0_and_n1`.
     pub fn sample_variance(&self) -> f64 {
         if self.count < 2 {
             0.0
@@ -956,6 +964,52 @@ mod tests {
         assert_eq!(w.count, 1);
         assert!((w.mean - 42.0).abs() < 1e-10);
         assert!((w.variance() - 0.0).abs() < 1e-10);
+    }
+
+    /// ADR-154 §7.4 #10: every statistic must stay FINITE at the n=0 and n=1
+    /// boundaries. This pins the load-bearing `count < 2` guards: without them
+    /// `sample_variance` at n=0 underflows `(0usize − 1)` and divides by a huge
+    /// bogus divisor, and `variance`/`z_score` produce `0.0/0.0 = NaN`. Same
+    /// family as the §4 divide-by-(n−1) window trio.
+    #[test]
+    fn welford_finite_at_n0_and_n1() {
+        // n = 0: fresh accumulator, nothing observed.
+        let w0 = WelfordStats::new();
+        assert_eq!(w0.count, 0);
+        for v in [
+            w0.mean,
+            w0.variance(),
+            w0.sample_variance(),
+            w0.std_dev(),
+            w0.z_score(123.0),
+        ] {
+            assert!(v.is_finite(), "n=0 statistic must be finite, got {v}");
+        }
+        // Documented sentinels at n=0.
+        assert_eq!(w0.variance(), 0.0);
+        assert_eq!(w0.sample_variance(), 0.0);
+        assert_eq!(w0.std_dev(), 0.0);
+        assert_eq!(w0.z_score(123.0), 0.0);
+
+        // n = 1: a single observation has no spread.
+        let mut w1 = WelfordStats::new();
+        w1.update(7.5);
+        assert_eq!(w1.count, 1);
+        for v in [
+            w1.mean,
+            w1.variance(),
+            w1.sample_variance(),
+            w1.std_dev(),
+            w1.z_score(7.5),
+            w1.z_score(999.0),
+        ] {
+            assert!(v.is_finite(), "n=1 statistic must be finite, got {v}");
+        }
+        assert_eq!(w1.variance(), 0.0);
+        assert_eq!(w1.sample_variance(), 0.0);
+        assert_eq!(w1.std_dev(), 0.0);
+        // z_score guards on near-zero sd → 0.0 even for an off-mean query.
+        assert_eq!(w1.z_score(999.0), 0.0);
     }
 
     #[test]
