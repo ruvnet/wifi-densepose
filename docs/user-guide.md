@@ -1113,7 +1113,7 @@ The Observatory is an immersive Three.js visualization that renders WiFi sensing
 
 A pretrained CSI encoder + presence-detection head is published on Hugging Face at [`ruvnet/wifi-densepose-pretrained`](https://huggingface.co/ruvnet/wifi-densepose-pretrained). It was trained on 60,630 frames / 610,615 contrastive triplets (12.2M steps, final loss 0.065) and reports **82.3% held-out temporal-triplet accuracy** (the older "100% presence" figure was measured on a single-class recording and has been retracted) and ~164k embeddings/sec on an Apple M4 Pro.
 
-> **Results & proof.** The SOTA 17-keypoint pose model is published separately at [`ruvnet/wifi-densepose-mmfi-pose`](https://huggingface.co/ruvnet/wifi-densepose-mmfi-pose) — **82.69% torso-PCK@20** on MM-Fi (83.59% ensemble + TTA), beating MultiFormer (72.25%) and CSI2Pose (68.41%). Browse the auditable [AetherArena leaderboard Space](https://huggingface.co/spaces/ruvnet/aether-arena), the full [MM-Fi study](benchmarks/mmfi-wifi-sensing-study.md), and the [efficiency frontier](benchmarks/wifi-pose-efficiency-frontier.md). Reproduce the deterministic pipeline proof with `python archive/v1/data/proof/verify.py` (must print `VERDICT: PASS`; see [ADR-147 benchmark proof](adr/ADR-147-benchmark-proof.md) and [WITNESS-LOG-028](WITNESS-LOG-028.md)).
+> **Results & proof.** The SOTA 17-keypoint pose model is published separately at [`ruvnet/wifi-densepose-mmfi-pose`](https://huggingface.co/ruvnet/wifi-densepose-mmfi-pose) — **82.69% torso-PCK@20** on MM-Fi (83.59% ensemble + TTA), beating MultiFormer (72.25%) and CSI2Pose (68.41%). Browse the auditable [AetherArena leaderboard Space](https://huggingface.co/spaces/ruvnet/aether-arena), the full [MM-Fi study](benchmarks/mmfi-wifi-sensing-study.md), and the [efficiency frontier](benchmarks/wifi-pose-efficiency-frontier.md). Reproduce the deterministic pipeline proof with `python archive/v1/data/proof/verify.py` (must print `VERDICT: PASS`; see [ADR-168 benchmark proof](adr/ADR-168-benchmark-proof.md) and [WITNESS-LOG-028](WITNESS-LOG-028.md)).
 
 What it ships (and what it does not):
 
@@ -1289,7 +1289,7 @@ Once trained, the adaptive model runs automatically:
 RuView integrates [OccWorld](https://github.com/wzzheng/OccWorld) (ECCV 2024) to predict
 future 3D occupancy from WiFi CSI — extending the Kalman tracker's 5-frame horizon to
 15 predicted frames (~7 s). See [ADR-147](adr/ADR-147-nvidia-cosmos-world-foundation-model-integration.md)
-and the [benchmark proof](adr/ADR-147-benchmark-proof.md) for full details.
+and the [benchmark proof](adr/ADR-168-benchmark-proof.md) for full details.
 
 **Hardware requirement:** NVIDIA GPU with ≥4 GB VRAM (validated: RTX 5080 at 209 ms / 3.4 GB).
 
@@ -1869,7 +1869,7 @@ Pre-trained models are available on HuggingFace:
 - **SOTA MM-Fi pose model** (82.69% torso-PCK@20) — https://huggingface.co/ruvnet/wifi-densepose-mmfi-pose
 - **AetherArena leaderboard Space** — https://huggingface.co/spaces/ruvnet/aether-arena
 
-Download and start sensing immediately — no datasets, no GPU, no training needed. Results are reproducible via `python archive/v1/data/proof/verify.py` (deterministic SHA-256 proof) — see [ADR-147](adr/ADR-147-benchmark-proof.md).
+Download and start sensing immediately — no datasets, no GPU, no training needed. Results are reproducible via `python archive/v1/data/proof/verify.py` (deterministic SHA-256 proof) — see [ADR-168](adr/ADR-168-benchmark-proof.md).
 
 ### Quick Start with Pre-Trained Models
 

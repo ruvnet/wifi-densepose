@@ -6,7 +6,7 @@ Research notes backing ADR-164. Each lens output is reproduced verbatim. Census:
 
 ## Lens 1: status-distribution
 
-Confirmed: ADR-147-benchmark-proof.md and ADR-134-csi-to-cir have no `Status` line in their headers (the 052-ddd hits are Rust code in the body, not a header; the ADR-052 appendix lacks a real Status header per its first lines). Findings are evidence-grounded. Final analysis below.
+Confirmed: ADR-168-benchmark-proof.md (was ADR-147-benchmark-proof.md) and ADR-134-csi-to-cir have no `Status` line in their headers (the 167-ddd hits are Rust code in the body, not a header; the ADR-167 appendix, was ADR-052-ddd, lacks a real Status header per its first lines). Findings are evidence-grounded. Final analysis below.
 
 ### ADR Corpus — Status & Implementation Distribution
 
@@ -20,7 +20,7 @@ Census: **162 ADR entries** across **156 distinct files** (6 duplicate-number co
 | Proposed (incl. "Proposed — conditional/research-only") | ~88 |
 | Superseded | 1 (ADR-002) |
 | Rejected | 1 (ADR-098) |
-| Missing / no Status header | 3 (ADR-147-benchmark-proof, ADR-052-ddd appendix, ADR-134-CIR) |
+| Missing / no Status header | 3 (ADR-168-benchmark-proof [was 147], ADR-167-ddd appendix [was 052], ADR-134-CIR) |
 | Mixed/dual status in one ADR | 3 (ADR-115, ADR-149-AetherArena vs swarm, ADR-133) |
 
 #### impl_state tally
@@ -31,29 +31,29 @@ Census: **162 ADR entries** across **156 distinct files** (6 duplicate-number co
 | partial | ~50 |
 | proposed-only | ~64 |
 | stale-or-contradicted | 3 (ADR-029, 030, 031) |
-| unknown | 5 (ADR-034, 044, 052-ddd, 147-proof, …) |
+| unknown | 5 (ADR-034, 044, 167-ddd [was 052], 168-proof [was 147], …) |
 | superseded | 1 (ADR-002) |
 
 **Headline:** ~114 of 162 ADRs (70%) are decisions that never fully landed (proposed-only + partial + stale + unknown). The dominant failure mode is **stale Status headers** — Accepted/implemented work still labeled "Proposed."
 
 #### SEVERITY: CRITICAL — Status header missing or structurally absent (cannot triage)
 
-- **ADR-147-benchmark-proof.md** — *No `Status` header at all* (grep confirmed). Not a true ADR; it's a benchmark artifact (OccWorld @ ~213ms on RTX 5080, random weights) misfiled under the ADR-147 number. **Action: relocate to `docs/proof/` or `benchmarks/`, remove ADR number.**
+- **ADR-168-benchmark-proof.md** (renumbered from ADR-147 to resolve the 147 collision) — *No `Status` header at all* (grep confirmed). Not a true ADR; it's a benchmark artifact (OccWorld @ ~213ms on RTX 5080, random weights) that was misfiled under the ADR-147 number. **Action: relocate to `docs/proof/` or `benchmarks/`, remove ADR number.**
 - **ADR-134-csi-to-cir-time-domain-multipath.md** — *No `Status` header* (grep confirmed) in the header region. Body says Proposed but the field is not in canonical position. Compounded by a **number collision**: ADR-126/129 reference "ADR-134" as HOMECORE-MIGRATE, but the on-disk file is CIR. **Action: add canonical `## Status` line; resolve the 134 identity split.**
-- **ADR-052-ddd-bounded-contexts.md** — Appendix doc with no Status/Date header (grep found only Rust code, no header field). **Action: mark explicitly "Appendix to ADR-052 (no independent status)".**
+- **ADR-167-ddd-bounded-contexts.md** (renumbered from ADR-052 to resolve the 052 collision; still an appendix to parent ADR-052) — Appendix doc with no Status/Date header (grep found only Rust code, no header field). **Action: mark explicitly "Appendix to ADR-052 (no independent status)".**
 
 #### SEVERITY: CRITICAL — Duplicate ADR numbers (6 collisions, all verified on disk)
 
-| Number | Colliding files | Action |
-|---|---|---|
-| **147** | adam-mode-light-theme · nvidia-cosmos/OccWorld · benchmark-proof | Renumber 2 of 3 |
-| **148** | drone-swarm-control-system · yoga-mode-pose-system | Renumber 1 |
-| **149** | AetherArena-leaderboard · swarm-benchmarking | Renumber 1 |
-| **050** | provisioning-tool-enhancements · quality-engineering-security-hardening | Renumber 1 |
-| **052** | tauri-desktop-frontend · ddd-bounded-contexts (appendix) | Demote appendix |
-| **134** | csi-to-cir (on disk) · HOMECORE-MIGRATE (referenced, no file) | Resolve identity |
+| Number | Colliding files | Action | Resolution |
+|---|---|---|---|
+| **147** | adam-mode-light-theme · nvidia-cosmos/OccWorld · benchmark-proof | Renumber 2 of 3 | **RESOLVED** — 147 keeps nvidia-cosmos/OccWorld; benchmark-proof → **ADR-168**, adam-mode → **ADR-169** |
+| **148** | drone-swarm-control-system · yoga-mode-pose-system | Renumber 1 | **RESOLVED** — 148 keeps drone-swarm; yoga-mode → **ADR-170** |
+| **149** | AetherArena-leaderboard · swarm-benchmarking | Renumber 1 | **RESOLVED** — 149 keeps AetherArena; swarm-benchmarking → **ADR-171** |
+| **050** | provisioning-tool-enhancements · quality-engineering-security-hardening | Renumber 1 | **RESOLVED** — 050 keeps provisioning (5 refs vs 1); quality-engineering → **ADR-166** |
+| **052** | tauri-desktop-frontend · ddd-bounded-contexts (appendix) | Demote appendix | **RESOLVED** — 052 keeps tauri; ddd appendix renumbered → **ADR-167** (still linked to parent 052) |
+| **134** | csi-to-cir (on disk) · HOMECORE-MIGRATE (referenced, no file) | Resolve identity | Identity split (not a filename collision); resolved separately via G3 → ADR-165 |
 
-These break the ADR index and `/adr` tooling — two ADRs answering to one number is a corpus-integrity defect, not cosmetics.
+These broke the ADR index and `/adr` tooling — two ADRs answering to one number is a corpus-integrity defect, not cosmetics. The five filename collisions are now resolved (six displaced files renumbered 166–171); see ADR-164 Gap Register G1.
 
 #### SEVERITY: HIGH — Status header stale vs. shipped reality (Proposed header on landed code)
 
@@ -91,7 +91,7 @@ Cluster heads where the whole chain is Proposed with zero implementation evidenc
 
 #### Ranked actionable backlog (do in this order)
 
-1. **Resolve 6 duplicate ADR numbers + 3 missing-header files** (CRITICAL — breaks the index/tooling). Renumber 147×2, 148, 149, 050; demote 052-ddd appendix; resolve the 134 identity split; add Status headers to 147-proof, 134, 052-ddd.
+1. **Resolve 6 duplicate ADR numbers + 3 missing-header files** (CRITICAL — breaks the index/tooling). **Number collisions RESOLVED:** renumbered 147×2 (benchmark-proof→168, adam-mode→169), 148 (yoga→170), 149 (swarm-benchmarking→171), 050 (quality-engineering→166), 052 ddd appendix→167. Remaining: resolve the 134 identity split (done via G3→165); add Status headers to 168-proof, 134, 167-ddd (owner-gated).
 2. **Bulk-flip the 10 streaming-engine headers (ADR-136–145)** from Proposed → "Accepted — partial" — they have commit-pinned, test-backed Implementation Status notes. Highest ROI: one batch fixes the largest stale-status cluster.
 3. **Fix the status-graph inversions** (032/053/048/077 depend on Proposed parents; promote parents 029/030/031/045/052/075/076 to match their built reality, or downgrade the dependents).
 4. **Reconcile CLAUDE.md vs ADR headers** for 017, 024, 027, 072, 152 (doc says one thing, header another).
@@ -184,7 +184,7 @@ The sweep (ADR-154–163) is itself a structured retraction layer: each "Beyond-
 
 **[MEDIUM] ADR-098 → ADR-099 partial reversal.** ADR-098 **Rejected** midstream as a system component; ADR-099 (Proposed) **adopts** midstream's temporal-compare (DTW) + temporal-attractor-studio as a parallel tap. Framed as "complementary," but it revives the exact carve-outs ADR-098 declined to integrate — a live decision conflict pending resolution.
 
-**[MEDIUM] ADR-147 (OccWorld) self-retracts Cosmos.** The accepted ADR-147 title/decision was revised from "NVIDIA Cosmos WFM Integration" to OccWorld after a hardware finding (Cosmos needs 32.5 GB VRAM); Cosmos is retracted as primary. The companion ADR-147-benchmark-proof reports 213 ms/inference on **random weights, no checkpoint** — a baseline-without-fine-tuning number that must not be cited as a quality/target metric.
+**[MEDIUM] ADR-147 (OccWorld) self-retracts Cosmos.** The accepted ADR-147 title/decision was revised from "NVIDIA Cosmos WFM Integration" to OccWorld after a hardware finding (Cosmos needs 32.5 GB VRAM); Cosmos is retracted as primary. The companion ADR-168-benchmark-proof (renumbered from ADR-147) reports 213 ms/inference on **random weights, no checkpoint** — a baseline-without-fine-tuning number that must not be cited as a quality/target metric.
 
 #### B. Pairs making CONFLICTING decisions on the same topic
 

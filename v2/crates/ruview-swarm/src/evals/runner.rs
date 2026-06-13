@@ -1,4 +1,4 @@
-//! Stage-1 kinematic rollout + seed × episode matrix (ADR-149).
+//! Stage-1 kinematic rollout + seed × episode matrix (ADR-171).
 //!
 //! A single `run_episode` deterministically drives `drones` drones across a
 //! mission area under a chosen [`FlightPattern`], marks coverage on a grid,
@@ -28,7 +28,7 @@ pub struct EvalConfig {
     pub config: SwarmConfig,
     pub drones: usize,
     pub steps: usize,
-    pub seeds: usize,             // ≥10 per ADR-149
+    pub seeds: usize,             // ≥10 per ADR-171
     pub episodes_per_seed: usize, // e.g. 50
     pub victims: Vec<Position3D>,
     pub noise: NoiseLevel,
@@ -297,7 +297,7 @@ pub fn run_matrix(cfg: &EvalConfig) -> Vec<Vec<EpisodeMetrics>> {
         .collect()
 }
 
-/// Standard ADR-149 noise sweep grid: cartesian product of σ × κ levels.
+/// Standard ADR-171 noise sweep grid: cartesian product of σ × κ levels.
 pub fn default_noise_sweep() -> Vec<NoiseLevel> {
     let sigmas = [0.02, 0.05, 0.10];
     let kappas = [16.0, 8.0, 4.0];

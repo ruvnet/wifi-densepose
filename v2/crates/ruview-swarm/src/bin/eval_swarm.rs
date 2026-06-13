@@ -1,11 +1,11 @@
-//! ADR-149 Stage-1 evaluation CLI.
+//! ADR-171 Stage-1 evaluation CLI.
 //!
 //! Runs the kinematic eval matrix over every flight pattern (default) and
 //! writes a ranked `RESULTS.md` leaderboard. Pure Rust — no special feature
 //! flag required, so it builds and runs in default CI.
 //!
 //! Defaults are intentionally small (10 seeds × 10 episodes) so the run is fast.
-//! The full ADR-149 reporting configuration is 10 seeds × 50 episodes — pass
+//! The full ADR-171 reporting configuration is 10 seeds × 50 episodes — pass
 //! `--seeds 10 --episodes 50` for the publication run.
 //!
 //! ```text
@@ -45,7 +45,7 @@ fn main() {
             }
             "--help" | "-h" => {
                 eprintln!(
-                    "eval_swarm — ADR-149 Stage-1 kinematic evaluator\n\
+                    "eval_swarm — ADR-171 Stage-1 kinematic evaluator\n\
                      Usage: eval_swarm [--seeds N] [--episodes M] [--out PATH]\n\
                      Defaults: --seeds 10 --episodes 10 --out crates/ruview-swarm/evals/RESULTS.md"
                 );
@@ -59,7 +59,7 @@ fn main() {
     }
 
     eprintln!(
-        "Running ADR-149 Stage-1 eval: {seeds} seeds × {episodes} episodes \
+        "Running ADR-171 Stage-1 eval: {seeds} seeds × {episodes} episodes \
          over {} flight patterns...",
         FlightPattern::all().len()
     );

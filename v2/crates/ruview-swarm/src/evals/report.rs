@@ -1,4 +1,4 @@
-//! RESULTS.md leaderboard generator (ADR-149 Stage 1).
+//! RESULTS.md leaderboard generator (ADR-171 Stage 1).
 
 use crate::evals::metrics::AggregateMetrics;
 use crate::evals::stats::ConfidenceInterval;
@@ -19,7 +19,7 @@ fn fmt_ci(ci: &ConfidenceInterval) -> String {
 /// so callers should pre-sort (e.g. by descending coverage point estimate).
 pub fn render_results_md(rows: &[(String, AggregateMetrics)]) -> String {
     let mut s = String::new();
-    s.push_str("# ruview-swarm Evaluation Results (ADR-149 Stage 1, kinematic)\n\n");
+    s.push_str("# ruview-swarm Evaluation Results (ADR-171 Stage 1, kinematic)\n\n");
     s.push_str(
         "Statistically-rigorous evaluation harness: seeded multi-run rollouts with \
          IQM + 95% stratified-bootstrap confidence intervals (Agarwal et al., \
@@ -46,7 +46,7 @@ pub fn render_results_md(rows: &[(String, AggregateMetrics)]) -> String {
     s.push_str(
         "\n> **Stage 2 pending**: high-fidelity Gazebo/PX4 SITL evaluation \
          (false-alarm rate, real collision rate on the median seeds) is a \
-         follow-on — see ADR-149 §6.1. The collision figures below are a \
+         follow-on — see ADR-171 §6.1. The collision figures below are a \
          kinematic min-separation proxy, not SITL physics.\n\n",
     );
 

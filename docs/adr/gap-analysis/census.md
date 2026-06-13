@@ -1,6 +1,6 @@
 # ADR Corpus Census
 
-Full per-ADR census underpinning ADR-164. **162 ADR entries across 156 distinct files** (6 duplicate-number collisions). Source of truth for the gap-analysis lenses. Where the census is uncertain it is marked *needs verification*.
+Full per-ADR census underpinning ADR-164. **162 ADR entries across 156 distinct files** (the 5 duplicate-number collisions / 6 displaced files have been RESOLVED — displaced files renumbered to ADR-166…171 per ADR-164 G1; the ADR-134 identity split is tracked separately under G3). Source of truth for the gap-analysis lenses. Where the census is uncertain it is marked *needs verification*.
 
 | ADR | Title | Status | impl_state | Flags |
 |-----|-------|--------|-----------|-------|
@@ -53,10 +53,10 @@ Full per-ADR census underpinning ADR-164. **162 ADR entries across 156 distinct 
 | ADR-047 | RuView Observatory — Three.js Visualization | Accepted (Implemented) | implemented | — |
 | ADR-048 | Adaptive CSI Activity Classifier | Accepted | implemented | depends on Proposed ADR-045 |
 | ADR-049 | Cross-Platform WiFi Detection & Graceful Degradation | Proposed | proposed-only | targets Python v1 legacy; abandonment risk |
-| ADR-050 | Provisioning Tool Enhancements | Proposed | partial | DUPLICATE NUMBER; partially fulfilled by ADR-060 |
-| ADR-050 | Quality Engineering Response — Security Hardening | Accepted | partial | DUPLICATE NUMBER; unverified claims (54K fps); findings #6-8 unconfirmed |
-| ADR-052 | DDD Bounded Contexts (appendix) | (none — appendix, no Status) | unknown | missing-status; DUPLICATE NUMBER; cross-ref errors (cites 044 for provisioning) |
-| ADR-052 | Tauri Desktop Frontend — Hardware Mgmt & Viz | Proposed | partial | DUPLICATE NUMBER; superseded_by ADR-054; status drift |
+| ADR-050 | Provisioning Tool Enhancements | Proposed | partial | keeps 050 (collision resolved); partially fulfilled by ADR-060 |
+| ADR-166 | Quality Engineering Response — Security Hardening | Accepted | partial | renumbered from ADR-050 (collision resolved); unverified claims (54K fps); findings #6-8 unconfirmed |
+| ADR-167 | DDD Bounded Contexts (appendix to ADR-052) | (none — appendix, no Status) | unknown | renumbered from ADR-052 (collision resolved); missing-status; cross-ref errors (cites 044 for provisioning) |
+| ADR-052 | Tauri Desktop Frontend — Hardware Mgmt & Viz | Proposed | partial | keeps 052 (collision resolved); superseded_by ADR-054; status drift |
 | ADR-053 | UI Design System — Dark Professional | Accepted | implemented | depends on Proposed ADR-052 |
 | ADR-054 | RuView Desktop Full Implementation | Accepted — in progress | partial | command matrix mostly Stub; espflash version drift vs 052 |
 | ADR-055 | Integrated Sensing Server in Desktop App | Accepted | implemented | — |
@@ -145,13 +145,13 @@ Full per-ADR census underpinning ADR-164. **162 ADR entries across 156 distinct 
 | ADR-144 | UWB Range-Constraint Fusion | Proposed | partial | header stale (commit b10bc2e9a); no UWB radio in fleet |
 | ADR-145 | Ablation Evaluation Harness | Proposed | partial | referenced as existing by 149/150/151; F4/UWB variant HW-gated |
 | ADR-146 | RF Encoder Multi-Task Heads + Uncertainty | Proposed | proposed-only | no Impl note (unlike 141-144); depends on tch/libtorch |
-| ADR-147 | adam-mode — light theme toggle | Proposed | proposed-only | DUPLICATE NUMBER (3 files); referenced as landed by 148-yoga |
-| ADR-147 | Occupancy World Model (OccWorld/RoboOccWorld) | Accepted | partial | DUPLICATE NUMBER; self-revised from Cosmos; Phase B gated |
-| ADR-147 | Benchmark Proof — OccWorld on RTX 5080 | (none) | unknown | MISSING STATUS; DUPLICATE NUMBER; baseline-without-fine-tuning (random weights) |
-| ADR-148 | Drone Swarm Control System | In Progress | partial | DUPLICATE NUMBER; re-routes 147 Cosmos item to 149 |
-| ADR-148 | yoga-mode — pose detection/scoring demo | Proposed | proposed-only | DUPLICATE NUMBER; no tracking issue |
-| ADR-149 | AetherArena — Spatial-Intelligence Benchmark (HF) | Accepted | partial | DUPLICATE NUMBER; external repo out-of-tree; Wi-Pose dropped |
-| ADR-149 | Drone Swarm Benchmarking Methodology | Accepted (peer-reviewed) | partial | DUPLICATE NUMBER; critiques 148's own numbers |
+| ADR-169 | adam-mode — light theme toggle | Proposed | proposed-only | renumbered from ADR-147 (collision resolved); referenced by ADR-170 yoga |
+| ADR-147 | Occupancy World Model (OccWorld/RoboOccWorld) | Accepted | partial | keeps 147 (collision resolved); self-revised from Cosmos; Phase B gated |
+| ADR-168 | Benchmark Proof — OccWorld on RTX 5080 | (none) | unknown | renumbered from ADR-147 (collision resolved); MISSING STATUS; baseline-without-fine-tuning (random weights) |
+| ADR-148 | Drone Swarm Control System | In Progress | partial | keeps 148 (collision resolved); re-routes 147 Cosmos item to 149 |
+| ADR-170 | yoga-mode — pose detection/scoring demo | Proposed | proposed-only | renumbered from ADR-148 (collision resolved); no tracking issue |
+| ADR-149 | AetherArena — Spatial-Intelligence Benchmark (HF) | Accepted | partial | keeps 149 (collision resolved); external repo out-of-tree; Wi-Pose dropped |
+| ADR-171 | Drone Swarm Benchmarking Methodology | Accepted (peer-reviewed) | partial | renumbered from ADR-149 (collision resolved); critiques 148's own numbers |
 | ADR-150 | RuView RF Foundation Encoder | Proposed | partial | status Proposed but cites measured 81.63% in-domain vs ~11.6% cross-subject |
 | ADR-151 | Per-Room Calibration & Specialized Model Training | Accepted — Stages 1-5 impl | partial | HF-backbone distillation pending |
 | ADR-152 | WiFi-Pose SOTA 2026 Intake | Proposed | partial | header stale; §2.1-2.3/2.6 impl, WiFlow-STD ~96% PCK; 1/25 claim REFUTED |

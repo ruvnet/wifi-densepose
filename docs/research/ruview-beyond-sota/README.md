@@ -15,7 +15,7 @@ validation pass run against the working tree.
 | [00-system-review.md](00-system-review.md) | Capability audit of the current engine | Signal layer is the deepest asset (`ruvsense/` ≈14.4k lines, 310 in-module tests); the model tier is the emptiest (no trained checkpoint in-tree); the live 20 Hz path is the main integration gap |
 | [01-sota-landscape-2026.md](01-sota-landscape-2026.md) | Published SOTA per capability axis (web-verified) | Defines the beyond-SOTA bar: 12-row capability → published SOTA → RuView-today → target table; IEEE 802.11bf-2025 is ratified and moves the moat up-stack |
 | [02-beyond-sota-architecture.md](02-beyond-sota-architecture.md) | Target architecture | 8 pillars (RF foundation encoder + UQ heads, differentiable RF forward model, RF-SLAM×WorldGraph loop, camera→RF distillation, swarm apertures, continual adaptation, deterministic WASM edge, NV fusion) — all landing inside existing crates, no rewrite (per ADR-136 §2.1) |
-| [03-benchmark-validation-methodology.md](03-benchmark-validation-methodology.md) | Test/validation/benchmark methodology | 6-layer validation pyramid; 15 criterion bench targets inventoried; `benchmark_baseline.json` is a live-capture anchor, not a criterion baseline; statistical protocol from ADR-149 (≥10 seeds, IQM, bootstrap CIs) |
+| [03-benchmark-validation-methodology.md](03-benchmark-validation-methodology.md) | Test/validation/benchmark methodology | 6-layer validation pyramid; 15 criterion bench targets inventoried; `benchmark_baseline.json` is a live-capture anchor, not a criterion baseline; statistical protocol from ADR-171 (≥10 seeds, IQM, bootstrap CIs) |
 | [04-optimization-roadmap.md](04-optimization-roadmap.md) | Performance review + 90-day plan | ISTA CIR solver is the dominant latency hazard (~1.1 GFLOP/frame at HE40); exact zero-risk wins identified; WorldGraph grows unboundedly (no eviction) — a real bug-class |
 
 ## Validation results (this session, 2026-06-09)
@@ -83,7 +83,7 @@ Correctness post-optimization: `wifi-densepose-signal` 456 tests green;
 
 1. **"Beyond SOTA" is currently unfalsifiable** without a real-CSI
    ground-truth benchmark — standing one up (per doc 03's acceptance table
-   and ADR-149's statistical protocol) is the highest-leverage next step.
+   and ADR-171's statistical protocol) is the highest-leverage next step.
 2. **The path is evolution, not rewrite**: all eight architecture pillars in
    doc 02 land inside existing crates on the ADR-136 `Stage<I,O>`/`FrameMeta`
    contract spine.

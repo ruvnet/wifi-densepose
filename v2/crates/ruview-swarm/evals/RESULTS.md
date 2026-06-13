@@ -1,4 +1,4 @@
-# ruview-swarm Evaluation Results (ADR-149 Stage 1, kinematic)
+# ruview-swarm Evaluation Results (ADR-171 Stage 1, kinematic)
 
 Statistically-rigorous evaluation harness: seeded multi-run rollouts with IQM + 95% stratified-bootstrap confidence intervals (Agarwal et al., NeurIPS 2021).
 
@@ -9,7 +9,7 @@ Statistically-rigorous evaluation harness: seeded multi-run rollouts with IQM + 
 - **CI method**: 95% stratified bootstrap of the IQM, stratified by seed
 - **GDOP**: 2-D geometric dilution of precision at first detection
 
-> **Stage 2 pending**: high-fidelity Gazebo/PX4 SITL evaluation (false-alarm rate, real collision rate on the median seeds) is a follow-on — see ADR-149 §6.1. The collision figures below are a kinematic min-separation proxy, not SITL physics.
+> **Stage 2 pending**: high-fidelity Gazebo/PX4 SITL evaluation (false-alarm rate, real collision rate on the median seeds) is a follow-on — see ADR-171 §6.1. The collision figures below are a kinematic min-separation proxy, not SITL physics.
 
 ## Flight-pattern leaderboard
 

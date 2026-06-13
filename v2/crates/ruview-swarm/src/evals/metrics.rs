@@ -1,4 +1,4 @@
-//! Per-episode and aggregate SAR + MARL metrics (ADR-149 Stage 1).
+//! Per-episode and aggregate SAR + MARL metrics (ADR-171 Stage 1).
 
 use crate::evals::stats::{stratified_bootstrap_ci, ConfidenceInterval};
 
@@ -38,7 +38,7 @@ pub struct AggregateMetrics {
 impl AggregateMetrics {
     /// Aggregate a seed-stratified matrix of episodes. Each inner `Vec` is one
     /// seed's episodes; bootstrap resampling is stratified by seed so the CI
-    /// reflects between-seed variance (the dominant source per ADR-149).
+    /// reflects between-seed variance (the dominant source per ADR-171).
     pub fn from_strata(per_seed: &[Vec<EpisodeMetrics>], boot_seed: u64) -> Self {
         const N_BOOT: usize = 1000;
 

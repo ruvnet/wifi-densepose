@@ -162,7 +162,7 @@ Represents an over-the-air firmware update to a running node.
 | `target_node` | `MacAddress` | Target node MAC |
 | `target_ip` | `IpAddr` | Target node IP |
 | `firmware` | `FirmwareBinary` | The binary being pushed |
-| `psk` | `Option<SecureString>` | PSK for authentication (ADR-050) |
+| `psk` | `Option<SecureString>` | PSK for authentication (ADR-166) |
 | `phase` | `OtaPhase` | Uploading / Rebooting / Verifying / Done / Failed |
 | `progress` | `Progress` | Upload progress |
 

@@ -18,7 +18,7 @@ published from the layer it lives at.
 |-------|----------------|---------|-----------|-------------|
 | **L0** Unit/integration tests | Code correctness | `cargo test --workspace --no-default-features` + pytest | per commit | exact |
 | **L1** Deterministic proof + witness bundle | Pipeline is real, unchanged, reproducible | `archive/v1/data/proof/verify.py`, `scripts/generate-witness-bundle.sh` | per merge / release | exact (SHA-256) |
-| **L2** Criterion micro-benchmarks | Compute latency only — never quality (ADR-149 §2) | 15 bench targets across `v2/crates/*/benches/` | nightly / pre-release | statistical |
+| **L2** Criterion micro-benchmarks | Compute latency only — never quality (ADR-171 §2) | 15 bench targets across `v2/crates/*/benches/` | nightly / pre-release | statistical |
 | **L3** Dataset-level accuracy eval | Pose/presence/vitals quality vs published SOTA | MM-Fi / Wi-Pose (ADR-015), `ruview_metrics.rs` tiers, ADR-145 ablation harness | per model release | seeded |
 | **L4** Hardware-in-loop | Real CSI on real ESP32, no mocks | COM9 (S3) / COM12 (C6) protocol, witness firmware hashes | per firmware release | A/B controlled |
 | **L5** Field trials / live capture | End-to-end behavior in a real room | live-session captures (e.g. `benchmark_baseline.json`) | campaign | statistical |
@@ -69,7 +69,7 @@ from the check inventory.
 
 ### 1.3 L2 — Criterion micro-benchmark inventory (all 15 targets)
 
-All bench sources read directly. Per ADR-149 §2 these are **latency regression gates
+All bench sources read directly. Per ADR-171 §2 these are **latency regression gates
 only, never quality evidence**.
 
 | Bench target | Crate | Benchmark functions / groups | What it measures | Recorded value or in-source target (citation) |
@@ -86,7 +86,7 @@ only, never quality evidence**.
 | `detection_bench.rs` | wifi-densepose-mat | `breathing_detection`, `heartbeat_detection`, `movement_classification`, `detection_pipeline`, localization (triangulation/depth), alert generation | MAT survivor-detection algorithms at varying signal lengths / noise | no recorded baseline |
 | `transport_bench.rs` | wifi-densepose-hardware | `beacon_serialize_16byte/28byte_auth/quic_framed`, `auth_beacon_verify`, `replay_window`, `framed_message` encode/decode, `secure_tdm_cycle` (manual vs QUIC) | TDM beacon crypto + transport | no recorded baseline |
 | `mqtt_throughput.rs` | wifi-densepose-sensing-server | `discovery::build_*`, `state::*`, `rate_limiter::allow_*`, `privacy::decide_*`, `semantic::bus_tick_all_10_primitives` | ADR-115 MQTT hot path | Targets (header): discovery **<5 µs**, state encode **<2 µs**, rate limit **<100 ns**, privacy **<50 ns**, bus tick **<10 µs** |
-| `swarm_bench.rs` | ruview-swarm | `marl_actor_inference`, `rrt_apf_100iter`, `multiview_fusion_3drones`, `demo_coverage_estimate`, `ppo_update_64transitions` | ADR-148 swarm control-loop compute | Measured: **3.3 µs / 43 µs / 54–58.5 ns / 100 ps / 248 µs** (ADR-149 §4.3; `CHANGELOG.md` Performance section) |
+| `swarm_bench.rs` | ruview-swarm | `marl_actor_inference`, `rrt_apf_100iter`, `multiview_fusion_3drones`, `demo_coverage_estimate`, `ppo_update_64transitions` | ADR-148 swarm control-loop compute | Measured: **3.3 µs / 43 µs / 54–58.5 ns / 100 ps / 248 µs** (ADR-171 §4.3; `CHANGELOG.md` Performance section) |
 | `pipeline_throughput.rs` | nvsim | `pipeline_run` (sample-count sweep), `witness::run` vs `run_with_witness` | NV-diamond sim throughput + witness overhead | Acceptance: **≥1 kHz** simulated samples/s on Cortex-A53-class CPU — bench header |
 | `state_machine.rs` | homecore | `set` first/warm/no-op, `get` hit/miss, `all_snapshot`, `all_by_domain_light_20_of_100`, `broadcast_fan_out` | HOMECORE state-machine hot paths | no recorded baseline |
 
@@ -109,7 +109,7 @@ file itself); its producer must be identified and committed (§5.3). Summary val
 | `person_count_changes` | 10 |
 
 Criterion latencies that *have* been recorded live in ADR documents instead
-(ADR-147-benchmark-proof.md, ADR-149 §4.3, CHANGELOG Performance) — §5 below defines
+(ADR-168-benchmark-proof.md, ADR-171 §4.3, CHANGELOG Performance) — §5 below defines
 how to consolidate them into a real machine-readable criterion baseline.
 
 ### 1.4 L3 — Dataset-level accuracy evaluation
@@ -150,7 +150,7 @@ how to consolidate them into a real machine-readable criterion baseline.
 ### 1.6 L5 — Field trials
 
 Live multi-node sessions captured as JSONL/JSON with summary statistics —
-`benchmark_baseline.json` (§1.3) is the existing exemplar. ADR-149 §6 adds the seeded
+`benchmark_baseline.json` (§1.3) is the existing exemplar. ADR-171 §6 adds the seeded
 `evals/` episode harness (Stage 1 kinematic full-matrix, Stage 2 Gazebo/PX4 SITL on the
 3 median seeds) for the swarm domain.
 
@@ -168,42 +168,42 @@ statistical procedure of §3 followed. Current axes with measured status:
 | Edge efficiency frontier | torso-PCK@20 at deployed precision + params + batch-1 latency | same | MultiFormer 72.25% at full size | Pareto-dominance: smaller **and** above 72.25% at the deployed precision | int8 73.5 KB **74.70%**; int4-QAT 36.7 KB **74.46%**; shipped int4 verified **74.08%**, 0.135 ms 1-thread x86 (same file) |
 | Cross-subject generalization | torso-PCK@20, official MM-Fi cross-subject split (256,608 train / 64,152 test) | leakage-free split | own zero-shot baseline 63.99% | ADR-150 §4 gate: **+≥6 pts cross-subject without losing >2 pts random-split** | Best zero-shot **64.92%** (mixup+TTA+3-seed); gate judged unreachable without new capture (ADR-150 §3.2) |
 | Few-shot calibration (deployment) | PCK@20 after K labeled in-room samples; adapter size | MM-Fi cross-subject & cross-environment splits | zero-shot (64% / 10.6%) | SOTA-level (≳72%) from ≤200 samples with ≤~11 KB per-room adapter | cross-subject ~**72%** @100–200 samples (3 seeds); cross-env **10.6→73.1%** @200, 60.1% @5 (ADR-150 §3.5–3.6) |
-| Swarm SAR localization | CEP50/CEP95 (m), GDOP-stratified | seeded episode distribution (ADR-149 §6), not single geometry | Wi2SAR **5 m** (arxiv 2604.09115, paper-to-paper) | CEP50 < 5 m, IQM over ≥10 seeds, 95% CI excluding 5 m | 1.732 m single synthetic geometry — graded **Low–Medium**, not yet claimable (ADR-149 §7) |
-| Swarm coverage | coverage-rate@240 s; time-to-95% | episode rollouts | Wi2SAR 160k m²/13.5 min | rollout (not analytic) mean+CI beating baseline | 223 s is an analytic estimate — graded **Low** (ADR-149 §7) |
-| Control-loop latency | criterion wall-clock | local hardware, named | 10 ms / 100 Hz budget | all stages ≪ budget | 3.3 µs MARL / 43 µs RRT-APF / 54 ns fusion / 248 µs PPO (ADR-149 §4.3) |
-| World-model trajectory | MDE (m) at 5-frame horizon | RuView CSI-derived occupancy | pre-fine-tune random-weight baseline 9.49 m MDE | **≤1.0 m (2.0 vox)** at 5-frame horizon (ADR-147 §5 target, cited in benchmark-proof §4) | 9.49 m / FDE 16.23 m random weights; 208.45 ms median latency on real CSI (ADR-147-benchmark-proof §4, §7) |
+| Swarm SAR localization | CEP50/CEP95 (m), GDOP-stratified | seeded episode distribution (ADR-171 §6), not single geometry | Wi2SAR **5 m** (arxiv 2604.09115, paper-to-paper) | CEP50 < 5 m, IQM over ≥10 seeds, 95% CI excluding 5 m | 1.732 m single synthetic geometry — graded **Low–Medium**, not yet claimable (ADR-171 §7) |
+| Swarm coverage | coverage-rate@240 s; time-to-95% | episode rollouts | Wi2SAR 160k m²/13.5 min | rollout (not analytic) mean+CI beating baseline | 223 s is an analytic estimate — graded **Low** (ADR-171 §7) |
+| Control-loop latency | criterion wall-clock | local hardware, named | 10 ms / 100 Hz budget | all stages ≪ budget | 3.3 µs MARL / 43 µs RRT-APF / 54 ns fusion / 248 µs PPO (ADR-171 §4.3) |
+| World-model trajectory | MDE (m) at 5-frame horizon | RuView CSI-derived occupancy | pre-fine-tune random-weight baseline 9.49 m MDE | **≤1.0 m (2.0 vox)** at 5-frame horizon (ADR-147 §5 target, cited in benchmark-proof §4) | 9.49 m / FDE 16.23 m random weights; 208.45 ms median latency on real CSI (ADR-168-benchmark-proof §4, §7) |
 | Privacy leakage | MIA `leakage_score = 2·(AUC−0.5)` | fixed replay, fixed-seed shadow classifier | chance (0) | ≤ **0.05** (attacker AUC ≤ 0.525) | gate defined, harness built (ADR-145 §2.3) |
 | Vitals (hardware) | BPM error vs wearable ground truth | live A/B board protocol | control board behavior | within physiological agreement of ground truth, stable spread | 88–91 BPM vs 87 GT, spread 59→0 (CHANGELOG #987) |
 
-### Claim-language discipline (from ADR-149 §7 grading)
+### Claim-language discipline (from ADR-171 §7 grading)
 
 | Evidence | Permitted language |
 |---|---|
 | Single run / single geometry / analytic estimate | "directional", never "beats SOTA" |
 | Seeded multi-run with CIs vs paper baseline | "exceeds the published X result paper-to-paper" |
 | Same metric, same split, same protocol, CI excludes baseline | "beyond SOTA on <dataset>/<split>" |
-| No public leaderboard exists (swarm CSI-SAR) | never claim "leaderboard standing" (ADR-149 §3) |
+| No public leaderboard exists (swarm CSI-SAR) | never claim "leaderboard standing" (ADR-171 §3) |
 
 ---
 
 ## 3. Statistical Procedure for Honest Claims
 
-Adopted from ADR-149 §5 (Agarwal 2021 / Gorsane 2022 standard) and the practices
+Adopted from ADR-171 §5 (Agarwal 2021 / Gorsane 2022 standard) and the practices
 already used in ADR-150/efficiency-frontier measurements:
 
-1. **Seeds.** ≥10 independent seeds for RL/episodic claims (ADR-149 §5); ≥3 seeds
+1. **Seeds.** ≥10 independent seeds for RL/episodic claims (ADR-171 §5); ≥3 seeds
    minimum for supervised dataset evals (ADR-150 §3.5 used 3 seeds; report all).
    Training seeds, eval seeds, and split files are versioned and committed.
 2. **Aggregate.** IQM (not mean/median) for episodic metrics + performance profiles;
    for dataset accuracy report mean across seeds with each seed's value listed.
-3. **Confidence intervals.** 95% stratified bootstrap, 1,000 resamples (ADR-149 §5;
+3. **Confidence intervals.** 95% stratified bootstrap, 1,000 resamples (ADR-171 §5;
    reference impl: `rliable`).
 4. **Paired comparisons.** When comparing model A vs B (e.g. `csi_plus_cir` vs
    `csi_only`, or ours vs a reproduced baseline), evaluate both on the **identical
    frozen test frames** and use a paired bootstrap over per-sample correctness
    (PCK hit/miss is per-joint binary — pair at the joint-sample level). For
    paper-to-paper comparisons where the baseline cannot be re-run, state so
-   explicitly ("paper-to-paper", ADR-149 §2) and require the CI lower bound to clear
+   explicitly ("paper-to-paper", ADR-171 §2) and require the CI lower bound to clear
    the published point value.
 5. **Pre-registration.** The threshold lives in an ADR **before** the run
    (precedent: ADR-150 §4 gate written before §3.2 measurements; the measurements
@@ -212,9 +212,9 @@ already used in ADR-150/efficiency-frontier measurements:
    capacity-hurts, and KD-didn't-help results in the record — required practice.
 7. **Eval episodes (swarm):** 50 fixed, versioned episodes per policy
    (10 victim layouts × 5 CSI-noise levels), ≥3 baselines (random walk,
-   boustrophedon+triangulation, IPPO) (ADR-149 §5).
+   boustrophedon+triangulation, IPPO) (ADR-171 §5).
 8. **GDOP stratification** for any localization claim, so geometry artifacts cannot
-   produce the headline (ADR-149 §6.3).
+   produce the headline (ADR-171 §6.3).
 
 ---
 
@@ -230,7 +230,7 @@ already used in ADR-150/efficiency-frontier measurements:
 
 ### 4.2 Criterion baseline file (replaces the current gap)
 
-Today criterion numbers live in prose (ADR-147-benchmark-proof, ADR-149 §4.3,
+Today criterion numbers live in prose (ADR-168-benchmark-proof, ADR-171 §4.3,
 CHANGELOG). Formalize:
 
 1. `cargo bench --workspace -- --save-baseline main` on a **named, fixed runner**
@@ -293,7 +293,7 @@ Anyone outside the project must be able to re-run every claimed result:
    (`calibration_proof_runner.rs` pattern, ADR-145 §2.6) for libm portability.
 3. **Seeds are constants, committed:** `PROOF_SEED=42`, `MODEL_SEED=0`
    (`proof.rs`, ADR-015 Phase 5); dataset splits committed as `.npy`
-   (`split_random.npy`); swarm configs as versioned YAML with all seeds (ADR-149 §5).
+   (`split_random.npy`); swarm configs as versioned YAML with all seeds (ADR-171 §5).
 4. **Artifacts carry hashes.** Published model artifacts include SHA-256 (HuggingFace
    `pose_micro_int4.npz`, sha256 `c03eeb…` — efficiency-frontier doc); witness bundle
    has a `MANIFEST.sha256` over every file; provenance fields
@@ -318,9 +318,9 @@ Anyone outside the project must be able to re-run every claimed result:
 | 1 | **Subject leakage / split optimism.** In-domain `random_split` has temporal/subject-adjacency effects; the same model family scores 83.6% random-split but ~11.6% torso-PCK on the leakage-free cross-subject split | efficiency-frontier "Controlled claim" footnote; ADR-150 §1, §3.2 | Always report the split name; publish random-split and cross-subject numbers side by side; cross-subject claims only on the official split |
 | 2 | **Per-environment overfitting.** Zero-shot cross-environment collapses to 10.6%; subject-scaling saturates ~63.7% past 16–20 subjects because the residual is room/device shift | ADR-150 §3.3, §3.6 | Cross-room degradation + 17-joint heatmap in every ablation (ADR-145 §2.5); claim deployment accuracy only with the calibration protocol stated (K samples, adapter size) |
 | 3 | **Mock-mode contamination.** Mock firmware missed a real Kconfig threshold bug; the nn crate ships a `mock_inference` criterion group that must never be quoted as pipeline performance | `CLAUDE.md` firmware rule 7; `inference_bench.rs` `bench_mock_inference` | L4 mandatory before firmware release ("Always test with real WiFi CSI, not mock mode"); label mock benches in reports; ADR-147 §7 re-ran the benchmark on real CSI explicitly "no mocks" |
-| 4 | **Single-run point estimates.** 1.732 m localization from one synthetic geometry; 223 s coverage from an analytic formula | ADR-149 §1, §7 | §3 seed/CI protocol; evidence-grade table before publication |
-| 5 | **Random-weight / untrained baselines read as results.** OccWorld MDE 9.49 m is a pre-fine-tuning random-weight reading | ADR-147-benchmark-proof §4 | Label baseline-vs-target explicitly; never aggregate untrained-model numbers into capability claims |
-| 6 | **Latency conflated with quality.** Criterion µs numbers prove no compute bottleneck, nothing about accuracy | ADR-149 §2, §4.3 | L2 is gate-only; quality claims live in L3+ |
+| 4 | **Single-run point estimates.** 1.732 m localization from one synthetic geometry; 223 s coverage from an analytic formula | ADR-171 §1, §7 | §3 seed/CI protocol; evidence-grade table before publication |
+| 5 | **Random-weight / untrained baselines read as results.** OccWorld MDE 9.49 m is a pre-fine-tuning random-weight reading | ADR-168-benchmark-proof §4 | Label baseline-vs-target explicitly; never aggregate untrained-model numbers into capability claims |
+| 6 | **Latency conflated with quality.** Criterion µs numbers prove no compute bottleneck, nothing about accuracy | ADR-171 §2, §4.3 | L2 is gate-only; quality claims live in L3+ |
 | 7 | **Floating-point nondeterminism breaking proofs.** SciPy FFT SIMD reordering + multithreaded BLAS produced different hashes across CI microarchitectures | CHANGELOG #560; `calibration_proof_runner.rs` lines 1–13 (cited in ADR-145 §2.3) | Quantize before hashing; pin thread env vars; exclude wall-clock from hashes |
 | 8 | **Hash churn without procedure.** Three distinct historical values of the proof hash exist (`8c0680d7…` ADR-028, `667eb054…` CHANGELOG #560, `f8e76f21…` current file) | cited files | Every regeneration via `--generate-hash` + re-verify + CHANGELOG entry + witness bundle refresh |
 | 9 | **Aggregation bugs masking accuracy.** Person count clamped to 1 by EMA mapping; eigenvalue path leaking counts up to 10; both invisible to unit tests for months | CHANGELOG #803, #894 | L5 summary gates on `person_count_changes`/count distributions; convergence tests replaying the live loop |
@@ -336,7 +336,7 @@ Anyone outside the project must be able to re-run every claimed result:
 | Machine-readable criterion baseline (`v2/benchmarks/criterion-baseline.json`) + CI comparison job | L2 | §4.2 (numbers currently only in ADR prose) |
 | Provenance + producer script for `benchmark_baseline.json`; soft-gate job | L5 | §1.3, §4.3 (zero code references today) |
 | `ruview-cli --ablation mode=auto` wiring + `expected_ablation_<slug>.sha256` (currently placeholders → exit 2) | L3 | ADR-145 implementation status |
-| Seeded swarm `evals/` harness + `evals/RESULTS.md` internal leaderboard | L3/L5 | ADR-149 §6, §8 open issues |
+| Seeded swarm `evals/` harness + `evals/RESULTS.md` internal leaderboard | L3/L5 | ADR-171 §6, §8 open issues |
 | Fix `VERIFY.sh` hardcoded verdict count; reconcile `CLAUDE.md` "7/7" | L1 | §1.2 |
 | Curated paired room-A/room-B labeled replay set (frozen, SHA-pinned, never trained on) | L3 | ADR-145 §3.2 |
 | ARM/edge on-device latency validation for the int4 model (x86-only today) | L4 | efficiency-frontier doc ("Pi fleet pending") |
@@ -372,8 +372,8 @@ failing test, not a slogan.
 ---
 
 *All values cited from: `benchmark_baseline.json`, `v2/crates/*/benches/*.rs` (15
-files), `docs/adr/ADR-147-benchmark-proof.md`,
-`docs/adr/ADR-149-swarm-benchmarking-evaluation-methodology.md`,
+files), `docs/adr/ADR-168-benchmark-proof.md`,
+`docs/adr/ADR-171-swarm-benchmarking-evaluation-methodology.md`,
 `docs/adr/ADR-145-ablation-eval-harness-privacy-leakage.md`,
 `docs/adr/ADR-028-esp32-capability-audit.md`,
 `docs/adr/ADR-015-public-dataset-training-strategy.md`,

@@ -265,7 +265,7 @@ impl AuthenticatedBeacon {
     /// Compute the HMAC-SHA256 tag for this beacon, truncated to 8 bytes.
     ///
     /// Uses the `hmac` + `sha2` crates for cryptographically secure
-    /// message authentication (ADR-050, Sprint 1).
+    /// message authentication (ADR-166, Sprint 1).
     pub fn compute_tag(payload_and_nonce: &[u8], key: &[u8; 16]) -> [u8; HMAC_TAG_SIZE] {
         let mut mac = HmacSha256::new_from_slice(key).expect("HMAC-SHA256 accepts any key length");
         mac.update(payload_and_nonce);
@@ -953,7 +953,7 @@ mod tests {
         assert_eq!(SecLevel::Enforcing as u8, 2);
     }
 
-    // ---- Security tests (ADR-050) ----
+    // ---- Security tests (ADR-166) ----
 
     #[test]
     fn test_hmac_different_keys_produce_different_tags() {

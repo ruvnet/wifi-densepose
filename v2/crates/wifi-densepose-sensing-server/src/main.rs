@@ -4282,7 +4282,7 @@ async fn delete_model(
     State(state): State<SharedState>,
     Path(id): Path<String>,
 ) -> Json<serde_json::Value> {
-    // ADR-050: Sanitize path to prevent directory traversal
+    // ADR-166: Sanitize path to prevent directory traversal
     let safe_id = std::path::Path::new(&id)
         .file_name()
         .and_then(|f| f.to_str())
@@ -4549,7 +4549,7 @@ async fn delete_recording(
     State(state): State<SharedState>,
     Path(id): Path<String>,
 ) -> Json<serde_json::Value> {
-    // ADR-050: Sanitize path to prevent directory traversal
+    // ADR-166: Sanitize path to prevent directory traversal
     let safe_id = std::path::Path::new(&id)
         .file_name()
         .and_then(|f| f.to_str())
@@ -7355,7 +7355,7 @@ async fn main() {
         tokio::spawn(simulated_data_task(state.clone(), args.tick_ms));
     }
 
-    // ADR-050: Parse bind address once, use for all listeners
+    // ADR-166: Parse bind address once, use for all listeners
     let bind_ip: std::net::IpAddr = args
         .bind_addr
         .parse()

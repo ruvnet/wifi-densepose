@@ -9,8 +9,10 @@
 | Relates to | ADR-134, ADR-136, ADR-139, ADR-140, ADR-143, ADR-144, ADR-146, ADR-147                |
 
 > **Scope note:** ADR-147 deferred Cosmos WFM to "ADR-148" as an offline data generator.
-> That item is promoted to ADR-149. This ADR takes 148 to address the broader drone swarm
-> control architecture, which is the first consumer of ADR-147's OccWorld occupancy output.
+> That item is promoted to ADR-171 (the swarm-benchmarking/evaluation companion to this ADR;
+> renumbered from ADR-149 to resolve the ADR-149 duplicate-number collision). This ADR takes
+> 148 to address the broader drone swarm control architecture, which is the first consumer of
+> ADR-147's OccWorld occupancy output.
 
 ---
 
@@ -874,9 +876,9 @@ validated; ITAR/EAR classification completed by export counsel.
 | GPS spoofing of full swarm simultaneously | Medium | Low | UWB mesh cross-check among all nodes; ≥ 3 nodes must agree on position to confirm |
 | 1000-UAV scale claims (not validated) | Low | High | SWARM+ demonstrated in simulation only; scale claims capped at 50 for production targets |
 
-### 12.3 Open Issues (Forward to ADR-149)
+### 12.3 Open Issues (Forward to ADR-171)
 
-- Cosmos WFM offline training data generation (deferred from ADR-147) — ADR-149
+- Cosmos WFM offline training data generation (deferred from ADR-147) — ADR-171
 - Fixed-wing hybrid platform support (endurance missions) — future ADR
 - Underwater-aerial cross-domain handoff protocol — future ADR
 - Quantum-enhanced task assignment (E6) — future ADR when hardware matures
@@ -998,4 +1000,4 @@ Implementation tracked at: https://github.com/ruvnet/RuView/issues/861
 
 *ADR authored with research support from `ruflo-goals:deep-researcher` (2026-05-30).
  Implementation progress tracked by `ruflo-goals:horizon-tracker`.
- OccWorld integration basis: ADR-147. Next: ADR-149 (Cosmos WFM offline data generation).*
+ OccWorld integration basis: ADR-147. Next: ADR-171 (Cosmos WFM offline data generation; renumbered from ADR-149).*
