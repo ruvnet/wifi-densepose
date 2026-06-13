@@ -1,12 +1,12 @@
 // Training Service for WiFi-DensePose UI
 // Manages training lifecycle, progress streaming, and CSI recordings.
 
-import { buildWsUrl } from '../config/api.config.js';
 import { apiService } from './api.service.js';
 
 export class TrainingService {
   constructor() {
     this.progressSocket = null;
+    this.progressPollTimer = null;
     this.listeners = {};
     this.logger = this.createLogger();
   }
@@ -189,49 +189,41 @@ export class TrainingService {
     }
   }
 
-  // --- WebSocket progress stream ---
+  // --- Progress stream ---
 
   connectProgressStream() {
-    if (this.progressSocket) {
-      this.logger.warn('Progress stream already connected');
-      return this.progressSocket;
+    if (this.progressPollTimer) {
+      this.logger.warn('Progress polling already connected');
+      return this.progressPollTimer;
     }
 
-    const url = buildWsUrl('/ws/train/progress');
-    this.logger.info('Connecting progress stream', { url });
+    this.logger.info('Connecting progress stream over training status polling');
+    this.emit('progress-connected', { transport: 'polling' });
 
-    const ws = new WebSocket(url);
-
-    ws.onopen = () => {
-      this.logger.info('Progress stream connected');
-      this.emit('progress-connected', {});
-    };
-
-    ws.onmessage = (event) => {
+    const poll = async () => {
       try {
-        const data = JSON.parse(event.data);
-        this.emit('progress', data);
+        const data = await this.getTrainingStatus();
+        if (data) {
+          this.emit('progress', data);
+          if (!data.active && ['completed', 'idle', 'stopped', 'error'].includes(data.status)) {
+            this.disconnectProgressStream();
+          }
+        }
       } catch (err) {
-        this.logger.warn('Failed to parse progress message', { error: err.message });
+        this.logger.warn('Progress polling failed', { error: err.message });
       }
     };
 
-    ws.onerror = (error) => {
-      this.logger.error('Progress stream error', { error });
-      this.emit('progress-error', { error });
-    };
-
-    ws.onclose = () => {
-      this.logger.info('Progress stream disconnected');
-      this.progressSocket = null;
-      this.emit('progress-disconnected', {});
-    };
-
-    this.progressSocket = ws;
-    return ws;
+    poll();
+    this.progressPollTimer = window.setInterval(poll, 750);
+    return this.progressPollTimer;
   }
 
   disconnectProgressStream() {
+    if (this.progressPollTimer) {
+      window.clearInterval(this.progressPollTimer);
+      this.progressPollTimer = null;
+    }
     if (this.progressSocket) {
       this.progressSocket.close();
       this.progressSocket = null;

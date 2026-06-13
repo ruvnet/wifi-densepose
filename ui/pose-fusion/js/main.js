@@ -1,11 +1,10 @@
 /**
- * RuView — Dual-Modal Pose Estimation Demo
+ * RuView — Dual-Modal Pose Estimation
  *
  * Main orchestration: video capture → CNN embedding → CSI processing → fusion → rendering
  */
 
 import { VideoCapture } from './video-capture.js?v=13';
-import { CsiSimulator } from './csi-simulator.js?v=13';
 import { CnnEmbedder } from './cnn-embedder.js?v=13';
 import { FusionEngine } from './fusion-engine.js?v=13';
 import { PoseDecoder } from './pose-decoder.js?v=13';
@@ -26,7 +25,6 @@ const latency = { video: 0, csi: 0, fusion: 0, total: 0 };
 
 // === Components ===
 const videoCapture = new VideoCapture(document.getElementById('webcam'));
-const csiSimulator = new CsiSimulator({ subcarriers: 52, timeWindow: 56 });
 const visualCnn = new CnnEmbedder({ inputSize: 56, embeddingDim: 128, seed: 42 });
 const csiCnn = new CnnEmbedder({ inputSize: 56, embeddingDim: 128, seed: 137 });
 const fusionEngine = new FusionEngine(128);
@@ -82,7 +80,7 @@ const RSSI_HISTORY_MAX = 80;
 
 // === Initialize ===
 function init() {
-  console.log(`[PoseFusion] init() v4 — CsiSimulator=${CsiSimulator.VERSION || 'OLD'}, starting...`);
+  console.log('[PoseFusion] init() v4 — live-only sensing, starting...');
   resizeCanvases();
   console.log(`[PoseFusion] canvases: skeleton=${skeletonCanvas.width}x${skeletonCanvas.height}, csi=${csiCanvas.width}x${csiCanvas.height}, emb=${embeddingCanvas.width}x${embeddingCanvas.height}`);
   window.addEventListener('resize', resizeCanvases);
@@ -226,18 +224,9 @@ function mainLoop(timestamp) {
       videoEmb = visualCnn.extract(frame.rgb, frame.width, frame.height);
       motionRegion = videoCapture.detectMotionRegion(56, 56);
 
-      // Feed motion to CSI simulator for correlated demo data
-      // When detected=false, CSI simulator handles through-wall persistence
-      csiSimulator.updatePersonState(
-        motionRegion.detected ? 1.0 : 0,
-        motionRegion.detected ? motionRegion.x + motionRegion.w / 2 : 0.5,
-        motionRegion.detected ? motionRegion.y + motionRegion.h / 2 : 0.5,
-        frame.motion
-      );
-
       fusionEngine.updateConfidence(
         frame.brightness, frame.motion,
-        0, csiSimulator.isLive || mode === 'dual'
+        0, false
       );
     }
     latency.video = performance.now() - t0;
@@ -247,49 +236,21 @@ function mainLoop(timestamp) {
   let csiEmb = null;
   if (mode !== 'video') {
     const t0 = performance.now();
-    const csiFrame = csiSimulator.nextFrame(elapsed);
-    const pseudoImage = csiSimulator.buildPseudoImage(56);
-    csiEmb = csiCnn.extract(pseudoImage, 56, 56);
-
-    fusionEngine.updateConfidence(
-      videoCapture.brightnessScore,
-      videoCapture.motionScore,
-      csiFrame.snr,
-      true
-    );
-
-    // Draw CSI heatmap
-    const heatmap = csiSimulator.getHeatmapData();
-    renderer.drawCsiHeatmap(csiCtx, heatmap, csiCanvas.width, csiCanvas.height);
+    csiCtx.clearRect(0, 0, csiCanvas.width, csiCanvas.height);
 
     latency.csi = performance.now() - t0;
   }
 
   // --- Fusion ---
   const t0f = performance.now();
-  const fusedEmb = fusionEngine.fuse(videoEmb, csiEmb, mode);
+  const effectiveMode = mode === 'csi' ? 'video' : mode;
+  const fusedEmb = fusionEngine.fuse(videoEmb, csiEmb, effectiveMode);
   latency.fusion = performance.now() - t0f;
 
   // --- Pose Decode ---
-  // For CSI-only mode, generate a synthetic motion region from CSI energy
-  if (mode === 'csi' && (!motionRegion || !motionRegion.detected)) {
-    const csiPresence = csiSimulator.personPresence;
-    if (csiPresence > 0.1) {
-      motionRegion = {
-        detected: true,
-        x: 0.25, y: 0.15, w: 0.5, h: 0.7,
-        coverage: csiPresence,
-        motionGrid: null,
-        gridCols: 10,
-        gridRows: 8
-      };
-    }
-  }
-
-  // CSI state for through-wall tracking
   const csiState = {
-    csiPresence: csiSimulator.personPresence,
-    isLive: csiSimulator.isLive
+    csiPresence: 0,
+    isLive: false
   };
 
   const keypoints = poseDecoder.decode(fusedEmb, motionRegion, elapsed, csiState);
@@ -356,12 +317,12 @@ function mainLoop(timestamp) {
   }
 
   // RSSI update
-  updateRssi(csiSimulator.rssiDbm);
+  updateRssi(null);
 
   // One-time diagnostic
   if (!_diagDone) {
     _diagDone = true;
-    console.log(`[PoseFusion] frame 1 OK — mode=${mode}, csi.bufLen=${csiSimulator.amplitudeBuffer.length}, embPts=${embPoints?.fused?.length ?? 0}, rssi=${(csiSimulator.rssiDbm ?? -99).toFixed(1)}`);
+    console.log(`[PoseFusion] frame 1 OK — mode=${mode}, liveCsi=false, embPts=${embPoints?.fused?.length ?? 0}`);
   }
 
   } catch (err) {
@@ -380,6 +341,15 @@ function mainLoop(timestamp) {
 // === RSSI Visualization ===
 function updateRssi(dbm) {
   if (!rssiBarEl) return;
+  if (typeof dbm !== 'number' || !Number.isFinite(dbm)) {
+    rssiBarEl.style.width = '0%';
+    rssiValueEl.textContent = '-- dBm';
+    rssiQualityEl.textContent = 'No live RSSI';
+    if (rssiSparkCtx) {
+      rssiSparkCtx.clearRect(0, 0, rssiSparkCanvas.width, rssiSparkCanvas.height);
+    }
+    return;
+  }
 
   // Clamp to typical WiFi range: -100 (worst) to -30 (best)
   const clamped = Math.max(-100, Math.min(-30, dbm));

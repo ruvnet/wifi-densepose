@@ -27,7 +27,7 @@ else
     echo "   Please start it with: wifi-densepose start"
     echo "   Or: python -m wifi_densepose.main"
     echo ""
-    echo "   The UI will still work with the mock server for testing."
+    echo "   The UI will stay offline until a live backend is available."
 fi
 
 echo ""

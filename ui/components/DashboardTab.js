@@ -4,12 +4,22 @@ import { healthService } from '../services/health.service.js';
 import { poseService } from '../services/pose.service.js';
 import { sensingService } from '../services/sensing.service.js';
 
+export function parseFocusNodeIdFromSearch(search = '') {
+  const params = new URLSearchParams(search);
+  const raw = params.get('node') || params.get('node_id') || '';
+  const normalized = raw.toLowerCase().replace(/^node-?/, '');
+  const nodeId = Number.parseInt(normalized, 10);
+  return Number.isFinite(nodeId) && nodeId > 0 ? nodeId : null;
+}
+
 export class DashboardTab {
   constructor(containerElement) {
     this.container = containerElement;
     this.statsElements = {};
     this.healthSubscription = null;
     this.statsInterval = null;
+    this.nodeStatusInterval = null;
+    this.focusNodeId = parseFocusNodeIdFromSearch(window.location.search);
   }
 
   // Initialize component
@@ -32,12 +42,8 @@ export class DashboardTab {
       };
     }
 
-    // Status indicators
-    this.statusElements = {
-      apiStatus: this.container.querySelector('.api-status'),
-      streamStatus: this.container.querySelector('.stream-status'),
-      hardwareStatus: this.container.querySelector('.hardware-status')
-    };
+    this.nodeSummary = this.container.querySelector('#node-summary');
+    this.nodeStatusGrid = this.container.querySelector('#node-status-grid');
   }
 
   // Load initial data
@@ -74,11 +80,15 @@ export class DashboardTab {
     });
     // Initial update
     this.updateDataSourceIndicator();
+    this.updateNodeStatus();
 
     // Start periodic stats updates
     this.statsInterval = setInterval(() => {
       this.updateLiveStats();
     }, 5000);
+    this.nodeStatusInterval = setInterval(() => {
+      this.updateNodeStatus();
+    }, 1000);
 
     // Start health monitoring
     healthService.startHealthMonitoring(30000);
@@ -93,14 +103,149 @@ export class DashboardTab {
     const statusMsg  = el.querySelector('.status-message');
     const config = {
       'live':              { text: 'ESP32',     status: 'healthy', msg: 'Real hardware connected' },
-      'server-simulated':  { text: 'SIMULATED', status: 'warning', msg: 'Server running without hardware' },
+      'stale':             { text: 'STALE',     status: 'degraded', msg: 'Waiting for fresh feature state' },
       'reconnecting':      { text: 'RECONNECTING', status: 'degraded', msg: 'Attempting to connect...' },
-      'simulated':         { text: 'OFFLINE',   status: 'unhealthy', msg: 'Server unreachable, local fallback' },
     };
     const cfg = config[ds] || config['reconnecting'];
     el.className = `component-status status-${cfg.status}`;
     if (statusText) statusText.textContent = cfg.text;
     if (statusMsg)  statusMsg.textContent = cfg.msg;
+  }
+
+  async updateNodeStatus() {
+    if (!this.nodeStatusGrid || !this.nodeSummary) return;
+
+    try {
+      const response = await fetch('/api/v1/cardputer/status', { cache: 'no-store' });
+      if (!response.ok) {
+        throw new Error(`status ${response.status}`);
+      }
+      const status = await response.json();
+      this.renderNodeStatus(status);
+    } catch (error) {
+      this.nodeSummary.textContent = 'Status unavailable';
+      this.nodeStatusGrid.replaceChildren(
+        this.createNodeEmptyState(`Cardputer status endpoint unavailable: ${error.message}`)
+      );
+    }
+  }
+
+  renderNodeStatus(status) {
+    const nodes = Array.isArray(status.nodes) ? status.nodes : [];
+    const liveCount = Number.isFinite(status.live_node_count)
+      ? status.live_node_count
+      : nodes.filter(node => node.live).length;
+    const totalCount = Number.isFinite(status.node_count) ? status.node_count : nodes.length;
+
+    const focusNode = this.focusNodeId
+      ? nodes.find(node => Number(node.node_id) === this.focusNodeId)
+      : null;
+    this.nodeSummary.textContent = totalCount > 0
+      ? this.formatNodeSummary(liveCount, totalCount, focusNode)
+      : 'Waiting for packets';
+
+    if (nodes.length === 0) {
+      this.nodeStatusGrid.replaceChildren(this.createNodeEmptyState('No node packets received'));
+      return;
+    }
+
+    const cards = [...nodes]
+      .sort((a, b) => this.compareNodes(a, b))
+      .map(node => this.createNodeStatusCard(node));
+    this.nodeStatusGrid.replaceChildren(...cards);
+  }
+
+  formatNodeSummary(liveCount, totalCount, focusNode) {
+    if (!this.focusNodeId) return `${liveCount}/${totalCount} live`;
+    if (!focusNode) return `Node ${this.focusNodeId} waiting - ${liveCount}/${totalCount} live`;
+    return `Node ${this.focusNodeId} ${focusNode.live ? 'live' : 'stale'} - ${liveCount}/${totalCount} live`;
+  }
+
+  compareNodes(a, b) {
+    const aId = Number(a.node_id);
+    const bId = Number(b.node_id);
+    if (this.focusNodeId) {
+      if (aId === this.focusNodeId && bId !== this.focusNodeId) return -1;
+      if (bId === this.focusNodeId && aId !== this.focusNodeId) return 1;
+    }
+    return aId - bId;
+  }
+
+  createNodeStatusCard(node) {
+    const card = document.createElement('article');
+    card.className = `node-status-card ${node.live ? 'node-live' : 'node-stale'}`;
+    if (Number(node.node_id) === this.focusNodeId) {
+      card.classList.add('node-focused');
+    }
+
+    const header = document.createElement('div');
+    header.className = 'node-status-header';
+    const title = document.createElement('h4');
+    title.textContent = `Node ${node.node_id}`;
+    const pill = document.createElement('span');
+    pill.className = 'node-status-pill';
+    pill.textContent = node.live ? 'LIVE' : 'STALE';
+    header.append(title, pill);
+
+    const fields = document.createElement('dl');
+    fields.className = 'node-status-fields';
+    [
+      ['Source', node.last_source || '-'],
+      ['Packets', this.formatNumber(node.packet_count || 0)],
+      ['Age', this.formatAge(node.last_packet_age_s)],
+      ['Type', node.last_packet_type || '-'],
+      ['Presence', this.formatMetric(node.feature_state?.presence_score)],
+      ['Motion', this.formatMetric(node.feature_state?.motion_score)],
+      ['RSSI', this.formatRssi(node.rssi_dbm)],
+      ['Battery', this.formatBattery(node.battery)],
+      ['Seen', this.formatPacketTypes(node.packet_types)]
+    ].forEach(([label, value]) => {
+      const term = document.createElement('dt');
+      term.textContent = label;
+      const detail = document.createElement('dd');
+      detail.textContent = value;
+      fields.append(term, detail);
+    });
+
+    card.append(header, fields);
+    return card;
+  }
+
+  createNodeEmptyState(message) {
+    const empty = document.createElement('div');
+    empty.className = 'node-status-empty';
+    empty.textContent = message;
+    return empty;
+  }
+
+  formatAge(value) {
+    if (!Number.isFinite(value)) return '-';
+    if (value < 1) return `${Math.round(value * 1000)}ms`;
+    return `${value.toFixed(1)}s`;
+  }
+
+  formatMetric(value, digits = 2) {
+    if (!Number.isFinite(value)) return '-';
+    return Number(value).toFixed(digits);
+  }
+
+  formatRssi(value) {
+    if (!Number.isFinite(value)) return 'not reported';
+    return `${Math.round(value)} dBm`;
+  }
+
+  formatBattery(battery) {
+    if (!battery?.valid) return 'not reported';
+    const charge = battery.charging ? ' charging' : '';
+    return `${battery.percent}%${charge}`;
+  }
+
+  formatPacketTypes(packetTypes) {
+    if (!packetTypes || Object.keys(packetTypes).length === 0) return '-';
+    return Object.entries(packetTypes)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([type, count]) => `${type}:${count}`)
+      .join(' ');
   }
 
   // Update API info display
@@ -221,8 +366,7 @@ export class DashboardTab {
 
   // Update system metrics
   updateSystemMetrics(metrics) {
-    // Handle both flat and nested metric structures
-    // Backend returns system_metrics.cpu.percent, mock returns metrics.cpu.percent
+    // Handle both flat and nested metric structures.
     const systemMetrics = metrics.system_metrics || metrics;
     const cpuPercent = systemMetrics.cpu?.percent || systemMetrics.cpu_percent;
     const memoryPercent = systemMetrics.memory?.percent || systemMetrics.memory_percent;
@@ -430,6 +574,9 @@ export class DashboardTab {
 
     if (this.statsInterval) {
       clearInterval(this.statsInterval);
+    }
+    if (this.nodeStatusInterval) {
+      clearInterval(this.nodeStatusInterval);
     }
 
     healthService.stopHealthMonitoring();

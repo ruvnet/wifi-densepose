@@ -6,7 +6,7 @@ const translations = {
     // Navigation
     'nav.dashboard': 'Dashboard',
     'nav.hardware': 'Hardware',
-    'nav.demo': 'Live Demo',
+    'nav.live': 'Live View',
     'nav.architecture': 'Architecture',
     'nav.performance': 'Performance',
     'nav.applications': 'Applications',
@@ -14,9 +14,9 @@ const translations = {
     'nav.training': 'Training',
 
     // Dashboard
-    'dashboard.title': 'Revolutionary WiFi-Based Human Pose Detection',
-    'dashboard.subtitle': 'Human Tracking Through Walls Using WiFi Signals',
-    'dashboard.description': 'AI can track your full-body movement through walls using just WiFi signals. Researchers at Carnegie Mellon have trained a neural network to turn basic WiFi signals into detailed wireframe models of human bodies.',
+    'dashboard.title': 'Live RuView Status',
+    'dashboard.subtitle': 'WiFi CSI sensing, capture, and model runtime state',
+    'dashboard.description': 'This dashboard reports the state of connected RuView hardware, backend services, and live sensing output.',
     'dashboard.status': 'System Status',
     'dashboard.metrics': 'System Metrics',
     'dashboard.features': 'Features',
@@ -44,9 +44,9 @@ const translations = {
     'benefit.privacy': 'Privacy-Preserving',
     'benefit.privacyDesc': 'No cameras or visual recording - just WiFi signal analysis',
     'benefit.realtime': 'Real-Time',
-    'benefit.realtimeDesc': 'Maps 24 body regions in real-time at 100Hz sampling rate',
+    'benefit.realtimeDesc': 'Shows live pose and sensing values only when the backend reports them',
     'benefit.lowCost': 'Low Cost',
-    'benefit.lowCostDesc': 'Built using $30 commercial WiFi hardware',
+    'benefit.lowCostDesc': 'Uses connected ESP32 CSI hardware; cost depends on the deployed node set',
 
     // Stats
     'stat.bodyRegions': 'Body Regions',
@@ -67,7 +67,6 @@ const translations = {
     'conn.offline': 'Offline',
     'conn.reconnecting': 'Reconnecting...',
     'conn.live': 'Live',
-    'conn.simulated': 'Simulated',
 
     // Misc
     'misc.loading': 'Loading...',
@@ -84,7 +83,7 @@ const translations = {
     // Navigation
     'nav.dashboard': 'Panel',
     'nav.hardware': 'Sprzet',
-    'nav.demo': 'Demo na zywo',
+    'nav.live': 'Widok na zywo',
     'nav.architecture': 'Architektura',
     'nav.performance': 'Wydajnosc',
     'nav.applications': 'Aplikacje',
@@ -92,9 +91,9 @@ const translations = {
     'nav.training': 'Trening',
 
     // Dashboard
-    'dashboard.title': 'Rewolucyjne wykrywanie pozy czlowieka przez WiFi',
-    'dashboard.subtitle': 'Sledzenie ludzi przez sciany za pomoca sygnalow WiFi',
-    'dashboard.description': 'AI moze sledzic ruchy calego ciala przez sciany uzywajac jedynie sygnalow WiFi. Badacze z Carnegie Mellon wytrenowali siec neuronowa do zamiany sygnalow WiFi w szczegolowe modele szkieletowe.',
+    'dashboard.title': 'Status RuView na zywo',
+    'dashboard.subtitle': 'Stan czujnikow WiFi CSI, rejestracji i modeli',
+    'dashboard.description': 'Ten panel pokazuje stan podlaczonego sprzetu RuView, uslug backendu i danych pomiarowych na zywo.',
     'dashboard.status': 'Status systemu',
     'dashboard.metrics': 'Metryki systemu',
     'dashboard.features': 'Funkcje',
@@ -122,9 +121,9 @@ const translations = {
     'benefit.privacy': 'Ochrona prywatnosci',
     'benefit.privacyDesc': 'Brak kamer i nagrywania - tylko analiza sygnalow WiFi',
     'benefit.realtime': 'Czas rzeczywisty',
-    'benefit.realtimeDesc': 'Mapuje 24 regiony ciala w czasie rzeczywistym przy 100Hz',
+    'benefit.realtimeDesc': 'Pokazuje poze i pomiary tylko wtedy, gdy backend je raportuje',
     'benefit.lowCost': 'Niski koszt',
-    'benefit.lowCostDesc': 'Zbudowany z komercyjnego sprzetu WiFi za $30',
+    'benefit.lowCostDesc': 'Uzywa podlaczonego sprzetu ESP32 CSI; koszt zalezy od zestawu wezlow',
 
     // Stats
     'stat.bodyRegions': 'Regiony ciala',
@@ -145,7 +144,6 @@ const translations = {
     'conn.offline': 'Offline',
     'conn.reconnecting': 'Ponowne laczenie...',
     'conn.live': 'Na zywo',
-    'conn.simulated': 'Symulacja',
 
     // Misc
     'misc.loading': 'Ladowanie...',

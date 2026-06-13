@@ -5,7 +5,7 @@
  * (ws://localhost:8765) and provides a callback-based API for the UI.
  *
  * While reconnecting the WebSocket stays in "reconnecting" state and does NOT
- * emit generated frames. The desktop HTTP API can still emit live hardware
+ * emit local fallback frames. The desktop HTTP API can still emit live hardware
  * frames derived from `/api/v1/status`.
  */
 
@@ -63,10 +63,10 @@ class SensingService {
 
   // ---- Public API --------------------------------------------------------
 
-  /** Start the service. */
-  start() {
+  /** Start status polling, and optionally connect the sensing WebSocket. */
+  start({ websocket = true } = {}) {
     this._startStatusPolling();
-    this._connect();
+    if (websocket) this._connect();
   }
 
   /** Stop the service entirely. */

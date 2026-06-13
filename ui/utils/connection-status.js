@@ -56,9 +56,7 @@ export class ConnectionStatus {
     } else if (source === 'stale') {
       this.setStatus('reconnecting', 'Stale');
     } else if (state === 'connected' || state === 'streaming') {
-      const label = source === 'live' ? 'Live' :
-                    source === 'server-simulated' ? 'Offline' :
-                    'Connected';
+      const label = source === 'live' ? 'Live' : 'Connected';
       this.setStatus('connected', label);
     } else if (state === 'connecting' || state === 'reconnecting') {
       this.setStatus('reconnecting', 'Connecting...');

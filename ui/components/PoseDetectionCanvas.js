@@ -97,7 +97,6 @@ export class PoseDetectionCanvas {
             <button class="btn btn-start" id="start-btn-${this.containerId}">&#9654; Start</button>
             <button class="btn btn-stop" id="stop-btn-${this.containerId}" disabled>&#9632; Stop</button>
             <button class="btn btn-reconnect" id="reconnect-btn-${this.containerId}" disabled>&#8635; Reconnect</button>
-            <button class="btn btn-demo" id="demo-btn-${this.containerId}">&#9881; Demo</button>
             <select class="mode-select" id="mode-select-${this.containerId}">
               <option value="skeleton">Skeleton</option>
               <option value="keypoints">Keypoints</option>
@@ -268,13 +267,13 @@ export class PoseDetectionCanvas {
         box-shadow: 0 4px 12px rgba(59, 130, 246, 0.2);
       }
 
-      .btn-demo {
+      .btn-local-disabled {
         background: rgba(139, 92, 246, 0.15);
         color: #a78bfa;
         border-color: rgba(139, 92, 246, 0.3);
       }
 
-      .btn-demo:hover:not(:disabled) {
+      .btn-local-disabled:hover:not(:disabled) {
         background: rgba(139, 92, 246, 0.25);
         border-color: rgba(139, 92, 246, 0.5);
         box-shadow: 0 4px 12px rgba(139, 92, 246, 0.2);
@@ -436,10 +435,6 @@ export class PoseDetectionCanvas {
     // Reconnect button
     const reconnectBtn = document.getElementById(`reconnect-btn-${this.containerId}`);
     reconnectBtn.addEventListener('click', () => this.reconnect());
-
-    // Demo button
-    const demoBtn = document.getElementById(`demo-btn-${this.containerId}`);
-    demoBtn.addEventListener('click', () => this.toggleDemo());
 
     // Trail toggle button
     const trailBtn = document.getElementById(`trail-btn-${this.containerId}`);
@@ -804,368 +799,33 @@ export class PoseDetectionCanvas {
     ctx.globalAlpha = 1.0;
   }
 
-  // Toggle demo mode
-  toggleDemo() {
-    if (this.demoState && this.demoState.isRunning) {
-      this.stopDemo();
-      this.updateDemoButton(false);
-    } else {
-      this.runDemo();
-      this.updateDemoButton(true);
+  // Local pose synthesis is disabled; live hardware is required.
+  rejectLocalPoseMode() {
+    this.showError('Local stand-in pose data has been removed. Connect live hardware to render poses.');
+  }
+
+  runLocalPoseMode() {
+    this.rejectLocalPoseMode();
+  }
+
+  clearLocalPoseState() {
+    if (this.localPoseAnimationFrame) {
+      cancelAnimationFrame(this.localPoseAnimationFrame);
+      this.localPoseAnimationFrame = null;
     }
+    if (this.renderer) this.renderer.clearCanvas();
   }
 
-  // Demo mode - renders animated test pose data
-  runDemo() {
-    this.logger.info('Running animated demo mode');
-    
-    // Stop any existing demo animation
-    this.stopDemo();
-    
-    // Force enable all visual elements for demo
-    this.originalConfig = { ...this.renderer.config };
-    this.renderer.updateConfig({
-      showKeypoints: true,
-      showSkeleton: true,
-      showBoundingBox: true,
-      showConfidence: true,
-      confidenceThreshold: 0.1,
-      keypointConfidenceThreshold: 0.1
-    });
-
-    // Initialize animation state
-    this.demoState = {
-      isRunning: true,
-      frameCount: 0,
-      startTime: Date.now(),
-      animations: {
-        person1: { type: 'walking', phase: 0, centerX: 150, centerY: 250 },
-        person2: { type: 'waving', phase: 0, centerX: 350, centerY: 270 },
-        person3: { type: 'dancing', phase: 0, centerX: 550, centerY: 260 }
-      }
-    };
-    
-    // Start animation loop
-    this.startDemoAnimation();
-    
-    // Show demo notification
-    this.showDemoNotification('🎭 Animated Demo Active - Walking, Waving & Dancing');
+  updateLocalPoseButton() {
+    return;
   }
 
-  stopDemo() {
-    if (this.demoState && this.demoState.isRunning) {
-      this.demoState.isRunning = false;
-      if (this.demoAnimationFrame) {
-        cancelAnimationFrame(this.demoAnimationFrame);
-      }
-      if (this.originalConfig) {
-        this.renderer.updateConfig(this.originalConfig);
-      }
-      // Clear canvas
-      if (this.renderer) {
-        this.renderer.clearCanvas();
-      }
-      this.logger.info('Demo stopped');
-    }
+  startLocalPoseAnimation() {
+    return;
   }
 
-  updateDemoButton(isRunning) {
-    const demoBtn = document.getElementById(`demo-btn-${this.containerId}`);
-    if (demoBtn) {
-      demoBtn.textContent = isRunning ? 'Stop Demo' : 'Demo';
-      demoBtn.style.background = isRunning ? '#dc3545' : '#6f42c1';
-      demoBtn.style.borderColor = isRunning ? '#dc3545' : '#6f42c1';
-    }
-  }
-
-  startDemoAnimation() {
-    if (!this.demoState || !this.demoState.isRunning) return;
-
-    this.demoState.frameCount++;
-    const elapsed = (Date.now() - this.demoState.startTime) / 1000;
-    
-    // Generate animated pose data
-    const animatedPoseData = this.generateAnimatedPoseData(elapsed);
-    
-    // Render the animated data
-    this.renderPoseData(animatedPoseData);
-    
-    // Continue animation
-    this.demoAnimationFrame = requestAnimationFrame(() => this.startDemoAnimation());
-  }
-
-  generateAnimatedPoseData(time) {
-    const persons = [];
-    
-    // Person 1: Walking animation
-    const person1 = this.generateWalkingPerson(
-      this.demoState.animations.person1.centerX,
-      this.demoState.animations.person1.centerY,
-      time * 2 // Walking speed
-    );
-    persons.push(person1);
-    
-    // Person 2: Waving animation
-    const person2 = this.generateWavingPerson(
-      this.demoState.animations.person2.centerX,
-      this.demoState.animations.person2.centerY,
-      time * 3 // Waving speed
-    );
-    persons.push(person2);
-    
-    // Person 3: Dancing animation
-    const person3 = this.generateDancingPerson(
-      this.demoState.animations.person3.centerX,
-      this.demoState.animations.person3.centerY,
-      time * 2.5 // Dancing speed
-    );
-    persons.push(person3);
-    
-    return {
-      timestamp: new Date().toISOString(),
-      frame_id: `demo_frame_${this.demoState.frameCount.toString().padStart(6, '0')}`,
-      persons: persons,
-      zone_summary: {
-        demo_zone: persons.length
-      },
-      processing_time_ms: 12 + Math.random() * 8,
-      metadata: {
-        mock_data: true,
-        source: 'animated_demo',
-        fps: Math.round(this.demoState.frameCount / ((Date.now() - this.demoState.startTime) / 1000))
-      }
-    };
-  }
-
-  generateWalkingPerson(centerX, centerY, time) {
-    // Walking cycle parameters
-    const walkCycle = Math.sin(time) * 0.3;
-    const stepPhase = Math.sin(time * 2) * 0.2;
-    
-    // Base keypoint positions for walking
-    const keypoints = [
-      // Head (nose, eyes, ears) - slight bob
-      { x: centerX, y: centerY - 80 + Math.sin(time * 4) * 2, confidence: 0.95 },
-      { x: centerX - 8, y: centerY - 85 + Math.sin(time * 4) * 2, confidence: 0.92 },
-      { x: centerX + 8, y: centerY - 85 + Math.sin(time * 4) * 2, confidence: 0.93 },
-      { x: centerX - 15, y: centerY - 82 + Math.sin(time * 4) * 2, confidence: 0.88 },
-      { x: centerX + 15, y: centerY - 82 + Math.sin(time * 4) * 2, confidence: 0.89 },
-      
-      // Shoulders - subtle movement
-      { x: centerX - 35 + walkCycle * 5, y: centerY - 40 + Math.sin(time * 4) * 1, confidence: 0.94 },
-      { x: centerX + 35 - walkCycle * 5, y: centerY - 40 + Math.sin(time * 4) * 1, confidence: 0.95 },
-      
-      // Elbows - arm swing
-      { x: centerX - 25 + walkCycle * 20, y: centerY + 10 + walkCycle * 10, confidence: 0.91 },
-      { x: centerX + 25 - walkCycle * 20, y: centerY + 10 - walkCycle * 10, confidence: 0.92 },
-      
-      // Wrists - follow elbows
-      { x: centerX - 15 + walkCycle * 25, y: centerY + 55 + walkCycle * 15, confidence: 0.87 },
-      { x: centerX + 15 - walkCycle * 25, y: centerY + 55 - walkCycle * 15, confidence: 0.88 },
-      
-      // Hips - slight movement
-      { x: centerX - 18 + walkCycle * 3, y: centerY + 60, confidence: 0.96 },
-      { x: centerX + 18 - walkCycle * 3, y: centerY + 60, confidence: 0.96 },
-      
-      // Knees - walking motion
-      { x: centerX - 20 + stepPhase * 15, y: centerY + 120 - Math.abs(stepPhase) * 10, confidence: 0.93 },
-      { x: centerX + 20 - stepPhase * 15, y: centerY + 120 - Math.abs(-stepPhase) * 10, confidence: 0.94 },
-      
-      // Ankles - foot placement
-      { x: centerX - 22 + stepPhase * 20, y: centerY + 180, confidence: 0.90 },
-      { x: centerX + 22 - stepPhase * 20, y: centerY + 180, confidence: 0.91 }
-    ];
-    
-    return {
-      person_id: 'demo_walker',
-      confidence: 0.94 + Math.sin(time) * 0.03,
-      bbox: this.calculateBoundingBox(keypoints),
-      keypoints: keypoints,
-      zone_id: 'demo_zone',
-      activity: 'walking'
-    };
-  }
-
-  generateWavingPerson(centerX, centerY, time) {
-    // Waving parameters
-    const wavePhase = Math.sin(time) * 0.8;
-    const armWave = Math.sin(time * 1.5) * 30;
-    
-    const keypoints = [
-      // Head - stable
-      { x: centerX, y: centerY - 80, confidence: 0.96 },
-      { x: centerX - 8, y: centerY - 85, confidence: 0.94 },
-      { x: centerX + 8, y: centerY - 85, confidence: 0.94 },
-      { x: centerX - 15, y: centerY - 82, confidence: 0.90 },
-      { x: centerX + 15, y: centerY - 82, confidence: 0.91 },
-      
-      // Shoulders
-      { x: centerX - 35, y: centerY - 40, confidence: 0.95 },
-      { x: centerX + 35, y: centerY - 40, confidence: 0.95 },
-      
-      // Elbows - left arm stable, right arm waving
-      { x: centerX - 55, y: centerY + 10, confidence: 0.92 },
-      { x: centerX + 65 + armWave * 0.3, y: centerY - 10 - Math.abs(armWave) * 0.5, confidence: 0.93 },
-      
-      // Wrists - dramatic wave motion
-      { x: centerX - 60, y: centerY + 60, confidence: 0.88 },
-      { x: centerX + 45 + armWave, y: centerY - 30 - Math.abs(armWave) * 0.8, confidence: 0.89 },
-      
-      // Hips - stable
-      { x: centerX - 18, y: centerY + 60, confidence: 0.97 },
-      { x: centerX + 18, y: centerY + 60, confidence: 0.97 },
-      
-      // Knees - slight movement
-      { x: centerX - 20, y: centerY + 120 + Math.sin(time * 0.5) * 5, confidence: 0.94 },
-      { x: centerX + 20, y: centerY + 120 + Math.sin(time * 0.5) * 5, confidence: 0.95 },
-      
-      // Ankles - stable
-      { x: centerX - 22, y: centerY + 180, confidence: 0.92 },
-      { x: centerX + 22, y: centerY + 180, confidence: 0.93 }
-    ];
-    
-    return {
-      person_id: 'demo_waver',
-      confidence: 0.91 + Math.sin(time * 0.7) * 0.05,
-      bbox: this.calculateBoundingBox(keypoints),
-      keypoints: keypoints,
-      zone_id: 'demo_zone',
-      activity: 'waving'
-    };
-  }
-
-  generateDancingPerson(centerX, centerY, time) {
-    // Dancing parameters - more complex movement
-    const dancePhase1 = Math.sin(time * 1.2) * 0.6;
-    const dancePhase2 = Math.cos(time * 1.8) * 0.4;
-    const bodyBob = Math.sin(time * 3) * 8;
-    const hipSway = Math.sin(time * 1.5) * 15;
-    
-    const keypoints = [
-      // Head - dancing bob
-      { x: centerX + dancePhase1 * 5, y: centerY - 80 + bodyBob, confidence: 0.96 },
-      { x: centerX - 8 + dancePhase1 * 5, y: centerY - 85 + bodyBob, confidence: 0.94 },
-      { x: centerX + 8 + dancePhase1 * 5, y: centerY - 85 + bodyBob, confidence: 0.94 },
-      { x: centerX - 15 + dancePhase1 * 5, y: centerY - 82 + bodyBob, confidence: 0.90 },
-      { x: centerX + 15 + dancePhase1 * 5, y: centerY - 82 + bodyBob, confidence: 0.91 },
-      
-      // Shoulders - dance movement
-      { x: centerX - 35 + dancePhase1 * 10, y: centerY - 40 + bodyBob * 0.5, confidence: 0.95 },
-      { x: centerX + 35 + dancePhase2 * 10, y: centerY - 40 + bodyBob * 0.5, confidence: 0.95 },
-      
-      // Elbows - both arms dancing
-      { x: centerX - 45 + dancePhase1 * 25, y: centerY + 0 + dancePhase1 * 20, confidence: 0.92 },
-      { x: centerX + 45 + dancePhase2 * 25, y: centerY + 0 + dancePhase2 * 20, confidence: 0.93 },
-      
-      // Wrists - expressive arm movements
-      { x: centerX - 40 + dancePhase1 * 35, y: centerY + 50 + dancePhase1 * 30, confidence: 0.88 },
-      { x: centerX + 40 + dancePhase2 * 35, y: centerY + 50 + dancePhase2 * 30, confidence: 0.89 },
-      
-      // Hips - dancing sway
-      { x: centerX - 18 + hipSway * 0.3, y: centerY + 60 + bodyBob * 0.3, confidence: 0.97 },
-      { x: centerX + 18 + hipSway * 0.3, y: centerY + 60 + bodyBob * 0.3, confidence: 0.97 },
-      
-      // Knees - dancing steps
-      { x: centerX - 20 + hipSway * 0.5 + Math.sin(time * 2.5) * 10, y: centerY + 120 + Math.abs(Math.sin(time * 2.5)) * 15, confidence: 0.94 },
-      { x: centerX + 20 + hipSway * 0.5 + Math.cos(time * 2.5) * 10, y: centerY + 120 + Math.abs(Math.cos(time * 2.5)) * 15, confidence: 0.95 },
-      
-      // Ankles - feet positioning
-      { x: centerX - 22 + hipSway * 0.6 + Math.sin(time * 2.5) * 12, y: centerY + 180, confidence: 0.92 },
-      { x: centerX + 22 + hipSway * 0.6 + Math.cos(time * 2.5) * 12, y: centerY + 180, confidence: 0.93 }
-    ];
-    
-    return {
-      person_id: 'demo_dancer',
-      confidence: 0.89 + Math.sin(time * 1.3) * 0.07,
-      bbox: this.calculateBoundingBox(keypoints),
-      keypoints: keypoints,
-      zone_id: 'demo_zone',
-      activity: 'dancing'
-    };
-  }
-
-  calculateBoundingBox(keypoints) {
-    const validPoints = keypoints.filter(kp => kp.confidence > 0.1);
-    if (validPoints.length === 0) return { x: 0, y: 0, width: 50, height: 50 };
-    
-    const xs = validPoints.map(kp => kp.x);
-    const ys = validPoints.map(kp => kp.y);
-    
-    const minX = Math.min(...xs) - 10;
-    const maxX = Math.max(...xs) + 10;
-    const minY = Math.min(...ys) - 10;
-    const maxY = Math.max(...ys) + 10;
-    
-    return {
-      x: minX,
-      y: minY,
-      width: maxX - minX,
-      height: maxY - minY
-    };
-  }
-
-  generateDemoKeypoints(centerX, centerY) {
-    // COCO keypoint order: nose, left_eye, right_eye, left_ear, right_ear,
-    // left_shoulder, right_shoulder, left_elbow, right_elbow, left_wrist, right_wrist,
-    // left_hip, right_hip, left_knee, right_knee, left_ankle, right_ankle
-    const offsets = [
-      [0, -80],     // nose
-      [-10, -90],   // left_eye
-      [10, -90],    // right_eye
-      [-20, -85],   // left_ear
-      [20, -85],    // right_ear
-      [-40, -40],   // left_shoulder
-      [40, -40],    // right_shoulder
-      [-60, 10],    // left_elbow
-      [60, 10],     // right_elbow
-      [-65, 60],    // left_wrist
-      [65, 60],     // right_wrist
-      [-20, 60],    // left_hip
-      [20, 60],     // right_hip
-      [-25, 120],   // left_knee
-      [25, 120],    // right_knee
-      [-25, 180],   // left_ankle
-      [25, 180]     // right_ankle
-    ];
-    
-    return offsets.map(([dx, dy]) => ({
-      x: centerX + dx,
-      y: centerY + dy,
-      confidence: 0.8 + (Math.random() * 0.2)
-    }));
-  }
-
-  showDemoNotification(message = '🎭 Demo Mode Active') {
-    const notification = document.createElement('div');
-    notification.style.cssText = `
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      background: rgba(111, 66, 193, 0.9);
-      color: white;
-      padding: 10px 15px;
-      border-radius: 4px;
-      font-size: 14px;
-      z-index: 20;
-      pointer-events: none;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    `;
-    notification.textContent = message;
-    
-    const overlay = document.getElementById(`overlay-${this.containerId}`);
-    
-    // Remove any existing notifications
-    const existingNotifications = overlay.querySelectorAll('div[style*="background: rgba(111, 66, 193"]');
-    existingNotifications.forEach(n => n.remove());
-    
-    overlay.appendChild(notification);
-    
-    // Remove notification after 3 seconds
-    setTimeout(() => {
-      if (notification.parentNode) {
-        notification.parentNode.removeChild(notification);
-      }
-    }, 3000);
+  generateAnimatedPoseData() {
+    return null;
   }
 
   // Configuration methods
@@ -1519,8 +1179,8 @@ export class PoseDetectionCanvas {
         this.stop();
       }
 
-      // Stop demo animation
-      this.stopDemo();
+      // Clear disabled local-pose state.
+      this.clearLocalPoseState();
 
       // Dispose settings panel
       if (this.settingsPanel) {

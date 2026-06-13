@@ -33,6 +33,16 @@ export class SensingTab {
   _buildDOM() {
     this.container.innerHTML = `
       <h2>Live WiFi Sensing</h2>
+      <div class="page-readme">
+        <h3>Sensing README</h3>
+        <p>This page visualizes live CSI-derived signal state from the RuView sensing service.</p>
+        <ul>
+          <li>The viewport updates only from live messages or HTTP status-derived hardware frames.</li>
+          <li>RSSI, variance, motion, breathing, and spectral values stay blank until reported.</li>
+          <li>Disconnected and stale states are shown explicitly; local fallback frames are disabled.</li>
+          <li>How data is used: CSI-derived features drive the 3D field, meters, classification label, sparkline, and node panels.</li>
+        </ul>
+      </div>
 
       <!-- Data-source status banner — updated by _onStateChange -->
       <div id="sensingSourceBanner" class="sensing-source-banner sensing-source-reconnecting"
@@ -72,22 +82,22 @@ export class SensingTab {
               <div class="sensing-meter">
                 <label>Variance</label>
                 <div class="sensing-bar"><div class="sensing-bar-fill" id="barVariance"></div></div>
-                <span class="sensing-meter-val" id="valVariance">0</span>
+                <span class="sensing-meter-val" id="valVariance">--</span>
               </div>
               <div class="sensing-meter">
                 <label>Motion Band</label>
                 <div class="sensing-bar"><div class="sensing-bar-fill motion" id="barMotion"></div></div>
-                <span class="sensing-meter-val" id="valMotion">0</span>
+                <span class="sensing-meter-val" id="valMotion">--</span>
               </div>
               <div class="sensing-meter">
                 <label>Breathing Band</label>
                 <div class="sensing-bar"><div class="sensing-bar-fill breath" id="barBreath"></div></div>
-                <span class="sensing-meter-val" id="valBreath">0</span>
+                <span class="sensing-meter-val" id="valBreath">--</span>
               </div>
               <div class="sensing-meter">
                 <label>Spectral Power</label>
                 <div class="sensing-bar"><div class="sensing-bar-fill spectral" id="barSpectral"></div></div>
-                <span class="sensing-meter-val" id="valSpectral">0</span>
+                <span class="sensing-meter-val" id="valSpectral">--</span>
               </div>
             </div>
           </div>
@@ -96,11 +106,11 @@ export class SensingTab {
           <div class="sensing-card">
             <div class="sensing-card-title">Classification</div>
             <div class="sensing-classification" id="sensingClassification">
-              <div class="sensing-class-label" id="classLabel">ABSENT</div>
+              <div class="sensing-class-label" id="classLabel">UNKNOWN</div>
               <div class="sensing-confidence">
                 <label>Confidence</label>
                 <div class="sensing-bar"><div class="sensing-bar-fill confidence" id="barConfidence"></div></div>
-                <span class="sensing-meter-val" id="valConfidence">0%</span>
+                <span class="sensing-meter-val" id="valConfidence">--</span>
               </div>
             </div>
           </div>
@@ -110,9 +120,8 @@ export class SensingTab {
             <div class="sensing-card-title">About This Data</div>
             <p class="sensing-about-text">
               Metrics are computed from WiFi Channel State Information (CSI).
-              With <strong><span id="sensingNodeCount">0</span> ESP32 node(s)</strong> you get presence detection, breathing
-              estimation, and gross motion. Add <strong>3-4+ ESP32 nodes</strong>
-              around the room for spatial resolution and limb-level tracking.
+              Connected ESP32 node count is reported by the live backend. More nodes improve spatial resolution when
+              the backend provides calibrated CSI streams.
             </p>
           </div>
 
@@ -127,10 +136,10 @@ export class SensingTab {
             <div class="sensing-card-title">Details</div>
             <div class="sensing-details">
               <div class="sensing-detail-row">
-                <span>Dominant Freq</span><span id="valDomFreq">0 Hz</span>
+                <span>Dominant Freq</span><span id="valDomFreq">--</span>
               </div>
               <div class="sensing-detail-row">
-                <span>Change Points</span><span id="valChangePoints">0</span>
+                <span>Change Points</span><span id="valChangePoints">--</span>
               </div>
               <div class="sensing-detail-row">
                 <span>Sample Rate</span><span id="valSampleRate">--</span>
@@ -231,7 +240,6 @@ export class SensingTab {
         connecting:   'Connecting...',
         connected:    'Connected',
         reconnecting: 'Reconnecting...',
-        simulated:    'Disconnected',
       };
       const sourceLabels = {
         live: 'Live',
@@ -250,9 +258,7 @@ export class SensingTab {
       const bannerConfig = {
         'live':              { text: 'LIVE \u2014 ESP32 HARDWARE',           cls: 'sensing-source-live' },
         'stale':             { text: 'STALE \u2014 FEATURE STATE',           cls: 'sensing-source-stale' },
-        'server-simulated':  { text: 'OFFLINE \u2014 NO LIVE HARDWARE',      cls: 'sensing-source-simulated' },
         'reconnecting':      { text: 'RECONNECTING...',                    cls: 'sensing-source-reconnecting' },
-        'simulated':         { text: 'OFFLINE \u2014 NO LIVE DATA',          cls: 'sensing-source-simulated' },
       };
       const cfg = bannerConfig[dataSource] || bannerConfig.reconnecting;
       banner.textContent = cfg.text;
@@ -272,31 +278,35 @@ export class SensingTab {
     if (countEl) countEl.textContent = String(nodeCount);
 
     // RSSI
-    this._setText('sensingRssi', `${(f.mean_rssi || -80).toFixed(1)} dBm`);
-    this._setText('sensingSource', data.source || '');
+    const meanRssi = this._finiteNumber(f.mean_rssi);
+    this._setText('sensingRssi', meanRssi == null ? '-- dBm' : `${meanRssi.toFixed(1)} dBm`);
+    this._setText('sensingSource', this._sourceLabel(data.source));
 
     // Bars (scale to 0-100%)
-    this._setBar('barVariance', f.variance, 10, 'valVariance', f.variance);
-    this._setBar('barMotion', f.motion_band_power, 0.5, 'valMotion', f.motion_band_power);
-    this._setBar('barBreath', f.breathing_band_power, 0.3, 'valBreath', f.breathing_band_power);
-    this._setBar('barSpectral', f.spectral_power, 2.0, 'valSpectral', f.spectral_power);
+    this._setBar('barVariance', f.variance, 10, 'valVariance', this._formatMetric(f.variance));
+    this._setBar('barMotion', f.motion_band_power, 0.5, 'valMotion', this._formatMetric(f.motion_band_power));
+    this._setBar('barBreath', f.breathing_band_power, 0.3, 'valBreath', this._formatMetric(f.breathing_band_power));
+    this._setBar('barSpectral', f.spectral_power, 2.0, 'valSpectral', this._formatMetric(f.spectral_power));
 
     // Classification
     const label = this.container.querySelector('#classLabel');
     if (label) {
-      const level = (c.motion_level || 'absent').toUpperCase();
+      const levelRaw = typeof c.motion_level === 'string' && c.motion_level ? c.motion_level : 'unknown';
+      const level = levelRaw.toUpperCase();
       label.textContent = level;
-      label.className = 'sensing-class-label ' + (c.motion_level || 'absent');
+      label.className = 'sensing-class-label ' + levelRaw;
     }
 
-    const confPct = ((c.confidence || 0) * 100).toFixed(0);
-    this._setBar('barConfidence', c.confidence, 1.0, 'valConfidence', confPct + '%');
+    const confidence = this._finiteNumber(c.confidence);
+    const confPct = confidence == null ? '--' : `${(confidence * 100).toFixed(0)}%`;
+    this._setBar('barConfidence', confidence, 1.0, 'valConfidence', confPct);
 
     // Details
-    this._setText('valDomFreq', (f.dominant_freq_hz || 0).toFixed(3) + ' Hz');
-    this._setText('valChangePoints', String(f.change_points || 0));
-    const srcLabel = (data.source === 'simulated' || data.source === 'simulate') ? 'offline' : data.source || 'live';
-    this._setText('valSampleRate', srcLabel);
+    const dominantFreq = this._finiteNumber(f.dominant_freq_hz);
+    const changePoints = this._finiteNumber(f.change_points);
+    this._setText('valDomFreq', dominantFreq == null ? '--' : `${dominantFreq.toFixed(3)} Hz`);
+    this._setText('valChangePoints', changePoints == null ? '--' : String(changePoints));
+    this._setText('valSampleRate', this._sourceLabel(data.source));
 
     // Sparkline
     this._drawSparkline();
@@ -310,13 +320,29 @@ export class SensingTab {
   _setBar(barId, value, maxVal, valId, displayVal) {
     const bar = this.container.querySelector('#' + barId);
     if (bar) {
-      const pct = Math.min(100, Math.max(0, ((value || 0) / maxVal) * 100));
+      const numericValue = this._finiteNumber(value) ?? 0;
+      const pct = Math.min(100, Math.max(0, (numericValue / maxVal) * 100));
       bar.style.width = pct + '%';
     }
     if (valId && displayVal != null) {
       const el = this.container.querySelector('#' + valId);
       if (el) el.textContent = typeof displayVal === 'number' ? displayVal.toFixed(3) : displayVal;
     }
+  }
+
+  _finiteNumber(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  _formatMetric(value) {
+    const number = this._finiteNumber(value);
+    return number == null ? '--' : number.toFixed(3);
+  }
+
+  _sourceLabel(source) {
+    if (!source) return '--';
+    return source;
   }
 
   _drawSparkline() {

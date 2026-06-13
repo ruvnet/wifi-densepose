@@ -1,7 +1,7 @@
 // RuView Service Worker - Offline caching for the dashboard shell
 // Strategy: Network-first for API calls, Cache-first for static assets
 
-const CACHE_NAME = 'ruview-v12';
+const CACHE_NAME = 'ruview-v16';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
@@ -11,7 +11,7 @@ const SHELL_ASSETS = [
   '/components/TabManager.js',
   '/components/DashboardTab.js',
   '/components/HardwareTab.js',
-  '/components/LiveDemoTab.js',
+  '/components/LiveViewTab.js',
   '/components/SensingTab.js',
   '/components/PoseDetectionCanvas.js',
   '/services/api.service.js',
@@ -86,7 +86,7 @@ self.addEventListener('fetch', (event) => {
     url.pathname === '/sw.js' ||
     url.pathname === '/config/api.config.js' ||
     url.pathname === '/components/DashboardTab.js' ||
-    url.pathname === '/components/LiveDemoTab.js' ||
+    url.pathname === '/components/LiveViewTab.js' ||
     url.pathname === '/components/SensingTab.js' ||
     url.pathname === '/services/sensing.service.js' ||
     url.pathname === '/observatory/js/main.js' ||

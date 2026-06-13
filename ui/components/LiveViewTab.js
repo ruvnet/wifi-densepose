@@ -1,4 +1,4 @@
-// Live Demo Tab Component - Enhanced Version
+// Live View Tab Component
 
 import { PoseDetectionCanvas } from './PoseDetectionCanvas.js';
 import { poseService } from '../services/pose.service.js';
@@ -10,7 +10,7 @@ import { sensingService } from '../services/sensing.service.js';
 let modelService = null;
 let trainingService = null;
 
-export class LiveDemoTab {
+export class LiveViewTab {
   constructor(containerElement) {
     this.container = containerElement;
     this.state = {
@@ -73,17 +73,17 @@ export class LiveDemoTab {
 
   createLogger() {
     return {
-      debug: (...args) => console.debug('[LIVEDEMO-DEBUG]', new Date().toISOString(), ...args),
-      info: (...args) => console.info('[LIVEDEMO-INFO]', new Date().toISOString(), ...args),
-      warn: (...args) => console.warn('[LIVEDEMO-WARN]', new Date().toISOString(), ...args),
-      error: (...args) => console.error('[LIVEDEMO-ERROR]', new Date().toISOString(), ...args)
+      debug: (...args) => console.debug('[LIVEVIEW-DEBUG]', new Date().toISOString(), ...args),
+      info: (...args) => console.info('[LIVEVIEW-INFO]', new Date().toISOString(), ...args),
+      warn: (...args) => console.warn('[LIVEVIEW-WARN]', new Date().toISOString(), ...args),
+      error: (...args) => console.error('[LIVEVIEW-ERROR]', new Date().toISOString(), ...args)
     };
   }
 
   // Initialize component
   async init() {
     try {
-      this.logger.info('Initializing LiveDemoTab component');
+      this.logger.info('Initializing LiveViewTab component');
 
       // Load optional services (non-blocking)
       try {
@@ -116,9 +116,9 @@ export class LiveDemoTab {
       // Initialize state
       this.updateUI();
 
-      this.logger.info('LiveDemoTab component initialized successfully');
+      this.logger.info('LiveViewTab component initialized successfully');
     } catch (error) {
-      this.logger.error('Failed to initialize LiveDemoTab', { error: error.message });
+      this.logger.error('Failed to initialize LiveViewTab', { error: error.message });
       this.showError(`Initialization failed: ${error.message}`);
     }
   }
@@ -129,23 +129,33 @@ export class LiveDemoTab {
     if (!existingCanvas) {
       // Create enhanced structure if it doesn't exist
       const enhancedHTML = `
-        <div class="live-demo-enhanced">
+        <div class="live-view-enhanced">
           <!-- Data source banner — prominent indicator for live hardware state -->
-          <div id="demo-source-banner" class="demo-source-banner demo-source-unknown" role="status" aria-live="polite">
+          <div id="live-source-banner" class="live-source-banner live-source-unknown" role="status" aria-live="polite">
             Detecting data source...
           </div>
 
-          <div class="demo-header">
-            <div class="demo-title">
-              <h2>Live Human Pose Detection</h2>
-              <div class="demo-status">
-                <span class="status-indicator" id="demo-status-indicator"></span>
-                <span class="status-text" id="demo-status-text">Ready</span>
+          <div class="live-header">
+            <div class="live-title">
+              <h2>Live View</h2>
+              <div class="page-readme page-readme--compact">
+                <h3>Live View README</h3>
+                <p>This page renders live RuView pose and sensing output only. If hardware or backend data is missing, it shows offline or waiting state instead of local stand-in data.</p>
+                <ul>
+                  <li>Start Detection opens the live pose stream.</li>
+                  <li>Data Source shows whether packets are live, stale, reconnecting, or offline.</li>
+                  <li>Stop Detection is manual; switching tabs does not stop live data.</li>
+                  <li>How data is used: live pose frames drive the canvas, counters, model comparison, and source banners; missing data stays visible as waiting/offline.</li>
+                </ul>
+              </div>
+              <div class="live-status">
+                <span class="status-indicator" id="live-status-indicator"></span>
+                <span class="status-text" id="live-status-text">Ready</span>
               </div>
             </div>
-            <div class="demo-controls">
-              <button class="btn btn--primary" id="start-enhanced-demo">Start Detection</button>
-              <button class="btn btn--secondary" id="stop-enhanced-demo" disabled>Stop Detection</button>
+            <div class="live-controls">
+              <button class="btn btn--primary" id="start-live-view">Start Detection</button>
+              <button class="btn btn--secondary" id="stop-live-view" disabled>Stop Detection</button>
               <button class="btn btn--primary" id="toggle-debug">Debug Mode</button>
               <select class="zone-select" id="zone-selector">
                 <option value="zone_1">Zone 1</option>
@@ -155,12 +165,12 @@ export class LiveDemoTab {
             </div>
           </div>
           
-          <div class="demo-content">
-            <div class="demo-main">
+          <div class="live-content">
+            <div class="live-main">
               <div id="pose-detection-main" class="pose-detection-container"></div>
             </div>
             
-            <div class="demo-sidebar">
+            <div class="live-sidebar">
               <div class="metrics-panel">
                 <h4>Performance Metrics</h4>
                 <div class="metric">
@@ -266,7 +276,7 @@ export class LiveDemoTab {
                 <p class="setup-note">
                   Signal-Derived mode uses aggregate CSI features.
                   For per-limb tracking, load a trained <code>.rvf</code> model
-                  with <code>--model path.rvf</code> and use 4+ sensors.
+                  from Model Control and use 4+ sensors.
                 </p>
               </div>
 
@@ -289,7 +299,7 @@ export class LiveDemoTab {
               <div class="debug-panel" id="debug-panel" style="display: none;">
                 <h4>Debug Information</h4>
                 <div class="debug-actions">
-                  <button class="btn btn-sm" id="force-reconnect">Force Reconnect</button>
+                  <button class="btn btn-sm" id="force-reconnect">Force Restart</button>
                   <button class="btn btn-sm" id="clear-errors">Clear Errors</button>
                   <button class="btn btn-sm" id="export-logs">Export Logs</button>
                 </div>
@@ -300,7 +310,7 @@ export class LiveDemoTab {
             </div>
           </div>
           
-          <div class="demo-footer">
+          <div class="live-footer">
             <div class="error-display" id="error-display" style="display: none;"></div>
           </div>
         </div>
@@ -314,7 +324,7 @@ export class LiveDemoTab {
   addEnhancedStyles() {
     const style = document.createElement('style');
     style.textContent = `
-      .live-demo-enhanced {
+      .live-view-enhanced {
         display: flex;
         flex-direction: column;
         height: 100%;
@@ -323,7 +333,7 @@ export class LiveDemoTab {
         color: #e0e0e0;
       }
 
-      .demo-header {
+      .live-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
@@ -336,13 +346,13 @@ export class LiveDemoTab {
         z-index: 10;
       }
 
-      .demo-title {
+      .live-title {
         display: flex;
         align-items: center;
         gap: 20px;
       }
 
-      .demo-title h2 {
+      .live-title h2 {
         margin: 0;
         color: #e0e0e0;
         font-size: 22px;
@@ -353,7 +363,7 @@ export class LiveDemoTab {
         background-clip: text;
       }
 
-      .demo-status {
+      .live-status {
         display: flex;
         align-items: center;
         gap: 10px;
@@ -397,13 +407,13 @@ export class LiveDemoTab {
         color: #b0b8c8;
       }
 
-      .demo-controls {
+      .live-controls {
         display: flex;
         align-items: center;
         gap: 12px;
       }
 
-      .demo-controls .btn {
+      .live-controls .btn {
         padding: 10px 20px;
         border: 1px solid transparent;
         border-radius: 8px;
@@ -474,7 +484,7 @@ export class LiveDemoTab {
         box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.2);
       }
 
-      .demo-content {
+      .live-content {
         display: flex;
         flex: 1;
         gap: 24px;
@@ -482,7 +492,7 @@ export class LiveDemoTab {
         background: #0a0f1a;
       }
 
-      .demo-main {
+      .live-main {
         flex: 2;
         min-height: 500px;
         background: #111827;
@@ -497,7 +507,7 @@ export class LiveDemoTab {
         position: relative;
       }
 
-      .demo-sidebar {
+      .live-sidebar {
         flex: 1;
         display: flex;
         flex-direction: column;
@@ -962,8 +972,8 @@ export class LiveDemoTab {
       }
     `;
     
-    if (!document.querySelector('#live-demo-enhanced-styles')) {
-      style.id = 'live-demo-enhanced-styles';
+    if (!document.querySelector('#live-view-enhanced-styles')) {
+      style.id = 'live-view-enhanced-styles';
       document.head.appendChild(style);
     }
   }
@@ -1005,17 +1015,17 @@ export class LiveDemoTab {
 
   setupEnhancedControls() {
     // Main controls
-    const startBtn = this.container.querySelector('#start-enhanced-demo');
-    const stopBtn = this.container.querySelector('#stop-enhanced-demo');
+    const startBtn = this.container.querySelector('#start-live-view');
+    const stopBtn = this.container.querySelector('#stop-live-view');
     const debugBtn = this.container.querySelector('#toggle-debug');
     const zoneSelector = this.container.querySelector('#zone-selector');
 
     if (startBtn) {
-      startBtn.addEventListener('click', () => this.startDemo());
+      startBtn.addEventListener('click', () => this.startLiveView());
     }
 
     if (stopBtn) {
-      stopBtn.addEventListener('click', () => this.stopDemo());
+      stopBtn.addEventListener('click', () => this.stopLiveView());
     }
 
     if (debugBtn) {
@@ -1112,15 +1122,15 @@ export class LiveDemoTab {
     this.logger.debug('Connection state changed', { state });
   }
 
-  // Start demo
-  async startDemo() {
+  // Start live view
+  async startLiveView() {
     if (this.state.isActive) {
-      this.logger.warn('Demo already active');
+      this.logger.warn('Live view already active');
       return;
     }
     
     try {
-      this.logger.info('Starting enhanced demo');
+      this.logger.info('Starting live view');
       this.metrics.startTime = Date.now();
       this.metrics.frameCount = 0;
       this.metrics.errorCount = 0;
@@ -1133,25 +1143,25 @@ export class LiveDemoTab {
       // Start the pose detection canvas
       await this.components.poseCanvas.start();
       
-      this.logger.info('Enhanced demo started successfully');
-      this.updateDebugOutput('Demo started successfully');
+      this.logger.info('Live view started successfully');
+      this.updateDebugOutput('Live view started successfully');
       
     } catch (error) {
-      this.logger.error('Failed to start enhanced demo', { error: error.message });
+      this.logger.error('Failed to start live view', { error: error.message });
       this.showError(`Failed to start: ${error.message}`);
       this.setState({ isActive: false, connectionState: 'error' });
     }
   }
 
-  // Stop demo
-  stopDemo() {
+  // Stop live view
+  stopLiveView() {
     if (!this.state.isActive) {
-      this.logger.warn('Demo not active');
+      this.logger.warn('Live view not active');
       return;
     }
     
     try {
-      this.logger.info('Stopping enhanced demo');
+      this.logger.info('Stopping live view');
       
       // Stop the pose detection canvas
       this.components.poseCanvas.stop();
@@ -1160,11 +1170,11 @@ export class LiveDemoTab {
       this.setState({ isActive: false, connectionState: 'disconnected' });
       this.clearError();
       
-      this.logger.info('Enhanced demo stopped successfully');
-      this.updateDebugOutput('Demo stopped successfully');
+      this.logger.info('Live view stopped successfully');
+      this.updateDebugOutput('Live view stopped successfully');
       
     } catch (error) {
-      this.logger.error('Error stopping enhanced demo', { error: error.message });
+      this.logger.error('Error stopping live view', { error: error.message });
       this.showError(`Error stopping: ${error.message}`);
     }
   }
@@ -1203,18 +1213,22 @@ export class LiveDemoTab {
   }
 
   async forceReconnect() {
-    if (!this.state.isActive) {
-      this.showError('Cannot reconnect - demo not active');
-      return;
-    }
-    
     try {
-      this.logger.info('Forcing reconnection');
-      await this.components.poseCanvas.reconnect();
-      this.updateDebugOutput('Force reconnection initiated');
+      this.logger.info('Forcing live view restart');
+      this.clearError();
+      if (!this.components.poseCanvas) {
+        throw new Error('Pose canvas is not initialized');
+      }
+      if (this.state.isActive) {
+        await this.components.poseCanvas.reconnect();
+        this.updateDebugOutput('Force restart: active stream reconnected');
+      } else {
+        await this.startLiveView();
+        this.updateDebugOutput('Force restart: live view started');
+      }
     } catch (error) {
-      this.logger.error('Force reconnection failed', { error: error.message });
-      this.showError(`Reconnection failed: ${error.message}`);
+      this.logger.error('Force restart failed', { error: error.message });
+      this.showError(`Force restart failed: ${error.message}`);
     }
   }
 
@@ -1262,8 +1276,8 @@ export class LiveDemoTab {
   }
 
   updateStatusIndicator() {
-    const indicator = this.container.querySelector('#demo-status-indicator');
-    const text = this.container.querySelector('#demo-status-text');
+    const indicator = this.container.querySelector('#live-status-indicator');
+    const text = this.container.querySelector('#live-status-text');
     
     if (indicator) {
       indicator.className = `status-indicator ${this.getStatusClass()}`;
@@ -1291,30 +1305,27 @@ export class LiveDemoTab {
     const ds = sensingService.dataSource;
     if (ds === 'live') return 'Active \u2014 ESP32 Live';
     if (ds === 'stale') return 'Stale \u2014 Waiting for Fresh Feature State';
-    if (ds === 'server-simulated' || ds === 'simulated') return 'Offline \u2014 No Live Hardware';
     return 'Connecting...';
   }
 
-  /** Update the prominent data-source banner at the top of Live Demo. */
+  /** Update the prominent data-source banner at the top of Live View. */
   updateSourceBanner() {
-    const banner = this.container.querySelector('#demo-source-banner');
+    const banner = this.container.querySelector('#live-source-banner');
     if (!banner) return;
     const ds = sensingService.dataSource;
     const config = {
-      'live':             { text: 'LIVE \u2014 ESP32 Hardware Connected',           cls: 'demo-source-live' },
-      'stale':            { text: 'STALE \u2014 Waiting for Fresh Feature State',   cls: 'demo-source-stale' },
-      'server-simulated': { text: 'OFFLINE \u2014 No Live Hardware Data',           cls: 'demo-source-offline' },
-      'reconnecting':     { text: 'RECONNECTING TO SERVER...',                      cls: 'demo-source-reconnecting' },
-      'simulated':        { text: 'OFFLINE \u2014 Server Unreachable',              cls: 'demo-source-offline' },
+      'live':             { text: 'LIVE \u2014 ESP32 Hardware Connected',           cls: 'live-source-live' },
+      'stale':            { text: 'STALE \u2014 Waiting for Fresh Feature State',   cls: 'live-source-stale' },
+      'reconnecting':     { text: 'RECONNECTING TO SERVER...',                      cls: 'live-source-reconnecting' },
     };
     const cfg = config[ds] || config['reconnecting'];
     banner.textContent = cfg.text;
-    banner.className = 'demo-source-banner ' + cfg.cls;
+    banner.className = 'live-source-banner ' + cfg.cls;
   }
 
   updateControls() {
-    const startBtn = this.container.querySelector('#start-enhanced-demo');
-    const stopBtn = this.container.querySelector('#stop-enhanced-demo');
+    const startBtn = this.container.querySelector('#start-live-view');
+    const stopBtn = this.container.querySelector('#stop-live-view');
     const zoneSelector = this.container.querySelector('#zone-selector');
     
     if (startBtn) {
@@ -1344,15 +1355,12 @@ export class LiveDemoTab {
       const dsLabels = {
         'live':              'Connected \u2014 ESP32',
         'stale':             'Stale \u2014 Feature State',
-        'server-simulated':  'Offline \u2014 No Hardware',
         'reconnecting':      'Reconnecting...',
-        'simulated':         'Offline',
       };
       const label = dsLabels[ds] || this.state.connectionState;
       elements.connectionStatus.textContent = label;
       const cls = ds === 'live' ? 'good'
         : ds === 'stale' ? 'bad'
-        : ds === 'simulated' ? 'bad'
         : this.getHealthClass(this.state.connectionState);
       elements.connectionStatus.className = `health-${cls}`;
     }
@@ -1845,11 +1853,11 @@ export class LiveDemoTab {
   // Clean up
   dispose() {
     try {
-      this.logger.info('Disposing LiveDemoTab component');
+      this.logger.info('Disposing LiveViewTab component');
       
-      // Stop demo if running
+      // Stop live view if running
       if (this.state.isActive) {
-        this.stopDemo();
+        this.stopLiveView();
       }
       
       // Clear intervals
@@ -1872,7 +1880,7 @@ export class LiveDemoTab {
       if (this._sensingStateUnsub) this._sensingStateUnsub();
       if (this._sensingDataUnsub) this._sensingDataUnsub();
       
-      this.logger.info('LiveDemoTab component disposed successfully');
+      this.logger.info('LiveViewTab component disposed successfully');
     } catch (error) {
       this.logger.error('Error during disposal', { error: error.message });
     }

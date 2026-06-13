@@ -663,12 +663,6 @@ select.form-control {
   border: 1px solid var(--color-border-secondary);
 }
 
-@font-face {
-  font-family: 'FKGroteskNeue';
-  src: url('https://www.perplexity.ai/fonts/FKGroteskNeue.woff2')
-    format('woff2');
-}
-
 /* Custom styles for WiFi DensePose application */
 
 /* Base layout and containers */

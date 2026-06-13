@@ -7,6 +7,7 @@ import { buildSensingWsUrl } from '../services/sensing.service.js';
 import { poseService } from '../services/pose.service.js';
 import { healthService } from '../services/health.service.js';
 import { TabManager } from '../components/TabManager.js';
+import { DashboardTab, parseFocusNodeIdFromSearch } from '../components/DashboardTab.js';
 
 class TestRunner {
   constructor() {
@@ -425,6 +426,53 @@ testRunner.test('TabManager can show/hide tabs', 'uiComponent', () => {
   tabManager.setTabVisible('hardware', false);
   const hardwareTab = container.querySelector('[data-tab="hardware"]');
   testRunner.assertEqual(hardwareTab.style.display, 'none', 'Tab should be hidden');
+});
+
+testRunner.test('Main shell imports are not versioned with ad hoc cache-busters', 'uiComponent', async () => {
+  const response = await fetch('/app.js', { cache: 'no-store' });
+  testRunner.assert(response.ok, 'app.js should be reachable');
+
+  const source = await response.text();
+  testRunner.assert(!source.includes('?v='), 'Main shell should not use query-string versioned imports');
+  testRunner.assert(source.includes("from './components/LiveViewTab.js'"), 'LiveViewTab import should be bare');
+  testRunner.assert(source.includes("from './components/SensingTab.js'"), 'SensingTab import should be bare');
+  testRunner.assert(source.includes("from './utils/connection-status.js'"), 'ConnectionStatus import should be bare');
+});
+
+testRunner.test('DashboardTab parses focus node ids from URL search strings', 'uiComponent', () => {
+  testRunner.assertEqual(parseFocusNodeIdFromSearch('?node=1'), 1, 'node should parse directly');
+  testRunner.assertEqual(parseFocusNodeIdFromSearch('?node_id=node-7'), 7, 'node_id should accept node-prefix values');
+  testRunner.assertEqual(parseFocusNodeIdFromSearch('?node=garbage'), null, 'invalid node ids should be ignored');
+});
+
+testRunner.test('DashboardTab renders focused nodes without mutating input order', 'uiComponent', () => {
+  const dashboard = new DashboardTab({});
+  dashboard.focusNodeId = 2;
+  dashboard.nodeSummary = { textContent: '' };
+  dashboard.nodeStatusGrid = {
+    children: [],
+    replaceChildren(...children) {
+      this.children = children;
+    }
+  };
+  dashboard.createNodeStatusCard = node => ({ node_id: node.node_id });
+
+  const status = {
+    nodes: [
+      { node_id: 3, live: false },
+      { node_id: 1, live: true },
+      { node_id: 2, live: true }
+    ],
+    live_node_count: 2,
+    node_count: 3
+  };
+  const originalOrder = status.nodes.map(node => node.node_id).join(',');
+
+  dashboard.renderNodeStatus(status);
+
+  testRunner.assertEqual(status.nodes.map(node => node.node_id).join(','), originalOrder, 'Input order should remain untouched');
+  testRunner.assertEqual(dashboard.nodeStatusGrid.children.map(node => node.node_id).join(','), '2,1,3', 'Focused node should render first');
+  testRunner.assertEqual(dashboard.nodeSummary.textContent, 'Node 2 live - 2/3 live', 'Summary should reflect focus node state');
 });
 
 // Integration Tests

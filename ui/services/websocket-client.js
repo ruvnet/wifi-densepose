@@ -151,7 +151,7 @@ export class WebSocketClient {
         return;
       }
 
-      // Detect real vs mock data from metadata
+      // Confirm live data from metadata.
       if (data.data && data.data.metadata) {
         this.isRealData = data.data.metadata.mock_data === false && data.data.metadata.source !== 'mock';
       } else if (data.metadata) {

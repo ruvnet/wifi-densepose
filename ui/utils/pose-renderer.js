@@ -557,7 +557,7 @@ export class PoseRenderer {
       this.canvas.height / 2
     );
     this.ctx.fillText(
-      'Click "Demo" to see test poses', 
+      'Start Live View to render connected pose data',
       this.canvas.width / 2, 
       this.canvas.height / 2 + 25
     );

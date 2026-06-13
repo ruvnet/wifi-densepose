@@ -14,7 +14,7 @@ export class DashboardHUD {
       fps: 0,
       confidence: 0,
       personCount: 0,
-      sensingMode: 'Mock',    // CSI, RSSI, Mock
+      sensingMode: 'Unavailable',
       latency: 0,
       messageCount: 0,
       uptime: 0
@@ -61,7 +61,7 @@ export class DashboardHUD {
           text-transform: uppercase;
           z-index: 110;
         }
-        .hud-banner.mock {
+        .hud-banner.offline {
           background: linear-gradient(90deg, rgba(180,100,0,0.85) 0%, rgba(200,120,0,0.85) 50%, rgba(180,100,0,0.85) 100%);
           color: #fff;
           border-bottom: 2px solid #ff8800;
@@ -211,7 +211,8 @@ export class DashboardHUD {
           border: 1px solid #8800ff;
           color: #ddaaff;
         }
-        .hud-mode-badge.mock {
+        .hud-mode-badge.offline,
+        .hud-mode-badge.unavailable {
           background: rgba(120, 80, 0, 0.7);
           border: 1px solid #ff8800;
           color: #ffddaa;
@@ -244,7 +245,7 @@ export class DashboardHUD {
       </style>
 
       <!-- Data source banner -->
-      <div class="hud-banner mock" id="hud-banner">MOCK DATA</div>
+      <div class="hud-banner offline" id="hud-banner">NO LIVE DATA</div>
 
       <!-- Corner decorations -->
       <div class="hud-corner tl"></div>
@@ -298,7 +299,7 @@ export class DashboardHUD {
 
       <!-- Bottom-right: sensing mode -->
       <div class="hud-bottom-right">
-        <div class="hud-mode-badge mock" id="hud-mode-badge">MOCK</div>
+        <div class="hud-mode-badge offline" id="hud-mode-badge">OFFLINE</div>
         <div class="hud-row" style="margin-top: 4px;">
           <span class="hud-label">WiFi DensePose</span>
         </div>
@@ -371,8 +372,8 @@ export class DashboardHUD {
       this._els.banner.textContent = 'REAL DATA - LIVE STREAM';
       this._els.banner.className = 'hud-banner real';
     } else {
-      this._els.banner.textContent = 'MOCK DATA - DEMO MODE';
-      this._els.banner.className = 'hud-banner mock';
+      this._els.banner.textContent = 'NO LIVE DATA';
+      this._els.banner.className = 'hud-banner offline';
     }
 
     // Connection status
@@ -416,7 +417,7 @@ export class DashboardHUD {
     this._els.confidenceFill.style.background = `hsl(${confHue}, 100%, 45%)`;
 
     // Sensing mode
-    const modeLower = (state.sensingMode || 'Mock').toLowerCase();
+    const modeLower = (state.sensingMode || 'Unavailable').toLowerCase();
     this._els.modeBadge.textContent = state.sensingMode.toUpperCase();
     this._els.modeBadge.className = `hud-mode-badge ${modeLower}`;
   }

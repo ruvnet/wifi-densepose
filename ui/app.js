@@ -3,8 +3,8 @@
 import { TabManager } from './components/TabManager.js';
 import { DashboardTab } from './components/DashboardTab.js';
 import { HardwareTab } from './components/HardwareTab.js';
-import { LiveDemoTab } from './components/LiveDemoTab.js?v=9';
-import { SensingTab } from './components/SensingTab.js?v=9';
+import { LiveViewTab } from './components/LiveViewTab.js';
+import { SensingTab } from './components/SensingTab.js';
 import { apiService } from './services/api.service.js';
 import { wsService } from './services/websocket.service.js';
 import { healthService } from './services/health.service.js';
@@ -17,7 +17,7 @@ import { CommandPalette } from './utils/command-palette.js';
 import { ActivityLog } from './utils/activity-log.js';
 import { DataExport } from './utils/data-export.js';
 import { FullscreenManager } from './utils/fullscreen.js';
-import { ConnectionStatus } from './utils/connection-status.js?v=9';
+import { ConnectionStatus } from './utils/connection-status.js';
 import { MobileNav } from './utils/mobile-nav.js';
 import { Router } from './utils/router.js';
 import { Onboarding } from './utils/onboarding.js';
@@ -85,9 +85,9 @@ class WiFiDensePoseApp {
       this.showBackendStatus('Backend unavailable — no live data', 'warning');
     }
 
-    // Start hardware status polling even when the optional WebSocket backend is
-    // absent; it does not generate fallback frames.
-    sensingService.start();
+    // Keep hardware status current on every tab. The optional sensing
+    // WebSocket is opened lazily by SensingTab so unrelated pages stay quiet.
+    sensingService.start({ websocket: false });
   }
 
   // Initialize UI components
@@ -129,11 +129,11 @@ class WiFiDensePoseApp {
       this.components.hardware.init();
     }
 
-    // Live demo tab
-    const demoContainer = document.getElementById('demo');
-    if (demoContainer) {
-      this.components.demo = new LiveDemoTab(demoContainer);
-      this.components.demo.init();
+    // Live view tab
+    const liveContainer = document.getElementById('live');
+    if (liveContainer) {
+      this.components.live = new LiveViewTab(liveContainer);
+      this.components.live.init();
     }
 
     // Sensing tab
@@ -290,11 +290,6 @@ class WiFiDensePoseApp {
   handleTabChange(newTab, oldTab) {
     console.log(`Tab changed from ${oldTab} to ${newTab}`);
     
-    // Stop demo if leaving demo tab
-    if (oldTab === 'demo' && this.components.demo) {
-      this.components.demo.stopDemo();
-    }
-    
     // Update components based on active tab
     switch (newTab) {
       case 'dashboard':
@@ -305,8 +300,8 @@ class WiFiDensePoseApp {
         // Hardware visualization is always active
         break;
         
-      case 'demo':
-        // Demo starts manually
+      case 'live':
+        // Live view starts manually
         break;
 
       case 'sensing':
