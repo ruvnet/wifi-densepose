@@ -4,11 +4,11 @@
  * Main orchestration: video capture → CNN embedding → CSI processing → fusion → rendering
  */
 
-import { VideoCapture } from './video-capture.js?v=13';
-import { CnnEmbedder } from './cnn-embedder.js?v=13';
-import { FusionEngine } from './fusion-engine.js?v=13';
-import { PoseDecoder } from './pose-decoder.js?v=13';
-import { CanvasRenderer } from './canvas-renderer.js?v=13';
+import { VideoCapture } from './video-capture.js?v=15';
+import { CnnEmbedder } from './cnn-embedder.js?v=15';
+import { FusionEngine } from './fusion-engine.js?v=15';
+import { PoseDecoder } from './pose-decoder.js?v=15';
+import { CanvasRenderer } from './canvas-renderer.js?v=15';
 
 // === State ===
 let mode = 'dual';  // 'dual' | 'video' | 'csi'
@@ -19,6 +19,7 @@ let frameCount = 0;
 let fps = 0;
 let lastFpsTime = 0;
 let confidenceThreshold = 0.3;
+let cameraAvailable = null;
 
 // Latency tracking
 const latency = { video: 0, csi: 0, fusion: 0, total: 0 };
@@ -30,6 +31,182 @@ const csiCnn = new CnnEmbedder({ inputSize: 56, embeddingDim: 128, seed: 137 });
 const fusionEngine = new FusionEngine(128);
 const poseDecoder = new PoseDecoder(128);
 const renderer = new CanvasRenderer();
+
+class LiveCsiSource {
+  constructor() {
+    this.ws = null;
+    this.pollTimer = null;
+    this.latest = { active: false, heatmap: null, rssi: null, snr: 0, presence: 0 };
+    this.rows = [];
+    this.maxRows = 20;
+    this.width = 56;
+  }
+
+  async connectLive(url = '') {
+    this.disconnect();
+    if (url.startsWith('ws://') || url.startsWith('wss://')) {
+      const ok = await this._connectWebSocket(url);
+      if (ok) return true;
+    }
+    this._startApiPolling();
+    await this._pollOnce();
+    return this.latest.active;
+  }
+
+  disconnect() {
+    if (this.ws) {
+      try { this.ws.close(); } catch (_) {}
+      this.ws = null;
+    }
+    if (this.pollTimer) {
+      window.clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+  }
+
+  getSnapshot() {
+    return this.latest;
+  }
+
+  async _connectWebSocket(url) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (ok) => {
+        if (settled) return;
+        settled = true;
+        resolve(ok);
+      };
+      try {
+        const ws = new WebSocket(url);
+        const timer = window.setTimeout(() => {
+          try { ws.close(); } catch (_) {}
+          finish(false);
+        }, 900);
+        ws.addEventListener('open', () => {
+          window.clearTimeout(timer);
+          this.ws = ws;
+          finish(true);
+        });
+        ws.addEventListener('message', (event) => {
+          try { this._ingest(JSON.parse(event.data)); } catch (_) {}
+        });
+        ws.addEventListener('error', () => {
+          window.clearTimeout(timer);
+          finish(false);
+        });
+        ws.addEventListener('close', () => {
+          if (this.ws === ws) this._startApiPolling();
+        });
+      } catch (_) {
+        finish(false);
+      }
+    });
+  }
+
+  _startApiPolling() {
+    if (this.pollTimer) return;
+    this._pollOnce();
+    this.pollTimer = window.setInterval(() => this._pollOnce(), 500);
+  }
+
+  async _pollOnce() {
+    try {
+      const res = await fetch('/api/v1/cardputer/status', { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      this._ingest(await res.json());
+    } catch (_) {
+      this.latest = { ...this.latest, active: false };
+    }
+  }
+
+  _ingest(payload) {
+    const nodes = Array.isArray(payload?.nodes) ? payload.nodes.filter(n => n.live) : [];
+    const source = nodes.find(n => n.edge_feature_live && n.edge_feature?.features)
+      || nodes.find(n => n.feature_state_live && n.feature_state)
+      || nodes.find(n => n.edge_vitals_live && n.edge_vitals)
+      || nodes[0]
+      || payload;
+    const values = this._featureValues(source);
+    if (!values.length) {
+      this.latest = {
+        ...this.latest,
+        active: Boolean(payload?.live || nodes.length),
+        rssi: this._rssi(source),
+        snr: this._snr(source),
+      };
+      return;
+    }
+    const row = this._normalizeRow(values);
+    this.rows.push(row);
+    if (this.rows.length > this.maxRows) this.rows.shift();
+    const heatmap = this._heatmap();
+    const rssi = this._rssi(source);
+    this.latest = {
+      active: true,
+      heatmap,
+      rssi,
+      snr: this._snr(source),
+      presence: this._presence(source),
+      nodeCount: Number(payload?.live_node_count || nodes.length || 0),
+    };
+  }
+
+  _featureValues(source) {
+    if (Array.isArray(source?.edge_feature?.features)) return source.edge_feature.features;
+    const fs = source?.feature_state || source?.edge_vitals || source || {};
+    const keys = [
+      'motion_score', 'presence_score', 'respiration_bpm', 'respiration_conf',
+      'heartbeat_bpm', 'heartbeat_conf', 'anomaly_score', 'env_shift_score',
+      'node_coherence', 'breathing_bpm', 'rssi_dbm', 'n_persons', 'motion_energy',
+    ];
+    return keys.map(k => Number(fs[k])).filter(Number.isFinite);
+  }
+
+  _normalizeRow(values) {
+    const row = new Float32Array(this.width);
+    const clean = values.map(v => Number.isFinite(v) ? v : 0);
+    let min = Math.min(...clean);
+    let max = Math.max(...clean);
+    if (!Number.isFinite(min) || !Number.isFinite(max) || max === min) {
+      min = -1; max = 1;
+    }
+    for (let i = 0; i < this.width; i++) {
+      const idx = Math.floor((i / this.width) * clean.length);
+      const v = clean[Math.min(clean.length - 1, idx)] ?? 0;
+      row[i] = Math.max(0, Math.min(1, (v - min) / (max - min)));
+    }
+    return row;
+  }
+
+  _heatmap() {
+    const data = new Float32Array(this.width * this.maxRows);
+    const offset = this.maxRows - this.rows.length;
+    this.rows.forEach((row, i) => data.set(row, (offset + i) * this.width));
+    return { data, width: this.width, height: this.maxRows };
+  }
+
+  _rssi(source) {
+    const value = source?.rssi_dbm ?? source?.edge_vitals?.rssi_dbm ?? source?.feature_state?.rssi_dbm;
+    return Number.isFinite(Number(value)) ? Number(value) : null;
+  }
+
+  _snr(source) {
+    const rssi = this._rssi(source);
+    const noise = Number(source?.noise_floor_dbm ?? -92);
+    if (rssi == null) return 0;
+    return Math.max(0, Math.min(35, rssi - noise));
+  }
+
+  _presence(source) {
+    const value = source?.feature_state?.presence_score
+      ?? source?.edge_vitals?.presence_score
+      ?? source?.presence_score
+      ?? source?.motion_score;
+    return Math.max(0, Math.min(1, Number(value) || 0));
+  }
+}
+
+const csiSimulator = new LiveCsiSource();
 
 // === Canvas Elements ===
 const skeletonCanvas = document.getElementById('skeleton-canvas');
@@ -110,7 +287,17 @@ function init() {
   // WebSocket connect
   connectWsBtn.addEventListener('click', async () => {
     const url = wsUrlInput.value.trim();
-    if (!url) return;
+    if (!url || url === 'desktop-api') {
+      connectWsBtn.textContent = 'Connecting...';
+      const ok = await csiSimulator.connectLive('');
+      connectWsBtn.textContent = ok ? '✓ Live ESP32' : 'Connect';
+      connectWsBtn.classList.toggle('active', ok);
+      if (ok) {
+        statusLabel.textContent = 'LIVE CSI';
+        statusDot.classList.remove('offline');
+      }
+      return;
+    }
     connectWsBtn.textContent = 'Connecting...';
     const ok = await csiSimulator.connectLive(url);
     connectWsBtn.textContent = ok ? '✓ Connected' : 'Connect';
@@ -135,22 +322,39 @@ function init() {
   csiCnn.tryLoadWasm(wasmBase);
 
   // Auto-connect to local sensing server WebSocket if available
-  const defaultWsUrl = 'ws://localhost:8765/ws/sensing';
-  if (wsUrlInput) wsUrlInput.value = defaultWsUrl;
-  csiSimulator.connectLive(defaultWsUrl).then(ok => {
+  if (wsUrlInput) wsUrlInput.value = 'desktop-api';
+  csiSimulator.connectLive('').then(ok => {
     if (ok && connectWsBtn) {
       connectWsBtn.textContent = '✓ Live ESP32';
       connectWsBtn.classList.add('active');
       statusLabel.textContent = 'LIVE CSI';
       statusDot.classList.remove('offline');
+      updateModeUI();
     }
   });
 
-  // Auto-start camera for video/dual modes
-  updateModeUI();
+  detectCameraAvailability().then(hasCamera => {
+    cameraAvailable = hasCamera;
+    const promptText = cameraPrompt?.querySelector('p');
+    if (!hasCamera && promptText) {
+      promptText.textContent = 'No local webcam detected. Dual mode is running from live CSI until a camera is attached.';
+    }
+    updateModeUI();
+  });
+
   startTime = performance.now() / 1000;
   isRunning = true;
   requestAnimationFrame(mainLoop);
+}
+
+async function detectCameraAvailability() {
+  if (!navigator.mediaDevices?.enumerateDevices) return false;
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices.some(device => device.kind === 'videoinput');
+  } catch (_) {
+    return false;
+  }
 }
 
 async function startCamera() {
@@ -161,16 +365,22 @@ async function startCamera() {
     statusLabel.textContent = 'LIVE';
     resizeCanvases();
   } else {
-    cameraPrompt.style.display = 'flex';
-    cameraPrompt.querySelector('p').textContent = 'Camera access denied. Try CSI-only mode.';
+    cameraAvailable = false;
+    updateModeUI();
+    statusDot.classList.remove('offline');
+    statusLabel.textContent = csiSimulator.getSnapshot()?.active
+      ? (mode === 'dual' ? 'DUAL CSI' : 'LIVE CSI')
+      : 'CSI ONLY';
   }
 }
 
 function updateModeUI() {
   const needsVideo = mode !== 'csi';
+  const csiLive = Boolean(csiSimulator.getSnapshot()?.active);
+  const canFallbackToCsi = mode === 'dual' && csiLive;
 
   // Show/hide camera prompt
-  if (needsVideo && !videoCapture.isActive) {
+  if (needsVideo && !videoCapture.isActive && !canFallbackToCsi) {
     cameraPrompt.style.display = 'flex';
   } else {
     cameraPrompt.style.display = 'none';
@@ -182,6 +392,10 @@ function updateModeUI() {
   const promptLabel = document.getElementById('prompt-mode-label');
   if (modeLabel) modeLabel.textContent = labelMap[mode] || mode;
   if (promptLabel) promptLabel.textContent = labelMap[mode] || mode;
+  if (mode === 'dual' && !videoCapture.isActive && csiLive) {
+    statusDot.classList.remove('offline');
+    statusLabel.textContent = cameraAvailable === false ? 'DUAL CSI' : 'LIVE CSI';
+  }
 }
 
 function resizeCanvases() {
@@ -201,6 +415,24 @@ function resizeCanvases() {
   embeddingCanvas.height = 140;
 }
 
+function heatmapToRgb(heatmap, outW, outH) {
+  const rgb = new Uint8Array(outW * outH * 3);
+  if (!heatmap?.data?.length) return rgb;
+  const { data, width, height } = heatmap;
+  for (let y = 0; y < outH; y++) {
+    const sy = Math.min(height - 1, Math.floor((y / outH) * height));
+    for (let x = 0; x < outW; x++) {
+      const sx = Math.min(width - 1, Math.floor((x / outW) * width));
+      const v = Math.max(0, Math.min(1, data[sy * width + sx] || 0));
+      const i = (y * outW + x) * 3;
+      rgb[i] = Math.round(v * 255);
+      rgb[i + 1] = Math.round(Math.sqrt(v) * 220);
+      rgb[i + 2] = Math.round((1 - v) * 120);
+    }
+  }
+  return rgb;
+}
+
 // === Main Loop ===
 let _loopErrorShown = false;
 let _diagDone = false;
@@ -217,40 +449,51 @@ function mainLoop(timestamp) {
   // --- Video Pipeline ---
   let videoEmb = null;
   let motionRegion = null;
+  let videoBrightness = 0;
+  let videoMotion = 0;
   if (mode !== 'csi' && videoCapture.isActive) {
     const t0 = performance.now();
     const frame = videoCapture.captureFrame(56, 56);
     if (frame) {
       videoEmb = visualCnn.extract(frame.rgb, frame.width, frame.height);
       motionRegion = videoCapture.detectMotionRegion(56, 56);
-
-      fusionEngine.updateConfidence(
-        frame.brightness, frame.motion,
-        0, false
-      );
+      videoBrightness = frame.brightness;
+      videoMotion = frame.motion;
     }
     latency.video = performance.now() - t0;
   }
 
   // --- CSI Pipeline ---
   let csiEmb = null;
+  const csiSnapshot = csiSimulator.getSnapshot();
   if (mode !== 'video') {
     const t0 = performance.now();
-    csiCtx.clearRect(0, 0, csiCanvas.width, csiCanvas.height);
+    if (csiSnapshot?.heatmap) {
+      renderer.drawCsiHeatmap(csiCtx, csiSnapshot.heatmap, csiCanvas.width, csiCanvas.height);
+      const csiRgb = heatmapToRgb(csiSnapshot.heatmap, 56, 56);
+      csiEmb = csiCnn.extract(csiRgb, 56, 56);
+    } else {
+      renderer.drawCsiHeatmap(csiCtx, null, csiCanvas.width, csiCanvas.height);
+    }
 
     latency.csi = performance.now() - t0;
   }
+  fusionEngine.updateConfidence(
+    videoBrightness,
+    videoMotion,
+    csiSnapshot?.snr || 0,
+    Boolean(csiSnapshot?.active && csiEmb)
+  );
 
   // --- Fusion ---
   const t0f = performance.now();
-  const effectiveMode = mode === 'csi' ? 'video' : mode;
-  const fusedEmb = fusionEngine.fuse(videoEmb, csiEmb, effectiveMode);
+  const fusedEmb = fusionEngine.fuse(videoEmb, csiEmb, mode);
   latency.fusion = performance.now() - t0f;
 
   // --- Pose Decode ---
   const csiState = {
-    csiPresence: 0,
-    isLive: false
+    csiPresence: csiSnapshot?.presence || 0,
+    isLive: Boolean(csiSnapshot?.active)
   };
 
   const keypoints = poseDecoder.decode(fusedEmb, motionRegion, elapsed, csiState);
@@ -317,12 +560,12 @@ function mainLoop(timestamp) {
   }
 
   // RSSI update
-  updateRssi(null);
+  updateRssi(csiSnapshot?.rssi ?? null);
 
   // One-time diagnostic
   if (!_diagDone) {
     _diagDone = true;
-    console.log(`[PoseFusion] frame 1 OK — mode=${mode}, liveCsi=false, embPts=${embPoints?.fused?.length ?? 0}`);
+    console.log(`[PoseFusion] frame 1 OK — mode=${mode}, liveCsi=${Boolean(csiSnapshot?.active)}, embPts=${embPoints?.fused?.length ?? 0}`);
   }
 
   } catch (err) {

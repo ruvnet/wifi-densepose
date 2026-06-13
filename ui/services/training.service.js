@@ -114,6 +114,16 @@ export class TrainingService {
     }
   }
 
+  async getRvfReadiness() {
+    try {
+      const data = await apiService.get('/api/v1/train/rvf/readiness');
+      return data;
+    } catch (error) {
+      this.logger.error('Failed to get RVF training readiness', { error: error.message });
+      throw error;
+    }
+  }
+
   async startPretraining(config) {
     try {
       const request = this.normalizePretrainRequest(config);

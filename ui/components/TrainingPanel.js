@@ -47,6 +47,19 @@ const TP_STYLES = `
 .tp-metric-cell{background:var(--color-background);border:1px solid var(--color-card-border-inner);border-radius:6px;padding:8px 10px;min-width:0}
 .tp-metric-label{font-size:10px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0}
 .tp-metric-value{font-size:14px;color:var(--color-text);font-weight:650;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tp-rvf-intro{font-size:12px;line-height:1.45;color:var(--color-text-secondary);margin:0 0 10px}
+.tp-rvf-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-bottom:12px}
+.tp-rvf-status{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:650;padding:4px 8px;border-radius:999px;border:1px solid var(--color-border);color:var(--color-text-secondary);margin-bottom:10px}
+.tp-rvf-status-ready{background:rgba(var(--color-success-rgb),.12);color:var(--color-success);border-color:rgba(var(--color-success-rgb),.25)}
+.tp-rvf-status-warn{background:rgba(var(--color-warning-rgb,168,75,47),.12);color:var(--color-warning,#a84b2f);border-color:rgba(var(--color-warning-rgb,168,75,47),.25)}
+.tp-rvf-files{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}
+.tp-file-cell{background:var(--color-background);border:1px solid var(--color-card-border-inner);border-radius:6px;padding:8px 10px;min-width:0}
+.tp-file-label{font-size:10px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0}
+.tp-file-value{font-size:12px;color:var(--color-text);font-weight:600;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tp-cmd-list{display:grid;gap:8px}
+.tp-cmd-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:start;background:var(--color-background);border:1px solid var(--color-card-border-inner);border-radius:6px;padding:9px 10px}
+.tp-cmd-label{font-size:11px;font-weight:700;color:var(--color-text);margin-bottom:5px}
+.tp-cmd-code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:1.45;color:var(--color-text-secondary);white-space:pre-wrap;word-break:break-word}
 .tp-btn{padding:7px 12px;border-radius:6px;font-size:12px;font-weight:650;cursor:pointer;border:1px solid transparent;transition:background .15s,border-color .15s,color .15s}
 .tp-btn:disabled{opacity:.5;cursor:not-allowed}
 .tp-btn-success{background:var(--color-primary);color:var(--color-btn-primary-text);border-color:var(--color-primary)}
@@ -57,7 +70,8 @@ const TP_STYLES = `
 .tp-btn-secondary:hover:not(:disabled),.tp-btn-rec:hover:not(:disabled){background:var(--color-secondary-hover)}
 .tp-btn-muted{background:transparent;color:var(--color-text-secondary);border-color:var(--color-border);font-size:11px;padding:4px 8px}
 .tp-btn-muted:hover:not(:disabled){color:var(--color-text);border-color:var(--color-primary)}
-@media(max-width:760px){.tp-config-form,.tp-chart-row,.tp-metrics-grid,.tp-readme-list{grid-template-columns:1fr}.tp-progress-label{text-align:left}}
+@media(max-width:980px){.tp-rvf-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.tp-rvf-files{grid-template-columns:1fr}}
+@media(max-width:760px){.tp-config-form,.tp-chart-row,.tp-metrics-grid,.tp-readme-list,.tp-rvf-grid{grid-template-columns:1fr}.tp-progress-label{text-align:left}.tp-cmd-row{grid-template-columns:1fr}}
 `;
 
 export default class TrainingPanel {
@@ -68,6 +82,7 @@ export default class TrainingPanel {
 
     this.state = {
       recordings: [], trainingStatus: null, isRecording: false,
+      rvfReadiness: null, copiedCommand: null,
       configOpen: true, loading: false, error: null
     };
     this.config = {
@@ -104,12 +119,14 @@ export default class TrainingPanel {
   async refresh() {
     this._set({ loading: true, error: null });
     try {
-      const [recordings, status] = await Promise.all([
+      const [recordings, status, rvfReadiness] = await Promise.all([
         trainingService.listRecordings().catch(() => []),
-        trainingService.getTrainingStatus().catch(() => null)
+        trainingService.getTrainingStatus().catch(() => null),
+        trainingService.getRvfReadiness().catch(() => null)
       ]);
       if (status && !status.active) this.progressData = { losses: [], pcks: [] };
-      this._set({ recordings, trainingStatus: status, loading: false });
+      const isRecording = recordings.some(rec => rec.status === 'recording');
+      this._set({ recordings, trainingStatus: status, rvfReadiness, isRecording, loading: false });
     } catch (e) { this._set({ loading: false, error: e.message }); }
   }
 
@@ -181,6 +198,7 @@ export default class TrainingPanel {
     panel.appendChild(this._renderReadme());
     if (this.state.error) panel.appendChild(this._el('div', 'tp-error', this.state.error));
     panel.appendChild(this._renderRecordings());
+    panel.appendChild(this._renderRvfWorkflow());
     const ts = this.state.trainingStatus;
     const active = ts && ts.active;
     if (active) panel.appendChild(this._renderProgress());
@@ -251,6 +269,72 @@ export default class TrainingPanel {
     }
     s.appendChild(acts);
     return s;
+  }
+
+  _renderRvfWorkflow() {
+    const data = this.state.rvfReadiness;
+    const s = this._el('div', 'tp-section');
+    s.appendChild(this._el('div', 'tp-section-title', 'Real .rvf Training'));
+    if (!data) {
+      s.appendChild(this._el('div', 'tp-empty', 'RVF readiness unavailable'));
+      return s;
+    }
+
+    const sum = data.summary || {};
+    const ready = data.status === 'ready';
+    const status = this._el('div', `tp-rvf-status ${ready ? 'tp-rvf-status-ready' : 'tp-rvf-status-warn'}`,
+      ready ? 'Ready to train from paired data' : 'Needs camera labels or paired data'
+    );
+    s.appendChild(status);
+    s.appendChild(this._el('p', 'tp-rvf-intro',
+      'Use camera labels only while collecting ground truth, align them with CSI, then export a real .rvf into data/models for model inference.'
+    ));
+
+    const metric = (label, value) => {
+      const cell = this._el('div', 'tp-metric-cell');
+      cell.appendChild(this._el('div', 'tp-metric-label', label));
+      cell.appendChild(this._el('div', 'tp-metric-value', String(value ?? '--')));
+      return cell;
+    };
+    const grid = this._el('div', 'tp-rvf-grid');
+    grid.appendChild(metric('Live Nodes', `${sum.live_nodes ?? 0}/${sum.recommended_nodes ?? 4}`));
+    grid.appendChild(metric('CSI', sum.recordings ?? 0));
+    grid.appendChild(metric('Labels', sum.ground_truth ?? 0));
+    grid.appendChild(metric('Paired', sum.paired ?? 0));
+    grid.appendChild(metric('Real RVF', sum.real_rvf ?? 0));
+    grid.appendChild(metric('Placeholders', sum.placeholder_rvf ?? 0));
+    s.appendChild(grid);
+
+    const latest = data.latest || {};
+    const files = this._el('div', 'tp-rvf-files');
+    [
+      ['Latest CSI', latest.recording?.name || latest.recording?.id || 'none'],
+      ['Latest Labels', latest.ground_truth?.name || 'none'],
+      ['Latest Paired', latest.paired?.name || 'none']
+    ].forEach(([label, value]) => {
+      const cell = this._el('div', 'tp-file-cell');
+      cell.appendChild(this._el('div', 'tp-file-label', label));
+      cell.appendChild(this._el('div', 'tp-file-value', value));
+      files.appendChild(cell);
+    });
+    s.appendChild(files);
+
+    const commands = this._el('div', 'tp-cmd-list');
+    (data.commands || []).forEach(cmd => commands.appendChild(this._renderCommand(cmd)));
+    s.appendChild(commands);
+    return s;
+  }
+
+  _renderCommand(cmd) {
+    const row = this._el('div', 'tp-cmd-row');
+    const body = this._el('div');
+    body.appendChild(this._el('div', 'tp-cmd-label', cmd.label || cmd.id || 'Command'));
+    body.appendChild(this._el('div', 'tp-cmd-code', cmd.command || ''));
+    row.appendChild(body);
+    const copied = this.state.copiedCommand === cmd.id;
+    const copy = this._btn(copied ? 'Copied' : 'Copy', 'tp-btn tp-btn-muted', () => this._copyCommand(cmd));
+    row.appendChild(copy);
+    return row;
   }
 
   _renderConfig() {
@@ -406,6 +490,18 @@ export default class TrainingPanel {
   }
 
   // --- Helpers ---
+
+  async _copyCommand(cmd) {
+    try {
+      await navigator.clipboard.writeText(cmd.command || '');
+      this._set({ copiedCommand: cmd.id || null });
+      window.setTimeout(() => {
+        if (this.state.copiedCommand === cmd.id) this._set({ copiedCommand: null });
+      }, 1400);
+    } catch (e) {
+      this._set({ error: `Copy failed: ${e.message}` });
+    }
+  }
 
   _el(tag, cls, txt) {
     const e = document.createElement(tag);
