@@ -29,6 +29,7 @@
 #[cfg(feature = "crv")]
 pub mod crv;
 pub mod coverage;
+pub mod estimator;
 pub mod event_log;
 pub mod mat;
 pub mod rotation;
@@ -36,6 +37,9 @@ pub mod signal;
 pub mod sketch;
 pub mod viewpoint;
 
+pub use estimator::{
+    DistanceEstimator, EstimatorBank, EstimatorQuery, EstimatorSketch, SideInfo,
+};
 pub use event_log::{NoveltyEvent, PrivacyEventLog};
 pub use rotation::Rotation;
 pub use sketch::{

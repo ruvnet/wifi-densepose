@@ -147,6 +147,29 @@ impl Rotation {
         if self.dim == 0 {
             return Vec::new();
         }
+        let mut buf = self.apply_padded(embedding);
+        // Read back the first `dim` rotated coordinates as the sketch input.
+        buf.truncate(self.dim);
+        buf
+    }
+
+    /// Apply the rotation `R = H·D` and return **all `padded_dim` rotated
+    /// coordinates** (not truncated to `dim`).
+    ///
+    /// This is the frame the RaBitQ estimator ([`crate::estimator`]) works in:
+    /// the 1-bit code `x̄ ∈ {±1/√D}^D` is unit over the **padded** length `D`,
+    /// and the query dot product `⟨x̄, q'⟩` must be taken over that same `D`. For
+    /// a power-of-two `dim`, `padded_dim == dim` and this equals
+    /// [`Rotation::apply`]; for a non-power-of-two `dim` the tail coordinates
+    /// (the zero-padded energy redistributed by the FHT) are retained here but
+    /// dropped by `apply`.
+    ///
+    /// `dim == 0` yields an empty vector. Ragged input is handled charitably
+    /// (truncate / zero-extend to `dim`), as in [`Rotation::apply`].
+    pub fn apply_padded(&self, embedding: &[f32]) -> Vec<f32> {
+        if self.dim == 0 {
+            return Vec::new();
+        }
         // Build the padded, sign-flipped working buffer: buf = D · x, then 0-pad.
         let mut buf = vec![0.0f32; self.padded];
         let n = embedding.len().min(self.dim);
@@ -157,9 +180,6 @@ impl Rotation {
 
         // In-place normalized Fast Hadamard Transform.
         fht_normalized(&mut buf);
-
-        // Read back the first `dim` rotated coordinates as the sketch input.
-        buf.truncate(self.dim);
         buf
     }
 }
