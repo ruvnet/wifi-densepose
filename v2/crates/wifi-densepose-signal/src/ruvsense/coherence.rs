@@ -249,11 +249,22 @@ pub fn coherence_score(current: &[f32], reference: &[f32], variance: &[f32]) -> 
     (weighted_sum / weight_sum).clamp(0.0, 1.0)
 }
 
+/// Coherence score at/above which the environment is classified `Stable`
+/// (ADR-154 §7.4 #9 — DATA-GATED). EMPIRICAL DEFAULT, not a calibrated cutoff:
+/// a defensible value needs labelled stable/drifting environment traces. Pinned
+/// by `classify_drift_*_boundary` so a future retune is a visible, tested change.
+const DRIFT_STABLE_SCORE: f32 = 0.85;
+
+/// Stale-frame count below which a coherence loss is treated as a transient
+/// `StepChange` rather than a sustained `Linear` drift (ADR-154 §7.4 #9 —
+/// DATA-GATED). EMPIRICAL DEFAULT pending labelled calibration.
+const DRIFT_STEP_CHANGE_MAX_STALE: u64 = 10;
+
 /// Classify drift profile based on coherence history.
 fn classify_drift(score: f32, stale_count: u64) -> DriftProfile {
-    if score >= 0.85 {
+    if score >= DRIFT_STABLE_SCORE {
         DriftProfile::Stable
-    } else if stale_count < 10 {
+    } else if stale_count < DRIFT_STEP_CHANGE_MAX_STALE {
         // Brief coherence loss -> likely step change
         DriftProfile::StepChange
     } else {
@@ -416,6 +427,38 @@ mod tests {
     #[test]
     fn drift_classification_linear() {
         assert_eq!(classify_drift(0.3, 20), DriftProfile::Linear);
+    }
+
+    // ── ADR-154 §7.4 #9: drift-threshold characterization (DATA-GATED) ──────
+    // Pin the CURRENT empirical thresholds so a future labelled-data retune is a
+    // visible, tested change. These assert the decision boundaries, not that the
+    // values are "correct".
+
+    /// The named consts must equal the original bare literals (no value drift).
+    #[test]
+    fn drift_consts_unchanged_from_literals() {
+        assert_eq!(DRIFT_STABLE_SCORE, 0.85);
+        assert_eq!(DRIFT_STEP_CHANGE_MAX_STALE, 10);
+    }
+
+    /// Stable score boundary: `>= 0.85` is Stable; just below flips to a
+    /// non-stable profile.
+    #[test]
+    fn classify_drift_stable_score_boundary() {
+        // exactly at threshold → Stable
+        assert_eq!(classify_drift(0.85, 0), DriftProfile::Stable);
+        // just below → not Stable (StepChange, since stale_count < 10)
+        assert_eq!(classify_drift(0.849, 0), DriftProfile::StepChange);
+    }
+
+    /// Stale-count boundary: `< 10` is StepChange, `>= 10` is Linear (when the
+    /// score is below the Stable cutoff).
+    #[test]
+    fn classify_drift_stale_count_boundary() {
+        // just below 10 → StepChange
+        assert_eq!(classify_drift(0.3, 9), DriftProfile::StepChange);
+        // exactly 10 → Linear
+        assert_eq!(classify_drift(0.3, 10), DriftProfile::Linear);
     }
 
     #[test]

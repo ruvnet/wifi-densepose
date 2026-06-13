@@ -77,13 +77,27 @@ pub struct GatePolicyConfig {
     pub adaptive: bool,
 }
 
+// Gate-policy DEFAULTS (ADR-154 §7.4 #9 — DATA-GATED). These were bare literals
+// in the `Default` impl. They are already tunable per-instance via
+// `GatePolicyConfig`/`GatePolicy::new` (the config seam exists), so de-magicking
+// here is about naming + pinning the DEFAULTS. EMPIRICAL — defensible values
+// need labelled coherence traces; the VALUES are unchanged.
+/// Default coherence accept cutoff (full Kalman update above this).
+const DEFAULT_ACCEPT_THRESHOLD: f32 = 0.85;
+/// Default coherence reject cutoff (discard measurement below this).
+const DEFAULT_REJECT_THRESHOLD: f32 = 0.5;
+/// Default stale-frame budget before forcing recalibration (≈10 s at 20 Hz).
+const DEFAULT_MAX_STALE_FRAMES: u64 = 200;
+/// Default PredictOnly-zone measurement-noise inflation factor.
+const DEFAULT_PREDICT_ONLY_NOISE: f32 = 3.0;
+
 impl Default for GatePolicyConfig {
     fn default() -> Self {
         Self {
-            accept_threshold: 0.85,
-            reject_threshold: 0.5,
-            max_stale_frames: 200, // 10s at 20Hz
-            predict_only_noise: 3.0,
+            accept_threshold: DEFAULT_ACCEPT_THRESHOLD,
+            reject_threshold: DEFAULT_REJECT_THRESHOLD,
+            max_stale_frames: DEFAULT_MAX_STALE_FRAMES,
+            predict_only_noise: DEFAULT_PREDICT_ONLY_NOISE,
             adaptive: false,
         }
     }
@@ -114,7 +128,7 @@ impl GatePolicy {
             accept_threshold: accept,
             reject_threshold: reject,
             max_stale_frames: max_stale,
-            predict_only_noise: 3.0,
+            predict_only_noise: DEFAULT_PREDICT_ONLY_NOISE,
             consecutive_low: 0,
             last_decision: None,
         }
@@ -341,6 +355,17 @@ mod tests {
         assert_eq!(cfg.max_stale_frames, 200);
         assert!((cfg.predict_only_noise - 3.0).abs() < f32::EPSILON);
         assert!(!cfg.adaptive);
+    }
+
+    /// ADR-154 §7.4 #9 (DATA-GATED): the named DEFAULT_* consts must equal the
+    /// original bare literals — pins the de-magicked defaults so a future
+    /// labelled-data retune is a visible, tested change. Values UNCHANGED.
+    #[test]
+    fn gate_default_consts_unchanged_from_literals() {
+        assert_eq!(DEFAULT_ACCEPT_THRESHOLD, 0.85);
+        assert_eq!(DEFAULT_REJECT_THRESHOLD, 0.5);
+        assert_eq!(DEFAULT_MAX_STALE_FRAMES, 200);
+        assert_eq!(DEFAULT_PREDICT_ONLY_NOISE, 3.0);
     }
 
     #[test]
