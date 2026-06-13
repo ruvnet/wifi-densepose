@@ -9,9 +9,10 @@
 
 use ndarray::Array2;
 use num_complex::Complex64;
-use rustfft::FftPlanner;
+use rustfft::{Fft, FftPlanner};
 use ruvector_attn_mincut::attn_mincut;
 use std::f64::consts::PI;
+use std::sync::Arc;
 
 /// Configuration for spectrogram generation.
 #[derive(Debug, Clone)]
@@ -87,12 +88,40 @@ pub fn compute_spectrogram(
         return Err(SpectrogramError::InvalidWindowSize);
     }
 
-    let n_frames = (signal.len() - config.window_size) / config.hop_size + 1;
-    let n_freq = config.window_size / 2 + 1;
-    let window = make_window(config.window_fn, config.window_size);
-
     let mut planner = FftPlanner::new();
     let fft = planner.plan_fft_forward(config.window_size);
+    let window = make_window(config.window_fn, config.window_size);
+    Ok(compute_spectrogram_with_plan(
+        signal,
+        sample_rate,
+        config,
+        &fft,
+        &window,
+    ))
+}
+
+/// STFT core that runs against a **pre-planned** FFT and pre-built window.
+///
+/// ADR-154 §7.4 #20: `compute_spectrogram` re-plans the FFT on every call, so
+/// `compute_multi_subcarrier_spectrogram` (which calls it once per subcarrier)
+/// re-planned the same length-`window_size` FFT for *every* subcarrier. This
+/// helper hoists the plan + window out of the per-subcarrier loop. The numeric
+/// body is byte-for-byte the old loop — only the plan/window construction is
+/// lifted — so the output is **bit-identical** to the per-call path (asserted by
+/// `multi_subcarrier_hoisted_plan_bit_identical`). Callers must pass a plan
+/// built for exactly `config.window_size` and a window of that length.
+fn compute_spectrogram_with_plan(
+    signal: &[f64],
+    sample_rate: f64,
+    config: &SpectrogramConfig,
+    fft: &Arc<dyn Fft<f64>>,
+    window: &[f64],
+) -> Spectrogram {
+    debug_assert_eq!(window.len(), config.window_size, "window/plan size mismatch");
+    debug_assert_eq!(fft.len(), config.window_size, "FFT/window size mismatch");
+
+    let n_frames = (signal.len() - config.window_size) / config.hop_size + 1;
+    let n_freq = config.window_size / 2 + 1;
 
     let mut data = Array2::zeros((n_freq, n_frames));
 
@@ -116,13 +145,13 @@ pub fn compute_spectrogram(
         }
     }
 
-    Ok(Spectrogram {
+    Spectrogram {
         data,
         n_freq,
         n_time: n_frames,
         freq_resolution: sample_rate / config.window_size as f64,
         time_resolution: config.hop_size as f64 / sample_rate,
-    })
+    }
 }
 
 /// Compute spectrogram for each subcarrier from a temporal CSI matrix.
@@ -134,12 +163,40 @@ pub fn compute_multi_subcarrier_spectrogram(
     sample_rate: f64,
     config: &SpectrogramConfig,
 ) -> Result<Vec<Spectrogram>, SpectrogramError> {
-    let (_, n_sc) = csi_temporal.dim();
-    let mut spectrograms = Vec::with_capacity(n_sc);
+    let (n_samples, n_sc) = csi_temporal.dim();
 
+    // ADR-154 §7.4 #20: validate *once* (same checks `compute_spectrogram`
+    // makes), then plan the FFT + build the window *once* and reuse them across
+    // every subcarrier instead of re-planning per column. The window length is
+    // identical for all subcarriers, so this is pure hoisting — output stays
+    // bit-identical to the per-call path.
+    if n_samples < config.window_size {
+        return Err(SpectrogramError::SignalTooShort {
+            signal_len: n_samples,
+            window_size: config.window_size,
+        });
+    }
+    if config.hop_size == 0 {
+        return Err(SpectrogramError::InvalidHopSize);
+    }
+    if config.window_size == 0 {
+        return Err(SpectrogramError::InvalidWindowSize);
+    }
+
+    let mut planner = FftPlanner::new();
+    let fft = planner.plan_fft_forward(config.window_size);
+    let window = make_window(config.window_fn, config.window_size);
+
+    let mut spectrograms = Vec::with_capacity(n_sc);
     for sc in 0..n_sc {
         let col: Vec<f64> = csi_temporal.column(sc).to_vec();
-        spectrograms.push(compute_spectrogram(&col, sample_rate, config)?);
+        spectrograms.push(compute_spectrogram_with_plan(
+            &col,
+            sample_rate,
+            config,
+            &fft,
+            &window,
+        ));
     }
 
     Ok(spectrograms)
@@ -370,6 +427,67 @@ mod tests {
         assert_eq!(specs.len(), n_sc);
         for spec in &specs {
             assert_eq!(spec.n_freq, 65);
+        }
+    }
+
+    // ADR-154 §7.4 #20: the FFT-planner hoist in
+    // `compute_multi_subcarrier_spectrogram` must produce **bit-identical**
+    // output to calling `compute_spectrogram` (fresh planner) per subcarrier.
+    // We compare `f64::to_bits` of every spectrogram value across several
+    // window functions and a realistic 56-subcarrier CSI matrix — the planner
+    // change only reorders *when* the (identical) plan is built, never the math.
+    #[test]
+    fn multi_subcarrier_hoisted_plan_bit_identical() {
+        let n_samples = 600;
+        let n_sc = 56; // canonical-56 grid — the production subcarrier count
+        let sample_rate = 100.0;
+        let csi = Array2::from_shape_fn((n_samples, n_sc), |(t, sc)| {
+            // Deterministic, non-trivial per-subcarrier content.
+            let freq = 0.7 + sc as f64 * 0.13;
+            (2.0 * PI * freq * t as f64 / sample_rate).sin()
+                + 0.3 * (2.0 * PI * (freq * 2.1) * t as f64 / sample_rate).cos()
+        });
+
+        for window_fn in [
+            WindowFunction::Hann,
+            WindowFunction::Hamming,
+            WindowFunction::Blackman,
+            WindowFunction::Rectangular,
+        ] {
+            for &power in &[true, false] {
+                let config = SpectrogramConfig {
+                    window_size: 128,
+                    hop_size: 37, // non-divisor hop to exercise frame edges
+                    window_fn,
+                    power,
+                };
+
+                // AFTER: hoisted-plan path.
+                let hoisted =
+                    compute_multi_subcarrier_spectrogram(&csi, sample_rate, &config).unwrap();
+
+                // BEFORE: independent per-subcarrier fresh-planner path.
+                let reference: Vec<Spectrogram> = (0..n_sc)
+                    .map(|sc| {
+                        let col: Vec<f64> = csi.column(sc).to_vec();
+                        compute_spectrogram(&col, sample_rate, &config).unwrap()
+                    })
+                    .collect();
+
+                assert_eq!(hoisted.len(), reference.len());
+                for (sc, (h, r)) in hoisted.iter().zip(reference.iter()).enumerate() {
+                    assert_eq!(h.data.dim(), r.data.dim(), "dim sc={sc} {window_fn:?}");
+                    for (a, b) in h.data.iter().zip(r.data.iter()) {
+                        assert_eq!(
+                            a.to_bits(),
+                            b.to_bits(),
+                            "bit mismatch sc={sc} {window_fn:?} power={power}: {a} vs {b}"
+                        );
+                    }
+                    assert_eq!(h.freq_resolution.to_bits(), r.freq_resolution.to_bits());
+                    assert_eq!(h.time_resolution.to_bits(), r.time_resolution.to_bits());
+                }
+            }
         }
     }
 }
