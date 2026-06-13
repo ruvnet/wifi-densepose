@@ -205,6 +205,79 @@ pub fn measure_pass2(p: CoverageParams, rotation_seed: u64) -> CoverageResult {
     measure_inner(p, Some(rot))
 }
 
+/// Measure mean top-K coverage of a **multi-bit (Pass-3)** rotated sketch:
+/// `bits` bits per dimension instead of 1, ranked by L1 distance over the
+/// per-dim codes (the natural multi-bit generalization of hamming). This is the
+/// "Multi-bit / Extended RaBitQ" half of ADR-156 §8 — measured here as an
+/// experiment to decide whether a full `MultiBitSketch` type is worth building.
+///
+/// Quantization: rotate (Pass-2 frame), then map each rotated coordinate through
+/// a uniform mid-rise scalar quantizer with `2^bits` levels over a fixed
+/// symmetric range `[-RANGE, RANGE]` (RANGE chosen from the rotated-coord scale).
+/// `bits == 1` reduces to sign-quantization (sanity: should match Pass-2 within
+/// quantizer-boundary noise). Memory cost is `bits×` the 1-bit sketch.
+///
+/// Returns the measured coverage; the caller reports the bit/coverage tradeoff.
+pub fn measure_multibit(p: CoverageParams, rotation_seed: u64, bits: u32) -> CoverageResult {
+    assert!((1..=8).contains(&bits), "bits must be in 1..=8");
+    let rot = Rotation::new(rotation_seed, p.dim);
+    let levels = 1u32 << bits; // 2^bits codes per dim
+    // Rotated AETHER-shape coords after the normalized FHT sit roughly in
+    // [-RANGE, RANGE]; clamp out-of-range to the end codes. RANGE picked to
+    // cover ~99% of the rotated-coord magnitude on this fixture (empirically
+    // ~3.0 after the 1/√m normalization).
+    const RANGE: f32 = 3.0;
+    let quantize = move |v: &[f32]| -> Vec<u16> {
+        rot.apply(v)
+            .iter()
+            .map(|&x| {
+                let t = ((x + RANGE) / (2.0 * RANGE)).clamp(0.0, 1.0); // → [0,1]
+                let code = (t * (levels - 1) as f32).round() as u32;
+                code.min(levels - 1) as u16
+            })
+            .collect()
+    };
+    // L1 distance over per-dim codes.
+    let l1 = |a: &[u16], b: &[u16]| -> u32 {
+        a.iter()
+            .zip(b)
+            .map(|(&x, &y)| (x as i32 - y as i32).unsigned_abs())
+            .sum()
+    };
+
+    let float_bank = make_fixture(p);
+    let centres = cluster_centres(p.dim, p.n_clusters.max(1), p.seed);
+    let coded_bank: Vec<Vec<u16>> = float_bank.iter().map(|v| quantize(v)).collect();
+
+    let mut total = 0.0f64;
+    for q in 0..p.n_queries {
+        let c = q % p.n_clusters.max(1);
+        let qv = realize(
+            &centres[c],
+            p.dim,
+            p.noise,
+            p.seed ^ 0xDEAD_0000_0000 ^ (q as u64).wrapping_mul(0x2545_F491),
+        );
+        let truth = float_topk(&float_bank, &qv, p.k);
+        let qc = quantize(&qv);
+        // top candidate_k by L1 over codes.
+        let mut scored: Vec<(u32, u32)> = coded_bank
+            .iter()
+            .enumerate()
+            .map(|(i, code)| (i as u32, l1(&qc, code)))
+            .collect();
+        scored.sort_by_key(|&(_, d)| d);
+        scored.truncate(p.candidate_k);
+        let cand_ids: std::collections::HashSet<u32> =
+            scored.into_iter().map(|(id, _)| id).collect();
+        let hit = truth.iter().filter(|id| cand_ids.contains(id)).count();
+        total += hit as f64 / p.k as f64;
+    }
+    CoverageResult {
+        coverage: total / p.n_queries as f64,
+    }
+}
+
 /// Build the deterministic float bank for `p`: `p.n` vectors, each assigned to
 /// one of `p.n_clusters` planted clusters (round-robin), realized as
 /// `centre + jitter` under the fixed anisotropic axis scale. Returned with the
@@ -285,6 +358,54 @@ mod tests {
             cov > 0.95,
             "tight clusters + 8× over-fetch should recover >95% of top-K, got {:.3}",
             cov
+        );
+    }
+
+    #[test]
+    fn multibit_tradeoff_report() {
+        // ADR-156 §8 "Multi-bit / Extended RaBitQ" measurement: bit/coverage
+        // tradeoff at the STRICT bar (candidate_k == K). Reports b=1..4 bits
+        // per dim alongside Pass-1 / Pass-2 (1-bit) baselines. Run with
+        // --nocapture to see the table.
+        let base = CoverageParams::aether_default(0xAD00_0084);
+        let rot_seed = 0x5EED_C0DE_1234_5678u64;
+        let p1 = measure_pass1(base).coverage;
+        let p2 = measure_pass2(base, rot_seed).coverage;
+        println!("\n=== ADR-156 §8 multi-bit tradeoff (strict candidate_k=K={}) ===", base.k);
+        println!("dim={} N={} clusters={} noise={}  bar=90%", base.dim, base.n, base.n_clusters, base.noise);
+        println!("  Pass1 (no rot, 1-bit)      : {:6.2}%", p1 * 100.0);
+        println!("  Pass2 (rot, 1-bit)         : {:6.2}%", p2 * 100.0);
+        for bits in 1..=4u32 {
+            let cov = measure_multibit(base, rot_seed, bits).coverage;
+            let bytes_per_vec = base.dim * bits as usize / 8;
+            println!(
+                "  Pass3 (rot, {bits}-bit, {bytes_per_vec:>3} B/vec): {:6.2}%  {}",
+                cov * 100.0,
+                if cov >= 0.90 { "≥90%" } else { "" }
+            );
+        }
+        println!("=================================================================\n");
+        assert!((0.0..=1.0).contains(&p1));
+    }
+
+    #[test]
+    fn multibit_1bit_matches_pass2_approx() {
+        // Sanity: 1-bit multi-bit quantization is essentially sign-quantization,
+        // so its coverage should track Pass-2 (rotated 1-bit) closely. (Not
+        // exact: the mid-rise quantizer's 0/1 boundary is at the RANGE midpoint,
+        // which equals the sign boundary, so they should match very closely.)
+        let p = CoverageParams {
+            n: 256,
+            n_queries: 16,
+            n_clusters: 16,
+            ..CoverageParams::aether_default(0x55)
+        };
+        let rot_seed = 0xABCDu64;
+        let p2 = measure_pass2(p, rot_seed).coverage;
+        let mb1 = measure_multibit(p, rot_seed, 1).coverage;
+        assert!(
+            (p2 - mb1).abs() < 0.05,
+            "1-bit multibit {mb1:.3} should track Pass-2 {p2:.3}"
         );
     }
 

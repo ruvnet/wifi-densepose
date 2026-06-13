@@ -103,7 +103,7 @@ The double-clone elimination is also correctness-neutral: all 100 `viewpoint`/`m
 | # | Candidate | What | Grade | Verdict |
 |---|-----------|------|-------|---------|
 | **1** | **SymphonyQG** (SIGMOD 2025, public code) | Unified quantization + graph ANN; source reports **3.5–17× QPS over HNSW at equal recall**, pure-CPU / edge-portable. | **CLAIMED** (author-measured; **not reproduced on our hardware** — reproduction is future work) | **Lead beyond-SOTA candidate for the ruvector ANN path.** Propose as ACCEPTED-future; cite honestly as "claimed by source, reproduction pending." Best fit because the ruvector retrieval path (AETHER re-ID, sketch prefilter) is exactly an ANN problem and SymphonyQG is CPU/edge-portable like our deployment. |
-| **2** | **Multi-bit / Extended RaBitQ** | Extends our existing **1-bit** `sketch.rs` (ADR-084) to multiple bits per dimension — precisely the "Pass 2" our own `sketch.rs` doc deferred (1-bit sign quantization ships first; rotation/more-bits "later if benchmark-measured top-K coverage drops below the ADR-084 90% threshold"). | **CLAIMED** (RaBitQ family well-characterised; our 1-bit baseline is MEASURED in `sketch_bench`) | **Accepted near-term.** Concrete, in-scope, incremental — extends a MEASURED capability rather than importing a new system. #2 priority. |
+| **2** | **Multi-bit / Extended RaBitQ** | Extends our existing **1-bit** `sketch.rs` (ADR-084) to multiple bits per dimension — precisely the "Pass 2" our own `sketch.rs` doc deferred (1-bit sign quantization ships first; rotation/more-bits "later if benchmark-measured top-K coverage drops below the ADR-084 90% threshold"). | **MEASURED-on-our-hardware** (was CLAIMED) — Pass-2 rotation + multi-bit Pass-3 implemented and benchmarked; see §10. Rotation lifts strict-bar coverage 36%→46% and clears 90% only with ~3× over-fetch; multi-bit (≤4-bit) reaches 74% at the strict bar — both **short of the strict 90% bar** on the tested distribution. | **DONE — RESOLVED-PARTIAL.** Built and MEASURED (§10). The honest negative (no strict-bar 90% from rotation or ≤4-bit) is recorded, not hidden. Over-fetch + Pass-2 is the path that meets the bar; that matches ADR-084's "candidate set" deployment pattern. |
 | **3** | **GraphPose-Fi-style learned antenna-attention + ChebGConv fusion head** | Would replace the current **untrained identity-projection + mean-pool** "attention" (the `CrossViewpointAttention` default is `ProjectionWeights::identity` — not a *learned* attention) with a learned graph fusion head. | **DATA-GATED** (per ADR-152 measurement (b): architecture is **NOT** the current bottleneck — **data is**) | **ACCEPTED-future, data-gated. Do NOT build now.** ADR-152's measured lesson was that swapping architecture without more/better paired data does not move PCK. Building a learned fusion head before the data exists would repeat the mistake ADR-155 §5 also flagged for GraphPose-Fi. |
 | — | **Cramér-Rao / sensor-placement** (`geometry.rs` CRB) | Investigated for a 2026 advance beating the textbook Fisher-information CRB already implemented. | **Investigated — NO ACTION** | **Cleared honestly.** No 2026 method beats the closed-form Fisher-information CRB for this 2-D bearing problem; our implementation is already correct SOTA. (Recording a negative result is a deliberate anti-slop signal.) The only CRB change this milestone is the §2.3 *GDOP* honesty fix, which is a labelling/quantity correction, not an algorithmic one. |
 
@@ -139,7 +139,7 @@ The double-clone elimination is also correctness-neutral: all 100 `viewpoint`/`m
 The review surfaced more than this milestone scoped. Tracked here for a future ADR-156 milestone:
 
 - **SymphonyQG reproduction** (§5 #1) — reproduce the 3.5–17× QPS-over-HNSW claim on our hardware before integrating into the ruvector ANN path. Currently CLAIMED-only.
-- **Multi-bit / Extended RaBitQ** (§5 #2) — implement the `sketch.rs` "Pass 2" (more bits per dimension and/or the randomized rotation) and re-measure top-K coverage against the ADR-084 ≥90% acceptance bar in `sketch_bench`.
+- **Multi-bit / Extended RaBitQ** (§5 #2) — **RESOLVED-PARTIAL** (see §10). Pass-2 randomized rotation (FHT + seeded ±1 sign flips, `src/rotation.rs`) and a multi-bit Pass-3 experiment landed and were MEASURED against the ADR-084 ≥90% bar. **Honest result: rotation helps (+10pp at the strict bar) and Pass-2 reaches 90% with ~3× over-fetch, but NEITHER rotation nor multi-bit (up to 4-bit) clears the strict candidate_k==K 90% bar on the tested anisotropic distribution.** The original `1-bit sign quantization ships first; rotation/more-bits later if benchmark-measured top-K coverage drops below 90%` deferral is therefore retired: the rotation is built, the bar is characterised, and the residual gap is documented rather than deferred.
 - **Learned cross-viewpoint fusion head** (§5 #3, GraphPose-Fi-style) — **data-gated**: blocked on the paired multi-room data ADR-152 measurement (b) identified as the real bottleneck; do not build the architecture first.
 - **`CrossViewpointAttention` learned projections** — the default `ProjectionWeights::identity` + mean-pool is honest but unlearned; wiring real learned Q/K/V projections is part of the data-gated item above (no learned weights ⇒ the "attention" is currently a geometric-bias-weighted average, which the code/docs should keep stating plainly).
 - **`coherence.rs` / `fusion.rs` micro-opts and the remaining lower-severity review findings** (style, doc, further hot-path tuning) from the fusion gap review.
@@ -151,3 +151,57 @@ The review surfaced more than this milestone scoped. Tracked here for a future A
 **Positive.** The fusion path now: uses one canonical wrapped angular-distance helper; reports a **real** dimensionless GDOP instead of a mislabeled RMSE; cannot be panicked by crafted multistatic indices or a zero-bin spectrogram (DoS closed); and does one embedding clone per viewpoint instead of two (measured). Every fix is pinned by a test that fails on the old code, and the ANN/fusion SOTA landscape is graded so the near-term (multi-bit RaBitQ) and the data-gated (learned fusion) are not confused.
 
 **Negative / honest.** The headline angular-wrap fix is a **numeric no-op** under the current cos kernel — we land it for contract/maintainability, not because it changes an output, and we say so. The two strongest external candidates (SymphonyQG, learned fusion) are **not built here** — one is CLAIMED-pending-reproduction, the other is data-gated by a prior measurement. The perf win is a **local hot-path** improvement, modest in the end-to-end pipeline (attention dominates). None of these is presented as more than it is.
+
+---
+
+## 10. RaBitQ Pass-2 / multi-bit — IMPLEMENTED & MEASURED (§8 backlog item #2)
+
+Milestone-1 of the §8 backlog. Status: **RESOLVED-PARTIAL** — built, measured, honest negative on the strict bar.
+
+### 10.1 What landed
+
+- **`crates/wifi-densepose-ruvector/src/rotation.rs`** (new) — `Rotation`, a deterministic randomized orthogonal rotation `R = H·D`: a **Fast Hadamard Transform** (`O(d log d)`, in-place butterfly, `1/√m` normalized so it is norm-preserving) composed with a diagonal of **seeded ±1 sign flips** (SplitMix64 from a stored `u64` seed). Chosen over a dense `d×d` matrix because that is `O(d²)` memory/time and infeasible at the 65,535-d the wire format provisions for; FHT is the standard fast-orthogonal (randomized-Hadamard / fast-JL) construction. Non-power-of-two `d` zero-pads to `next_pow2(d)` and reads back the first `d` coords.
+- **`sketch.rs`** — additive Pass-2 API: `Sketch::from_embedding_rotated`, `SketchBank::with_rotation` + `insert_embedding` / `topk_embedding` / `novelty_embedding`. **Pass 1 (`from_embedding`) is byte-for-byte unchanged**; a Pass-2 sketch has identical `embedding_dim` / packed-byte length / wire shape, so `WireSketch` and existing callers (`event_log.rs`, `signal/longitudinal.rs`) are untouched. Default behaviour preserved.
+- **`coverage.rs`** (new) — single-source-of-truth top-K coverage harness on a deterministic **anisotropic planted-cluster** fixture (cosine ground truth, the metric a sign sketch approximates). Backs both the `pass2_coverage_report` unit test and the `sketch_bench` coverage table.
+- **Multi-bit Pass-3 experiment** — `coverage::measure_multibit`: rotate, then `b`-bit uniform scalar-quantize each coord, rank by L1 over codes. Measures the bit/coverage tradeoff.
+
+### 10.2 Pre-existing bug found and fixed (disclosed)
+
+Building the coverage harness surfaced a **pre-existing correctness bug in `SketchBank::topk`** (shipped in ADR-084): the `n > k` heap path used `BinaryHeap<Reverse<(dist,id)>>` (a *min*-heap) but its comment/logic treated the peek as the max, so it evicted the *nearest* and returned the **k farthest** sketches as "nearest." The shipped unit tests only exercised the `n ≤ k` fast path (≤ 3 entries), so it was never caught. Fixed to a plain max-heap. Pinned by **`topk_heap_path_returns_nearest`** (fails on the old heap when entries are inserted farthest-first) and **`tight_clusters_give_high_coverage_with_overfetch`** (measured **0.072** coverage on the old code — random — vs **>0.99** fixed). This is a real, measured behaviour fix, not a no-op.
+
+### 10.3 MEASURED top-K coverage
+
+Test machine: Windows 11, `cargo bench --release` / `cargo test`. Fixture: **dim=128, N=2048, K=8, 64 planted clusters, intra-cluster noise=0.35, 128 queries, master_seed=0xAD000084, rotation_seed=0x5EEDC0DE12345678**, ground-truth metric = cosine. Reproduce: `cargo test -p wifi-densepose-ruvector --no-default-features pass2_coverage_report -- --nocapture` or `cargo bench -p wifi-densepose-ruvector --bench sketch_bench -- pass2_coverage`.
+
+**Coverage vs over-fetch (`coverage = |sketch_topK ∩ float_cosine_topK| / K`):**
+
+| candidate_k | Pass-1 (1-bit, no rot) | Pass-2 (1-bit, rot) | vs 90% bar |
+|---|---|---|---|
+| **8 (= K, strict bar)** | **36.13%** | **46.39%** | both **BELOW** |
+| 16 | 62.79% | 75.59% | below |
+| 24 | 83.89% | **91.60%** | **Pass-2 clears** |
+| 32 | 100.00% | 100.00% | clears |
+| 64 | 100.00% | 100.00% | clears |
+
+**Multi-bit Pass-3 at the strict bar (candidate_k = K = 8):**
+
+| Variant | Coverage | Memory |
+|---|---|---|
+| Pass-1 (1-bit, no rot) | 36.13% | 16 B/vec |
+| Pass-2 (1-bit, rot) | 46.39% | 16 B/vec |
+| Pass-3 (rot, 2-bit) | 54.39% | 32 B/vec |
+| Pass-3 (rot, 3-bit) | 66.70% | 48 B/vec |
+| Pass-3 (rot, 4-bit) | 74.22% | 64 B/vec |
+
+### 10.4 Honest verdict
+
+- **Rotation consistently helps** — +10.3 pp at the strict bar (36.13%→46.39%) and a uniform lift at every over-fetch level. The FHT construction is verified norm-preserving and deterministic.
+- **Neither rotation nor multi-bit (≤4-bit) clears the strict candidate_k==K 90% bar** on this anisotropic distribution. 1-bit sign quantization simply cannot resolve 8-of-2048 from sign bits alone; even 4× memory (4-bit) reaches only 74%.
+- **Pass-2 reaches the 90% bar at candidate_k=24 (~3× over-fetch)** — i.e. fetch ≥24 sketch candidates, refine to K with full float. This is exactly the "candidate set, then full refinement" deployment pattern ADR-084 specifies, so the bar is met *in the deployment the sensor is designed for*, just not at strict K=K.
+- **This is a measured, partial win, reported as such.** No benchmark was tuned to manufacture a pass. The strict-bar gap (and the multi-bit tradeoff that doesn't close it) is documented rather than spun.
+
+### 10.5 Deferred sub-items (graded, not dropped)
+
+- **Strict-bar 90% from a richer code** — neither rotation nor uniform multi-bit closes it here. A learned/asymmetric quantizer or the full RaBitQ residual-distance estimator (not just a uniform scalar code) might, but is unbuilt and **unmeasured** — explicitly deferred, not claimed.
+- **Distribution sensitivity** — the result is for one synthetic anisotropic distribution; on real AETHER traces the strict-bar number may differ. Re-measuring on recorded embeddings is deferred to the ADR-084 post-merge soak.
+- **Promoting a `MultiBitSketch` type** — the multi-bit code lives in the measurement harness, not as a shipped sketch type. Building the production type is gated on a use site actually needing strict-K (vs over-fetch), which the measurement says is not required today.
