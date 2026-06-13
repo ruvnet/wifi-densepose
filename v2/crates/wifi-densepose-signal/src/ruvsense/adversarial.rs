@@ -73,6 +73,44 @@ impl Default for AdversarialConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Detection tuning constants (ADR-154 §7.4 #13 — DATA-GATED)
+// ---------------------------------------------------------------------------
+//
+// These were bare numeric literals buried in `check`/`check_consistency`. They
+// are EMPIRICAL DEFAULTS, not calibrated operating points — setting defensible
+// values needs labelled spoofed/clean CSI (the Wi-Spoof benchmark, §6.2/§7.3).
+// De-magicking + the boundary tests below make any future data-driven retune a
+// visible, tested change. The VALUES here are unchanged from the pre-ADR-154
+// behaviour; only their names and the pinning tests are new.
+
+/// Gini coefficient above which the energy distribution is flagged as a
+/// `FieldModelViolation` (one link hogging the energy → likely injection).
+/// EMPIRICAL DEFAULT pending labelled calibration.
+const FIELD_MODEL_GINI_VIOLATION: f64 = 0.8;
+
+/// Energy-conservation ratio (total / expected-for-body-count) above which the
+/// frame is flagged as an `EnergyViolation` (too much energy for the occupancy).
+/// EMPIRICAL DEFAULT pending labelled calibration.
+const ENERGY_RATIO_HIGH_VIOLATION: f64 = 2.0;
+
+/// Energy-conservation ratio below which an *occupied* frame is flagged as an
+/// `EnergyViolation` (too little energy for a claimed body — possible dropout
+/// or masking). Only applied when `n_bodies > 0`. EMPIRICAL DEFAULT.
+const ENERGY_RATIO_LOW_VIOLATION: f64 = 0.1;
+
+/// Fraction of the mean per-link energy a link must exceed to count as
+/// "active" in the multi-link consistency check. EMPIRICAL DEFAULT.
+const CONSISTENCY_ACTIVE_FRACTION_OF_MEAN: f64 = 0.1;
+
+/// Weights of the four checks in the aggregate anomaly score (sum to 1.0).
+/// EMPIRICAL DEFAULTS — equal 0.2 split with consistency double-weighted (0.4)
+/// because single-link injection is the primary threat model (ADR-030 Tier 7).
+const SCORE_W_CONSISTENCY: f64 = 0.4;
+const SCORE_W_FIELD_MODEL: f64 = 0.2;
+const SCORE_W_TEMPORAL: f64 = 0.2;
+const SCORE_W_ENERGY: f64 = 0.2;
+
+// ---------------------------------------------------------------------------
 // Detection results
 // ---------------------------------------------------------------------------
 
@@ -250,13 +288,15 @@ impl AdversarialDetector {
         if consistency < self.config.consistency_threshold {
             violations.push(AnomalyType::SingleLinkInjection);
         }
-        if field_residual > 0.8 {
+        if field_residual > FIELD_MODEL_GINI_VIOLATION {
             violations.push(AnomalyType::FieldModelViolation);
         }
         if temporal > self.config.max_temporal_discontinuity {
             violations.push(AnomalyType::TemporalDiscontinuity);
         }
-        if energy_ratio > 2.0 || (n_bodies > 0 && energy_ratio < 0.1) {
+        if energy_ratio > ENERGY_RATIO_HIGH_VIOLATION
+            || (n_bodies > 0 && energy_ratio < ENERGY_RATIO_LOW_VIOLATION)
+        {
             violations.push(AnomalyType::EnergyViolation);
         }
 
@@ -268,10 +308,10 @@ impl AdversarialDetector {
         };
 
         // Score: weighted combination
-        let anomaly_score = ((1.0 - consistency) * 0.4
-            + field_residual * 0.2
-            + (temporal / self.config.max_temporal_discontinuity).min(1.0) * 0.2
-            + ((energy_ratio - 1.0).abs() / 2.0).min(1.0) * 0.2)
+        let anomaly_score = ((1.0 - consistency) * SCORE_W_CONSISTENCY
+            + field_residual * SCORE_W_FIELD_MODEL
+            + (temporal / self.config.max_temporal_discontinuity).min(1.0) * SCORE_W_TEMPORAL
+            + ((energy_ratio - 1.0).abs() / 2.0).min(1.0) * SCORE_W_ENERGY)
             .clamp(0.0, 1.0);
 
         // Find affected links (highest single-link energy ratio)
@@ -304,7 +344,8 @@ impl AdversarialDetector {
         }
 
         let mean = total / energies.len() as f64;
-        let threshold = mean * 0.1; // link must have at least 10% of mean energy
+        // link must have at least CONSISTENCY_ACTIVE_FRACTION_OF_MEAN of mean energy
+        let threshold = mean * CONSISTENCY_ACTIVE_FRACTION_OF_MEAN;
 
         let active_count = energies.iter().filter(|&&e| e > threshold).count();
         active_count as f64 / energies.len() as f64
@@ -639,6 +680,120 @@ mod tests {
             gini > 0.5,
             "Concentrated distribution should have high Gini: {}",
             gini
+        );
+    }
+
+    // ── ADR-154 §7.4 #13: threshold characterization (DATA-GATED) ───────────
+    // These pin the CURRENT empirical threshold values so a future labelled-data
+    // retune is a visible, tested change. They do NOT assert the values are
+    // "correct" — only that the named consts equal the de-magicked literals and
+    // that the decision boundaries sit exactly where the old bare literals put
+    // them.
+
+    /// The named consts must equal the original bare literals (no value drift).
+    #[test]
+    fn tuning_consts_unchanged_from_literals() {
+        assert_eq!(FIELD_MODEL_GINI_VIOLATION, 0.8);
+        assert_eq!(ENERGY_RATIO_HIGH_VIOLATION, 2.0);
+        assert_eq!(ENERGY_RATIO_LOW_VIOLATION, 0.1);
+        assert_eq!(CONSISTENCY_ACTIVE_FRACTION_OF_MEAN, 0.1);
+        assert!(
+            (SCORE_W_CONSISTENCY + SCORE_W_FIELD_MODEL + SCORE_W_TEMPORAL + SCORE_W_ENERGY - 1.0)
+                .abs()
+                < 1e-12,
+            "score weights must sum to 1.0"
+        );
+    }
+
+    /// Energy-ratio HIGH boundary: the `> ENERGY_RATIO_HIGH_VIOLATION` decision
+    /// flips just above 2.0. With max_energy_per_body=10 and n_bodies=1, total
+    /// energy E gives ratio E/10, so E=20 is the boundary. Use a clean uniform
+    /// distribution so ONLY the energy check can fire.
+    #[test]
+    fn energy_ratio_high_boundary() {
+        let mk = |per_link: f64| {
+            // 6 links, uniform → consistency=1, gini≈0, temporal=0 (first frame).
+            vec![per_link; 6]
+        };
+        // ratio just BELOW 2.0 (total=19.2 → ratio 1.92): no energy violation.
+        let mut det = AdversarialDetector::new(default_config()).unwrap();
+        let below = det.check(&mk(3.2), 1, 0).unwrap(); // 6*3.2=19.2
+        assert!(
+            !below.anomaly_detected,
+            "ratio 1.92 (<2.0) must not flag energy violation: {:?}",
+            below.anomaly_type
+        );
+        // ratio just ABOVE 2.0 (total=21.0 → ratio 2.1): energy violation fires.
+        let mut det2 = AdversarialDetector::new(default_config()).unwrap();
+        let above = det2.check(&mk(3.5), 1, 0).unwrap(); // 6*3.5=21.0
+        assert!(
+            above.anomaly_detected,
+            "ratio 2.1 (>2.0) must flag an anomaly"
+        );
+    }
+
+    /// Energy-ratio LOW boundary: an occupied frame with ratio < 0.1 flags an
+    /// `EnergyViolation`. With n_bodies=1, max_energy_per_body=10, boundary
+    /// total = 1.0 (ratio 0.1). Below it (total 0.9 → 0.09) must flag.
+    #[test]
+    fn energy_ratio_low_boundary() {
+        // just ABOVE 0.1 (total 1.2 → ratio 0.12): no energy violation.
+        let mut det = AdversarialDetector::new(default_config()).unwrap();
+        let above = det.check(&vec![0.2; 6], 1, 0).unwrap(); // 6*0.2=1.2
+        assert!(
+            !above.anomaly_detected,
+            "ratio 0.12 (>0.1) must not flag: {:?}",
+            above.anomaly_type
+        );
+        // just BELOW 0.1 (total 0.6 → ratio 0.06): energy violation fires.
+        let mut det2 = AdversarialDetector::new(default_config()).unwrap();
+        let below = det2.check(&vec![0.1; 6], 1, 0).unwrap(); // 6*0.1=0.6
+        assert!(
+            below.anomaly_detected,
+            "ratio 0.06 (<0.1) must flag an energy anomaly"
+        );
+    }
+
+    /// Field-model Gini boundary: `check_field_model` > 0.8 → FieldModelViolation.
+    /// We directly characterize where the Gini crosses 0.8 for a one-hot vs
+    /// uniform-tail mix, pinning the 0.8 const.
+    #[test]
+    fn field_model_gini_boundary() {
+        let det = AdversarialDetector::new(default_config()).unwrap();
+        // Fully concentrated (one-hot) over 6 links → Gini = (n-1)/n = 0.833 > 0.8.
+        let concentrated = det.check_field_model(&[6.0, 0.0, 0.0, 0.0, 0.0, 0.0], 6.0);
+        assert!(
+            concentrated > FIELD_MODEL_GINI_VIOLATION,
+            "one-hot Gini {concentrated} must exceed the 0.8 violation threshold"
+        );
+        // Uniform → Gini ≈ 0 < 0.8.
+        let uniform = det.check_field_model(&[1.0; 6], 6.0);
+        assert!(
+            uniform < FIELD_MODEL_GINI_VIOLATION,
+            "uniform Gini {uniform} must be below the 0.8 threshold"
+        );
+    }
+
+    /// Consistency active-fraction boundary: a link counts as "active" iff its
+    /// energy > 0.1·mean. Pin that exactly one sub-threshold link is excluded.
+    #[test]
+    fn consistency_active_fraction_boundary() {
+        let det = AdversarialDetector::new(default_config()).unwrap();
+        // 5 links at 1.0, one link at just BELOW 0.1·mean.
+        // mean over 6 = (5.0 + x)/6; for x small, threshold ≈ 0.1*5/6 ≈ 0.083.
+        let mut e = vec![1.0; 6];
+        e[5] = 0.05; // below ~0.083 threshold → excluded
+        let c_excluded = det.check_consistency(&e, e.iter().sum());
+        assert!(
+            (c_excluded - 5.0 / 6.0).abs() < 1e-9,
+            "sub-threshold link must be excluded: got {c_excluded}"
+        );
+        // Bump it well above threshold → counts as active (all 6).
+        e[5] = 1.0;
+        let c_included = det.check_consistency(&e, e.iter().sum());
+        assert!(
+            (c_included - 1.0).abs() < 1e-9,
+            "above-threshold link must count: got {c_included}"
         );
     }
 }
