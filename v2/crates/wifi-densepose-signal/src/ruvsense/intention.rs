@@ -21,6 +21,11 @@
 
 use std::collections::VecDeque;
 
+/// Minimum acceleration magnitude (ADR-154 §7.4 — de-magicked) below which the
+/// lead-time estimate `t = (v_thresh - v) / a` would divide by a near-zero
+/// acceleration; below this the lead time is reported as 0.0.
+const LEAD_TIME_MIN_ACCEL: f64 = 1e-10;
+
 // ---------------------------------------------------------------------------
 // Error types
 // ---------------------------------------------------------------------------
@@ -233,7 +238,7 @@ impl IntentionDetector {
         let detected = self.sustained_count >= self.config.min_sustained_frames;
 
         // Estimate lead time based on current acceleration and velocity
-        let estimated_lead = if detected && accel_mag > 1e-10 {
+        let estimated_lead = if detected && accel_mag > LEAD_TIME_MIN_ACCEL {
             // Time until velocity reaches threshold: t = (v_thresh - v) / a
             let remaining = (self.config.max_pre_movement_velocity - velocity_mag) / accel_mag;
             remaining.clamp(0.0, self.config.max_lead_time_s)
@@ -507,5 +512,30 @@ mod tests {
         let c = vec![1.0];
         let sd = embedding_second_diff(&a, &b, &c, 1.0);
         assert!((sd[0] - 2.0).abs() < 1e-10);
+    }
+
+    // -- ADR-154 §7.4: de-magic-constant + boundary characterization tests.
+
+    /// De-magicked lead-time accel guard must equal the prior literal.
+    #[test]
+    fn lead_time_accel_const_unchanged_from_literal() {
+        assert_eq!(LEAD_TIME_MIN_ACCEL, 1e-10);
+    }
+
+    /// A static (zero-motion) embedding stream produces ~zero acceleration, so
+    /// the lead-time estimate stays at the 0.0 sentinel rather than dividing by
+    /// a near-zero acceleration. Pins the `accel_mag <= LEAD_TIME_MIN_ACCEL`
+    /// branch behaviour.
+    #[test]
+    fn lead_time_zero_for_static_stream() {
+        let config = make_config();
+        let mut detector = IntentionDetector::new(config).unwrap();
+        let mut last = None;
+        for frame in 0..6_u64 {
+            last = Some(detector.update(&static_embedding(), frame * 50_000).unwrap());
+        }
+        let signal = last.unwrap();
+        assert!(signal.acceleration_magnitude < LEAD_TIME_MIN_ACCEL.max(1e-9));
+        assert_eq!(signal.estimated_lead_time_s, 0.0);
     }
 }
