@@ -40,6 +40,30 @@ const VERSION: u8 = 1;
 const HEADER_LEN: usize = 16; // magic(4) + version(1) + tier(1) + reserved(2) + unix_s(8)
 const SUBCARRIER_RECORD_LEN: usize = 16; // 4 × f32
 
+// ADR-154 §7.4 — de-magicked (values unchanged). The tuning thresholds below
+// are EMPIRICAL DEFAULTS pending labelled empty-vs-occupied calibration traces.
+
+/// Default minimum frames for a baseline finalization (30 s @ 20 Hz). Shared by
+/// every tier constructor (`ht20`/`ht40`/`he20`/`he40`).
+const DEFAULT_MIN_FRAMES: u32 = 600;
+
+/// Amplitude standard-deviation floor used as the z-score divisor in
+/// `deviation()`, guarding against a zero-variance baseline subcarrier.
+const AMP_STD_FLOOR: f32 = 1e-12;
+
+/// `deviation()` flags motion when the median amplitude z-score exceeds this
+/// many σ. EMPIRICAL DEFAULT.
+const MOTION_AMP_Z_THRESHOLD: f32 = 2.0;
+
+/// `deviation()` flags motion when the median phase drift exceeds this many
+/// radians (π/6 = 30°). EMPIRICAL DEFAULT.
+const MOTION_PHASE_DRIFT_THRESHOLD: f32 = std::f32::consts::PI / 6.0;
+
+/// Minimum complex magnitude in `subtract_in_place` below which a bin is left
+/// untouched (a near-zero bin has no meaningful baseline to subtract and the
+/// `(norm - baseline)/norm` scaling would be ill-conditioned).
+const SUBTRACT_MIN_NORM: f64 = 1e-30;
+
 // ---------------------------------------------------------------------------
 // PHY tier
 // ---------------------------------------------------------------------------
@@ -103,11 +127,11 @@ pub struct CalibrationConfig {
 impl CalibrationConfig {
     /// HT20 defaults: 64 FFT, 52 active, 600 frame minimum (30 s @ 20 Hz).
     pub fn ht20() -> Self {
-        Self { tier: PhyTier::Ht20, num_subcarriers: 64, num_active: 52, min_frames: 600, max_phase_variance: 0.3 }
+        Self { tier: PhyTier::Ht20, num_subcarriers: 64, num_active: 52, min_frames: DEFAULT_MIN_FRAMES, max_phase_variance: 0.3 }
     }
     /// HT40 defaults: 128 FFT, 114 active.
     pub fn ht40() -> Self {
-        Self { tier: PhyTier::Ht40, num_subcarriers: 128, num_active: 114, min_frames: 600, max_phase_variance: 0.3 }
+        Self { tier: PhyTier::Ht40, num_subcarriers: 128, num_active: 114, min_frames: DEFAULT_MIN_FRAMES, max_phase_variance: 0.3 }
     }
     /// HE20 defaults: 256 FFT, **256 active** (record all delivered bins).
     ///
@@ -128,11 +152,11 @@ impl CalibrationConfig {
     /// `cir.rs` (`HE20_ACTIVE`), where the Φ sensing matrix genuinely needs it;
     /// the baseline recorder does not.
     pub fn he20() -> Self {
-        Self { tier: PhyTier::He20, num_subcarriers: 256, num_active: 256, min_frames: 600, max_phase_variance: 0.3 }
+        Self { tier: PhyTier::He20, num_subcarriers: 256, num_active: 256, min_frames: DEFAULT_MIN_FRAMES, max_phase_variance: 0.3 }
     }
     /// HE40 defaults: 512 FFT, 484 active.
     pub fn he40() -> Self {
-        Self { tier: PhyTier::He40, num_subcarriers: 512, num_active: 484, min_frames: 600, max_phase_variance: 0.3 }
+        Self { tier: PhyTier::He40, num_subcarriers: 512, num_active: 484, min_frames: DEFAULT_MIN_FRAMES, max_phase_variance: 0.3 }
     }
 }
 
@@ -264,7 +288,7 @@ impl BaselineCalibration {
         for (ki, (c, baseline)) in y.iter().zip(self.subcarriers.iter()).enumerate() {
             let _ = ki;
             let amp = c.norm();
-            let std = baseline.amp_variance.sqrt().max(1e-12_f32);
+            let std = baseline.amp_variance.sqrt().max(AMP_STD_FLOOR);
             z_amp.push((amp - baseline.amp_mean) / std);
             let theta = c.arg();
             let drift = circular_distance(theta, baseline.phase_mean);
@@ -273,7 +297,8 @@ impl BaselineCalibration {
         let amplitude_z_median = median_abs(&z_amp);
         let amplitude_z_max = z_amp.iter().map(|v| v.abs()).fold(0.0_f32, f32::max);
         let phase_drift_median = median_slice(&phase_drift);
-        let motion_flagged = amplitude_z_median > 2.0 || phase_drift_median > std::f32::consts::PI / 6.0;
+        let motion_flagged =
+            amplitude_z_median > MOTION_AMP_Z_THRESHOLD || phase_drift_median > MOTION_PHASE_DRIFT_THRESHOLD;
         Ok(CalibrationDeviationScore { amplitude_z_median, amplitude_z_max, phase_drift_median, motion_flagged })
     }
 
@@ -338,7 +363,7 @@ impl BaselineCalibration {
             for s in 0..n_streams {
                 let c = frame.data[[s, ki]];
                 let norm = c.norm();
-                if norm > 1e-30 {
+                if norm > SUBTRACT_MIN_NORM {
                     let scale = ((norm - baseline_amp).max(0.0)) / norm;
                     frame.data[[s, ki]] = num_complex::Complex64::new(c.re * scale, c.im * scale);
                 }
@@ -491,7 +516,8 @@ impl CalibrationRecorder {
         let amplitude_z_median = median_slice(&z_amp_abs);
         let amplitude_z_max = z_amp_abs.iter().copied().fold(0.0_f32, f32::max);
         let phase_drift_median = median_slice(&phase_drift);
-        let motion_flagged = amplitude_z_median > 2.0 || phase_drift_median > std::f32::consts::PI / 6.0;
+        let motion_flagged =
+            amplitude_z_median > MOTION_AMP_Z_THRESHOLD || phase_drift_median > MOTION_PHASE_DRIFT_THRESHOLD;
         Ok(CalibrationDeviationScore { amplitude_z_median, amplitude_z_max, phase_drift_median, motion_flagged })
     }
 
@@ -733,6 +759,27 @@ mod tests {
         match rec.finalize() {
             Err(CalibrationError::InsufficientFrames { got: 1, need: 600 }) => {}
             other => panic!("expected InsufficientFrames, got {:?}", other),
+        }
+    }
+
+    // -- ADR-154 §7.4: de-magic-constant pin test.
+
+    /// The de-magicked calibration constants MUST equal the prior literals, and
+    /// every tier constructor MUST share the one DEFAULT_MIN_FRAMES default.
+    #[test]
+    fn calibration_consts_unchanged_from_literals() {
+        assert_eq!(DEFAULT_MIN_FRAMES, 600);
+        assert_eq!(AMP_STD_FLOOR, 1e-12_f32);
+        assert_eq!(MOTION_AMP_Z_THRESHOLD, 2.0_f32);
+        assert_eq!(MOTION_PHASE_DRIFT_THRESHOLD, std::f32::consts::PI / 6.0);
+        assert_eq!(SUBTRACT_MIN_NORM, 1e-30_f64);
+        for cfg in [
+            CalibrationConfig::ht20(),
+            CalibrationConfig::ht40(),
+            CalibrationConfig::he20(),
+            CalibrationConfig::he40(),
+        ] {
+            assert_eq!(cfg.min_frames, DEFAULT_MIN_FRAMES);
         }
     }
 
