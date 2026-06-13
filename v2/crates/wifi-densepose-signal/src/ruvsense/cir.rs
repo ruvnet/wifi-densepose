@@ -1458,6 +1458,79 @@ mod tests {
         }
     }
 
+    /// ADR-154 §7.4 #14: the `fft_operator` path *changes the witness hash*
+    /// (documented in `CirConfig::fft_operator`), so it must be pinned as
+    /// numerically **close** to the dense path — not silently divergent. The
+    /// existing `fft_estimate_matches_dense_dominant_tap` covers HT20 / one tau;
+    /// this test asserts the **full `Cir` output** (every tap + every scalar
+    /// field) stays within a documented relative tolerance on the production
+    /// **canonical-56** config across several realistic delays. A regression
+    /// that lets the FFT path drift (wrong scaling, off-by-one Φ column, etc.)
+    /// fails here instead of corrupting a downstream witness unnoticed.
+    #[test]
+    fn fft_operator_within_tolerance_of_dense_canonical56() {
+        // Relative tolerances — documented, not silent. The FFT operator sums the
+        // same Φ entries in a different order, so taps agree to ~float epsilon
+        // scaled by the dominant-tap magnitude; ISTA can differ by a few last
+        // bits over its trajectory, hence 1e-2 (same order as the existing test).
+        const TAP_REL_TOL: f32 = 1e-2;
+        const RATIO_ABS_TOL: f32 = 1e-2;
+        const SPREAD_REL_TOL: f64 = 1e-2;
+
+        for &tau in &[20e-9_f64, 50e-9, 90e-9] {
+            let dense_cfg = CirConfig::canonical56();
+            let mut fft_cfg = CirConfig::canonical56();
+            fft_cfg.fft_operator = true;
+
+            let frame = make_single_tap_frame(dense_cfg.num_subcarriers, tau);
+            let dense = CirEstimator::new(dense_cfg).estimate(&frame).unwrap();
+            let fast = CirEstimator::new(fft_cfg).estimate(&frame).unwrap();
+
+            assert_eq!(dense.taps.len(), fast.taps.len());
+
+            // Full tap vector close (relative to the dominant tap magnitude).
+            let dom = dense.taps[dense.dominant_tap_idx].norm().max(1e-6);
+            let mut max_tap_err = 0.0_f32;
+            for (a, b) in dense.taps.iter().zip(&fast.taps) {
+                max_tap_err = max_tap_err.max((a - b).norm());
+            }
+            assert!(
+                max_tap_err <= TAP_REL_TOL * dom,
+                "tau={tau:e}: FFT taps diverged from dense — max err {max_tap_err} > {TAP_REL_TOL} * {dom} (NOT numerically close)"
+            );
+
+            // The dominant tap and the scalar summary fields must agree too —
+            // these feed the witness, so a silent divergence here is the bug #14
+            // guards against.
+            assert_eq!(
+                dense.dominant_tap_idx, fast.dominant_tap_idx,
+                "tau={tau:e}: dominant tap index moved"
+            );
+            assert!(
+                (dense.dominant_tap_ratio - fast.dominant_tap_ratio).abs() <= RATIO_ABS_TOL,
+                "tau={tau:e}: dominant_tap_ratio drift {} vs {}",
+                dense.dominant_tap_ratio,
+                fast.dominant_tap_ratio
+            );
+            assert_eq!(
+                dense.active_tap_count, fast.active_tap_count,
+                "tau={tau:e}: active_tap_count changed"
+            );
+            assert_eq!(
+                dense.ranging_valid, fast.ranging_valid,
+                "tau={tau:e}: ranging_valid flipped"
+            );
+            let spread_ref = dense.rms_delay_spread_s.abs().max(1e-12);
+            assert!(
+                (dense.rms_delay_spread_s - fast.rms_delay_spread_s).abs()
+                    <= SPREAD_REL_TOL * spread_ref,
+                "tau={tau:e}: rms_delay_spread drift {} vs {}",
+                dense.rms_delay_spread_s,
+                fast.rms_delay_spread_s
+            );
+        }
+    }
+
     /// The default configs keep the FFT operator off — the dense, bit-exact
     /// witness path is the default (enabling FFT shifts float results).
     #[test]
