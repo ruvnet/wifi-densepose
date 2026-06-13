@@ -18,6 +18,16 @@ use midstreamer_temporal_compare::{ComparisonAlgorithm, Sequence, TemporalCompar
 
 use super::gesture::{GestureConfig, GestureError, GestureResult, GestureTemplate};
 
+/// Minimum second-best distance (ADR-154 §7.4 — de-magicked) below which the
+/// relative-margin confidence `1 - best/second_best` would divide by a
+/// near-zero denominator; below this we fall back to the `max_distance`-relative
+/// confidence. Mirrors the same guard in `gesture.rs`.
+const CONFIDENCE_SECOND_BEST_EPSILON: f64 = 1e-10;
+
+/// Fixed-point scale used to quantize a frame's L2 norm to an i64 for the
+/// integer temporal comparator (norm·SCALE truncated). Empirical resolution.
+const NORM_QUANTIZATION_SCALE: f64 = 1000.0;
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -192,7 +202,10 @@ impl TemporalGestureClassifier {
         let recognized = best_distance <= self.config.max_distance;
 
         // Confidence based on margin between best and second-best
-        let confidence = if recognized && second_best.is_finite() && second_best > 1e-10 {
+        let confidence = if recognized
+            && second_best.is_finite()
+            && second_best > CONFIDENCE_SECOND_BEST_EPSILON
+        {
             (1.0 - best_distance / second_best).clamp(0.0, 1.0)
         } else if recognized {
             (1.0 - best_distance / self.config.max_distance).clamp(0.0, 1.0)
@@ -244,13 +257,13 @@ impl TemporalGestureClassifier {
 
     /// Convert a feature sequence to a midstreamer `Sequence<i64>`.
     ///
-    /// Each frame's L2 norm is quantized to an i64 (multiplied by 1000)
-    /// for use with the generic comparator.
+    /// Each frame's L2 norm is quantized to an i64 (multiplied by
+    /// [`NORM_QUANTIZATION_SCALE`]) for use with the generic comparator.
     fn to_sequence(frames: &[Vec<f64>]) -> Sequence<i64> {
         let mut seq = Sequence::new();
         for (i, frame) in frames.iter().enumerate() {
             let norm = frame.iter().map(|x| x * x).sum::<f64>().sqrt();
-            let quantized = (norm * 1000.0) as i64;
+            let quantized = (norm * NORM_QUANTIZATION_SCALE) as i64;
             seq.push(quantized, i as u64);
         }
         seq
@@ -536,5 +549,15 @@ mod tests {
         let classifier = TemporalGestureClassifier::new(small_config());
         let dbg = format!("{:?}", classifier);
         assert!(dbg.contains("TemporalGestureClassifier"));
+    }
+
+    // -- ADR-154 §7.4: de-magic-constant pin test.
+
+    /// De-magicked confidence epsilon + quantization scale must equal the
+    /// prior inline literals.
+    #[test]
+    fn temporal_gesture_consts_unchanged_from_literals() {
+        assert_eq!(CONFIDENCE_SECOND_BEST_EPSILON, 1e-10);
+        assert_eq!(NORM_QUANTIZATION_SCALE, 1000.0);
     }
 }
