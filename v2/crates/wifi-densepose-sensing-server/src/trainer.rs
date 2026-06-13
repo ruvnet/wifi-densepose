@@ -285,7 +285,24 @@ impl WarmupCosineScheduler {
 
 // ── Validation metrics ─────────────────────────────────────────────────────
 
-/// Percentage of Correct Keypoints at a distance threshold.
+/// **RAW-threshold** Percentage of Correct Keypoints — a keypoint is correct
+/// iff its raw L2 distance to the target is `≤ thr`, with **NO torso/bbox
+/// normalization**.
+///
+/// # ADR-155 §2.1 / §8 — DIVERGENT from canonical (relabel, do NOT conflate)
+///
+/// This is **not** the canonical hip↔hip torso-normalized
+/// `wifi_densepose_train::pck_canonical`. It is the most divergent PCK in the
+/// workspace: an unnormalized raw-distance count (the ADR-155 §1 "PCK-4
+/// raw-threshold" class). It drives the live sensing-server CLI's reported
+/// `best_pck` (see `Trainer::compute_validation_metrics`, `main.rs` training
+/// path), which prints/serializes as `PCK@0.2` — that label is **raw-threshold
+/// PCK**, NOT canonical PCK@0.2. ADR-155 Milestone-1 resolves the collision by
+/// relabelling the *reported* number (`pck_raw@0.2` in logs/JSON) rather than
+/// silently changing this `pub` API's math; unifying onto `pck_canonical`
+/// (requires a torso scale + the train crate as a dep) is a tracked §8 backlog
+/// item. The ADR-155 §1 table did not enumerate this live `trainer.rs` kernel —
+/// flagged here as a missed divergence.
 pub fn pck_at_threshold(pred: &[(f32, f32, f32)], target: &[(f32, f32, f32)], thr: f32) -> f32 {
     let n = pred.len().min(target.len());
     if n == 0 {
@@ -340,6 +357,20 @@ pub fn oks_single(
 }
 
 /// Mean OKS over multiple predictions (simplified mAP).
+///
+/// # ADR-155 §2.1 / §8 — FAKE-GOLD `area = 1.0` (flagged finding, not yet fixed)
+///
+/// This passes `area = 1.0` to [`oks_single`] — the **exact "fake Gold tier"
+/// pattern** ADR-155 §2.1 said it had closed in `ruview_metrics` / the train
+/// crate's `compute_oks`. With keypoints in a small coordinate range and
+/// `area = 1.0`, every squared distance is tiny relative to `2 σ² area`, so the
+/// exponential kernel returns ≈1.0 and the reported OKS is inflated regardless
+/// of pose quality. This live sensing-server kernel was **not** in the ADR-155
+/// §1 table and is still on the inflating `area = 1.0` path; it drives the live
+/// `best_oks` (`main.rs`). Until it is unified onto the canonical
+/// pose-extent-derived scale (tracked as an ADR-155 §8 backlog item), the value
+/// is relabelled `oks_map(area=1.0 proxy)` everywhere it surfaces and must NOT
+/// be read as a claim-grade COCO OKS.
 pub fn oks_map(preds: &[Vec<(f32, f32, f32)>], targets: &[Vec<(f32, f32, f32)>]) -> f32 {
     let n = preds.len().min(targets.len());
     if n == 0 {
@@ -349,6 +380,7 @@ pub fn oks_map(preds: &[Vec<(f32, f32, f32)>], targets: &[Vec<(f32, f32, f32)>])
         .iter()
         .zip(targets.iter())
         .take(n)
+        // area = 1.0 is the fake-Gold proxy (see fn doc / ADR-155 §8).
         .map(|(p, t)| oks_single(p, t, &COCO_KEYPOINT_SIGMAS, 1.0))
         .sum();
     s / n as f32
@@ -1270,6 +1302,34 @@ mod tests {
     #[test]
     fn pck_all_wrong_is_0() {
         assert!(pck_at_threshold(&mkp(0.0), &mkp(100.0), 0.2) < 1e-6);
+    }
+
+    /// ADR-155 §2.1 / §8: pin that the live `pck_at_threshold` is **raw-threshold**
+    /// (no torso normalization) and is therefore a genuinely different metric
+    /// from the canonical hip↔hip PCK — justifying RELABEL, not silent unify.
+    ///
+    /// Two scenes with the **same absolute keypoint error** but **different torso
+    /// sizes** must get the **same** raw PCK (because raw PCK ignores scale),
+    /// whereas a torso-normalized PCK would score them differently. We assert the
+    /// raw verdict is scale-invariant: a 0.15-unit error is "correct" at thr=0.2
+    /// regardless of how far apart the hips are.
+    #[test]
+    fn pck_at_threshold_is_raw_unnormalized_not_canonical() {
+        // Target: one keypoint at origin, vis=1. (Single-joint scene.)
+        let target = vec![(0.0f32, 0.0f32, 1.0f32)];
+        // Prediction off by exactly 0.15 in x.
+        let pred = vec![(0.15f32, 0.0f32, 1.0f32)];
+
+        // Raw threshold 0.2: 0.15 ≤ 0.2 ⇒ correct ⇒ PCK 1.0, independent of any
+        // torso scale (there is none in this kernel).
+        let raw = pck_at_threshold(&pred, &target, 0.2);
+        assert!((raw - 1.0).abs() < 1e-6, "raw PCK ignores scale; expected 1.0, got {raw}");
+
+        // Same absolute error, tighter raw threshold 0.1: 0.15 > 0.1 ⇒ wrong ⇒ 0.0.
+        // The verdict is set purely by the absolute distance vs thr — the
+        // signature of a raw (un-normalized) PCK, NOT canonical torso-relative PCK.
+        let raw_tight = pck_at_threshold(&pred, &target, 0.1);
+        assert!(raw_tight < 1e-6, "raw PCK is absolute-distance only; expected 0.0, got {raw_tight}");
     }
     #[test]
     fn oks_perfect_is_1() {

@@ -6944,8 +6944,12 @@ async fn main() {
         eprintln!("Starting training for {} epochs...", args.epochs);
         let result = t.run_training(train_data, val_data);
         eprintln!("Training complete in {:.1}s", result.total_time_secs);
+        // ADR-155 §2.1: `best_pck` is RAW-threshold PCK (no torso norm) and
+        // `best_oks` uses the fake-Gold area=1.0 proxy — NOT the canonical
+        // hip↔hip `pck_canonical` / COCO OKS. Label them distinctly so the
+        // printed numbers are never read as claim-grade canonical metrics.
         eprintln!(
-            "  Best epoch: {}, PCK@0.2: {:.4}, OKS mAP: {:.4}",
+            "  Best epoch: {}, pck_raw@0.2: {:.4}, oks_map(area=1.0 proxy): {:.4}",
             result.best_epoch, result.best_pck, result.best_oks
         );
 
