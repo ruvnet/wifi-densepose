@@ -43,6 +43,20 @@ pub struct Features {
 pub const EMBED_MIN_SCORE: f32 = 0.25;
 
 impl Features {
+    /// The all-zero feature vector — the well-defined result of an empty (or
+    /// wholly non-finite) capture. Total by construction: downstream
+    /// specialists read it as "no signal" rather than panicking or poisoning a
+    /// threshold (see [`Features::from_series`]).
+    pub const ZERO: Features = Features {
+        mean: 0.0,
+        variance: 0.0,
+        motion: 0.0,
+        breathing_score: 0.0,
+        breathing_hz: 0.0,
+        heart_score: 0.0,
+        heart_hz: 0.0,
+    };
+
     /// A fixed-length numeric embedding for nearest-prototype classifiers.
     ///
     /// The hz components are zeroed unless their periodicity score clears
@@ -77,29 +91,33 @@ impl Features {
     }
 
     /// Extract features from a per-frame scalar series sampled at `fs` Hz.
+    ///
+    /// **Total / fail-closed:** non-finite samples (`NaN`/`±inf`) are dropped
+    /// before any statistic is computed, so a single garbage CSI frame cannot
+    /// poison `mean`/`variance` into `NaN` and silently disable a persisted
+    /// specialist (a `NaN` threshold makes every `>` comparison false). A
+    /// series with no finite samples yields [`Features::ZERO`], exactly like
+    /// the empty series. Same defensive contract as
+    /// [`GeometryEmbedding`](crate::geometry_embedding::GeometryEmbedding):
+    /// adversarial input degrades to "no signal", never to `NaN`.
     pub fn from_series(series: &[f32], fs: f32) -> Features {
-        let n = series.len();
+        // Drop non-finite samples: a corrupt frame counts as no frame, not as
+        // a NaN that propagates through every downstream statistic.
+        let clean: Vec<f32> = series.iter().copied().filter(|v| v.is_finite()).collect();
+        let n = clean.len();
         if n == 0 {
-            return Features {
-                mean: 0.0,
-                variance: 0.0,
-                motion: 0.0,
-                breathing_score: 0.0,
-                breathing_hz: 0.0,
-                heart_score: 0.0,
-                heart_hz: 0.0,
-            };
+            return Features::ZERO;
         }
-        let mean = series.iter().copied().sum::<f32>() / n as f32;
-        let variance = series.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / n as f32;
+        let mean = clean.iter().copied().sum::<f32>() / n as f32;
+        let variance = clean.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / n as f32;
         let motion = if n > 1 {
-            series.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>() / (n - 1) as f32
+            clean.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>() / (n - 1) as f32
         } else {
             0.0
         };
 
         // De-mean before periodicity search.
-        let centered: Vec<f32> = series.iter().map(|v| v - mean).collect();
+        let centered: Vec<f32> = clean.iter().map(|v| v - mean).collect();
         let (breathing_hz, breathing_score) = autocorr_dominant(&centered, fs, 0.1, 0.6);
         let (heart_hz, heart_score) = autocorr_dominant(&centered, fs, 0.8, 3.0);
 
@@ -252,6 +270,36 @@ mod tests {
         let f = Features::from_series(&[], 15.0);
         assert_eq!(f.mean, 0.0);
         assert_eq!(f.breathing_hz, 0.0);
+    }
+
+    /// Fail-closed regression: a NaN/inf in the scalar series (corrupt CSI
+    /// frame) must NOT poison the features into `NaN`/`inf`. Pre-fix, a single
+    /// `NaN` made `mean`/`variance` `NaN`, which — baked into a persisted
+    /// `PresenceSpecialist::threshold` — silently disabled presence detection
+    /// (every `f.variance > NaN` is false). Non-finite samples are dropped.
+    #[test]
+    fn non_finite_samples_do_not_poison_features() {
+        let f = Features::from_series(&[1.0, 2.0, f32::NAN, 4.0, f32::INFINITY, 6.0], 15.0);
+        assert!(f.mean.is_finite(), "mean must stay finite, got {}", f.mean);
+        assert!(f.variance.is_finite(), "variance must stay finite, got {}", f.variance);
+        assert!(f.motion.is_finite(), "motion must stay finite, got {}", f.motion);
+        for x in f.embedding() {
+            assert!(x.is_finite(), "embedding slot non-finite: {x}");
+        }
+        // Mean is over the 4 finite samples {1,2,4,6} only.
+        assert!((f.mean - 3.25).abs() < 1e-5, "mean over finite samples, got {}", f.mean);
+        // Equivalence: dropping the non-finite samples must equal feeding only
+        // the finite ones — proves the filter, not just finiteness.
+        let only_finite = Features::from_series(&[1.0, 2.0, 4.0, 6.0], 15.0);
+        assert_eq!(f, only_finite);
+    }
+
+    /// A series with no finite samples degrades to the all-zero `ZERO`, exactly
+    /// like the empty series — never `NaN`.
+    #[test]
+    fn all_non_finite_series_is_zero() {
+        let f = Features::from_series(&[f32::NAN, f32::INFINITY, f32::NEG_INFINITY], 15.0);
+        assert_eq!(f, Features::ZERO);
     }
 
     /// ADR-152 "heart-band leakage" regression: a strong breathing rhythm must
