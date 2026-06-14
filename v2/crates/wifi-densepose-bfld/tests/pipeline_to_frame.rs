@@ -88,6 +88,11 @@ fn process_to_frame_returns_none_under_sustained_high_risk() {
 
 #[test]
 fn process_to_frame_round_trips_through_bytes() {
+    // Default pipeline class is Anonymous(2). The frame must round-trip through
+    // wire bytes with no CRC error; the payload it carries is the privacy-gated
+    // (angle-matrix-stripped) form, not the raw input — see
+    // process_to_frame_at_anonymous_strips_identity_leaky_sections for the
+    // content assertion. This test pins byte/CRC consistency only.
     let mut p = BfldPipeline::new(BfldConfig::new("seed-01"));
     let frame = p
         .process_to_frame(
@@ -100,7 +105,10 @@ fn process_to_frame_round_trips_through_bytes() {
     let bytes = frame.to_bytes();
     let parsed = BfldFrame::from_bytes(&bytes).expect("frame must round-trip");
     let parsed_payload = parsed.parse_payload().expect("payload must round-trip");
-    assert_eq!(parsed_payload, typed_payload());
+    // Round-trip preserves whatever the privacy gate left in place.
+    assert_eq!(parsed_payload, frame.parse_payload().unwrap());
+    // And the identity surface is gone at Anonymous.
+    assert!(parsed_payload.compressed_angle_matrix.is_empty());
 }
 
 #[test]
@@ -139,6 +147,94 @@ fn process_to_frame_preserves_header_template_identity_fields() {
     assert_eq!(frame.header.sta_hash, [0xA2; 16]);
     assert_eq!(frame.header.session_id, [0xA3; 16]);
     assert_eq!({ frame.header.channel }, 36);
+}
+
+// --- ADR-141 privacy-gate-correctness regression -------------------------
+//
+// `process_to_frame` stamps the frame with the pipeline's privacy_class but
+// (pre-fix) serialized the caller-supplied payload UNCHANGED. That let a frame
+// labeled Anonymous(2) / Restricted(3) carry the full identity-leaky
+// `compressed_angle_matrix` (+ amplitude/phase/csi_delta) that
+// `PrivacyGate::demote` is documented (privacy_gate_demote.rs) to strip at
+// exactly those classes. A NetworkSink accepts class >= Derived, so such a
+// frame would publish the beamforming angle matrix (identity surface) to the
+// network despite its restrictive class byte. These tests pin that the payload
+// content matches what the stamped class permits.
+
+#[test]
+fn process_to_frame_at_anonymous_strips_identity_leaky_sections() {
+    // Default pipeline class is Anonymous(2): the angle matrix and csi_delta
+    // MUST NOT survive into the emitted frame, matching PrivacyGate::demote.
+    let mut p = BfldPipeline::new(BfldConfig::new("seed-01"));
+    let mut leaky = typed_payload();
+    leaky.csi_delta = Some(vec![0x55; 24]);
+    let frame = p
+        .process_to_frame(
+            inputs(1_700_000_000_000_000_000, [0.1, 0.1, 0.1, 0.1]),
+            header_template(),
+            leaky,
+            Some(embedding()),
+        )
+        .expect("low-risk frame must be emitted");
+    assert_eq!({ frame.header.privacy_class }, PrivacyClass::Anonymous.as_u8());
+    let payload = frame.parse_payload().expect("payload parses");
+    assert!(
+        payload.compressed_angle_matrix.is_empty(),
+        "Anonymous frame must NOT carry the compressed_angle_matrix (identity surface)",
+    );
+    assert!(
+        payload.csi_delta.is_none(),
+        "Anonymous frame must NOT carry csi_delta",
+    );
+    // Aggregate sensing sections survive.
+    assert_eq!(payload.snr_vector.len(), 8);
+    assert_eq!(payload.amplitude_proxy.len(), 16);
+}
+
+#[test]
+fn process_to_frame_in_privacy_mode_strips_amplitude_and_phase() {
+    // privacy_mode -> Restricted(3): amplitude + phase proxies must ALSO drop.
+    let mut p = BfldPipeline::new(
+        BfldConfig::new("seed-01").with_privacy_class(PrivacyClass::Anonymous),
+    );
+    p.enable_privacy_mode();
+    let frame = p
+        .process_to_frame(
+            inputs(0, [0.1, 0.1, 0.1, 0.1]),
+            header_template(),
+            typed_payload(),
+            Some(embedding()),
+        )
+        .expect("frame emitted");
+    assert_eq!({ frame.header.privacy_class }, PrivacyClass::Restricted.as_u8());
+    let payload = frame.parse_payload().expect("payload parses");
+    assert!(payload.compressed_angle_matrix.is_empty(), "angle matrix stripped at Restricted");
+    assert!(payload.amplitude_proxy.is_empty(), "amplitude stripped at Restricted");
+    assert!(payload.phase_proxy.is_empty(), "phase stripped at Restricted");
+    assert_eq!(payload.snr_vector.len(), 8, "snr_vector survives");
+}
+
+#[test]
+fn process_to_frame_at_derived_preserves_full_payload() {
+    // Derived(1) is a research mode that legitimately keeps the angle matrix.
+    // The strip must NOT over-fire at classes below Anonymous.
+    let mut p = BfldPipeline::new(
+        BfldConfig::new("seed-01").with_privacy_class(PrivacyClass::Derived),
+    );
+    let frame = p
+        .process_to_frame(
+            inputs(0, [0.1, 0.1, 0.1, 0.1]),
+            header_template(),
+            typed_payload(),
+            Some(embedding()),
+        )
+        .expect("frame emitted");
+    assert_eq!({ frame.header.privacy_class }, PrivacyClass::Derived.as_u8());
+    let payload = frame.parse_payload().expect("payload parses");
+    assert_eq!(
+        payload, typed_payload(),
+        "Derived research frame keeps the full payload unchanged",
+    );
 }
 
 #[test]
