@@ -139,7 +139,7 @@ Fixture: planted-cluster synthetic, **dim=128, N=10,000, 64 clusters, 200 querie
 
 ## 8. Validation
 
-- **`cd v2 && cargo test -p wifi-densepose-ruvector --no-default-features --lib`** — **151 passed / 0 failed** (was 131; +20 new tests: 10 `hnsw`, 7 `hnsw_quantized`, 3 `ann_measure`).
+- **`cd v2 && cargo test -p wifi-densepose-ruvector --no-default-features --lib`** — **156 passed / 0 failed, 1 ignored** (M1 added 20: 10 `hnsw`, 7 `hnsw_quantized`, 3 `ann_measure`; M2 added 5 multi-bit/scaling tests; `scaling_report` is the `#[ignore]` measurement that produced the §11 table).
 - **`cargo test --workspace --no-default-features`** — GREEN (see §10 for the count).
 - **Correctness gate verified to bite:** the recall@10 gate **panicked** on the first (buggy) insert path (§4); after the fix it passes at 0.99+ recall (L2 and cosine).
 - **`cargo test -p wifi-densepose-ruvector --no-default-features --release ann_bench_report -- --nocapture`** — prints the §6 table; the numbers above are copied verbatim from that run.
@@ -154,10 +154,13 @@ Fixture: planted-cluster synthetic, **dim=128, N=10,000, 64 clusters, 200 querie
 
 **Negative / honest.** The 1-bit quantized variant is **not** an equal-recall QPS win at our scale; it is shipped as a measured experiment with a clearly-stated ceiling, not as a recommended default. Anyone reaching for it must read §7.
 
+**Resolved by Milestone-2 (§11, MEASURED — no longer deferred).**
+- **Multi-bit traversal score** — implemented (`b ∈ {1,2,4}` bits/dim over the Pass-2 rotated coordinates) and measured. It *does* lift quantized recall (at N=10k, b=4 reaches the 0.90 equal-recall regime where 1-bit could not), but still does not beat float HNSW QPS.
+- **Large-N crossover measurement** — measured at N ∈ {10k, 100k, 250k}. **The predicted large-N crossover did NOT materialize — it moved the wrong way** (quant recall *collapses* as N grows). See §11.
+
 **Deferred (not silently dropped).**
-- **Multi-bit / RaBitQ-estimator traversal score.** Replace 1-bit Hamming traversal with a ≤4-bit code or the `estimator.rs` unbiased rescale (ADR-156 §10/§11) — the lever most likely to lift quantized recall to the equal-recall regime.
-- **Large-N crossover measurement.** Re-run §6 at N=100k–1M (`ANN_BENCH_N`) to find where quantization's per-node saving starts to dominate.
 - **Wiring HNSW into the live re-ID path** (AETHER hot-cache / sketch prefilter) behind a flag.
+- **N ≥ 1M + SymphonyQG's exact RaBitQ-fused construction** — our impl refutes the *direction* at ≤250k; a true 1:1 reproduction at million-scale with their fused codes remains a separate, larger build.
 
 ---
 
@@ -170,3 +173,28 @@ Fixture: planted-cluster synthetic, **dim=128, N=10,000, 64 clusters, 200 querie
 - `lib.rs` — `pub mod hnsw / hnsw_quantized / ann_measure`; re-export `HnswIndex`, `HnswParams`, `Metric`, `QuantizedHnswIndex`.
 - `ADR-156-ruvector-fusion-beyond-sota.md` §5 #1 + §8 backlog — SymphonyQG regraded **CLAIMED → MEASURED-direction-tested (refuted at N=10k for our 1-bit construction)**, pointing here.
 - `CHANGELOG.md` — `[Unreleased]` entry.
+
+---
+
+## 11. Milestone-2 — multi-bit traversal + large-N scaling study (MEASURED)
+
+M1 (§7) refuted the SymphonyQG direction at N=10k with a 1-bit code, and *predicted* a crossover at "large N + a higher-bit code." M2 builds both levers and measures them — so the prediction is tested, not assumed.
+
+**Built:** `hnsw_quantized.rs` generalized from 1-bit to a **`b`-bit-per-dimension** code (`b ∈ {1,2,4}`, a mid-rise quantizer over the same `RANGE=3.0` rotated coordinates as ADR-156 §10's `measure_multibit`); `ann_measure.rs` gained `run_scaling_study` / `best_float_op` / `best_quant_op` + a deterministic `scaling_report` (`#[ignore]`, `--release`) and a CI-safe `scaling_study_small_is_consistent`. Memory: **16 / 32 / 64 bytes/node** for b = 1 / 2 / 4.
+
+**MEASURED** (dim=128, 64 clusters, 200 queries, K=10, L2, M=16, ef_construction=200, seeded, `--release`, this box; target recall ≥ 0.90):
+
+| N | bits | B/node | quant best recall | float @ target | quant @ target | quant/float |
+|--:|--:|--:|--:|--|--|--:|
+| 10,000 | 1 | 16 | 1.000 | 23,155 QPS @ r=0.995 | 4,482 QPS @ r=0.965 | **0.19×** |
+| 10,000 | 2 | 32 | 1.000 | 23,155 QPS @ r=0.995 | 10,658 QPS @ r=0.908 | **0.46×** |
+| 10,000 | 4 | 64 | 1.000 | 23,155 QPS @ r=0.995 | 11,217 QPS @ r=0.946 | **0.48×** |
+| 100,000 | 1 / 2 / 4 | 16/32/64 | 0.207 / 0.346 / 0.788 | 2,493 QPS @ r=0.938 | none (never ≥ 0.90) | — |
+| 250,000 | 1 / 2 / 4 | 16/32/64 | 0.108 / 0.210 / 0.624 | 1,593 QPS @ r=0.925 | none | — |
+
+**Verdict — NO crossover at any measured (N, b) up to 250k, and the trend REFUTES the large-N prediction:**
+1. **Multi-bit helps at small N but not enough.** At N=10k, more bits lift the equal-recall QPS ratio 0.19× → 0.46× → 0.48× (and let b≥2 actually *reach* the 0.90 bar that 1-bit missed) — but quant stays **below 1.0×**, i.e. slower than float HNSW at equal recall.
+2. **The predicted large-N crossover moved the wrong way.** As N grows 10k → 100k → 250k, quant's best achievable recall **collapses** (b=4: 1.000 → 0.788 → 0.624) and never reaches the 0.90 comparison point, while float HNSW holds ≥0.92. A denser graph packs near-neighbours whose low-bit codes are nearly identical, so the approximate score steers the beam off-path faster than the bigger float-distance savings can repay. The "crossover at millions" intuition is **not supported by our construction's trend** — if anything it diverges.
+3. **Caveat unchanged:** this is our HNSW + our per-node multi-bit code, not SymphonyQG's RaBitQ-fused graph. The result refutes the *direction* for our construction at ≤250k; it does not disprove their published numbers on their system at their scale. A real 1:1 reproduction is the deferred million-scale build.
+
+This is a **published negative with the mechanism explained** — the multi-bit + scaling levers were built and measured rather than asserted, and the honest outcome (no crossover, trend diverging) is recorded, not hidden.
