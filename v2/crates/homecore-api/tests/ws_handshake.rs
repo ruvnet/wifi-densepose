@@ -166,3 +166,100 @@ async fn ping_pong_reply_is_received() {
     assert_eq!(reply["type"], "pong");
     assert_eq!(reply["id"], 7);
 }
+
+/// Variant of [`spawn_server_with_token`] that also returns a `HomeCore`
+/// handle (cheap `Arc` clone) so the test can fire events into the *same*
+/// bus the served subscription reads from.
+async fn spawn_server_returning_homecore(valid_token: &str) -> (SocketAddr, HomeCore) {
+    let hc = HomeCore::new();
+    let tokens = LongLivedTokenStore::empty();
+    tokens.register(valid_token).await;
+    let state = SharedState::with_tokens(hc.clone(), "Test", "test-version", tokens);
+    let app = router(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (addr, hc)
+}
+
+#[tokio::test]
+async fn subscription_survives_broadcast_lag() {
+    // HC-WS-LAG-01: the per-subscription event task must treat a broadcast
+    // `Lagged(n)` as RECOVERABLE (re-sync + continue), matching the bus
+    // contract ("Lagged receivers must re-sync") and HA's WS semantics.
+    //
+    // The pre-fix `Err(_) => break` killed the whole event-stream task on
+    // the first lag, so after a >4,096-event burst the client's stream
+    // went permanently silent. This test fires far more than the 4,096
+    // channel capacity to force a `Lagged`, then fires ONE more event and
+    // asserts the subscription still delivers it. FAILS (5s timeout) on
+    // the old code because the task is already dead.
+    use homecore::{Context, DomainEvent};
+
+    let (addr, hc) = spawn_server_returning_homecore("good_token_abc").await;
+    let url = format!("ws://{addr}/api/websocket");
+    let (mut ws, _resp) = connect_async(&url).await.unwrap();
+
+    let _ = next_json(&mut ws).await; // auth_required
+    ws.send(Message::Text(
+        serde_json::json!({"type":"auth","access_token":"good_token_abc"}).to_string(),
+    ))
+    .await
+    .unwrap();
+    let auth = next_json(&mut ws).await;
+    assert_eq!(auth["type"], "auth_ok");
+
+    // Subscribe to a specific domain event type so unrelated traffic is
+    // filtered out and we can deterministically match the post-lag event.
+    ws.send(Message::Text(
+        serde_json::json!({"id": 1, "type": "subscribe_events", "event_type": "lag_probe"})
+            .to_string(),
+    ))
+    .await
+    .unwrap();
+    let ack = next_json(&mut ws).await; // result ok for the subscribe
+    assert_eq!(ack["type"], "result");
+    assert_eq!(ack["success"], true);
+
+    // Flood the bus far past EVENT_CHANNEL_CAPACITY (4,096) with events the
+    // subscription FILTERS OUT (different event_type). Because the client
+    // never reads them off the WS, the server-side broadcast receiver falls
+    // behind and the NEXT `recv()` yields `Lagged`. We fire synchronously
+    // and don't yield to the WS reader, guaranteeing the overflow.
+    for i in 0..6000u32 {
+        hc.bus().fire_domain(DomainEvent::new(
+            "noise",
+            serde_json::json!({ "i": i }),
+            Context::new(),
+        ));
+    }
+
+    // Now fire the event the client IS subscribed to. On the fixed code the
+    // task recovered from `Lagged` and continues, so this is delivered. On
+    // the old code the task broke on `Lagged` and this never arrives.
+    hc.bus().fire_domain(DomainEvent::new(
+        "lag_probe",
+        serde_json::json!({ "marker": "post-lag" }),
+        Context::new(),
+    ));
+
+    // Drain frames until we see our post-lag event (ignoring any noise the
+    // filter let slip before the lag), bounded by a timeout.
+    let got = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let v = next_json(&mut ws).await;
+            if v["type"] == "event" && v["event"]["event_type"] == "lag_probe" {
+                return v;
+            }
+        }
+    })
+    .await
+    .expect(
+        "subscription went silent after a broadcast lag — Lagged was treated \
+         as fatal (HC-WS-LAG-01)",
+    );
+    assert_eq!(got["event"]["data"]["marker"], "post-lag");
+}

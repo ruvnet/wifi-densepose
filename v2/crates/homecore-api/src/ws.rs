@@ -298,7 +298,17 @@ impl Connection {
                                     }
                                 }
                                 Ok(_) => {}
-                                Err(_) => break,
+                                // A slow consumer that falls >4,096 events behind
+                                // gets `Lagged(n)`, which is RECOVERABLE: the bus
+                                // doc (`bus.rs` §"Lagged receivers must re-sync")
+                                // and HA's WS contract both keep the subscription
+                                // alive across a lag. The pre-fix `Err(_) => break`
+                                // treated `Lagged` as fatal, silently killing the
+                                // client's event stream on a burst (HC-WS-LAG-01).
+                                // Skip the dropped window and continue; only a
+                                // `Closed` sender ends the task.
+                                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                                Err(broadcast::error::RecvError::Closed) => break,
                             },
                             evt = domain_rx.recv() => match evt {
                                 Ok(de) => {
@@ -316,7 +326,12 @@ impl Connection {
                                         if tx_clone.send(payload.to_string()).is_err() { break; }
                                     }
                                 }
-                                Err(_) => break,
+                                // Same recoverable-lag handling as the system arm
+                                // above (HC-WS-LAG-01): a lagged domain-event
+                                // receiver re-syncs and continues; only `Closed`
+                                // terminates the subscription.
+                                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                                Err(broadcast::error::RecvError::Closed) => break,
                             }
                         }
                     }
