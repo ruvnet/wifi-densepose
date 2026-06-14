@@ -135,10 +135,13 @@ pub fn render_events(event: &BfldEvent) -> Vec<TopicMessage> {
 
     if let Some(zone) = &event.zone_id {
         // Emit a JSON string so consumers can distinguish "no zone" (omitted)
-        // from "single-zone deployment" (always the same zone string).
+        // from "single-zone deployment" (always the same zone string). The zone
+        // name is operator-controlled; escape JSON metacharacters so a name
+        // containing a quote or backslash cannot produce malformed/injected
+        // JSON. Mirrors ha_discovery.rs::push_str_field's escaping.
         out.push(TopicMessage {
             topic: TopicMessage::ruview_topic(node, "zone_activity"),
-            payload: format!("\"{zone}\""),
+            payload: json_string_literal(zone),
         });
     }
 
@@ -153,5 +156,28 @@ pub fn render_events(event: &BfldEvent) -> Vec<TopicMessage> {
         }
     }
 
+    out
+}
+
+/// Wrap `value` in JSON double-quote delimiters, escaping the metacharacters
+/// that would otherwise break out of the string literal (`"`, `\`, control
+/// chars, and the bare `\n`/`\r`/`\t` whitespace). Kept in lockstep with
+/// `ha_discovery::push_str_field` so state-topic and discovery payloads escape
+/// identically.
+fn json_string_literal(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
     out
 }
