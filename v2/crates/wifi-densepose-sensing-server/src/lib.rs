@@ -23,6 +23,10 @@ pub mod model_format;
 pub mod mqtt;
 pub mod path_safety;
 pub mod semantic;
+/// ADR-262 P3: the live RuField surface — turns the governed sensing cycle into
+/// signed RuField `FieldEvent`s on the additive `/api/field` + `/ws/field`
+/// endpoints, via the `wifi-densepose-rufield` anti-corruption bridge.
+pub mod rufield_surface;
 pub mod rvf_container;
 pub mod rvf_pipeline;
 pub mod sona;

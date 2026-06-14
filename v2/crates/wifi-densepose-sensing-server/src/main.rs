@@ -26,7 +26,7 @@ mod vital_signs;
 
 // Training pipeline modules (exposed via lib.rs)
 use wifi_densepose_sensing_server::{
-    dataset, embedding, error_response, graph_transformer, trainer,
+    dataset, embedding, error_response, graph_transformer, rufield_surface, trainer,
 };
 
 use ruvector_mincut::{DynamicMinCut, MinCutBuilder};
@@ -1093,6 +1093,14 @@ struct AppStateInner {
     pub(crate) dedup_factor: f64,
     /// Data directory for persisting runtime config (parent of `firmware_dir`).
     pub(crate) data_dir: std::path::PathBuf,
+    /// ADR-262 P3: the live RuField surface. Holds the dedicated ed25519 signer
+    /// + a bounded ring of recent signed `FieldEvent`s + the `/ws/field`
+    /// broadcast topic. The governed sensing cycle calls `emit()` on it once per
+    /// cycle (joining `SensingUpdate` features/classification/signal_field with
+    /// the `TrustedOutput` trust class); `/api/field` + `/ws/field` read it.
+    /// Held behind its own `Arc<RwLock<_>>` so the additive field router can
+    /// take it as state without re-locking `AppStateInner`.
+    field_surface: rufield_surface::FieldState,
 }
 
 /// If no ESP32 frame arrives within this duration, source reverts to offline.
@@ -4000,6 +4008,80 @@ fn derive_single_person_pose(
 /// the strongest peak so they remain co-located with real energy rather than at
 /// a fake origin; if the field has no peak above threshold the position stays at
 /// `[0,0,0]` and `motion_score` still reflects real motion power.
+/// ADR-262 P3: emit one signed RuField `FieldEvent` for this sensing cycle.
+///
+/// Joins the cycle's [`SensingUpdate`] (features / classification /
+/// signal_field) with the governed engine's trust state (`effective_class` /
+/// `demoted`, recorded on `engine_bridge` by `observe_cycle`) into a
+/// `SensingSnapshot`, then surfaces it via the P1 bridge on `/api/field` +
+/// `/ws/field`. The bridge maps privacy by information content and the surface
+/// applies the §10 network egress gate, so above-policy cycles never reach the
+/// wire.
+///
+/// **No phantom events:** an empty/no-presence cycle (`presence == false`)
+/// emits nothing — there is no person to describe, so no event is fabricated
+/// (ADR-262 §4 P3 / §6). Cycles before the governed engine has produced a trust
+/// class are likewise skipped (no class ⇒ nothing honest to stamp).
+///
+/// `identity_bound` is `false` on the live path: RuView's live cycle does not
+/// bind an enrolled identity to the surface yet (that is a per-room-calibration
+/// / AETHER concern, ADR-262 §8 Q4). This is conservative for egress — it only
+/// ever *lowers* a Derived cycle from P5 to P4, both of which are already held
+/// edge-local, so it cannot leak.
+fn emit_rufield_event(s: &AppStateInner, update: &SensingUpdate, node_id: u8) {
+    // No-presence ⇒ no phantom event.
+    if !update.classification.presence {
+        return;
+    }
+    // Need a governed trust class before we can honestly stamp privacy.
+    let Some(effective_class) = s.engine_bridge.effective_class() else {
+        return;
+    };
+
+    let timestamp_ns = if update.timestamp.is_finite() && update.timestamp > 0.0 {
+        (update.timestamp * 1_000_000_000.0) as u64
+    } else {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0)
+    };
+
+    let snap = rufield_surface::build_snapshot(
+        timestamp_ns,
+        format!("esp32_node_{node_id}"),
+        rufield_surface::SensingFeatures {
+            mean_rssi: update.features.mean_rssi,
+            variance: update.features.variance,
+            motion_band_power: update.features.motion_band_power,
+            breathing_band_power: update.features.breathing_band_power,
+            dominant_freq_hz: update.features.dominant_freq_hz,
+            change_points: update.features.change_points,
+            spectral_power: update.features.spectral_power,
+        },
+        rufield_surface::SensingClass {
+            motion_level: update.classification.motion_level.clone(),
+            presence: update.classification.presence,
+            confidence: update.classification.confidence,
+        },
+        Some(rufield_surface::SignalField {
+            grid_size: update.signal_field.grid_size,
+            values: update.signal_field.values.clone(),
+        }),
+        rufield_surface::ruview_class_from_bfld(effective_class),
+        s.engine_bridge.demoted(),
+        false, // identity_bound — see fn-doc (conservative, cannot leak).
+    );
+
+    // `field_surface` is its own Arc<RwLock<_>>; `try_write` is non-blocking and
+    // never deadlocks against the `s` guard (a different lock). The only other
+    // touchers are the read-only `/api/field` / `/ws/field` handlers, so
+    // contention is negligible; a rare miss just drops one cycle's event.
+    if let Ok(mut fs) = s.field_surface.try_write() {
+        fs.emit(&snap);
+    }
+}
+
 fn attach_field_positions(update: &mut SensingUpdate) {
     let Some(persons) = update.persons.as_mut() else {
         return;
@@ -5990,6 +6072,18 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     if let Ok(json) = serde_json::to_string(&update) {
                         let _ = s.tx.send(json);
                     }
+
+                    // ── ADR-262 P3: emit a signed RuField FieldEvent ────────
+                    // Join this cycle's SensingUpdate (features / classification
+                    // / signal_field) with the governed engine's trust state
+                    // (effective_class / demoted, recorded by `observe_cycle`
+                    // above) into a `SensingSnapshot`, and surface it on
+                    // `/api/field` + `/ws/field` via the P1 bridge. Only cycles
+                    // whose mapped privacy class clears the §10 network egress
+                    // gate are surfaced (P1/P2); a `Derived → P4/P5` cycle is
+                    // held edge-local. `presence == false` ⇒ no phantom event.
+                    emit_rufield_event(&s, &update, node_id);
+
                     s.latest_update = Some(update);
 
                     // Evict stale nodes every 100 ticks to prevent memory leak.
@@ -7322,6 +7416,13 @@ async fn main() {
         );
     }
 
+    // ADR-262 P3: build the live RuField surface (dedicated ed25519 signer from
+    // WDP_RUFIELD_SIGNING_SEED, else a logged dev default). The same Arc is
+    // stored in AppStateInner (so the sensing loop can `emit()` per cycle) and
+    // cloned into the additive `/api/field` + `/ws/field` router below.
+    let field_surface: rufield_surface::FieldState =
+        Arc::new(RwLock::new(rufield_surface::FieldSurface::from_env()));
+
     let state: SharedState = Arc::new(RwLock::new(AppStateInner {
         latest_update: None,
         rssi_history: VecDeque::new(),
@@ -7424,6 +7525,7 @@ async fn main() {
         // ADR-044 §5.3: runtime-configurable dedup factor (persisted).
         dedup_factor: runtime_config.dedup_factor,
         data_dir: data_dir.clone(),
+        field_surface: field_surface.clone(),
     }));
 
     // Start background tasks from the resolved plan (issue #1004).
@@ -7497,11 +7599,15 @@ async fn main() {
     let ws_app = Router::new()
         .route("/ws/sensing", get(ws_sensing_handler))
         .route("/health", get(health))
+        .with_state(ws_state)
+        // ADR-262 P3: additive `/ws/field` (+ `/api/field`) on the WS port too,
+        // so a client on :8765 can stream signed RuField FieldEvents alongside
+        // `/ws/sensing`. Merged with its own FieldState (different state type).
+        .merge(rufield_surface::router(field_surface.clone()))
         .layer(axum::middleware::from_fn_with_state(
             host_allowlist.clone(),
             wifi_densepose_sensing_server::host_validation::require_allowed_host,
-        ))
-        .with_state(ws_state);
+        ));
 
     let ws_addr = SocketAddr::from((bind_ip, args.ws_port));
     let ws_listener = tokio::net::TcpListener::bind(ws_addr)
@@ -7615,15 +7721,24 @@ async fn main() {
             bearer_auth_state.clone(),
             wifi_densepose_sensing_server::bearer_auth::require_bearer,
         ))
+        .with_state(state.clone())
+        // ADR-262 P3: additive RuField surface (`/api/field` + `/ws/field`).
+        // Merged AFTER `.with_state` (so http_app is already `Router<()>` and
+        // can absorb the field router's own `FieldState`). These routes sit
+        // OUTSIDE `/api/v1/*` so they are not bearer-gated, but the
+        // host-validation layer below still applies (it is added last, so it
+        // runs first, over the whole merged router). The surface's own §10
+        // egress gate is what keeps above-policy classes off the wire.
+        .merge(rufield_surface::router(field_surface.clone()))
         // DNS-rebinding defense: applied last so it runs first on the request
         // path (axum layers run outermost-in). Rejects requests whose `Host`
         // header is not in the allowlist before any handler — including
-        // `/health` and `/ws/*` — observes the body.
+        // `/health`, `/ws/*`, and the merged `/api/field` + `/ws/field` —
+        // observes the body.
         .layer(axum::middleware::from_fn_with_state(
             host_allowlist.clone(),
             wifi_densepose_sensing_server::host_validation::require_allowed_host,
-        ))
-        .with_state(state.clone());
+        ));
 
     let http_addr = SocketAddr::from((bind_ip, args.http_port));
     let http_listener = tokio::net::TcpListener::bind(http_addr)
