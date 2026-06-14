@@ -15,6 +15,28 @@ use serde::{Deserialize, Serialize};
 use crate::anchor::{AnchorLabel, Posture};
 use crate::extract::{AnchorFeature, Features};
 
+/// Default minimum breathing-band periodicity score to report a rate, used when
+/// a [`BreathingSpecialist`] carries no explicit `min_score` (the serde / pre-
+/// trained-default case). Respiration is a strong, narrowband modulation, so a
+/// moderate floor rejects noise windows without dropping real breaths.
+pub const DEFAULT_BREATHING_MIN_SCORE: f32 = 0.25;
+
+/// Default minimum HR-band periodicity score, used when a [`HeartbeatSpecialist`]
+/// carries no explicit `min_score`. Higher than breathing's: sub-mm chest
+/// displacement at HR frequencies sits near the CSI noise floor (ADR-151 §3.2),
+/// so the heartbeat head demands a cleaner peak before reporting.
+pub const DEFAULT_HEARTBEAT_MIN_SCORE: f32 = 0.3;
+
+/// Multiple of the typical inter-anchor spread ([`AnomalySpecialist::scale`])
+/// beyond which a live window is fully out-of-distribution (anomaly score 1.0):
+/// a window more than this many spreads from every enrolled prototype is novel.
+pub const ANOMALY_OUTLIER_SPREADS: f32 = 2.0;
+
+/// Anomaly score above which the window is *labelled* "anomalous" (vs "normal").
+/// Distinct from the runtime veto threshold ([`crate::runtime`]); this only
+/// drives the human-readable label.
+pub const ANOMALY_LABEL_CUTOFF: f32 = 0.5;
+
 /// Which biological signal a specialist estimates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SpecialistKind {
@@ -229,7 +251,7 @@ impl Specialist for BreathingSpecialist {
         let min = if self.min_score > 0.0 {
             self.min_score
         } else {
-            0.25
+            DEFAULT_BREATHING_MIN_SCORE
         };
         if f.breathing_score < min || f.breathing_hz <= 0.0 {
             return None;
@@ -258,7 +280,7 @@ impl Specialist for HeartbeatSpecialist {
         let min = if self.min_score > 0.0 {
             self.min_score
         } else {
-            0.3
+            DEFAULT_HEARTBEAT_MIN_SCORE
         };
         if f.heart_score < min || f.heart_hz <= 0.0 {
             return None;
@@ -383,13 +405,13 @@ impl Specialist for AnomalySpecialist {
                 .sqrt();
             best = best.min(d);
         }
-        // >2× the typical spread → anomalous.
-        let score = (best / (2.0 * self.scale)).clamp(0.0, 1.0);
+        // Beyond ANOMALY_OUTLIER_SPREADS× the typical spread → fully anomalous.
+        let score = (best / (ANOMALY_OUTLIER_SPREADS * self.scale)).clamp(0.0, 1.0);
         Some(SpecialistReading {
             kind: SpecialistKind::Anomaly,
             value: score,
             confidence: 0.6,
-            label: Some(if score > 0.5 { "anomalous" } else { "normal" }.into()),
+            label: Some(if score > ANOMALY_LABEL_CUTOFF { "anomalous" } else { "normal" }.into()),
         })
     }
 }
@@ -503,6 +525,32 @@ mod tests {
         assert!((r.value - 18.0).abs() < 0.1); // 0.3 Hz = 18 BPM
         assert!(r.confidence > 0.5);
         assert!(b.infer(&feat(5.0, 0.2, 0.3, 0.1)).is_none()); // low score → none
+    }
+
+    /// De-magic pin: the named default min-scores must equal the historical
+    /// literal values, and the gate boundary must be `score >= min` (a window
+    /// exactly at the default floor reports; a hair below does not).
+    #[test]
+    fn default_min_score_constants_match_prior_literals() {
+        assert_eq!(DEFAULT_BREATHING_MIN_SCORE, 0.25);
+        assert_eq!(DEFAULT_HEARTBEAT_MIN_SCORE, 0.3);
+        let b = BreathingSpecialist::default(); // min_score = 0.0 → uses default
+        assert!(
+            b.infer(&feat(5.0, 0.2, 0.3, DEFAULT_BREATHING_MIN_SCORE)).is_some(),
+            "score exactly at the default floor must report"
+        );
+        assert!(
+            b.infer(&feat(5.0, 0.2, 0.3, DEFAULT_BREATHING_MIN_SCORE - 1e-3)).is_none(),
+            "score below the default floor must not report"
+        );
+    }
+
+    /// De-magic pin for the anomaly score scale + label cutoff (value-identical
+    /// to the prior `2.0 * scale` / `> 0.5` literals).
+    #[test]
+    fn anomaly_constants_match_prior_literals() {
+        assert_eq!(ANOMALY_OUTLIER_SPREADS, 2.0);
+        assert_eq!(ANOMALY_LABEL_CUTOFF, 0.5);
     }
 
     #[test]
