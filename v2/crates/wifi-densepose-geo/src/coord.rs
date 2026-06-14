@@ -15,7 +15,11 @@ pub fn haversine(a: &GeoPoint, b: &GeoPoint) -> f64 {
     let lat1 = a.lat.to_radians();
     let lat2 = b.lat.to_radians();
     let h = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
-    2.0 * WGS84_A * h.sqrt().asin()
+    // `asin` is only defined on [-1, 1]. For (near-)antipodal points floating
+    // rounding can push `h.sqrt()` to 1.0 + epsilon, and `asin(>1)` is NaN —
+    // which would silently poison any distance-based comparison downstream.
+    // Clamp into domain so the result is always a finite distance.
+    2.0 * WGS84_A * h.sqrt().clamp(0.0, 1.0).asin()
 }
 
 /// WGS84 to local ENU (East-North-Up) relative to origin, in meters.
@@ -82,4 +86,74 @@ pub fn tiles_for_bbox(bbox: &GeoBBox, zoom: u8) -> Vec<TileCoord> {
         }
     }
     tiles
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── haversine asin-domain robustness ───────────────────────────────────
+    //
+    // For (near-)antipodal points, floating rounding can push the haversine
+    // term `h` to 1.0 + ~4e-16, and `asin(sqrt(h)) = asin(>1)` is NaN. A NaN
+    // distance silently breaks every downstream comparison (all `<`/`>` become
+    // false), so the result must stay finite. This exact pair produced
+    // h = 1.0000000000000004 pre-fix (verified empirically).
+
+    #[test]
+    fn haversine_near_antipodal_is_finite_not_nan() {
+        let a = GeoPoint {
+            lat: -44.4994,
+            lon: -178.957_22,
+            alt: 0.0,
+        };
+        let b = GeoPoint {
+            lat: 44.499_399_99,
+            lon: 1.042_780_01,
+            alt: 0.0,
+        };
+        let d = haversine(&a, &b);
+        assert!(d.is_finite(), "near-antipodal haversine must be finite, got {d}");
+        // Half-circumference is ~20_037 km; result must be close to that.
+        assert!(
+            (19_000_000.0..21_000_000.0).contains(&d),
+            "antipodal distance should be ~half-circumference, got {d}"
+        );
+    }
+
+    #[test]
+    fn haversine_identical_points_is_zero() {
+        let p = GeoPoint {
+            lat: 43.65,
+            lon: -79.38,
+            alt: 0.0,
+        };
+        let d = haversine(&p, &p);
+        assert!(d.is_finite() && d < 1e-6, "identical points → 0, got {d}");
+    }
+
+    // ── pole-singularity robustness (degenerate geometry) ──────────────────
+    //
+    // The ENU transforms divide by cos(lat); at the poles cos(±90°) = 0, so
+    // the longitude term is non-finite. We do not change the transform (that
+    // would alter near-pole results), but we pin that the call does NOT panic.
+
+    #[test]
+    fn wgs84_to_enu_at_pole_does_not_panic() {
+        let origin = GeoPoint {
+            lat: 90.0,
+            lon: 0.0,
+            alt: 0.0,
+        };
+        let point = GeoPoint {
+            lat: 89.99,
+            lon: 10.0,
+            alt: 0.0,
+        };
+        // Must return without panicking. North/up stay finite; east may be
+        // non-finite at the exact pole — assert the bounded components only.
+        let enu = wgs84_to_enu(&point, &origin);
+        assert!(enu[1].is_finite(), "north component must be finite");
+        assert!(enu[2].is_finite(), "up component must be finite");
+    }
 }
