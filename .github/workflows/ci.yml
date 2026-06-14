@@ -29,6 +29,7 @@ jobs:
       continue-on-error: true
       uses: actions/checkout@v4
       with:
+        submodules: recursive
         fetch-depth: 0
 
     - name: Set up Python
@@ -82,6 +83,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
       # ADR-262 P1: `wifi-densepose-rufield` path-deps the `vendor/rufield`
       # submodule. Without a recursive checkout the workspace build fails to
       # resolve those path deps in CI even though it passes locally.
@@ -207,6 +210,8 @@ jobs:
     - name: Checkout code
       continue-on-error: true
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Set up Python ${{ matrix.python-version }}
       continue-on-error: true
@@ -272,6 +277,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -340,6 +347,8 @@ jobs:
     - name: Checkout code
       continue-on-error: true
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Set up Docker Buildx
       continue-on-error: true
@@ -412,6 +421,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Set up Python
       uses: actions/setup-python@v6

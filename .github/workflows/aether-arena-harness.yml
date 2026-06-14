@@ -33,6 +33,8 @@ jobs:
         working-directory: v2
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Rust toolchain
         run: rustup show && rustc --version
