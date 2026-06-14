@@ -63,3 +63,7 @@ harness = false
 name = "onnx_bench"
 harness = false
 required-features = ["onnx"]
+
+[[bench]]
+name = "native_conv_bench"
+harness = false
