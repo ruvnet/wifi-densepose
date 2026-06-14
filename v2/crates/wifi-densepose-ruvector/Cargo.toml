@@ -47,3 +47,7 @@ harness = false
 [[bench]]
 name = "fusion_bench"
 harness = false
+
+[[bench]]
+name = "ann_bench"
+harness = false
