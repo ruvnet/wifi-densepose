@@ -1081,6 +1081,17 @@ The `wifi-densepose-vitals` crate (ESP32 CSI-grade vital signs) has not yet been
 - SONA-based environment adaptation
 - VitalSignStore with tiered temporal compression
 
+## Implementation Notes
+
+### 2026-06 — ESP32 edge vitals: person-count over-count + presence flicker (#998, #996)
+
+Two robustness bugs were fixed in the on-device edge path (`firmware/esp32-csi-node/main/edge_processing.c`, the ADR-039 packet `0xC5110002`). These touch the *boolean/count emission logic*, not the underlying CSI signal-processing math, and do **not** constitute a validated-accuracy claim — true occupancy-count and presence accuracy vs labelled ground truth remain hardware/data-gated (COM9 ESP32-S3 + labelled capture).
+
+- **#998 `n_persons` over-count (reported 4 for one person).** `update_multi_person_vitals()` divided the top-K subcarriers into `top_k_count/2` groups and marked *every* group `active`, so one body's multipath always read the full `EDGE_MAX_PERSONS`. Added an energy gate (`EDGE_PERSON_MIN_ENERGY_RATIO`), spatial dedup (`EDGE_PERSON_MIN_SC_SEP`), and a persistence debounce (`EDGE_PERSON_PERSIST_FRAMES`) via two pure functions `count_distinct_persons()` / `person_count_debounce()`.
+- **#996 presence flag flicker at ~50 cm.** Single-threshold compare on a noisy `presence_score` chattered at the boundary. Replaced with a Schmitt trigger + clear-debounce (`presence_flag_update()`, constants `EDGE_PRESENCE_HYST_RATIO` / `EDGE_PRESENCE_CLEAR_FRAMES`); `presence_score` is unchanged and still emitted for consumer-side thresholding.
+
+Both are pinned by host-buildable C99 tests in `firmware/esp32-csi-node/test/test_vitals_count_presence.c` (`make run_vitals`). The exact thresholds are documented constants pending on-device calibration against ground truth.
+
 ## References
 
 - Ramsauer et al. (2020). "Hopfield Networks is All You Need." ICLR 2021. (ModernHopfield formulation)

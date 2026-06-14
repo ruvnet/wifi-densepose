@@ -16,6 +16,15 @@ firmware/esp32-csi-node/sdkconfig.defaults.bak
 # ESP-IDF set-target backup (local only)
 firmware/esp32-hello-world/sdkconfig.old
 
+# Host-built firmware test binaries (compiled from test/*.c, not source)
+firmware/esp32-csi-node/test/test_adr110
+firmware/esp32-csi-node/test/test_vitals
+firmware/esp32-csi-node/test/fuzz_serialize
+firmware/esp32-csi-node/test/fuzz_edge
+firmware/esp32-csi-node/test/fuzz_nvs
+firmware/esp32-csi-node/test/*.exe
+firmware/esp32-csi-node/test/*.obj
+
 # Claude Flow swarm runtime state
 .swarm/
 

@@ -203,6 +203,21 @@ pub struct PersonDetection {
     pub keypoints: Vec<PoseKeypoint>,
     pub bbox: BoundingBox,
     pub zone: String,
+    /// Room-world position `[x, y, z]` (Observatory scene units / meters),
+    /// derived from the strongest `signal_field` peak (issue #1050). `y` is
+    /// `0.0` — the field is a floor-plane grid. Real field-peak readout, not
+    /// calibrated triangulation. Defaults to `[0,0,0]`.
+    #[serde(default)]
+    pub position: [f64; 3],
+    /// Motion magnitude on the Observatory's `0..100` scale, passed through
+    /// from the measured `motion_band_power` (issue #1050).
+    #[serde(default)]
+    pub motion_score: f64,
+    /// Coarse posture label when a real aggregate posture estimate exists,
+    /// else `None`. Never fabricated; per-person skeletal pose remains gated
+    /// on the pose model (ADR-079).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pose: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

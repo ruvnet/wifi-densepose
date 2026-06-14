@@ -43,9 +43,10 @@ MAIN_DIR  = ../main
 FUZZ_DURATION ?= 30
 FUZZ_JOBS     ?= 1
 
-.PHONY: all clean run_serialize run_edge run_nvs run_all test_adr110 run_adr110 host_tests
+.PHONY: all clean run_serialize run_edge run_nvs run_all test_adr110 run_adr110 \
+        test_vitals run_vitals host_tests
 
-all: fuzz_serialize fuzz_edge fuzz_nvs test_adr110
+all: fuzz_serialize fuzz_edge fuzz_nvs test_adr110 test_vitals
 
 # --- ADR-110 encoding unit tests ---
 # Host-side, no libFuzzer needed — plain C99 deterministic table tests
@@ -57,8 +58,19 @@ test_adr110: test_adr110_encoding.c
 run_adr110: test_adr110
 	./test_adr110
 
-host_tests: run_adr110
-	@echo "ADR-110 host tests passed"
+# --- Vitals count + presence logic unit tests (issue #998 / #996) ---
+# Host-side, no libFuzzer. Pins the person-count gate (no over-count for one
+# body) and the presence hysteresis (no flicker on a dithering score). Pulls
+# the named tuning constants from ../main/edge_processing.h so the test and the
+# firmware can never disagree on thresholds.
+test_vitals: test_vitals_count_presence.c $(MAIN_DIR)/edge_processing.h
+	cc -std=c99 -Wall -Wextra -Istubs -I$(MAIN_DIR) -o $@ $< -lm
+
+run_vitals: test_vitals
+	./test_vitals
+
+host_tests: run_adr110 run_vitals
+	@echo "Host tests passed (ADR-110 + vitals #998/#996)"
 
 # --- Serialize fuzzer ---
 # Tests csi_serialize_frame() with random wifi_csi_info_t inputs.
@@ -94,5 +106,5 @@ run_nvs: fuzz_nvs
 run_all: run_serialize run_edge run_nvs
 
 clean:
-	rm -f fuzz_serialize fuzz_edge fuzz_nvs test_adr110
+	rm -f fuzz_serialize fuzz_edge fuzz_nvs test_adr110 test_vitals
 	rm -rf corpus_serialize/ corpus_edge/ corpus_nvs/

@@ -72,6 +72,28 @@ pub const CANON_LEFT_HIP: usize = 11;
 /// COCO joint index of the right hip.
 pub const CANON_RIGHT_HIP: usize = 12;
 
+// --- Tuning constants (ADR-155 M2 §8: de-magicked from bare literals; values
+// are bit-identical to the prior inline literals — documentation only, no
+// behaviour change). ---
+
+/// Visibility cutoff: a keypoint counts as *visible* iff `visibility[j] >= 0.5`.
+///
+/// This is the COCO convention (visibility flag 2 = "labelled and visible";
+/// any soft confidence ≥ 0.5 is treated as present). Used identically in
+/// [`bounding_box_diagonal`], [`canonical_torso_size`], [`pck_canonical`] and
+/// [`oks_canonical`].
+const VISIBILITY_THRESHOLD: f32 = 0.5;
+
+/// Minimum positive extent for a usable reference scale (torso width or bbox
+/// diagonal). Below this the sample has no measurable evidence and is reported
+/// as unscoreable (PCK `(0,0,0.0)` / OKS `0.0`) rather than dividing by ≈0.
+const MIN_REFERENCE_EXTENT: f32 = 1e-6;
+
+/// Fallback per-joint OKS sigma for joint indices beyond the 17 COCO-defined
+/// keypoints (defensive: the canonical path only ever scores `j < 17`). Mid-range
+/// of the COCO sigma band — see [`COCO_KP_SIGMAS`].
+const OKS_FALLBACK_SIGMA: f32 = 0.07;
+
 /// Compute the Euclidean diagonal of the bounding box of visible keypoints.
 ///
 /// The bounding box is defined by the axis-aligned extent of all keypoints
@@ -89,7 +111,7 @@ pub(crate) fn bounding_box_diagonal(
     let mut any_visible = false;
 
     for j in 0..num_joints {
-        if visibility[j] >= 0.5 {
+        if visibility[j] >= VISIBILITY_THRESHOLD {
             let x = kp[[j, 0]];
             let y = kp[[j, 1]];
             x_min = x_min.min(x);
@@ -123,19 +145,19 @@ pub fn canonical_torso_size(gt_kpts: &Array2<f32>, visibility: &Array1<f32>) -> 
     let n = gt_kpts.shape()[0].min(visibility.len());
     if CANON_LEFT_HIP < n
         && CANON_RIGHT_HIP < n
-        && visibility[CANON_LEFT_HIP] >= 0.5
-        && visibility[CANON_RIGHT_HIP] >= 0.5
+        && visibility[CANON_LEFT_HIP] >= VISIBILITY_THRESHOLD
+        && visibility[CANON_RIGHT_HIP] >= VISIBILITY_THRESHOLD
     {
         let dx = gt_kpts[[CANON_LEFT_HIP, 0]] - gt_kpts[[CANON_RIGHT_HIP, 0]];
         let dy = gt_kpts[[CANON_LEFT_HIP, 1]] - gt_kpts[[CANON_RIGHT_HIP, 1]];
         let torso = (dx * dx + dy * dy).sqrt();
-        if torso > 1e-6 {
+        if torso > MIN_REFERENCE_EXTENT {
             return Some(torso);
         }
     }
     // Fallback: bounding-box diagonal of visible keypoints.
     let diag = bounding_box_diagonal(gt_kpts, visibility, n);
-    if diag > 1e-6 {
+    if diag > MIN_REFERENCE_EXTENT {
         Some(diag)
     } else {
         None
@@ -179,7 +201,7 @@ pub fn pck_canonical(
     let mut correct = 0usize;
     let mut total = 0usize;
     for j in 0..n {
-        if visibility[j] < 0.5 {
+        if visibility[j] < VISIBILITY_THRESHOLD {
             continue;
         }
         total += 1;
@@ -229,7 +251,7 @@ pub fn oks_canonical(
     let mut num = 0.0f32;
     let mut den = 0.0f32;
     for j in 0..n {
-        if visibility[j] < 0.5 {
+        if visibility[j] < VISIBILITY_THRESHOLD {
             continue;
         }
         den += 1.0;
@@ -239,7 +261,7 @@ pub fn oks_canonical(
         let k = if j < COCO_KP_SIGMAS.len() {
             COCO_KP_SIGMAS[j]
         } else {
-            0.07
+            OKS_FALLBACK_SIGMA
         };
         num += (-d_sq / (2.0 * s_sq * k * k)).exp();
     }
@@ -247,5 +269,67 @@ pub fn oks_canonical(
         num / den
     } else {
         0.0
+    }
+}
+
+#[cfg(test)]
+mod consts_tests {
+    use super::*;
+
+    /// ADR-155 M2 §8: the de-magicked tuning consts must equal the prior inline
+    /// literals exactly — this pins them so a future "tidy-up" cannot silently
+    /// shift the metric definition (operating-value guard).
+    #[test]
+    fn metrics_core_consts_unchanged_from_literals() {
+        assert_eq!(VISIBILITY_THRESHOLD, 0.5_f32);
+        assert_eq!(MIN_REFERENCE_EXTENT, 1e-6_f32);
+        assert_eq!(OKS_FALLBACK_SIGMA, 0.07_f32);
+        assert_eq!(CANON_LEFT_HIP, 11);
+        assert_eq!(CANON_RIGHT_HIP, 12);
+    }
+
+    /// Characterize the visibility-threshold boundary: a keypoint at exactly the
+    /// cutoff (vis == 0.5) is INCLUDED (`>=`), just below (0.499) is EXCLUDED.
+    /// Pins current `>=`-inclusive behaviour at the edge.
+    #[test]
+    fn visibility_threshold_boundary_is_inclusive() {
+        // Two GT hips give a positive torso; vary the (single) scored joint's
+        // visibility around the 0.5 cutoff and confirm it flips total in/out.
+        let gt = Array2::from_shape_vec(
+            (13, 2),
+            (0..13).flat_map(|j| [j as f32, 0.0]).collect::<Vec<_>>(),
+        )
+        .unwrap();
+        // hips at 11,12 give torso = |11-12| = 1.0 along x.
+        let pred = gt.clone();
+        let mk_vis = |v0: f32| {
+            let mut vis = Array1::<f32>::zeros(13);
+            vis[CANON_LEFT_HIP] = 1.0;
+            vis[CANON_RIGHT_HIP] = 1.0;
+            vis[0] = v0; // joint 0 is the one we toggle
+            vis
+        };
+        // At exactly 0.5 → joint 0 is counted (total includes it: 3 visible).
+        let (_, total_at, _) = pck_canonical(&pred, &gt, &mk_vis(0.5), 0.2);
+        assert_eq!(total_at, 3, "vis == 0.5 must be INCLUDED (>=)");
+        // Just below → joint 0 excluded (only the 2 hips visible).
+        let (_, total_below, _) = pck_canonical(&pred, &gt, &mk_vis(0.499), 0.2);
+        assert_eq!(total_below, 2, "vis < 0.5 must be EXCLUDED");
+    }
+
+    /// Characterize the reference-extent floor: a near-zero-extent GT pose (all
+    /// keypoints coincident, hips coincident) is UNSCOREABLE → `(0,0,0.0)`,
+    /// never a trivial perfect score. Pins the `MIN_REFERENCE_EXTENT` guard.
+    #[test]
+    fn degenerate_extent_below_floor_is_unscoreable() {
+        // All 13 joints at the same point ⇒ torso ≈ 0, bbox diag ≈ 0 < 1e-6.
+        let gt = Array2::<f32>::zeros((13, 2));
+        let pred = gt.clone();
+        let mut vis = Array1::<f32>::zeros(13);
+        vis[CANON_LEFT_HIP] = 1.0;
+        vis[CANON_RIGHT_HIP] = 1.0;
+        assert!(canonical_torso_size(&gt, &vis).is_none());
+        assert_eq!(pck_canonical(&pred, &gt, &vis, 0.2), (0, 0, 0.0));
+        assert_eq!(oks_canonical(&pred, &gt, &vis), 0.0);
     }
 }

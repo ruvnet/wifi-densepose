@@ -14,6 +14,7 @@ pub mod cli;
 pub mod csi;
 mod engine_bridge;
 mod field_bridge;
+mod field_localize;
 mod model_format;
 mod multistatic_bridge;
 pub mod pose;
@@ -406,6 +407,24 @@ struct PersonDetection {
     keypoints: Vec<PoseKeypoint>,
     bbox: BoundingBox,
     zone: String,
+    /// Room-world position `[x, y, z]` (Observatory scene units / meters),
+    /// derived from the strongest `signal_field` peak this person sits on
+    /// (issue #1050). `y` is `0.0` — the field is a floor-plane grid. This is
+    /// a real field-peak readout, not calibrated triangulation; see
+    /// `field_localize` for the honesty caveat. Defaults to `[0,0,0]` until
+    /// field positions are attached by `attach_field_positions`.
+    #[serde(default)]
+    position: [f64; 3],
+    /// Motion magnitude on the Observatory's `0..100` scale, passed through
+    /// from the measured `motion_band_power` (issue #1050).
+    #[serde(default)]
+    motion_score: f64,
+    /// Coarse posture label (`"standing"`/`"lying"`/…) when a **real** aggregate
+    /// posture estimate exists, else `None`. Never fabricated — per-person
+    /// skeletal pose in room coordinates remains gated on the pose model
+    /// (ADR-079). The Observatory defaults to `'standing'` when this is absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pose: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2572,6 +2591,8 @@ async fn windows_wifi_task(state: SharedState, tick_ms: u64) {
         if !tracked.is_empty() {
             update.persons = Some(tracked);
         }
+        // #1050: attach real signal_field-peak positions to each person.
+        attach_field_positions(&mut update);
 
         if let Ok(json) = serde_json::to_string(&update) {
             let _ = s.tx.send(json);
@@ -2725,6 +2746,8 @@ async fn windows_wifi_fallback_tick(state: &SharedState, seq: u32) {
     if !tracked.is_empty() {
         update.persons = Some(tracked);
     }
+    // #1050: attach real signal_field-peak positions to each person.
+    attach_field_positions(&mut update);
 
     if let Ok(json) = serde_json::to_string(&update) {
         let _ = s.tx.send(json);
@@ -3163,12 +3186,21 @@ async fn handle_ws_pose_client(mut socket: WebSocket, state: SharedState) {
                                                 x: kp[0], y: kp[1], z: kp[2], confidence: kp[3],
                                             })
                                             .collect();
+                                        let [nx, _ny, nz] = sensing.signal_field.grid_size;
+                                        let peak = field_localize::extract_peaks(
+                                            &sensing.signal_field.values, nx, nz, 1, 3.0,
+                                        ).into_iter().next();
                                         vec![PersonDetection {
                                             id: 1,
                                             confidence: sensing.classification.confidence,
                                             bbox: BoundingBox { x: 260.0, y: 150.0, width: 120.0, height: 220.0 },
                                             keypoints,
                                             zone: "zone_1".into(),
+                                            position: peak.map_or([0.0, 0.0, 0.0], |p| p.position),
+                                            motion_score: field_localize::motion_score_from_power(
+                                                sensing.features.motion_band_power,
+                                            ),
+                                            pose: sensing.posture.clone(),
                                         }]
                                     }).unwrap_or_else(|| {
                                         // Prefer tracked persons from broadcast if available
@@ -3947,6 +3979,53 @@ fn derive_single_person_pose(
             height: (max_y - min_y).max(160.0),
         },
         zone: format!("zone_{}", person_idx + 1),
+        // Position/motion_score/pose are attached from the real signal_field
+        // peaks by `attach_field_positions` after the tracker step (#1050);
+        // default here so the synthetic-skeleton geometry stays unchanged.
+        position: [0.0, 0.0, 0.0],
+        motion_score: 0.0,
+        pose: None,
+    }
+}
+
+/// Attach real, field-derived per-person world positions to a `SensingUpdate`'s
+/// `persons` (issue #1050).
+///
+/// For each detected person we read a strongest-peak position out of the frame's
+/// real `signal_field` (the same grid the Observatory already renders) and map
+/// it to room-world coordinates via `field_localize::cell_to_world`. `motion_score`
+/// is passed through from the measured `motion_band_power`; `pose` is taken from
+/// the real aggregate `posture` estimate when present, else left `None` (never
+/// fabricated). Persons beyond the number of resolvable field peaks fall back to
+/// the strongest peak so they remain co-located with real energy rather than at
+/// a fake origin; if the field has no peak above threshold the position stays at
+/// `[0,0,0]` and `motion_score` still reflects real motion power.
+fn attach_field_positions(update: &mut SensingUpdate) {
+    let Some(persons) = update.persons.as_mut() else {
+        return;
+    };
+    if persons.is_empty() {
+        return;
+    }
+
+    let [nx, _ny, nz] = update.signal_field.grid_size;
+    let peaks = field_localize::extract_peaks(
+        &update.signal_field.values,
+        nx,
+        nz,
+        persons.len().max(1),
+        3.0,
+    );
+
+    let motion_score = field_localize::motion_score_from_power(update.features.motion_band_power);
+    let pose_label = update.posture.clone();
+
+    for (i, person) in persons.iter_mut().enumerate() {
+        if let Some(peak) = peaks.get(i).or_else(|| peaks.first()) {
+            person.position = peak.position;
+        }
+        person.motion_score = motion_score;
+        person.pose = pose_label.clone();
     }
 }
 
@@ -5473,6 +5552,8 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     if !tracked.is_empty() {
                         update.persons = Some(tracked);
                     }
+                    // #1050: attach real signal_field-peak positions to each person.
+                    attach_field_positions(&mut update);
 
                     if let Ok(json) = serde_json::to_string(&update) {
                         let _ = s.tx.send(json);
@@ -5903,6 +5984,8 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     if !tracked.is_empty() {
                         update.persons = Some(tracked);
                     }
+                    // #1050: attach real signal_field-peak positions to each person.
+                    attach_field_positions(&mut update);
 
                     if let Ok(json) = serde_json::to_string(&update) {
                         let _ = s.tx.send(json);
@@ -6076,6 +6159,8 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
         if !tracked.is_empty() {
             update.persons = Some(tracked);
         }
+        // #1050: attach real signal_field-peak positions to each person.
+        attach_field_positions(&mut update);
 
         if update.classification.presence {
             s.total_detections += 1;
@@ -8218,5 +8303,173 @@ mod export_rvf_mode_tests {
     fn no_export_flag_never_emits() {
         assert!(!export_emits_placeholder_demo(false, false, false));
         assert!(!export_emits_placeholder_demo(false, true, false));
+    }
+}
+
+#[cfg(test)]
+mod observatory_persons_field_position_tests {
+    //! Issue #1050 — the Observatory 3D figure animates from per-person
+    //! `position` / `motion_score` / `pose` carried on `sensing_update.persons`.
+    //!
+    //! These tests pin the public WS contract: a frame that detects a person on
+    //! a known signal_field peak must emit a `persons` array whose first entry
+    //! carries a `position` derived from that peak (matching the Observatory's
+    //! cell→world transform), a real `motion_score`, and a serialized frame
+    //! that round-trips. An empty / no-presence field must emit `persons: []`
+    //! (or no person), never a phantom person at a fabricated origin.
+
+    use super::*;
+
+    /// Build a 20×20 signal_field that is background everywhere except a single
+    /// strong normalized peak at grid cell `(ix, iz)`.
+    fn field_with_peak(ix: usize, iz: usize) -> SignalField {
+        let nx = 20usize;
+        let nz = 20usize;
+        let mut values = vec![0.05f64; nx * nz];
+        values[iz * nx + ix] = 1.0;
+        SignalField {
+            grid_size: [nx, 1, nz],
+            values,
+        }
+    }
+
+    /// Build an all-background (below-threshold) 20×20 field — no localizable
+    /// hotspot, modelling an empty / no-presence room.
+    fn empty_field() -> SignalField {
+        SignalField {
+            grid_size: [20, 1, 20],
+            values: vec![0.05f64; 20 * 20],
+        }
+    }
+
+    fn base_update(signal_field: SignalField, presence: bool, motion_band_power: f64) -> SensingUpdate {
+        SensingUpdate {
+            msg_type: "sensing_update".to_string(),
+            timestamp: 1.0,
+            source: "test".to_string(),
+            tick: 1,
+            nodes: vec![],
+            features: FeatureInfo {
+                mean_rssi: -60.0,
+                variance: 48.6,
+                motion_band_power,
+                breathing_band_power: 0.0,
+                dominant_freq_hz: 1.0,
+                change_points: 0,
+                spectral_power: 0.0,
+            },
+            classification: ClassificationInfo {
+                motion_level: if presence { "present_moving".to_string() } else { "absent".to_string() },
+                presence,
+                confidence: 0.8,
+            },
+            signal_field,
+            vital_signs: None,
+            enhanced_motion: None,
+            enhanced_breathing: None,
+            posture: None,
+            signal_quality_score: None,
+            quality_verdict: None,
+            bssid_count: None,
+            pose_keypoints: None,
+            model_status: None,
+            persons: None,
+            estimated_persons: Some(1),
+            node_features: None,
+        }
+    }
+
+    #[test]
+    fn sensing_update_emits_persons_with_field_derived_position() {
+        // Person present, motion energy 63.3, a hotspot at cell (15, 4).
+        let peak_ix = 15;
+        let peak_iz = 4;
+        let mut update = base_update(field_with_peak(peak_ix, peak_iz), true, 63.3);
+
+        // Pipeline order: derive raw skeleton, then attach real field positions.
+        update.persons = Some(derive_pose_from_sensing(&update));
+        attach_field_positions(&mut update);
+
+        let persons = update.persons.as_ref().expect("persons should be Some");
+        assert!(!persons.is_empty(), "a present person must be emitted");
+
+        // Position must match the Observatory cell→world transform for (15, 4):
+        // x = (15-10)*0.6 = 3.0 ; z = (4-10)*0.5 = -3.0 ; y = 0.
+        let p0 = &persons[0];
+        assert!((p0.position[0] - 3.0).abs() < 1e-6, "x={}", p0.position[0]);
+        assert!((p0.position[1] - 0.0).abs() < 1e-9);
+        assert!((p0.position[2] - (-3.0)).abs() < 1e-6, "z={}", p0.position[2]);
+
+        // motion_score is the measured motion_band_power passed through (≤100).
+        assert!((p0.motion_score - 63.3).abs() < 1e-6, "motion_score={}", p0.motion_score);
+
+        // The serialized WS frame must carry the new fields by their exact
+        // contract names the Observatory UI reads.
+        let v = serde_json::to_value(&update).unwrap();
+        let arr = v["persons"].as_array().expect("persons must be a JSON array");
+        assert_eq!(arr.len(), persons.len());
+        let pj = &arr[0];
+        assert!(pj.get("position").is_some(), "person.position missing from WS frame");
+        assert!(pj.get("motion_score").is_some(), "person.motion_score missing from WS frame");
+        assert!((pj["position"][0].as_f64().unwrap() - 3.0).abs() < 1e-6);
+        assert!((pj["position"][2].as_f64().unwrap() - (-3.0)).abs() < 1e-6);
+        assert!((pj["motion_score"].as_f64().unwrap() - 63.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pose_is_real_when_posture_present_and_absent_otherwise() {
+        // No aggregate posture estimate → pose is None (never fabricated).
+        let mut no_posture = base_update(field_with_peak(10, 10), true, 40.0);
+        no_posture.persons = Some(derive_pose_from_sensing(&no_posture));
+        attach_field_positions(&mut no_posture);
+        let p = &no_posture.persons.as_ref().unwrap()[0];
+        assert!(p.pose.is_none(), "pose must stay None when no real posture exists");
+        // skip_serializing_if drops the key entirely (UI defaults to 'standing').
+        let v = serde_json::to_value(&no_posture).unwrap();
+        assert!(v["persons"][0].get("pose").is_none());
+
+        // Real aggregate posture present → pose is carried through verbatim.
+        let mut with_posture = base_update(field_with_peak(10, 10), true, 40.0);
+        with_posture.posture = Some("lying".to_string());
+        with_posture.persons = Some(derive_pose_from_sensing(&with_posture));
+        attach_field_positions(&mut with_posture);
+        let p2 = &with_posture.persons.as_ref().unwrap()[0];
+        assert_eq!(p2.pose.as_deref(), Some("lying"));
+        let v2 = serde_json::to_value(&with_posture).unwrap();
+        assert_eq!(v2["persons"][0]["pose"], "lying");
+    }
+
+    #[test]
+    fn empty_room_yields_no_phantom_person() {
+        // No presence → derive_pose_from_sensing returns no persons at all.
+        let mut update = base_update(empty_field(), false, 2.0);
+        update.persons = Some(derive_pose_from_sensing(&update));
+        attach_field_positions(&mut update);
+
+        let persons = update.persons.as_ref().unwrap();
+        assert!(
+            persons.is_empty(),
+            "no-presence frame must not emit a phantom person, got {} persons",
+            persons.len()
+        );
+
+        // And in the serialized frame the array is empty (no fake origin person).
+        let v = serde_json::to_value(&update).unwrap();
+        assert_eq!(v["persons"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn present_but_below_threshold_field_keeps_position_at_origin_not_fabricated() {
+        // Presence is true but the field has no peak above PEAK_THRESHOLD — we
+        // must NOT invent a position; it stays at the [0,0,0] default while
+        // motion_score still reflects the real measured motion power. This is
+        // the honest degenerate case (no localizable hotspot to report).
+        let mut update = base_update(empty_field(), true, 55.0);
+        update.persons = Some(derive_pose_from_sensing(&update));
+        attach_field_positions(&mut update);
+
+        let p = &update.persons.as_ref().unwrap()[0];
+        assert_eq!(p.position, [0.0, 0.0, 0.0], "no peak → default origin, not fabricated coords");
+        assert!((p.motion_score - 55.0).abs() < 1e-6, "motion_score stays real");
     }
 }

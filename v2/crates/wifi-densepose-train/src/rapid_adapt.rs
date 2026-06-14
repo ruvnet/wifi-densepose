@@ -11,8 +11,9 @@
 //! by the code. That placeholder is gone. The two `*_loss` functions are now
 //! pure evaluators of the real objective, and [`RapidAdaptation::adapt`]
 //! descends them with a **finite-difference gradient** of that exact loss.
-//! Finite differences genuinely minimize the stated objective (to O(ε)
-//! truncation), so "the adaptation loss decreases" is now a real, reproducible
+//! Finite differences genuinely minimize the stated objective (central
+//! differences are accurate to O(ε²) truncation; see [`RapidAdaptation::adapt`]),
+//! so "the adaptation loss decreases" is now a real, reproducible
 //! measurement rather than an artefact of a hand-tuned fake step.
 //!
 //! **Scope caveat (still honest):** this minimizes a *self-supervised proxy*

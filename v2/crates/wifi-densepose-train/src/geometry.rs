@@ -166,6 +166,13 @@ impl DeepSets {
     }
 
     /// Encode a set of embeddings (each of length `geometry_dim`) into one vector.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `ap_embeddings` is empty — a permutation-invariant mean-pool
+    /// over zero elements is undefined. Callers with optional AP sets must guard
+    /// for the empty case before calling (no behaviour change; documents the
+    /// existing `assert!`).
     pub fn encode(&self, ap_embeddings: &[Vec<f32>]) -> Vec<f32> {
         assert!(
             !ap_embeddings.is_empty(),

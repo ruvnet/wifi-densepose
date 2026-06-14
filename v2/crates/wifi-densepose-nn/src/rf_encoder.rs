@@ -98,14 +98,104 @@ pub struct LinearHead {
     var_b: f32,
 }
 
+/// A shape mismatch when building a [`LinearHead`] from supplied weights.
+///
+/// Returned by [`LinearHead::try_new`] so a caller loading weights from an
+/// **untrusted / deserialized** source can validate the tensor shapes without
+/// the panic that [`LinearHead::new`] raises on a programmer-supplied mismatch
+/// (ADR-155 M2 §3: a pure-Rust input guard ahead of the construction contract).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RfHeadError {
+    /// `w.len()` was not `out_dim * EMBEDDING_DIM`.
+    WeightShape {
+        /// Expected length (`out_dim * EMBEDDING_DIM`).
+        expected: usize,
+        /// Actual `w.len()`.
+        got: usize,
+    },
+    /// `b.len()` was not `out_dim`.
+    BiasShape {
+        /// Expected length (`out_dim`).
+        expected: usize,
+        /// Actual `b.len()`.
+        got: usize,
+    },
+    /// `var_w.len()` was not `EMBEDDING_DIM`.
+    VarWeightShape {
+        /// Expected length (`EMBEDDING_DIM`).
+        expected: usize,
+        /// Actual `var_w.len()`.
+        got: usize,
+    },
+}
+
+impl std::fmt::Display for RfHeadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WeightShape { expected, got } => {
+                write!(f, "weight shape mismatch: expected {expected}, got {got}")
+            }
+            Self::BiasShape { expected, got } => {
+                write!(f, "bias shape mismatch: expected {expected}, got {got}")
+            }
+            Self::VarWeightShape { expected, got } => {
+                write!(f, "var weight shape mismatch: expected {expected}, got {got}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RfHeadError {}
+
 impl LinearHead {
     /// Build a head with given weights. `w.len()` must be `out_dim * EMBEDDING_DIM`.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a shape mismatch (`w`/`b`/`var_w`). This is a construction-time
+    /// API contract on *programmer-supplied* vectors. For weights from an
+    /// untrusted / deserialized source, prefer [`LinearHead::try_new`], which
+    /// returns a typed [`RfHeadError`] instead of panicking.
     #[must_use]
     pub fn new(task: TaskKind, out_dim: usize, w: Vec<f32>, b: Vec<f32>, var_w: Vec<f32>, var_b: f32) -> Self {
         assert_eq!(w.len(), out_dim * EMBEDDING_DIM, "weight shape mismatch");
         assert_eq!(b.len(), out_dim, "bias shape mismatch");
         assert_eq!(var_w.len(), EMBEDDING_DIM, "var weight shape mismatch");
         Self { task, w, b, out_dim, var_w, var_b }
+    }
+
+    /// Fallible constructor: validate the weight shapes and return a typed
+    /// [`RfHeadError`] on mismatch instead of panicking (ADR-155 M2 §3).
+    ///
+    /// Use this when `w` / `b` / `var_w` originate from a checkpoint or any
+    /// untrusted source. On success the produced head is byte-for-byte identical
+    /// to [`LinearHead::new`] with the same arguments.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RfHeadError`] when any of:
+    /// - `w.len() != out_dim * EMBEDDING_DIM`
+    /// - `b.len() != out_dim`
+    /// - `var_w.len() != EMBEDDING_DIM`
+    pub fn try_new(
+        task: TaskKind,
+        out_dim: usize,
+        w: Vec<f32>,
+        b: Vec<f32>,
+        var_w: Vec<f32>,
+        var_b: f32,
+    ) -> Result<Self, RfHeadError> {
+        let expected_w = out_dim * EMBEDDING_DIM;
+        if w.len() != expected_w {
+            return Err(RfHeadError::WeightShape { expected: expected_w, got: w.len() });
+        }
+        if b.len() != out_dim {
+            return Err(RfHeadError::BiasShape { expected: out_dim, got: b.len() });
+        }
+        if var_w.len() != EMBEDDING_DIM {
+            return Err(RfHeadError::VarWeightShape { expected: EMBEDDING_DIM, got: var_w.len() });
+        }
+        Ok(Self { task, w, b, out_dim, var_w, var_b })
     }
 
     /// A zero-initialised head (uncertainty = softplus(0) ≈ 0.693).
@@ -136,9 +226,14 @@ impl LinearHead {
     }
 }
 
+/// Input magnitude above which `softplus(x) ≈ x` to f32 precision, so the
+/// `exp` is skipped to avoid overflow (ADR-155 M2 §8: de-magicked from a bare
+/// `20.0`; value unchanged). At x = 20, `ln(1+e^20) − 20 ≈ 2e-9`, below f32 eps.
+const SOFTPLUS_LINEAR_THRESHOLD: f32 = 20.0;
+
 fn softplus(x: f32) -> f32 {
     // Numerically stable softplus.
-    if x > 20.0 {
+    if x > SOFTPLUS_LINEAR_THRESHOLD {
         x
     } else {
         (1.0 + x.exp()).ln()
@@ -268,6 +363,48 @@ mod tests {
 
     fn emb(fill: f32) -> RfEmbedding {
         RfEmbedding::new(vec![fill; EMBEDDING_DIM])
+    }
+
+    /// ADR-155 M2 §8: the de-magicked softplus linear-threshold must equal the
+    /// prior inline `20.0` literal exactly (operating-value guard).
+    #[test]
+    fn softplus_threshold_unchanged_from_literal() {
+        assert_eq!(SOFTPLUS_LINEAR_THRESHOLD, 20.0_f32);
+    }
+
+    /// ADR-155 M2 §3: `try_new` accepts correctly-shaped weights and produces a
+    /// head byte-identical to `new`, but returns a typed error on a mismatched
+    /// (e.g. corrupt-checkpoint) shape instead of panicking.
+    #[test]
+    fn try_new_accepts_valid_and_rejects_each_bad_shape() {
+        let out_dim = 2;
+        let w = vec![0.0; out_dim * EMBEDDING_DIM];
+        let b = vec![0.0; out_dim];
+        let var_w = vec![0.0; EMBEDDING_DIM];
+
+        // Valid: try_new == new (forward identical on a probe embedding).
+        let head = LinearHead::try_new(TaskKind::Presence, out_dim, w.clone(), b.clone(), var_w.clone(), 0.0)
+            .expect("valid shapes must construct");
+        let reference = LinearHead::new(TaskKind::Presence, out_dim, w.clone(), b.clone(), var_w.clone(), 0.0);
+        assert_eq!(head.forward(&emb(0.5)).values, reference.forward(&emb(0.5)).values);
+
+        // Bad weight length.
+        assert_eq!(
+            LinearHead::try_new(TaskKind::Presence, out_dim, vec![0.0; 3], b.clone(), var_w.clone(), 0.0)
+                .unwrap_err(),
+            RfHeadError::WeightShape { expected: out_dim * EMBEDDING_DIM, got: 3 }
+        );
+        // Bad bias length.
+        assert_eq!(
+            LinearHead::try_new(TaskKind::Presence, out_dim, w.clone(), vec![0.0; 1], var_w.clone(), 0.0)
+                .unwrap_err(),
+            RfHeadError::BiasShape { expected: out_dim, got: 1 }
+        );
+        // Bad var-weight length.
+        assert_eq!(
+            LinearHead::try_new(TaskKind::Presence, out_dim, w, b, vec![0.0; 5], 0.0).unwrap_err(),
+            RfHeadError::VarWeightShape { expected: EMBEDDING_DIM, got: 5 }
+        );
     }
 
     #[test]

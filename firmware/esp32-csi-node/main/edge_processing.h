@@ -38,6 +38,30 @@
 /* ---- Multi-person ---- */
 #define EDGE_MAX_PERSONS      4     /**< Max simultaneous persons. */
 
+/* ---- Multi-person counting gates (issue #998) ----
+ *
+ * Over-counting root cause: the multi-person path used to split the top-K
+ * subcarriers into EDGE_MAX_PERSONS groups and mark EVERY group active,
+ * so one body's multipath always reported the full EDGE_MAX_PERSONS. These
+ * gates promote a subcarrier group to a real "person" only when it carries
+ * genuine, distinct, persistent energy:
+ *
+ *   1. Energy gate   — a group's phase variance must exceed a fraction of the
+ *                      strongest group's variance, else it is multipath/noise.
+ *   2. Spatial dedup — two groups whose representative subcarriers sit within
+ *                      EDGE_PERSON_MIN_SC_SEP of each other are the same body
+ *                      (adjacent subcarriers see correlated reflections), so
+ *                      the weaker one is merged away.
+ *   3. Persistence   — a candidate count must hold for EDGE_PERSON_PERSIST_FRAMES
+ *                      consecutive decisions before it is emitted, so a single
+ *                      noisy frame cannot promote a phantom person.
+ *
+ * These are robustness gates on the existing heuristic, not a calibrated
+ * occupancy model — true count accuracy vs ground truth remains data-gated. */
+#define EDGE_PERSON_MIN_ENERGY_RATIO 0.35f /**< Group var must be >= this * max group var to count. */
+#define EDGE_PERSON_MIN_SC_SEP       4     /**< Min subcarrier separation between distinct persons. */
+#define EDGE_PERSON_PERSIST_FRAMES   3     /**< Consecutive decisions a count must hold before emit. */
+
 /* ---- Calibration ---- */
 #define EDGE_CALIB_FRAMES     1200  /**< Frames for adaptive calibration (~60s at 20 Hz). */
 #define EDGE_CALIB_SIGMA_MULT 3.0f  /**< Threshold = mean + 3*sigma of ambient. */
@@ -45,6 +69,27 @@
 /* ---- Fall detection ---- */
 #define EDGE_FALL_COOLDOWN_MS 5000  /**< Minimum ms between fall alerts (debounce). */
 #define EDGE_FALL_CONSEC_MIN  3     /**< Consecutive frames above threshold to trigger. */
+
+/* ---- Presence flag hysteresis + debounce (issue #996) ----
+ *
+ * Flicker root cause: the presence flag was a single-threshold compare on a
+ * noisy presence_score (observed 2.6-26.7 frame-to-frame for one stationary
+ * person), so the boolean chattered at the boundary even while the score
+ * clearly indicated a person. Fix: Schmitt-trigger hysteresis plus a clear
+ * debounce.
+ *
+ *   - Assert  presence when score >  threshold              (enter immediately).
+ *   - Hold    presence while score >= threshold * HYST_RATIO (no flicker in the
+ *                                                            gap band).
+ *   - Clear   presence only after the score stays below the low threshold for
+ *             EDGE_PRESENCE_CLEAR_FRAMES consecutive frames (genuine departure).
+ *
+ * HYST_RATIO < 1.0 sets the low threshold below the high threshold; a wider gap
+ * (smaller ratio) is more flicker-immune but slower to clear on real exit. The
+ * exact ratio that best matches a given room's score scale remains an on-device
+ * tuning parameter — this removes the logic bug (no hysteresis at all). */
+#define EDGE_PRESENCE_HYST_RATIO  0.5f /**< Low thresh = HYST_RATIO * high thresh. */
+#define EDGE_PRESENCE_CLEAR_FRAMES 5   /**< Frames below low thresh before clearing. */
 
 /* ---- DSP task tuning ---- */
 #define EDGE_BATCH_LIMIT      4     /**< Max frames per batch before longer yield. */

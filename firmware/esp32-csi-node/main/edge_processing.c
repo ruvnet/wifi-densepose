@@ -367,6 +367,7 @@ static float    s_heartrate_bpm;
 static float    s_motion_energy;
 static float    s_presence_score;
 static bool     s_presence_detected;
+static uint8_t  s_presence_below_count;  /**< Consecutive frames below low thresh (issue #996). */
 static bool     s_fall_detected;
 static int8_t   s_latest_rssi;
 static uint32_t s_frame_count;
@@ -398,6 +399,11 @@ static uint16_t s_feature_seq;
 
 /** Multi-person vitals state. */
 static edge_person_vitals_t s_persons[EDGE_MAX_PERSONS];
+
+/** Person-count persistence debounce (issue #998). */
+static uint8_t s_person_count_candidate;  /**< Last raw (gated) candidate count. */
+static uint8_t s_person_count_streak;     /**< Consecutive frames at the candidate. */
+static uint8_t s_person_count_stable;     /**< Emitted (debounced) count. */
 static edge_biquad_t s_person_bq_br[EDGE_MAX_PERSONS];
 static edge_biquad_t s_person_bq_hr[EDGE_MAX_PERSONS];
 static float s_person_br_filt[EDGE_MAX_PERSONS][EDGE_PHASE_HISTORY_LEN];
@@ -444,6 +450,61 @@ static void update_top_k(uint16_t n_subcarriers)
     }
 
     s_top_k_count = k;
+}
+
+/* ======================================================================
+ * Presence Flag Hysteresis + Debounce (issue #996)
+ * ====================================================================== */
+
+/**
+ * Schmitt-trigger presence decision with a clear-debounce.
+ *
+ * Pure function (no globals) so it is host-testable: feed a presence_score
+ * trace and assert the boolean flag is stable. Replaces the old single-
+ * threshold `score > threshold` compare that chattered when a noisy score
+ * dithered around the boundary (observed 2.6-26.7 for one stationary person).
+ *
+ *   - score  >  threshold              → assert presence (enter immediately)
+ *   - score  >= threshold * HYST_RATIO → hold current state (dead band)
+ *   - score  <  threshold * HYST_RATIO → count toward clearing; only clear
+ *                                        after CLEAR_FRAMES consecutive frames
+ *
+ * @param prev          Current presence flag (in/out via return + below_count).
+ * @param score         Latest presence score.
+ * @param threshold     High (enter) threshold.
+ * @param below_count   In/out: consecutive frames the score has been below the
+ *                      low threshold. Reset to 0 whenever the score recovers.
+ * @return New presence flag.
+ */
+static bool presence_flag_update(bool prev, float score, float threshold,
+                                 uint8_t *below_count)
+{
+    float low_thresh = threshold * EDGE_PRESENCE_HYST_RATIO;
+
+    if (score > threshold) {
+        /* Clearly present — assert and reset the clear debounce. */
+        *below_count = 0;
+        return true;
+    }
+
+    if (score >= low_thresh) {
+        /* Dead band: hold whatever we had, no flicker. Recovery above the low
+         * threshold also resets the clear debounce so a brief dip doesn't
+         * accumulate toward a false clear. */
+        *below_count = 0;
+        return prev;
+    }
+
+    /* Below the low threshold — candidate for clearing. */
+    if (*below_count < 0xFF) (*below_count)++;
+    if (!prev) {
+        return false;  /* Already cleared. */
+    }
+    if (*below_count >= EDGE_PRESENCE_CLEAR_FRAMES) {
+        *below_count = 0;
+        return false;  /* Sustained absence — clear. */
+    }
+    return true;  /* Still within the hold window — keep asserting. */
 }
 
 /* ======================================================================
@@ -582,6 +643,112 @@ store_prev:
  * ====================================================================== */
 
 /**
+ * Count distinct persons from per-group energy + representative subcarrier (issue #998).
+ *
+ * Pure function (no globals) so it is host-testable. Each of the `n_groups`
+ * subcarrier groups is a *candidate* person. A candidate is counted only if:
+ *   1. Energy gate   — its energy >= EDGE_PERSON_MIN_ENERGY_RATIO * max energy.
+ *                      One body's multipath spreads energy unevenly across the
+ *                      groups; weak groups are reflections, not extra people.
+ *   2. Spatial dedup — its representative subcarrier is at least
+ *                      EDGE_PERSON_MIN_SC_SEP away from every already-counted
+ *                      person. Adjacent subcarriers see the same reflection, so
+ *                      a near-duplicate group is the same body.
+ *
+ * The strongest group is always counted (so a present body yields >= 1).
+ *
+ * @param energy   Per-group energy (e.g. phase variance), length n_groups.
+ * @param sc_idx   Per-group representative subcarrier index, length n_groups.
+ * @param n_groups Number of candidate groups (<= EDGE_MAX_PERSONS).
+ * @return Distinct person count in [0, n_groups].
+ */
+static uint8_t count_distinct_persons(const float *energy, const uint8_t *sc_idx,
+                                      uint8_t n_groups)
+{
+    if (n_groups == 0) return 0;
+
+    /* Strongest group sets the reference energy. */
+    float max_energy = 0.0f;
+    for (uint8_t g = 0; g < n_groups; g++) {
+        if (energy[g] > max_energy) max_energy = energy[g];
+    }
+    /* No real signal anywhere → no persons. */
+    if (max_energy <= 0.0f) return 0;
+
+    float min_energy = max_energy * EDGE_PERSON_MIN_ENERGY_RATIO;
+
+    uint8_t counted_sc[EDGE_MAX_PERSONS];
+    uint8_t count = 0;
+
+    /* Greedy by descending energy: take the strongest unclaimed group that is
+     * spatially separated from everything already counted. */
+    bool used[EDGE_MAX_PERSONS];
+    for (uint8_t g = 0; g < n_groups && g < EDGE_MAX_PERSONS; g++) used[g] = false;
+
+    for (uint8_t iter = 0; iter < n_groups && iter < EDGE_MAX_PERSONS; iter++) {
+        /* Find the strongest still-unused group above the energy gate. */
+        int best = -1;
+        float best_e = min_energy;  /* must beat the gate */
+        for (uint8_t g = 0; g < n_groups && g < EDGE_MAX_PERSONS; g++) {
+            if (used[g]) continue;
+            if (energy[g] >= best_e) { best_e = energy[g]; best = g; }
+        }
+        if (best < 0) break;  /* nothing left above the gate */
+        used[best] = true;
+
+        /* Spatial dedup against already-counted persons. */
+        bool duplicate = false;
+        for (uint8_t c = 0; c < count; c++) {
+            int sep = (int)sc_idx[best] - (int)counted_sc[c];
+            if (sep < 0) sep = -sep;
+            if (sep < EDGE_PERSON_MIN_SC_SEP) { duplicate = true; break; }
+        }
+        if (duplicate) continue;
+
+        counted_sc[count++] = sc_idx[best];
+    }
+
+    /* The strongest group always represents at least one body. */
+    if (count == 0) count = 1;
+    return count;
+}
+
+/**
+ * Debounce a raw person count so a single noisy frame can't change the emitted
+ * value (issue #998). A new candidate must hold for EDGE_PERSON_PERSIST_FRAMES
+ * consecutive frames before it replaces the stable count.
+ *
+ * Pure function (state passed by pointer) → host-testable.
+ *
+ * @param raw        Raw (gated) count this frame.
+ * @param candidate  In/out: the candidate being accumulated.
+ * @param streak     In/out: consecutive frames the candidate has held.
+ * @param stable     In/out: the currently emitted count.
+ * @return The (possibly updated) stable count.
+ */
+static uint8_t person_count_debounce(uint8_t raw, uint8_t *candidate,
+                                     uint8_t *streak, uint8_t *stable)
+{
+    if (raw == *stable) {
+        /* Agrees with what we emit — reset any pending change. */
+        *candidate = raw;
+        *streak = 0;
+        return *stable;
+    }
+    if (raw == *candidate) {
+        if (*streak < 0xFF) (*streak)++;
+    } else {
+        *candidate = raw;
+        *streak = 1;
+    }
+    if (*streak >= EDGE_PERSON_PERSIST_FRAMES) {
+        *stable = *candidate;
+        *streak = 0;
+    }
+    return *stable;
+}
+
+/**
  * Update multi-person vitals by assigning top-K subcarriers to person groups.
  *
  * Division strategy: top-K subcarriers are evenly divided among
@@ -600,10 +767,25 @@ static void update_multi_person_vitals(const uint8_t *iq_data, uint16_t n_sc,
 
     uint8_t subs_per_person = s_top_k_count / n_persons;
 
+    /* Per-group energy + representative subcarrier, for the #998 person gate. */
+    float   group_energy[EDGE_MAX_PERSONS] = {0};
+    uint8_t group_sc[EDGE_MAX_PERSONS]     = {0};
+
     for (uint8_t p = 0; p < n_persons; p++) {
         edge_person_vitals_t *pv = &s_persons[p];
-        pv->active = true;
         pv->subcarrier_idx = s_top_k[p * subs_per_person];
+        group_sc[p] = s_top_k[p * subs_per_person];
+
+        /* Group energy = max Welford variance over its subcarriers. This is the
+         * same variance used for top-K selection, so a multipath group (weak,
+         * adjacent to the strong one) registers low energy and gets gated out. */
+        float energy = 0.0f;
+        for (uint8_t s = 0; s < subs_per_person; s++) {
+            uint8_t sc = s_top_k[p * subs_per_person + s];
+            float v = (float)welford_variance(&s_subcarrier_var[sc]);
+            if (v > energy) energy = v;
+        }
+        group_energy[p] = energy;
 
         /* Average phase across this person's subcarrier group. */
         float avg_phase = 0.0f;
@@ -662,9 +844,31 @@ static void update_multi_person_vitals(const uint8_t *iq_data, uint16_t n_sc,
         }
     }
 
-    /* Mark remaining persons as inactive. */
-    for (uint8_t p = n_persons; p < EDGE_MAX_PERSONS; p++) {
+    /* --- Issue #998: gate phantom persons by energy + spatial dedup,
+     * then debounce so a single noisy frame can't change the count. --- */
+    uint8_t raw_count = count_distinct_persons(group_energy, group_sc, n_persons);
+    uint8_t stable_count = person_count_debounce(raw_count,
+                                                 &s_person_count_candidate,
+                                                 &s_person_count_streak,
+                                                 &s_person_count_stable);
+
+    /* Mark the strongest `stable_count` groups active (descending energy); the
+     * rest — including phantom multipath groups — are inactive. */
+    bool used[EDGE_MAX_PERSONS];
+    for (uint8_t p = 0; p < EDGE_MAX_PERSONS; p++) {
+        used[p] = false;
         s_persons[p].active = false;
+    }
+    for (uint8_t n = 0; n < stable_count && n < n_persons; n++) {
+        int best = -1;
+        float best_e = -1.0f;
+        for (uint8_t p = 0; p < n_persons; p++) {
+            if (used[p]) continue;
+            if (group_energy[p] > best_e) { best_e = group_energy[p]; best = p; }
+        }
+        if (best < 0) break;
+        used[best] = true;
+        s_persons[best].active = true;
     }
 }
 
@@ -960,7 +1164,12 @@ static void process_frame(const edge_ring_slot_t *slot)
     } else if (threshold == 0.0f) {
         threshold = 0.05f;  /* Default until calibrated. */
     }
-    s_presence_detected = (s_presence_score > threshold);
+    /* Issue #996: hysteresis + clear-debounce instead of a bare threshold
+     * compare, so a noisy score dithering around the boundary doesn't flicker
+     * the boolean flag. */
+    s_presence_detected = presence_flag_update(s_presence_detected,
+                                               s_presence_score, threshold,
+                                               &s_presence_below_count);
 
     /* --- Step 10: Fall detection (phase acceleration + debounce, issue #263) --- */
     if (s_history_len >= 3) {
@@ -1160,6 +1369,7 @@ esp_err_t edge_processing_init(const edge_config_t *cfg)
     s_motion_energy = 0.0f;
     s_presence_score = 0.0f;
     s_presence_detected = false;
+    s_presence_below_count = 0;
     s_fall_detected = false;
     s_latest_rssi = 0;
     s_frame_count = 0;
@@ -1183,6 +1393,9 @@ esp_err_t edge_processing_init(const edge_config_t *cfg)
     for (uint8_t p = 0; p < EDGE_MAX_PERSONS; p++) {
         s_persons[p].active = false;
     }
+    s_person_count_candidate = 0;
+    s_person_count_streak = 0;
+    s_person_count_stable = 0;
 
     /* Design biquad bandpass filters.
      * Sampling rate ~20 Hz (typical ESP32 CSI callback rate). */
