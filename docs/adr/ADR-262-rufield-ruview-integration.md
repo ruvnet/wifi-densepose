@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Proposed — P1 implemented |
+| **Status** | Proposed — **P1 + P3 implemented** (live `/api/field` + `/ws/field`; P3 signs with a **dedicated dev/sensing key**, deferring the §8 Q1 `cog-ha-matter` key-ownership decision to P2) |
 | **Date** | 2026-06-14 |
 | **Deciders** | ruv |
 | **Codebase target** | New thin bridge crate `wifi-densepose-rufield` (v2 workspace member); taps `wifi-densepose-sensing-server` emit path + `wifi-densepose-engine` `TrustedOutput`; depends on `vendor/rufield/crates/rufield-*` via path (the `vendor/rvcsi` pattern) |
@@ -30,7 +30,15 @@ This project has been publicly accused of "AI slop." This ADR answers with **evi
 - **Privacy (§3.3 crux)** — `map_privacy()` maps by information content, **fail-closed**: `Raw → P0`, `Derived → P4` (or `P5` if identity-bound — **never P1**), `Anonymous → P2`, `Restricted → P2`; a `demoted` cycle floors egress to ≥ P2.
 - **Gates that pass** (`tests/p1_gates.rs`, 15 tests / 0 failed = 5 unit + 9 integration + 1 doc): round-trip (snapshot → `FieldEvent` → serde → equal); `is_fusable` (verified ed25519 receipt); `RuFieldFusion::ingest` accept + `infer()` runs; **privacy-safety** (`gate_privacy_safety_derived_never_maps_to_low_privacy` — `Derived → P4/P5`, never P1; full §3.3 table; fail-closed demotion); determinism (same snapshot + same signer seed → byte-identical event).
 
-**Deferred:** the §3.3 *provenance carrier* recommendation (reuse the `cog-ha-matter` SHA-256+Ed25519 chain + embed the BLAKE3 engine witness) is **not** in P1 — P1 takes a dedicated `Signer` param (the §8 open question 1 key-ownership decision is unresolved). P2's BLAKE3-embed, P3 (live `/ws/field` surfacing — the bridge is **not** wired into the running server yet), and P4 (multi-modality) remain future work. **No accuracy is claimed** (§0 / §6) — P1 is tested plumbing + a safe privacy mapping.
+**P3 (§4) is implemented** as the live RuField surface in `wifi-densepose-sensing-server` (the bridge is now wired into the running server):
+
+- **Tap** — at the ESP32 governed-trust cycle (`main.rs` `observe_cycle` ~`:5886` / `SensingUpdate` build ~`:5938`), a new `emit_rufield_event` joins the cycle's `SensingUpdate` (features / classification / signal_field) with the engine's recorded `effective_class` / `demoted` trust state into a `wifi_densepose_rufield::SensingSnapshot`, then `snapshot_to_field_event(&snap, &signer)`. Existing endpoints (`/ws/sensing` etc.) are **unchanged** — purely additive.
+- **Surface** — `GET /api/field` (latest signed `FieldEvent`s + signer pubkey + a `dev_signing_key` flag) and `GET /ws/field` (broadcast stream, mirroring `/ws/sensing`), both mounted on the HTTP port and `/ws/field` also on the WS port. A small bounded ring buffer (`FIELD_RING_CAPACITY = 64`) holds recent **network-surfaced** events. New handler code lives in `src/rufield_surface.rs`, not in the 8k-line `main.rs`.
+- **Signer (defers the P2 key decision)** — a **dedicated standalone `Signer`** held in server state, seeded from `WDP_RUFIELD_SIGNING_SEED` (64-hex or ≥32-byte value), else a deterministic dev default with a logged `WARN`. Reusing the `cog-ha-matter` Ed25519 key (§8 Q1) is the **deferred P2** decision — P3 uses a standalone sensing key so it does not pre-empt that call.
+- **Egress privacy (fail-closed)** — `network_egress_allowed` is *stricter* than `DefaultPrivacyGuard` for an unattended live surface: only **P1/P2** leave the box; P0 (raw) and P3/P4/P5 (identity/biometric/aggregate above the default P2 ceiling) are held edge-local. A `Derived` cycle maps to P4/P5 and is therefore **never** surfaced. No-presence cycles emit nothing (no phantom events).
+- **Gates that pass** (`tests/rufield_surface_test.rs`, 4 integration via `tower::oneshot` + 4 module unit, 0 failed): a well-formed **signed** event (`Modality::WifiCsi`, P2 not P1, `is_fusable` ed25519-verified, real timestamp); **empty cycle → no phantom**; **privacy-safety** — an injected `Derived` trust never surfaces on `/api/field`; a mixed stream surfaces only egress-safe events.
+
+**Deferred:** the §3.3 *provenance carrier* recommendation (reuse the `cog-ha-matter` SHA-256+Ed25519 chain + embed the BLAKE3 engine witness) is **not** in P1/P3 — both take a dedicated `Signer` (the §8 open question 1 key-ownership decision is unresolved; P3 uses a standalone dev/sensing key precisely so it does not pre-empt P2). P2's `cog-ha-matter` key reuse + BLAKE3-embed, and P4 (multi-modality), remain future work. **No accuracy is claimed** (§0 / §6) — P1/P3 are tested plumbing on a live endpoint + a safe privacy mapping; the live surface is single-link CSI with its existing caveats (no validated room-coordinate accuracy — `field_localize`).
 
 ---
 

@@ -522,6 +522,25 @@ Base URL: `http://localhost:3000` (Docker) or `http://localhost:8080` (binary de
 | `GET` | `/api/v1/mesh` | ADR-110 fleet-wide mesh sync map ([iter 29](adr/ADR-110-esp32-c6-firmware-extension.md)) | `{"nodes":{"9":{...},"12":{...}},"total":2}` |
 | `GET` | `/api/v1/nodes/:id/sync` | Single-node mesh sync snapshot (or 404) | `{"offset_us":1163565,"is_leader":false,...}` |
 | `GET` | `/api/v1/mesh/metrics` | ADR-110 mesh state in Prometheus exposition format ([iter 36](adr/ADR-110-esp32-c6-firmware-extension.md)) | `wifi_densepose_mesh_offset_us{node="9"} 1163565\n…` |
+| `GET` | `/api/field` | ADR-262 P3 — latest **signed RuField `FieldEvent`s** from the live sensing cycle, plus the signer pubkey + a `dev_signing_key` flag. Only egress-safe (P1/P2) events are surfaced; identity/biometric (P4/P5) and raw (P0) are held edge-local | `{"spec":"rufield","signer_pubkey_hex":"…","dev_signing_key":true,"events":[…]}` |
+
+### RuField surface (ADR-262 P3)
+
+RuView's live WiFi-CSI sensing now also speaks the standalone **RuField MFS** wire format. Each governed sensing cycle is converted (via the `wifi-densepose-rufield` anti-corruption bridge) into a **signed** `FieldEvent` (`Modality::WifiCsi`, ed25519 `ProvenanceRef`) and surfaced on two additive endpoints:
+
+- `GET /api/field` — the most recent signed events (JSON).
+- `GET /ws/field` — a WebSocket that streams each cycle's signed event (mirrors `/ws/sensing`).
+
+```bash
+curl -s http://localhost:3000/api/field | python -m json.tool          # latest signed FieldEvents
+python -c "import asyncio,websockets; asyncio.run((lambda: websockets.connect('ws://localhost:8765/ws/field'))())"  # stream
+```
+
+Privacy is fail-closed: only egress-safe **P1/P2** events leave the box — raw (P0) and identity/biometric/aggregate (P3–P5) cycles are held **edge-local** and never appear on these endpoints; a no-presence cycle emits **no event**.
+
+**Signing key:** the surface signs with a **dedicated dev/sensing key**, seeded from `WDP_RUFIELD_SIGNING_SEED` (a 64-char hex string or a ≥32-byte value); when unset it falls back to a deterministic dev default and logs a `WARN` (the `dev_signing_key` flag in `/api/field` reflects this). This is a standalone key pending the ADR-262 §8 Q1 key-ownership decision — set `WDP_RUFIELD_SIGNING_SEED` for any real deployment.
+
+> **Honesty (ADR-262 §0/§6):** this is real plumbing on a live endpoint, **not an accuracy claim.** It is the single-link CSI sensing with its existing caveats (no validated room-coordinate accuracy — positions are the "strongest field peak", not calibrated triangulation).
 
 ### Example: Get fleet mesh state (ADR-110)
 
