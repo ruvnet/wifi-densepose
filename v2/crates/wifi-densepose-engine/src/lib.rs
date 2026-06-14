@@ -595,19 +595,46 @@ impl StreamingEngine {
     }
 }
 
+/// Domain-separation tag for the witness hash. Bumping this string
+/// intentionally invalidates every previously-recorded witness (a schema break).
+const WITNESS_DOMAIN: &[u8] = b"ruview.engine.witness.v1";
+
+/// Length-prefix a variable-length field into the witness hash so adjacent
+/// fields can never be confused for one another. The 8-byte little-endian
+/// length makes the field framing unambiguous regardless of the bytes inside
+/// it (a field can contain the separator, the domain tag, anything).
+fn witness_field(h: &mut blake3::Hasher, bytes: &[u8]) {
+    h.update(&(bytes.len() as u64).to_le_bytes());
+    h.update(bytes);
+}
+
 /// Deterministic BLAKE3 witness over a trust decision: the provenance tuple
 /// (evidence ‖ model ‖ calibration ‖ privacy decision) plus the effective
 /// privacy-class byte. Stable across runs for identical decisions — the
 /// "signed operational belief" fingerprint (ADR-137 §2.7 / ADR-028).
+///
+/// # Witness integrity (review finding: domain separation)
+/// Every privacy-relevant field is **length-prefixed** before hashing, and the
+/// (variable-length) evidence list is preceded by an explicit count. Without
+/// this framing the fields were concatenated boundary-to-boundary, so a string
+/// straddling a field boundary (e.g. an adapter id absorbing the leading bytes
+/// of the calibration epoch, or a model_version absorbing a trailing evidence
+/// ref) collided with a *different* trust decision — silently un-distinguishing
+/// two distinct privacy-relevant inputs and defeating the tamper/drift audit.
+/// `model_version` is operator-influenceable (per-room adapter id, ADR-150
+/// §3.4), so the ambiguity was reachable, not merely theoretical.
 fn witness_of(p: &SemanticProvenance, class: PrivacyClass) -> [u8; 32] {
     let mut h = blake3::Hasher::new();
+    h.update(WITNESS_DOMAIN);
+    // Explicit evidence count, then each ref length-prefixed: the number of
+    // evidence refs is itself privacy-relevant and must be unambiguous.
+    h.update(&(p.evidence.len() as u64).to_le_bytes());
     for e in &p.evidence {
-        h.update(e.as_bytes());
-        h.update(b"\x1f");
+        witness_field(&mut h, e.as_bytes());
     }
-    h.update(p.model_version.as_bytes());
-    h.update(p.calibration_version.as_bytes());
-    h.update(p.privacy_decision.as_bytes());
+    witness_field(&mut h, p.model_version.as_bytes());
+    witness_field(&mut h, p.calibration_version.as_bytes());
+    witness_field(&mut h, p.privacy_decision.as_bytes());
     h.update(&[class.as_u8()]);
     *h.finalize().as_bytes()
 }
@@ -1112,5 +1139,81 @@ mod tests {
             .unwrap();
         // StrictNoIdentity base = Restricted, even with no contradiction.
         assert_eq!(out.effective_class, PrivacyClass::Restricted);
+    }
+
+    /// Witness domain-separation (review finding): the witness must change
+    /// whenever ANY privacy-relevant field changes. The model_version,
+    /// calibration_version, and privacy_decision fields are concatenated into
+    /// the hash; without an unambiguous delimiter between them, a string that
+    /// straddles the model/calibration boundary collides with a different
+    /// (model, calibration) tuple.
+    ///
+    /// `model_version` is operator-influenceable through the per-room adapter id
+    /// (ADR-150 §3.4), and `calibration_version` is `cal:<hex>` — so the two
+    /// provenances below are *both reachable* and represent genuinely different
+    /// trust decisions (different model identity, different calibration epoch),
+    /// yet the field-boundary ambiguity makes them hash-collide. A colliding
+    /// witness silently un-distinguishes two distinct privacy-relevant inputs,
+    /// defeating the tamper/drift audit guarantee.
+    #[test]
+    fn witness_distinguishes_model_calibration_boundary() {
+        let class = PrivacyClass::Anonymous;
+        // A: model "rfenc-v1+adapter:X", calibration epoch "cal:00ab".
+        let a = SemanticProvenance {
+            evidence: vec!["ev".into()],
+            model_version: "rfenc-v1+adapter:X".into(),
+            calibration_version: "cal:00ab".into(),
+            privacy_decision: "PrivateHome/Anonymous".into(),
+        };
+        // B: adapter id absorbs the leading "cal:00a" of A's calibration; B's
+        // own calibration is the remaining "b". A.model‖A.cal == B.model‖B.cal,
+        // so the unseparated concatenation hashes identically — yet these are
+        // distinct (model identity, calibration epoch) tuples.
+        let b = SemanticProvenance {
+            evidence: vec!["ev".into()],
+            model_version: "rfenc-v1+adapter:Xcal:00a".into(),
+            calibration_version: "b".into(),
+            privacy_decision: "PrivateHome/Anonymous".into(),
+        };
+        assert_ne!(a.model_version, b.model_version);
+        assert_ne!(a.calibration_version, b.calibration_version);
+        // Sanity: the two collide under naive concatenation.
+        assert_eq!(
+            format!("{}{}", a.model_version, a.calibration_version),
+            format!("{}{}", b.model_version, b.calibration_version),
+        );
+        assert_ne!(
+            witness_of(&a, class),
+            witness_of(&b, class),
+            "distinct (model, calibration) tuples must not share a witness"
+        );
+    }
+
+    /// Witness domain-separation across the evidence/model boundary: a witness
+    /// must distinguish an extra evidence ref from a model_version that absorbs
+    /// the same bytes. The evidence loop terminates each ref with one separator;
+    /// the model field must itself be unambiguously delimited from the (variable
+    /// number of) evidence refs that precede it.
+    #[test]
+    fn witness_distinguishes_evidence_model_boundary() {
+        let class = PrivacyClass::Anonymous;
+        let a = SemanticProvenance {
+            evidence: vec!["e1".into(), "e2".into()],
+            model_version: "m".into(),
+            calibration_version: "cal:1".into(),
+            privacy_decision: "PrivateHome/Anonymous".into(),
+        };
+        let b = SemanticProvenance {
+            evidence: vec!["e1".into()],
+            // absorbs "e2" + its 0x1f separator into the model field.
+            model_version: "e2\u{1f}m".into(),
+            calibration_version: "cal:1".into(),
+            privacy_decision: "PrivateHome/Anonymous".into(),
+        };
+        assert_ne!(
+            witness_of(&a, class),
+            witness_of(&b, class),
+            "an extra evidence ref must not collide with a model_version that absorbs it"
+        );
     }
 }
