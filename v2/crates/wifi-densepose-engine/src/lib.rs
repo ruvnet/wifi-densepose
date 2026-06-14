@@ -205,7 +205,7 @@ impl StreamingEngine {
     pub fn new(mode: PrivacyMode, model_version: u16, registration: GeoRegistration) -> Self {
         Self {
             fuser: MultistaticFuser::with_config(MultistaticConfig::default()),
-            coherence_accept: 0.85,
+            coherence_accept: Self::DEFAULT_COHERENCE_ACCEPT,
             privacy: PrivacyModeRegistry::new(mode),
             world: WorldGraph::new(registration),
             model_version,
@@ -213,7 +213,11 @@ impl StreamingEngine {
             array: ArrayCoordinator::new(ArrayCoordinatorConfig::default()),
             node_geom: BTreeMap::new(),
             evolution: None,
-            slam: RfSlam::with_discovery(0.5, 5, 0.6),
+            slam: RfSlam::with_discovery(
+                Self::SLAM_ASSOC_RADIUS_M,
+                Self::SLAM_MIN_SIGHTINGS,
+                Self::SLAM_MIN_COHERENCE,
+            ),
             person_tracks: BTreeMap::new(),
             semantic_retention: Self::DEFAULT_SEMANTIC_RETENTION,
             adapter: None,
@@ -256,6 +260,31 @@ impl StreamingEngine {
     /// (~6 minutes of full-rate history at 20 Hz; older beliefs are evicted —
     /// durable history belongs to the recorder).
     pub const DEFAULT_SEMANTIC_RETENTION: usize = 7_200;
+
+    /// Cross-node coherence at or above which fusion records a positive
+    /// `CoherenceGateThreshold` evidence ref (ADR-137). Below it the cycle still
+    /// emits, but without that corroborating evidence — so this gate shapes the
+    /// trust record, not the privacy class. (== prior inline 0.85.)
+    pub const DEFAULT_COHERENCE_ACCEPT: f32 = 0.85;
+
+    /// ADR-143 reflector-discovery parameters used to build the persistent
+    /// `RfSlam`: association radius (m) within which two sightings are the same
+    /// reflector, the minimum number of sightings before a reflector is
+    /// considered stable, and the minimum per-sighting coherence to admit it.
+    /// (== prior inline `with_discovery(0.5, 5, 0.6)`.)
+    pub const SLAM_ASSOC_RADIUS_M: f64 = 0.5;
+    /// Minimum sightings before a discovered reflector is treated as stable.
+    pub const SLAM_MIN_SIGHTINGS: u64 = 5;
+    /// Minimum per-sighting coherence to admit a reflector sighting.
+    pub const SLAM_MIN_COHERENCE: f32 = 0.6;
+
+    /// ADR-143 static-anchor classification thresholds passed to
+    /// `RfSlam::static_anchors`: the wall/ceiling stationarity ceiling and the
+    /// mobile-reflector floor (anchors more mobile than this are dropped, not
+    /// persisted). (== prior inline `static_anchors(0.05, 1.0)`.)
+    pub const ANCHOR_WALL_CEILING: f64 = 0.05;
+    /// Mobility floor above which a reflector is treated as mobile (skipped).
+    pub const ANCHOR_MOBILE_FLOOR: f64 = 1.0;
 
     /// Override the `SemanticState` retention cap (minimum 1).
     pub fn set_semantic_retention(&mut self, max_states: usize) {
@@ -331,7 +360,9 @@ impl StreamingEngine {
             self.slam.observe(obs);
         }
         let mut written = Vec::new();
-        for (pos, class) in self.slam.static_anchors(0.05, 1.0) {
+        for (pos, class) in
+            self.slam.static_anchors(Self::ANCHOR_WALL_CEILING, Self::ANCHOR_MOBILE_FLOOR)
+        {
             let kind = match class {
                 wifi_densepose_signal::ruvsense::ReflectorClass::Wall => AnchorKind::Reflector,
                 wifi_densepose_signal::ruvsense::ReflectorClass::Furniture => AnchorKind::Furniture,
@@ -1139,6 +1170,105 @@ mod tests {
             .unwrap();
         // StrictNoIdentity base = Restricted, even with no contradiction.
         assert_eq!(out.effective_class, PrivacyClass::Restricted);
+    }
+
+    /// De-magic pin (review finding): the named engine constants must keep
+    /// their prior inline values exactly, so the de-magic is a pure rename with
+    /// no behavior change.
+    #[test]
+    fn engine_constants_match_prior_values() {
+        assert_eq!(StreamingEngine::DEFAULT_COHERENCE_ACCEPT, 0.85);
+        assert_eq!(StreamingEngine::SLAM_ASSOC_RADIUS_M, 0.5);
+        assert_eq!(StreamingEngine::SLAM_MIN_SIGHTINGS, 5);
+        assert_eq!(StreamingEngine::SLAM_MIN_COHERENCE, 0.6);
+        assert_eq!(StreamingEngine::ANCHOR_WALL_CEILING, 0.05);
+        assert_eq!(StreamingEngine::ANCHOR_MOBILE_FLOOR, 1.0);
+    }
+
+    /// Privacy monotonicity (the crux): across EVERY base mode, a forced
+    /// contradiction may only ever make the emitted class *more* restrictive
+    /// (higher byte) and never less. Demotion is single-step and clamps at
+    /// Restricted; a clean cycle emits exactly the base class. This is the
+    /// information-only-removed invariant of ADR-141/120 stated as a property
+    /// over the whole mode set.
+    #[test]
+    fn forced_contradiction_never_relaxes_class() {
+        let cal_mismatch = [Some(CalibrationId(1)), Some(CalibrationId(2))]; // disagree → contradiction
+        let cal_match = [Some(CalibrationId(5)), Some(CalibrationId(5))];
+        let frames = [node_frame(0, 1000, 56), node_frame(1, 1001, 56)];
+        for mode in [
+            PrivacyMode::RawResearch,
+            PrivacyMode::PrivateHome,
+            PrivacyMode::EnterpriseAnonymous,
+            PrivacyMode::CareWithConsent,
+            PrivacyMode::StrictNoIdentity,
+        ] {
+            let base_class = mode.target_class();
+
+            // Clean cycle: emits exactly the base class (no relaxation upward).
+            let mut clean = StreamingEngine::new(mode, 1, GeoRegistration::default());
+            let room_c = clean.add_room("r", "R");
+            let oc = clean
+                .process_cycle_calibrated(&frames, &cal_match, room_c, 1)
+                .unwrap();
+            assert_eq!(oc.effective_class, base_class, "clean cycle == base class");
+            assert!(!oc.demoted);
+
+            // Forced contradiction: class byte only ever increases (more
+            // restrictive), never decreases below the base.
+            let mut dirty = StreamingEngine::new(mode, 1, GeoRegistration::default());
+            let room_d = dirty.add_room("r", "R");
+            let od = dirty
+                .process_cycle_calibrated(&frames, &cal_mismatch, room_d, 1)
+                .unwrap();
+            assert!(od.demoted, "calibration mismatch must demote in {mode:?}");
+            assert!(
+                od.effective_class.as_u8() >= base_class.as_u8(),
+                "demotion must never relax: {mode:?} base={:?} got={:?}",
+                base_class,
+                od.effective_class
+            );
+            // And it must be strictly more restrictive unless already clamped
+            // at the most-restrictive class.
+            if base_class != PrivacyClass::Restricted {
+                assert!(
+                    od.effective_class.as_u8() > base_class.as_u8(),
+                    "unclamped demotion must increase restriction in {mode:?}"
+                );
+            } else {
+                assert_eq!(od.effective_class, PrivacyClass::Restricted);
+            }
+        }
+    }
+
+    /// Fail-closed boundary: an empty cycle (zero frames) must NOT emit a
+    /// trusted output at all — fusion rejects it and the engine surfaces a
+    /// hard error. There is no degenerate output that could carry a stale or
+    /// over-permissive class.
+    #[test]
+    fn empty_cycle_fails_closed() {
+        let (mut e, room) = engine();
+        let err = e.process_cycle(&[], CalibrationId(1), room, 1);
+        assert!(matches!(err, Err(EngineError::Fusion(_))), "empty cycle must error, got {err:?}");
+        // No SemanticState was appended (room + sensor only).
+        assert_eq!(e.world().node_count(), 2);
+        assert_eq!(e.cycle_count(), 0, "a failed cycle must not advance the counter");
+    }
+
+    /// Single-node boundary characterization: a one-node cycle fuses (no
+    /// multistatic cross-check is possible), reports no mesh (n<2), and emits a
+    /// well-formed witness at the base class. Documents that single-node sensing
+    /// is a valid, non-demoting mode — not a silent bypass.
+    #[test]
+    fn single_node_cycle_is_well_formed() {
+        let (mut e, room) = engine();
+        let out = e
+            .process_cycle(&[node_frame(0, 1000, 56)], CalibrationId(1), room, 1)
+            .unwrap();
+        assert!(out.mesh.is_none(), "one node has no mesh cut");
+        assert!(out.directional.is_none(), "no geometry registered");
+        assert_eq!(out.effective_class, PrivacyClass::Anonymous); // PrivateHome base
+        assert_ne!(out.witness, [0u8; 32], "witness still emitted");
     }
 
     /// Witness domain-separation (review finding): the witness must change
