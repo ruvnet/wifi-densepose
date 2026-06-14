@@ -70,6 +70,32 @@ impl ExecutionContext {
     }
 }
 
+/// Upper bound for a `delay` / `wait_for_trigger` timeout, in seconds
+/// (~100 years). Caps absurd values so `Duration::from_secs_f64` cannot
+/// overflow-panic on e.g. `seconds: 1e308`, while still allowing any
+/// realistic automation delay (HC-SEC-02).
+const MAX_DELAY_SECS: f64 = 3.15e9;
+
+/// Convert a user-supplied seconds value into a `Duration` without
+/// panicking (HC-SEC-02).
+///
+/// `Duration::from_secs_f64` **panics** on negative, NaN, infinite, or
+/// overflowing inputs. Those values are all reachable from a crafted
+/// automation YAML (`delay: {seconds: -1}`, `.nan`, `.inf`, `1e308`), so a
+/// single hostile config would crash the running automation task. We
+/// instead saturate to a safe range — matching Home Assistant's lenient
+/// treatment of a non-positive delay as "no delay":
+///
+/// - non-finite (NaN / ±inf) → `0`
+/// - negative → `0`
+/// - above [`MAX_DELAY_SECS`] → clamped to the cap
+fn safe_duration_from_secs(seconds: f64) -> Duration {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return Duration::ZERO;
+    }
+    Duration::from_secs_f64(seconds.min(MAX_DELAY_SECS))
+}
+
 /// Action configuration. Deserialized from YAML `action:` blocks.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
@@ -154,7 +180,10 @@ impl Action {
                     Ok(result)
                 }
                 Action::Delay { seconds } => {
-                    let dur = Duration::from_secs_f64(*seconds);
+                    // `safe_duration_from_secs` guards against negative /
+                    // NaN / infinite / overflowing values that would
+                    // otherwise panic `Duration::from_secs_f64` (HC-SEC-02).
+                    let dur = safe_duration_from_secs(*seconds);
                     sleep(dur).await;
                     Ok(serde_json::Value::Null)
                 }
@@ -172,7 +201,8 @@ impl Action {
                     // P1 stub — just sleeps for the timeout duration if specified.
                     // Full trigger subscription lands in P2.
                     if let Some(secs) = timeout_seconds {
-                        sleep(Duration::from_secs_f64(*secs)).await;
+                        // Same non-panicking guard as `Delay` (HC-SEC-02).
+                        sleep(safe_duration_from_secs(*secs)).await;
                     }
                     Ok(serde_json::Value::Null)
                 }
@@ -241,6 +271,68 @@ mod tests {
         let action = Action::Delay { seconds: 0.001 };
         let result = action.execute(&mut exec_ctx).await.unwrap();
         assert!(result.is_null());
+    }
+
+    // ── HC-SEC-02: a crafted delay must not panic the run task ─────────
+    //
+    // `Duration::from_secs_f64` panics on negative / NaN / infinite /
+    // overflowing inputs, all reachable from a YAML `delay:` value. On the
+    // pre-fix code each of these aborts the spawned automation task with a
+    // panic; the guard saturates to a safe Duration instead. These tests
+    // fail on old (panic = test failure).
+    #[tokio::test]
+    async fn delay_negative_seconds_does_not_panic() {
+        let hc = HomeCore::new();
+        let mut ctx = ExecutionContext::new(hc, "auto");
+        let result = Action::Delay { seconds: -1.0 }.execute(&mut ctx).await;
+        assert!(result.is_ok(), "negative delay must be treated as 0, not panic");
+    }
+
+    #[tokio::test]
+    async fn delay_nan_seconds_does_not_panic() {
+        let hc = HomeCore::new();
+        let mut ctx = ExecutionContext::new(hc, "auto");
+        let result = Action::Delay { seconds: f64::NAN }.execute(&mut ctx).await;
+        assert!(result.is_ok(), "NaN delay must be treated as 0, not panic");
+    }
+
+    #[tokio::test]
+    async fn delay_infinite_seconds_does_not_panic() {
+        let hc = HomeCore::new();
+        let mut ctx = ExecutionContext::new(hc, "auto");
+        let result = Action::Delay { seconds: f64::INFINITY }.execute(&mut ctx).await;
+        assert!(result.is_ok(), "infinite delay must saturate to 0, not panic");
+    }
+
+    // Note: the overflow case (1e300) is covered by the synchronous
+    // `safe_duration_saturates_hostile_values` unit test below — executing
+    // `Action::Delay { seconds: 1e300 }` would genuinely sleep for the
+    // clamped (~100-year) duration, so we assert the conversion directly
+    // rather than through `execute`.
+
+    #[tokio::test]
+    async fn wait_for_trigger_negative_timeout_does_not_panic() {
+        let hc = HomeCore::new();
+        let mut ctx = ExecutionContext::new(hc, "auto");
+        let result = Action::WaitForTrigger { timeout_seconds: Some(-5.0) }
+            .execute(&mut ctx)
+            .await;
+        assert!(result.is_ok(), "negative wait timeout must not panic");
+    }
+
+    #[test]
+    fn safe_duration_saturates_hostile_values() {
+        assert_eq!(safe_duration_from_secs(-1.0), Duration::ZERO);
+        assert_eq!(safe_duration_from_secs(f64::NAN), Duration::ZERO);
+        assert_eq!(safe_duration_from_secs(f64::INFINITY), Duration::ZERO);
+        assert_eq!(safe_duration_from_secs(f64::NEG_INFINITY), Duration::ZERO);
+        // legitimate value preserved
+        assert_eq!(safe_duration_from_secs(2.5), Duration::from_secs_f64(2.5));
+        // huge value clamped to the cap, not overflow-panicked
+        assert_eq!(
+            safe_duration_from_secs(1e300),
+            Duration::from_secs_f64(MAX_DELAY_SECS)
+        );
     }
 
     #[tokio::test]
