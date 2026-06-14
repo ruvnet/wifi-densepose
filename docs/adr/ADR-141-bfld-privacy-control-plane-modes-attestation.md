@@ -599,3 +599,33 @@ Per ADR-028/ADR-010, three rows are added to the witness log:
 **Integration glue -- not yet on the live path:** wiring the registry into `PrivacyGate` class transitions, the MQTT discovery payload, and a read-only Home Assistant diagnostic entity exposing the active mode + proof hash.
 
 **Trust contribution:** the *policy spine* -- privacy posture is a tamper-evident, auditable chain rather than a checkbox; an operator's mode choice actively governs whether identity data may even exist.
+
+---
+
+## Privacy Monotonicity Review (2026-06-14) — confirmed clean
+
+A beyond-SOTA security review of the governed-trust cycle
+(`wifi-densepose-engine::StreamingEngine::process_cycle_calibrated`) examined
+the privacy-demotion path this ADR governs. **The monotonicity invariant holds:
+demotion only ever makes the emitted class more restrictive, never less.**
+
+Verification (no behaviour change, the result is a clean bill with evidence):
+
+- Each cycle computes `effective_class` fresh from the active mode's
+  `target_class()` (the floor) and applies at most a **single-step** demotion
+  (`demote_one`, clamped at `Restricted`). There is no cross-cycle state that
+  could let a permissive class overwrite a restrictive one.
+- A forced contradiction (calibration mismatch / array-geometry insufficiency /
+  mesh partition risk, ADR-032) raises the class byte; a clean cycle emits
+  exactly the base class.
+- Pinned by `forced_contradiction_never_relaxes_class`, a property test over
+  **all five** `PrivacyMode`s asserting `effective_class.as_u8() >=
+  base_class.as_u8()` (strictly greater unless already clamped at `Restricted`)
+  under a forced contradiction, and `== base` on a clean cycle.
+
+Fail-closed boundaries were also pinned: an empty cycle errors (no degenerate
+over-permissive output, `empty_cycle_fails_closed`) and the single-node boundary
+is characterized as a valid non-demoting mode (`single_node_cycle_is_well_formed`).
+
+The related witness domain-separation fix from the same review is recorded in
+ADR-137 (the witness folds `effective_class`, so the demotion is auditable).
