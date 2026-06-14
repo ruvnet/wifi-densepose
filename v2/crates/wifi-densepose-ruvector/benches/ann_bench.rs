@@ -16,12 +16,17 @@
 //! so the bench and the report can never measure different graphs.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use wifi_densepose_ruvector::ann_measure::{build_indices, queries, AnnBenchParams};
+use wifi_densepose_ruvector::ann_measure::{
+    build_indices, build_quant_bits, queries, AnnBenchParams,
+};
 
 fn bench_ann(c: &mut Criterion) {
     // Modest N so the bench builds quickly; the report covers the larger N.
     let p = AnnBenchParams::default_fixture(10_000);
-    let (float_idx, quant_idx, _v) = build_indices(p);
+    let (float_idx, quant_idx, vectors) = build_indices(p);
+    // Multi-bit quant variants over the SAME graph/fixture (ADR-261 §11).
+    let quant_2bit = build_quant_bits(p, &vectors, 2);
+    let quant_4bit = build_quant_bits(p, &vectors, 4);
     let qs = queries(p);
     let k = p.k;
 
@@ -52,10 +57,10 @@ fn bench_ann(c: &mut Criterion) {
         });
     }
 
-    // Quantized HNSW at matched beam widths + rerank.
+    // Quantized HNSW (1-bit) at matched beam widths + rerank.
     for &ef in &[64usize, 128] {
         let rr = k * 5;
-        group.bench_function(format!("quant_hnsw_ef{ef}_rr{rr}"), |b| {
+        group.bench_function(format!("quant_hnsw_1bit_ef{ef}_rr{rr}"), |b| {
             b.iter(|| {
                 let mut sink = 0u64;
                 for q in &qs {
@@ -65,6 +70,25 @@ fn bench_ann(c: &mut Criterion) {
                 black_box(sink)
             })
         });
+    }
+
+    // Multi-bit quant HNSW (ADR-261 §11): 2-bit and 4-bit traversal codes at a
+    // mid beam width, so the criterion medians show the per-bit QPS cost the
+    // scaling study reports against recall.
+    for (label, idx) in [("2bit", &quant_2bit), ("4bit", &quant_4bit)] {
+        for &ef in &[64usize, 128] {
+            let rr = k * 5;
+            group.bench_function(format!("quant_hnsw_{label}_ef{ef}_rr{rr}"), |b| {
+                b.iter(|| {
+                    let mut sink = 0u64;
+                    for q in &qs {
+                        sink = sink
+                            .wrapping_add(idx.search_quantized(black_box(q), k, ef, rr).len() as u64);
+                    }
+                    black_box(sink)
+                })
+            });
+        }
     }
 
     group.finish();
