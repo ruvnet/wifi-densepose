@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Proposed |
+| **Status** | Proposed — P1 implemented |
 | **Date** | 2026-06-14 |
 | **Deciders** | ruv |
 | **Codebase target** | New thin bridge crate `wifi-densepose-rufield` (v2 workspace member); taps `wifi-densepose-sensing-server` emit path + `wifi-densepose-engine` `TrustedOutput`; depends on `vendor/rufield/crates/rufield-*` via path (the `vendor/rvcsi` pattern) |
@@ -18,6 +18,19 @@ This project has been publicly accused of "AI slop." This ADR answers with **evi
 - **No accuracy is claimed.** RuField v0.1 is **SYNTHETIC** end-to-end by its own admission (ADR-260 "Honest statement", line 386–390: *"Every metric here is simulator-based. No ESP32 CSI, mmWave, or thermal capture was used."*). RuView's only real-CSI rufield path today would be **replay of recorded `.csi.jsonl`, unlabeled** — `rufield-adapters::CsiReplayAdapter`'s own module doc (`vendor/rufield/crates/rufield-adapters/src/csi_replay.rs:19-31`) states it is *"real signal, replay from file not live hardware, unlabeled ⇒ proxy not validated accuracy."* This ADR therefore proposes **plumbing**, and grades its own claims as "ARCHITECTURE" (a design decision, testable by a round-trip/compile gate) vs "ACCURACY" (which it explicitly does not assert).
 - The privacy/provenance section reports an **honest conflict**: RuView has **three** witness mechanisms across two hash algorithms, and **two** privacy enums, none of which map 1:1 onto RuField's P0–P5. We map them and recommend the cleanest reconciliation rather than asserting they already align.
 - Each phase below ships an **independently testable gate** (a round-trip test, a privacy-monotonicity test, a signature-verify test) so the integration is provable, not aspirational.
+
+---
+
+## 0.1 Implementation status
+
+**P1 (§4) is implemented** as the `wifi-densepose-rufield` bridge crate (`v2/crates/wifi-densepose-rufield/`, a new v2 workspace member; path-deps the `vendor/rufield` submodule per §5.4):
+
+- **Input** — `SensingSnapshot` (owned primitives mirroring `SensingUpdate` features/classification/signal_field joined with the `TrustedOutput` `trust_class`/`demoted`/`identity_bound`); the bridge does **not** depend on `wifi-densepose-sensing-server` (anti-corruption layer).
+- **Conversion** — `snapshot_to_field_event(&snap, &Signer)` emits a signed `FieldEvent` (`Modality::WifiCsi`, axis `[Frequency]`, real `timestamp_ns`); position derived from the signal-field peak when present (never fabricated); real sha256 `ProvenanceRef` + ed25519 signature, `synthetic = false`.
+- **Privacy (§3.3 crux)** — `map_privacy()` maps by information content, **fail-closed**: `Raw → P0`, `Derived → P4` (or `P5` if identity-bound — **never P1**), `Anonymous → P2`, `Restricted → P2`; a `demoted` cycle floors egress to ≥ P2.
+- **Gates that pass** (`tests/p1_gates.rs`, 15 tests / 0 failed = 5 unit + 9 integration + 1 doc): round-trip (snapshot → `FieldEvent` → serde → equal); `is_fusable` (verified ed25519 receipt); `RuFieldFusion::ingest` accept + `infer()` runs; **privacy-safety** (`gate_privacy_safety_derived_never_maps_to_low_privacy` — `Derived → P4/P5`, never P1; full §3.3 table; fail-closed demotion); determinism (same snapshot + same signer seed → byte-identical event).
+
+**Deferred:** the §3.3 *provenance carrier* recommendation (reuse the `cog-ha-matter` SHA-256+Ed25519 chain + embed the BLAKE3 engine witness) is **not** in P1 — P1 takes a dedicated `Signer` param (the §8 open question 1 key-ownership decision is unresolved). P2's BLAKE3-embed, P3 (live `/ws/field` surfacing — the bridge is **not** wired into the running server yet), and P4 (multi-modality) remain future work. **No accuracy is claimed** (§0 / §6) — P1 is tested plumbing + a safe privacy mapping.
 
 ---
 
