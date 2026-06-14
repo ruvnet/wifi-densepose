@@ -187,13 +187,41 @@ The gap review surfaced ~60 findings; this milestone scoped to the provable inte
 - **GraphPose-Fi graph decoder** — build the §5 top candidate (ACCEPTED-future, not built).
 - **ONNX INT4** quantization; **CSI-JEPA vs MAE** A/B; the rest of the §5 roadmap.
 - **ONNX read-lock concurrency win** — blocked on an `ort` release exposing `&self` `Session::run` (§4.2); harness already committed.
-- **native-conv naive-loop** perf rewrite (§4).
-- **`rf_encoder.rs` `assert_eq!`-on-checkpoint** and any other **tch-gated** panic-on-input sites — require a libtorch host to compile/verify (`model.rs` `amp_fc1` unbounded alloc is *indirectly* guarded by the new `config.validate()` upper bounds, but a direct guard + test is deferred).
+- ~~**native-conv naive-loop** perf rewrite (§4).~~ — **RESOLVED in Milestone-2 (see §8.2): bench-first → MEASURED-INCONCLUSIVE, no perf change shipped.**
+- ~~**`rf_encoder.rs` `assert_eq!`-on-checkpoint**~~ — **RESOLVED in Milestone-2 (see §8.2): a pure-Rust fallible `LinearHead::try_new` guard was added.** Any genuine **tch-gated** panic-on-input sites remain deferred — they require a libtorch host to compile/verify (`model.rs` `amp_fc1` unbounded alloc is *indirectly* guarded by the new `config.validate()` upper bounds, but a direct guard + test is deferred).
 - ~~**`sensing-server/training_api.rs` PCK**~~ — **RESOLVED in Milestone-1b (see §8.1, Goal C).** Relabelled (not unified) — and the audit found the *real* live divergence is in `trainer.rs`, not the orphaned `training_api.rs`.
 - ~~**`test_metrics.rs` reference kernels**~~ — **RESOLVED in Milestone-1b (see §8.1, Goal B).** Canonical core hoisted to an un-gated module; the integration test now validates the production functions against hand-computed fixtures + a differential cross-check.
 - **`metrics.rs` `compute_pck_v2`/`compute_oks_v2`/`MetricsAccumulatorV2`/`evaluate_dataset_v2`/`hungarian_assignment_v2`** — confirmed to have **zero external callers** (only `evaluate_dataset_v2`→`MetricsAccumulatorV2` internally). They are already `#[deprecated]` and route through canonical, so they are not a *divergent-definition* risk, only dead weight. Left in place this pass (public API in a tch-gated module; deleting needs a deprecation-cycle + tch host to verify) — flagged here for a future cleanup, NOT deleted silently.
 - **`sensing-server/trainer.rs` `pck_at_threshold` (raw) + `oks_map(area=1.0)` and the `training_bench.rs` raw kernel** — relabelled in Milestone-1b (§8.1); true unification onto `pck_canonical`/`oks_canonical` (needs a torso scale + the train crate as a sensing-server dep) remains deferred.
-- The remaining ~40 lower-severity review findings (style, micro-opt, doc) from the NN/training gap review.
+- ~~The remaining ~40 lower-severity review findings (style, micro-opt, doc).~~ — **RESOLVED in Milestone-2 (§8.2): the host-verifiable subset is cleared.** The "~40" was an estimate; the actual host-verifiable (non-tch) train/nn surface is smaller. Enumerated resolution below.
+
+### 8.2 Milestone-2 — host-verifiable §8 P3 backlog clearance — RESOLVED
+
+Mirroring the ADR-154 M3 cleanup discipline, M2 closed the **host-verifiable (non-tch) subset** of the §8 backlog in `wifi-densepose-train` (+ the pure-Rust `rf_encoder.rs`/`densepose.rs` in `wifi-densepose-nn` that the §3/§4 items named). Everything behind `#[cfg(feature = "tch-backend")]` (`metrics.rs`, `model.rs`, `losses.rs`, `proof.rs`, `trainer.rs`, `wiflow_std/{layers,model}.rs`) is **out of host-verifiable scope** — it cannot be compiled/verified without libtorch and stays genuinely deferred (not dropped).
+
+**PROOF discipline held:** every de-magicked constant is pinned `== prior literal` by a `*_consts_unchanged_from_literals` test; every boundary test characterizes CURRENT behaviour; no operating-value or behaviour change; the Python proof stays bit-exact at `f8e76f21…46f7a` (the metrics path is off the signal proof path — asserted, not assumed). A smaller-but-true count was reported rather than inventing 40 fixes.
+
+**Enumerated finding → resolution (real counts):**
+
+| # | Finding (location) | Action | Pin/characterization test |
+|---|---|---|---|
+| 1 | `metrics_core.rs` — `0.5` vis / `1e-6` extent / `0.07` OKS-fallback sigma | de-magic → `VISIBILITY_THRESHOLD` / `MIN_REFERENCE_EXTENT` / `OKS_FALLBACK_SIGMA` | `metrics_core_consts_unchanged_from_literals`; `visibility_threshold_boundary_is_inclusive`; `degenerate_extent_below_floor_is_unscoreable` |
+| 2 | `ruview_metrics.rs` — `17` / `0.5` / `0.2` / `1e-3` / `1e-6` | de-magic → `NUM_KEYPOINTS` / `VISIBILITY_THRESHOLD` / `PCK_THRESHOLD` / `MIN_BBOX_DIAG` / `MIN_DURATION_MINUTES` | `ruview_metrics_consts_unchanged_from_literals`; `tracking_zero_duration_does_not_divide_by_zero`; `oks_short_array_is_bounded_at_keypoint_count` |
+| 3 | `subcarrier.rs` — sparse-interp `0.15`/`1e-4`/`0.1`/`1e-8`/`1e-5`/`500` | de-magic → 6 `SPARSE_*` consts | `sparse_interp_consts_unchanged_from_literals`; `compute_interp_weights_single_target_is_index_zero`; `sparse_interp_single_target_is_finite` |
+| 4 | `eval.rs` — `1e-10` division guard (×3) | de-magic → `MIN_POSITIVE_MPJPE` | `eval_min_positive_mpjpe_unchanged_from_literal`; `domain_gap_infinite_when_in_domain_perfect_but_cross_nonzero`; `domain_gap_unity_when_everything_perfect` |
+| 5 | `domain.rs` — `1e-5` LayerNorm eps | de-magic → `LAYER_NORM_EPS` | `layer_norm_eps_unchanged_from_literal` (n=0/zero-var boundary already covered) |
+| 6 | `virtual_aug.rs` — `1e-10` Box-Muller / room-scale guards | de-magic → `BOX_MULLER_U1_FLOOR` / `MIN_ROOM_SCALE` | `virtual_aug_guard_consts_unchanged_from_literals`; `augment_frame_zero_room_scale_passes_amplitude_finite` |
+| 7 | `rf_encoder.rs` — `20.0` softplus overflow threshold | de-magic → `SOFTPLUS_LINEAR_THRESHOLD` | `softplus_threshold_unchanged_from_literal` |
+| 8 | `rf_encoder.rs` — panic-only `LinearHead::new` for untrusted weights (§3) | add pure-Rust fallible `try_new` → typed `RfHeadError` (additive; `new` unchanged) | `try_new_accepts_valid_and_rejects_each_bad_shape` |
+| 9 | `densepose.rs::apply_conv_layer` naive-loop (§4) | **bench-first → MEASURED-INCONCLUSIVE**, no perf change shipped; committed bench + characterization anchor | `native_conv_matches_reference` + `benches/native_conv_bench.rs` |
+| 10 | `rapid_adapt.rs` module-doc "O(ε)" inconsistency | doc-only fix → "O(ε²)" (central differences) | n/a (doc) |
+| 11 | `geometry.rs` `DeepSets::encode` missing `# Panics` | doc-only fix (documents existing `assert!`) | n/a (doc) |
+
+**Tally:** **7 de-magicked (const + pin test)**, **9 new boundary/characterization tests**, **1 added input guard (`try_new`) + test**, **2 doc-only fixes**, **1 perf item bench-first MEASURED-INCONCLUSIVE (not shipped, deferred)**. New tests: train `--no-default-features` **303** (was 288, +15); nn `--no-default-features` lib **38** (was 35, +3).
+
+**Skipped honestly (flagged-but-not-real):** `ablation.rs` (NaN sort + boundary already fixed/tested in M1 — clean), `signal_features.rs` (consts already named, n=0 boundary already tested), `mae.rs` (no bare guard literals found), `metrics_core` already had thorough zero-visible/hip-normalizer coverage from M1. No churn was manufactured to hit a count.
+
+**Genuinely data-gated / tch-gated — remaining backlog (blocked, not dropped):** GraphPose-Fi graph decoder, ONNX INT4, CSI-JEPA vs MAE A/B (all **data/model-gated** — need a training run + datasets); ONNX read-lock concurrency win (**upstream-gated** on `ort`); the tch-gated panic-on-input sites in `proof.rs`/`trainer.rs`/`model.rs` and the `metrics.rs` `*_v2` dead-code deletion (**tch-gated** — need a libtorch host to compile/verify). **The non-tch-verifiable subset of §8 is now cleared.**
 
 ### 8.1 Milestone-1b — metric-definition unification (the §8 metric subset) — RESOLVED
 
