@@ -265,3 +265,74 @@ Result at time of writing (all 0 failed):
   perform (B5).
 - Files kept under the 500-line guideline (`engine.rs` 462; behavioral tests
   moved to `tests/engine_behaviors.rs`).
+
+## Addendum — `homecore-api` follow-up security review (beyond-SOTA pass)
+
+A later network-facing review of `homecore-api` (the remote REST + WS attack
+surface) — independent of the ADR-154–159 sweep — found and fixed two real
+issues the original M7 pass (which focused on the WS auth bypass HC-WS-01, the
+reply-theater HC-WS-02, and the bin token provisioning HC-WS-08) did not catch.
+Both are LOW severity and reported at true severity.
+
+### HC-API-AUTH-01 — `GET /api/` was unauthenticated (FIXED)
+
+`rest::api_root` took no headers and unconditionally returned
+`200 {"message":"API running."}`, while every sibling route gates on
+`BearerAuth::from_headers`. HA's `APIStatusView` inherits `requires_auth = True`,
+so `/api/` must return **401** for a missing/wrong bearer. HA clients use the
+status route as a token-validation probe; a 200 told a bad-token client its
+token was valid and let an unauthenticated party confirm a live endpoint.
+LOW severity (the body is a static string; no entity/state data leaks).
+
+**Fix:** `api_root(headers, State)` now validates the bearer like `get_config`.
+**Pinned by** (fail-on-old, `tests/server_bin_auth.rs`):
+`api_root_rejects_missing_bearer`, `api_root_rejects_wrong_bearer` (both 200→401),
+guarded by `api_root_accepts_correct_bearer` (still 200 with a valid token).
+
+### HC-WS-LAG-01 — `subscribe_events` killed the stream on a broadcast lag (FIXED)
+
+The per-subscription task matched `Err(_) => break` on both broadcast
+`recv()` arms. `RecvError::Lagged(n)` (a slow consumer falling
+>`EVENT_CHANNEL_CAPACITY` = 4,096 events behind) is **recoverable** — the bus
+doc says "Lagged receivers must re-sync" and HA keeps the subscription alive
+across a lag. The old code treated the first lag as fatal, so after an event
+burst the client's stream went permanently silent with no error frame — a
+self-inflicted event-delivery DoS under load.
+
+**Fix:** `Lagged(_) => continue` (skip the dropped window, re-sync),
+`Closed => break`, on both the system and domain arms of the `select!`.
+**Pinned by** `subscription_survives_broadcast_lag` (`tests/ws_handshake.rs`):
+subscribes to a filtered event type, floods 6,000 unrelated events past the
+4,096 capacity to force a `Lagged`, then asserts a subsequent subscribed event
+is still delivered (old code: 5s-timeout panic).
+
+### Dimensions confirmed clean (with evidence)
+
+- **AuthN/AuthZ** — all 7 other REST handlers gate on `BearerAuth::from_headers`
+  → `LongLivedTokenStore::is_valid` before any work; the WS handshake validates
+  the `auth` token against the same store before the command loop, and
+  privileged commands are unreachable pre-`auth_ok`. Token compare is
+  `HashSet::contains` (content-independent timing — not the byte-`==` oracle of
+  ADR-157 §B4), so no timing-oracle finding. No route skips the gate; no
+  result-ignored check; no default/empty token accepted.
+- **Path traversal** — no route maps user input to a filesystem path (state is an
+  in-memory `DashMap`); `:entity_id` passes through `EntityId::parse`, a strict
+  `[a-z0-9_]+\.[a-z0-9_]+` ASCII allowlist that rejects `..`, `/`, `\`, and
+  absolute paths. No traversal surface.
+- **Injection** — no SQL, no shell/subprocess, no `format!`-into-response;
+  service/state bodies are typed `serde_json::Value` handed to the in-process
+  registry (HA-equivalent).
+- **Info-leak** — `ApiError` maps to fixed status + a typed `{message}`;
+  `ServiceError::HandlerFailed(String)` is integration-controlled (HA surfaces
+  the handler error too), never framework internals/paths/stack-traces — no
+  ADR-080-class leak.
+- **CORS** — explicit allowlist with `allow_credentials(false)` (HC-05),
+  not `permissive()`.
+- **De-magic** — no bare security-relevant literals in the crate worth
+  extracting (`EVENT_CHANNEL_CAPACITY` is already named in `homecore`; CORS
+  dev-default ports are documented).
+
+**Tests:** `homecore-api --no-default-features` **25 → 29** (+2 api-root auth,
++1 api-root accept-guard, +1 WS lag-survival), 0 failed. Workspace green.
+Python deterministic proof unchanged (homecore-api is off the signal proof
+path).
