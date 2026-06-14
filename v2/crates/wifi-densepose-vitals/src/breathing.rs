@@ -174,6 +174,20 @@ impl BreathingExtractor {
         let output =
             (1.0 - r) * (input - state.x2) + 2.0 * r * cos_w0 * state.y1 - r * r * state.y2;
 
+        // Self-healing non-finite guard (ADR-158 §A1). A single non-finite
+        // sample — a NaN/inf residual from a corrupt CSI frame, or a transient
+        // overflow — would otherwise be stored into `y1`/`y2` and poison the
+        // resonator recurrence *permanently*: every subsequent output stays
+        // NaN, the `extract()` finite-check drops it, and the history buffer
+        // never refills, so breathing extraction is dead until `reset()`.
+        // Resetting the filter state here lets the resonator recover on the next
+        // clean frame; the 0.0 we return for this frame is still dropped by the
+        // caller's `is_finite()` check, so no spurious sample enters history.
+        if !output.is_finite() {
+            *state = IirState::default();
+            return 0.0;
+        }
+
         state.x2 = state.x1;
         state.x1 = input;
         state.y2 = state.y1;
@@ -394,6 +408,75 @@ mod tests {
         );
         // Must lie within the residual range [0, 2] — a scale-mixed sum would not.
         assert!((0.0..=2.0).contains(&fused), "weighted average must be in-range: {fused}");
+    }
+
+    /// ADR-158 §A1 bug-catching test: a single non-finite residual must NOT
+    /// permanently poison the IIR filter state.
+    ///
+    /// The resonator recurrence stores `y[n]` into the filter state. Before the
+    /// fix, one NaN/inf residual produced a NaN `output`, the `extract()`
+    /// finite-guard dropped that frame from history — but the NaN was already
+    /// latched into `state.y1`/`y2`, so every subsequent output stayed NaN, the
+    /// finite-guard rejected it too, and the history buffer never refilled.
+    /// Breathing extraction was then dead until `reset()`. A control run on the
+    /// same clean signal yields 15 BPM (0.25 Hz); after a leading NaN frame the
+    /// OLD code returned `None` with `history_len() == 0` forever. This test
+    /// asserts recovery (FAILS on the old code, verified by reverting the
+    /// `bandpass_filter` self-heal).
+    #[test]
+    fn nan_frame_does_not_permanently_poison_filter() {
+        let sr = 10.0;
+        let feed_clean = |ext: &mut BreathingExtractor| {
+            let mut last = None;
+            for i in 0..600 {
+                let t = i as f64 / sr;
+                let s = (2.0 * std::f64::consts::PI * 0.25 * t).sin();
+                last = ext.extract(&[s], &[1.0]);
+            }
+            last
+        };
+
+        // Control: clean signal accumulates history and detects ~15 BPM.
+        let mut control = BreathingExtractor::new(1, sr, 60.0);
+        let control_res = feed_clean(&mut control);
+        assert!(control.history_len() > 0);
+        assert!(control_res.is_some(), "control clean run must produce an estimate");
+
+        // A leading NaN frame must not kill the extractor.
+        let mut ext = BreathingExtractor::new(1, sr, 60.0);
+        ext.extract(&[f64::NAN], &[1.0]);
+        let res = feed_clean(&mut ext);
+        assert!(
+            ext.history_len() > 0,
+            "extractor must recover and refill history after a NaN frame (got {})",
+            ext.history_len()
+        );
+        assert!(res.is_some(), "extractor must recover an estimate after a NaN frame");
+    }
+
+    /// ADR-158 §A1: a mid-stream `inf` must not freeze the history buffer.
+    #[test]
+    fn inf_mid_stream_does_not_freeze_history() {
+        let sr = 10.0;
+        let mut ext = BreathingExtractor::new(1, sr, 60.0);
+        let clean = |ext: &mut BreathingExtractor, count: usize| {
+            for i in 0..count {
+                let t = i as f64 / sr;
+                let s = (2.0 * std::f64::consts::PI * 0.25 * t).sin();
+                ext.extract(&[s], &[1.0]);
+            }
+        };
+        clean(&mut ext, 300);
+        let before = ext.history_len();
+        assert!(before > 0);
+        ext.extract(&[f64::INFINITY], &[1.0]); // poison mid-stream
+        clean(&mut ext, 600);
+        assert!(
+            ext.history_len() > before,
+            "history must keep growing after an inf frame (before={}, after={})",
+            before,
+            ext.history_len()
+        );
     }
 
     /// ADR-157 §A3 bug-catching test. Divergence needs the pole magnitude
