@@ -7086,6 +7086,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "rufield-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rufield-fusion"
+version = "0.1.0"
+dependencies = [
+ "rufield-core",
+ "rufield-provenance",
+ "serde",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "rufield-privacy"
+version = "0.1.0"
+dependencies = [
+ "rufield-core",
+]
+
+[[package]]
+name = "rufield-provenance"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "rufield-core",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "rumqttc"
 version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11043,6 +11079,18 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower-http",
+]
+
+[[package]]
+name = "wifi-densepose-rufield"
+version = "0.3.0"
+dependencies = [
+ "rufield-core",
+ "rufield-fusion",
+ "rufield-privacy",
+ "rufield-provenance",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -72,6 +72,11 @@ members = [
     "crates/homecore-assist",      # ADR-133 — HOMECORE voice assistant + ruflo bridge
     "crates/homecore-server",      # iter-9 — HOMECORE integration binary (all 8 crates wired together)
     "crates/ruview-swarm",                         # ADR-148 — drone swarm control system
+    # ADR-262 P1 — anti-corruption bridge converting RuView WiFi-CSI sensing
+    # output into signed RuField FieldEvents. Path-deps the `vendor/rufield`
+    # submodule crates (rufield-core/-provenance/-privacy/-fusion); single
+    # coupling point between RuView and the standalone RuField MFS spec.
+    "crates/wifi-densepose-rufield",
 ]
 # ADR-040: WASM edge crate targets wasm32-unknown-unknown (no_std),
 # excluded from workspace to avoid breaking `cargo test --workspace`.
