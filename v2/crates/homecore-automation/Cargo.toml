@@ -29,8 +29,10 @@ serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1"
 
-# MiniJinja — HA-compatible Jinja2 template engine in pure Rust (ADR-129 §2.1)
-minijinja = { version = "2", features = ["json", "loader"] }
+# MiniJinja — HA-compatible Jinja2 template engine in pure Rust (ADR-129 §2.1).
+# `fuel` bounds instruction count so a malicious `template:` condition cannot
+# spin the engine with a nested-loop / huge-repeat DoS (HC-SEC-01).
+minijinja = { version = "2", features = ["json", "loader", "fuel"] }
 
 # Error handling
 thiserror = "1"
