@@ -75,3 +75,72 @@ async fn from_env_path_enforces_whitelist() {
     assert!(!store.is_valid("not_in_whitelist").await);
     assert!(!store.is_dev_mode().await, "from_env must NOT be dev mode");
 }
+
+// ─── HC-API-AUTH-01: `GET /api/` must be auth-gated like every sibling ───
+//
+// HA's `APIStatusView` inherits `requires_auth = True`, so `/api/` returns
+// 401 for a missing/wrong bearer and 200 only for a valid one. The pre-fix
+// `api_root` took no headers and unconditionally returned 200 — these two
+// tests FAIL on that code.
+
+#[tokio::test]
+async fn api_root_rejects_missing_bearer() {
+    let app = router(provisioned_state("the_real_token").await);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "GET /api/ with NO bearer must be 401 (HC-API-AUTH-01) — HA's \
+         APIStatusView requires_auth=True; a 200 here lets an \
+         unauthenticated party confirm a live endpoint and tells a \
+         token-validation probe a bad token is good"
+    );
+}
+
+#[tokio::test]
+async fn api_root_rejects_wrong_bearer() {
+    let app = router(provisioned_state("the_real_token").await);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/")
+                .header("Authorization", "Bearer the_wrong_token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "GET /api/ with a WRONG bearer must be 401 (HC-API-AUTH-01)"
+    );
+}
+
+#[tokio::test]
+async fn api_root_accepts_correct_bearer() {
+    let app = router(provisioned_state("the_real_token").await);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/")
+                .header("Authorization", "Bearer the_real_token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "GET /api/ with the correct bearer must still return 200 (API running.)"
+    );
+}
