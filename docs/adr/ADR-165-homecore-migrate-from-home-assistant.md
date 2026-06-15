@@ -78,6 +78,23 @@ converts the entity registry; full conversion of the remaining artifacts is defe
 
 - `MigrateError` carries context (`path`, line/field) for I/O, JSON, YAML, missing-field,
   unsupported-schema-version, and entity-id parse failures (`src/lib.rs`).
+- **Secret-leak hardening (security review, 2026-06).** `secrets.yaml` parse failures must
+  NOT use the generic `MigrateError::YamlParse { source }` variant: `serde_yaml`'s message
+  for a typed-tag coercion error (e.g. `port: !!int <value>`) embeds the offending scalar
+  verbatim (`invalid value: string "<the-secret-value>"`), and that error propagates through
+  the `InspectSecrets` CLI path to stderr — leaking a secret value despite the CLI's
+  deliberate `<redacted>` design. `read_secrets` now maps such failures to a dedicated
+  redacting variant `MigrateError::SecretsParse { path, line, column }` that carries only the
+  file path and a coarse location (`serde_yaml::Error::location()`), never the scalar content.
+  Pinned by `secrets::tests::malformed_secrets_error_never_contains_secret_value` (asserts the
+  rendered error **and its full `#[source]` chain** never contain the secret value).
+  **Review dimensions confirmed clean with evidence:** source is never mutated (no
+  `fs::write`/`remove`/`create` anywhere — P1 reads source, writes nothing); paths are
+  user-supplied dirs joined with fixed filenames (no `..`/absolute traversal beyond the
+  user's own privileges); malformed/typed/truncated `.storage` JSON and YAML **error, never
+  panic** (every production `unwrap`/`expect` is test-only); unknown schema `minor_version`
+  hard-errors fail-closed; no SQL/shell/path injection surface (the tool emits diagnostics
+  only, persists nothing in P1).
 
 ### 2.5 Deferred to P2+ (NOT built — honestly labelled)
 
@@ -89,7 +106,9 @@ converts the entity registry; full conversion of the remaining artifacts is defe
 
 ### 2.6 Test evidence (as shipped)
 
-- 19 tests (`cargo test -p homecore-migrate`), per the crate README badge.
+- 21 tests (`cargo test -p homecore-migrate`) — 19 as originally shipped plus 2 added by the
+  2026-06 security review (`secrets::tests::malformed_secrets_error_never_contains_secret_value`,
+  `malformed_secrets_error_reports_location`).
 
 ## 3. Consequences
 
