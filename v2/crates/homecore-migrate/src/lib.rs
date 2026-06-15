@@ -55,6 +55,25 @@ pub enum MigrateError {
         source: serde_yaml::Error,
     },
 
+    /// Parse failure in a SECRET-bearing file (`secrets.yaml`).
+    ///
+    /// Unlike [`MigrateError::YamlParse`], this variant deliberately does NOT
+    /// embed the underlying `serde_yaml::Error` message — that message can quote
+    /// the offending scalar verbatim (e.g. a typed-tag coercion error renders
+    /// `invalid value: string "<the-secret-value>"`), which would leak a secret
+    /// into stderr/logs. We carry only the file path plus a coarse line/column
+    /// so the user can locate the problem without the value being printed.
+    /// (ADR-165 secret-handling rule: a secret value must never appear in output.)
+    #[error(
+        "secrets.yaml parse error in {path} (line {line}, column {column}): \
+         malformed YAML (value content redacted)"
+    )]
+    SecretsParse {
+        path: String,
+        line: usize,
+        column: usize,
+    },
+
     /// Fired when the outer `{version, minor_version}` envelope version is
     /// known but the `minor_version` is not supported by any compiled parser.
     /// Per ADR-165 §6 Q5: hard error on unknown minor_version.
