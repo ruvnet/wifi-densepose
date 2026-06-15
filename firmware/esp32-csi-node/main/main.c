@@ -29,8 +29,10 @@
 #include "wasm_runtime.h"
 #include "wasm_upload.h"
 #include "display_task.h"
+#include "cardputer_adv_audio.h"
 #include "mmwave_sensor.h"
 #include "swarm_bridge.h"
+#include "esp32cam_dual_stream.h"
 #include "rv_radio_ops.h"          /* ADR-081 Layer 1 — Radio Abstraction Layer. */
 #include "adaptive_controller.h"   /* ADR-081 Layer 2 — Adaptive controller. */
 #include "c6_twt.h"                /* ADR-110: TWT (no-op stub on S3) */
@@ -47,7 +49,9 @@
 static const char *TAG = "main";
 
 /* ADR-040: WASM timer handle (calls on_timer at configurable interval). */
+#if defined(CONFIG_WASM_ENABLE)
 static esp_timer_handle_t s_wasm_timer;
+#endif /* CONFIG_WASM_ENABLE */
 
 /* Runtime configuration (loaded from NVS or Kconfig defaults).
  * Global so other modules (wasm_upload.c) can access pubkey, etc. */
@@ -173,14 +177,12 @@ void app_main(void)
     ESP_LOGI(TAG, "%s CSI Node (ADR-018 / ADR-110) — v%s — Node ID: %d",
              target_name, app_desc->version, g_nvs_config.node_id);
 
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
     /* Turn off onboard WS2812 LED.
-     * S3 dev boards put the LED on GPIO 38; C6 dev boards on GPIO 8.
-     * On C6, GPIO 38 doesn't exist (only 0-30) — gate the init by target. */
-#if defined(CONFIG_IDF_TARGET_ESP32C6)
-    const int led_gpio = 8;
-#else
+     * S3 dev boards put the LED on GPIO 38.
+     * ESP32-PICO must not touch GPIO38/RMT here. */
     const int led_gpio = 38;
-#endif
+
     led_strip_handle_t led_strip;
     led_strip_config_t strip_config = {
         .strip_gpio_num = led_gpio,
@@ -196,6 +198,26 @@ void app_main(void)
     if (led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip) == ESP_OK) {
         led_strip_clear(led_strip);
     }
+#endif /* CONFIG_IDF_TARGET_ESP32S3 */
+
+    /*
+     * Start the display heartbeat before network bring-up. wifi_init_sta()
+     * can wait for a connection for a long time; the LCD should still boot,
+     * animate, and show a heartbeat while WiFi/UDP/edge processing come online.
+     */
+#ifdef CONFIG_DISPLAY_ENABLE
+    esp_err_t disp_ret = display_task_start();
+    if (disp_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Display init returned: %s", esp_err_to_name(disp_ret));
+    }
+#endif
+
+#if defined(CONFIG_CARDPUTER_ADV_AUDIO_ENABLE)
+    esp_err_t audio_ret = cardputer_adv_audio_startup_probe();
+    if (audio_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Cardputer-Adv audio proof returned: %s", esp_err_to_name(audio_ret));
+    }
+#endif
 
     /* ADR-110 P4: 802.15.4 mesh time-sync (C6 only).
      * Initialized BEFORE WiFi so it's available even when WiFi STA can't
@@ -272,11 +294,17 @@ void app_main(void)
      * both S3 and C6 — replaces the broken 802.15.4 RX path in c6_timesync.
      * Skip on QEMU mock (no real WiFi → no ESP-NOW). */
 #ifndef CONFIG_CSI_MOCK_SKIP_WIFI_CONNECT
+#if defined(CONFIG_IDF_TARGET_ESP32)
+    /* ESP-NOW sync disabled on classic ESP32-PICO baseline.
+     * This isolates TGx WDT resets seen immediately after c6_espnow leader step-down. */
+    ESP_LOGW(TAG, "c6_sync_espnow disabled on ESP32-PICO baseline");
+#else
     esp_err_t espnow_ret = c6_sync_espnow_init();
     if (espnow_ret != ESP_OK) {
         ESP_LOGW(TAG, "c6_sync_espnow_init failed: %s (continuing without ESP-NOW sync)",
                  esp_err_to_name(espnow_ret));
     }
+#endif /* CONFIG_IDF_TARGET_ESP32 */
 #endif
 
     /* ADR-039: Initialize edge processing pipeline. */
@@ -302,21 +330,38 @@ void app_main(void)
     if (ota_ret != ESP_OK) {
         ESP_LOGW(TAG, "OTA server init failed: %s", esp_err_to_name(ota_ret));
     }
+#if defined(CONFIG_ESP32CAM_DUAL_FIRMWARE)
+    esp_err_t cam_ret = ESP_ERR_INVALID_STATE;
+    if (ota_server != NULL) {
+        cam_ret = esp32cam_dual_stream_register(ota_server);
+        if (cam_ret != ESP_OK) {
+            ESP_LOGW(TAG, "ESP32-CAM dual stream init failed: %s", esp_err_to_name(cam_ret));
+        }
+    }
+#endif
 #else
     esp_err_t ota_ret = ESP_ERR_NOT_SUPPORTED;
     ESP_LOGI(TAG, "Mock CSI mode: skipping OTA server (no network)");
 #endif
 
+    const char *wasm_status = "off";
+
     /* ADR-040: Initialize WASM programmable sensing runtime. */
+    /* WASM init/upload/timer only exists when WASM is compiled in. */
+#if defined(CONFIG_WASM_ENABLE)
     esp_err_t wasm_ret = wasm_runtime_init();
     if (wasm_ret != ESP_OK) {
         ESP_LOGW(TAG, "WASM runtime init failed: %s", esp_err_to_name(wasm_ret));
+        wasm_status = "off";
     } else {
+        wasm_status = "ready";
         /* Register WASM upload endpoints on the OTA HTTP server. */
         if (ota_server != NULL) {
             wasm_upload_register(ota_server);
         }
 
+        /* WASM timer only exists when WASM is compiled in. */
+#if defined(CONFIG_WASM_ENABLE)
         /* Start periodic timer for wasm_runtime_on_timer(). */
         esp_timer_create_args_t timer_args = {
             .callback = (void (*)(void *))wasm_runtime_on_timer,
@@ -337,8 +382,18 @@ void app_main(void)
         } else {
             ESP_LOGW(TAG, "WASM timer create failed: %s", esp_err_to_name(timer_ret));
         }
+#endif /* CONFIG_WASM_ENABLE */
     }
+#endif /* CONFIG_WASM_ENABLE */
 
+#if defined(CONFIG_IDF_TARGET_ESP32)
+    /* Classic ESP32 StickC/PICO nodes are CSI-only in this build. Do not probe
+     * the mmWave UART here: on the StickC Plus recovery path the watchdog reset
+     * happens immediately after network bring-up, before a clean no-sensor
+     * startup can complete. S3/ADV keeps the full auto-detect path below. */
+    esp_err_t mmwave_ret = ESP_ERR_NOT_SUPPORTED;
+    ESP_LOGI(TAG, "mmWave probe disabled on ESP32-PICO baseline (CSI-only mode)");
+#else
     /* ADR-063: Initialize mmWave sensor (auto-detect on UART). */
     esp_err_t mmwave_ret = mmwave_sensor_init(-1, -1);  /* -1 = use default GPIO pins */
     if (mmwave_ret == ESP_OK) {
@@ -350,6 +405,7 @@ void app_main(void)
     } else {
         ESP_LOGI(TAG, "No mmWave sensor detected (CSI-only mode)");
     }
+#endif
 
     /* ADR-066: Initialize swarm bridge to Cognitum Seed (if configured). */
     esp_err_t swarm_ret = ESP_ERR_INVALID_ARG;
@@ -402,19 +458,11 @@ void app_main(void)
     /* Initialize power management. */
     power_mgmt_init(g_nvs_config.power_duty);
 
-    /* ADR-045: Start AMOLED display task (gracefully skips if no display). */
-#ifdef CONFIG_DISPLAY_ENABLE
-    esp_err_t disp_ret = display_task_start();
-    if (disp_ret != ESP_OK) {
-        ESP_LOGW(TAG, "Display init returned: %s", esp_err_to_name(disp_ret));
-    }
-#endif
-
     ESP_LOGI(TAG, "CSI streaming active → %s:%d (edge_tier=%u, OTA=%s, WASM=%s, mmWave=%s, swarm=%s, adapt=%s)",
              g_nvs_config.target_ip, g_nvs_config.target_port,
              g_nvs_config.edge_tier,
              (ota_ret == ESP_OK) ? "ready" : "off",
-             (wasm_ret == ESP_OK) ? "ready" : "off",
+             wasm_status,
              (mmwave_ret == ESP_OK) ? "active" : "off",
              (swarm_ret == ESP_OK) ? g_nvs_config.seed_url : "off",
              (adapt_ret == ESP_OK) ? "on" : "off");

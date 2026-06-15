@@ -1,6 +1,6 @@
 /**
  * @file display_task.h
- * @brief ADR-045: FreeRTOS display task — LVGL pump on Core 0.
+ * @brief ADR-045: FreeRTOS display task — live graph loop.
  */
 
 #ifndef DISPLAY_TASK_H
@@ -13,12 +13,14 @@ extern "C" {
 #endif
 
 /**
- * Start the display task on Core 0, priority 1.
+ * Start the live graph display task on Core 1, priority 6.
  *
- * Probes for RM67162 panel and SPIRAM. If either is absent,
- * logs a warning and returns ESP_OK (graceful skip).
+ * Probes for the active target's LCD hardware. If the LCD is absent, logs a
+ * warning and returns ESP_OK (graceful skip). If display init succeeds but
+ * the raw heartbeat task cannot be created, returns an error so the caller
+ * can log the real fault.
  *
- * @return ESP_OK always (display is optional).
+ * @return ESP_OK on skip or success; error on display init/task failure.
  */
 esp_err_t display_task_start(void);
 
