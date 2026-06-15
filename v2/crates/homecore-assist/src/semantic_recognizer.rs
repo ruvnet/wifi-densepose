@@ -135,6 +135,12 @@ impl SemanticIntentRecognizer {
         utterance: &str,
         language: &str,
     ) -> Result<(Option<Intent>, Option<f32>), RecognizerError> {
+        // Fail-closed on an over-length utterance before embedding/scanning.
+        // Untrusted input must not force an unbounded `to_lowercase` clone +
+        // full tokenisation/embedding. Mirrors the regex recognizer's bound.
+        if utterance.len() > crate::recognizer::MAX_UTTERANCE_BYTES {
+            return Ok((None, None));
+        }
         if let Some((id, similarity)) = self.nearest(utterance, language).await {
             if similarity >= self.threshold {
                 let inner = self.index.read().await;
@@ -226,6 +232,32 @@ mod tests {
         .await
         .unwrap();
         r
+    }
+
+    #[tokio::test]
+    async fn empty_utterance_against_empty_index_no_panic_no_match() {
+        // SECURITY (NaN/empty-poisoning): an empty (zero-vector) query against an
+        // empty index must not panic and must yield no intent — the recognizer
+        // falls through to the (also empty) regex fallback. Proves the empty-
+        // iterator `max_by` path returns None cleanly.
+        let semantic = SemanticIntentRecognizer::new(RegexIntentRecognizer::new());
+        let result = semantic.recognize("", "en").await.unwrap();
+        assert!(result.is_none(), "empty utterance must produce no intent / no action");
+    }
+
+    #[tokio::test]
+    async fn over_length_utterance_fails_closed_semantic() {
+        // SECURITY (DoS / fail-closed): an over-length utterance must short-
+        // circuit before embedding/scanning, returning no intent — even if it
+        // textually contains an enrolled/fallback-matchable command.
+        let semantic = SemanticIntentRecognizer::new(turn_on_recognizer().await);
+        let huge = format!(
+            "{} turn on the kitchen light",
+            "a ".repeat(crate::recognizer::MAX_UTTERANCE_BYTES)
+        );
+        assert!(huge.len() > crate::recognizer::MAX_UTTERANCE_BYTES);
+        let result = semantic.recognize(&huge, "en").await.unwrap();
+        assert!(result.is_none(), "over-length utterance must fail closed in semantic path");
     }
 
     #[tokio::test]

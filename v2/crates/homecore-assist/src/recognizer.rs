@@ -26,6 +26,20 @@ use thiserror::Error;
 
 use crate::intent::{Intent, IntentName};
 
+/// Maximum accepted utterance length, in bytes.
+///
+/// Utterances arrive from untrusted callers (voice transcripts, the WebSocket
+/// `assist` command). A pathological multi-megabyte utterance would otherwise
+/// be cloned by `to_lowercase()` and scanned by every registered pattern (and,
+/// in the semantic path, fully tokenised + embedded) — an unbounded
+/// memory/CPU amplification on attacker-controlled input. Real spoken
+/// utterances are tiny; 4 KiB is far above any legitimate command yet caps the
+/// blast radius. An over-length utterance fails **closed**: the recognizer
+/// returns `Ok(None)` (no intent, no action), exactly like an unrecognised
+/// phrase. The `regex` crate itself is linear-time (no catastrophic
+/// backtracking), so this bound is purely an allocation/throughput guard.
+pub const MAX_UTTERANCE_BYTES: usize = 4096;
+
 #[derive(Error, Debug)]
 pub enum RecognizerError {
     #[error("regex compile error: {0}")]
@@ -102,6 +116,12 @@ impl IntentRecognizer for RegexIntentRecognizer {
         utterance: &str,
         language: &str,
     ) -> Result<Option<Intent>, RecognizerError> {
+        // Fail-closed on an over-length utterance before any allocation/scan.
+        // Untrusted input must not be able to force an unbounded `to_lowercase`
+        // clone + per-pattern scan. Bound first, then normalise.
+        if utterance.len() > MAX_UTTERANCE_BYTES {
+            return Ok(None);
+        }
         let normalised = utterance.trim().to_lowercase();
         let patterns = self.patterns.read().await;
         for pattern in patterns.iter() {
@@ -181,6 +201,55 @@ mod tests {
         let r = turn_on_recognizer().await;
         let result = r.recognize("play jazz music", "en").await.unwrap();
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn over_length_utterance_fails_closed() {
+        // SECURITY (DoS / fail-closed): an utterance larger than the bound must
+        // return Ok(None) WITHOUT being normalised or scanned. Crucially, even
+        // an over-length utterance that *contains* a matching command must NOT
+        // resolve — fail closed, never open.
+        //
+        // This FAILS against the pre-fix recognizer: there, a giant prefix
+        // followed by "turn on the kitchen light" would still match HassTurnOn
+        // (and force a multi-megabyte `to_lowercase` clone + scan first).
+        let r = turn_on_recognizer().await;
+        let huge = format!("{} turn on the kitchen light", "a ".repeat(MAX_UTTERANCE_BYTES));
+        assert!(huge.len() > MAX_UTTERANCE_BYTES);
+
+        let result = r.recognize(&huge, "en").await.unwrap();
+        assert!(
+            result.is_none(),
+            "over-length utterance must fail closed (no intent, no action)"
+        );
+
+        // And a just-under-bound utterance still works, so the cap doesn't
+        // break legitimate (tiny) commands.
+        let ok = r
+            .recognize("turn on the kitchen light", "en")
+            .await
+            .unwrap();
+        assert!(ok.is_some(), "normal-length command must still resolve");
+    }
+
+    #[tokio::test]
+    async fn pathological_backtracking_pattern_completes_in_bounded_time() {
+        // SECURITY (ReDoS): the `regex` crate is a linear-time finite automaton,
+        // so even a classic catastrophic-backtracking shape `(a+)+$` cannot hang
+        // on a crafted adversarial input. This proves the recognizer terminates
+        // promptly on the worst-case input the regex engine is asked to run.
+        let r = RegexIntentRecognizer::new();
+        r.register("Evil", r"(a+)+$", "*").await.unwrap();
+        // Just under the length bound: all 'a' then a 'b' — the classic input
+        // that destroys a backtracking engine. Linear-time regex shrugs.
+        let evil = format!("{}b", "a".repeat(MAX_UTTERANCE_BYTES - 1));
+        let start = std::time::Instant::now();
+        let _ = r.recognize(&evil, "en").await.unwrap();
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "linear-time regex must not hang on adversarial input; took {elapsed:?}"
+        );
     }
 
     #[tokio::test]

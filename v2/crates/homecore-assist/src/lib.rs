@@ -47,7 +47,9 @@ pub mod pipeline;
 pub mod embedding;
 
 pub use intent::{Card, Intent, IntentName, IntentResponse};
-pub use recognizer::{IntentRecognizer, RecognizerError, RegexIntentRecognizer};
+pub use recognizer::{
+    IntentRecognizer, RecognizerError, RegexIntentRecognizer, MAX_UTTERANCE_BYTES,
+};
 pub use semantic_recognizer::{SemanticIntentRecognizer, DEFAULT_SIMILARITY_THRESHOLD};
 pub use handler::{
     HandlerError, HassCancelAll, HassLightSet, HassNevermind, HassTurnOff, HassTurnOn,
