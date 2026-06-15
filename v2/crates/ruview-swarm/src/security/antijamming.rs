@@ -59,8 +59,16 @@ impl FhssRadio {
     }
 
     /// Returns the current active channel frequency in MHz.
+    ///
+    /// `FhssConfig` is `Deserialize`, so `channels_mhz` can arrive empty from a
+    /// malformed or hostile config. An empty channel list would make `% n`
+    /// (n = 0) panic with a divide-by-zero. Guard it and return a benign `0.0`
+    /// sentinel instead of crashing the radio task (DoS-resistance).
     pub fn current_channel_mhz(&self) -> f64 {
         let n = self.config.channels_mhz.len();
+        if n == 0 {
+            return 0.0;
+        }
         // XOR node seed into hop index so each node uses a different offset
         let idx = (self.hop_index ^ (self.node_seed as usize)) % n;
         self.config.channels_mhz[idx]
@@ -68,7 +76,11 @@ impl FhssRadio {
 
     /// Advance the hop sequence by one step (call at hop_rate_hz).
     pub fn next_hop(&mut self) {
-        self.hop_index = (self.hop_index + 1) % self.config.channels_mhz.len();
+        let n = self.config.channels_mhz.len();
+        if n == 0 {
+            return; // no channels configured — nothing to hop (avoid `% 0` panic)
+        }
+        self.hop_index = (self.hop_index + 1) % n;
     }
 
     /// Update with latest RSSI measurement. Drives jamming detection.
@@ -97,9 +109,13 @@ impl FhssRadio {
             .wrapping_mul(lcg_a)
             .wrapping_add(self.evasion_count)
             .wrapping_add(lcg_c);
-        let n = self.config.channels_mhz.len() as u64;
+        let len = self.config.channels_mhz.len();
+        if len == 0 {
+            return; // no channels configured — avoid `% 0` panic
+        }
+        let n = len as u64;
         let offset = (seed % n / 4 + 3) as usize;
-        self.hop_index = (self.hop_index + offset) % self.config.channels_mhz.len();
+        self.hop_index = (self.hop_index + offset) % len;
         self.evasion_count += 1;
         self.rssi_history.clear();
     }
@@ -163,6 +179,23 @@ mod tests {
         let initial_idx = radio.hop_index;
         radio.tick(2.0); // 2 ms = 2 hops
         assert_eq!(radio.hop_index, (initial_idx + 2) % 50);
+    }
+
+    /// Security/DoS: an empty `channels_mhz` (deserialized from a malformed or
+    /// hostile config) must not panic with a `% 0` divide-by-zero. Fails on old
+    /// code, where `next_hop`/`current_channel_mhz`/`evasive_hop`/`tick` all do
+    /// modulo / index by `channels_mhz.len()`.
+    #[test]
+    fn test_empty_channels_does_not_panic() {
+        let cfg = FhssConfig { channels_mhz: vec![], jamming_detect_window: 1, ..Default::default() };
+        let mut radio = FhssRadio::new(7, cfg);
+        // None of these may panic.
+        let _ = radio.current_channel_mhz();
+        radio.next_hop();
+        radio.observe_rssi(-99.0); // window=1 → jamming_detected() true → evasive_hop()
+        radio.tick(100.0);
+        radio.evasive_hop();
+        assert_eq!(radio.current_channel_mhz(), 0.0, "empty channel list returns sentinel");
     }
 
     #[test]

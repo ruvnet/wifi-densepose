@@ -64,10 +64,25 @@ impl MultiViewFusion {
         detections: &[CsiDetection],
         drone_positions: &[(NodeId, Position3D)],
     ) -> Option<FusedDetection> {
-        // Filter by confidence and require estimated position
+        // Filter by confidence and require a FINITE estimated position.
+        //
+        // A peer detection (received via `receive_peer_detection`) carries f32/f64
+        // fields that can deserialize to NaN/Inf. A NaN `victim_position` passes
+        // `is_some()` and would propagate through the confidence-weighted average
+        // into the fused position — dispatching a NaN "confirmed victim" location
+        // to the swarm. A NaN `confidence` is already rejected by `>= min_confidence`
+        // (NaN comparisons are false), but we make that explicit and also require
+        // the victim position components to be finite. Fail CLOSED: drop poisoned
+        // detections rather than fusing them.
         let valid: Vec<(&CsiDetection, &Position3D)> = detections
             .iter()
-            .filter(|d| d.confidence >= self.min_confidence && d.victim_position.is_some())
+            .filter(|d| {
+                d.confidence.is_finite()
+                    && d.confidence >= self.min_confidence
+                    && d.victim_position
+                        .map(|p| p.x.is_finite() && p.y.is_finite() && p.z.is_finite())
+                        .unwrap_or(false)
+            })
             .filter_map(|d| {
                 let drone_pos = drone_positions
                     .iter()
@@ -176,5 +191,47 @@ mod tests {
             "uncertainty {} should be < 5 m single-drone baseline",
             result.uncertainty_m
         );
+    }
+
+    /// Security: a detection with a NaN victim position (poisoned peer report)
+    /// must be dropped, not fused. Fails on old code where the NaN propagates
+    /// into the confidence-weighted average and the fused position is NaN.
+    #[test]
+    fn test_nan_victim_position_dropped_from_fusion() {
+        let fusion = MultiViewFusion { min_viewpoints: 2, min_confidence: 0.5 };
+        let detections = vec![
+            CsiDetection {
+                drone_id: NodeId(0),
+                confidence: 0.9,
+                victim_position: Some(Position3D { x: 50.0, y: 50.0, z: 0.0 }),
+                timestamp_ms: 0,
+            },
+            CsiDetection {
+                drone_id: NodeId(1),
+                confidence: 0.9,
+                victim_position: Some(Position3D { x: f64::NAN, y: 50.0, z: 0.0 }),
+                timestamp_ms: 0,
+            },
+            CsiDetection {
+                drone_id: NodeId(2),
+                confidence: 0.9,
+                victim_position: Some(Position3D { x: 50.0, y: 50.0, z: 0.0 }),
+                timestamp_ms: 0,
+            },
+        ];
+        let positions = vec![
+            (NodeId(0), Position3D { x: 0.0, y: 0.0, z: -30.0 }),
+            (NodeId(1), Position3D { x: 100.0, y: 0.0, z: -30.0 }),
+            (NodeId(2), Position3D { x: 50.0, y: 86.6, z: -30.0 }),
+        ];
+        // Two finite viewpoints remain → still fuses, but the result must be finite.
+        let result = fusion.fuse(&detections, &positions).unwrap();
+        assert!(
+            result.estimated_position.x.is_finite()
+                && result.estimated_position.y.is_finite()
+                && result.estimated_position.z.is_finite(),
+            "fused position must be finite when a NaN detection is present"
+        );
+        assert!(!result.contributing_drones.contains(&NodeId(1)), "NaN detection must be excluded");
     }
 }

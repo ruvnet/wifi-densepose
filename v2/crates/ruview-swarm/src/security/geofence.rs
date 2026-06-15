@@ -27,6 +27,16 @@ pub enum GeofenceResult {
 impl Geofence {
     /// Check a position against this geofence.
     pub fn check(&self, pos: &Position3D) -> GeofenceResult {
+        // Fail CLOSED on a non-finite position. A NaN/Inf component (from a
+        // corrupt GPS/EKF estimate or a forged position) makes every subsequent
+        // comparison false: `NaN < min || NaN > max` is `false`, so the altitude
+        // breach is skipped, and a NaN altitude with otherwise-valid x/y would
+        // return `Safe` — a silent geofence bypass on a flight-safety boundary.
+        // Treat any non-finite coordinate as a hard breach.
+        if !pos.x.is_finite() || !pos.y.is_finite() || !pos.z.is_finite() {
+            return GeofenceResult::HardBreach;
+        }
+
         let altitude_m = -pos.z; // NED: negative z = altitude above ground
 
         // Altitude check
@@ -145,5 +155,30 @@ mod tests {
         let f = square_fence();
         let pos = Position3D { x: 50.0, y: 50.0, z: -200.0 }; // 200m altitude
         assert_eq!(f.check(&pos), GeofenceResult::HardBreach);
+    }
+
+    /// Security: a NaN altitude with an otherwise in-bounds x/y must fail closed
+    /// to HardBreach. Fails on old code where `NaN < min || NaN > max` is `false`,
+    /// the altitude check is skipped, and the point-in-polygon path returns Safe —
+    /// a silent geofence bypass.
+    #[test]
+    fn test_nan_altitude_fails_closed() {
+        let f = square_fence();
+        let pos = Position3D { x: 50.0, y: 50.0, z: f64::NAN };
+        assert_eq!(f.check(&pos), GeofenceResult::HardBreach);
+    }
+
+    /// Security: NaN/Inf horizontal coordinates must also fail closed.
+    #[test]
+    fn test_nonfinite_horizontal_fails_closed() {
+        let f = square_fence();
+        assert_eq!(
+            f.check(&Position3D { x: f64::NAN, y: 50.0, z: -30.0 }),
+            GeofenceResult::HardBreach
+        );
+        assert_eq!(
+            f.check(&Position3D { x: 50.0, y: f64::INFINITY, z: -30.0 }),
+            GeofenceResult::HardBreach
+        );
     }
 }

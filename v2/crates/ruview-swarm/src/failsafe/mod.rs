@@ -47,8 +47,18 @@ impl FailSafeMachine {
         link_alive: bool,
         nearest_neighbor_dist: f64,
     ) -> FailSafeState {
-        // Collision avoidance has highest priority
-        if nearest_neighbor_dist < self.collision_dist_m {
+        // Collision avoidance has highest priority.
+        //
+        // Fail CLOSED on a non-finite neighbour distance. `nearest_neighbor_dist`
+        // is derived from peer positions (see
+        // `SwarmOrchestrator::nearest_peer_distance`), which arrive over the
+        // untrusted swarm comm layer as `DroneState` values whose f64 position
+        // fields can deserialize to NaN/Inf. A naive `NaN < collision_dist_m`
+        // evaluates to `false`, silently DISABLING collision avoidance — the
+        // worst possible failure for a physical drone. Treat a non-finite
+        // distance as "too close" so the swarm diverges rather than trusting a
+        // poisoned reading.
+        if !nearest_neighbor_dist.is_finite() || nearest_neighbor_dist < self.collision_dist_m {
             self.state = FailSafeState::EmergencyDiverge;
             return self.state.clone();
         }
@@ -71,8 +81,11 @@ impl FailSafeMachine {
             }
         }
 
-        // Battery checks
-        if state.battery_pct <= self.battery_rth_pct {
+        // Battery checks. A non-finite battery reading (NaN/Inf from a corrupt or
+        // forged telemetry/peer message) must fail CLOSED: `NaN <= threshold` is
+        // `false`, which would otherwise let a drone with an unknown battery
+        // level keep flying nominally. Treat a non-finite reading as critical.
+        if !state.battery_pct.is_finite() || state.battery_pct <= self.battery_rth_pct {
             self.state = FailSafeState::ReturnToHome;
         } else if state.battery_pct <= self.battery_warn_pct {
             self.state = FailSafeState::LowBatteryWarn;
@@ -143,5 +156,36 @@ mod tests {
         let s = good_state();
         let result = fsm.tick(&s, true, 0.5); // too close
         assert_eq!(result, FailSafeState::EmergencyDiverge);
+    }
+
+    /// Security: a NaN neighbour distance (poisoned peer position over the swarm
+    /// comm layer) must NOT silently disable collision avoidance. Fails on old
+    /// code where `NaN < collision_dist_m` is `false` and the state stays Nominal.
+    #[test]
+    fn test_nan_neighbor_distance_fails_closed_to_diverge() {
+        let mut fsm = FailSafeMachine::new();
+        let s = good_state();
+        let result = fsm.tick(&s, true, f64::NAN);
+        assert_eq!(
+            result,
+            FailSafeState::EmergencyDiverge,
+            "non-finite neighbour distance must fail closed to EmergencyDiverge"
+        );
+    }
+
+    /// Security: a NaN battery reading must fail closed to ReturnToHome rather
+    /// than being treated as a healthy battery. Fails on old code where
+    /// `NaN <= battery_rth_pct` is `false` and the drone stays Nominal.
+    #[test]
+    fn test_nan_battery_fails_closed_to_rth() {
+        let mut fsm = FailSafeMachine::new();
+        let mut s = good_state();
+        s.battery_pct = f32::NAN;
+        let result = fsm.tick(&s, true, 10.0);
+        assert_eq!(
+            result,
+            FailSafeState::ReturnToHome,
+            "non-finite battery must fail closed to ReturnToHome"
+        );
     }
 }
