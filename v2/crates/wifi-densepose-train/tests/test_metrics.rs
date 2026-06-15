@@ -29,6 +29,66 @@
 
 use ndarray::{Array1, Array2};
 use wifi_densepose_train::{oks_canonical, pck_canonical, CANON_LEFT_HIP, CANON_RIGHT_HIP};
+// ADR-155 §Tier-1.2 — metric-locked accuracy harness public surface.
+use wifi_densepose_train::{accuracy_report, pck_at, PckNormalization, PoseFrame};
+
+// ---------------------------------------------------------------------------
+// Metric-locked accuracy harness: the three PCK normalizations are reachable
+// from the crate root and give DIFFERENT PCK on identical predictions — the
+// proof that the 96 / 81.6 / 61 figures were non-comparable (validated here as
+// a downstream consumer would call it).
+// ---------------------------------------------------------------------------
+
+/// Identical predictions, three declared normalizations ⇒ three distinct PCK.
+/// Hand calc (all coords in `[0,1]`):
+/// * GT: nose(0)=(0.50,0.10), l_sh(5)=(0.50,0.30), hips=(0.40,0.90)/(0.60,0.90).
+/// * Pred: nose err 0.06, shoulder err 0.10, hips exact.
+/// * torso = 0.20 ⇒ τ@20 = 0.04 ⇒ only hips correct ⇒ 2/4 = **0.50**.
+/// * bbox  = √(0.20²+0.80²)=0.82462 ⇒ τ@20 = 0.16492 ⇒ all correct ⇒ **1.00**.
+/// * abs(0.08): nose 0.06≤0.08 ok, shoulder 0.10>0.08 wrong ⇒ 3/4 = **0.75**.
+#[test]
+fn harness_three_normalizations_differ_from_crate_root() {
+    let gt = pose17(&[
+        (0, 0.50, 0.10),
+        (5, 0.50, 0.30),
+        (CANON_LEFT_HIP, 0.40, 0.90),
+        (CANON_RIGHT_HIP, 0.60, 0.90),
+    ]);
+    let pred = pose17(&[
+        (0, 0.56, 0.10),
+        (5, 0.60, 0.30),
+        (CANON_LEFT_HIP, 0.40, 0.90),
+        (CANON_RIGHT_HIP, 0.60, 0.90),
+    ]);
+    let vis = vis17(&[0, 5, CANON_LEFT_HIP, CANON_RIGHT_HIP]);
+
+    let (_, _, torso) = pck_at(&pred, &gt, &vis, 20, PckNormalization::TorsoDiameter);
+    let (_, _, bbox) = pck_at(&pred, &gt, &vis, 20, PckNormalization::BoundingBoxDiagonal);
+    let (_, _, abs) = pck_at(&pred, &gt, &vis, 20, PckNormalization::AbsolutePixels(0.08));
+
+    assert!((torso - 0.50).abs() < 1e-6, "torso PCK 0.50, got {torso}");
+    assert!((bbox - 1.00).abs() < 1e-6, "bbox PCK 1.00, got {bbox}");
+    assert!((abs - 0.75).abs() < 1e-6, "abs(0.08) PCK 0.75, got {abs}");
+    assert!(
+        torso != bbox && bbox != abs && torso != abs,
+        "three normalizations must be distinct: {torso} / {bbox} / {abs}"
+    );
+}
+
+/// `accuracy_report` returns a self-describing result carrying its normalization,
+/// so an unlabeled PCK number is structurally impossible at the API boundary.
+#[test]
+fn harness_report_carries_normalization_label() {
+    let gt = pose17(&[(CANON_LEFT_HIP, 0.40, 0.50), (CANON_RIGHT_HIP, 0.60, 0.50)]);
+    let vis = vis17(&[CANON_LEFT_HIP, CANON_RIGHT_HIP]);
+    let frame = PoseFrame { pred: gt.clone(), gt: gt.clone(), visibility: vis };
+    let report = accuracy_report(&[frame], &[20], PckNormalization::BoundingBoxDiagonal);
+    assert_eq!(report.normalization, PckNormalization::BoundingBoxDiagonal);
+    assert_eq!(report.n_keypoints, 17);
+    assert_eq!(report.n_frames, 1);
+    assert!((report.pck(20).unwrap() - 1.0).abs() < 1e-6);
+    assert!(report.summary().contains("bbox-diagonal"));
+}
 
 // ---------------------------------------------------------------------------
 // Tests that use `EvalMetrics` (requires tch-backend because the metrics

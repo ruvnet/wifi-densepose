@@ -43,6 +43,11 @@
 // All *this* crate's code is written without unsafe blocks.
 #![warn(missing_docs)]
 
+/// Metric-locked pose-accuracy harness (ADR-155 §Tier-1.2; needs ADR slot 173)
+/// — selectable `PckNormalization` (torso / bbox-diagonal / absolute), `mpjpe`,
+/// and a self-describing `PoseAccuracy` result so a reported PCK number always
+/// carries the definition it was computed under.
+pub mod accuracy;
 pub mod config;
 pub mod dataset;
 pub mod domain;
@@ -88,6 +93,11 @@ pub mod trainer;
 pub use metrics_core::{
     canonical_torso_size, oks_canonical, pck_canonical, CANON_LEFT_HIP, CANON_RIGHT_HIP,
     COCO_KP_SIGMAS,
+};
+// ADR-155 §Tier-1.2 — metric-locked accuracy harness (selectable PCK
+// normalization + MPJPE + self-describing result).
+pub use accuracy::{
+    accuracy_report, mpjpe as pck_mpjpe, pck_at, PckNormalization, PoseAccuracy, PoseFrame,
 };
 pub use config::TrainingConfig;
 pub use dataset::{
