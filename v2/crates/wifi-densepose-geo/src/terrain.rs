@@ -68,6 +68,21 @@ pub fn parse_hgt(data: &[u8], origin_lat: f64, origin_lon: f64) -> Result<Elevat
     let n_samples = data.len() / 2;
     let side = (n_samples as f64).sqrt() as usize;
 
+    // A valid SRTM grid is at least 2x2 — anything smaller has no cell spacing.
+    // Without this guard, `side - 1` underflows (panic in debug, wraps to a
+    // huge value in release) and `1.0 / (side - 1)` yields a garbage/inf
+    // `cell_size_deg` that then poisons every `ElevationGrid::get` lookup. A
+    // truncated download, a 404 HTML body, or an empty response can all reach
+    // here, so fail loudly instead of corrupting the persisted grid.
+    if side < 2 {
+        anyhow::bail!(
+            "HGT data too small: {} bytes ({} samples, side {}) — need at least a 2x2 grid",
+            data.len(),
+            n_samples,
+            side
+        );
+    }
+
     let heights: Vec<f32> = data
         .chunks_exact(2)
         .map(|c| {
@@ -127,5 +142,44 @@ pub fn extract_subgrid(grid: &ElevationGrid, center: &GeoPoint, radius_m: f64) -
         cols,
         rows,
         heights,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── parse_hgt degenerate-input robustness ──────────────────────────────
+    //
+    // Before the `side < 2` guard, an empty or sub-2x2 buffer made
+    // `1.0 / (side - 1)` underflow `side` (panic in debug / huge wrap in
+    // release) and produce a garbage `cell_size_deg`. A truncated download or
+    // a 404 HTML page reaches `parse_hgt`, so these must Err, not panic/poison.
+
+    #[test]
+    fn parse_hgt_empty_data_errors_not_panics() {
+        let res = parse_hgt(&[], 40.0, -75.0);
+        assert!(res.is_err(), "empty HGT must Err, got {res:?}");
+    }
+
+    #[test]
+    fn parse_hgt_single_sample_errors() {
+        // 2 bytes = 1 sample → side 1 → div-by-zero cell_size (inf) pre-fix.
+        let res = parse_hgt(&[0u8, 0u8], 40.0, -75.0);
+        assert!(res.is_err(), "1-sample HGT must Err, got {res:?}");
+    }
+
+    #[test]
+    fn parse_hgt_minimal_2x2_is_finite() {
+        // 4 samples = 8 bytes → side 2 → cell_size = 1.0 (finite, valid).
+        let data = vec![0u8; 8];
+        let grid = parse_hgt(&data, 40.0, -75.0).expect("2x2 HGT should parse");
+        assert_eq!(grid.cols, 2);
+        assert_eq!(grid.rows, 2);
+        assert!(
+            grid.cell_size_deg.is_finite() && grid.cell_size_deg > 0.0,
+            "cell_size must be finite positive, got {}",
+            grid.cell_size_deg
+        );
     }
 }

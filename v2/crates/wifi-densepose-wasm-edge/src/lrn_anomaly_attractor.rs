@@ -71,6 +71,8 @@ type StateVec = [f32; STATE_DIM];
 
 /// Attractor-based anomaly detector.
 pub struct AttractorDetector {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
     /// Circular trajectory buffer.
     trajectory: [StateVec; TRAJ_LEN],
     /// Write index into trajectory buffer.
@@ -108,6 +110,7 @@ pub struct AttractorDetector {
 impl AttractorDetector {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 4],
             trajectory: [[0.0; STATE_DIM]; TRAJ_LEN],
             traj_idx: 0,
             traj_len: 0,
@@ -137,7 +140,6 @@ impl AttractorDetector {
         amplitudes: &[f32],
         motion_energy: f32,
     ) -> &[(i32, f32)] {
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n_ev = 0usize;
 
         let n_sc = phases.len().min(amplitudes.len());
@@ -200,16 +202,14 @@ impl AttractorDetector {
                     self.radius = 0.01;
                 }
 
-                unsafe {
-                    EVENTS[n_ev] = (EVENT_LEARNING_COMPLETE, 1.0);
-                    n_ev += 1;
-                    EVENTS[n_ev] = (EVENT_ATTRACTOR_TYPE, self.attractor_type as u8 as f32);
-                    n_ev += 1;
-                    EVENTS[n_ev] = (EVENT_LYAPUNOV_EXPONENT, lambda);
-                    n_ev += 1;
-                }
+                self.events[n_ev] = (EVENT_LEARNING_COMPLETE, 1.0);
+                n_ev += 1;
+                self.events[n_ev] = (EVENT_ATTRACTOR_TYPE, self.attractor_type as u8 as f32);
+                n_ev += 1;
+                self.events[n_ev] = (EVENT_LYAPUNOV_EXPONENT, lambda);
+                n_ev += 1;
 
-                return unsafe { &EVENTS[..n_ev] };
+                return &self.events[..n_ev];
             }
 
             return &[];
@@ -221,10 +221,8 @@ impl AttractorDetector {
 
         if dist > departure_threshold && self.cooldown == 0 {
             self.cooldown = DEPARTURE_COOLDOWN;
-            unsafe {
-                EVENTS[n_ev] = (EVENT_BASIN_DEPARTURE, dist / self.radius);
-                n_ev += 1;
-            }
+            self.events[n_ev] = (EVENT_BASIN_DEPARTURE, dist / self.radius);
+            n_ev += 1;
         }
 
         // ── Periodic attractor update (every 200 frames) ────────────────
@@ -234,16 +232,14 @@ impl AttractorDetector {
 
             if new_type != self.attractor_type && n_ev < 3 {
                 self.attractor_type = new_type;
-                unsafe {
-                    EVENTS[n_ev] = (EVENT_ATTRACTOR_TYPE, new_type as u8 as f32);
-                    n_ev += 1;
-                    EVENTS[n_ev] = (EVENT_LYAPUNOV_EXPONENT, lambda);
-                    n_ev += 1;
-                }
+                self.events[n_ev] = (EVENT_ATTRACTOR_TYPE, new_type as u8 as f32);
+                n_ev += 1;
+                self.events[n_ev] = (EVENT_LYAPUNOV_EXPONENT, lambda);
+                n_ev += 1;
             }
         }
 
-        unsafe { &EVENTS[..n_ev] }
+        &self.events[..n_ev]
     }
 
     /// Compute the current largest Lyapunov exponent estimate.

@@ -174,3 +174,71 @@ vs. an in-memory array at compile time), which intersects with ADR-084 (RabitQ) 
 | **P1** (this ADR) | `intent`, `recognizer` (regex), `handler` (5 built-ins), `runner` (trait + noop), `pipeline` (end-to-end wiring), 10–15 tests |
 | **P2** | Real `tokio::process::Child` runner with Windows-safe teardown; `SemanticIntentRecognizer` with ruvector HNSW |
 | **P3** | STT/TTS bridge, satellite protocol, cloud fallback |
+
+---
+
+## 6. Security review (beyond-SOTA, untrusted-input → action path)
+
+A focused security review of the Assist pipeline — `utterance → recognizer →
+intent → handler → action`, plus `RufloRunner` — treating the utterance as
+untrusted input (voice transcripts, the WebSocket `assist` command). This
+surface was not covered by the ADR-154–159 sweep.
+
+### 6.1 Finding fixed — HC-ASSIST-01 (unbounded-utterance DoS, LOW)
+
+Both `RegexIntentRecognizer::recognize` and the semantic `recognize_scored`
+accepted utterances of **unbounded length** and ran `to_lowercase()` (a full
+clone) + a per-registered-pattern scan (and, in the semantic path, full
+tokenisation + feature-hash embedding) before any bound — an allocation/CPU
+amplification on attacker-controlled input. The `regex` crate is **linear-time**
+(RE2-style finite automaton, no catastrophic backtracking), so this was a
+throughput/memory DoS, not a hang.
+
+**Fix:** `MAX_UTTERANCE_BYTES = 4096` (far above any real spoken command),
+checked at **both** recognizer boundaries *before* any allocation/scan. An
+over-length utterance **fails closed** to `Ok(None)` — no intent, no action,
+identical to an unrecognised phrase — so it can never be coerced into firing a
+handler. Pinned by `over_length_utterance_fails_closed` (an over-length
+utterance that *contains* a valid command resolves to `None`, which would have
+matched on the old code) and `over_length_utterance_fails_closed_semantic`.
+
+### 6.2 Dimensions confirmed clean (with evidence)
+
+- **Command / argument injection — NO SUBPROCESS SURFACE.** The `RufloRunner`
+  has exactly two impls: `NoopRunner` (no process) and `LocalRunner` (runs the
+  local recognizer, no process). There is **no** `std::process` / `tokio::process`
+  / `Command` / process `.spawn()` anywhere in the crate — the trait `spawn` is
+  only a `started: bool` lifecycle flag — and `RufloRunnerOpts.{script_path,env}`
+  are **inert data, never consumed**. The live `node ruflo-agent.js` runner is
+  genuinely data-gated/future (P2). Defence-in-depth: the `entity_id` capture
+  class `[a-z_][a-z0-9_ .]*` **excludes every shell/SQL metacharacter**, so even
+  when an injection-shaped utterance resolves (the regex is not exact-anchored),
+  the captured slot is a clean token — sanitisation by construction. Pins:
+  `shell_metachars_never_survive_into_a_resolved_slot`,
+  `runner_opts_are_inert_no_process_spawned`,
+  `pipeline_injection_shaped_utterance_carries_no_metachars_to_service`.
+- **ReDoS — STRUCTURALLY IMPOSSIBLE.** `regex 1.12.3` (no `fancy-regex` in the
+  dependency tree) is linear-time; a classic `(a+)+$` shape on adversarial input
+  completes in bounded time. Pin:
+  `pathological_backtracking_pattern_completes_in_bounded_time`. Patterns are
+  operator-registered, not user-supplied, in any case.
+- **NaN-poisoning — EMBEDDINGS STRUCTURALLY FINITE.** The embedding path takes
+  only `&str` and produces values via FNV feature-hashing + a guarded L2
+  normalise (`norm > 1e-12`); no external float input, no unguarded division, so
+  a crafted utterance cannot inject NaN/Inf to poison the cosine k-NN. Cosine
+  against the zero vector is a finite `0.0`; an empty index `max_by` returns
+  `None` (no panic); the NaN-safe `partial_cmp().unwrap_or(Equal)` is already in
+  place. Pins: `embeddings_are_structurally_finite`,
+  `cosine_with_zero_vector_is_finite_not_nan`,
+  `empty_utterance_against_empty_index_no_panic_no_match`.
+- **Intent confusion / fail-closed.** An unrecognised utterance → `not_understood()`
+  (no service call); a recognised intent with no registered handler →
+  `not_understood()`; semantic below-threshold / empty-index → regex fallback.
+  No default high-privilege intent, no fail-open path.
+- **Panic-on-input.** No `unwrap`/`expect`/index reachable from a crafted
+  utterance; the one `exemplars[id]` index uses an `id` from `enumerate()` over
+  the append-only exemplar `Vec` (no remove API), so it is always in bounds.
+
+`cargo test -p homecore-assist --no-default-features`: **29→36, 0 failed** (+7);
+default/`semantic`: **39→48, 0 failed** (+9). Python deterministic proof
+unchanged (homecore-assist is off the signal proof path).

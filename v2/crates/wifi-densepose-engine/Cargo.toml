@@ -1,0 +1,35 @@
+[package]
+name = "wifi-densepose-engine"
+description = "RuView streaming-engine integration layer — composes the ADR-135..146 building blocks into one trust-traceable pipeline cycle"
+version = "0.3.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Composed building blocks (ADR-135..146).
+wifi-densepose-core = { version = "0.3.0", path = "../wifi-densepose-core" }
+wifi-densepose-signal = { version = "0.3.1", path = "../wifi-densepose-signal", default-features = false }
+wifi-densepose-ruvector = { version = "0.3.0", path = "../wifi-densepose-ruvector", default-features = false }
+# bfld is no_std by default; the privacy CONTROL PLANE (PrivacyModeRegistry) is
+# std-gated, so request std explicitly even under a workspace --no-default-features build.
+wifi-densepose-bfld = { version = "0.3.0", path = "../wifi-densepose-bfld", features = ["std"] }
+wifi-densepose-worldgraph = { version = "0.3.0", path = "../wifi-densepose-worldgraph" }
+wifi-densepose-geo = { version = "0.1.0", path = "../wifi-densepose-geo" }
+# Deterministic witness over the trust decision (ADR-137 §2.7 / ADR-028).
+blake3 = { version = "1.5", default-features = false }
+# Dynamic min-cut over the live mesh coupling graph (mesh_guard.rs):
+# incremental partition-risk monitoring + structural recalibration trigger.
+ruvector-mincut = { workspace = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "engine_cycle"
+harness = false
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

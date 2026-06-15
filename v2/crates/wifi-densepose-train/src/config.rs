@@ -32,6 +32,43 @@ use std::path::{Path, PathBuf};
 use crate::error::ConfigError;
 
 // ---------------------------------------------------------------------------
+// Allocation-guard upper bounds (ADR-155 §Tier-2)
+// ---------------------------------------------------------------------------
+//
+// `validate()` historically only checked lower bounds, so a config with an
+// absurd field (e.g. `window_frames = usize::MAX`) passed validation and only
+// blew up later as an OOM / allocation-size overflow deep in the pipeline.
+// These constants cap each dimensioning field at a value far above any real
+// hardware configuration but well below the point where the product of
+// dimensions overflows `usize` on a 64-bit allocation. They guard against
+// allocation-overflow, not against "sensible" configs — every real preset
+// stays orders of magnitude under these caps.
+
+/// Maximum temporal window length, in frames. Caps the time dimension of every
+/// CSI window allocation. Real captures use ≤ a few thousand frames.
+pub const MAX_WINDOW_FRAMES: usize = 100_000;
+
+/// Maximum subcarrier count (model or native). Real Wi-Fi captures top out in
+/// the low hundreds; this leaves vast headroom while preventing overflow.
+pub const MAX_SUBCARRIERS: usize = 100_000;
+
+/// Maximum backbone feature-map channel count. Even large vision backbones use
+/// a few thousand channels.
+pub const MAX_BACKBONE_CHANNELS: usize = 1_000_000;
+
+/// Maximum heatmap side length (H = W). Caps the square heatmap allocation.
+pub const MAX_HEATMAP_SIZE: usize = 100_000;
+
+/// Maximum number of keypoints. COCO uses 17; this is a wide safety margin.
+pub const MAX_KEYPOINTS: usize = 10_000;
+
+/// Maximum number of DensePose body-part classes. DensePose uses 24.
+pub const MAX_BODY_PARTS: usize = 10_000;
+
+/// Maximum mini-batch size. Guards the batch dimension of every allocation.
+pub const MAX_BATCH_SIZE: usize = 1_000_000;
+
+// ---------------------------------------------------------------------------
 // TrainingConfig
 // ---------------------------------------------------------------------------
 
@@ -317,15 +354,34 @@ impl TrainingConfig {
     ///   increasing.
     /// - `save_top_k` must be at least 1.
     /// - `val_every_epochs` must be at least 1.
+    /// - Dimensioning fields (`window_frames`, subcarrier counts,
+    ///   `backbone_channels`, `heatmap_size`, `num_keypoints`,
+    ///   `num_body_parts`, `batch_size`) must not exceed their
+    ///   allocation-guard upper bounds (see `MAX_*` constants), so an absurd
+    ///   value is rejected here rather than causing an OOM / allocation
+    ///   overflow later in the pipeline.
+    /// - `gpu_device_id` must be non-negative.
     pub fn validate(&self) -> Result<(), ConfigError> {
         // Subcarrier counts
         if self.num_subcarriers == 0 {
             return Err(ConfigError::invalid_value("num_subcarriers", "must be > 0"));
         }
+        if self.num_subcarriers > MAX_SUBCARRIERS {
+            return Err(ConfigError::invalid_value(
+                "num_subcarriers",
+                format!("must be <= {MAX_SUBCARRIERS} (allocation guard)"),
+            ));
+        }
         if self.native_subcarriers == 0 {
             return Err(ConfigError::invalid_value(
                 "native_subcarriers",
                 "must be > 0",
+            ));
+        }
+        if self.native_subcarriers > MAX_SUBCARRIERS {
+            return Err(ConfigError::invalid_value(
+                "native_subcarriers",
+                format!("must be <= {MAX_SUBCARRIERS} (allocation guard)"),
             ));
         }
 
@@ -341,18 +397,42 @@ impl TrainingConfig {
         if self.window_frames == 0 {
             return Err(ConfigError::invalid_value("window_frames", "must be > 0"));
         }
+        if self.window_frames > MAX_WINDOW_FRAMES {
+            return Err(ConfigError::invalid_value(
+                "window_frames",
+                format!("must be <= {MAX_WINDOW_FRAMES} (allocation guard)"),
+            ));
+        }
 
         // Heatmap
         if self.heatmap_size == 0 {
             return Err(ConfigError::invalid_value("heatmap_size", "must be > 0"));
+        }
+        if self.heatmap_size > MAX_HEATMAP_SIZE {
+            return Err(ConfigError::invalid_value(
+                "heatmap_size",
+                format!("must be <= {MAX_HEATMAP_SIZE} (allocation guard)"),
+            ));
         }
 
         // Model dims
         if self.num_keypoints == 0 {
             return Err(ConfigError::invalid_value("num_keypoints", "must be > 0"));
         }
+        if self.num_keypoints > MAX_KEYPOINTS {
+            return Err(ConfigError::invalid_value(
+                "num_keypoints",
+                format!("must be <= {MAX_KEYPOINTS} (allocation guard)"),
+            ));
+        }
         if self.num_body_parts == 0 {
             return Err(ConfigError::invalid_value("num_body_parts", "must be > 0"));
+        }
+        if self.num_body_parts > MAX_BODY_PARTS {
+            return Err(ConfigError::invalid_value(
+                "num_body_parts",
+                format!("must be <= {MAX_BODY_PARTS} (allocation guard)"),
+            ));
         }
         if self.backbone_channels == 0 {
             return Err(ConfigError::invalid_value(
@@ -360,10 +440,22 @@ impl TrainingConfig {
                 "must be > 0",
             ));
         }
+        if self.backbone_channels > MAX_BACKBONE_CHANNELS {
+            return Err(ConfigError::invalid_value(
+                "backbone_channels",
+                format!("must be <= {MAX_BACKBONE_CHANNELS} (allocation guard)"),
+            ));
+        }
 
         // Optimisation
         if self.batch_size == 0 {
             return Err(ConfigError::invalid_value("batch_size", "must be > 0"));
+        }
+        if self.batch_size > MAX_BATCH_SIZE {
+            return Err(ConfigError::invalid_value(
+                "batch_size",
+                format!("must be <= {MAX_BATCH_SIZE} (allocation guard)"),
+            ));
         }
         if self.learning_rate <= 0.0 {
             return Err(ConfigError::invalid_value("learning_rate", "must be > 0.0"));
@@ -441,6 +533,11 @@ impl TrainingConfig {
         }
         if self.save_top_k == 0 {
             return Err(ConfigError::invalid_value("save_top_k", "must be > 0"));
+        }
+
+        // Device: a CUDA device index can never be negative.
+        if self.gpu_device_id < 0 {
+            return Err(ConfigError::invalid_value("gpu_device_id", "must be >= 0"));
         }
 
         Ok(())
@@ -553,6 +650,96 @@ mod tests {
             ..TrainingConfig::default()
         };
         assert!(!cfg2.needs_subcarrier_interp());
+    }
+
+    // ADR-155 §Tier-2: every preset constructor must still validate after the
+    // upper-bound (allocation-guard) checks were added.
+    #[test]
+    fn presets_still_validate() {
+        TrainingConfig::default().validate().expect("default");
+        TrainingConfig::mmfi().validate().expect("mmfi");
+        TrainingConfig::ht40_192().validate().expect("ht40_192");
+        TrainingConfig::multiband_168()
+            .validate()
+            .expect("multiband_168");
+        TrainingConfig::for_subcarriers(168, 56)
+            .validate()
+            .expect("for_subcarriers");
+    }
+
+    // ADR-155 §Tier-2: oversized dimensioning fields (config-OOM class) must be
+    // rejected, not passed through to an allocation that overflows / OOMs.
+    #[test]
+    fn oversized_window_frames_is_invalid() {
+        let cfg = TrainingConfig {
+            window_frames: MAX_WINDOW_FRAMES + 1,
+            ..TrainingConfig::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn oversized_subcarriers_are_invalid() {
+        let cfg = TrainingConfig {
+            num_subcarriers: MAX_SUBCARRIERS + 1,
+            ..TrainingConfig::default()
+        };
+        assert!(cfg.validate().is_err());
+        let cfg = TrainingConfig {
+            native_subcarriers: MAX_SUBCARRIERS + 1,
+            ..TrainingConfig::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn oversized_backbone_channels_is_invalid() {
+        let cfg = TrainingConfig {
+            backbone_channels: MAX_BACKBONE_CHANNELS + 1,
+            ..TrainingConfig::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn oversized_heatmap_size_is_invalid() {
+        let cfg = TrainingConfig {
+            heatmap_size: MAX_HEATMAP_SIZE + 1,
+            ..TrainingConfig::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn oversized_keypoints_and_body_parts_are_invalid() {
+        let cfg = TrainingConfig {
+            num_keypoints: MAX_KEYPOINTS + 1,
+            ..TrainingConfig::default()
+        };
+        assert!(cfg.validate().is_err());
+        let cfg = TrainingConfig {
+            num_body_parts: MAX_BODY_PARTS + 1,
+            ..TrainingConfig::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn oversized_batch_size_is_invalid() {
+        let cfg = TrainingConfig {
+            batch_size: MAX_BATCH_SIZE + 1,
+            ..TrainingConfig::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn negative_gpu_device_id_is_invalid() {
+        let cfg = TrainingConfig {
+            gpu_device_id: -1,
+            ..TrainingConfig::default()
+        };
+        assert!(cfg.validate().is_err());
     }
 
     #[test]

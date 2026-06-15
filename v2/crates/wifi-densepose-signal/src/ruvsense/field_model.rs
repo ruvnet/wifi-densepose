@@ -105,6 +105,10 @@ impl WelfordStats {
     }
 
     /// Population variance (biased). Returns 0.0 if count < 2.
+    ///
+    /// The `count < 2` guard is the n=0 NaN guard (ADR-154 §7.4 #10): at n=0,
+    /// `m2 = 0` and `count = 0` would yield `0.0/0.0 = NaN`. Pinned by
+    /// `welford_finite_at_n0_and_n1`.
     pub fn variance(&self) -> f64 {
         if self.count < 2 {
             0.0
@@ -119,6 +123,10 @@ impl WelfordStats {
     }
 
     /// Sample variance (unbiased). Returns 0.0 if count < 2.
+    ///
+    /// The `count < 2` guard is load-bearing (ADR-154 §7.4 #10): at n=0 the
+    /// `(self.count - 1)` term would underflow `0usize − 1` and at n=1 it would
+    /// divide by zero. Pinned by `welford_finite_at_n0_and_n1`.
     pub fn sample_variance(&self) -> f64 {
         if self.count < 2 {
             0.0
@@ -276,6 +284,13 @@ pub struct FieldNormalMode {
     pub geometry_hash: u64,
     /// Baseline eigenvalue count above Marcenko-Pastur threshold (empty-room).
     pub baseline_eigenvalue_count: usize,
+    /// Baseline noise variance estimate (median of bottom-half positive
+    /// eigenvalues from the calibration covariance). Persisted so that
+    /// `estimate_occupancy` can anchor its Marcenko-Pastur threshold to the
+    /// calibration noise floor instead of letting it drift with the
+    /// per-window sample size. Defaults to 0.0 in the diagonal-fallback path.
+    /// Issue #942.
+    pub baseline_noise_var: f64,
 }
 
 /// Body perturbation extracted from a CSI observation.
@@ -504,7 +519,11 @@ impl FieldModel {
         let baseline: Vec<Vec<f64>> = self.link_stats.iter().map(|ls| ls.mean_vector()).collect();
 
         // --- True eigenvalue decomposition (with diagonal fallback) ---
-        let (mode_energies, environmental_modes, baseline_eig_count) =
+        // Returns: (energies, modes, baseline_count, baseline_noise_var).
+        // The noise_var slot is 0.0 in the diagonal-fallback paths; the
+        // estimation hot path treats 0.0 as "no anchored noise floor" and
+        // falls back to per-window noise_var, preserving pre-#942 behavior.
+        let (mode_energies, environmental_modes, baseline_eig_count, baseline_noise_var) =
             if let Some(ref cov_sum) = self.covariance_sum {
                 if self.covariance_count > 1 {
                     // Compute sample covariance from raw outer products:
@@ -588,23 +607,28 @@ impl FieldModel {
                             let baseline_count =
                                 eigenvalues.iter().filter(|&&ev| ev > mp_threshold).count();
 
-                            (energies, modes, baseline_count)
+                            (energies, modes, baseline_count, noise_var)
                         }
                         Err(_) => {
                             // Fallback to diagonal approximation on SVD failure
-                            diagonal_fallback(&self.link_stats, n_sc, n_modes)
+                            let (e, m, b) =
+                                diagonal_fallback(&self.link_stats, n_sc, n_modes);
+                            (e, m, b, 0.0_f64)
                         }
                     }
                     // When eigenvalue feature is disabled, use diagonal fallback
                     #[cfg(not(feature = "eigenvalue"))]
                     {
-                        diagonal_fallback(&self.link_stats, n_sc, n_modes)
+                        let (e, m, b) = diagonal_fallback(&self.link_stats, n_sc, n_modes);
+                        (e, m, b, 0.0_f64)
                     }
                 } else {
-                    diagonal_fallback(&self.link_stats, n_sc, n_modes)
+                    let (e, m, b) = diagonal_fallback(&self.link_stats, n_sc, n_modes);
+                    (e, m, b, 0.0_f64)
                 }
             } else {
-                diagonal_fallback(&self.link_stats, n_sc, n_modes)
+                let (e, m, b) = diagonal_fallback(&self.link_stats, n_sc, n_modes);
+                (e, m, b, 0.0_f64)
             };
 
         // Compute variance explained using the same centered covariance as modes.
@@ -648,6 +672,7 @@ impl FieldModel {
             calibrated_at_us: timestamp_us,
             geometry_hash,
             baseline_eigenvalue_count: baseline_eig_count,
+            baseline_noise_var,
         };
 
         self.modes = Some(field_mode);
@@ -794,7 +819,7 @@ impl FieldModel {
         // Marcenko-Pastur noise estimate: median of POSITIVE eigenvalues
         // in the bottom half. Excludes zeros from rank-deficient matrices
         // (common when n_subcarriers > n_frames, e.g. 56 subcarriers / 50 frames).
-        let noise_var = {
+        let local_noise_var = {
             let mut positive: Vec<f64> =
                 eigenvalues.iter().copied().filter(|&e| e > 1e-10).collect();
             positive.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -807,6 +832,22 @@ impl FieldModel {
                 return Ok(0); // All zero eigenvalues — can't estimate
             }
         };
+
+        // Issue #942: anchor the noise floor to the calibration's noise_var
+        // when it's available. Per-window noise_var drifts with sample size —
+        // a short estimation window can produce a small local_noise_var that
+        // inflates `significant` and breaks the test_estimate_occupancy_noise_only
+        // invariant. The max of (calibration noise, local noise) keeps the
+        // threshold from collapsing on small windows while still letting the
+        // per-window noise dominate when it's the larger estimate. Falls back
+        // to local_noise_var when baseline_noise_var == 0 (diagonal-fallback
+        // calibration path, or pre-#942 stored modes).
+        let noise_var = if modes.baseline_noise_var > 0.0 {
+            local_noise_var.max(modes.baseline_noise_var)
+        } else {
+            local_noise_var
+        };
+
         let ratio = n as f64 / count as f64;
         let mp_threshold = noise_var * (1.0 + ratio.sqrt()).powi(2);
 
@@ -923,6 +964,52 @@ mod tests {
         assert_eq!(w.count, 1);
         assert!((w.mean - 42.0).abs() < 1e-10);
         assert!((w.variance() - 0.0).abs() < 1e-10);
+    }
+
+    /// ADR-154 §7.4 #10: every statistic must stay FINITE at the n=0 and n=1
+    /// boundaries. This pins the load-bearing `count < 2` guards: without them
+    /// `sample_variance` at n=0 underflows `(0usize − 1)` and divides by a huge
+    /// bogus divisor, and `variance`/`z_score` produce `0.0/0.0 = NaN`. Same
+    /// family as the §4 divide-by-(n−1) window trio.
+    #[test]
+    fn welford_finite_at_n0_and_n1() {
+        // n = 0: fresh accumulator, nothing observed.
+        let w0 = WelfordStats::new();
+        assert_eq!(w0.count, 0);
+        for v in [
+            w0.mean,
+            w0.variance(),
+            w0.sample_variance(),
+            w0.std_dev(),
+            w0.z_score(123.0),
+        ] {
+            assert!(v.is_finite(), "n=0 statistic must be finite, got {v}");
+        }
+        // Documented sentinels at n=0.
+        assert_eq!(w0.variance(), 0.0);
+        assert_eq!(w0.sample_variance(), 0.0);
+        assert_eq!(w0.std_dev(), 0.0);
+        assert_eq!(w0.z_score(123.0), 0.0);
+
+        // n = 1: a single observation has no spread.
+        let mut w1 = WelfordStats::new();
+        w1.update(7.5);
+        assert_eq!(w1.count, 1);
+        for v in [
+            w1.mean,
+            w1.variance(),
+            w1.sample_variance(),
+            w1.std_dev(),
+            w1.z_score(7.5),
+            w1.z_score(999.0),
+        ] {
+            assert!(v.is_finite(), "n=1 statistic must be finite, got {v}");
+        }
+        assert_eq!(w1.variance(), 0.0);
+        assert_eq!(w1.sample_variance(), 0.0);
+        assert_eq!(w1.std_dev(), 0.0);
+        // z_score guards on near-zero sd → 0.0 even for an off-mean query.
+        assert_eq!(w1.z_score(999.0), 0.0);
     }
 
     #[test]

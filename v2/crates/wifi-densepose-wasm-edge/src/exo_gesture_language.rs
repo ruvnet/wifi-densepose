@@ -1,4 +1,13 @@
-//! Sign language letter recognition from CSI signatures — ADR-041 exotic module.
+//! Sign-language-letter-like recognition from CSI signatures — ADR-041 exotic / research module.
+//!
+//! ⚠️ EXPERIMENTAL RESEARCH MODULE — NOT VALIDATED. This is a *candidate*
+//! ⚠️ coarse gesture-cluster classifier, NOT a validated sign-language
+//! ⚠️ recognizer: it has never been evaluated against a labelled ASL (or any
+//! ⚠️ sign-language) dataset, accuracy is unproven, and it does not recognize
+//! ⚠️ true sign language (see ADR-160 §A4). Do NOT rely on its letter labels
+//! ⚠️ for communication or accessibility. (Registry tag: Exotic / Research.)
+//! ⚠️ The DSP (feature extraction + template matching) is real; the
+//! ⚠️ sign-language interpretation is not validated.
 //!
 //! # Algorithm
 //!
@@ -87,6 +96,8 @@ pub const EVENT_GESTURE_REJECTED: i32 = 623;
 /// Supports up to 26 letter templates loaded via `set_template()`.
 /// Uses DTW matching on compact feature sequences.
 pub struct GestureLanguageDetector {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
     /// Template feature sequences: [template_idx][frame][feature].
     templates: [[[f32; FEAT_DIM]; GESTURE_WIN_LEN]; MAX_TEMPLATES],
     /// Length of each template (0 = not loaded).
@@ -118,6 +129,7 @@ pub struct GestureLanguageDetector {
 impl GestureLanguageDetector {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 4],
             templates: [[[0.0; FEAT_DIM]; GESTURE_WIN_LEN]; MAX_TEMPLATES],
             template_lens: [0; MAX_TEMPLATES],
             n_templates: 0,
@@ -201,7 +213,6 @@ impl GestureLanguageDetector {
         motion_energy: f32,
         presence: i32,
     ) -> &[(i32, f32)] {
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n_ev = 0usize;
 
         self.frame_count += 1;
@@ -223,29 +234,21 @@ impl GestureLanguageDetector {
                 if self.gesture_fill >= MIN_GESTURE_FILL && self.gesture_active {
                     let (letter, confidence) = self.match_gesture();
                     if letter < MAX_TEMPLATES as u8 && self.since_last_letter >= DEBOUNCE_FRAMES {
-                        unsafe {
-                            EVENTS[n_ev] = (EVENT_LETTER_RECOGNIZED, letter as f32);
-                        }
+                        self.events[n_ev] = (EVENT_LETTER_RECOGNIZED, letter as f32);
                         n_ev += 1;
-                        unsafe {
-                            EVENTS[n_ev] = (EVENT_LETTER_CONFIDENCE, confidence);
-                        }
+                        self.events[n_ev] = (EVENT_LETTER_CONFIDENCE, confidence);
                         n_ev += 1;
                         self.last_letter = letter;
                         self.last_confidence = confidence;
                         self.since_last_letter = 0;
                     } else {
-                        unsafe {
-                            EVENTS[n_ev] = (EVENT_GESTURE_REJECTED, 1.0);
-                        }
+                        self.events[n_ev] = (EVENT_GESTURE_REJECTED, 1.0);
                         n_ev += 1;
                     }
                 }
 
                 // Emit word boundary.
-                unsafe {
-                    EVENTS[n_ev] = (EVENT_WORD_BOUNDARY, 1.0);
-                }
+                self.events[n_ev] = (EVENT_WORD_BOUNDARY, 1.0);
                 n_ev += 1;
                 self.word_boundary_emitted = true;
                 self.reset_gesture();
@@ -264,7 +267,7 @@ impl GestureLanguageDetector {
             }
         }
 
-        unsafe { &EVENTS[..n_ev] }
+        &self.events[..n_ev]
     }
 
     /// Match the current gesture buffer against all loaded templates.

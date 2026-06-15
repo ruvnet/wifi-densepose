@@ -1,11 +1,20 @@
-//! Respiratory distress detection — ADR-041 Category 1 Medical module.
+//! Respiratory-distress-like pattern flagging — ADR-041 Category 1 Medical module.
 //!
-//! Detects pathological breathing patterns from host CSI pipeline:
-//!   - Tachypnea: sustained breathing rate > 25 BPM
-//!   - Labored breathing: high amplitude variance relative to baseline
-//!   - Cheyne-Stokes respiration: crescendo-decrescendo periodicity (30-90 s)
-//!     detected via autocorrelation of the breathing amplitude envelope
-//!   - Overall respiratory distress level: composite severity score 0-100
+//! ⚠️ EXPERIMENTAL RESEARCH MODULE — NOT VALIDATED AGAINST CLINICAL DATA.
+//! ⚠️ NOT A MEDICAL DEVICE. Do NOT use for diagnosis or patient monitoring.
+//! ⚠️ This module flags *candidate* respiratory-distress-like breathing
+//! ⚠️ signatures only; it has never been compared against capnography,
+//! ⚠️ spirometry, or any reference standard, and its accuracy is unproven
+//! ⚠️ (see ADR-160 §A1). Gated behind the non-default `medical-experimental`
+//! ⚠️ cargo feature.
+//!
+//! Flags candidate pathological-breathing-like patterns from the host CSI
+//! pipeline (experimental proxies, NOT clinical measurements):
+//!   - Tachypnea-like: sustained breathing-rate estimate > 25 BPM
+//!   - Labored-breathing-like: high amplitude variance relative to baseline
+//!   - Cheyne-Stokes-like: crescendo-decrescendo periodicity (30-90 s)
+//!     flagged via autocorrelation of the breathing-rate envelope
+//!   - Composite distress-level proxy: severity score 0-100
 //!
 //! Events:
 //!   TACHYPNEA           (120) — sustained high respiratory rate
@@ -97,6 +106,9 @@ pub struct RespiratoryDistressDetector {
 
     /// Frame counter.
     frame_count: u32,
+
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
 }
 
 impl RespiratoryDistressDetector {
@@ -116,6 +128,7 @@ impl RespiratoryDistressDetector {
             cd_cs: 0,
             last_distress: 0.0,
             frame_count: 0,
+            events: [(0, 0.0); 4],
         }
     }
 
@@ -163,14 +176,13 @@ impl RespiratoryDistressDetector {
             self.var_mean += d / self.var_count as f32;
         }
 
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n = 0usize;
 
         // ── Tachypnea ───────────────────────────────────────────────────
         if breathing_bpm > TACHYPNEA_THRESH {
             self.tachy_count = self.tachy_count.saturating_add(1);
             if self.tachy_count >= SUSTAINED_SECS && self.cd_tachy == 0 && n < 4 {
-                unsafe { EVENTS[n] = (EVENT_TACHYPNEA, breathing_bpm); }
+                self.events[n] = (EVENT_TACHYPNEA, breathing_bpm);
                 n += 1;
                 self.cd_tachy = COOLDOWN_SECS;
             }
@@ -183,7 +195,7 @@ impl RespiratoryDistressDetector {
             let current_var = self.recent_var_mean();
             let ratio = current_var / self.var_mean;
             if ratio > LABORED_VAR_RATIO && self.cd_labored == 0 && n < 4 {
-                unsafe { EVENTS[n] = (EVENT_LABORED_BREATHING, ratio); }
+                self.events[n] = (EVENT_LABORED_BREATHING, ratio);
                 n += 1;
                 self.cd_labored = COOLDOWN_SECS;
             }
@@ -192,7 +204,7 @@ impl RespiratoryDistressDetector {
         // ── Cheyne-Stokes (autocorrelation) ─────────────────────────────
         if self.bpm_len >= AC_WINDOW && self.cd_cs == 0 && n < 4 {
             if let Some(period) = self.detect_cheyne_stokes() {
-                unsafe { EVENTS[n] = (EVENT_CHEYNE_STOKES, period as f32); }
+                self.events[n] = (EVENT_CHEYNE_STOKES, period as f32);
                 n += 1;
                 self.cd_cs = COOLDOWN_SECS;
             }
@@ -202,11 +214,11 @@ impl RespiratoryDistressDetector {
         if self.frame_count % DISTRESS_REPORT_INTERVAL == 0 && n < 4 {
             let score = self.compute_distress_score(breathing_bpm, variance);
             self.last_distress = score;
-            unsafe { EVENTS[n] = (EVENT_RESP_DISTRESS_LEVEL, score); }
+            self.events[n] = (EVENT_RESP_DISTRESS_LEVEL, score);
             n += 1;
         }
 
-        unsafe { &EVENTS[..n] }
+        &self.events[..n]
     }
 
     /// Mean of recent variance samples.

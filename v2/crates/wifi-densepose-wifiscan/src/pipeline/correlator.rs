@@ -5,6 +5,8 @@
 //! A single message-passing step identifies co-varying BSSID clusters
 //! that are likely affected by the same person.
 
+use std::collections::VecDeque;
+
 /// BSSID correlator that computes pairwise Pearson correlation
 /// and identifies co-varying clusters.
 ///
@@ -12,8 +14,10 @@
 /// weights trained on CSI data. For Phase 2 we use a lightweight
 /// correlation-based approach that can be upgraded to GNN later.
 pub struct BssidCorrelator {
-    /// Per-BSSID history buffers for correlation computation.
-    histories: Vec<Vec<f32>>,
+    /// Per-BSSID history buffers for correlation computation. Each is a
+    /// `VecDeque` so the per-frame oldest-sample eviction is O(1) instead of
+    /// an O(n) `Vec::remove(0)` (ADR-157 §A1).
+    histories: Vec<VecDeque<f32>>,
     /// Maximum history length.
     window: usize,
     /// Number of tracked BSSIDs.
@@ -31,7 +35,7 @@ impl BssidCorrelator {
     #[must_use]
     pub fn new(n_bssids: usize, window: usize, correlation_threshold: f32) -> Self {
         Self {
-            histories: vec![Vec::with_capacity(window); n_bssids],
+            histories: vec![VecDeque::with_capacity(window); n_bssids],
             window,
             n_bssids,
             correlation_threshold,
@@ -45,22 +49,26 @@ impl BssidCorrelator {
     pub fn update(&mut self, amplitudes: &[f32]) -> CorrelationResult {
         let n = amplitudes.len().min(self.n_bssids);
 
-        // Update histories
+        // Update histories. O(1) eviction via `VecDeque::pop_front`, and
+        // contiguous-ize each touched buffer once so the correlation pass below
+        // can borrow it as a slice (`pearson_r` takes `&[f32]`).
         for (i, &amp) in amplitudes.iter().enumerate().take(n) {
             let hist = &mut self.histories[i];
-            hist.push(amp);
+            hist.push_back(amp);
             if hist.len() > self.window {
-                hist.remove(0);
+                hist.pop_front();
             }
+            hist.make_contiguous();
         }
 
-        // Compute pairwise Pearson correlation
+        // Compute pairwise Pearson correlation. Each history is already
+        // contiguous (above), so `as_slices().0` is the full buffer.
         let mut corr_matrix = vec![vec![0.0f32; n]; n];
         #[allow(clippy::needless_range_loop)]
         for i in 0..n {
             corr_matrix[i][i] = 1.0;
             for j in (i + 1)..n {
-                let r = pearson_r(&self.histories[i], &self.histories[j]);
+                let r = pearson_r(self.histories[i].as_slices().0, self.histories[j].as_slices().0);
                 corr_matrix[i][j] = r;
                 corr_matrix[j][i] = r;
             }

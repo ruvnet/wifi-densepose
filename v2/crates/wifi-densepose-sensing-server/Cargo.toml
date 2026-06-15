@@ -1,6 +1,6 @@
 [package]
 name = "wifi-densepose-sensing-server"
-version = "0.3.1"
+version = "0.3.3"
 edition.workspace = true
 description = "Lightweight Axum server for WiFi sensing UI with RuVector signal processing"
 license.workspace = true
@@ -52,6 +52,23 @@ wifi-densepose-signal = { version = "0.3.1", path = "../wifi-densepose-signal", 
 
 # Hardware crate — SyncPacket decoder for ADR-110 §A0.12 mesh-aligned timestamps.
 wifi-densepose-hardware = { version = "0.3.0", path = "../wifi-densepose-hardware" }
+
+# Governed streaming engine (ADR-135..146): fusion + privacy demotion +
+# WorldGraph belief + deterministic witness. The live server data runs through
+# this as a governed path whose Restricted-class decision strips per-node raw
+# amplitudes from the live publish; full output gating is a tracked follow-up —
+# see engine_bridge.rs ("Honest scope of the live-path governance").
+wifi-densepose-engine = { version = "0.3.0", path = "../wifi-densepose-engine" }
+wifi-densepose-worldgraph = { version = "0.3.0", path = "../wifi-densepose-worldgraph" }
+wifi-densepose-bfld = { version = "0.3.1", path = "../wifi-densepose-bfld", default-features = false }
+wifi-densepose-geo = { version = "0.1.0", path = "../wifi-densepose-geo" }
+
+# ADR-262 P3: live RuField surface. The thin anti-corruption bridge that turns
+# this server's governed sensing cycle into signed RuField `FieldEvent`s on
+# `/api/field` + `/ws/field`. It path-deps the standalone `vendor/rufield`
+# submodule (it is the single coupling point — ADR-262 §5.4) and pulls in no
+# RuView internal crate, so the dep surface added here is just the bridge.
+wifi-densepose-rufield = { version = "0.3.0", path = "../wifi-densepose-rufield" }
 
 # midstream — real-time introspection / low-latency tap (ADR-099 D1).
 # Two crates only, on purpose: scheduler / neural-solver / strange-loop are

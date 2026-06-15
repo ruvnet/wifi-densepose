@@ -14,6 +14,13 @@ COPY v2/crates/ ./crates/
 # Copy vendored RuVector crates
 COPY vendor/ruvector/ /build/vendor/ruvector/
 
+# Copy vendored RuField submodule — the `wifi-densepose-rufield` bridge crate
+# (ADR-262) path-deps `../../../vendor/rufield/crates/*`, which from the Docker
+# build layout (v2/ collapsed into /build) resolves to /vendor/rufield. Copy the
+# whole tree so the rufield workspace Cargo.toml (workspace-dep inheritance) and
+# the four bridged crates (rufield-core/-provenance/-privacy/-fusion) all resolve.
+COPY vendor/rufield/ /vendor/rufield/
+
 # Build release binaries:
 #   - sensing-server with `mqtt` feature so the HA-DISCO MQTT publisher
 #     (ADR-115) is wired in (auto-discovery topics flow to Home Assistant)

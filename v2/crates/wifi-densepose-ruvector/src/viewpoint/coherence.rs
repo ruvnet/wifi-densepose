@@ -212,6 +212,115 @@ impl CoherenceGate {
     }
 }
 
+// ---------------------------------------------------------------------------
+// ADR-138 — Clock-quality gate (coherence × clock dispersion/age)
+// ---------------------------------------------------------------------------
+
+/// Per-node clock-synchronisation quality (ADR-138 §2.2), derived from the
+/// ADR-110 802.15.4 time-sync follower offset statistics.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClockQualityScore {
+    /// EMA-smoothed follower offset standard deviation (µs). ADR-110 measured
+    /// ~104 µs against the ±100 µs target on COM9↔COM12.
+    pub offset_stdev_us: f32,
+    /// Age of the most recent sync packet (µs). The sensing server enforces a
+    /// 9 s staleness ceiling.
+    pub age_us: u64,
+    /// Whether a valid sync has ever been observed for this node.
+    pub valid: bool,
+}
+
+impl ClockQualityScore {
+    /// Scalar clock quality in `[0, 1]` (1 = perfectly synced). Reaches 0 at
+    /// `5 × max_offset_stdev_us`; used to bias directional attention weights.
+    #[must_use]
+    pub fn quality(&self, max_offset_stdev_us: f32) -> f32 {
+        if !self.valid || max_offset_stdev_us <= 0.0 {
+            return 0.0;
+        }
+        (1.0 - self.offset_stdev_us / (5.0 * max_offset_stdev_us)).clamp(0.0, 1.0)
+    }
+}
+
+/// Why a node failed the clock-quality gate hard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClockRejectReason {
+    /// Phase coherence below the gate threshold.
+    Incoherent,
+    /// Sync packet older than the staleness ceiling.
+    ClockStale,
+    /// Offset dispersion far beyond the floor (≥ 5× the monitor threshold).
+    ClockDispersed,
+    /// No valid sync ever observed for this node.
+    ClockInvalid,
+}
+
+/// One node's gate decision for one sensing cycle (ADR-138 §2.2).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ClockGateDecision {
+    /// Both terms pass: node admitted at full weight.
+    Admit,
+    /// Phase OK but clock degraded: evidence-only, NO environment/model update.
+    MonitorOnly {
+        /// Combined clock-quality score in [0, 1] (dispersion × age terms).
+        clock_quality: f32,
+    },
+    /// Either term fails hard: node excluded this cycle.
+    Reject {
+        /// Which hard term failed (phase, dispersion, or age).
+        reason: ClockRejectReason,
+    },
+}
+
+/// Clock-quality gate: combines the phase [`CoherenceGate`] with clock
+/// dispersion and age terms (ADR-138 §2.2).
+#[derive(Debug, Clone)]
+pub struct ClockQualityGate {
+    /// Phase-coherence gate (threshold + hysteresis).
+    pub coherence: CoherenceGate,
+    /// Offset-stdev floor (µs): at or above ⇒ `MonitorOnly`. Default 200.0.
+    pub max_offset_stdev_us: f32,
+    /// Sync-age ceiling (µs): above ⇒ hard reject. Default 9_000_000.
+    pub max_age_us: u64,
+}
+
+impl ClockQualityGate {
+    /// Construct from a phase gate and the two clock thresholds.
+    pub fn new(coherence: CoherenceGate, max_offset_stdev_us: f32, max_age_us: u64) -> Self {
+        Self { coherence, max_offset_stdev_us, max_age_us }
+    }
+
+    /// Defaults: phase gate 0.7/0.05, 200 µs floor, 9 s staleness ceiling.
+    pub fn default_params() -> Self {
+        Self::new(CoherenceGate::default_params(), 200.0, 9_000_000)
+    }
+
+    /// Evaluate both terms for one node this cycle. `coherence_value` is the
+    /// rolling phasor coherence ([`CoherenceState::coherence`]).
+    pub fn evaluate(&mut self, coherence_value: f32, clock: &ClockQualityScore) -> ClockGateDecision {
+        if !clock.valid {
+            return ClockGateDecision::Reject { reason: ClockRejectReason::ClockInvalid };
+        }
+        if clock.age_us > self.max_age_us {
+            return ClockGateDecision::Reject { reason: ClockRejectReason::ClockStale };
+        }
+        if clock.offset_stdev_us >= 5.0 * self.max_offset_stdev_us {
+            return ClockGateDecision::Reject { reason: ClockRejectReason::ClockDispersed };
+        }
+        // Phase term (hysteretic). Clock-degraded but coherent ⇒ MonitorOnly.
+        if !self.coherence.evaluate(coherence_value) {
+            return ClockGateDecision::Reject { reason: ClockRejectReason::Incoherent };
+        }
+        if clock.offset_stdev_us >= self.max_offset_stdev_us {
+            ClockGateDecision::MonitorOnly {
+                clock_quality: clock.quality(self.max_offset_stdev_us),
+            }
+        } else {
+            ClockGateDecision::Admit
+        }
+    }
+}
+
 /// Stateless coherence gate function matching the ADR-031 specification.
 ///
 /// Computes the complex mean of unit phasors from the given phase differences
@@ -387,5 +496,43 @@ mod tests {
             state.push(i as f32 * 0.1);
         }
         assert_eq!(state.len(), 5, "count should be capped at window size");
+    }
+
+    // ===== ADR-138 clock-quality gate =====
+
+    #[test]
+    fn clock_gate_invalid_rejected() {
+        let mut g = ClockQualityGate::default_params();
+        let c = ClockQualityScore { offset_stdev_us: 10.0, age_us: 0, valid: false };
+        assert_eq!(
+            g.evaluate(0.9, &c),
+            ClockGateDecision::Reject { reason: ClockRejectReason::ClockInvalid }
+        );
+    }
+
+    #[test]
+    fn clock_gate_dispersed_rejected() {
+        let mut g = ClockQualityGate::default_params(); // floor 200 → 5× = 1000 µs
+        let c = ClockQualityScore { offset_stdev_us: 1500.0, age_us: 0, valid: true };
+        assert_eq!(
+            g.evaluate(0.9, &c),
+            ClockGateDecision::Reject { reason: ClockRejectReason::ClockDispersed }
+        );
+    }
+
+    #[test]
+    fn clock_gate_admit_and_monitor_and_quality() {
+        let mut g = ClockQualityGate::default_params();
+        let good = ClockQualityScore { offset_stdev_us: 50.0, age_us: 0, valid: true };
+        assert_eq!(g.evaluate(0.9, &good), ClockGateDecision::Admit);
+        // quality: 1 - 50/(5*200) = 0.95
+        assert!((good.quality(200.0) - 0.95).abs() < 1e-4);
+
+        let mut g2 = ClockQualityGate::default_params();
+        let degraded = ClockQualityScore { offset_stdev_us: 250.0, age_us: 0, valid: true };
+        assert!(matches!(
+            g2.evaluate(0.9, &degraded),
+            ClockGateDecision::MonitorOnly { .. }
+        ));
     }
 }

@@ -220,11 +220,20 @@ static void fast_loop_cb(TimerHandle_t t)
     adaptive_controller_decide(&s_cfg, s_state, &obs, &dec);
     apply_decision(&dec);
 
-    /* ADR-081 Layer 4/5: emit compact feature state on every fast tick
-     * (default 200 ms → 5 Hz, within the 1–10 Hz spec). Replaces raw
-     * ADR-018 CSI as the default upstream; raw remains available as a
-     * debug stream gated by the channel plan. */
-    emit_feature_state();
+    /* ADR-081 Layer 4/5: emit compact feature state at 1 Hz (the spec's
+     * 1–10 Hz floor). Was previously emitted on every fast tick (~5 Hz at
+     * the default 200 ms fast period), which combined with CSI promiscuous
+     * RX saturated the WiFi TX airtime — measured live on COM8 (S3) and
+     * COM9 (C6): every adaptive cycle showed `sendto ENOMEM — backing off
+     * for 100 ms`, and bumping LWIP/WiFi buffer pools to 4× had no effect
+     * on the rate because the bottleneck was radio TX time, not pool size.
+     * Dropping to 1 Hz (5× less feature_state traffic) frees the TX queue
+     * for CSI sends and lands well within the spec. */
+    static uint8_t s_emit_divider = 0;
+    if (++s_emit_divider >= 5) {
+        s_emit_divider = 0;
+        emit_feature_state();
+    }
 }
 
 static void medium_loop_cb(TimerHandle_t t)

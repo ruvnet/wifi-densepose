@@ -59,5 +59,11 @@ mod no_movement;
 mod room_active;
 mod sleeping;
 
+// ADR-140: auditable semantic-state record + Ruflo multi-signal agent bridge.
+pub mod record;
+
 pub use bus::{SemanticBus, SemanticEvent, SemanticKind};
 pub use common::{PrimitiveConfig, PrimitiveState, RawSnapshot, Reason};
+pub use record::{
+    AgentRoute, MultiSignalRule, PrivacyAction, RecordContext, SemanticStateRecord, route_all,
+};

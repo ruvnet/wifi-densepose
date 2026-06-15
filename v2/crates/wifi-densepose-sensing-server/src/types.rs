@@ -12,6 +12,7 @@ use crate::rvf_container::RvfContainerInfo;
 use crate::rvf_pipeline::ProgressiveLoader;
 use crate::vital_signs::{VitalSignDetector, VitalSigns};
 
+use wifi_densepose_hardware::PpduType;
 use wifi_densepose_signal::ruvsense::field_model::FieldModel;
 use wifi_densepose_signal::ruvsense::longitudinal::{EmbeddingEntry, EmbeddingHistory};
 use wifi_densepose_signal::ruvsense::multistatic::MultistaticFuser;
@@ -84,14 +85,32 @@ pub struct Esp32Frame {
     pub magic: u32,
     pub node_id: u8,
     pub n_antennas: u8,
-    pub n_subcarriers: u8,
+    /// Subcarrier bin count. u16 since ADR-110: ESP32-C6 HE-LTF frames carry
+    /// 256 bins (242 active HE20 tones) — issue #1005. HT frames stay ≤128.
+    pub n_subcarriers: u16,
     pub freq_mhz: u16,
     pub sequence: u32,
     pub rssi: i8,
     pub noise_floor: i8,
+    /// ADR-110 byte 18: PPDU type the CSI was sampled from (HT-LTF vs
+    /// HE-LTF symbol grids are NOT comparable bin-for-bin). Pre-ADR-110
+    /// firmware sends 0 ⇒ `PpduType::HtLegacy`.
+    pub ppdu_type: PpduType,
     pub amplitudes: Vec<f64>,
     pub phases: Vec<f64>,
 }
+
+impl Esp32Frame {
+    /// The (subcarrier-count, PPDU-type) pair identifying which symbol grid
+    /// this frame was sampled on. Frames from different grids must never be
+    /// mixed in one rolling baseline window (ADR-110 / issue #1005).
+    pub fn grid(&self) -> CsiGrid {
+        (self.n_subcarriers, self.ppdu_type)
+    }
+}
+
+/// Subcarrier-grid identity: `(n_subcarriers, ppdu_type)`.
+pub type CsiGrid = (u16, PpduType);
 
 // ── Sensing Update ──────────────────────────────────────────────────────────
 
@@ -184,6 +203,21 @@ pub struct PersonDetection {
     pub keypoints: Vec<PoseKeypoint>,
     pub bbox: BoundingBox,
     pub zone: String,
+    /// Room-world position `[x, y, z]` (Observatory scene units / meters),
+    /// derived from the strongest `signal_field` peak (issue #1050). `y` is
+    /// `0.0` — the field is a floor-plane grid. Real field-peak readout, not
+    /// calibrated triangulation. Defaults to `[0,0,0]`.
+    #[serde(default)]
+    pub position: [f64; 3],
+    /// Motion magnitude on the Observatory's `0..100` scale, passed through
+    /// from the measured `motion_band_power` (issue #1050).
+    #[serde(default)]
+    pub motion_score: f64,
+    /// Coarse posture label when a real aggregate posture estimate exists,
+    /// else `None`. Never fabricated; per-person skeletal pose remains gated
+    /// on the pose model (ADR-079).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pose: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -281,6 +315,14 @@ pub struct NodeState {
     /// `None` until the first `update_novelty` call. Consumed by the
     /// model-wake gate downstream (low novelty → skip CNN, save energy).
     pub last_novelty_score: Option<f32>,
+    /// ADR-110 / issue #1005: the `(n_subcarriers, ppdu_type)` grid this
+    /// node's rolling windows were built on. ESP32-C6 nodes interleave
+    /// HE-SU 256-bin frames with HT 64-bin frames on one socket; mixing
+    /// the two symbol grids in `frame_history` corrupts variance/baseline
+    /// statistics. Policy: lock onto the densest grid seen; frames on a
+    /// sparser grid are counted as arrivals but skipped by the feature
+    /// path; a grid upgrade clears the history and re-warms the baseline.
+    pub active_grid: Option<CsiGrid>,
 }
 
 impl Default for NodeState {
@@ -322,6 +364,35 @@ impl NodeState {
                 NOVELTY_SKETCH_VERSION,
             )),
             last_novelty_score: None,
+            active_grid: None,
+        }
+    }
+
+    /// ADR-110 / issue #1005 grid gate: decide whether a frame on `grid`
+    /// may enter this node's feature path, and update `active_grid`.
+    ///
+    /// Returns `true` to accept. On a grid *upgrade* (more subcarriers than
+    /// the current grid — e.g. first HE-SU 256-bin frame after HT 64-bin
+    /// history) the rolling amplitude history and motion baseline are
+    /// cleared so HT and HE symbol grids are never mixed in one window.
+    /// Sparser-grid frames (the ~16% HT minority a C6 keeps emitting) are
+    /// rejected from the feature path.
+    pub fn accept_grid(&mut self, grid: CsiGrid) -> bool {
+        match self.active_grid {
+            None => {
+                self.active_grid = Some(grid);
+                true
+            }
+            Some(active) if active == grid => true,
+            Some((active_n, _)) if grid.0 > active_n => {
+                // Denser grid wins: re-key the window and re-warm baselines.
+                self.active_grid = Some(grid);
+                self.frame_history.clear();
+                self.baseline_motion = 0.0;
+                self.baseline_frames = 0;
+                true
+            }
+            Some(_) => false,
         }
     }
 

@@ -24,6 +24,17 @@ pub const INPUT_TIMESTEPS: usize = 20;
 /// Count classification over {0, 1, ..., 7} persons.
 pub const COUNT_CLASSES: usize = 8;
 
+/// Highest class the shipped `count_v1` weights were actually **trained** on.
+///
+/// The count head has 8 logits, but `count_train_results.json` only has support
+/// for classes 0 and 1 (`per_class_accuracy` keys are `"0"` and `"1"`). The model
+/// is a presence detector (0 vs ≥1 person), **not** a calibrated multi-occupant
+/// counter. An argmax landing on classes 2..=7 is out-of-distribution: the logits
+/// there were never supervised against labelled data. We flag such outputs
+/// `low_confidence` so downstream consumers don't trust a fabricated headcount.
+/// (Multi-occupant *accuracy* is DATA-GATED — not fabricated here.)
+pub const MAX_TRAINED_CLASS: usize = 1;
+
 #[derive(Debug, Clone)]
 pub struct CsiWindow {
     pub data: Vec<f32>,
@@ -43,6 +54,23 @@ pub struct CountPrediction {
 impl CountPrediction {
     pub fn is_finite(&self) -> bool {
         self.probs.iter().all(|v| v.is_finite()) && self.confidence.is_finite()
+    }
+
+    /// True when the maximum-likelihood class is beyond what the shipped weights
+    /// were trained on ([`MAX_TRAINED_CLASS`]). Such a prediction is out-of-
+    /// distribution — the count head's logits for classes 2..=7 were never
+    /// supervised, so the headcount is not trustworthy. Surfaced as the
+    /// `low_confidence` field on the `person.count` event (honest-clip pattern).
+    pub fn is_low_confidence(&self) -> bool {
+        self.argmax() > MAX_TRAINED_CLASS
+    }
+
+    /// Argmax clamped to [`MAX_TRAINED_CLASS`]. When the raw argmax is an
+    /// untrained class we clamp the *reported* count to the highest trained
+    /// class rather than emit a fabricated multi-occupant headcount. The raw
+    /// distribution is still available in `probs` for diagnostics.
+    pub fn clamped_count(&self) -> usize {
+        self.argmax().min(MAX_TRAINED_CLASS)
     }
 
     /// Maximum-likelihood class.

@@ -85,6 +85,8 @@ impl Template {
 
 /// User-teachable gesture learner and recognizer.
 pub struct GestureLearner {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
     // ── Stored templates ─────────────────────────────────────────────────
     templates: [Template; MAX_TEMPLATES],
     template_count: usize,
@@ -117,6 +119,7 @@ pub struct GestureLearner {
 impl GestureLearner {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 4],
             templates: [Template::empty(); MAX_TEMPLATES],
             template_count: 0,
             learn_phase: LearnPhase::Idle,
@@ -143,7 +146,6 @@ impl GestureLearner {
     ///
     /// Returns events as `(event_id, value)` pairs in a static buffer.
     pub fn process_frame(&mut self, phases: &[f32], motion_energy: f32) -> &[(i32, f32)] {
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n_ev = 0usize;
 
         if phases.is_empty() {
@@ -228,12 +230,10 @@ impl GestureLearner {
                     // Check if all 3 rehearsals are mutually similar.
                     if self.rehearsals_are_similar() {
                         if let Some(id) = self.commit_template() {
-                            unsafe {
-                                EVENTS[n_ev] = (EVENT_GESTURE_LEARNED, id as f32);
-                                n_ev += 1;
-                                EVENTS[n_ev] = (EVENT_TEMPLATE_COUNT, self.template_count as f32);
-                                n_ev += 1;
-                            }
+                            self.events[n_ev] = (EVENT_GESTURE_LEARNED, id as f32);
+                            n_ev += 1;
+                            self.events[n_ev] = (EVENT_TEMPLATE_COUNT, self.template_count as f32);
+                            n_ev += 1;
                         }
                     }
                     // Reset learning state regardless.
@@ -284,18 +284,16 @@ impl GestureLearner {
 
             if let Some(id) = best_id {
                 self.cooldown = MATCH_COOLDOWN;
-                unsafe {
-                    EVENTS[n_ev] = (EVENT_GESTURE_MATCHED, id as f32);
+                self.events[n_ev] = (EVENT_GESTURE_MATCHED, id as f32);
+                n_ev += 1;
+                if n_ev < 4 {
+                    self.events[n_ev] = (EVENT_MATCH_DISTANCE, best_dist);
                     n_ev += 1;
-                    if n_ev < 4 {
-                        EVENTS[n_ev] = (EVENT_MATCH_DISTANCE, best_dist);
-                        n_ev += 1;
-                    }
                 }
             }
         }
 
-        unsafe { &EVENTS[..n_ev] }
+        &self.events[..n_ev]
     }
 
     /// Check if all rehearsals are pairwise similar (DTW distance < threshold).

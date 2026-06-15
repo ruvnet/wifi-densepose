@@ -47,7 +47,7 @@ use tokio::sync::broadcast;
 #[cfg(feature = "mqtt")]
 use tracing::info;
 #[cfg(feature = "mqtt")]
-use wifi_densepose_sensing_server::cli::Args;
+use wifi_densepose_sensing_server::cli::MqttArgs;
 #[cfg(feature = "mqtt")]
 use wifi_densepose_sensing_server::mqtt::{
     config::MqttConfig,
@@ -61,7 +61,15 @@ use wifi_densepose_sensing_server::mqtt::{
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    let args = Args::parse();
+    let args = {
+        use clap::Parser;
+        #[derive(Parser)]
+        struct W {
+            #[command(flatten)]
+            m: MqttArgs,
+        }
+        W::parse().m
+    };
 
     if !args.mqtt {
         eprintln!("This example requires --mqtt. Aborting.");

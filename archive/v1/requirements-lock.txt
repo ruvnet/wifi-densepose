@@ -6,8 +6,14 @@
 #
 # To update: change versions, run `python v1/data/proof/verify.py --generate-hash`,
 # then commit the new expected_features.sha256.
+#
+# numpy/scipy track the versions the *published* expected hash
+# (expected_features.sha256 = ca58956c…) was generated with — modern numpy 2.x,
+# i.e. what a fresh `pip install numpy` and the proof-of-capabilities.md skeptic
+# path produce today. The old 1.26.4 pin no longer matched that hash and made
+# the determinism gate fail against its own published proof.
 
-numpy==1.26.4
-scipy==1.14.1
+numpy==2.4.2
+scipy==1.17.1
 pydantic==2.10.4
 pydantic-settings==2.7.1

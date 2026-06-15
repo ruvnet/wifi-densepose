@@ -33,8 +33,12 @@ chrono = { version = "0.4", features = ["serde"] }
 
 uuid = { version = "1", features = ["v4", "serde"] }
 dashmap = "6"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 hyper = "1"
 http-body-util = "0.1"
+# End-to-end WS handshake + reply tests (HC-WS-01/02, ADR-161).
+tokio-tungstenite = "0.24"
+futures-util = { version = "0.3", default-features = false }

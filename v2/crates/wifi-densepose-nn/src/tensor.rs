@@ -4,10 +4,38 @@
 //! different backends (ONNX, tch, Candle).
 
 use crate::error::{NnError, NnResult};
-use ndarray::{Array1, Array2, Array3, Array4, ArrayD};
+use ndarray::{Array1, Array2, Array3, Array4, ArrayD, ArrayViewMutD, Axis};
 // num_traits is available if needed for advanced tensor operations
 use serde::{Deserialize, Serialize};
 use std::fmt;
+
+/// Apply a numerically-stable softmax in place to every 1-D lane of `view`
+/// taken along `axis`. Each lane is shifted by its own max before
+/// exponentiation, then divided by its own sum, so every lane sums to 1.0
+/// independently — the per-pixel / per-class normalization densepose needs.
+///
+/// `axis` MUST be validated as in-range by the caller.
+fn softmax_inplace_along_axis(mut view: ArrayViewMutD<'_, f32>, axis: usize) {
+    for mut lane in view.lanes_mut(Axis(axis)) {
+        let max = lane.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        // An all-`-inf` (or empty) lane has no finite max; leave it untouched
+        // to avoid producing NaNs from `exp(-inf - -inf)`.
+        if !max.is_finite() {
+            continue;
+        }
+        let mut sum = 0.0f32;
+        for v in lane.iter_mut() {
+            let e = (*v - max).exp();
+            *v = e;
+            sum += e;
+        }
+        if sum > 0.0 {
+            for v in lane.iter_mut() {
+                *v /= sum;
+            }
+        }
+    }
+}
 
 /// Shape of a tensor
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -288,14 +316,39 @@ impl Tensor {
         }
     }
 
-    /// Apply softmax along axis
-    pub fn softmax(&self, _axis: usize) -> NnResult<Tensor> {
+    /// Apply softmax along the given `axis`.
+    ///
+    /// Each 1-D lane along `axis` is normalized independently so it sums to
+    /// 1.0. This is the correct semantics for per-pixel / per-class probability
+    /// maps (e.g. DensePose body-part logits over the channel axis). A
+    /// numerically-stable max-shift is applied per lane.
+    ///
+    /// # Errors
+    /// Returns [`NnError`] if `axis` is out of range for the tensor's rank, or
+    /// if the tensor type is unsupported.
+    pub fn softmax(&self, axis: usize) -> NnResult<Tensor> {
         match self {
             Tensor::Float4D(a) => {
-                let max = a.fold(f32::NEG_INFINITY, |acc, &x| acc.max(x));
-                let exp = a.mapv(|x| (x - max).exp());
-                let sum = exp.sum();
-                Ok(Tensor::Float4D(exp / sum))
+                if axis >= a.ndim() {
+                    return Err(NnError::tensor_op(format!(
+                        "softmax axis {axis} out of range for {}-D tensor",
+                        a.ndim()
+                    )));
+                }
+                let mut out = a.clone();
+                softmax_inplace_along_axis(out.view_mut().into_dyn(), axis);
+                Ok(Tensor::Float4D(out))
+            }
+            Tensor::FloatND(a) => {
+                if axis >= a.ndim() {
+                    return Err(NnError::tensor_op(format!(
+                        "softmax axis {axis} out of range for {}-D tensor",
+                        a.ndim()
+                    )));
+                }
+                let mut out = a.clone();
+                softmax_inplace_along_axis(out.view_mut(), axis);
+                Ok(Tensor::FloatND(out))
             }
             _ => Err(NnError::tensor_op(
                 "Softmax not supported for this tensor type",
@@ -515,6 +568,67 @@ mod tests {
         let sigmoid = tensor.sigmoid().unwrap();
         assert!(sigmoid.min().unwrap() > 0.0);
         assert!(sigmoid.max().unwrap() < 1.0);
+    }
+
+    // ADR-155 §Tier-2: softmax(axis) must normalize along the GIVEN axis
+    // (per-lane sum == 1), not over the whole tensor.
+    #[test]
+    fn test_softmax_axis_sums_to_one_per_lane() {
+        // 2x3x1x1 tensor; softmax along axis 1 (the size-3 axis).
+        let arr =
+            Array4::from_shape_vec([2, 3, 1, 1], vec![1.0f32, 2.0, 3.0, -1.0, 0.0, 1.0]).unwrap();
+        let t = Tensor::Float4D(arr);
+        let sm = t.softmax(1).unwrap();
+        let out = sm.as_array4().unwrap();
+        // Each lane along axis 1 must sum to 1.0.
+        for b in 0..2 {
+            let lane_sum: f32 = (0..3).map(|c| out[[b, c, 0, 0]]).sum();
+            assert!((lane_sum - 1.0).abs() < 1e-6, "lane {b} sum = {lane_sum}");
+        }
+        // Probabilities must be ordered like the logits within a lane.
+        assert!(out[[0, 0, 0, 0]] < out[[0, 1, 0, 0]]);
+        assert!(out[[0, 1, 0, 0]] < out[[0, 2, 0, 0]]);
+    }
+
+    // ADR-155 §Tier-2: softmax along different axes must give different
+    // results — the old global-softmax bug ignored the axis entirely.
+    #[test]
+    fn test_softmax_axis_choice_matters() {
+        let arr = Array4::from_shape_vec([1, 2, 2, 1], vec![1.0f32, 2.0, 3.0, 4.0]).unwrap();
+        let t = Tensor::Float4D(arr);
+        let along1 = t.softmax(1).unwrap();
+        let along2 = t.softmax(2).unwrap();
+        let a1 = along1.as_array4().unwrap();
+        let a2 = along2.as_array4().unwrap();
+        // The two normalizations partition the values differently, so at least
+        // one element must differ.
+        let mut differs = false;
+        for h in 0..2 {
+            if (a1[[0, 0, h, 0]] - a2[[0, 0, h, 0]]).abs() > 1e-6 {
+                differs = true;
+            }
+        }
+        assert!(differs, "softmax along axis 1 must differ from axis 2");
+    }
+
+    // ADR-155 §Tier-2: known-value check on a tiny tensor.
+    #[test]
+    fn test_softmax_known_values() {
+        // Lane [0, ln(3)] along axis 1 → softmax = [1/4, 3/4].
+        let arr = Array4::from_shape_vec([1, 2, 1, 1], vec![0.0f32, 3.0f32.ln()]).unwrap();
+        let t = Tensor::Float4D(arr);
+        let out = t.softmax(1).unwrap();
+        let a = out.as_array4().unwrap();
+        assert!((a[[0, 0, 0, 0]] - 0.25).abs() < 1e-6);
+        assert!((a[[0, 1, 0, 0]] - 0.75).abs() < 1e-6);
+    }
+
+    // ADR-155 §Tier-2: out-of-range axis must return an error, never panic.
+    #[test]
+    fn test_softmax_axis_out_of_range_errors() {
+        let t = Tensor::zeros_4d([1, 2, 2, 2]);
+        assert!(t.softmax(4).is_err());
+        assert!(t.softmax(99).is_err());
     }
 
     #[test]

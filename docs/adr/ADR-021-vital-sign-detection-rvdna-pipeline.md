@@ -1081,6 +1081,23 @@ The `wifi-densepose-vitals` crate (ESP32 CSI-grade vital signs) has not yet been
 - SONA-based environment adaptation
 - VitalSignStore with tiered temporal compression
 
+## Implementation Notes
+
+### 2026-06 — ESP32 edge vitals: person-count over-count + presence flicker (#998, #996)
+
+Two robustness bugs were fixed in the on-device edge path (`firmware/esp32-csi-node/main/edge_processing.c`, the ADR-039 packet `0xC5110002`). These touch the *boolean/count emission logic*, not the underlying CSI signal-processing math, and do **not** constitute a validated-accuracy claim — true occupancy-count and presence accuracy vs labelled ground truth remain hardware/data-gated (COM9 ESP32-S3 + labelled capture).
+
+- **#998 `n_persons` over-count (reported 4 for one person).** `update_multi_person_vitals()` divided the top-K subcarriers into `top_k_count/2` groups and marked *every* group `active`, so one body's multipath always read the full `EDGE_MAX_PERSONS`. Added an energy gate (`EDGE_PERSON_MIN_ENERGY_RATIO`), spatial dedup (`EDGE_PERSON_MIN_SC_SEP`), and a persistence debounce (`EDGE_PERSON_PERSIST_FRAMES`) via two pure functions `count_distinct_persons()` / `person_count_debounce()`.
+- **#996 presence flag flicker at ~50 cm.** Single-threshold compare on a noisy `presence_score` chattered at the boundary. Replaced with a Schmitt trigger + clear-debounce (`presence_flag_update()`, constants `EDGE_PRESENCE_HYST_RATIO` / `EDGE_PRESENCE_CLEAR_FRAMES`); `presence_score` is unchanged and still emitted for consumer-side thresholding.
+
+Both are pinned by host-buildable C99 tests in `firmware/esp32-csi-node/test/test_vitals_count_presence.c` (`make run_vitals`). The exact thresholds are documented constants pending on-device calibration against ground truth.
+
+### 2026-06 — Rust `wifi-densepose-vitals`: IIR filter NaN/inf self-heal (ADR-158 §A1)
+
+A correctness/safety review of the Rust extraction crate found a real bug parallel to the firmware robustness class above. The 2nd-order resonator `bandpass_filter` in both `breathing.rs` and `heartrate.rs` latches each output `y[n]` into its filter state (`y1`/`y2`). A single non-finite amplitude residual from a corrupt CSI frame produced a NaN `output` that was written into the state; the existing `extract()` `is_finite()` guard dropped that one sample from the history buffer **but never sanitized the poisoned filter state**, so every later output stayed NaN, was rejected too, and the sliding-window history never refilled — breathing **and** heart-rate extraction went silently dead (returning `None` forever) until `reset()`. On the alert path this is a safety-relevant denial of service (one bad frame stops vitals monitoring with no error surfaced).
+
+Fix: when `bandpass_filter` computes a non-finite `output`, it resets the IIR state to default and returns `0.0`, so the resonator self-heals on the next clean frame (the `0.0` is still dropped by the caller's finite-check, so no spurious sample enters history). Same shape as the calibration NaN bug (ADR-154 §3) — the prior hardening guarded the *history boundary* but not the *filter-state boundary*. Pinned by `breathing::tests::nan_frame_does_not_permanently_poison_filter`, `breathing::tests::inf_mid_stream_does_not_freeze_history`, and `heartrate::tests::nan_frame_does_not_permanently_poison_filter` (all FAIL pre-fix, verified by reverting). The review also de-magicked the HR physiological plausibility band into named `HR_PLAUSIBLE_MIN_BPM`/`HR_PLAUSIBLE_MAX_BPM` consts (value-identical 40/180 BPM) and added a fabricated-vital negative (`pure_noise_is_never_reported_valid` — broadband noise never yields a clinically `Valid` HR; the extractor honestly returns low-confidence `Unreliable`). Clean dimensions confirmed with evidence: flat/silent input → `None`; pure noise → low-confidence `Unreliable`, never `Valid`; harmonic-rich breathing with no cardiac component → low-confidence, not a confident false HR; out-of-band BPM rejected by the plausibility clamp.
+
 ## References
 
 - Ramsauer et al. (2020). "Hopfield Networks is All You Need." ICLR 2021. (ModernHopfield formulation)

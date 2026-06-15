@@ -84,12 +84,15 @@ pub struct OptimalTransportDetector {
     frame_count: u32,
     shift_streak: u8,
     subtle_streak: u8,
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
 }
 
 impl OptimalTransportDetector {
     pub const fn new() -> Self {
         Self { prev_amps: [0.0; MAX_SC], smoothed_dist: 0.0, smoothed_var: 0.0, prev_var: 0.0,
-               initialized: false, frame_count: 0, shift_streak: 0, subtle_streak: 0 }
+               initialized: false, frame_count: 0, shift_streak: 0, subtle_streak: 0,
+               events: [(0, 0.0); 4] }
     }
 
     fn w1_sorted(a: &[f32], b: &[f32], n: usize) -> f32 {
@@ -150,16 +153,15 @@ impl OptimalTransportDetector {
 
         i = 0; while i < n { self.prev_amps[i] = cur[i]; i += 1; }
 
-        static mut EV: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut ne = 0usize;
 
         if self.frame_count % 5 == 0 && ne < 4 {
-            unsafe { EV[ne] = (EVENT_WASSERSTEIN_DISTANCE, self.smoothed_dist); } ne += 1;
+            self.events[ne] = (EVENT_WASSERSTEIN_DISTANCE, self.smoothed_dist); ne += 1;
         }
         if self.smoothed_dist > WASS_SHIFT {
             self.shift_streak = self.shift_streak.saturating_add(1);
             if self.shift_streak >= SHIFT_DEB && ne < 4 {
-                unsafe { EV[ne] = (EVENT_DISTRIBUTION_SHIFT, self.smoothed_dist); } ne += 1;
+                self.events[ne] = (EVENT_DISTRIBUTION_SHIFT, self.smoothed_dist); ne += 1;
                 self.shift_streak = 0;
             }
         } else { self.shift_streak = 0; }
@@ -167,12 +169,12 @@ impl OptimalTransportDetector {
         if self.smoothed_dist > WASS_SUBTLE && vc < VAR_STABLE {
             self.subtle_streak = self.subtle_streak.saturating_add(1);
             if self.subtle_streak >= SUBTLE_DEB && ne < 4 {
-                unsafe { EV[ne] = (EVENT_SUBTLE_MOTION, self.smoothed_dist); } ne += 1;
+                self.events[ne] = (EVENT_SUBTLE_MOTION, self.smoothed_dist); ne += 1;
                 self.subtle_streak = 0;
             }
         } else { self.subtle_streak = 0; }
 
-        unsafe { &EV[..ne] }
+        &self.events[..ne]
     }
 
     pub fn distance(&self) -> f32 { self.smoothed_dist }

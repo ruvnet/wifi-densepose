@@ -1002,7 +1002,7 @@ mod tests {
 
     #[test]
     fn rvf_model_file_round_trip() {
-        let dir = std::env::temp_dir().join("rvf_pipeline_test");
+        let dir = std::env::temp_dir().join(format!("rvf_pipeline_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("pipeline_model.rvf");
 

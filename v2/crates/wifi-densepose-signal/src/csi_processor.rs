@@ -475,11 +475,21 @@ impl CsiPreprocessor {
         })
     }
 
-    /// Generate Hamming window
+    /// Generate Hamming window.
+    ///
+    /// ADR-154: guards the `n - 1` denominator. For `n == 0` the original code
+    /// underflowed (`0usize - 1` panics in debug / wraps in release); for
+    /// `n == 1` it divided by zero (every sample became NaN). Both degenerate
+    /// sizes now return a safe window (empty / single unit sample) — the
+    /// standard convention for a length-1 window is the constant 1.0.
     fn hamming_window(n: usize) -> Vec<f64> {
-        (0..n)
-            .map(|i| 0.54 - 0.46 * (2.0 * PI * i as f64 / (n - 1) as f64).cos())
-            .collect()
+        match n {
+            0 => Vec::new(),
+            1 => vec![1.0],
+            _ => (0..n)
+                .map(|i| 0.54 - 0.46 * (2.0 * PI * i as f64 / (n - 1) as f64).cos())
+                .collect(),
+        }
     }
 
     /// Calculate standard deviation
@@ -775,5 +785,25 @@ mod tests {
 
         // First and last values should be approximately 0.08
         assert!((window[0] - 0.08).abs() < 0.01);
+    }
+
+    // ADR-154: n=0 underflowed `n-1` (usize), n=1 divided by zero → NaN.
+    #[test]
+    fn test_hamming_window_degenerate_sizes() {
+        assert!(
+            CsiPreprocessor::hamming_window(0).is_empty(),
+            "n=0 must return an empty window, not underflow"
+        );
+        let w1 = CsiPreprocessor::hamming_window(1);
+        assert_eq!(w1.len(), 1);
+        assert!(
+            w1[0].is_finite() && (w1[0] - 1.0).abs() < 1e-12,
+            "n=1 must be a finite unit sample, got {}",
+            w1[0]
+        );
+        // n=2 is the smallest size that exercises the (n-1) denominator.
+        let w2 = CsiPreprocessor::hamming_window(2);
+        assert_eq!(w2.len(), 2);
+        assert!(w2.iter().all(|v| v.is_finite()));
     }
 }

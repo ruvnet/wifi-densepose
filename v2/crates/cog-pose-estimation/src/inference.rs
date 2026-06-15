@@ -27,6 +27,16 @@ pub const INPUT_SUBCARRIERS: usize = 56;
 pub const INPUT_TIMESTEPS: usize = 20;
 pub const OUTPUT_KEYPOINTS: usize = 17;
 
+/// The model's typical self-reported confidence. `pose_v1` has **no confidence
+/// head** (the head emits 34 keypoint coordinates only), so per-frame confidence
+/// is not available from the network. This is the validation-set PCK@50 (18.5%)
+/// the training run reported, used as the published per-frame confidence floor.
+///
+/// Surfaced as a public constant so the runtime can warn when a configured
+/// `min_confidence` threshold exceeds it — otherwise a default install would
+/// silently emit zero `pose.frame` events while health reports healthy.
+pub const MODEL_TYPICAL_CONFIDENCE: f32 = 0.185;
+
 #[derive(Debug, Clone)]
 pub struct CsiWindow {
     pub data: Vec<f32>, // length INPUT_SUBCARRIERS * INPUT_TIMESTEPS
@@ -46,6 +56,40 @@ impl PoseOutput {
     }
 }
 
+/// Per-room LoRA calibration adapter (ADR-150 §3.5–3.6). Low-rank deltas on the pose
+/// head: `delta = (x · A) · B`, with `A:[in,r]`, `B:[r,out]` (scale baked into `B` at
+/// save time). A handful of labeled in-room samples fit this ~few-KB adapter and recover
+/// SOTA-level pose for an unseen room/person, on top of the frozen shared base.
+/// Adapter safetensors keys: `fc1.a`, `fc1.b`, `fc2.a`, `fc2.b` (any subset).
+#[derive(Clone)]
+struct PoseLora {
+    fc1: Option<(Tensor, Tensor)>,
+    fc2: Option<(Tensor, Tensor)>,
+}
+
+impl PoseLora {
+    /// Load from an adapter safetensors. Missing layer keys are simply skipped.
+    fn load(path: &Path, device: &Device) -> candle_core::Result<Self> {
+        let t = candle_core::safetensors::load(path, device)?;
+        let pair = |a: &str, b: &str| match (t.get(a), t.get(b)) {
+            (Some(x), Some(y)) => Some((x.clone(), y.clone())),
+            _ => None,
+        };
+        Ok(Self {
+            fc1: pair("fc1.a", "fc1.b"),
+            fc2: pair("fc2.a", "fc2.b"),
+        })
+    }
+
+    /// `y + (x · A) · B` when an adapter for this layer is present, else `y` unchanged.
+    fn apply(slot: &Option<(Tensor, Tensor)>, x: &Tensor, y: Tensor) -> candle_core::Result<Tensor> {
+        match slot {
+            Some((a, b)) => y + x.matmul(a)?.matmul(b)?,
+            None => Ok(y),
+        }
+    }
+}
+
 /// Internal model — mirrors the training script's `PoseModel` exactly.
 struct PoseNet {
     c1: Conv1d,
@@ -53,6 +97,8 @@ struct PoseNet {
     c3: Conv1d,
     fc1: Linear,
     fc2: Linear,
+    /// Optional per-room calibration adapter (none = shared base behaviour).
+    adapter: Option<PoseLora>,
 }
 
 impl PoseNet {
@@ -108,20 +154,31 @@ impl PoseNet {
             c3,
             fc1,
             fc2,
+            adapter: None,
         })
     }
 
-    /// Forward pass: `[B, 56, 20]` -> `[B, 34]` in `[0, 1]`.
+    /// Forward pass: `[B, 56, 20]` -> `[B, 34]` in `[0, 1]`. Applies the per-room
+    /// LoRA calibration adapter on the head layers when one is attached.
     fn forward(&self, x: &Tensor) -> candle_core::Result<Tensor> {
         let h = self.c1.forward(x)?.relu()?;
         let h = self.c2.forward(&h)?.relu()?;
         let h = self.c3.forward(&h)?.relu()?;
         // Global average pool over time dim (last dim) -> [B, 128]
-        let h = h.mean(2)?;
-        let h = self.fc1.forward(&h)?.relu()?;
-        let h = self.fc2.forward(&h)?;
+        let pooled = h.mean(2)?;
+        // fc1 (+ adapter delta) -> ReLU
+        let mut h1 = self.fc1.forward(&pooled)?;
+        if let Some(ad) = &self.adapter {
+            h1 = PoseLora::apply(&ad.fc1, &pooled, h1)?;
+        }
+        let h1 = h1.relu()?;
+        // fc2 (+ adapter delta)
+        let mut h2 = self.fc2.forward(&h1)?;
+        if let Some(ad) = &self.adapter {
+            h2 = PoseLora::apply(&ad.fc2, &h1, h2)?;
+        }
         // sigmoid -> keep in [0, 1]
-        candle_nn::ops::sigmoid(&h)
+        candle_nn::ops::sigmoid(&h2)
     }
 }
 
@@ -144,10 +201,31 @@ impl InferenceEngine {
         Self::with_weights(default_weights_path().as_deref())
     }
 
+    /// Engine from the default base weights plus an optional per-room calibration
+    /// adapter (ADR-150 §3.5). Used by `cog-pose-estimation run --adapter <path>`.
+    pub fn with_adapter(adapter_path: Option<&Path>) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::with_weights_and_adapter(default_weights_path().as_deref(), adapter_path)
+    }
+
     /// Create an engine with a specific weights path (used by `--config`
     /// in `cog-pose-estimation run`). If `weights_path` is `None`, the
     /// stub fallback is used.
     pub fn with_weights(weights_path: Option<&Path>) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::with_weights_and_adapter(weights_path, None)
+    }
+
+    /// Create an engine with a shared base **and an optional per-room calibration
+    /// adapter** (ADR-150 §3.5). The adapter is a tiny LoRA **safetensors with keys
+    /// `fc1.a`/`fc1.b`/`fc2.a`/`fc2.b`** — low-rank deltas for *this* engine's conv+MLP
+    /// pose head, fitted from a short labeled in-room capture. (It applies the same LoRA
+    /// calibration *mechanism* demonstrated by the reference tool in
+    /// `aether-arena/calibration/`, but that reference targets the MM-Fi transformer model
+    /// and emits a different key layout — adapters are model-specific and not interchangeable.)
+    /// `None` = uncalibrated base.
+    pub fn with_weights_and_adapter(
+        weights_path: Option<&Path>,
+        adapter_path: Option<&Path>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let device = pick_device();
         let inner = match weights_path {
             Some(p) if p.exists() => {
@@ -158,12 +236,25 @@ impl InferenceEngine {
                 let vb = unsafe {
                     VarBuilder::from_mmaped_safetensors(&[p.to_path_buf()], DType::F32, &device)?
                 };
-                let net = PoseNet::new(vb)?;
+                let mut net = PoseNet::new(vb)?;
+                if let Some(ap) = adapter_path {
+                    if ap.exists() {
+                        net.adapter = Some(PoseLora::load(ap, &device)?);
+                    }
+                }
                 Some(Arc::new(LoadedModel { net }))
             }
             _ => None,
         };
         Ok(Self { inner, device })
+    }
+
+    /// Whether a per-room calibration adapter is currently attached.
+    pub fn is_calibrated(&self) -> bool {
+        self.inner
+            .as_ref()
+            .map(|m| m.net.adapter.is_some())
+            .unwrap_or(false)
     }
 
     /// Where the weights actually came from. Useful for the run.started event.
@@ -202,12 +293,15 @@ impl InferenceEngine {
         let out = model.net.forward(&t)?; // [1, 34]
         let flat: Vec<f32> = out.flatten_all()?.to_vec1()?;
         // Confidence from pose_v1 is a published constant rather than per-frame —
-        // the trained model didn't emit a confidence head. Use the validation-set
-        // PCK@50 (18.5%) as the published self-reported confidence so downstream
-        // consumers can gate display decisions on it.
+        // the trained model has no confidence head (the head emits 34 keypoint
+        // coordinates only), so a real per-frame value is genuinely unavailable.
+        // We surface the validation-set PCK@50 (`MODEL_TYPICAL_CONFIDENCE`) as the
+        // honest self-reported confidence. The runtime's `min_confidence` default
+        // is pinned at or below this so a default install actually emits frames
+        // (and warns if an operator raises the threshold above the model's reach).
         Ok(PoseOutput {
             keypoints: flat,
-            confidence: 0.185,
+            confidence: MODEL_TYPICAL_CONFIDENCE,
         })
     }
 }

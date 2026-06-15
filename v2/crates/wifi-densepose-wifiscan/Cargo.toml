@@ -1,6 +1,6 @@
 [package]
 name = "wifi-densepose-wifiscan"
-version.workspace = true
+version = "0.3.1"
 edition.workspace = true
 description = "Multi-BSSID WiFi scanning domain layer for enhanced Windows WiFi DensePose sensing (ADR-022)"
 license.workspace = true
@@ -21,6 +21,17 @@ serde = { workspace = true, optional = true }
 # Async runtime (optional, for Tier 2 async scanning)
 tokio = { workspace = true, optional = true }
 
+# Native Windows WLAN API (`wlanapi.dll`) FFI for the Tier 2 native scan
+# path. Only linked on Windows targets; on every other platform the
+# native path returns a typed `Unsupported` error and this dependency is
+# not compiled at all. `windows-sys` is already in the workspace lock
+# tree (transitive), so this adds no new external crate.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_WiFi",
+] }
+
 [features]
 default = ["serde", "pipeline"]
 serde = ["dep:serde"]
@@ -29,7 +40,10 @@ pipeline = []
 wlanapi = ["dep:tokio"]
 
 [lints.rust]
-unsafe_code = "forbid"
+# `deny` (not `forbid`) so the single, audited `wlan_ffi` module can opt
+# back in with `#[allow(unsafe_code)]` for the `wlanapi.dll` FFI calls.
+# Every other module in the crate remains unsafe-free (enforced by deny).
+unsafe_code = "deny"
 
 [lints.clippy]
 all = "warn"

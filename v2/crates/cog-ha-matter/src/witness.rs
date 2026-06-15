@@ -102,19 +102,43 @@ pub struct WitnessEvent {
     pub this_hash: WitnessHash,
 }
 
+/// Domain-separation tag prefixing every witness canonical message.
+///
+/// This is the *domain tag* half of the "domain-tag + length-prefix"
+/// rule for any hashed/signed message whose fields are
+/// operator-influenceable. The witness chain already length-prefixes
+/// `kind` and `payload` (preventing intra-protocol concatenation
+/// forgery); the tag adds cross-protocol separation so a SHA-256
+/// preimage / Ed25519 message produced here can never be re-interpreted
+/// as a message from another signing context that shares key
+/// infrastructure — notably ADR-116's *manifest* `binary_signature`
+/// (Ed25519 over `binary_sha256`), which ADR-262 P2 reuses this exact
+/// chain for. A signature is only ever valid for the one domain whose
+/// tag it commits to.
+///
+/// The trailing NUL terminates the version string so a future
+/// migration (Blake3, extra fields, Merkle tier) bumps the tag instead
+/// of silently colliding with v1 bundles.
+pub const WITNESS_DOMAIN_TAG: &[u8] = b"cog-ha-matter/witness-event/v1\x00";
+
 /// Compute the canonical-bytes form an event is hashed over.
 ///
-/// The format is intentionally simple and length-prefixed so a
-/// future migration can be staged with a `version` byte in front
-/// without ambiguity:
+/// The format is domain-tagged and length-prefixed:
 ///
 /// ```text
-///   prev_hash[32] | seq:u64-be | ts:u64-be | kind_len:u32-be | kind | payload_len:u32-be | payload
+///   DOMAIN_TAG | prev_hash[32] | seq:u64-be | ts:u64-be
+///              | kind_len:u32-be | kind | payload_len:u32-be | payload
 /// ```
 ///
-/// Length-prefixing prevents the classic "concatenation forgery"
-/// attack where `"abc" + "def"` and `"ab" + "cdef"` would hash the
-/// same.
+/// * The leading [`WITNESS_DOMAIN_TAG`] gives cross-protocol
+///   separation: bytes signed/hashed here cannot be replayed as a
+///   message for another Ed25519 context in the same trust chain
+///   (e.g. the manifest `binary_signature`). It also carries a format
+///   version for staged migrations.
+/// * Length-prefixing `kind` and `payload` prevents the classic
+///   "concatenation forgery" where `"abc" + "def"` and `"ab" + "cdef"`
+///   would hash the same. The fixed-width `prev_hash`/`seq`/`ts`
+///   fields are self-delimiting.
 pub fn canonical_bytes(
     prev_hash: WitnessHash,
     seq: u64,
@@ -123,7 +147,10 @@ pub fn canonical_bytes(
     payload: &[u8],
 ) -> Vec<u8> {
     let kind_bytes = kind.as_bytes();
-    let mut out = Vec::with_capacity(32 + 8 + 8 + 4 + kind_bytes.len() + 4 + payload.len());
+    let mut out = Vec::with_capacity(
+        WITNESS_DOMAIN_TAG.len() + 32 + 8 + 8 + 4 + kind_bytes.len() + 4 + payload.len(),
+    );
+    out.extend_from_slice(WITNESS_DOMAIN_TAG);
     out.extend_from_slice(&prev_hash.0);
     out.extend_from_slice(&seq.to_be_bytes());
     out.extend_from_slice(&timestamp_unix_s.to_be_bytes());
@@ -466,11 +493,51 @@ mod tests {
     }
 
     #[test]
-    fn canonical_bytes_starts_with_prev_hash() {
+    fn canonical_bytes_starts_with_domain_tag_then_prev_hash() {
         // Locks the on-wire format. A future migration that flips
-        // field order must bump a version byte and update this test.
+        // field order must bump the domain tag and update this test.
         let bytes = canonical_bytes(WitnessHash([7u8; 32]), 1, 2, "k", b"p");
-        assert_eq!(&bytes[..32], &[7u8; 32]);
+        let tag = WITNESS_DOMAIN_TAG.len();
+        assert_eq!(&bytes[..tag], WITNESS_DOMAIN_TAG);
+        assert_eq!(&bytes[tag..tag + 32], &[7u8; 32]);
+    }
+
+    #[test]
+    fn canonical_bytes_is_domain_separated() {
+        // Cross-protocol separation: the witness preimage must begin
+        // with the domain tag so its SHA-256 / Ed25519 message can
+        // never be reinterpreted as a message from another signing
+        // context that shares key infrastructure (e.g. the manifest
+        // `binary_signature` over `binary_sha256`). Fails on the old
+        // un-tagged encoding, which began directly with `prev_hash`.
+        let bytes = canonical_bytes(WitnessHash::GENESIS, 0, 0, "k", b"p");
+        assert!(
+            bytes.starts_with(WITNESS_DOMAIN_TAG),
+            "canonical message is not domain-separated"
+        );
+        // The tag is versioned and NUL-terminated.
+        assert!(WITNESS_DOMAIN_TAG.ends_with(b"\x00"));
+        assert!(WITNESS_DOMAIN_TAG.windows(2).any(|w| w == b"v1"));
+    }
+
+    #[test]
+    fn witness_preimage_cannot_collide_with_a_bare_manifest_digest() {
+        // The manifest `binary_signature` signs a bare 64-byte
+        // SHA-256 hex string. A witness preimage must never *equal*
+        // such a string, even if an operator crafted kind/payload to
+        // try — the domain tag (33 bytes) + fixed 48-byte prefix make
+        // the witness message structurally longer and tag-distinct.
+        // Fails on the old encoding only if it could ever produce a
+        // 64-byte all-hex message; the tag makes the impossibility
+        // explicit and regression-guarded.
+        let manifest_digest_msg = "a".repeat(64); // 64 ASCII hex bytes
+        let witness = canonical_bytes(WitnessHash::GENESIS, 0, 0, "", b"");
+        assert_ne!(witness.as_slice(), manifest_digest_msg.as_bytes());
+        assert!(
+            witness.len() > manifest_digest_msg.len(),
+            "domain tag must make witness preimage structurally distinct"
+        );
+        assert!(!witness.starts_with(b"aaaa"));
     }
 
     #[test]

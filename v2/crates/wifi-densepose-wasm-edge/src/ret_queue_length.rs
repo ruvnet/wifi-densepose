@@ -62,6 +62,8 @@ const RATE_HISTORY: usize = 1200;
 
 /// Estimates queue length from CSI presence and person-count data.
 pub struct QueueLengthEstimator {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
     /// Smoothed queue length estimate.
     queue_ema: Ema,
     /// Smoothed arrival rate (persons/minute).
@@ -91,6 +93,7 @@ pub struct QueueLengthEstimator {
 impl QueueLengthEstimator {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 4],
             queue_ema: Ema::new(QUEUE_EMA_ALPHA),
             arrival_rate_ema: Ema::new(RATE_EMA_ALPHA),
             service_rate_ema: Ema::new(RATE_EMA_ALPHA),
@@ -161,14 +164,11 @@ impl QueueLengthEstimator {
         }
 
         // Build events.
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut ne = 0usize;
 
         // Periodic queue length report.
         if self.frame_count % REPORT_INTERVAL == 0 {
-            unsafe {
-                EVENTS[ne] = (EVENT_QUEUE_LENGTH, self.current_queue as f32);
-            }
+            self.events[ne] = (EVENT_QUEUE_LENGTH, self.current_queue as f32);
             ne += 1;
         }
 
@@ -184,9 +184,7 @@ impl QueueLengthEstimator {
 
                 // Service rate event.
                 if ne < 4 {
-                    unsafe {
-                        EVENTS[ne] = (EVENT_SERVICE_RATE, self.service_rate_ema.value);
-                    }
+                    self.events[ne] = (EVENT_SERVICE_RATE, self.service_rate_ema.value);
                     ne += 1;
                 }
 
@@ -199,9 +197,7 @@ impl QueueLengthEstimator {
                 };
 
                 if ne < 4 {
-                    unsafe {
-                        EVENTS[ne] = (EVENT_WAIT_TIME_ESTIMATE, wait_time);
-                    }
+                    self.events[ne] = (EVENT_WAIT_TIME_ESTIMATE, wait_time);
                     ne += 1;
                 }
             }
@@ -216,16 +212,14 @@ impl QueueLengthEstimator {
         if self.current_queue as f32 >= QUEUE_ALERT_THRESH && !self.alert_active {
             self.alert_active = true;
             if ne < 4 {
-                unsafe {
-                    EVENTS[ne] = (EVENT_QUEUE_ALERT, self.current_queue as f32);
-                }
+                self.events[ne] = (EVENT_QUEUE_ALERT, self.current_queue as f32);
                 ne += 1;
             }
         } else if (self.current_queue as f32) < QUEUE_ALERT_THRESH - 1.0 {
             self.alert_active = false;
         }
 
-        unsafe { &EVENTS[..ne] }
+        &self.events[..ne]
     }
 
     /// Get the current smoothed queue length.

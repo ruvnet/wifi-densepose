@@ -1,0 +1,32 @@
+{
+  "published": {
+    "pck@20": 0.9725,
+    "pck@30": 0.9863,
+    "pck@40": 0.9916,
+    "pck@50": 0.9948,
+    "mpjpe": 0.007
+  },
+  "params_millions": 2.225042,
+  "data_dir": "C:\\Users\\ruv\\.cache\\kagglehub\\datasets\\kaka2434\\wiflow-dataset\\versions\\1\\preprocessed_csi_data",
+  "device": "cpu",
+  "test_full": {
+    "samples": 54000,
+    "mpjpe": NaN,
+    "pck@10": 5.6790124349020145e-05,
+    "pck@20": 0.0007876543271596785,
+    "pck@30": 0.007780246982971827,
+    "pck@40": 0.05529259262923841,
+    "pck@50": 0.1542370371548114,
+    "wall_seconds": 118.03756999969482
+  },
+  "test_drop_last": {
+    "samples": 53952,
+    "mpjpe": NaN,
+    "pck@10": 5.6840649370682976e-05,
+    "pck@20": 0.0007883550872372227,
+    "pck@30": 0.007787168910892621,
+    "pck@40": 0.055318307667895535,
+    "pck@50": 0.15425316342412276,
+    "wall_seconds": 120.87458372116089
+  }
+}

@@ -12,9 +12,12 @@
 //!
 //! | Code | Meaning |
 //! |------|---------|
-//! | 0    | PASS — hash matches AND loss decreased |
-//! | 1    | FAIL — hash mismatch OR loss did not decrease |
-//! | 2    | SKIP — no expected hash file found; run `--generate-hash` first |
+//! | 0    | PASS — committed hash matches AND loss decreased ≥ margin |
+//! | 1    | FAIL — hash mismatch OR loss did not decrease by the margin |
+//! | 2    | SKIP — loss decreased but no committed hash to compare against |
+//!
+//! Note (ADR-155 §Tier-1.4): a sub-margin loss change is a **FAIL**, never a
+//! SKIP — a missing baseline can no longer mask a non-learning pipeline.
 //!
 //! # Usage
 //!
@@ -156,11 +159,31 @@ fn main() {
     println!("  Initial loss:    {:.6}", result.initial_loss);
     println!("  Final loss:      {:.6}", result.final_loss);
     println!(
-        "  Loss decreased:  {} ({:.6} → {:.6})",
+        "  Loss decreased:  {} (Δ={:.6}, need ≥ {:.0e}) ({:.6} → {:.6})",
         if result.loss_decreased { "YES" } else { "NO" },
+        result.loss_decrease,
+        proof::MIN_LOSS_DECREASE,
         result.initial_loss,
         result.final_loss
     );
+
+    // ADR-155 §Tier-1.4: a sub-margin / non-decrease is a FAIL regardless of
+    // whether an expected hash exists — it can never be silently downgraded to
+    // SKIP. Fail fast before the hash comparison.
+    if !result.loss_decreased {
+        println!();
+        println!("[VERDICT] FAIL");
+        println!("{}", "=".repeat(72));
+        println!(
+            "  REASON: loss did not decrease by the required margin \
+             (Δ={:.6} < {:.0e}).",
+            result.loss_decrease,
+            proof::MIN_LOSS_DECREASE
+        );
+        println!("  The optimiser is not measurably learning on the fixed proof problem.");
+        println!("{}", "=".repeat(72));
+        std::process::exit(1);
+    }
 
     if args.verbose {
         println!();

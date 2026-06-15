@@ -1,0 +1,20 @@
+[package]
+name = "wifi-densepose-worldmodel"
+description = "ADR-147 — OccWorld thin-client bridge: WorldGraph PersonTrack history → OccWorld Python subprocess → TrajectoryPrior"
+readme = "README.md"
+version = "0.3.1"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tokio = { version = "1", features = ["net", "io-util", "macros", "time"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+wifi-densepose-worldgraph = { version = "0.3.1", path = "../wifi-densepose-worldgraph" }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

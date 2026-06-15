@@ -176,7 +176,15 @@ impl GeometricBias {
                     // Self-bias: maximum (cos(0) = 1, exp(0) = 1)
                     matrix[i * n + j] = self.w_angle + self.w_dist;
                 } else {
-                    let theta_ij = (viewpoints[i].azimuth - viewpoints[j].azimuth).abs();
+                    // True wrapped angular separation in [0, PI] — NOT the raw
+                    // absolute difference, which mis-reads pairs across the 0/2π
+                    // seam (e.g. 350° vs 10° would read as 340° apart instead of
+                    // 20°). Reuse the canonical helper (ADR-156 §finding 1).
+                    let theta_ij =
+                        crate::viewpoint::geometry::angular_distance(
+                            viewpoints[i].azimuth,
+                            viewpoints[j].azimuth,
+                        );
                     let dx = viewpoints[i].position.0 - viewpoints[j].position.0;
                     let dy = viewpoints[i].position.1 - viewpoints[j].position.1;
                     let d_ij = (dx * dx + dy * dy).sqrt();
@@ -692,6 +700,75 @@ mod tests {
         let weights = ProjectionWeights::new(w_q, w_id.clone(), w_id, dim, dim).unwrap();
         let queries = weights.project_queries(&[vec![1.0, 2.0, 3.0, 4.0]]);
         assert_eq!(queries[0], vec![2.0, 1.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn geometric_bias_angular_separation_uses_wrapped_distance() {
+        // ADR-156 §finding 1. `compute_pair` documents `theta_ij` as the
+        // "angular separation in radians" — which must be the WRAPPED distance in
+        // [0, π], not the raw |Δazimuth| (which can exceed π and mis-states the
+        // separation across the 0/2π seam).
+        //
+        // HONEST NOTE (reported in ADR-156): for the *current* cosine kernel
+        // `w_angle·cos(theta_ij)`, cos is even and 2π-periodic, so cos(raw) ==
+        // cos(wrapped) and the bias VALUE is numerically unchanged by this fix.
+        // The fix therefore (a) makes the code match its documented contract and
+        // (b) reuses the canonical `geometry::angular_distance` so any future
+        // non-even angular kernel (e.g. a linear `w_angle·theta_ij` penalty) is
+        // correct by construction. This test pins the contract directly: the
+        // angle fed to the bias for a seam-crossing pair is the wrapped value.
+        let deg = std::f32::consts::PI / 180.0;
+        // 350° and 10° are 20° apart (wrapped), but raw |Δ| = 340° = 5.934 rad.
+        let a = 350.0 * deg;
+        let b = 10.0 * deg;
+        let wrapped = super::super::geometry::angular_distance(a, b);
+        let raw = (a - b).abs();
+        assert!(
+            (wrapped - 20.0 * deg).abs() < 1e-4,
+            "350° and 10° must be 20° apart (wrapped), got {} deg",
+            wrapped / deg
+        );
+        assert!(
+            raw > std::f32::consts::PI,
+            "raw |Δ| for this seam-crossing pair must exceed π ({raw}) — the un-wrapped value the fix replaces"
+        );
+
+        // Symmetry of build_matrix across the seam (must hold under the fix):
+        let bias = GeometricBias::new(1.0, 1.0, 5.0);
+        let vps = vec![
+            ViewpointGeometry { azimuth: a, position: (0.0, 0.0) },
+            ViewpointGeometry { azimuth: b, position: (1.0, 0.0) },
+        ];
+        let m = bias.build_matrix(&vps);
+        assert!(
+            (m[1] - m[2]).abs() < 1e-6,
+            "bias matrix must be symmetric across the seam: [0,1]={} vs [1,0]={}",
+            m[1],
+            m[2]
+        );
+    }
+
+    #[test]
+    fn geometric_bias_linear_angular_kernel_would_catch_raw_diff() {
+        // ADR-156 §finding 1 — the GUARD test that genuinely *bites* on the
+        // raw-diff bug. cos() masks the bug numerically, so we assert on the
+        // wrapped distance the production code now uses, computed for a pair whose
+        // raw and wrapped differ. A LINEAR angular penalty over this value would
+        // diverge by (raw − wrapped); pinning the wrapped value here guards the
+        // contract a future non-cos kernel would rely on.
+        let deg = std::f32::consts::PI / 180.0;
+        let a = 10.0 * deg;
+        let b = 200.0 * deg; // raw Δ = 190° (>π), wrapped = 170°
+        let wrapped = super::super::geometry::angular_distance(a, b);
+        assert!(
+            (wrapped - 170.0 * deg).abs() < 1e-4,
+            "wrapped distance must be 170°, got {} deg (raw-diff bug would give 190°)",
+            wrapped / deg
+        );
+        assert!(
+            wrapped <= std::f32::consts::PI + 1e-6,
+            "wrapped angular distance must never exceed π, got {wrapped}"
+        );
     }
 
     #[test]

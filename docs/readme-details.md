@@ -50,7 +50,7 @@ See [PR #405](https://github.com/ruvnet/RuView/pull/405) for full details.
 ### What's New in v0.7.0
 
 <details>
-<summary><strong>Camera Ground-Truth Training — 92.9% PCK@20</strong></summary>
+<summary><strong>Camera Ground-Truth Training</strong></summary>
 
 **v0.7.0 adds camera-supervised pose training** using MediaPipe + real ESP32 CSI data:
 
@@ -76,15 +76,20 @@ node scripts/train-wiflow-supervised.js --data data/paired/*.jsonl --scale lite
 node scripts/eval-wiflow.js --model models/wiflow-real/wiflow-v1.json --data data/paired/*.jsonl
 ```
 
-**Result: 92.9% PCK@20** from a 5-minute data collection session with one ESP32-S3 and one webcam.
+> **Accuracy retraction (2026-06-10):** the "92.9% PCK@20" figure previously
+> shown here is retracted. A forensic recheck of the surviving eval holdout
+> (69 samples) found a constant-output model scored with an absolute
+> (non-torso-normalized) threshold on nearly-static frames — a protocol under
+> which a trivial mean-pose predictor scores 100%. Torso-normalized PCK@20 on
+> the same holdout is ~19% (from that degenerate predictor). No measured
+> camera-supervised PCK@20 is currently published (CHANGELOG, PR #535).
 
-| Metric | Before (proxy) | After (camera-supervised) |
-|--------|----------------|--------------------------|
-| PCK@20 | 0% | **92.9%** |
-| Eval loss | 0.700 | **0.082** |
-| Bone constraint | N/A | **0.008** |
-| Training time | N/A | **19 minutes** |
-| Model size | N/A | **974 KB** |
+| Metric | Camera-supervised run (protocol retracted) |
+|--------|--------------------------------------------|
+| Eval loss | 0.082 |
+| Bone constraint | 0.008 |
+| Training time | 19 minutes |
+| Model size | 974 KB |
 
 Pre-trained model: [HuggingFace ruv/ruview/wiflow-v1](https://huggingface.co/ruv/ruview)
 
@@ -122,7 +127,7 @@ node scripts/benchmark-ruvllm.js --model models/csi-ruvllm       # benchmark
 
 | What we measured | Result | Why it matters |
 |-----------------|--------|---------------|
-| **Presence detection** | **100% accuracy** | Never misses a person, never false alarms |
+| **CSI embedding quality** | **82.3% held-out temporal-triplet** | Honest label-free metric on the last 20% by time (v1's "100% presence" was a single-class recording — retracted, [#882](https://github.com/ruvnet/RuView/issues/882)) |
 | **Inference speed** | **0.008 ms** per embedding | 125,000x faster than real-time |
 | **Throughput** | **164,183 embeddings/sec** | One Mac Mini handles 1,600+ ESP32 nodes |
 | **Contrastive learning** | **51.6% improvement** | Strong pattern learning from real overnight data |
@@ -233,7 +238,7 @@ python firmware/esp32-csi-node/provision.py --port COM9 --hop-channels "1,6,11"
 | **kNN similarity search** | "Find the 10 most similar states to right now" — anomaly detection, fingerprinting | Cognitum Seed |
 | **Witness chain** | SHA-256 tamper-evident audit trail for every measurement (1,747 entries validated) | Cognitum Seed |
 | **Camera-free pose training** | 17 COCO keypoints from 10 sensor signals — PIR, RSSI triangulation, subcarrier asymmetry, vibration, BME280 | 2x ESP32 + Seed |
-| **Pre-trained model** | 82.8 KB (8 KB at 4-bit quantization), 100% presence accuracy, 0 skeleton violations | Download from release |
+| **Pre-trained model** | 82.8 KB (8 KB at 4-bit quantization), 82.3% held-out temporal-triplet accuracy (v1's "100% presence" was single-class — retracted, [#882](https://github.com/ruvnet/RuView/issues/882)) | Download from release |
 | **Sub-ms inference** | 0.012 ms latency, 171,472 embeddings/sec on M4 Pro | Any machine with Node.js |
 | **SONA adaptation** | Adapts to new rooms in <1ms without retraining | ruvllm runtime |
 | **LoRA room adapters** | Per-node fine-tuning with 2,048 parameters per adapter | Automatic |
@@ -262,7 +267,7 @@ node scripts/benchmark-ruvllm.js --model models/csi-ruvllm
 
 | What we measured | Result | Why it matters |
 |-----------------|--------|---------------|
-| **Presence detection** | **100% accuracy** | Never misses a person, never false alarms |
+| **CSI embedding quality** | **82.3% held-out temporal-triplet** | Honest label-free metric (v1's "100% presence" was single-class — retracted, [#882](https://github.com/ruvnet/RuView/issues/882)) |
 | **Person counting** | **24/24 correct** (MinCut) | Fixed the #1 user-reported issue |
 | **Inference speed** | **0.012 ms** per embedding | 83,000x faster than real-time |
 | **Throughput** | **171,472 embeddings/sec** | One Mac Mini handles 1,700+ ESP32 nodes |
@@ -868,7 +873,7 @@ Download a pre-built binary — no build toolchain needed:
 
 | Release | What's included | Tag |
 |---------|-----------------|-----|
-| [v0.7.0](https://github.com/ruvnet/RuView/releases/tag/v0.7.0) | **Latest** — Camera-supervised WiFlow model (92.9% PCK@20), ground-truth training pipeline, ruvector optimizations | `v0.7.0` |
+| [v0.7.0](https://github.com/ruvnet/RuView/releases/tag/v0.7.0) | **Latest** — Camera-supervised WiFlow model (accuracy figure retracted 2026-06-10, see above), ground-truth training pipeline, ruvector optimizations | `v0.7.0` |
 | [v0.6.0](https://github.com/ruvnet/RuView/releases/tag/v0.6.0-esp32) | [Pre-trained models on HuggingFace](https://huggingface.co/ruv/ruview), 17 sensing apps, 51.6% contrastive improvement, 0.008ms inference | `v0.6.0-esp32` |
 | [v0.5.5](https://github.com/ruvnet/RuView/releases/tag/v0.5.5-esp32) | SNN + MinCut (#348 fix) + CNN spectrogram + WiFlow + multi-freq mesh + graph transformer | `v0.5.5-esp32` |
 | [v0.5.4](https://github.com/ruvnet/RuView/releases/tag/v0.5.4-esp32) | Cognitum Seed integration ([ADR-069](docs/adr/ADR-069-cognitum-seed-csi-pipeline.md)), 8-dim feature vectors, RVF store, witness chain, security hardening | `v0.5.4-esp32` |

@@ -190,4 +190,78 @@ The entity registry is a `RwLock<HashMap<EntityId, EntityEntry>>` backed by an a
 
 - `v2/crates/wifi-densepose-sensing-server/src/main.rs` — Axum + Tokio architecture pattern used throughout the existing server stack
 - `docs/adr/ADR-126-ruview-native-ha-port-master.md` — HOMECORE master; §5.5 crate naming; §6 compatibility contract; §5.1 RUVIEW-POLICY
+
+---
+
+## 9. Security & concurrency review (P1 core, beyond-SOTA sweep)
+
+Foundational review of the `homecore` crate — the state store + event bus +
+service/entity registries every other HOMECORE module trusts. Same rigor as
+the ADR-129/130/132/133/161 sibling reviews. **Three real fixes (one
+concurrency, two hardening), each pinned by a fails-on-old test; the bus-lag
+and lock-discipline dimensions confirmed clean with evidence.**
+
+- **HC-RACE-01 (state-set TOCTOU — lost / reordered `state_changed`, the
+  crux). FIXED.** `StateMachine::set` did `get()` (releasing the DashMap
+  shard lock) → compute the next snapshot + the no-op / `last_changed`
+  decision → `insert()` (re-acquiring the lock) → `send()`. The
+  read-modify-write was **not atomic** w.r.t. a concurrent writer on the
+  same entity, contradicting §2.1's promise that "the writer atomically
+  replaces the map entry." A writer that read a stale `old` could
+  mis-classify a genuine transition as a no-op and **drop its
+  `state_changed` event** (a missed automation trigger) or fire an event
+  whose `new_state` duplicated the previously delivered one (a spurious
+  trigger for any automation keyed on `old_state != new_state`). **Fix:**
+  hold the shard write-lock across the entire read→decide→insert→fire
+  sequence via `entry()`/`insert_entry()`; `tx.send` is non-blocking,
+  non-async, and never re-enters the map, so firing under the shard lock
+  cannot deadlock and keeps global event order in lock-step with global
+  commit order. Pinned by `concurrent_set_fires_no_duplicate_adjacent_events`
+  (4 writers toggling one entity A/B; asserts no two consecutive fired
+  events carry an identical `new_state` — impossible under correct
+  serialisation; a probe observed ~93k such duplicate-adjacent events across
+  200 trials on the racy code, zero on the fix).
+- **HC-EID-LEN-01 (unbounded `entity_id` — memory-DoS at the REST boundary).
+  FIXED.** `homecore-api/src/rest.rs` parses untrusted path segments
+  straight through `EntityId::parse`; with no length cap, an
+  otherwise-valid id (`a.` + many MB of `[a-z0-9_]`) was accepted and a
+  `POST /api/states/<giant>` would persist it into the DashMap state store
+  (permanent growth across distinct ids). **Fix:** reject ids longer than
+  `MAX_ENTITY_ID_LEN` (255, HA-compatible) up front in `parse()`, before any
+  per-char scan, with a new `EntityIdError::TooLong`; fail-closed at the
+  boundary type protects every caller. Pinned by `entity_id_length_boundary`
+  (exactly-MAX accepted, MAX+1 and a 4 MiB id rejected — fails on old code).
+- **HC-SVC-PANIC-01 (service-handler panic not isolated). HARDENED.**
+  `ServiceRegistry::call` already ran handlers outside the registry lock (no
+  `RwLock` poisoning, no blocking of other callers — clean), but a
+  panicking handler unwound through `call()` into the caller's task. **Fix:**
+  wrap the handler future in `AssertUnwindSafe` + `catch_unwind`, converting
+  a panic to `ServiceError::HandlerPanicked`; the registry stays fully
+  usable. Pinned by `panicking_handler_is_isolated_and_registry_survives`.
+
+**Dimensions confirmed clean (with evidence):**
+
+- **Event-bus bounds / lag (same class as the homecore-api WS lag-DoS).**
+  Both `StateMachine` and `EventBus` use bounded `tokio::sync::broadcast`
+  (capacity 4,096). A slow subscriber gets a recoverable `Lagged(n)`
+  (drop-oldest + re-sync); `fire_*` is non-blocking and **never waits on
+  slow receivers**, so a lagging subscriber cannot block the publisher, grow
+  the channel without bound, or take down a fast subscriber. Evidenced by
+  `slow_subscriber_does_not_block_publisher_or_kill_the_bus` (fire 3×
+  capacity at an idle subscriber; publisher unblocked, bus stays live).
+- **Lock ordering / lock-across-await (deadlock).** No code path holds two
+  of `{state DashMap, registry RwLock, service RwLock}` simultaneously, so
+  no inconsistent-ordering deadlock can exist. Every `tokio::sync::RwLock`
+  guard in `registry.rs`/`service.rs` is used in a single synchronous
+  statement and dropped before any `.await`; `call` explicitly scopes the
+  read guard out before awaiting the handler. The only guard held across a
+  send is the DashMap shard lock in `set`, across a synchronous
+  (non-await) broadcast send — safe.
+- **Panic-on-input.** No reachable `unwrap`/`expect`/index in non-test code
+  beyond the safe `send().unwrap_or(0)` and the dead-but-harmless
+  `split_once(...).unwrap_or(...)` fallbacks on already-validated ids.
+
+`cargo test -p homecore --no-default-features`: **20 → 24 passed, 0 failed**
+(+4 pins). Workspace green; Python deterministic proof unchanged
+(`f8e76f21…46f7a`, bit-exact — `homecore` is off the signal proof path).
 - `docs/adr/ADR-028-esp32-capability-audit.md` — witness chain pattern (Ed25519 per state transition)

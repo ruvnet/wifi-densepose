@@ -1,5 +1,6 @@
 # homecore-migrate — Migration tooling from Python Home Assistant.
-# Implements ADR-134 (HOMECORE-MIGRATE), P1 scaffold:
+# Implements ADR-165 (HOMECORE-MIGRATE), P1 scaffold:
+# (was cited as "ADR-134"; renumbered to ADR-165 — on-disk ADR-134 is CIR. See ADR-164/ADR-165.)
 #   - HaStorageDir + HaStorageEnvelope: reads `.storage/*.json` files
 #   - Versioned format parsers under `storage_format::v<N>`
 #   - entity_registry, device_registry, config_entries parsers
@@ -14,7 +15,7 @@ version = "0.1.0-alpha.0"
 edition = "2021"
 license = "MIT"
 authors = ["rUv <ruv@ruv.net>", "HOMECORE Contributors"]
-description = "Migration tooling from Python Home Assistant to HOMECORE (ADR-134 P1 scaffold)"
+description = "Migration tooling from Python Home Assistant to HOMECORE (ADR-165 P1 scaffold)"
 repository = "https://github.com/ruvnet/RuView"
 
 [[bin]]

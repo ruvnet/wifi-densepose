@@ -2,6 +2,26 @@
 //!
 //! Test-time training with contrastive learning and entropy minimization on
 //! unlabeled CSI frames. Produces LoRA weight deltas for new environments.
+//!
+//! # Honesty note (ADR-155 §Tier-1.3)
+//!
+//! Earlier this module's `contrastive_step` / `entropy_step` wrote a *fake*
+//! gradient (`grad += v * 0.01`) that did **not** descend the stated triplet /
+//! entropy objective — so any "TTA improves the metric" claim was unsupported
+//! by the code. That placeholder is gone. The two `*_loss` functions are now
+//! pure evaluators of the real objective, and [`RapidAdaptation::adapt`]
+//! descends them with a **finite-difference gradient** of that exact loss.
+//! Finite differences genuinely minimize the stated objective (central
+//! differences are accurate to O(ε²) truncation; see [`RapidAdaptation::adapt`]),
+//! so "the adaptation loss decreases" is now a real, reproducible
+//! measurement rather than an artefact of a hand-tuned fake step.
+//!
+//! **Scope caveat (still honest):** this minimizes a *self-supervised proxy*
+//! (temporal-contrastive + prediction entropy) over a tiny LoRA bottleneck on
+//! raw CSI frames. It is NOT yet wired to the pose model, and there is no
+//! measured end-to-end PCK gain on WiFi pose from this path. ADR-155 records
+//! TTA-on-pose as a future, not-yet-measured capability — do not cite a PCK
+//! improvement from this module.
 
 /// Loss function(s) for test-time adaptation.
 #[derive(Debug, Clone)]
@@ -169,26 +189,15 @@ impl RapidAdaptation {
         let lora_sz = 2 * fdim * self.lora_rank;
         let mut w = vec![0.01_f32; lora_sz];
         let (epochs, lr) = (self.adaptation_loss.epochs(), self.adaptation_loss.lr());
-        let mut final_loss = 0.0_f32;
+        let mut final_loss = self.total_loss(&w, fdim);
         for _ in 0..epochs {
-            let mut g = vec![0.0_f32; lora_sz];
-            let loss = match &self.adaptation_loss {
-                AdaptationLoss::ContrastiveTTT { .. } => self.contrastive_step(&w, fdim, &mut g),
-                AdaptationLoss::EntropyMin { .. } => self.entropy_step(&w, fdim, &mut g),
-                AdaptationLoss::Combined { lambda_ent, .. } => {
-                    let cl = self.contrastive_step(&w, fdim, &mut g);
-                    let mut eg = vec![0.0_f32; lora_sz];
-                    let el = self.entropy_step(&w, fdim, &mut eg);
-                    for (gi, egi) in g.iter_mut().zip(eg.iter()) {
-                        *gi += lambda_ent * egi;
-                    }
-                    cl + lambda_ent * el
-                }
-            };
-            for (wi, gi) in w.iter_mut().zip(g.iter()) {
+            // Real gradient of the *actual* objective via central finite
+            // differences (ADR-155 §Tier-1.3). No hand-tuned fake step.
+            let grad = self.finite_diff_grad(&w, fdim);
+            for (wi, gi) in w.iter_mut().zip(grad.iter()) {
                 *wi -= lr * gi;
             }
-            final_loss = loss;
+            final_loss = self.total_loss(&w, fdim);
         }
         Ok(AdaptationResult {
             lora_weights: w,
@@ -198,7 +207,44 @@ impl RapidAdaptation {
         })
     }
 
-    fn contrastive_step(&self, w: &[f32], fdim: usize, grad: &mut [f32]) -> f32 {
+    /// The scalar objective being minimized, for the active loss variant.
+    fn total_loss(&self, w: &[f32], fdim: usize) -> f32 {
+        match &self.adaptation_loss {
+            AdaptationLoss::ContrastiveTTT { .. } => self.contrastive_loss(w, fdim),
+            AdaptationLoss::EntropyMin { .. } => self.entropy_loss(w, fdim),
+            AdaptationLoss::Combined { lambda_ent, .. } => {
+                self.contrastive_loss(w, fdim) + lambda_ent * self.entropy_loss(w, fdim)
+            }
+        }
+    }
+
+    /// Central finite-difference gradient of [`Self::total_loss`] w.r.t. `w`.
+    ///
+    /// `∂L/∂wᵢ ≈ (L(w + ε eᵢ) − L(w − ε eᵢ)) / (2ε)`. This is the true gradient
+    /// of the stated objective up to O(ε²) truncation — descending it genuinely
+    /// reduces the loss (validated by the `*_loss_decreases` tests), unlike the
+    /// removed `grad += v*0.01` placeholder which was unrelated to the loss.
+    fn finite_diff_grad(&self, w: &[f32], fdim: usize) -> Vec<f32> {
+        const EPS: f32 = 1e-3;
+        let mut grad = vec![0.0_f32; w.len()];
+        let mut wp = w.to_vec();
+        for i in 0..w.len() {
+            let orig = wp[i];
+            wp[i] = orig + EPS;
+            let lp = self.total_loss(&wp, fdim);
+            wp[i] = orig - EPS;
+            let lm = self.total_loss(&wp, fdim);
+            wp[i] = orig;
+            grad[i] = (lp - lm) / (2.0 * EPS);
+        }
+        grad
+    }
+
+    /// Temporal-contrastive triplet loss (pure evaluator — no gradient writes).
+    ///
+    /// Positive = temporally adjacent frame, negative = a half-buffer-away
+    /// frame; margin-1 triplet hinge over the LoRA-projected features.
+    fn contrastive_loss(&self, w: &[f32], fdim: usize) -> f32 {
         let n = self.calibration_buffer.len();
         if n < 2 {
             return 0.0;
@@ -213,19 +259,13 @@ impl RapidAdaptation {
                 self.project(pos, w, fdim),
                 self.project(neg, w, fdim),
             );
-            let trip = (l2_dist(&pa, &pp) - l2_dist(&pa, &pn) + margin).max(0.0);
-            total += trip;
-            if trip > 0.0 {
-                for (j, g) in grad.iter_mut().enumerate() {
-                    let v = anc.get(j % fdim).copied().unwrap_or(0.0);
-                    *g += v * 0.01 / pairs as f32;
-                }
-            }
+            total += (l2_dist(&pa, &pp) - l2_dist(&pa, &pn) + margin).max(0.0);
         }
         total / pairs as f32
     }
 
-    fn entropy_step(&self, w: &[f32], fdim: usize, grad: &mut [f32]) -> f32 {
+    /// Prediction-entropy loss (pure evaluator — no gradient writes).
+    fn entropy_loss(&self, w: &[f32], fdim: usize) -> f32 {
         let n = self.calibration_buffer.len();
         if n == 0 {
             return 0.0;
@@ -241,7 +281,7 @@ impl RapidAdaptation {
             let mx = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
             let exps: Vec<f32> = logits.iter().map(|&l| (l - mx).exp()).collect();
             let s: f32 = exps.iter().sum();
-            let ent: f32 = exps
+            total += exps
                 .iter()
                 .map(|&e| {
                     let p = e / s;
@@ -251,12 +291,7 @@ impl RapidAdaptation {
                         0.0
                     }
                 })
-                .sum();
-            total += ent;
-            for (j, g) in grad.iter_mut().enumerate() {
-                let v = frame.get(j % frame.len().max(1)).copied().unwrap_or(0.0);
-                *g += v * ent * 0.001 / n as f32;
-            }
+                .sum::<f32>();
         }
         total / n as f32
     }
@@ -363,6 +398,8 @@ mod tests {
 
     #[test]
     fn contrastive_loss_decreases() {
+        // ADR-155 §Tier-1.3: with REAL finite-difference gradients of the actual
+        // triplet objective, more optimisation must not increase the loss.
         let (fdim, rank) = (32, 4);
         let mk = |ep| {
             let mut a = RapidAdaptation::new(
@@ -370,7 +407,7 @@ mod tests {
                 rank,
                 AdaptationLoss::ContrastiveTTT {
                     epochs: ep,
-                    lr: 0.01,
+                    lr: 0.05,
                 },
             );
             for i in 0..20 {
@@ -379,9 +416,68 @@ mod tests {
             }
             a.adapt().unwrap().final_loss
         };
+        let l0 = mk(0); // no optimisation: loss at the initial weights
+        let l20 = mk(20); // 20 real gradient steps
         assert!(
-            mk(10) <= mk(1) + 1e-6,
-            "10 epochs should yield <= 1 epoch loss"
+            l20 <= l0 + 1e-6,
+            "20 gradient steps must not increase the contrastive loss: l0={l0}, l20={l20}"
+        );
+    }
+
+    #[test]
+    fn entropy_loss_decreases() {
+        // ADR-155 §Tier-1.3: entropy minimisation must actually reduce entropy.
+        let (fdim, rank) = (16, 4);
+        let mk = |ep| {
+            let mut a = RapidAdaptation::new(
+                10,
+                rank,
+                AdaptationLoss::EntropyMin {
+                    epochs: ep,
+                    lr: 0.05,
+                },
+            );
+            for i in 0..10 {
+                a.push_frame(
+                    &(0..fdim)
+                        .map(|d| ((i * fdim + d) as f32).sin())
+                        .collect::<Vec<_>>(),
+                );
+            }
+            a.adapt().unwrap().final_loss
+        };
+        let l0 = mk(0);
+        let l30 = mk(30);
+        assert!(
+            l30 <= l0 + 1e-6,
+            "entropy minimisation must not increase entropy: l0={l0}, l30={l30}"
+        );
+    }
+
+    #[test]
+    fn reported_loss_is_the_real_objective_not_a_placeholder() {
+        // The returned final_loss must equal an independent recomputation of the
+        // contrastive objective at the produced LoRA weights — i.e. it is the
+        // real loss, not a fabricated number (ADR-155 §Tier-1.3).
+        let (fdim, rank) = (16, 4);
+        let mut a = RapidAdaptation::new(
+            8,
+            rank,
+            AdaptationLoss::ContrastiveTTT {
+                epochs: 3,
+                lr: 0.02,
+            },
+        );
+        for i in 0..8 {
+            a.push_frame(&(0..fdim).map(|d| (i + d) as f32 * 0.05).collect::<Vec<_>>());
+        }
+        let r = a.adapt().unwrap();
+        let recomputed = a.contrastive_loss(&r.lora_weights, fdim);
+        assert!(
+            (r.final_loss - recomputed).abs() < 1e-5,
+            "final_loss {} must match the real objective {} at the output weights",
+            r.final_loss,
+            recomputed
         );
     }
 

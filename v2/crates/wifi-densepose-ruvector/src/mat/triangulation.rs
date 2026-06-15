@@ -18,7 +18,15 @@ use ruvector_solver::types::CsrMatrix;
 /// # Returns
 ///
 /// Estimated `(x, y)` position in metres, or `None` if fewer than 3 TDoA
-/// measurements are provided or the solver fails to converge.
+/// measurements are provided, `ap_positions` is empty, any measurement
+/// references an out-of-range AP index, or the solver fails to converge.
+///
+/// # Robustness (ADR-156 §finding 2)
+///
+/// Inputs may originate from network-sourced multistatic frames, so crafted
+/// AP indices must NOT panic. Any TDoA tuple whose `i`/`j` is out of range for
+/// `ap_positions` (or an empty `ap_positions`) returns `None` instead of an
+/// out-of-bounds index panic (a DoS vector).
 ///
 /// # Algorithm
 ///
@@ -34,15 +42,17 @@ pub fn solve_triangulation(
     }
 
     const C: f32 = 3e8_f32; // speed of light, m/s
-    let (x_ref, y_ref) = ap_positions[0];
+    // Guard: empty AP table cannot anchor a reference (ADR-156 §finding 2).
+    let &(x_ref, y_ref) = ap_positions.first()?;
 
     let mut col0 = Vec::new();
     let mut col1 = Vec::new();
     let mut b = Vec::new();
 
     for &(i, j, tdoa) in tdoa_measurements {
-        let (xi, yi) = ap_positions[i];
-        let (xj, yj) = ap_positions[j];
+        // Guard against crafted out-of-range indices (no index panic / DoS).
+        let &(xi, yi) = ap_positions.get(i)?;
+        let &(xj, yj) = ap_positions.get(j)?;
         col0.push(xi - xj);
         col1.push(yi - yj);
         b.push(
@@ -134,6 +144,39 @@ mod tests {
         assert!(
             result.is_none(),
             "fewer than 3 measurements must return None"
+        );
+    }
+
+    /// ADR-156 §finding 2 (security / DoS): crafted out-of-range AP indices in
+    /// TDoA measurements must NOT panic — they return `None`. Before the fix the
+    /// `ap_positions[i]` / `ap_positions[j]` indexing panicked on these inputs,
+    /// a remote-triggerable denial-of-service on a fusion path that can carry
+    /// network-sourced multistatic frames.
+    #[test]
+    fn triangulation_out_of_range_index_returns_none_no_panic() {
+        let ap_positions = vec![(0.0_f32, 0.0), (1.0, 0.0), (1.0, 1.0)];
+        // AP index 99 does not exist (3 APs ⇒ valid indices 0..=2).
+        let crafted = vec![(0, 99, 1e-9_f32), (1, 0, 1e-9), (2, 0, 1e-9)];
+        let result = solve_triangulation(&crafted, &ap_positions);
+        assert!(
+            result.is_none(),
+            "crafted out-of-range AP index must return None, not panic"
+        );
+
+        // Reference index out of range (i = 5).
+        let crafted2 = vec![(5, 0, 1e-9_f32), (1, 0, 1e-9), (2, 0, 1e-9)];
+        assert!(solve_triangulation(&crafted2, &ap_positions).is_none());
+    }
+
+    /// ADR-156 §finding 2: an empty AP table must return `None`, not panic on
+    /// `ap_positions[0]`.
+    #[test]
+    fn triangulation_empty_ap_positions_returns_none_no_panic() {
+        let empty: Vec<(f32, f32)> = Vec::new();
+        let measurements = vec![(0, 1, 1e-9_f32), (1, 2, 1e-9), (2, 0, 1e-9)];
+        assert!(
+            solve_triangulation(&measurements, &empty).is_none(),
+            "empty AP table must return None, not panic"
         );
     }
 }

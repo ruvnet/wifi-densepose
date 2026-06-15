@@ -40,6 +40,12 @@ mod csi_frame;
 mod error;
 pub mod esp32;
 mod esp32_parser;
+// ADR-153: IEEE 802.11bf-2025 forward-compatibility protocol model
+// (sensing setup / measurement instance / report / SBP / termination).
+// Simulation-tested; no commodity silicon implements the standard yet —
+// the OpportunisticCsiBridge maps today's ESP32 CSI extraction onto the
+// standardized report path until an OTA binding exists.
+pub mod ieee80211bf;
 pub mod sync_packet;
 
 // ADR-081: Rust mirror of the firmware radio abstraction layer (L1) and
@@ -49,7 +55,9 @@ pub mod sync_packet;
 pub mod radio_ops;
 
 pub use bridge::CsiData;
-pub use csi_frame::{AntennaConfig, Bandwidth, CsiFrame, CsiMetadata, SubcarrierData};
+pub use csi_frame::{
+    Adr018Flags, AntennaConfig, Bandwidth, CsiFrame, CsiMetadata, PpduType, SubcarrierData,
+};
 pub use error::ParseError;
 pub use esp32_parser::{
     ruview_sibling_packet_name, Esp32CsiParser, ESP32_CSI_MAGIC, RUVIEW_COMPRESSED_CSI_MAGIC,

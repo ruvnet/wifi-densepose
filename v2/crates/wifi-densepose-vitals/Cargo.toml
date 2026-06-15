@@ -1,6 +1,6 @@
 [package]
 name = "wifi-densepose-vitals"
-version.workspace = true
+version = "0.3.1"
 edition.workspace = true
 description = "ESP32 CSI-grade vital sign extraction (ADR-021): heart rate and respiratory rate from WiFi Channel State Information"
 license.workspace = true
@@ -17,6 +17,11 @@ serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json.workspace = true
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "vitals_bench"
+harness = false
 
 [features]
 default = ["serde"]

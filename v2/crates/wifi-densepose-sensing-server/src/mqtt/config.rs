@@ -63,7 +63,7 @@ impl MqttConfig {
     /// `hostname()` via the `gethostname` crate if `mqtt_client_id` was
     /// not supplied — we don't add a dep here, we let the publisher
     /// supply the default lazily.
-    pub fn from_args(args: &crate::cli::Args) -> Self {
+    pub fn from_args(args: &crate::cli::MqttArgs) -> Self {
         let password = std::env::var(&args.mqtt_password_env).ok();
         let port = args.mqtt_port.unwrap_or(if args.mqtt_tls { 8883 } else { 1883 });
         let tls = build_tls(args);
@@ -135,7 +135,7 @@ impl MqttConfig {
     }
 }
 
-fn build_tls(args: &crate::cli::Args) -> TlsConfig {
+fn build_tls(args: &crate::cli::MqttArgs) -> TlsConfig {
     if !args.mqtt_tls {
         return TlsConfig::Off;
     }
@@ -186,8 +186,14 @@ mod tests {
     use super::*;
     use clap::Parser;
 
-    fn parse(args: &[&str]) -> crate::cli::Args {
-        crate::cli::Args::parse_from(std::iter::once("sensing-server").chain(args.iter().copied()))
+    fn parse(args: &[&str]) -> crate::cli::MqttArgs {
+        use clap::Parser;
+        #[derive(Parser)]
+        struct W {
+            #[command(flatten)]
+            m: crate::cli::MqttArgs,
+        }
+        W::parse_from(std::iter::once("sensing-server").chain(args.iter().copied())).m
     }
 
     #[test]

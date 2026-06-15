@@ -4,7 +4,7 @@ use cog_person_count::{
     fusion::{fuse_confidence_weighted, fuse_with_mincut_clip},
     inference::{
         CountPrediction, CsiWindow, InferenceEngine, SyntheticInput, COUNT_CLASSES,
-        INPUT_SUBCARRIERS, INPUT_TIMESTEPS,
+        INPUT_SUBCARRIERS, INPUT_TIMESTEPS, MAX_TRAINED_CLASS,
     },
 };
 
@@ -81,6 +81,51 @@ fn fusion_passes_through_single_node() {
     let out = fuse_confidence_weighted(std::slice::from_ref(&input));
     assert_eq!(out.argmax(), 3);
     assert!((out.confidence - 0.6).abs() < 1e-6);
+}
+
+/// ADR-159 §A2 — the 8-class count head ships, but the weights were only
+/// trained on classes 0/1 (presence). A prediction whose argmax lands on an
+/// UNTRAINED class (2..=7) must be flagged `low_confidence` and the reported
+/// count clamped to the trained range, so we never emit a fabricated
+/// multi-occupant headcount. Fails on old code (no such flag/clamp existed).
+#[test]
+fn untrained_class_argmax_is_flagged_low_confidence() {
+    // Sanity: the trained ceiling is below the head width.
+    assert!(MAX_TRAINED_CLASS < COUNT_CLASSES - 1);
+
+    // Mass on an untrained class (5 persons) — out-of-distribution.
+    let mut probs = [0.0_f32; COUNT_CLASSES];
+    probs[5] = 0.9;
+    probs[1] = 0.1;
+    let oodp = CountPrediction {
+        probs,
+        confidence: 0.95, // even a "confident" softmax must be flagged
+    };
+    assert_eq!(oodp.argmax(), 5);
+    assert!(
+        oodp.is_low_confidence(),
+        "argmax beyond MAX_TRAINED_CLASS must be flagged low_confidence"
+    );
+    assert_eq!(
+        oodp.clamped_count(),
+        MAX_TRAINED_CLASS,
+        "reported count must clamp to the trained ceiling, not fabricate a headcount"
+    );
+
+    // A trained-range prediction (1 person) is NOT flagged.
+    let mut probs2 = [0.0_f32; COUNT_CLASSES];
+    probs2[1] = 0.8;
+    probs2[0] = 0.2;
+    let inp = CountPrediction {
+        probs: probs2,
+        confidence: 0.8,
+    };
+    assert_eq!(inp.argmax(), 1);
+    assert!(
+        !inp.is_low_confidence(),
+        "a trained-range count must not be flagged"
+    );
+    assert_eq!(inp.clamped_count(), 1);
 }
 
 #[test]

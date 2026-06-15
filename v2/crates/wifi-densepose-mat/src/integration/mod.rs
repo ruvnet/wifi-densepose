@@ -161,6 +161,20 @@ pub enum AdapterError {
     #[error("Hardware adapter error: {0}")]
     Hardware(String),
 
+    /// The requested device/driver is genuinely unavailable in this
+    /// environment (missing NIC, kernel module, or device file). This is an
+    /// HONEST error, NOT a stub — the real code path ran and found no hardware.
+    /// Callers must surface this rather than substituting fabricated CSI.
+    #[error("Hardware unavailable: {0}")]
+    HardwareUnavailable(String),
+
+    /// The adapter is recognised but its CSI wire format cannot be parsed in
+    /// this build (e.g. proprietary/NIC-specific format with no public spec or
+    /// no available hardware to validate against). Distinct from a transient
+    /// hardware fault: it will not succeed by retrying.
+    #[error("Unsupported adapter: {0}")]
+    UnsupportedAdapter(String),
+
     /// Configuration error
     #[error("Configuration error: {0}")]
     Config(String),

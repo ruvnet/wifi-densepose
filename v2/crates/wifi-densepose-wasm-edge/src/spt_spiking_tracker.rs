@@ -69,6 +69,8 @@ pub const EVENT_TRACK_LOST: i32 = 773;
 
 /// Spiking neural network person tracker.
 pub struct SpikingTracker {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
     /// Membrane potential of each input neuron.
     membrane: [f32; N_INPUT],
     /// Synaptic weights from input to output neurons.
@@ -109,6 +111,7 @@ impl SpikingTracker {
         }
 
         Self {
+            events: [(0, 0.0); 4],
             membrane: [0.0; N_INPUT],
             weights,
             input_spike_time: [0; N_INPUT],
@@ -242,8 +245,7 @@ impl SpikingTracker {
     }
 
     /// Construct event output.
-    fn build_events(&self, zone: i8, was_active: bool) -> &[(i32, f32)] {
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
+    fn build_events(&mut self, zone: i8, was_active: bool) -> &[(i32, f32)] {
         let mut n = 0usize;
 
         // Mean spike rate across all zones.
@@ -255,29 +257,29 @@ impl SpikingTracker {
 
         if zone >= 0 {
             // TRACK_UPDATE with zone ID.
-            unsafe { EVENTS[n] = (EVENT_TRACK_UPDATE, zone as f32); }
+            self.events[n] = (EVENT_TRACK_UPDATE, zone as f32);
             n += 1;
 
             // TRACK_VELOCITY.
-            unsafe { EVENTS[n] = (EVENT_TRACK_VELOCITY, self.velocity_ema); }
+            self.events[n] = (EVENT_TRACK_VELOCITY, self.velocity_ema);
             n += 1;
 
             // SPIKE_RATE.
-            unsafe { EVENTS[n] = (EVENT_SPIKE_RATE, mean_rate); }
+            self.events[n] = (EVENT_SPIKE_RATE, mean_rate);
             n += 1;
         } else {
             // SPIKE_RATE even when no track.
-            unsafe { EVENTS[n] = (EVENT_SPIKE_RATE, mean_rate); }
+            self.events[n] = (EVENT_SPIKE_RATE, mean_rate);
             n += 1;
 
             // TRACK_LOST if we had a track before.
             if was_active {
-                unsafe { EVENTS[n] = (EVENT_TRACK_LOST, self.prev_zone as f32); }
+                self.events[n] = (EVENT_TRACK_LOST, self.prev_zone as f32);
                 n += 1;
             }
         }
 
-        unsafe { &EVENTS[..n] }
+        &self.events[..n]
     }
 
     /// Get the current tracked zone (-1 if lost).

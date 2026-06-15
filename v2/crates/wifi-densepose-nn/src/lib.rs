@@ -35,6 +35,8 @@ pub mod error;
 pub mod inference;
 #[cfg(feature = "onnx")]
 pub mod onnx;
+/// ADR-146 — RF encoder multi-task heads + uncertainty + contrastive batcher.
+pub mod rf_encoder;
 pub mod tensor;
 pub mod translator;
 

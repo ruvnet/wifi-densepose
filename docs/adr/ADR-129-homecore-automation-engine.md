@@ -190,6 +190,23 @@ This is the same Wasmtime host already used for integration plugins (ADR-128) �
 
 ---
 
+## 8a. Security review (beyond-SOTA sweep, post ADR-154–159)
+
+A focused security review of `homecore-automation` (the execution/eval surface — triggers → conditions → actions, with templates) was run after the ADR-154–159 sweep, applying the same rigor that the sibling engine/bfld/calibration/vitals/geo reviews used. **Two real DoS findings, each pinned by a fails-on-old test; the condition-bypass, fail-closed-parsing, and action-authorization dimensions were probed and found clean.**
+
+- **HC-SEC-01 (template-injection / unbounded-expansion DoS, HIGH) — FIXED.** A `template:` condition / `value_template` is user automation config, and was rendered with MiniJinja's defaults: **no instruction budget, no output cap**. A single condition such as `{% for i in range(5000) %}{% for j in range(5000) %}xxxx{% endfor %}{% endfor %}` rendered a **100 MB string over ~11 s on one render call** (measured) — a CPU/memory denial of service (the bfld-class "unbounded expansion"; MiniJinja's per-call `range()` 10k cap does **not** stop nested loops). **Fix:** enable MiniJinja's `fuel` feature and set a per-render budget (`set_fuel(Some(1_000_000))`) so a nested loop burns one unit per iteration — the attack now fails fast (~90 ms) with "engine ran out of fuel"; plus a 64 KiB source-length cap rejecting pathological sources before compilation. Legitimate HA templates (a few dozen instructions) are unaffected. Pinned by `nested_loop_template_is_bounded_not_unbounded_dos`, `single_huge_repeat_template_is_bounded`, `oversized_template_source_is_rejected` (all fail-on-old: unbounded render / no rejection), and `legitimate_template_still_renders_within_fuel` (no regression).
+- **HC-SEC-02 (panic-on-config DoS, MEDIUM) — FIXED.** `Action::Delay { seconds }` and `Action::WaitForTrigger { timeout_seconds }` fed the user-supplied float straight into `Duration::from_secs_f64`, which **panics** on negative, NaN, infinite, or overflowing inputs — all reachable from a crafted (or typo'd) YAML (`delay: {seconds: -1}`, `.nan`, `.inf`, `1e308`). One hostile config aborts the spawned automation run task with a panic (measured: "cannot convert float seconds to Duration: value is negative"). **Fix:** a `safe_duration_from_secs` guard that saturates instead of panicking (NaN/±inf/negative → `Duration::ZERO`, matching HA's lenient "non-positive delay = no delay"; absurdly large → clamped to ~100 years). Pinned by `delay_negative_seconds_does_not_panic`, `delay_nan_seconds_does_not_panic`, `delay_infinite_seconds_does_not_panic`, `wait_for_trigger_negative_timeout_does_not_panic`, `safe_duration_saturates_hostile_values` (incl. overflow clamp).
+
+**Dimensions confirmed clean (with evidence):**
+- **Condition bypass / fail-closed eval** — a `Condition::Template` whose render errors evaluates to `false` (`condition.rs` `Err(_) => false`), and a `Choose` branch condition that fails to deserialize is treated as **non-matching** (the branch is skipped), not silently passing (`action.rs` `ChoiceBranch::matches` `Err(_) => return false`). Both fail **closed** (do-not-run), confirmed by the existing `choose_*` tests and template-false-blocks-action behavioral test. No true-by-default-on-parse-error path found.
+- **Re-entrancy / livelock (DoS)** — run-mode machinery is bounded and tested: `Single`/`IgnoreFirst` re-entrancy guard, `Restart` cancel-and-replace, `Queued` FIFO serialization, and `max: N` semaphore cap (ADR-162; `restart_mode_cancels_prior_run`, `queued_mode_runs_sequentially_not_concurrently`, `max_two_caps_concurrency_at_two`, `single_mode_does_not_double_fire_on_rapid_triggers`). A self-triggering automation does not livelock the engine — each fire is bounded by its run-mode.
+- **Action authorization** — templates are read-only sandboxed (`states`/`state_attr`/`is_state`/`now` globals; no service-call or state-set global is exposed to template scope), so a template cannot escalate into an action. Service authorization itself is enforced at the `homecore` service-registry boundary (out of this crate's scope); no gap found in what the automation crate enforces.
+- **Panic-on-config (parse)** — `serde_yaml`/`serde_json` deserialization returns structured `AutomationError` (no `unwrap`/`expect`/index reachable from a crafted config in the eval/exec path); the only remaining panic surface was the `from_secs_f64` path fixed as HC-SEC-02.
+
+Validation: `cargo test -p homecore-automation --no-default-features` → 54 passed / 0 failed (+14 over baseline). Python deterministic proof unchanged (homecore-automation is off the signal-processing proof path).
+
+---
+
 ## 9. References
 
 ### HA upstream

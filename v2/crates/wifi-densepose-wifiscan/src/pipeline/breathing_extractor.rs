@@ -5,10 +5,12 @@
 //! analysis rather than `OscillatoryRouter` (which is designed for
 //! gamma-band frequencies, not sub-Hz breathing).
 
+use std::collections::VecDeque;
+
 /// Coarse breathing extractor from multi-BSSID signal variance.
 pub struct CoarseBreathingExtractor {
-    /// Combined filtered signal history.
-    filtered_history: Vec<f32>,
+    /// Combined filtered signal history (sliding window; O(1) push/pop).
+    filtered_history: VecDeque<f32>,
     /// Window size for analysis.
     window: usize,
     /// Maximum tracked BSSIDs.
@@ -55,7 +57,7 @@ impl CoarseBreathingExtractor {
     pub fn new(n_bssids: usize, sample_rate: f32, freq_low: f32, freq_high: f32) -> Self {
         let window = (sample_rate * 30.0) as usize; // 30 seconds of data
         Self {
-            filtered_history: Vec::with_capacity(window),
+            filtered_history: VecDeque::with_capacity(window),
             window,
             n_bssids,
             freq_low,
@@ -97,10 +99,11 @@ impl CoarseBreathingExtractor {
         // Apply bandpass filter
         let filtered = self.bandpass_filter(weighted_signal);
 
-        // Store in history
-        self.filtered_history.push(filtered);
+        // Store in history. `VecDeque` evicts the oldest sample in O(1) (was a
+        // `Vec` with an O(n) `remove(0)` per sample — ADR-157 §A1).
+        self.filtered_history.push_back(filtered);
         if self.filtered_history.len() > self.window {
-            self.filtered_history.remove(0);
+            self.filtered_history.pop_front();
         }
 
         // Need at least 10 seconds of data to estimate breathing
@@ -110,10 +113,12 @@ impl CoarseBreathingExtractor {
             return None;
         }
 
-        // Zero-crossing rate -> frequency
-        let crossings = count_zero_crossings(&self.filtered_history);
+        // Zero-crossing rate -> frequency. `make_contiguous` rotates the ring
+        // buffer in place once so the slice helpers below can borrow it.
+        let history = self.filtered_history.make_contiguous();
+        let crossings = count_zero_crossings(history);
         #[allow(clippy::cast_precision_loss)]
-        let duration_s = self.filtered_history.len() as f32 / self.sample_rate;
+        let duration_s = history.len() as f32 / self.sample_rate;
         #[allow(clippy::cast_precision_loss)]
         let frequency_hz = crossings as f32 / (2.0 * duration_s);
 
@@ -125,7 +130,7 @@ impl CoarseBreathingExtractor {
         let bpm = frequency_hz * 60.0;
 
         // Compute confidence based on signal regularity
-        let confidence = compute_confidence(&self.filtered_history);
+        let confidence = compute_confidence(history);
 
         Some(BreathingEstimate {
             bpm,

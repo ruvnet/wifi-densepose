@@ -6,7 +6,7 @@ Migration tooling for importing Home Assistant configuration, entities, and secr
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![MSRV: 1.89+](https://img.shields.io/badge/MSRV-1.89%2B-purple.svg)
 [![Tests](https://img.shields.io/badge/tests-19%20passing-brightgreen.svg)](https://github.com/ruvnet/RuView)
-[![ADR-134](https://img.shields.io/badge/ADR-134-orange.svg)](../../docs/adr/ADR-134-homecore-migration-from-python-ha.md)
+[![ADR-165](https://img.shields.io/badge/ADR-165-orange.svg)](../../docs/adr/ADR-165-homecore-migrate-from-home-assistant.md)
 
 Parse and inspect Home Assistant's `.storage/` directory, entity registry, device registry, secrets, and automations. Convert existing HA configurations for import into HOMECORE (full conversion in P2).
 
@@ -22,7 +22,7 @@ Parse and inspect Home Assistant's `.storage/` directory, entity registry, devic
 - **Automations parser** — reads `automations.yaml` and counts/lists automations (full conversion in P2)
 - **CLI binary** — `homecore-migrate inspect` to preview what will be migrated
 
-The tool enforces version schema compatibility: unknown HA schema versions are rejected (hard error per ADR-134 §6 Q5) rather than silently corrupting data.
+The tool enforces version schema compatibility: unknown HA schema versions are rejected (hard error per ADR-165 §6 Q5) rather than silently corrupting data.
 
 ## Features
 
@@ -136,7 +136,7 @@ homecore-migrate (import from HA)
 
 ## References
 
-- [ADR-134: HOMECORE Migration from Python Home Assistant](../../docs/adr/ADR-134-homecore-migration-from-python-ha.md)
+- [ADR-165: HOMECORE Migration from Python Home Assistant](../../docs/adr/ADR-165-homecore-migrate-from-home-assistant.md)
 - [ADR-126: HOMECORE Home Assistant Port (master)](../../docs/adr/ADR-126-homecore-home-assistant-port.md)
 - [Home Assistant .storage/ format](https://developers.home-assistant.io/docs/storage/)
 - [homecore-migrate CLI source](src/main.rs)

@@ -121,8 +121,21 @@ async fn main() -> Result<()> {
     let _ = plugin_registry; // wired-but-empty at boot; integrations register here
 
     // ── 4. Automation engine ────────────────────────────────────────
-    let _automation_engine = AutomationEngine::new(hc.clone());
-    info!("Automation engine ready (no automations loaded yet)");
+    // Construct AND start the engine (HC-WS-03, ADR-161). `start()`
+    // spawns the state-change event loop + the 1 Hz wall-clock timer
+    // task so state/numeric/event AND time triggers all fire. The
+    // engine is kept alive for the process lifetime (it is moved into a
+    // long-lived binding); its background tasks run until the HomeCore
+    // broadcast channel closes at shutdown. No automations are loaded at
+    // boot yet (YAML loader is P-next); integrations register via
+    // `engine.register(..)`.
+    let automation_engine = AutomationEngine::new(hc.clone());
+    let _automation_task = automation_engine.start();
+    info!(
+        "Automation engine started ({} automations registered) — \
+         state/numeric/event + time triggers active",
+        automation_engine.len()
+    );
 
     // ── 5. Assist pipeline ──────────────────────────────────────────
     let recognizer = RegexIntentRecognizer::new();

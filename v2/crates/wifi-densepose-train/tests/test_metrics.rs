@@ -1,14 +1,34 @@
-//! Integration tests for [`wifi_densepose_train::metrics`].
+//! Integration tests for `wifi_densepose_train` pose metrics.
 //!
-//! The metrics module is only compiled when the `tch-backend` feature is
-//! enabled (because it is gated in `lib.rs`).  Tests that use
-//! `EvalMetrics` are wrapped in `#[cfg(feature = "tch-backend")]`.
+//! # ADR-155 Milestone-1 — §8 "reference kernels" resolution
 //!
-//! The deterministic PCK, OKS, and Hungarian assignment tests that require
-//! no tch dependency are implemented inline in the non-gated section below
-//! using hand-computed helper functions.
+//! The full `metrics` module is gated behind `tch-backend` (libtorch), but the
+//! **canonical** metric core (`pck_canonical` / `oks_canonical`) now lives in
+//! the un-gated `metrics_core` module and is re-exported at the crate root, so
+//! these workspace tests (run under `--no-default-features`) validate the
+//! **production** functions directly.
 //!
-//! All inputs are fixed, deterministic arrays — no `rand`, no OS entropy.
+//! Previously this file carried its own local `compute_pck` / `compute_oks`
+//! reimplementations and asserted properties of *those* — a test that could
+//! not catch a bug in the canonical implementation (both could be wrong the
+//! same way). That is fixed two ways here:
+//!
+//! 1. **Fixture tests** (`canonical_pck_matches_hand_computed_fixture`,
+//!    `canonical_oks_*`) assert the production `pck_canonical` / `oks_canonical`
+//!    equal *hand-computed* expected values — numbers worked out by hand below,
+//!    NOT a second implementation of the same algorithm.
+//! 2. **Differential test** (`test_kernel_agrees_with_canonical`) keeps a small
+//!    independent reference kernel and asserts it **agrees** with the canonical
+//!    function on shared inputs (in the torso=raw-threshold regime where the two
+//!    coincide), so the reference adds genuine cross-check value rather than
+//!    duplicating the algorithm under test.
+//!
+//! `EvalMetrics` tests remain `#[cfg(feature = "tch-backend")]` (that type is in
+//! the gated module). All inputs are fixed, deterministic arrays — no `rand`,
+//! no OS entropy.
+
+use ndarray::{Array1, Array2};
+use wifi_densepose_train::{oks_canonical, pck_canonical, CANON_LEFT_HIP, CANON_RIGHT_HIP};
 
 // ---------------------------------------------------------------------------
 // Tests that use `EvalMetrics` (requires tch-backend because the metrics
@@ -163,146 +183,236 @@ mod eval_metrics_tests {
 }
 
 // ---------------------------------------------------------------------------
-// Deterministic PCK computation tests (pure Rust, no tch, no feature gate)
+// Canonical PCK / OKS validation (production functions, no tch)
 // ---------------------------------------------------------------------------
 
-/// Compute PCK@threshold for a (pred, gt) pair.
-fn compute_pck(pred: &[[f64; 2]], gt: &[[f64; 2]], threshold: f64) -> f64 {
-    let n = pred.len();
-    if n == 0 {
-        return 0.0;
+/// Build a 17-joint pose in `[0,1]` coordinates from an `(x, y)` per-joint list,
+/// padding any unspecified joint to `(0,0)`. Returns `[17, 2]`.
+fn pose17(joints: &[(usize, f32, f32)]) -> Array2<f32> {
+    let mut a = Array2::<f32>::zeros((17, 2));
+    for &(j, x, y) in joints {
+        a[[j, 0]] = x;
+        a[[j, 1]] = y;
     }
-    let correct = pred
-        .iter()
-        .zip(gt.iter())
-        .filter(|(p, g)| {
-            let dx = p[0] - g[0];
-            let dy = p[1] - g[1];
-            (dx * dx + dy * dy).sqrt() <= threshold
-        })
-        .count();
-    correct as f64 / n as f64
+    a
 }
 
-/// PCK of a perfect prediction (pred == gt) must be 1.0.
-#[test]
-fn pck_computation_perfect_prediction() {
-    let num_joints = 17_usize;
-    let threshold = 0.5_f64;
-
-    let pred: Vec<[f64; 2]> = (0..num_joints)
-        .map(|j| [j as f64 * 0.05, j as f64 * 0.04])
-        .collect();
-    let gt = pred.clone();
-
-    let pck = compute_pck(&pred, &gt, threshold);
-    assert!(
-        (pck - 1.0).abs() < 1e-9,
-        "PCK for perfect prediction must be 1.0, got {pck}"
-    );
-}
-
-/// PCK of completely wrong predictions must be 0.0.
-#[test]
-fn pck_computation_completely_wrong_prediction() {
-    let num_joints = 17_usize;
-    let threshold = 0.05_f64;
-
-    let gt: Vec<[f64; 2]> = (0..num_joints).map(|_| [0.0, 0.0]).collect();
-    let pred: Vec<[f64; 2]> = (0..num_joints).map(|_| [10.0, 10.0]).collect();
-
-    let pck = compute_pck(&pred, &gt, threshold);
-    assert!(
-        pck.abs() < 1e-9,
-        "PCK for completely wrong prediction must be 0.0, got {pck}"
-    );
-}
-
-/// PCK is monotone: a prediction closer to GT scores higher.
-#[test]
-fn pck_monotone_with_accuracy() {
-    let gt = vec![[0.5_f64, 0.5_f64]];
-    let close_pred = vec![[0.51_f64, 0.50_f64]];
-    let far_pred = vec![[0.60_f64, 0.50_f64]];
-    let very_far_pred = vec![[0.90_f64, 0.50_f64]];
-
-    let threshold = 0.05_f64;
-    let pck_close = compute_pck(&close_pred, &gt, threshold);
-    let pck_far = compute_pck(&far_pred, &gt, threshold);
-    let pck_very_far = compute_pck(&very_far_pred, &gt, threshold);
-
-    assert!(
-        pck_close >= pck_far,
-        "closer prediction must score at least as high: close={pck_close}, far={pck_far}"
-    );
-    assert!(
-        pck_far >= pck_very_far,
-        "farther prediction must score lower or equal: far={pck_far}, very_far={pck_very_far}"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Deterministic OKS computation tests (pure Rust, no tch, no feature gate)
-// ---------------------------------------------------------------------------
-
-/// Compute OKS for a (pred, gt) pair.
-fn compute_oks(pred: &[[f64; 2]], gt: &[[f64; 2]], sigma: f64, scale: f64) -> f64 {
-    let n = pred.len();
-    if n == 0 {
-        return 0.0;
+/// Visibility vector with the listed joints visible (`2.0`), rest invisible.
+fn vis17(visible: &[usize]) -> Array1<f32> {
+    let mut v = Array1::<f32>::zeros(17);
+    for &j in visible {
+        v[j] = 2.0;
     }
-    let denom = 2.0 * scale * scale * sigma * sigma;
-    let sum: f64 = pred
-        .iter()
-        .zip(gt.iter())
-        .map(|(p, g)| {
-            let dx = p[0] - g[0];
-            let dy = p[1] - g[1];
-            (-(dx * dx + dy * dy) / denom).exp()
-        })
-        .sum();
-    sum / n as f64
+    v
 }
 
-/// OKS of a perfect prediction (pred == gt) must be 1.0.
+/// **Fixture test (Goal B).** The production `pck_canonical` must equal a value
+/// worked out *by hand* on a constructed pose — not a reimplementation.
+///
+/// Construction (all coordinates in `[0,1]`):
+/// * left_hip(11)  = (0.40, 0.50), right_hip(12) = (0.60, 0.50)
+///   ⇒ canonical torso = hip↔hip width = 0.20.
+/// * threshold = 0.2 ⇒ dist_threshold = 0.2 × 0.20 = **0.04**.
+/// * Visible joints: {0 (nose), 5 (l_shoulder), 11, 12}. (4 visible.)
+///   - nose(0):       pred == gt           ⇒ dist 0.00 ≤ 0.04 ⇒ CORRECT
+///   - l_shoulder(5): pred off by dy=0.10  ⇒ dist 0.10 > 0.04 ⇒ wrong
+///   - l_hip(11):     pred == gt           ⇒ dist 0.00 ≤ 0.04 ⇒ CORRECT
+///   - r_hip(12):     pred off by dx=0.03  ⇒ dist 0.03 ≤ 0.04 ⇒ CORRECT
+/// Hand result: correct = 3, total = 4, pck = 3/4 = **0.75**.
 #[test]
-fn oks_perfect_prediction_is_one() {
-    let num_joints = 17_usize;
-    let sigma = 0.05_f64;
-    let scale = 1.0_f64;
+fn canonical_pck_matches_hand_computed_fixture() {
+    let gt = pose17(&[
+        (0, 0.50, 0.20),  // nose
+        (5, 0.35, 0.35),  // left_shoulder
+        (CANON_LEFT_HIP, 0.40, 0.50),
+        (CANON_RIGHT_HIP, 0.60, 0.50),
+    ]);
+    let pred = pose17(&[
+        (0, 0.50, 0.20),  // exact
+        (5, 0.35, 0.45),  // off by dy = 0.10  (> 0.04)
+        (CANON_LEFT_HIP, 0.40, 0.50),  // exact
+        (CANON_RIGHT_HIP, 0.63, 0.50), // off by dx = 0.03  (<= 0.04)
+    ]);
+    let vis = vis17(&[0, 5, CANON_LEFT_HIP, CANON_RIGHT_HIP]);
 
-    let pred: Vec<[f64; 2]> = (0..num_joints).map(|j| [j as f64 * 0.05, 0.3]).collect();
-    let gt = pred.clone();
-
-    let oks = compute_oks(&pred, &gt, sigma, scale);
+    let (correct, total, pck) = pck_canonical(&pred, &gt, &vis, 0.2);
+    assert_eq!(total, 4, "4 visible joints expected, got {total}");
+    assert_eq!(correct, 3, "hand-computed: 3 of 4 within 0.04, got {correct}");
     assert!(
-        (oks - 1.0).abs() < 1e-9,
-        "OKS for perfect prediction must be 1.0, got {oks}"
+        (pck - 0.75).abs() < 1e-6,
+        "hand-computed PCK is 0.75, got {pck}"
     );
 }
 
-/// OKS must decrease as the L2 distance between pred and GT increases.
+/// Pin the **normalizer**: PCK uses hip↔hip torso width. A prediction error of
+/// 0.18 (just under 0.2 × torso=1.0 wide hips) is CORRECT, but the same error
+/// is WRONG once the hips are squeezed to width 0.20 (threshold 0.04). If the
+/// implementation ignored the torso normalizer this test would fail.
 #[test]
-fn oks_decreases_with_distance() {
-    let sigma = 0.05_f64;
-    let scale = 1.0_f64;
+fn canonical_pck_uses_hip_to_hip_torso_normalizer() {
+    // Wide hips: width 1.0 ⇒ threshold 0.2. An error of 0.18 on joint 5 is OK.
+    let gt_wide = pose17(&[(5, 0.50, 0.50), (CANON_LEFT_HIP, 0.0, 0.5), (CANON_RIGHT_HIP, 1.0, 0.5)]);
+    let pred_wide = pose17(&[(5, 0.68, 0.50), (CANON_LEFT_HIP, 0.0, 0.5), (CANON_RIGHT_HIP, 1.0, 0.5)]);
+    let vis = vis17(&[5, CANON_LEFT_HIP, CANON_RIGHT_HIP]);
+    let (_, _, pck_wide) = pck_canonical(&pred_wide, &gt_wide, &vis, 0.2);
 
-    let gt = vec![[0.5_f64, 0.5_f64]];
-    let pred_d0 = vec![[0.5_f64, 0.5_f64]];
-    let pred_d1 = vec![[0.6_f64, 0.5_f64]];
-    let pred_d2 = vec![[1.0_f64, 0.5_f64]];
+    // Narrow hips: width 0.20 ⇒ threshold 0.04. Same 0.18 error on joint 5 is wrong.
+    let gt_narrow = pose17(&[(5, 0.50, 0.50), (CANON_LEFT_HIP, 0.40, 0.5), (CANON_RIGHT_HIP, 0.60, 0.5)]);
+    let pred_narrow = pose17(&[(5, 0.68, 0.50), (CANON_LEFT_HIP, 0.40, 0.5), (CANON_RIGHT_HIP, 0.60, 0.5)]);
+    let (_, _, pck_narrow) = pck_canonical(&pred_narrow, &gt_narrow, &vis, 0.2);
 
-    let oks_d0 = compute_oks(&pred_d0, &gt, sigma, scale);
-    let oks_d1 = compute_oks(&pred_d1, &gt, sigma, scale);
-    let oks_d2 = compute_oks(&pred_d2, &gt, sigma, scale);
-
+    // Joints 11/12 are exact (correct in both); joint 5 flips.
+    // Wide: 3/3 = 1.0; Narrow: 2/3 ≈ 0.667.
+    assert!((pck_wide - 1.0).abs() < 1e-6, "wide-hip PCK should be 1.0, got {pck_wide}");
     assert!(
-        oks_d0 > oks_d1,
-        "OKS at distance 0 must be > OKS at distance 0.1: {oks_d0} vs {oks_d1}"
+        (pck_narrow - 2.0 / 3.0).abs() < 1e-6,
+        "narrow-hip PCK should be 2/3 (joint 5 now out of tolerance), got {pck_narrow}"
     );
+}
+
+/// The claim-inflating bug: no visible joints must score **0.0**, never 1.0.
+#[test]
+fn canonical_pck_zero_visible_is_zero() {
+    let kpts = pose17(&[(CANON_LEFT_HIP, 0.4, 0.5), (CANON_RIGHT_HIP, 0.6, 0.5)]);
+    let vis = vis17(&[]); // nothing visible
+    let (correct, total, pck) = pck_canonical(&kpts, &kpts, &vis, 0.2);
+    assert_eq!((correct, total), (0, 0));
+    assert_eq!(pck, 0.0, "no-visible-joint PCK must be 0.0 (not the old 1.0)");
+}
+
+// ---------------------------------------------------------------------------
+// Canonical OKS validation (production function, no tch)
+// ---------------------------------------------------------------------------
+
+/// **Fixture test (Goal B).** A perfect prediction (pred == gt) makes every
+/// Gaussian term `exp(0) = 1`, so the canonical OKS is exactly **1.0** —
+/// hand-evident, independent of the (positive) scale.
+#[test]
+fn canonical_oks_perfect_prediction_is_one() {
+    let gt = pose17(&[
+        (0, 0.50, 0.20),
+        (5, 0.35, 0.35),
+        (CANON_LEFT_HIP, 0.40, 0.50),
+        (CANON_RIGHT_HIP, 0.60, 0.50),
+    ]);
+    let vis = vis17(&[0, 5, CANON_LEFT_HIP, CANON_RIGHT_HIP]);
+    let oks = oks_canonical(&gt, &gt, &vis);
     assert!(
-        oks_d1 > oks_d2,
-        "OKS at distance 0.1 must be > OKS at distance 0.5: {oks_d1} vs {oks_d2}"
+        (oks - 1.0).abs() < 1e-6,
+        "OKS for a perfect prediction must be 1.0, got {oks}"
+    );
+}
+
+/// **The "fake Gold tier" bug, pinned (Goal B).** On normalized `[0,1]`
+/// coordinates the historical `s = 1.0` path returned ≈1.0 for *any* pose.
+/// Canonical derives `s` from the pose extent (here torso width = 0.20), so a
+/// pose whose visible non-hip joint is off by ~3× the torso scores far below
+/// the "Gold" tier. Hand bound: for joint 5 with d ≈ 0.60, s = 0.20, k = 0.079,
+/// the exponent `-d²/(2 s² k²)` is enormously negative ⇒ that term ≈ 0; the two
+/// (exact) hip terms give 1 each ⇒ OKS ≈ 2/3 at most, and with joint-5 ≈ 0 the
+/// mean is ≈ 0.667. We assert it is comfortably **< 0.8** (and the wrong joint
+/// contributes ≈ 0), i.e. nowhere near the old ≈1.0.
+#[test]
+fn canonical_oks_not_one_for_wrong_pose_on_normalized_coords() {
+    let gt = pose17(&[
+        (5, 0.30, 0.50),
+        (CANON_LEFT_HIP, 0.40, 0.50),
+        (CANON_RIGHT_HIP, 0.60, 0.50),
+    ]);
+    // Joint 5 dragged 0.60 away (3× the 0.20 torso); hips exact.
+    let pred = pose17(&[
+        (5, 0.90, 0.50),
+        (CANON_LEFT_HIP, 0.40, 0.50),
+        (CANON_RIGHT_HIP, 0.60, 0.50),
+    ]);
+    let vis = vis17(&[5, CANON_LEFT_HIP, CANON_RIGHT_HIP]);
+    let oks = oks_canonical(&pred, &gt, &vis);
+    assert!(
+        oks < 0.8,
+        "wrong-pose OKS on [0,1] coords must NOT be ≈1.0 (fake-Gold bug); got {oks}"
+    );
+    // The two exact hips alone give 2/3; the wrong joint must add ~nothing.
+    assert!(
+        (oks - 2.0 / 3.0).abs() < 0.05,
+        "wrong joint should contribute ≈0 ⇒ OKS ≈ 2/3, got {oks}"
+    );
+}
+
+/// Canonical OKS decreases monotonically with prediction error.
+#[test]
+fn canonical_oks_decreases_with_distance() {
+    let gt = pose17(&[(5, 0.50, 0.50), (CANON_LEFT_HIP, 0.40, 0.50), (CANON_RIGHT_HIP, 0.60, 0.50)]);
+    let vis = vis17(&[5, CANON_LEFT_HIP, CANON_RIGHT_HIP]);
+    let mk = |x5: f32| pose17(&[(5, x5, 0.50), (CANON_LEFT_HIP, 0.40, 0.50), (CANON_RIGHT_HIP, 0.60, 0.50)]);
+
+    let oks0 = oks_canonical(&mk(0.50), &gt, &vis);
+    let oks1 = oks_canonical(&mk(0.52), &gt, &vis);
+    let oks2 = oks_canonical(&mk(0.60), &gt, &vis);
+    assert!(oks0 > oks1, "OKS must drop as error grows: {oks0} vs {oks1}");
+    assert!(oks1 > oks2, "OKS must drop as error grows: {oks1} vs {oks2}");
+}
+
+// ---------------------------------------------------------------------------
+// Differential cross-check: independent reference kernel vs canonical (Goal B)
+// ---------------------------------------------------------------------------
+
+/// A deliberately *independent* PCK reference implementation in the simplest
+/// regime — a **raw distance threshold** (no torso normalization). It is kept
+/// only to cross-check the canonical function, not to define the metric.
+fn reference_pck_raw(pred: &[(f32, f32)], gt: &[(f32, f32)], dist_threshold: f32) -> (usize, usize, f32) {
+    let n = pred.len().min(gt.len());
+    let mut correct = 0usize;
+    for i in 0..n {
+        let dx = pred[i].0 - gt[i].0;
+        let dy = pred[i].1 - gt[i].1;
+        if (dx * dx + dy * dy).sqrt() <= dist_threshold {
+            correct += 1;
+        }
+    }
+    let pck = if n > 0 { correct as f32 / n as f32 } else { 0.0 };
+    (correct, n, pck)
+}
+
+/// **Differential test (Goal B).** In the regime where the canonical torso
+/// normalizer equals 1.0 (hips exactly one unit apart, so `threshold · torso`
+/// reduces to the raw `threshold`), the canonical PCK and an independent
+/// raw-threshold reference kernel MUST agree on shared inputs. This catches a
+/// canonical-side bug that a pure self-fixture could miss, *because* the second
+/// implementation is genuinely independent.
+#[test]
+fn test_kernel_agrees_with_canonical() {
+    // Hips one unit apart ⇒ canonical torso == 1.0 ⇒ dist_threshold == threshold.
+    let gt = pose17(&[
+        (0, 0.30, 0.30),
+        (5, 0.55, 0.55),
+        (7, 0.10, 0.90),
+        (CANON_LEFT_HIP, 0.00, 0.50),
+        (CANON_RIGHT_HIP, 1.00, 0.50),
+    ]);
+    let pred = pose17(&[
+        (0, 0.31, 0.30),  // err 0.01
+        (5, 0.70, 0.55),  // err 0.15
+        (7, 0.10, 0.98),  // err 0.08
+        (CANON_LEFT_HIP, 0.00, 0.50),  // exact
+        (CANON_RIGHT_HIP, 1.00, 0.50), // exact
+    ]);
+    let visible = [0usize, 5, 7, CANON_LEFT_HIP, CANON_RIGHT_HIP];
+    let vis = vis17(&visible);
+    let threshold = 0.1_f32;
+
+    let (c_can, t_can, pck_can) = pck_canonical(&pred, &gt, &vis, threshold);
+
+    // Reference over the SAME visible joints with the SAME raw threshold
+    // (torso == 1.0 so threshold·torso == threshold).
+    let pred_v: Vec<(f32, f32)> = visible.iter().map(|&j| (pred[[j, 0]], pred[[j, 1]])).collect();
+    let gt_v: Vec<(f32, f32)> = visible.iter().map(|&j| (gt[[j, 0]], gt[[j, 1]])).collect();
+    let (c_ref, t_ref, pck_ref) = reference_pck_raw(&pred_v, &gt_v, threshold);
+
+    assert_eq!(t_can, t_ref, "visible counts must match: {t_can} vs {t_ref}");
+    assert_eq!(c_can, c_ref, "correct counts must match: {c_can} vs {c_ref}");
+    assert!(
+        (pck_can - pck_ref).abs() < 1e-6,
+        "canonical PCK {pck_can} must agree with independent reference {pck_ref}"
     );
 }
 

@@ -7,7 +7,8 @@ use crate::csi_processor::CsiData;
 use chrono::{DateTime, Utc};
 use ndarray::{Array1, Array2};
 use num_complex::Complex64;
-use rustfft::FftPlanner;
+use rustfft::{Fft, FftPlanner};
+use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 /// Amplitude-based features
@@ -449,8 +450,29 @@ pub struct PowerSpectralDensity {
 }
 
 impl PowerSpectralDensity {
-    /// Calculate PSD from CSI amplitude data
+    /// Calculate PSD from CSI amplitude data.
+    ///
+    /// Plans a fresh FFT each call. On the per-frame hot path, prefer
+    /// [`Self::from_csi_data_with_fft`] with a planner cached in
+    /// [`FeatureExtractor`] — ADR-154 measured the re-plan as the dominant cost
+    /// (see `benches/features_bench.rs`).
     pub fn from_csi_data(csi_data: &CsiData, fft_size: usize) -> Self {
+        let mut fft_planner = FftPlanner::new();
+        let fft = fft_planner.plan_fft_forward(fft_size);
+        Self::from_csi_data_with_fft(csi_data, fft_size, &fft)
+    }
+
+    /// Calculate PSD reusing a pre-planned FFT (ADR-154 perf path).
+    ///
+    /// `fft` must be a forward plan of length `fft_size`. The output is
+    /// **bit-identical** to [`Self::from_csi_data`] for the same `fft_size`
+    /// (rustfft plans of equal length compute the same butterflies); only the
+    /// one-time planner construction is hoisted out of the loop.
+    pub fn from_csi_data_with_fft(
+        csi_data: &CsiData,
+        fft_size: usize,
+        fft: &Arc<dyn Fft<f64>>,
+    ) -> Self {
         let amplitude = &csi_data.amplitude;
         let flat: Vec<f64> = amplitude.iter().copied().collect();
 
@@ -465,9 +487,7 @@ impl PowerSpectralDensity {
             input.push(Complex64::new(0.0, 0.0));
         }
 
-        // Apply FFT
-        let mut fft_planner = FftPlanner::new();
-        let fft = fft_planner.plan_fft_forward(fft_size);
+        // Apply the caller-provided (cached) FFT plan.
         fft.process(&mut input);
 
         // Calculate power spectrum
@@ -613,16 +633,31 @@ impl Default for FeatureExtractorConfig {
     }
 }
 
-/// Feature extractor for CSI data
-#[derive(Debug)]
+/// Feature extractor for CSI data.
+///
+/// ADR-154: caches the forward FFT plan for `config.fft_size` so the per-frame
+/// PSD path does not re-plan a `FftPlanner` on every `extract()` call.
 pub struct FeatureExtractor {
     config: FeatureExtractorConfig,
+    /// Cached forward FFT plan of length `config.fft_size` (ADR-154 perf path).
+    psd_fft: Arc<dyn Fft<f64>>,
+}
+
+impl std::fmt::Debug for FeatureExtractor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FeatureExtractor")
+            .field("config", &self.config)
+            .field("psd_fft_len", &self.config.fft_size)
+            .finish()
+    }
 }
 
 impl FeatureExtractor {
     /// Create a new feature extractor
     pub fn new(config: FeatureExtractorConfig) -> Self {
-        Self { config }
+        let mut planner = FftPlanner::new();
+        let psd_fft = planner.plan_fft_forward(config.fft_size);
+        Self { config, psd_fft }
     }
 
     /// Create with default configuration
@@ -640,7 +675,11 @@ impl FeatureExtractor {
         let amplitude = AmplitudeFeatures::from_csi_data(csi_data);
         let phase = PhaseFeatures::from_csi_data(csi_data);
         let correlation = CorrelationFeatures::from_csi_data(csi_data);
-        let psd = PowerSpectralDensity::from_csi_data(csi_data, self.config.fft_size);
+        let psd = PowerSpectralDensity::from_csi_data_with_fft(
+            csi_data,
+            self.config.fft_size,
+            &self.psd_fft,
+        );
 
         let metadata = FeatureMetadata {
             num_antennas: csi_data.num_antennas,
@@ -692,7 +731,11 @@ impl FeatureExtractor {
 
     /// Extract PSD features only
     pub fn extract_psd(&self, csi_data: &CsiData) -> PowerSpectralDensity {
-        PowerSpectralDensity::from_csi_data(csi_data, self.config.fft_size)
+        PowerSpectralDensity::from_csi_data_with_fft(
+            csi_data,
+            self.config.fft_size,
+            &self.psd_fft,
+        )
     }
 
     /// Extract Doppler features from history
@@ -800,6 +843,31 @@ mod tests {
         assert_eq!(psd.frequencies.len(), 128);
         assert!(psd.total_power >= 0.0);
         assert!(psd.peak_power >= 0.0);
+    }
+
+    // ADR-154: the cached-FFT PSD path must be BIT-IDENTICAL to the
+    // fresh-planner path (the perf change only hoists the planner out of the
+    // loop — same butterflies, same output).
+    #[test]
+    fn psd_cached_fft_bit_identical_to_fresh() {
+        use rustfft::FftPlanner;
+        let csi_data = create_test_csi_data();
+        for fft_size in [16usize, 32, 64, 128, 100, 96] {
+            let fresh = PowerSpectralDensity::from_csi_data(&csi_data, fft_size);
+            let mut planner = FftPlanner::<f64>::new();
+            let plan = planner.plan_fft_forward(fft_size);
+            let cached =
+                PowerSpectralDensity::from_csi_data_with_fft(&csi_data, fft_size, &plan);
+            assert_eq!(
+                fresh.values.to_vec(),
+                cached.values.to_vec(),
+                "PSD values differ for fft_size={fft_size}"
+            );
+            assert_eq!(fresh.total_power.to_bits(), cached.total_power.to_bits());
+            assert_eq!(fresh.peak_frequency.to_bits(), cached.peak_frequency.to_bits());
+            assert_eq!(fresh.centroid.to_bits(), cached.centroid.to_bits());
+            assert_eq!(fresh.bandwidth.to_bits(), cached.bandwidth.to_bits());
+        }
     }
 
     #[test]

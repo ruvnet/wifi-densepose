@@ -133,10 +133,13 @@ impl GeometricDiversityIndex {
     }
 }
 
-/// Compute the shortest angular distance between two angles (radians).
+/// Compute the shortest (wrapped) angular distance between two angles (radians).
 ///
-/// Returns a value in `[0, PI]`.
-fn angular_distance(a: f32, b: f32) -> f32 {
+/// Returns a value in `[0, PI]`. This correctly handles the `0`/`2π` seam: e.g.
+/// `350°` and `10°` are `20°` apart, not `340°`. It is the single canonical
+/// angular-distance helper for the viewpoint module — `attention::GeometricBias`
+/// reuses it so the geometric bias respects the same wrap (ADR-156 §finding 1).
+pub fn angular_distance(a: f32, b: f32) -> f32 {
     let diff = (a - b).abs() % (2.0 * std::f32::consts::PI);
     if diff > std::f32::consts::PI {
         2.0 * std::f32::consts::PI - diff
@@ -204,7 +207,15 @@ pub struct CramerRaoBound {
     pub crb_y: f32,
     /// Root-mean-square position error lower bound (metres).
     pub rmse_lower_bound: f32,
-    /// Geometric dilution of precision (GDOP).
+    /// Geometric Dilution of Precision (GDOP) — a **dimensionless** geometry
+    /// quality factor, `sqrt(trace(G⁻¹))` where `G` is the *unit-variance*
+    /// bearing geometry matrix (the FIM with every `1/σ²` set to 1). GDOP
+    /// depends only on the array/target geometry, NOT on the noise level, and
+    /// relates the per-measurement noise to the position RMSE as
+    /// `rmse ≈ GDOP · σ`. Lower GDOP = better geometry (ADR-156 §finding 3).
+    ///
+    /// (Previously this field stored `sqrt(crb_x + crb_y)`, which is just the
+    /// RMSE again — noise-dependent and metric-valued, NOT a true GDOP.)
     pub gdop: f32,
 }
 
@@ -244,6 +255,11 @@ impl CramerRaoBound {
         let mut fim_00 = 0.0_f32;
         let mut fim_01 = 0.0_f32;
         let mut fim_11 = 0.0_f32;
+        // Unit-variance geometry matrix G (same bearings, every 1/σ² = 1) for a
+        // noise-independent, dimensionless GDOP (ADR-156 §finding 3).
+        let mut g_00 = 0.0_f32;
+        let mut g_01 = 0.0_f32;
+        let mut g_11 = 0.0_f32;
 
         for vp in viewpoints {
             let dx = target.0 - vp.x;
@@ -256,6 +272,10 @@ impl CramerRaoBound {
             fim_00 += inv_var * cos_phi * cos_phi;
             fim_01 += inv_var * cos_phi * sin_phi;
             fim_11 += inv_var * sin_phi * sin_phi;
+
+            g_00 += cos_phi * cos_phi;
+            g_01 += cos_phi * sin_phi;
+            g_11 += sin_phi * sin_phi;
         }
 
         // Invert the 2x2 FIM analytically: CRB = FIM^{-1}.
@@ -267,7 +287,17 @@ impl CramerRaoBound {
         let crb_x = fim_11 / det;
         let crb_y = fim_00 / det;
         let rmse = (crb_x + crb_y).sqrt();
-        let gdop = (crb_x + crb_y).sqrt();
+
+        // True GDOP = sqrt(trace(G⁻¹)) on the unit-variance geometry — a
+        // dimensionless geometry factor, independent of σ. trace(G⁻¹) =
+        // (g_00 + g_11) / det(G). Degenerate (collinear) geometry ⇒ det(G) ≈ 0
+        // ⇒ GDOP → ∞; report f32::INFINITY rather than NaN/panic.
+        let det_g = g_00 * g_11 - g_01 * g_01;
+        let gdop = if det_g.abs() < 1e-12 {
+            f32::INFINITY
+        } else {
+            ((g_00 + g_11) / det_g).max(0.0).sqrt()
+        };
 
         Some(CramerRaoBound {
             crb_x,
@@ -303,6 +333,10 @@ impl CramerRaoBound {
         let mut fim_00 = regularisation;
         let mut fim_01 = 0.0_f32;
         let mut fim_11 = regularisation;
+        // Unit-variance geometry matrix for the dimensionless GDOP (ADR-156 §3).
+        let mut g_00 = regularisation;
+        let mut g_01 = 0.0_f32;
+        let mut g_11 = regularisation;
 
         for vp in viewpoints {
             let dx = target.0 - vp.x;
@@ -315,6 +349,10 @@ impl CramerRaoBound {
             fim_00 += inv_var * cos_phi * cos_phi;
             fim_01 += inv_var * cos_phi * sin_phi;
             fim_11 += inv_var * sin_phi * sin_phi;
+
+            g_00 += cos_phi * cos_phi;
+            g_01 += cos_phi * sin_phi;
+            g_11 += sin_phi * sin_phi;
         }
 
         // Use Neumann solver for the regularised system.
@@ -343,11 +381,19 @@ impl CramerRaoBound {
 
         let rmse = (crb_x.abs() + crb_y.abs()).sqrt();
 
+        // Dimensionless GDOP from the (regularised) unit-variance geometry.
+        let det_g = g_00 * g_11 - g_01 * g_01;
+        let gdop = if det_g.abs() < 1e-12 {
+            f32::INFINITY
+        } else {
+            ((g_00 + g_11) / det_g).max(0.0).sqrt()
+        };
+
         Some(CramerRaoBound {
             crb_x,
             crb_y,
             rmse_lower_bound: rmse,
-            gdop: rmse,
+            gdop,
         })
     }
 }
@@ -489,6 +535,67 @@ mod tests {
             "6 viewpoints should give lower CRB than 3: {:.4} vs {:.4}",
             crb6.rmse_lower_bound,
             crb3.rmse_lower_bound
+        );
+    }
+
+    #[test]
+    fn gdop_is_dimensionless_and_noise_independent() {
+        // ADR-156 §finding 3. True GDOP is a *geometry* factor: scaling every
+        // sensor's noise by k must scale RMSE by k but leave GDOP UNCHANGED.
+        // The old `gdop = sqrt(crb_x + crb_y)` (== RMSE) fails this: it would
+        // scale with noise, proving it was RMSE mislabelled, not GDOP.
+        let target = (0.0_f32, 0.0);
+        let geom = |noise: f32| -> Vec<ViewpointPosition> {
+            (0..4)
+                .map(|i| {
+                    let a = 2.0 * std::f32::consts::PI * i as f32 / 4.0;
+                    ViewpointPosition {
+                        x: 5.0 * a.cos(),
+                        y: 5.0 * a.sin(),
+                        noise_std: noise,
+                    }
+                })
+                .collect()
+        };
+
+        let crb_lo = CramerRaoBound::estimate(target, &geom(0.1)).unwrap();
+        let crb_hi = CramerRaoBound::estimate(target, &geom(1.0)).unwrap(); // 10× noise
+
+        // GDOP must be (nearly) identical despite 10× noise — it is geometric.
+        assert!(
+            (crb_lo.gdop - crb_hi.gdop).abs() < 1e-3,
+            "GDOP must be noise-independent: {} (σ=0.1) vs {} (σ=1.0)",
+            crb_lo.gdop,
+            crb_hi.gdop
+        );
+        // RMSE, by contrast, MUST scale ~10× with the 10× noise.
+        assert!(
+            crb_hi.rmse_lower_bound > 5.0 * crb_lo.rmse_lower_bound,
+            "RMSE must scale with noise: {} (σ=1.0) vs {} (σ=0.1)",
+            crb_hi.rmse_lower_bound,
+            crb_lo.rmse_lower_bound
+        );
+        // GDOP and RMSE are DIFFERENT quantities: rmse = GDOP·σ. At σ=0.1 they
+        // must differ ~10×. The OLD bug (`gdop = sqrt(crb_x+crb_y)` == RMSE) made
+        // them identical at every σ, which this assertion catches.
+        assert!(
+            (crb_lo.gdop - crb_lo.rmse_lower_bound).abs() > 1e-3,
+            "at σ=0.1, GDOP {} must differ from RMSE {} (old bug made them equal)",
+            crb_lo.gdop,
+            crb_lo.rmse_lower_bound
+        );
+        // Sanity: rmse ≈ GDOP · σ at both noise levels.
+        assert!(
+            (crb_lo.gdop * 0.1 - crb_lo.rmse_lower_bound).abs() < 0.05 * crb_lo.rmse_lower_bound,
+            "rmse@σ=0.1 ({}) must ≈ GDOP·σ ({})",
+            crb_lo.rmse_lower_bound,
+            crb_lo.gdop * 0.1
+        );
+        assert!(
+            (crb_hi.gdop * 1.0 - crb_hi.rmse_lower_bound).abs() < 0.05 * crb_hi.rmse_lower_bound,
+            "rmse@σ=1.0 ({}) must ≈ GDOP·σ ({})",
+            crb_hi.rmse_lower_bound,
+            crb_hi.gdop
         );
     }
 

@@ -59,12 +59,28 @@ impl CompressedHeartbeatSpectrogram {
     /// Decodes only the bins in the requested range and returns the mean of
     /// the squared decoded values over the last up to 100 frames.
     /// Returns `0.0` for an empty range.
+    ///
+    /// # Robustness (ADR-156 §finding 2)
+    ///
+    /// Both bounds are clamped to the valid bin range, so crafted / out-of-range
+    /// `low_bin`/`high_bin` (including a band that starts past the last bin, or a
+    /// zero-bin spectrogram) return `0.0` instead of an index or subtraction
+    /// overflow panic. This guards a path that may be driven by external CSI.
     pub fn band_power(&self, low_bin: usize, high_bin: usize) -> f32 {
-        let n = (high_bin.min(self.n_freq_bins - 1) + 1).saturating_sub(low_bin);
-        if n == 0 {
+        // Empty spectrogram: no bins to read (avoids `n_freq_bins - 1` underflow).
+        if self.n_freq_bins == 0 {
             return 0.0;
         }
-        (low_bin..=high_bin.min(self.n_freq_bins - 1))
+        let last = self.n_freq_bins - 1;
+        // Clamp BOTH bounds into [0, last]; if low > high after clamping the
+        // range is empty and we return 0.0 (no panic, no out-of-range index).
+        let lo = low_bin.min(last);
+        let hi = high_bin.min(last);
+        if lo > hi {
+            return 0.0;
+        }
+        let n = hi - lo + 1;
+        (lo..=hi)
             .map(|b| {
                 let mut out = Vec::new();
                 tt_segment::decode(&self.encoded[b], &mut out);
@@ -96,6 +112,40 @@ mod tests {
             10,
             "frame_count must equal the number of pushed columns"
         );
+    }
+
+    /// ADR-156 §finding 2: a zero-bin spectrogram must NOT panic in
+    /// `band_power`. Before the fix, `self.n_freq_bins - 1` underflowed (usize
+    /// `0 - 1`), panicking in debug and producing `usize::MAX` (then an
+    /// out-of-range index) in release — both DoS-able on an externally-driven
+    /// CSI path.
+    #[test]
+    fn heartbeat_band_power_zero_bins_no_panic() {
+        let spec = CompressedHeartbeatSpectrogram::new(0);
+        assert_eq!(
+            spec.band_power(0, 10),
+            0.0,
+            "zero-bin spectrogram must return 0.0, not panic"
+        );
+    }
+
+    /// ADR-156 §finding 2: out-of-range / inverted band bounds are clamped and
+    /// return a finite value (or 0.0), never panicking.
+    #[test]
+    fn heartbeat_band_power_out_of_range_bounds_no_panic() {
+        let n_freq_bins = 16;
+        let mut spec = CompressedHeartbeatSpectrogram::new(n_freq_bins);
+        for i in 0..5 {
+            let column: Vec<f32> = (0..n_freq_bins).map(|b| (i + b) as f32 * 0.1).collect();
+            spec.push_column(&column);
+        }
+        // high_bin far past the last valid bin → clamped, no out-of-range index.
+        let p1 = spec.band_power(2, 9999);
+        assert!(p1.is_finite() && p1 >= 0.0, "clamped high bound must be finite");
+        // low_bin past the last bin → empty range → 0.0 (no panic).
+        assert_eq!(spec.band_power(100, 200), 0.0);
+        // inverted bounds (low > high) → 0.0.
+        assert_eq!(spec.band_power(10, 3), 0.0);
     }
 
     #[test]

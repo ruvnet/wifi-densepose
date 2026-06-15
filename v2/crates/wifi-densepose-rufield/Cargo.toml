@@ -1,0 +1,26 @@
+[package]
+name = "wifi-densepose-rufield"
+version = "0.3.0"
+edition = "2021"
+description = "ADR-262 anti-corruption bridge: converts RuView WiFi-CSI sensing output into signed RuField FieldEvents (P0–P5 privacy mapping + ed25519 provenance)"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+# ADR-262 §5.4: this crate is the single coupling point ("anti-corruption
+# layer") between RuView and the standalone RuField MFS spec. It depends on the
+# `vendor/rufield` submodule crates **via path** (the `vendor/rvcsi` pattern) —
+# RuView does NOT depend on published rufield crates (there are none) and does
+# NOT make rufield a v2 workspace member. The four crates below are pure-Rust
+# (serde / serde_json / toml / sha2 / ed25519-dalek only — no tch / openblas /
+# ndarray / candle), so they build under `--no-default-features`.
+[dependencies]
+rufield-core = { path = "../../../vendor/rufield/crates/rufield-core" }
+rufield-provenance = { path = "../../../vendor/rufield/crates/rufield-provenance" }
+rufield-privacy = { path = "../../../vendor/rufield/crates/rufield-privacy" }
+rufield-fusion = { path = "../../../vendor/rufield/crates/rufield-fusion" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

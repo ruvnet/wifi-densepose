@@ -9,6 +9,7 @@
 
 pub mod fusion;
 pub mod inference;
+pub mod manifest;
 pub mod publisher;
 pub mod runtime;
 

@@ -259,14 +259,75 @@ Validation runs against:
 - **ADR-083** (Proposed) — Per-cluster Pi compute hop. Defines the
   device class that hosts the sketch bank.
 
+## Pass 2 — randomized rotation + multi-bit (ADR-156 §8, landed 2026-06)
+
+The "Open question" below ("does `BinaryQuantized` need a randomized
+rotation pre-pass?") is now **answered with measured numbers** via
+ADR-156 §10. Summary:
+
+- **Pass 2 (randomized rotation) is implemented** —
+  `crates/wifi-densepose-ruvector/src/rotation.rs`: a deterministic
+  `R = H·D` (Fast Hadamard Transform + seeded ±1 sign flips), `O(d log d)`
+  / `O(d)`, norm-preserving, reproducible from a stored `u64` seed. Opt-in
+  via `Sketch::from_embedding_rotated` / `SketchBank::with_rotation`;
+  Pass-1 API and wire format unchanged.
+- **Measured top-K coverage** (anisotropic planted-cluster fixture,
+  cosine ground truth, dim=128 N=2048 K=8): rotation lifts coverage
+  **36.13% → 46.39%** at the strict `candidate_k = K` bar, and Pass-2
+  reaches the **≥90% acceptance bar at candidate_k = 24 (~3× over-fetch)**.
+  Multi-bit (≤4-bit) reaches 74% at the strict bar. **Honest verdict:
+  neither rotation nor ≤4-bit multi-bit clears the strict-K 90% bar on
+  this distribution; the bar is met via the over-fetch "candidate set"
+  pattern this ADR specifies** (Decision §"the canonical pattern" — sketch
+  picks the candidate set, full precision refines). Full numbers and
+  reproduce commands in ADR-156 §10.
+- **Pre-existing `SketchBank::topk` bug fixed** — the `n > k` heap path
+  returned the k *farthest* sketches (min-heap mistaken for max-heap);
+  only the `n ≤ k` fast path had test coverage. Fixed + regression-pinned
+  (`topk_heap_path_returns_nearest`,
+  `tight_clusters_give_high_coverage_with_overfetch`). This makes every
+  prior top-K acceptance number in this ADR depend on the fixed path; the
+  ≥90% coverage criterion is only meaningful post-fix.
+
+## Pass 2b — RaBitQ unbiased distance estimator (ADR-156 §11, landed 2026-06)
+
+The **real** RaBitQ contribution (Gao & Long, SIGMOD 2024) — an
+**unbiased estimator of the inner product / distance** from the 1-bit
+code + per-vector side info, not just sign bits — is now implemented and
+**MEASURED against this ADR's ≥90% strict-K bar**:
+
+- **Implemented** — `crates/wifi-densepose-ruvector/src/estimator.rs`:
+  `EstimatorSketch` (Pass-2 sign code + 8 B/vec side info:
+  `residual_norm` + `x_dot_o = ⟨x̄, o'⟩`), `DistanceEstimator`
+  (`⟨o',q'⟩ ≈ ⟨x̄,q'⟩ / x_dot_o`, the paper's unbiased rescale), and
+  `EstimatorBank` reranking candidates by the estimate instead of raw
+  Hamming. **Zero-centroid simplification** (`c = 0`) documented;
+  paper-faithful centroid path also built (`with_centroid`). Additive —
+  Pass-1/Pass-2 and the wire format are unchanged.
+- **MEASURED strict-K coverage** (same fixture as §"Pass 2", cosine
+  ground truth): the estimator lifts the strict `candidate_k = K` bar
+  **46.39% (Pass-2 sign) → 49.71% (estimator, cosine rerank)** — a real
+  **+3.3 pp** lift, but **still ~40 pp short of the ≥90% strict bar.**
+  At over-fetch the estimator does better than sign (95.12% vs 91.60% at
+  candidate_k = 24). **Honest verdict: the unbiased estimator does NOT
+  clear the strict-K 90% bar on this distribution** — the binding
+  constraint is the 1-bit code's information ceiling, not estimator
+  variance. The ≥90% acceptance bar is still met only via the over-fetch
+  "candidate set" pattern this ADR's Decision specifies; the estimator
+  **reduces the over-fetch factor** needed but does not remove it. This
+  is a **published negative**, reported as such. Full numbers + reproduce
+  commands in ADR-156 §11.
+
 ## Open questions
 
 - **Does `BinaryQuantized` need a randomized rotation pre-pass for
-  RuView's embedding distributions?** Pure sign quantization assumes
-  zero-centered, isotropic embeddings. If AETHER / spectrogram
-  distributions are skewed (likely for spectrogram), add a
-  `randomized_rotation` pre-pass following the original RaBitQ paper
-  (Gao & Long, SIGMOD 2024). Decided after pass-1 benchmark.
+  RuView's embedding distributions?** **ANSWERED (ADR-156 §10):** rotation
+  is built and measured — it helps (+10pp at strict K) but is not
+  sufficient alone for strict-K 90% on the tested anisotropic
+  distribution; the over-fetch candidate-set pattern meets the bar.
+  Pure sign quantization assumes zero-centered, isotropic embeddings; the
+  rotation decorrelates anisotropic coords as the RaBitQ paper
+  (Gao & Long, SIGMOD 2024) prescribes.
 - **Sketch dimension target.** Default to the embedding's native
   dimension (128 for AETHER, 256 for spectrogram). Higher-dimensional
   sketches (Johnson-Lindenstrauss-projected to 512) trade compute for

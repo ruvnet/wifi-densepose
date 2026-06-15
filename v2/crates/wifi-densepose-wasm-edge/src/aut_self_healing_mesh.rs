@@ -28,6 +28,8 @@ pub const EVENT_HEALING_COMPLETE: i32 = 888;
 
 /// Self-healing mesh monitor with Stoer-Wagner min-cut analysis.
 pub struct SelfHealingMesh {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); MAX_EVENTS],
     /// EMA-smoothed quality score per node [0, 1].
     node_quality: [f32; MAX_NODES],
     /// Whether each node quality has received its first sample.
@@ -49,6 +51,7 @@ pub struct SelfHealingMesh {
 impl SelfHealingMesh {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); MAX_EVENTS],
             node_quality: [0.0; MAX_NODES],
             node_init: [false; MAX_NODES],
             adj: [[0.0; MAX_NODES]; MAX_NODES],
@@ -76,7 +79,6 @@ impl SelfHealingMesh {
     /// per active node (length clamped to 8).
     /// Returns a slice of (event_id, value) pairs.
     pub fn process_frame(&mut self, node_qualities: &[f32]) -> &[(i32, f32)] {
-        static mut EVENTS: [(i32, f32); MAX_EVENTS] = [(0, 0.0); MAX_EVENTS];
         let mut ne = 0usize;
         self.frame_count += 1;
 
@@ -84,7 +86,7 @@ impl SelfHealingMesh {
         self.n_active = n;
         for i in 0..n { self.update_node_quality(i, node_qualities[i]); }
 
-        if n < 2 { return unsafe { &EVENTS[..0] }; }
+        if n < 2 { return &self.events[..0]; }
 
         // Build adjacency: edge weight = min(quality_i, quality_j).
         for i in 0..n {
@@ -101,7 +103,7 @@ impl SelfHealingMesh {
         for i in 0..n { sum += self.node_quality[i]; }
         let coverage = sum / (n as f32);
         if ne < MAX_EVENTS {
-            unsafe { EVENTS[ne] = (EVENT_COVERAGE_SCORE, coverage); }
+            self.events[ne] = (EVENT_COVERAGE_SCORE, coverage);
             ne += 1;
         }
 
@@ -112,24 +114,24 @@ impl SelfHealingMesh {
             if !self.healing { self.healing = true; }
             self.weakest = cut_node;
             if ne < MAX_EVENTS {
-                unsafe { EVENTS[ne] = (EVENT_NODE_DEGRADED, cut_node as f32); }
+                self.events[ne] = (EVENT_NODE_DEGRADED, cut_node as f32);
                 ne += 1;
             }
             if ne < MAX_EVENTS {
-                unsafe { EVENTS[ne] = (EVENT_MESH_RECONFIGURE, mincut); }
+                self.events[ne] = (EVENT_MESH_RECONFIGURE, mincut);
                 ne += 1;
             }
         } else if self.healing && mincut >= MINCUT_HEALTHY {
             self.healing = false;
             self.weakest = NO_NODE;
             if ne < MAX_EVENTS {
-                unsafe { EVENTS[ne] = (EVENT_HEALING_COMPLETE, mincut); }
+                self.events[ne] = (EVENT_HEALING_COMPLETE, mincut);
                 ne += 1;
             }
         }
 
         self.prev_mincut = mincut;
-        unsafe { &EVENTS[..ne] }
+        &self.events[..ne]
     }
 
     /// Simplified Stoer-Wagner min-cut for n <= 8 nodes.

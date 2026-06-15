@@ -53,11 +53,13 @@ pub mod utils;
 
 // Re-export commonly used types at the crate root
 pub use error::{CoreError, CoreResult, InferenceError, SignalError, StorageError};
-pub use traits::{DataStore, NeuralInference, SignalProcessor};
+pub use traits::{CanonicalFrame, DataStore, NeuralInference, SignalProcessor};
 pub use types::{
     AntennaConfig,
     // Bounding box
     BoundingBox,
+    // ADR-136 canonical complex-sample contract
+    ComplexSample,
     // Common types
     Confidence,
     // CSI types
@@ -99,10 +101,10 @@ pub const DEFAULT_CONFIDENCE_THRESHOLD: f32 = 0.5;
 pub mod prelude {
 
     pub use crate::error::{CoreError, CoreResult};
-    pub use crate::traits::{DataStore, NeuralInference, SignalProcessor};
+    pub use crate::traits::{CanonicalFrame, DataStore, NeuralInference, SignalProcessor};
     pub use crate::types::{
-        AntennaConfig, BoundingBox, Confidence, CsiFrame, CsiMetadata, DeviceId, FrameId,
-        FrequencyBand, Keypoint, KeypointType, PersonPose, PoseEstimate, ProcessedSignal,
+        AntennaConfig, BoundingBox, ComplexSample, Confidence, CsiFrame, CsiMetadata, DeviceId,
+        FrameId, FrequencyBand, Keypoint, KeypointType, PersonPose, PoseEstimate, ProcessedSignal,
         SignalFeatures, Timestamp,
     };
 }

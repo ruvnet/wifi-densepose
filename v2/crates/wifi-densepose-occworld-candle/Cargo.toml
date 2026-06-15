@@ -1,0 +1,30 @@
+[package]
+name = "wifi-densepose-occworld-candle"
+description = "ADR-147 — OccWorld TransVQVAE inference ported to Candle (Rust-native, no Python IPC)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Candle ML framework — pin to 0.9 (same as cog-person-count).
+# The `cuda` feature is opt-in; CPU is the default.
+candle-core = { version = "0.9", default-features = false }
+candle-nn = { version = "0.9", default-features = false }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { version = "1", features = ["fs", "macros"] }
+safetensors = "0.4"
+
+[dev-dependencies]
+approx = "0.5"
+
+[features]
+default = []
+cuda = ["candle-core/cuda", "candle-nn/cuda"]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

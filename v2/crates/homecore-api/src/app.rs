@@ -88,6 +88,11 @@ fn default_origins() -> Vec<HeaderValue> {
 mod tests {
     use super::*;
 
+    // `set_var`/`remove_var` mutate process-global state; serialize every test
+    // that touches HOMECORE_CORS_ORIGINS so they cannot race in parallel.
+    // Poison-tolerant: a panicking test must not cascade-fail the others.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn default_origins_includes_vite_and_ha_ports() {
         let origins = default_origins();
@@ -98,6 +103,7 @@ mod tests {
 
     #[test]
     fn env_override_via_homecore_cors_origins() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("HOMECORE_CORS_ORIGINS", "https://example.com,https://other.example.com");
         // build_cors_layer() returns a CorsLayer which doesn't expose
         // its origin list; we test the parse path indirectly by
@@ -112,6 +118,7 @@ mod tests {
 
     #[test]
     fn env_empty_falls_back_to_defaults() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("HOMECORE_CORS_ORIGINS", "   ");
         let raw = std::env::var("HOMECORE_CORS_ORIGINS").ok();
         let trimmed = raw.as_deref().map(|s| s.trim()).unwrap_or("");

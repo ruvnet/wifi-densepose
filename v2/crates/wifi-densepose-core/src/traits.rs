@@ -21,6 +21,46 @@
 use crate::error::{CoreResult, InferenceError, SignalError, StorageError};
 use crate::types::{CsiFrame, FrameId, PoseEstimate, ProcessedSignal, Timestamp};
 
+/// ADR-136 §2.5 — deterministic, architecture-independent frame serialisation.
+///
+/// Every frame type that crosses a [`Stage`](https://example.invalid) boundary
+/// or is recorded/replayed (`homecore-recorder`) implements `CanonicalFrame`.
+/// The encoding is stable across architectures (little-endian per ADR-136 §2.3,
+/// via [`ComplexSample::to_le_bytes`](crate::types::ComplexSample::to_le_bytes))
+/// and across runs (fixed field order), so a BLAKE3 of the bytes is a witness
+/// hash compatible with the ADR-028 proof chain and the ADR-119
+/// `signature_hasher` precedent.
+///
+/// # Determinism contract
+///
+/// Feeding a recorded `Vec<CsiFrame>` through the stage chain twice MUST yield
+/// byte-identical output streams, verified by equal [`Self::witness_hash`].
+pub trait CanonicalFrame {
+    /// Deterministic, architecture-independent encoding of this frame.
+    ///
+    /// Rules (ADR-136 §2.5): fixed-width little-endian fields in declared order;
+    /// complex payload as `ComplexSample::to_le_bytes()` in stream-major order;
+    /// raw IEEE-754 LE only (no text formatting of floats).
+    fn to_canonical_bytes(&self) -> alloc_vec::Vec<u8>;
+
+    /// BLAKE3-256 of [`Self::to_canonical_bytes`] — the witness hash (ADR-028).
+    fn witness_hash(&self) -> [u8; 32] {
+        blake3::hash(&self.to_canonical_bytes()).into()
+    }
+}
+
+// `Vec` alias that works under both `std` and `no_std + alloc` (core is
+// `#![cfg_attr(not(feature = "std"), no_std)]`). Keeps `CanonicalFrame` usable
+// on the Xtensa/ESP32 target referenced by ADR-136 §2.3.
+#[cfg(feature = "std")]
+mod alloc_vec {
+    pub use std::vec::Vec;
+}
+#[cfg(not(feature = "std"))]
+mod alloc_vec {
+    pub use alloc::vec::Vec;
+}
+
 /// Configuration for signal processing.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]

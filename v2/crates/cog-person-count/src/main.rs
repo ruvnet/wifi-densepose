@@ -12,7 +12,6 @@ use cog_person_count::{
     publisher, COG_ID, COG_VERSION,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -83,19 +82,11 @@ fn cmd_version() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn cmd_manifest() -> Result<(), Box<dyn std::error::Error>> {
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&json!({
-            "id": COG_ID,
-            "version": COG_VERSION,
-            "binary_url": Value::Null,
-            "binary_bytes": Value::Null,
-            "binary_sha256": Value::Null,
-            "binary_signature": Value::Null,
-            "installed_at": Value::Null,
-            "status": Value::Null,
-        }))?
-    );
+    // Emit the real, signed manifest embedded at compile time (ADR-159 §A4) —
+    // not the old hollow null skeleton. Parse-then-emit so a malformed embedded
+    // artifact fails loudly and the output is canonical JSON.
+    let spec = cog_person_count::manifest::embedded_manifest_value()?;
+    println!("{}", serde_json::to_string_pretty(&spec)?);
     Ok(())
 }
 

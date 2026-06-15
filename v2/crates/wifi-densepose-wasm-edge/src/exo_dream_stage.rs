@@ -1,4 +1,12 @@
-//! Non-contact sleep stage classification — ADR-041 exotic module.
+//! Non-contact sleep-stage-like classification — ADR-041 exotic / research module.
+//!
+//! ⚠️ EXPERIMENTAL RESEARCH MODULE — NOT VALIDATED. Quasi-medical sleep-stage
+//! ⚠️ classification here is a *candidate* heuristic only: it has never been
+//! ⚠️ compared against polysomnography or any sleep-staging reference standard,
+//! ⚠️ and its accuracy is unproven (see ADR-160 §A4). NOT a medical device. Do
+//! ⚠️ NOT use for sleep diagnosis or any clinical decision. (Registry tag:
+//! ⚠️ Exotic / Research.) The DSP is real; the sleep-stage labels are not
+//! ⚠️ validated.
 //!
 //! # Algorithm
 //!
@@ -113,6 +121,8 @@ pub enum SleepStage {
 
 /// Non-contact sleep stage classifier using WiFi CSI physiological signatures.
 pub struct DreamStageDetector {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
     /// Rolling breathing BPM values.
     breath_hist: CircularBuffer<BREATH_HIST_LEN>,
     /// Rolling heart rate BPM values.
@@ -152,6 +162,7 @@ pub struct DreamStageDetector {
 impl DreamStageDetector {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 4],
             breath_hist: CircularBuffer::new(),
             hr_hist: CircularBuffer::new(),
             phase_buf: CircularBuffer::new(),
@@ -192,7 +203,6 @@ impl DreamStageDetector {
         _variance: f32,
         presence: i32,
     ) -> &[(i32, f32)] {
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n_ev = 0usize;
 
         self.frame_count += 1;
@@ -282,33 +292,25 @@ impl DreamStageDetector {
         };
 
         // Emit events.
-        unsafe {
-            EVENTS[n_ev] = (EVENT_SLEEP_STAGE, self.current_stage as u8 as f32);
-        }
+        self.events[n_ev] = (EVENT_SLEEP_STAGE, self.current_stage as u8 as f32);
         n_ev += 1;
 
         // Emit quality periodically (every 20 frames).
         if self.frame_count % 20 == 0 {
-            unsafe {
-                EVENTS[n_ev] = (EVENT_SLEEP_QUALITY, efficiency);
-            }
+            self.events[n_ev] = (EVENT_SLEEP_QUALITY, efficiency);
             n_ev += 1;
 
-            unsafe {
-                EVENTS[n_ev] = (EVENT_DEEP_SLEEP_RATIO, deep_ratio);
-            }
+            self.events[n_ev] = (EVENT_DEEP_SLEEP_RATIO, deep_ratio);
             n_ev += 1;
         }
 
         // Emit REM episode when in REM or just exited.
         if rem_ep > 0 {
-            unsafe {
-                EVENTS[n_ev] = (EVENT_REM_EPISODE, rem_ep as f32);
-            }
+            self.events[n_ev] = (EVENT_REM_EPISODE, rem_ep as f32);
             n_ev += 1;
         }
 
-        unsafe { &EVENTS[..n_ev] }
+        &self.events[..n_ev]
     }
 
     /// Classify the sleep stage from physiological features.

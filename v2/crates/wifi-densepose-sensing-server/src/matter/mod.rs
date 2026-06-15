@@ -37,4 +37,4 @@ pub use bridge::{build_bridge_tree, BridgeTree, Endpoint, EndpointRef, NodeBranc
 pub use clusters::{
     matter_mapping, ClusterId, EndpointTypeId, MatterClusterMapping,
 };
-pub use commissioning::{ManualPairingCode, SetupCodeInput};
+pub use commissioning::{DecodedManualCode, ManualPairingCode, SetupCodeInput};

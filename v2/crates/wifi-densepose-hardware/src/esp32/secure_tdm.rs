@@ -47,6 +47,42 @@ type HmacSha256 = Hmac<Sha256>;
 /// Size of the HMAC-SHA256 truncated tag (manual crypto mode).
 const HMAC_TAG_SIZE: usize = 8;
 
+/// Constant-time comparison of two fixed-size HMAC/auth tags.
+///
+/// ADR-157 §B4: the previous `self.hmac_tag == expected` short-circuits on the
+/// first differing byte, leaking how many leading bytes matched through its
+/// execution time. For an authentication tag that is a timing oracle: an
+/// attacker who can submit forged beacons and measure verification latency can
+/// recover the correct tag byte-by-byte (~256·N trials instead of 256^N).
+///
+/// This hand-rolled compare avoids adding the `subtle` crate (ADR-157 deferred
+/// B4 only to dodge that dependency — a fixed 8-byte compare needs none). We
+/// XOR-accumulate every byte difference into a single `u8` with **no early
+/// exit**, so the work done is identical regardless of where (or whether) the
+/// tags differ. The accumulator is non-zero iff any byte differed; we compare
+/// it to zero exactly once at the end.
+///
+/// `#[inline(never)]` plus `black_box` on the accumulator stop the optimizer
+/// from reintroducing a short-circuit or hoisting the loop into a `memcmp`
+/// (which is itself non-constant-time). The two slices are required to be the
+/// same length by construction (both `[u8; HMAC_TAG_SIZE]`); a length mismatch
+/// returns `false` without inspecting contents.
+#[inline(never)]
+fn constant_time_tag_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        // Branch-free: accumulate the bitwise difference of every byte.
+        diff |= x ^ y;
+    }
+    // black_box prevents the compiler from proving `diff == 0` early and
+    // short-circuiting the loop above. The single equality check is the only
+    // data-dependent branch, and it is on the fully-accumulated value.
+    core::hint::black_box(diff) == 0
+}
+
 /// Size of the nonce field (manual crypto mode).
 const NONCE_SIZE: usize = 4;
 
@@ -265,7 +301,7 @@ impl AuthenticatedBeacon {
     /// Compute the HMAC-SHA256 tag for this beacon, truncated to 8 bytes.
     ///
     /// Uses the `hmac` + `sha2` crates for cryptographically secure
-    /// message authentication (ADR-050, Sprint 1).
+    /// message authentication (ADR-166, Sprint 1).
     pub fn compute_tag(payload_and_nonce: &[u8], key: &[u8; 16]) -> [u8; HMAC_TAG_SIZE] {
         let mut mac = HmacSha256::new_from_slice(key).expect("HMAC-SHA256 accepts any key length");
         mac.update(payload_and_nonce);
@@ -281,7 +317,10 @@ impl AuthenticatedBeacon {
         msg[..16].copy_from_slice(&self.beacon.to_bytes());
         msg[16..20].copy_from_slice(&self.nonce.to_le_bytes());
         let expected = Self::compute_tag(&msg, key);
-        if self.hmac_tag == expected {
+        // ADR-157 §B4: constant-time compare — `==` on the tag would leak,
+        // via short-circuit timing, how many leading bytes an attacker's
+        // forged tag matched, enabling byte-by-byte tag recovery.
+        if constant_time_tag_eq(&self.hmac_tag, &expected) {
             Ok(())
         } else {
             Err(SecureTdmError::BeaconAuthFailed)
@@ -752,6 +791,124 @@ mod tests {
         ));
     }
 
+    // ---- ADR-157 §B4: constant-time tag compare ----
+
+    /// Functional pin proving the new constant-time helper is wired and correct
+    /// for the four tag-shape cases. This is the *hard gate* for §B4 — it fails
+    /// on the old `==` path only if the helper is removed/unwired, and it
+    /// guarantees accept/reject semantics are byte-exact. Grade: MEASURED
+    /// (constant-time *construction*); micro-timing on a noisy host is only a
+    /// smoke check (see `tag_compare_timing_invariance_smoke`, #[ignore]).
+    #[test]
+    fn tag_compare_is_constant_time_shape() {
+        let base = [0xA5u8; HMAC_TAG_SIZE];
+
+        // Equal tags accept.
+        assert!(constant_time_tag_eq(&base, &base), "equal tags must accept");
+
+        // First byte differs → reject.
+        let mut first = base;
+        first[0] ^= 0xFF;
+        assert!(
+            !constant_time_tag_eq(&base, &first),
+            "first-byte-differ must reject"
+        );
+
+        // Last byte differs → reject.
+        let mut last = base;
+        last[HMAC_TAG_SIZE - 1] ^= 0x01;
+        assert!(
+            !constant_time_tag_eq(&base, &last),
+            "last-byte-differ must reject"
+        );
+
+        // Every byte differs → reject.
+        let all = [0x5Au8; HMAC_TAG_SIZE]; // bitwise-inverse of 0xA5
+        assert!(
+            !constant_time_tag_eq(&base, &all),
+            "all-bytes-differ must reject"
+        );
+
+        // Length mismatch → reject without inspecting contents.
+        assert!(
+            !constant_time_tag_eq(&base, &base[..HMAC_TAG_SIZE - 1]),
+            "length mismatch must reject"
+        );
+
+        // End-to-end through verify(): a tag whose only difference is the
+        // *last* byte must still be rejected exactly like a first-byte diff.
+        let beacon = SyncBeacon {
+            cycle_id: 7,
+            cycle_period: Duration::from_millis(50),
+            drift_correction_us: 0,
+            generated_at: std::time::Instant::now(),
+        };
+        let key = DEFAULT_TEST_KEY;
+        let nonce = 1u32;
+        let mut msg = [0u8; 20];
+        msg[..16].copy_from_slice(&beacon.to_bytes());
+        msg[16..20].copy_from_slice(&nonce.to_le_bytes());
+        let mut tag = AuthenticatedBeacon::compute_tag(&msg, &key);
+        tag[HMAC_TAG_SIZE - 1] ^= 0x01; // tamper the LAST byte only
+        let auth = AuthenticatedBeacon {
+            beacon,
+            nonce,
+            hmac_tag: tag,
+        };
+        assert!(
+            matches!(auth.verify(&key), Err(SecureTdmError::BeaconAuthFailed)),
+            "last-byte tamper must fail verify()"
+        );
+    }
+
+    /// Coarse timing-invariance smoke check. #[ignore]d so it never flakes CI —
+    /// the host is noisy and a hard timing bound is unreliable. Run manually
+    /// with `cargo test -p wifi-densepose-hardware -- --ignored
+    /// tag_compare_timing_invariance_smoke --nocapture`. The assertion is a
+    /// deliberately *generous* ratio bound (4×): a short-circuit `==` would show
+    /// last-byte-differ ≫ first-byte-differ; the constant-time helper should not.
+    #[test]
+    #[ignore = "timing smoke check — noisy host, run manually with --ignored"]
+    fn tag_compare_timing_invariance_smoke() {
+        use std::time::Instant;
+        const ITERS: u32 = 2_000_000;
+        let base = [0xA5u8; HMAC_TAG_SIZE];
+        let mut first = base;
+        first[0] ^= 0xFF;
+        let mut last = base;
+        last[HMAC_TAG_SIZE - 1] ^= 0x01;
+
+        // Warm up.
+        for _ in 0..ITERS / 10 {
+            core::hint::black_box(constant_time_tag_eq(&base, &first));
+        }
+
+        let t0 = Instant::now();
+        let mut acc = false;
+        for _ in 0..ITERS {
+            acc ^= constant_time_tag_eq(&base, &first);
+        }
+        core::hint::black_box(acc);
+        let dt_first = t0.elapsed().as_nanos() as f64;
+
+        let t1 = Instant::now();
+        let mut acc2 = false;
+        for _ in 0..ITERS {
+            acc2 ^= constant_time_tag_eq(&base, &last);
+        }
+        core::hint::black_box(acc2);
+        let dt_last = t1.elapsed().as_nanos() as f64;
+
+        let ratio = dt_last.max(dt_first) / dt_last.min(dt_first).max(1.0);
+        println!(
+            "first-differ {dt_first:.0}ns, last-differ {dt_last:.0}ns, ratio {ratio:.3}"
+        );
+        assert!(
+            ratio < 4.0,
+            "timing ratio {ratio:.3} too large — possible short-circuit leak"
+        );
+    }
+
     #[test]
     fn test_auth_beacon_too_short() {
         let result = AuthenticatedBeacon::from_bytes(&[0u8; 10]);
@@ -953,7 +1110,7 @@ mod tests {
         assert_eq!(SecLevel::Enforcing as u8, 2);
     }
 
-    // ---- Security tests (ADR-050) ----
+    // ---- Security tests (ADR-166) ----
 
     #[test]
     fn test_hmac_different_keys_produce_different_tags() {

@@ -73,6 +73,8 @@ impl WelfordStats {
 
 /// Coherence-gated frame filter.
 pub struct CoherenceGate {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 3],
     prev_phases: [f32; MAX_SC],
     stats: WelfordStats,
     initial_variance: f32,
@@ -89,6 +91,7 @@ pub struct CoherenceGate {
 impl CoherenceGate {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 3],
             prev_phases: [0.0; MAX_SC],
             stats: WelfordStats::new(),
             initial_variance: 0.0,
@@ -105,7 +108,6 @@ impl CoherenceGate {
         let n_sc = if phases.len() > MAX_SC { MAX_SC } else { phases.len() };
         if n_sc < 2 { return &[]; }
 
-        static mut EVENTS: [(i32, f32); 3] = [(0, 0.0); 3];
         let mut n_ev = 0usize;
 
         if !self.initialized {
@@ -146,7 +148,7 @@ impl CoherenceGate {
             self.gate = GateDecision::Recalibrate;
             self.low_count = 0;
             self.high_count = 0;
-            unsafe { EVENTS[n_ev] = (EVENT_RECALIBRATE_NEEDED, variance); }
+            self.events[n_ev] = (EVENT_RECALIBRATE_NEEDED, variance);
             n_ev += 1;
         } else {
             let below = coherence < LOW_THRESHOLD;
@@ -178,11 +180,11 @@ impl CoherenceGate {
             };
         }
 
-        unsafe { EVENTS[n_ev] = (EVENT_GATE_DECISION, self.gate.as_f32()); }
+        self.events[n_ev] = (EVENT_GATE_DECISION, self.gate.as_f32());
         n_ev += 1;
-        unsafe { EVENTS[n_ev] = (EVENT_COHERENCE_SCORE, coherence); }
+        self.events[n_ev] = (EVENT_COHERENCE_SCORE, coherence);
         n_ev += 1;
-        unsafe { &EVENTS[..n_ev] }
+        &self.events[..n_ev]
     }
 
     pub fn gate(&self) -> GateDecision { self.gate }

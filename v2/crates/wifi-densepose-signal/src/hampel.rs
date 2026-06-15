@@ -43,11 +43,22 @@ pub struct HampelResult {
 /// MAD = 0.6745 * σ → σ = MAD / 0.6745 = 1.4826 * MAD
 const MAD_SCALE: f64 = 1.4826;
 
+/// Zero-MAD epsilon (ADR-154 §7.4 — de-magicked). When the estimated σ falls
+/// at/below this, the window is treated as constant (degenerate MAD): any
+/// deviation larger than this same epsilon flags the sample as an outlier.
+/// Empirical guard against an all-equal window, not a tuned operating point.
+const ZERO_MAD_EPSILON: f64 = 1e-15;
+
 /// Apply Hampel filter to a 1D signal.
 ///
 /// For each sample, computes the median and MAD of the surrounding window.
 /// If the sample deviates from the median by more than `threshold * σ_est`,
 /// it is replaced with the median.
+///
+/// # Errors
+/// - [`HampelError::EmptySignal`] if `signal` is empty.
+/// - [`HampelError::InvalidWindow`] if `config.half_window == 0` (a window of
+///   one sample has zero MAD and cannot estimate σ).
 pub fn hampel_filter(signal: &[f64], config: &HampelConfig) -> Result<HampelResult, HampelError> {
     if signal.is_empty() {
         return Err(HampelError::EmptySignal);
@@ -75,13 +86,13 @@ pub fn hampel_filter(signal: &[f64], config: &HampelConfig) -> Result<HampelResu
         sigma_estimates.push(sigma);
 
         let deviation = (signal[i] - med).abs();
-        let is_outlier = if sigma > 1e-15 {
+        let is_outlier = if sigma > ZERO_MAD_EPSILON {
             // Normal case: compare deviation to threshold * sigma
             deviation > config.threshold * sigma
         } else {
             // Zero-MAD case: all window values identical except possibly this sample.
             // Any non-zero deviation from the median is an outlier.
-            deviation > 1e-15
+            deviation > ZERO_MAD_EPSILON
         };
 
         if is_outlier {
@@ -232,5 +243,49 @@ mod tests {
             hampel_filter(&[], &HampelConfig::default()),
             Err(HampelError::EmptySignal)
         ));
+    }
+
+    // -- ADR-154 §7.4: de-magic-constant + boundary characterization tests.
+
+    /// De-magicked zero-MAD epsilon must equal the prior literal.
+    #[test]
+    fn zero_mad_epsilon_unchanged_from_literal() {
+        assert_eq!(ZERO_MAD_EPSILON, 1e-15);
+        assert_eq!(MAD_SCALE, 1.4826);
+    }
+
+    /// `half_window == 0` is the documented invalid-window boundary; pins the
+    /// previously-untested error path.
+    #[test]
+    fn test_zero_half_window_error() {
+        let config = HampelConfig {
+            half_window: 0,
+            threshold: 3.0,
+        };
+        assert!(matches!(
+            hampel_filter(&[1.0, 2.0, 3.0], &config),
+            Err(HampelError::InvalidWindow)
+        ));
+        // half_window = 1 is the smallest valid window.
+        let ok = HampelConfig {
+            half_window: 1,
+            threshold: 3.0,
+        };
+        assert!(hampel_filter(&[1.0, 2.0, 3.0], &ok).is_ok());
+    }
+
+    /// Zero-MAD (constant) window: a single deviating sample is flagged via the
+    /// degenerate-MAD branch; a fully constant signal flags nothing.
+    #[test]
+    fn test_zero_mad_constant_window() {
+        // Fully constant -> no outliers (deviation is 0, not > epsilon).
+        let constant = vec![5.0; 20];
+        let r = hampel_filter(&constant, &HampelConfig::default()).unwrap();
+        assert!(r.outlier_indices.is_empty());
+        // A single spike in an otherwise-constant signal -> flagged.
+        let mut spiked = vec![5.0; 20];
+        spiked[10] = 5.5;
+        let r = hampel_filter(&spiked, &HampelConfig::default()).unwrap();
+        assert!(r.outlier_indices.contains(&10));
     }
 }

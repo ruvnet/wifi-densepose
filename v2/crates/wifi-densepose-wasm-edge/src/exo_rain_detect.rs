@@ -99,6 +99,8 @@ pub enum RainIntensity {
 
 /// Detects rain from broadband CSI phase variance perturbations.
 pub struct RainDetector {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 3],
     /// Baseline variance per subcarrier group (slow EWMA).
     baseline_var: [Ema; N_GROUPS],
     /// Short-term variance per subcarrier group (fast EWMA).
@@ -122,6 +124,7 @@ pub struct RainDetector {
 impl RainDetector {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 3],
             baseline_var: [
                 Ema::new(BASELINE_ALPHA), Ema::new(BASELINE_ALPHA),
                 Ema::new(BASELINE_ALPHA), Ema::new(BASELINE_ALPHA),
@@ -159,7 +162,6 @@ impl RainDetector {
         amplitudes: &[f32],
         presence: i32,
     ) -> &[(i32, f32)] {
-        static mut EVENTS: [(i32, f32); 3] = [(0, 0.0); 3];
         let mut n_ev = 0usize;
 
         self.frame_count += 1;
@@ -250,9 +252,7 @@ impl RainDetector {
         // Onset: was not raining, now have enough consecutive rain frames.
         if !self.raining && self.rain_frames >= ONSET_FRAMES {
             self.raining = true;
-            unsafe {
-                EVENTS[n_ev] = (EVENT_RAIN_ONSET, 1.0);
-            }
+            self.events[n_ev] = (EVENT_RAIN_ONSET, 1.0);
             n_ev += 1;
         }
 
@@ -260,9 +260,7 @@ impl RainDetector {
         if was_raining && self.quiet_frames >= CESSATION_FRAMES {
             self.raining = false;
             self.intensity = RainIntensity::None;
-            unsafe {
-                EVENTS[n_ev] = (EVENT_RAIN_CESSATION, 1.0);
-            }
+            self.events[n_ev] = (EVENT_RAIN_CESSATION, 1.0);
             n_ev += 1;
         }
 
@@ -277,13 +275,11 @@ impl RainDetector {
                 RainIntensity::Heavy
             };
 
-            unsafe {
-                EVENTS[n_ev] = (EVENT_RAIN_INTENSITY, self.intensity as u8 as f32);
-            }
+            self.events[n_ev] = (EVENT_RAIN_INTENSITY, self.intensity as u8 as f32);
             n_ev += 1;
         }
 
-        unsafe { &EVENTS[..n_ev] }
+        &self.events[..n_ev]
     }
 
     /// Whether rain is currently detected.

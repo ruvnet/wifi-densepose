@@ -20,6 +20,16 @@
 //!   for spoken word recognition" IEEE TASSP
 
 // ---------------------------------------------------------------------------
+// Tuning constants (ADR-154 §7.4 — de-magicked; value unchanged)
+// ---------------------------------------------------------------------------
+
+/// Minimum second-best DTW distance below which the relative-margin
+/// confidence formula `1 - best/second_best` would divide by a near-zero
+/// denominator. Below this we fall back to the `max_distance`-relative
+/// confidence. Empirical guard, not a tuned operating point.
+const CONFIDENCE_SECOND_BEST_EPSILON: f64 = 1e-10;
+
+// ---------------------------------------------------------------------------
 // Error types
 // ---------------------------------------------------------------------------
 
@@ -236,7 +246,10 @@ impl GestureClassifier {
         let recognized = best_dist <= self.config.max_distance;
 
         // Confidence: how much better is the best match vs second best
-        let confidence = if recognized && second_best_dist.is_finite() && second_best_dist > 1e-10 {
+        let confidence = if recognized
+            && second_best_dist.is_finite()
+            && second_best_dist > CONFIDENCE_SECOND_BEST_EPSILON
+        {
             (1.0 - best_dist / second_best_dist).clamp(0.0, 1.0)
         } else if recognized {
             (1.0 - best_dist / self.config.max_distance).clamp(0.0, 1.0)
@@ -308,27 +321,80 @@ fn dtw_distance(seq_a: &[Vec<f64>], seq_b: &[Vec<f64>], band_width: usize) -> f6
         };
         let j_end = (i + band_width).min(m);
 
-        for j in 1..=m {
-            if j < j_start || j > j_end {
-                curr[j] = f64::INFINITY;
-                continue;
-            }
-
+        // ADR-154: honor the Sakoe-Chiba band by iterating ONLY the in-band
+        // cells [j_start, j_end] instead of walking the full 1..=m row and
+        // `continue`-ing on every out-of-band cell. This cuts the inner-loop
+        // trip count from m to (2·band_width + 1).
+        //
+        // `curr` is reused across rows via swap, so out-of-band cells that a
+        // LATER read can touch must be reset to INFINITY (the previous row may
+        // have left a stale finite value). Reads of `curr`/`prev` only ever
+        // touch the immediate neighbours of the band:
+        //   - `curr[j_start - 1]` (the left/deletion term at j == j_start),
+        //   - next row's `prev[j_end + 1]` (the insertion/match term as the
+        //     band slides right by one), and
+        //   - the final `prev[m]` answer when m itself is out of band.
+        // Resetting `curr[j_start-1]` and `curr[j_end+1..=m up to one cell]`
+        // reproduces the full-row version **bit-for-bit**.
+        // When `j_start > j_end` the band is empty for this row (j_start can even
+        // exceed m). The full-row version would set every cell to INFINITY; we
+        // reproduce that by leaving the band loop empty and INFINITY-filling the
+        // boundary guards below (all clamped to valid indices).
+        if j_start >= 1 && j_start - 1 <= m {
+            curr[j_start - 1] = f64::INFINITY;
+        }
+        for j in j_start..=j_end {
             let cost = euclidean_distance(&seq_a[i - 1], &seq_b[j - 1]);
             curr[j] = cost
                 + prev[j] // insertion
                     .min(curr[j - 1]) // deletion
                     .min(prev[j - 1]); // match
         }
+        // Guard the right boundary with a SINGLE cell. As `i` increments the
+        // band slides right by one, so the only out-of-band cell the next row
+        // reads beyond `j_end` is `prev[j_end + 1]` (its insertion/match term).
+        // Resetting just that one cell keeps the per-row cost O(band), not O(m).
+        // The final `prev[m]` answer is handled by the band-reachability check
+        // at the return site, so we never need to walk the whole tail.
+        if j_end + 1 <= m {
+            curr[j_end + 1] = f64::INFINITY;
+        }
 
         std::mem::swap(&mut prev, &mut curr);
     }
 
-    prev[m]
+    // The endpoint (n, m) is reachable only if `m` lies within the LAST row's
+    // band `[n - band, n + band]` — i.e. `|n - m| <= band_width`. Outside that,
+    // the full-row version left `prev[m] = INFINITY`, so we return INFINITY to
+    // stay bit-identical (the banded loop never wrote `prev[m]`).
+    let last_row_lo = n.saturating_sub(band_width).max(1);
+    let last_row_hi = (n + band_width).min(m);
+    if m >= last_row_lo && m <= last_row_hi {
+        prev[m]
+    } else {
+        f64::INFINITY
+    }
 }
 
 /// Euclidean distance between two feature vectors.
+///
+/// # Caller contract (ADR-154 §7.4 #12)
+/// `a` and `b` are expected to have the **same** dimension (`feature_dim`).
+/// The implementation `zip`s the two slices, so on a length mismatch it
+/// **silently truncates to the shorter vector** rather than erroring. Every
+/// in-tree caller (`dtw_distance` over a single classifier's templates)
+/// already enforces equal `feature_dim`, so a mismatch indicates a
+/// construction bug; a `debug_assert!` makes that loud in debug builds while
+/// keeping the release operating path (and its output) unchanged.
 fn euclidean_distance(a: &[f64], b: &[f64]) -> f64 {
+    debug_assert_eq!(
+        a.len(),
+        b.len(),
+        "euclidean_distance: feature-vector length mismatch ({} vs {}) — \
+         zip() would silently truncate; callers must use a uniform feature_dim",
+        a.len(),
+        b.len()
+    );
     a.iter()
         .zip(b.iter())
         .map(|(x, y)| (x - y) * (x - y))
@@ -343,6 +409,82 @@ fn euclidean_distance(a: &[f64], b: &[f64]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reference full-row banded DTW (the pre-ADR-154 implementation): walks the
+    /// entire 1..=m row and `continue`s on out-of-band cells. Used to prove the
+    /// optimized banded loop is bit-identical.
+    fn dtw_distance_fullrow(seq_a: &[Vec<f64>], seq_b: &[Vec<f64>], band_width: usize) -> f64 {
+        let n = seq_a.len();
+        let m = seq_b.len();
+        if n == 0 || m == 0 {
+            return f64::INFINITY;
+        }
+        let mut prev = vec![f64::INFINITY; m + 1];
+        let mut curr = vec![f64::INFINITY; m + 1];
+        prev[0] = 0.0;
+        for i in 1..=n {
+            curr[0] = f64::INFINITY;
+            let j_start = if band_width >= i {
+                1
+            } else {
+                i.saturating_sub(band_width).max(1)
+            };
+            let j_end = (i + band_width).min(m);
+            for j in 1..=m {
+                if j < j_start || j > j_end {
+                    curr[j] = f64::INFINITY;
+                    continue;
+                }
+                let cost = euclidean_distance(&seq_a[i - 1], &seq_b[j - 1]);
+                curr[j] = cost + prev[j].min(curr[j - 1]).min(prev[j - 1]);
+            }
+            std::mem::swap(&mut prev, &mut curr);
+        }
+        prev[m]
+    }
+
+    /// ADR-154: the banded loop must be BIT-IDENTICAL to the full-row version
+    /// across a sweep of sizes and band widths (this is the perf change's
+    /// correctness contract — same numbers, fewer cells touched).
+    #[test]
+    fn dtw_banded_bit_identical_to_fullrow() {
+        // Deterministic pseudo-random sequences.
+        let mk = |len: usize, seed: u64| -> Vec<Vec<f64>> {
+            let mut s = seed;
+            (0..len)
+                .map(|_| {
+                    s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    let x = ((s >> 33) as f64) / (u32::MAX as f64);
+                    vec![x, 1.0 - x]
+                })
+                .collect()
+        };
+        for &(n, m) in &[
+            (10, 10),
+            (10, 20),
+            (20, 10),
+            (50, 50),
+            (200, 200),
+            (7, 13),
+            (13, 7),
+            (1, 5),
+            (5, 1),
+            (100, 30),
+            (30, 100),
+            (200, 195),
+        ] {
+            let a = mk(n, 0x1234);
+            let b = mk(m, 0x9abc);
+            for band in [0usize, 1, 2, 3, 5, 8, 50, 1000] {
+                let opt = dtw_distance(&a, &b, band);
+                let refv = dtw_distance_fullrow(&a, &b, band);
+                assert!(
+                    (opt == refv) || (opt.is_infinite() && refv.is_infinite()),
+                    "DTW mismatch n={n} m={m} band={band}: opt={opt} ref={refv}"
+                );
+            }
+        }
+    }
 
     fn make_template(
         name: &str,
@@ -575,5 +717,35 @@ mod tests {
         assert_eq!(GestureType::Push.name(), "push");
         assert_eq!(GestureType::Circle.name(), "circle");
         assert_eq!(GestureType::Custom.name(), "custom");
+    }
+
+    // -- ADR-154 §7.4 #12 + de-magic: boundary / characterization tests.
+
+    /// De-magicked confidence epsilon must equal the prior literal.
+    #[test]
+    fn confidence_epsilon_unchanged_from_literal() {
+        assert_eq!(CONFIDENCE_SECOND_BEST_EPSILON, 1e-10);
+    }
+
+    /// `dtw_distance` returns +inf when EITHER sequence is empty. Pins the
+    /// n=0 / m=0 boundary (previously exercised only with n,m >= 3).
+    #[test]
+    fn dtw_empty_sequence_is_infinite() {
+        let nonempty: Vec<Vec<f64>> = vec![vec![1.0], vec![2.0]];
+        let empty: Vec<Vec<f64>> = vec![];
+        assert!(dtw_distance(&empty, &nonempty, 3).is_infinite());
+        assert!(dtw_distance(&nonempty, &empty, 3).is_infinite());
+        assert!(dtw_distance(&empty, &empty, 3).is_infinite());
+    }
+
+    /// `euclidean_distance` over equal-length vectors is the L2 norm of the
+    /// difference. Pins the documented same-dimension caller contract (#12);
+    /// the mismatch case is guarded by a debug_assert in debug builds and
+    /// truncates in release — not exercised here to keep the test
+    /// release/debug-agnostic.
+    #[test]
+    fn euclidean_distance_equal_length_is_l2() {
+        assert!((euclidean_distance(&[1.0, 2.0, 2.0], &[0.0, 0.0, 0.0]) - 3.0).abs() < 1e-12);
+        assert_eq!(euclidean_distance(&[], &[]), 0.0);
     }
 }

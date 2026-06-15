@@ -65,6 +65,15 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     d_m3LogOutput=0                  # Disable WASM3 stdout logging (use ESP_LOG)
     d_m3FixedHeap=0                  # Use dynamic allocation (PSRAM-friendly)
     WASM3_AVAILABLE=1                # Flag for conditional compilation
+    # Issue #946: GCC 15.2.0 for Xtensa (ESP-IDF v6.0.1) rejects wasm3's
+    # `M3_MUSTTAIL` aggressive tail-call attribute with
+    # "cannot tail-call: machine description does not have a sibcall_epilogue
+    # instruction pattern". wasm3 falls back to a regular call sequence when
+    # M3_NO_MUSTTAIL is defined — slightly slower per opcode but functionally
+    # identical. Forcing it off unconditionally on Xtensa is fine because the
+    # tail-call optimisation was never reliable on this target anyway. Older
+    # IDF/GCC builds also accept the define (it just becomes a no-op).
+    M3_NO_MUSTTAIL=1
 )
 
 # Suppress warnings from third-party code.

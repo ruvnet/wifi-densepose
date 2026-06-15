@@ -1,4 +1,4 @@
-889715e9d698ad78f9978ad8b93b6af24a726b0494247201c8f0d920d9fc80ca *firmware/esp32-csi-node/release_bins/c6-adr110/bootloader.bin
-d8539e47c6f10a3344679118619e3fe01cfd66eb560ea8883268ca7c9a12efa4 *firmware/esp32-csi-node/release_bins/c6-adr110/esp32-csi-node.bin
+b0fb1f217a39c80bc95b5eb8208a0b8572ae64efa0f6d580b76caff4affe0f4d *firmware/esp32-csi-node/release_bins/c6-adr110/bootloader.bin
+4764c5b20a353895f70122816adc98f861ec20e9a8ea9b344dc0648b6341073c *firmware/esp32-csi-node/release_bins/c6-adr110/esp32-csi-node.bin
 7d2c7ac4888bfd75cd5f56e8d61f69595121183afc81556c876732fd3782c62f *firmware/esp32-csi-node/release_bins/c6-adr110/ota_data_initial.bin
 4c2cc4ffd52641e23b779bd57b3908014083ac3c1aab395756478c89e70d81f0 *firmware/esp32-csi-node/release_bins/c6-adr110/partition-table.bin

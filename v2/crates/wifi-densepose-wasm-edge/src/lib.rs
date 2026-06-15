@@ -46,10 +46,20 @@ pub mod vital_trend;
 pub mod intrusion;
 
 // ── Category 1: Medical & Health (ADR-041, event IDs 100-199) ───────────────
+//
+// ⚠️ EXPERIMENTAL — NOT clinically validated, NOT medical devices (ADR-160 §A1).
+// Gated behind the non-default `medical-experimental` feature so they cannot be
+// silently built into a shipping artifact. The DSP is real; the clinical claim
+// surface is not. See each module's header disclaimer.
+#[cfg(feature = "medical-experimental")]
 pub mod med_sleep_apnea;
+#[cfg(feature = "medical-experimental")]
 pub mod med_cardiac_arrhythmia;
+#[cfg(feature = "medical-experimental")]
 pub mod med_respiratory_distress;
+#[cfg(feature = "medical-experimental")]
 pub mod med_gait_analysis;
+#[cfg(feature = "medical-experimental")]
 pub mod med_seizure_detect;
 
 // ── Category 2: Security & Safety (ADR-041, event IDs 200-299) ──────────────
@@ -83,6 +93,18 @@ pub mod ind_structural_vibration;
 // ── Shared vendor utilities (ADR-041) ────────────────────────────────────────
 
 pub mod vendor_common;
+
+// ── Unified edge pipeline (ADR-160 deliverable) ──────────────────────────────
+//
+// `EdgePipeline` registers EVERY runtime skill module behind one uniform
+// `EdgeSkill` trait and runs them all per CSI frame. Host-only (`std`): it uses
+// Box/Vec for dynamic dispatch; the wasm `no_std` build keeps the small flagship
+// pipeline in this file. The `med_*` tier is registered only under
+// `medical-experimental` (preserves the ADR-160 safety gate).
+#[cfg(feature = "std")]
+pub mod pipeline_all;
+#[cfg(feature = "std")]
+pub mod skill_registry;
 
 // ── Vendor-integrated modules (ADR-041 Category 7) ──────────────────────────
 //
@@ -228,9 +250,11 @@ pub mod event_types {
     pub const DEPARTURE_DETECTED: i32 = 212;
     pub const SEC_ZONE_TRANSITION: i32 = 213;
 
-    // sec_weapon_detect (220-222)
+    // sec_weapon_detect (220-222) — ADR-160 §A3: honest physical-quantity names.
+    // `WEAPON_ALERT` was renamed to `HIGH_METAL_REFLECTIVITY`: a variance ratio
+    // measures RF reflectivity, not weapon-grade discrimination.
     pub const METAL_ANOMALY: i32 = 220;
-    pub const WEAPON_ALERT: i32 = 221;
+    pub const HIGH_METAL_REFLECTIVITY: i32 = 221;
     pub const CALIBRATION_NEEDED: i32 = 222;
 
     // sec_tailgating (230-232)

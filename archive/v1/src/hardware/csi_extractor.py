@@ -221,11 +221,15 @@ class ESP32BinaryParser:
 
         snr = float(rssi - noise_floor)
         frequency = float(freq_mhz) * 1e6
-        bandwidth = 20e6  # default; could infer from n_subcarriers
 
-        if n_subcarriers <= 56:
+        # Bandwidth inference (issue #1005): HE-LTF uses a 4x denser tone
+        # grid than HT-LTF on the same channel width — an HE-SU frame with
+        # 256 bins (242 active HE20 tones) is a *20 MHz* capture, not 160.
+        if ppdu_byte in (1, 2, 3):  # HE-SU / HE-MU / HE-TB
+            bandwidth = 40e6 if (flags_byte & 0x01) or n_subcarriers > 256 else 20e6
+        elif n_subcarriers <= 64:  # ESP32 HT20 delivers the full 64-bin FFT
             bandwidth = 20e6
-        elif n_subcarriers <= 114:
+        elif n_subcarriers <= 128:
             bandwidth = 40e6
         elif n_subcarriers <= 242:
             bandwidth = 80e6

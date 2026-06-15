@@ -72,6 +72,8 @@ pub const EVENT_VIBRATION_SPECTRUM: i32 = 543;
 
 /// Structural vibration monitor.
 pub struct StructuralVibrationMonitor {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
     /// Phase history ring buffer [time][subcarrier].
     phase_history: [[f32; MAX_SC]; PHASE_HISTORY_LEN],
     hist_idx: usize,
@@ -104,6 +106,7 @@ pub struct StructuralVibrationMonitor {
 impl StructuralVibrationMonitor {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 4],
             phase_history: [[0.0; MAX_SC]; PHASE_HISTORY_LEN],
             hist_idx: 0,
             hist_len: 0,
@@ -162,7 +165,6 @@ impl StructuralVibrationMonitor {
             self.hist_len += 1;
         }
 
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n_events = 0usize;
 
         // --- Calibration: establish baseline when space is empty ---
@@ -180,7 +182,7 @@ impl StructuralVibrationMonitor {
                     self.baseline_set = true;
                 }
             }
-            return unsafe { &EVENTS[..0] };
+            return &self.events[..0];
         }
 
         // Only analyze when unoccupied (human presence masks structural signals).
@@ -191,7 +193,7 @@ impl StructuralVibrationMonitor {
                 self.drift_direction[i] = 0;
                 self.drift_accumulator[i] = 0.0;
             }
-            return unsafe { &EVENTS[..0] };
+            return &self.events[..0];
         }
 
         // --- Step 1: Compute phase deviation RMS ---
@@ -209,7 +211,7 @@ impl StructuralVibrationMonitor {
                     && n_events < 4
                 {
                     self.seismic_cooldown = SEISMIC_COOLDOWN;
-                    unsafe { EVENTS[n_events] = (EVENT_SEISMIC_DETECTED, rms); }
+                    self.events[n_events] = (EVENT_SEISMIC_DETECTED, rms);
                     n_events += 1;
                 }
             }
@@ -235,7 +237,7 @@ impl StructuralVibrationMonitor {
                     } else {
                         0.0
                     };
-                    unsafe { EVENTS[n_events] = (EVENT_MECHANICAL_RESONANCE, freq); }
+                    self.events[n_events] = (EVENT_MECHANICAL_RESONANCE, freq);
                     n_events += 1;
                 }
             } else {
@@ -253,7 +255,7 @@ impl StructuralVibrationMonitor {
             if fabsf(avg_drift) > DRIFT_RATE_THRESH {
                 self.drift_cooldown = DRIFT_COOLDOWN;
                 // Value is drift rate in rad/second.
-                unsafe { EVENTS[n_events] = (EVENT_STRUCTURAL_DRIFT, avg_drift * 20.0); }
+                self.events[n_events] = (EVENT_STRUCTURAL_DRIFT, avg_drift * 20.0);
                 n_events += 1;
             }
         }
@@ -263,11 +265,11 @@ impl StructuralVibrationMonitor {
             && self.hist_len >= MAX_LAGS + 1
             && n_events < 4
         {
-            unsafe { EVENTS[n_events] = (EVENT_VIBRATION_SPECTRUM, rms); }
+            self.events[n_events] = (EVENT_VIBRATION_SPECTRUM, rms);
             n_events += 1;
         }
 
-        unsafe { &EVENTS[..n_events] }
+        &self.events[..n_events]
     }
 
     /// Compute RMS phase deviation from baseline.

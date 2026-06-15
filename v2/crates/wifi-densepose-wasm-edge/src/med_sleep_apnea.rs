@@ -1,10 +1,19 @@
-//! Sleep apnea detection — ADR-041 Category 1 Medical module.
+//! Apnea-like breathing-pause flagging — ADR-041 Category 1 Medical module.
 //!
-//! Detects obstructive and central sleep apnea by monitoring breathing BPM
-//! from the host CSI pipeline.  When breathing drops below 4 BPM for more
-//! than 10 seconds the detector flags an apnea event.  It also tracks the
-//! Apnea-Hypopnea Index (AHI) — the number of apnea events per hour of
-//! monitored sleep time.
+//! ⚠️ EXPERIMENTAL RESEARCH MODULE — NOT VALIDATED AGAINST CLINICAL DATA.
+//! ⚠️ NOT A MEDICAL DEVICE. Do NOT use for diagnosis, monitoring of patients,
+//! ⚠️ or any clinical decision. This module flags *candidate* apnea-like
+//! ⚠️ breathing-pause signatures (sustained low breathing-rate estimates)
+//! ⚠️ only; it has never been compared against polysomnography or any
+//! ⚠️ reference standard, and its accuracy is unproven (see ADR-160 §A1).
+//! ⚠️ Gated behind the non-default `medical-experimental` cargo feature so it
+//! ⚠️ cannot be silently built into a shipping artifact.
+//!
+//! Monitors breathing-rate estimates from the host CSI pipeline. When the
+//! estimate drops below 4 BPM for more than 10 seconds the detector flags a
+//! candidate apnea-like event. It also tracks a candidate Apnea-Hypopnea
+//! Index (AHI) proxy — the number of flagged events per hour of monitored
+//! time. These are experimental proxies, NOT clinical measurements.
 //!
 //! Events:
 //!   APNEA_START (100) — breathing ceased or fell below threshold
@@ -77,6 +86,8 @@ pub struct SleepApneaDetector {
     timer_count: u32,
     /// Most recently computed AHI.
     last_ahi: f32,
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
 }
 
 impl SleepApneaDetector {
@@ -90,6 +101,7 @@ impl SleepApneaDetector {
             monitoring_secs: 0,
             timer_count: 0,
             last_ahi: 0.0,
+            events: [(0, 0.0); 4],
         }
     }
 
@@ -104,7 +116,6 @@ impl SleepApneaDetector {
     ) -> &[(i32, f32)] {
         self.timer_count += 1;
 
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n = 0usize;
 
         // Only monitor when subject is present.
@@ -115,11 +126,11 @@ impl SleepApneaDetector {
                 self.record_episode(self.current_start, dur);
                 self.in_apnea = false;
                 self.low_breath_secs = 0;
-                unsafe { EVENTS[n] = (EVENT_APNEA_END, dur as f32); }
+                self.events[n] = (EVENT_APNEA_END, dur as f32);
                 n += 1;
             }
             self.low_breath_secs = 0;
-            return unsafe { &EVENTS[..n] };
+            return &self.events[..n];
         }
 
         self.monitoring_secs += 1;
@@ -129,7 +140,7 @@ impl SleepApneaDetector {
         // Treat NaN as invalid — skip detection for this frame.
         if breathing_bpm != breathing_bpm {
             // NaN: f32::NAN != f32::NAN is true.
-            return unsafe { &EVENTS[..n] };
+            return &self.events[..n];
         }
 
         // ── Apnea detection ─────────────────────────────────────────────
@@ -140,7 +151,7 @@ impl SleepApneaDetector {
                 // Apnea onset — backdate start to when breathing first dropped.
                 self.in_apnea = true;
                 self.current_start = self.timer_count.saturating_sub(self.low_breath_secs);
-                unsafe { EVENTS[n] = (EVENT_APNEA_START, breathing_bpm); }
+                self.events[n] = (EVENT_APNEA_START, breathing_bpm);
                 n += 1;
             }
         } else {
@@ -149,7 +160,7 @@ impl SleepApneaDetector {
                 let dur = self.timer_count.saturating_sub(self.current_start);
                 self.record_episode(self.current_start, dur);
                 self.in_apnea = false;
-                unsafe { EVENTS[n] = (EVENT_APNEA_END, dur as f32); }
+                self.events[n] = (EVENT_APNEA_END, dur as f32);
                 n += 1;
             }
             self.low_breath_secs = 0;
@@ -163,11 +174,11 @@ impl SleepApneaDetector {
             } else {
                 0.0
             };
-            unsafe { EVENTS[n] = (EVENT_AHI_UPDATE, self.last_ahi); }
+            self.events[n] = (EVENT_AHI_UPDATE, self.last_ahi);
             n += 1;
         }
 
-        unsafe { &EVENTS[..n] }
+        &self.events[..n]
     }
 
     fn record_episode(&mut self, start: u32, duration: u32) {

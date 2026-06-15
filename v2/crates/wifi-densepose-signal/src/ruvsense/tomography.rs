@@ -182,6 +182,8 @@ pub struct RfTomographer {
     weight_matrix: Vec<Vec<(usize, f64)>>,
     /// Number of voxels.
     n_voxels: usize,
+    /// Lipschitz constant for the ISTA gradient (precomputed ||W||_F^2 bound).
+    lipschitz: f64,
 }
 
 impl RfTomographer {
@@ -222,10 +224,20 @@ impl RfTomographer {
             return Err(TomographyError::NoIntersections);
         }
 
+        // Lipschitz upper bound for the ISTA step size: ||W^T W|| <= ||W||_F^2.
+        // Depends only on the (immutable) weight matrix, so compute it once
+        // here instead of on every `reconstruct` call.
+        let frobenius_sq: f64 = weight_matrix
+            .iter()
+            .flat_map(|ws| ws.iter().map(|&(_, w)| w * w))
+            .sum();
+        let lipschitz = frobenius_sq.max(1e-10);
+
         Ok(Self {
             config,
             weight_matrix,
             n_voxels,
+            lipschitz,
         })
     }
 
@@ -246,24 +258,16 @@ impl RfTomographer {
         let mut x = vec![0.0_f64; self.n_voxels];
         let n_links = attenuations.len();
 
-        // Estimate step size: 1 / L where L is the Lipschitz constant of the
-        // gradient of ||Wx - y||^2, i.e. the spectral norm of W^T W.
-        // A safe upper bound is the Frobenius norm squared of W (sum of all
-        // squared entries), since ||W^T W|| <= ||W||_F^2.
-        let frobenius_sq: f64 = self
-            .weight_matrix
-            .iter()
-            .flat_map(|ws| ws.iter().map(|&(_, w)| w * w))
-            .sum();
-        let lipschitz = frobenius_sq.max(1e-10);
-        let step_size = 1.0 / lipschitz;
+        // Step size 1 / L, with L precomputed in `new` (||W||_F^2 upper bound).
+        let step_size = 1.0 / self.lipschitz;
 
         let mut residual = 0.0_f64;
         let mut iterations = 0;
+        let mut gradient = vec![0.0_f64; self.n_voxels];
 
         for iter in 0..self.config.max_iterations {
             // Compute gradient: W^T (Wx - y)
-            let mut gradient = vec![0.0_f64; self.n_voxels];
+            gradient.fill(0.0);
             residual = 0.0;
 
             for (link_idx, weights) in self.weight_matrix.iter().enumerate() {

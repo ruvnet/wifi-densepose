@@ -108,6 +108,31 @@ const COCO_SIGMAS: [f32; 17] = [
 /// left_hip, right_hip.
 const TORSO_INDICES: [usize; 4] = [5, 6, 11, 12];
 
+// --- Tuning constants (ADR-155 M2 §8: de-magicked from bare literals; values
+// bit-identical to the prior inline literals — documentation only, no behaviour
+// change). ---
+
+/// Number of COCO body keypoints. Loops over keypoints are bounded by this so
+/// short/adversarial inputs cannot panic (ADR-155 §Tier-2).
+const NUM_KEYPOINTS: usize = 17;
+
+/// Visibility cutoff: a keypoint is *visible* iff `visibility[j] >= 0.5`
+/// (COCO convention; matches [`crate::metrics_core`]).
+const VISIBILITY_THRESHOLD: f32 = 0.5;
+
+/// PCK acceptance ratio: a keypoint is correct iff its error ≤ `0.2 · bbox_diag`
+/// (the ADR-152 / WiFlow-STD PCK@0.2 convention).
+const PCK_THRESHOLD: f32 = 0.2;
+
+/// Floor on the GT bounding-box diagonal used as the OKS/PCK reference scale.
+/// Guards the `dist_thr = ratio · diag` and OKS `s` against a degenerate
+/// (≈0-extent) pose producing a divide-by-≈0 (Inf/NaN) score.
+const MIN_BBOX_DIAG: f32 = 1e-3;
+
+/// Floor on a tracking-sequence duration (minutes) before it divides the
+/// false-track count, so a zero-length window cannot yield `Inf` per-minute.
+const MIN_DURATION_MINUTES: f32 = 1e-6;
+
 /// Evaluate Metric 1: Joint Error.
 ///
 /// # Arguments
@@ -141,21 +166,21 @@ pub fn evaluate_joint_error(
     }
 
     // PCK@0.2 computation.
-    let pck_threshold = 0.2;
+    let pck_threshold = PCK_THRESHOLD;
     let mut all_correct = 0_usize;
     let mut all_total = 0_usize;
     let mut torso_correct = 0_usize;
     let mut torso_total = 0_usize;
     let mut oks_sum = 0.0_f64;
-    let mut per_kp_errors: Vec<Vec<f32>> = vec![Vec::new(); 17];
+    let mut per_kp_errors: Vec<Vec<f32>> = vec![Vec::new(); NUM_KEYPOINTS];
 
     for i in 0..n {
         let bbox_diag = compute_bbox_diag(&gt_kpts[i], &visibility[i]);
-        let safe_diag = bbox_diag.max(1e-3);
+        let safe_diag = bbox_diag.max(MIN_BBOX_DIAG);
         let dist_thr = pck_threshold * safe_diag;
 
         for (j, kp_errors) in per_kp_errors.iter_mut().enumerate() {
-            if visibility[i][j] < 0.5 {
+            if visibility[i][j] < VISIBILITY_THRESHOLD {
                 continue;
             }
             let dx = pred_kpts[i][[j, 0]] - gt_kpts[i][[j, 0]];
@@ -177,8 +202,13 @@ pub fn evaluate_joint_error(
             }
         }
 
-        // OKS for this frame.
-        let s = scale.get(i).copied().unwrap_or(1.0);
+        // OKS for this frame. ADR-155 §Tier-1.1/§Tier-2: never fall back to
+        // s=1.0 on normalized [0,1] coordinates — that makes every distance ≈0
+        // and OKS ≈1.0 for any pose (the "fake Gold tier" bug). When no valid
+        // per-frame scale is supplied we derive it from the GT pose extent
+        // (`safe_diag`), exactly as the canonical OKS does.
+        let supplied = scale.get(i).copied().unwrap_or(0.0);
+        let s = if supplied > 0.0 { supplied } else { safe_diag };
         let oks_frame = compute_single_oks(&pred_kpts[i], &gt_kpts[i], &visibility[i], s);
         oks_sum += oks_frame as f64;
     }
@@ -373,7 +403,7 @@ pub fn evaluate_tracking(
     };
 
     // False tracks per minute.
-    let safe_duration = duration_minutes.max(1e-6);
+    let safe_duration = duration_minutes.max(MIN_DURATION_MINUTES);
     let false_tracks_per_min = total_false_positives as f32 / safe_duration;
 
     // MOTA = 1 - (misses + false_positives + id_switches) / total_gt
@@ -607,8 +637,8 @@ fn compute_bbox_diag(kp: &Array2<f32>, vis: &Array1<f32>) -> f32 {
     let mut y_max = f32::MIN;
     let mut any = false;
 
-    for j in 0..17.min(kp.shape()[0]) {
-        if vis[j] >= 0.5 {
+    for j in 0..NUM_KEYPOINTS.min(kp.shape()[0]) {
+        if vis[j] >= VISIBILITY_THRESHOLD {
             let x = kp[[j, 0]];
             let y = kp[[j, 1]];
             x_min = x_min.min(x);
@@ -627,11 +657,19 @@ fn compute_bbox_diag(kp: &Array2<f32>, vis: &Array1<f32>) -> f32 {
 }
 
 fn compute_single_oks(pred: &Array2<f32>, gt: &Array2<f32>, vis: &Array1<f32>, s: f32) -> f32 {
+    // ADR-155 §Tier-2: a non-positive scale would divide by ≈0 (Inf/NaN OKS) —
+    // and on normalized coords s=1.0 was the fake-perfect bug. Reject it.
+    if !(s > 0.0) {
+        return 0.0;
+    }
     let s_sq = s * s;
+    // ADR-155 §Tier-2: bound the loop to the actual array extents so adversarial
+    // / short inputs (< 17 rows, mismatched vis length) cannot panic on `[j]`.
+    let n = pred.shape()[0].min(gt.shape()[0]).min(vis.len()).min(NUM_KEYPOINTS);
     let mut num = 0.0_f32;
     let mut den = 0.0_f32;
-    for j in 0..17 {
-        if vis[j] < 0.5 {
+    for j in 0..n {
+        if vis[j] < VISIBILITY_THRESHOLD {
             continue;
         }
         den += 1.0;
@@ -662,7 +700,7 @@ fn compute_torso_jitter(pred_kpts: &[Array2<f32>], visibility: &[Array1<f32>]) -
             let mut cy = 0.0_f32;
             let mut count = 0_usize;
             for &idx in &TORSO_INDICES {
-                if vis[idx] >= 0.5 {
+                if vis[idx] >= VISIBILITY_THRESHOLD {
                     cx += kp[[idx, 0]];
                     cy += kp[[idx, 1]];
                     count += 1;
@@ -717,6 +755,50 @@ mod tests {
     use super::*;
     use ndarray::{Array1, Array2};
 
+    /// ADR-155 M2 §8: the de-magicked tuning consts must equal the prior inline
+    /// literals exactly (operating-value guard against a future silent shift).
+    #[test]
+    fn ruview_metrics_consts_unchanged_from_literals() {
+        assert_eq!(NUM_KEYPOINTS, 17);
+        assert_eq!(VISIBILITY_THRESHOLD, 0.5_f32);
+        assert_eq!(PCK_THRESHOLD, 0.2_f32);
+        assert_eq!(MIN_BBOX_DIAG, 1e-3_f32);
+        assert_eq!(MIN_DURATION_MINUTES, 1e-6_f32);
+    }
+
+    /// Characterize `evaluate_tracking`'s duration floor: a zero-minute window
+    /// must NOT produce an Inf per-minute false-track rate — it divides by the
+    /// `MIN_DURATION_MINUTES` floor instead. Pins the guard.
+    #[test]
+    fn tracking_zero_duration_does_not_divide_by_zero() {
+        let frames = vec![TrackingFrame {
+            frame_idx: 0,
+            gt_ids: vec![1],
+            pred_ids: vec![1, 2], // one extra ⇒ a false positive track
+            assignments: vec![(1, 1)],
+        }];
+        let r = evaluate_tracking(&frames, 0.0, &TrackingThresholds::default());
+        assert!(
+            r.false_tracks_per_min.is_finite(),
+            "zero duration must not yield Inf false-tracks/min: {}",
+            r.false_tracks_per_min
+        );
+    }
+
+    /// Characterize `compute_single_oks`'s short-array bound at exactly the
+    /// `NUM_KEYPOINTS` edge and just below: fewer than 17 rows must score the
+    /// available joints without panicking on `[j]`.
+    #[test]
+    fn oks_short_array_is_bounded_at_keypoint_count() {
+        // 16 rows (one below NUM_KEYPOINTS): must not panic, finite result.
+        let pred = Array2::<f32>::zeros((16, 2));
+        let gt = Array2::<f32>::zeros((16, 2));
+        let mut vis = Array1::<f32>::ones(16);
+        vis[0] = 1.0;
+        let oks = compute_single_oks(&pred, &gt, &vis, 1.0);
+        assert!(oks.is_finite());
+    }
+
     fn make_perfect_kpts() -> (Array2<f32>, Array2<f32>, Array1<f32>) {
         let kp = Array2::from_shape_fn((17, 2), |(j, d)| {
             if d == 0 {
@@ -744,6 +826,59 @@ mod tests {
         });
         let vis = Array1::ones(17);
         (pred, gt, vis)
+    }
+
+    #[test]
+    fn oks_rejects_nonpositive_scale() {
+        // ADR-155 §Tier-2: s<=0 must return 0.0, never Inf/NaN.
+        let (pred, gt, vis) = make_perfect_kpts();
+        assert_eq!(compute_single_oks(&pred, &gt, &vis, 0.0), 0.0);
+        assert_eq!(compute_single_oks(&pred, &gt, &vis, -1.0), 0.0);
+        assert!(compute_single_oks(&pred, &gt, &vis, 0.5).is_finite());
+    }
+
+    #[test]
+    fn oks_does_not_panic_on_short_arrays() {
+        // ADR-155 §Tier-2: fewer than 17 rows / mismatched vis must not panic.
+        let pred = Array2::<f32>::zeros((5, 2));
+        let gt = Array2::<f32>::zeros((5, 2));
+        let vis = Array1::<f32>::ones(5);
+        let oks = compute_single_oks(&pred, &gt, &vis, 0.5);
+        assert!(oks.is_finite());
+    }
+
+    #[test]
+    fn oks_not_perfect_for_wrong_pose_with_derived_scale() {
+        // ADR-155 §Tier-1.1/§Tier-2: a clearly wrong pose on normalized coords,
+        // evaluated with no supplied scale (derived from GT extent), must NOT
+        // look near-perfect — the old s=1.0 fallback would have returned ≈1.0.
+        let gt = Array2::from_shape_fn(
+            (17, 2),
+            |(j, d)| {
+                if d == 0 {
+                    0.4 + j as f32 * 0.01
+                } else {
+                    0.5
+                }
+            },
+        );
+        let mut pred = gt.clone();
+        for j in 0..17 {
+            pred[[j, 1]] += 0.3; // shift every joint far in y
+        }
+        let vis = Array1::<f32>::ones(17);
+        let result = evaluate_joint_error(
+            &[pred],
+            &[gt],
+            &[vis],
+            &[], // no supplied scale ⇒ derive from GT extent
+            &JointErrorThresholds::default(),
+        );
+        assert!(
+            result.oks < 0.5,
+            "wrong pose must not yield near-perfect OKS, got {}",
+            result.oks
+        );
     }
 
     #[test]

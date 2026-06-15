@@ -74,6 +74,8 @@ pub const EVENT_COORDINATION_INDEX: i32 = 682;
 /// Samples `motion_energy` into a circular buffer and runs autocorrelation
 /// to detect period doubling and multi-person temporal coordination.
 pub struct TimeCrystalDetector {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 3],
     /// Circular buffer of motion energy samples.
     motion_buf: CircularBuffer<BUF_LEN>,
     /// Autocorrelation values at lags 1..MAX_LAG.
@@ -101,6 +103,7 @@ pub struct TimeCrystalDetector {
 impl TimeCrystalDetector {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 3],
             motion_buf: CircularBuffer::new(),
             autocorr: [0.0; MAX_LAG],
             last_multiplier: 0,
@@ -119,7 +122,6 @@ impl TimeCrystalDetector {
     ///
     /// Returns events as `(event_id, value)` pairs in a static buffer.
     pub fn process_frame(&mut self, motion_energy: f32) -> &[(i32, f32)] {
-        static mut EVENTS: [(i32, f32); 3] = [(0, 0.0); 3];
         let mut n_ev = 0usize;
 
         // Push sample into circular buffer.
@@ -216,25 +218,19 @@ impl TimeCrystalDetector {
 
         // Emit events.
         if detected_multiplier > 0 {
-            unsafe {
-                EVENTS[n_ev] = (EVENT_CRYSTAL_DETECTED, detected_multiplier as f32);
-            }
+            self.events[n_ev] = (EVENT_CRYSTAL_DETECTED, detected_multiplier as f32);
             n_ev += 1;
         }
 
-        unsafe {
-            EVENTS[n_ev] = (EVENT_CRYSTAL_STABILITY, self.stability_ema.value);
-        }
+        self.events[n_ev] = (EVENT_CRYSTAL_STABILITY, self.stability_ema.value);
         n_ev += 1;
 
         if coordination > 0 {
-            unsafe {
-                EVENTS[n_ev] = (EVENT_COORDINATION_INDEX, coordination as f32);
-            }
+            self.events[n_ev] = (EVENT_COORDINATION_INDEX, coordination as f32);
             n_ev += 1;
         }
 
-        unsafe { &EVENTS[..n_ev] }
+        &self.events[..n_ev]
     }
 
     /// Compute mean and variance of the circular buffer contents.

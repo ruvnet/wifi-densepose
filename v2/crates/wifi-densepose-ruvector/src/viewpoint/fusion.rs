@@ -359,6 +359,10 @@ impl MultistaticArray {
         self.cycle_count += 1;
 
         // Extract all needed data from viewpoints upfront to avoid borrow conflicts.
+        // Embeddings are cloned exactly once (out of `self.viewpoints`, which we
+        // borrow immutably); metadata is Copy. The previous implementation cloned
+        // each embedding a SECOND time when building `embeddings` from `extracted`
+        // — eliminated here (ADR-156 §finding 4).
         let min_snr = self.config.min_snr_db;
         let total_viewpoints = self.viewpoints.len();
         let extracted: Vec<ExtractedViewpoint> = self
@@ -394,22 +398,23 @@ impl MultistaticArray {
             });
         }
 
-        // Prepare embeddings and geometries from extracted data.
-        let embeddings: Vec<Vec<f32>> = extracted.iter().map(|(_, e, _, _)| e.clone()).collect();
-        let geom: Vec<ViewpointGeometry> = extracted
-            .iter()
-            .map(|(_, _, az, pos)| ViewpointGeometry {
-                azimuth: *az,
-                position: *pos,
-            })
-            .collect();
+        // Move the cloned embeddings out of `extracted` (no second clone) while
+        // capturing geometry/ids by Copy. `extracted` is consumed here.
+        let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(n_valid);
+        let mut geom: Vec<ViewpointGeometry> = Vec::with_capacity(n_valid);
+        let mut azimuths: Vec<f32> = Vec::with_capacity(n_valid);
+        let mut ids: Vec<NodeId> = Vec::with_capacity(n_valid);
+        for (id, emb, az, pos) in extracted {
+            geom.push(ViewpointGeometry { azimuth: az, position: pos });
+            azimuths.push(az);
+            ids.push(id);
+            embeddings.push(emb); // move, not clone
+        }
 
         // Run cross-viewpoint attention fusion.
         let fused_emb = self.attention.fuse(&embeddings, &geom)?;
 
         // Compute GDI.
-        let azimuths: Vec<f32> = extracted.iter().map(|(_, _, az, _)| *az).collect();
-        let ids: Vec<NodeId> = extracted.iter().map(|(id, _, _, _)| *id).collect();
         let gdi_opt = GeometricDiversityIndex::compute(&azimuths, &ids);
         let (gdi_val, n_eff) = match &gdi_opt {
             Some(g) => (g.value, g.n_effective),
@@ -456,19 +461,20 @@ impl MultistaticArray {
             });
         }
 
-        let embeddings: Vec<Vec<f32>> = extracted.iter().map(|(_, e, _, _)| e.clone()).collect();
-        let geom: Vec<ViewpointGeometry> = extracted
-            .iter()
-            .map(|(_, _, az, pos)| ViewpointGeometry {
-                azimuth: *az,
-                position: *pos,
-            })
-            .collect();
+        // Move embeddings out of `extracted` (no second clone — ADR-156 §finding 4).
+        let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(n_valid);
+        let mut geom: Vec<ViewpointGeometry> = Vec::with_capacity(n_valid);
+        let mut azimuths: Vec<f32> = Vec::with_capacity(n_valid);
+        let mut ids: Vec<NodeId> = Vec::with_capacity(n_valid);
+        for (id, emb, az, pos) in extracted {
+            geom.push(ViewpointGeometry { azimuth: az, position: pos });
+            azimuths.push(az);
+            ids.push(id);
+            embeddings.push(emb);
+        }
 
         let fused_emb = self.attention.fuse(&embeddings, &geom)?;
 
-        let azimuths: Vec<f32> = extracted.iter().map(|(_, _, az, _)| *az).collect();
-        let ids: Vec<NodeId> = extracted.iter().map(|(id, _, _, _)| *id).collect();
         let gdi_opt = GeometricDiversityIndex::compute(&azimuths, &ids);
         let (gdi_val, n_eff) = match &gdi_opt {
             Some(g) => (g.value, g.n_effective),

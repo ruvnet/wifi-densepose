@@ -10,6 +10,11 @@
 // Helper math functions
 // ---------------------------------------------------------------------------
 
+/// LayerNorm numerical-stability epsilon added under the variance square root
+/// (`(x − μ)/√(σ² + ε)`). The standard transformer default (ADR-155 M2 §8:
+/// de-magicked from a bare `1e-5`; value unchanged, no behaviour change).
+const LAYER_NORM_EPS: f32 = 1e-5;
+
 /// GELU activation (Hendrycks & Gimpel, 2016 approximation).
 pub fn gelu(x: f32) -> f32 {
     let c = (2.0_f32 / std::f32::consts::PI).sqrt();
@@ -24,7 +29,7 @@ pub fn layer_norm(x: &[f32]) -> Vec<f32> {
     }
     let mean = x.iter().sum::<f32>() / n;
     let var = x.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / n;
-    let inv_std = 1.0 / (var + 1e-5_f32).sqrt();
+    let inv_std = 1.0 / (var + LAYER_NORM_EPS).sqrt();
     x.iter().map(|v| (v - mean) * inv_std).collect()
 }
 
@@ -388,6 +393,13 @@ mod tests {
     #[test]
     fn layer_norm_empty() {
         assert!(layer_norm(&[]).is_empty());
+    }
+
+    /// ADR-155 M2 §8: the de-magicked LayerNorm epsilon must equal the prior
+    /// inline `1e-5` literal exactly (operating-value guard).
+    #[test]
+    fn layer_norm_eps_unchanged_from_literal() {
+        assert_eq!(LAYER_NORM_EPS, 1e-5_f32);
     }
 
     #[test]

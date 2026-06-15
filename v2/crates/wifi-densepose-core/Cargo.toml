@@ -1,7 +1,7 @@
 [package]
 name = "wifi-densepose-core"
 description = "Core types, traits, and utilities for WiFi-DensePose pose estimation system"
-version.workspace = true
+version = "0.3.1"  # ADR-136: ComplexSample/CanonicalFrame/provenance + blake3
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -37,6 +37,9 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # UUID for unique identifiers
 uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# BLAKE3 witness hashing (ADR-136 CanonicalFrame; no_std-safe like wifi-densepose-bfld)
+blake3 = { version = "1.5", default-features = false }
 
 [dev-dependencies]
 serde_json.workspace = true

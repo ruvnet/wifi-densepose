@@ -117,6 +117,23 @@ impl OwnedDiscoveryBuilder {
             via_device: self.via_device.as_deref(),
         }
     }
+
+    /// Derive a per-node builder from this base (issue #898). Each physical
+    /// RuView node must surface as its own Home-Assistant device — the base
+    /// builder's `node_id` (the MQTT client id) is replaced with the actual
+    /// node id, giving a distinct `wifi_densepose_<node>` device identifier
+    /// and a per-node friendly name, instead of collapsing every node into a
+    /// single hard-coded device.
+    pub fn for_node(&self, node_id: &str) -> OwnedDiscoveryBuilder {
+        OwnedDiscoveryBuilder {
+            discovery_prefix: self.discovery_prefix.clone(),
+            node_id: node_id.to_string(),
+            node_friendly_name: Some(format!("RuView node {node_id}")),
+            sw_version: self.sw_version.clone(),
+            model: self.model.clone(),
+            via_device: self.via_device.clone(),
+        }
+    }
 }
 
 /// Core run loop. Pumps the broadcast channel + the MQTT event loop in
@@ -129,20 +146,19 @@ async fn run(
     let opts = build_mqtt_options(&cfg);
     let (client, mut eventloop): (AsyncClient, EventLoop) = AsyncClient::new(opts, 256);
 
-    let builder_borrowed = builder_owned.as_borrowed();
     let entities = DiscoveryBuilder::enabled_entities(
         cfg.privacy_mode,
         cfg.publish_pose,
         &[], // no_semantic — wire from cli::Args in P3.5
     );
 
-    if let Err(e) = publish_all_discovery(&client, &builder_borrowed, &entities).await {
-        warn!("[mqtt] initial discovery publish failed: {e}");
-    }
-    let avail = NodeAvailability::for_builder(&builder_borrowed, &entities);
-    if let Err(e) = publish_availability(&client, &avail, "online").await {
-        warn!("[mqtt] initial availability publish failed: {e}");
-    }
+    // #898: one Home-Assistant device per node. Discovery + availability are
+    // published lazily the first time a snapshot for a given node_id arrives;
+    // each node's builder + availability are retained here for heartbeats and
+    // the offline LWT. (Previously a single hard-coded builder collapsed every
+    // node into one device.)
+    let mut nodes: std::collections::HashMap<String, (OwnedDiscoveryBuilder, NodeAvailability)> =
+        std::collections::HashMap::new();
 
     let mut rate_limiter = RateLimiter::new();
     let mut last_heartbeat = Instant::now();
@@ -179,14 +195,20 @@ async fn run(
             // Periodic heartbeat / discovery refresh.
             _ = tokio::time::sleep(Duration::from_secs(1)) => {
                 if last_heartbeat.elapsed() >= AVAILABILITY_HEARTBEAT {
-                    if let Err(e) = publish_availability(&client, &avail, "online").await {
-                        warn!("[mqtt] heartbeat publish failed: {e}");
+                    for (_, na) in nodes.values() {
+                        if let Err(e) = publish_availability(&client, na, "online").await {
+                            warn!("[mqtt] heartbeat publish failed: {e}");
+                        }
                     }
                     last_heartbeat = Instant::now();
                 }
                 if last_refresh.elapsed() >= Duration::from_secs(cfg.refresh_secs) {
-                    if let Err(e) = publish_all_discovery(&client, &builder_borrowed, &entities).await {
-                        warn!("[mqtt] discovery refresh failed: {e}");
+                    for (nb, _) in nodes.values() {
+                        if let Err(e) =
+                            publish_all_discovery(&client, &nb.as_borrowed(), &entities).await
+                        {
+                            warn!("[mqtt] discovery refresh failed: {e}");
+                        }
                     }
                     last_refresh = Instant::now();
                 }
@@ -197,18 +219,39 @@ async fn run(
                 match recv {
                     Ok(snap) => {
                         let elapsed = start_instant.elapsed();
-                        publish_snapshot(&client, &builder_borrowed, &snap, &cfg, &mut rate_limiter, elapsed).await;
+                        // #898: on first sight of a node_id, publish that
+                        // node's discovery + availability; then route its
+                        // state to per-node topics.
+                        if !nodes.contains_key(&snap.node_id) {
+                            let nb = builder_owned.for_node(&snap.node_id);
+                            let borrowed = nb.as_borrowed();
+                            if let Err(e) =
+                                publish_all_discovery(&client, &borrowed, &entities).await
+                            {
+                                warn!("[mqtt] node {} discovery failed: {e}", snap.node_id);
+                            }
+                            let na = NodeAvailability::for_builder(&borrowed, &entities);
+                            if let Err(e) = publish_availability(&client, &na, "online").await {
+                                warn!("[mqtt] node {} availability failed: {e}", snap.node_id);
+                            }
+                            nodes.insert(snap.node_id.clone(), (nb, na));
+                        }
+                        let borrowed = nodes[&snap.node_id].0.as_borrowed();
+                        publish_snapshot(&client, &borrowed, &snap, &cfg, &mut rate_limiter, elapsed).await;
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         warn!("[mqtt] lagged behind broadcast by {n} messages — dropped");
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         info!("[mqtt] broadcast channel closed, draining");
-                        // Publish offline before exit.
-                        let _ = publish_availability(&client, &avail, "offline").await;
+                        // Publish offline for every known node before exit.
+                        for (_, na) in nodes.values() {
+                            let _ = publish_availability(&client, na, "offline").await;
+                        }
                         let _ = client.disconnect().await;
                         return;
                     }
+
                 }
             }
         }
@@ -295,4 +338,53 @@ async fn publish_state(client: &AsyncClient, m: &StateMessage) -> Result<(), Cli
         _ => QoS::ExactlyOnce,
     };
     client.publish(&m.topic, qos, m.retain, m.payload.clone()).await
+}
+
+#[cfg(test)]
+mod per_node_device_tests {
+    //! Issue #898 — each physical node must surface as its own Home-Assistant
+    //! device, not collapse into one hard-coded device.
+    use super::*;
+
+    fn base() -> OwnedDiscoveryBuilder {
+        OwnedDiscoveryBuilder {
+            discovery_prefix: "homeassistant".into(),
+            node_id: "wifi-densepose-1".into(),
+            node_friendly_name: Some("RuView".into()),
+            sw_version: "0.0.0".into(),
+            model: "test".into(),
+            via_device: None,
+        }
+    }
+
+    fn device_identifiers(b: &OwnedDiscoveryBuilder) -> Vec<String> {
+        b.as_borrowed().build(EntityKind::Presence).device.identifiers
+    }
+
+    #[test]
+    fn for_node_overrides_node_id_and_friendly_name() {
+        let n = base().for_node("node-A");
+        assert_eq!(n.node_id, "node-A");
+        assert_eq!(n.node_friendly_name.as_deref(), Some("RuView node node-A"));
+    }
+
+    #[test]
+    fn distinct_nodes_yield_distinct_ha_device_identifiers() {
+        let b = base();
+        let a = device_identifiers(&b.for_node("node-A"));
+        let c = device_identifiers(&b.for_node("node-B"));
+        assert_eq!(a, vec!["wifi_densepose_node-A".to_string()]);
+        assert_eq!(c, vec!["wifi_densepose_node-B".to_string()]);
+        assert_ne!(a, c, "#898: two nodes must not collapse into one device");
+    }
+
+    #[test]
+    fn single_node_keeps_a_stable_identity() {
+        // Two snapshots from the same node map to the same device.
+        let b = base();
+        assert_eq!(
+            device_identifiers(&b.for_node("node-7")),
+            device_identifiers(&b.for_node("node-7"))
+        );
+    }
 }

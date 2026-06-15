@@ -1132,11 +1132,19 @@ impl CsiParser {
             ));
         }
 
-        // PicoScenes CSI segment parsing is not yet implemented.
-        // The format requires parsing DeviceType, RxSBasic, CSI, and MVMExtra segments.
-        // See https://ps.zpj.io/packet-format.html for the full specification.
-        Err(AdapterError::DataFormat(
-            "PicoScenes CSI parser not yet implemented. Packet received but segment parsing (DeviceType, RxSBasic, CSI, MVMExtra) is required. See https://ps.zpj.io/packet-format.html".into()
+        // HONEST gating: the PicoScenes container is a multi-segment binary
+        // format (DeviceType, RxSBasic, CSI, MVMExtra, ...) that varies by the
+        // capturing NIC's PicoScenes plugin; parsing it correctly requires the
+        // matching hardware/plugin to validate against, which is not available
+        // here. Rather than emit a wrong/fabricated decode, return a typed
+        // UnsupportedAdapter error. The header is still validated above so an
+        // obviously-too-short buffer is rejected as a format error first.
+        // Spec: https://ps.zpj.io/packet-format.html
+        Err(AdapterError::UnsupportedAdapter(
+            "PicoScenes CSI container parsing is not supported in this build (multi-segment, \
+             NIC/plugin-specific; needs matching hardware to validate). See \
+             https://ps.zpj.io/packet-format.html"
+                .into(),
         ))
     }
 

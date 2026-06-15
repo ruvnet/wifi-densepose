@@ -41,6 +41,8 @@ pub const EVENT_COMPLIANCE_REPORT: i32 = 523;
 
 /// Clean room monitor.
 pub struct CleanRoomMonitor {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
     /// Maximum allowed occupancy.
     max_occupancy: u8,
     /// Current smoothed person count.
@@ -70,6 +72,7 @@ pub struct CleanRoomMonitor {
 impl CleanRoomMonitor {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 4],
             max_occupancy: DEFAULT_MAX_OCCUPANCY,
             current_count: 0,
             prev_count: 0,
@@ -88,6 +91,7 @@ impl CleanRoomMonitor {
     /// Create with custom maximum occupancy.
     pub const fn with_max_occupancy(max: u8) -> Self {
         Self {
+            events: [(0, 0.0); 4],
             max_occupancy: max,
             current_count: 0,
             prev_count: 0,
@@ -146,12 +150,11 @@ impl CleanRoomMonitor {
             }
         }
 
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n_events = 0usize;
 
         // --- Step 1: Emit count changes ---
         if count != self.prev_count && n_events < 4 {
-            unsafe { EVENTS[n_events] = (EVENT_OCCUPANCY_COUNT, count as f32); }
+            self.events[n_events] = (EVENT_OCCUPANCY_COUNT, count as f32);
             n_events += 1;
         }
 
@@ -166,7 +169,7 @@ impl CleanRoomMonitor {
                 self.violation_cooldown = VIOLATION_COOLDOWN;
                 // Value encodes: count * 10 + max_allowed.
                 let val = count as f32;
-                unsafe { EVENTS[n_events] = (EVENT_OCCUPANCY_VIOLATION, val); }
+                self.events[n_events] = (EVENT_OCCUPANCY_VIOLATION, val);
                 n_events += 1;
             }
         } else {
@@ -182,7 +185,7 @@ impl CleanRoomMonitor {
             {
                 self.total_turbulent += 1;
                 self.turbulent_cooldown = TURBULENT_COOLDOWN;
-                unsafe { EVENTS[n_events] = (EVENT_TURBULENT_MOTION, motion_energy); }
+                self.events[n_events] = (EVENT_TURBULENT_MOTION, motion_energy);
                 n_events += 1;
             }
         } else {
@@ -196,11 +199,11 @@ impl CleanRoomMonitor {
             } else {
                 100.0
             };
-            unsafe { EVENTS[n_events] = (EVENT_COMPLIANCE_REPORT, compliance_pct); }
+            self.events[n_events] = (EVENT_COMPLIANCE_REPORT, compliance_pct);
             n_events += 1;
         }
 
-        unsafe { &EVENTS[..n_events] }
+        &self.events[..n_events]
     }
 
     /// Current occupancy count.

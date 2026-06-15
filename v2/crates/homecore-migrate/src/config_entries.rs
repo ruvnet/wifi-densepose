@@ -1,6 +1,6 @@
 //! Parser for `core.config_entries` (HA storage schema v1, minor_version varies).
 //!
-//! Per ADR-134 §6 Q5, `.storage/core.config_entries` format is undocumented
+//! Per ADR-165 §6 Q5, `.storage/core.config_entries` format is undocumented
 //! and version-gated. P1 reads the envelope and emits:
 //!   - count of config entries
 //!   - list of integration domains represented

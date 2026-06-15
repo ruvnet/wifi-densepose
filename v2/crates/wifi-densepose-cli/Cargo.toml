@@ -1,6 +1,6 @@
 [package]
 name = "wifi-densepose-cli"
-version.workspace = true
+version = "0.3.1"
 edition.workspace = true
 description = "CLI for WiFi-DensePose"
 authors.workspace = true
@@ -16,12 +16,22 @@ name = "wifi-densepose"
 path = "src/main.rs"
 
 [features]
+# `mat` pulls wifi-densepose-mat → -nn → ort (ONNX) → openssl-sys, which does NOT
+# cross-compile to aarch64 and is irrelevant to the calibration path. Build the
+# Pi/appliance calibration binary with `--no-default-features` to exclude it.
 default = ["mat"]
-mat = []
+mat = ["dep:wifi-densepose-mat"]
 
 [dependencies]
 # Internal crates
-wifi-densepose-mat = { version = "0.3.0", path = "../wifi-densepose-mat" }
+wifi-densepose-mat = { version = "0.3.0", path = "../wifi-densepose-mat", optional = true }
+wifi-densepose-signal = { version = "0.3.1", path = "../wifi-densepose-signal", default-features = false }
+wifi-densepose-core = { version = "0.3.0", path = "../wifi-densepose-core" }
+wifi-densepose-calibration = { version = "0.3.0", path = "../wifi-densepose-calibration" }
+
+# Linear algebra / complex numbers (used by calibrate.rs to build CsiFrame)
+ndarray = { workspace = true }
+num-complex = { workspace = true }
 
 # CLI framework
 clap = { version = "4.4", features = ["derive", "env", "cargo"] }
@@ -34,6 +44,10 @@ console = "0.16"
 
 # Async runtime
 tokio = { version = "1.35", features = ["full"] }
+
+# HTTP API server (calibrate-serve subcommand — drives a future UI)
+axum = { workspace = true }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -58,3 +72,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 assert_cmd = "2.0"
 predicates = "3.0"
 tempfile = "3.9"
+tower = { workspace = true }

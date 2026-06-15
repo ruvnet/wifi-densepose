@@ -36,7 +36,7 @@
 //! key store (separate concern). Tests use a fixed-bytes seed for
 //! determinism — never check in real Seed keys here.
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
 use crate::witness::{canonical_bytes, WitnessEvent};
 
@@ -58,6 +58,16 @@ pub fn sign_event(event: &WitnessEvent, key: &SigningKey) -> Signature {
 /// Verify an Ed25519 signature against a witness event using the
 /// Seed's public key. `Ok(())` iff the signature is valid for the
 /// event's canonical bytes under this key.
+///
+/// Uses `verify_strict` (not the permissive `Verifier::verify`) on
+/// purpose: for a tamper-evident *audit* chain the signature is the
+/// attestation, so non-canonical encodings and small-order public
+/// keys must be rejected. `verify_strict` enforces RFC 8032's
+/// stricter checks, giving the "one canonical signature per event"
+/// property an auditor relies on when comparing or deduplicating
+/// signed witness records. The public key is caller-pinned (the
+/// Seed's known verifying key) — never parsed from the event — so a
+/// forged event carrying its own key cannot self-verify.
 pub fn verify_signature(
     event: &WitnessEvent,
     signature: &Signature,
@@ -71,7 +81,7 @@ pub fn verify_signature(
         &event.payload,
     );
     public_key
-        .verify(&bytes, signature)
+        .verify_strict(&bytes, signature)
         .map_err(|_| SignatureVerifyError::Invalid)
 }
 
@@ -138,6 +148,58 @@ mod tests {
         let event = fresh_event();
         let sig = sign_event(&event, &key);
         verify_signature(&event, &sig, &public).expect("clean signature verifies");
+    }
+
+    #[test]
+    fn signature_commits_to_domain_tag_not_bare_fields() {
+        // The signature is over the domain-tagged canonical bytes. A
+        // signature produced over the *un-tagged* concatenation of the
+        // same fields must NOT verify — proving cross-protocol
+        // separation reaches the signature layer, not just the hash.
+        // Fails on the old encoding where the signed message began
+        // directly with `prev_hash` (no tag).
+        use ed25519_dalek::Signer;
+        let key = fixed_key();
+        let public = key.verifying_key();
+        let event = fresh_event();
+
+        // Hand-build the OLD (un-tagged) preimage and sign it.
+        let mut untagged = Vec::new();
+        untagged.extend_from_slice(&event.prev_hash.0);
+        untagged.extend_from_slice(&event.seq.to_be_bytes());
+        untagged.extend_from_slice(&event.timestamp_unix_s.to_be_bytes());
+        untagged.extend_from_slice(&(event.kind.len() as u32).to_be_bytes());
+        untagged.extend_from_slice(event.kind.as_bytes());
+        untagged.extend_from_slice(&(event.payload.len() as u32).to_be_bytes());
+        untagged.extend_from_slice(&event.payload);
+        let old_sig = key.sign(&untagged);
+
+        // The current verifier (which uses the domain-tagged message)
+        // must reject a signature made over the un-tagged bytes.
+        let err = verify_signature(&event, &old_sig, &public).unwrap_err();
+        assert_eq!(err, SignatureVerifyError::Invalid);
+
+        // Sanity: the proper signature still verifies.
+        let good = sign_event(&event, &key);
+        verify_signature(&event, &good, &public).expect("tagged signature verifies");
+    }
+
+    #[test]
+    fn verify_uses_strict_path_and_pins_caller_key() {
+        // Regression guard: verification must run through the strict
+        // path against a CALLER-supplied key. A wrong key fails; the
+        // event never carries its own verifying key, so a forged event
+        // cannot self-attest. (verify_strict additionally rejects
+        // non-canonical / small-order encodings.)
+        let key = fixed_key();
+        let wrong = SigningKey::from_bytes(b"another-wrong-key-another-wrong-");
+        let event = fresh_event();
+        let sig = sign_event(&event, &key);
+        verify_signature(&event, &sig, &key.verifying_key()).expect("right key verifies");
+        assert_eq!(
+            verify_signature(&event, &sig, &wrong.verifying_key()).unwrap_err(),
+            SignatureVerifyError::Invalid
+        );
     }
 
     #[test]

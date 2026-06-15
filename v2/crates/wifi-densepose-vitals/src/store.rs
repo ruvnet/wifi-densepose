@@ -5,11 +5,14 @@
 //! becomes available (ADR-021 phase 2).
 
 use crate::types::{VitalReading, VitalStatus};
+use std::collections::VecDeque;
 
 /// Simple vital sign store with capacity-limited ring buffer semantics.
 pub struct VitalSignStore {
-    /// Stored readings (oldest first).
-    readings: Vec<VitalReading>,
+    /// Stored readings (oldest first). A `VecDeque` so eviction of the oldest
+    /// reading at capacity is O(1) instead of an O(n) `Vec::remove(0)`
+    /// (ADR-157 §A1).
+    readings: VecDeque<VitalReading>,
     /// Maximum number of readings to retain.
     max_readings: usize,
 }
@@ -42,7 +45,7 @@ impl VitalSignStore {
     #[must_use]
     pub fn new(max_readings: usize) -> Self {
         Self {
-            readings: Vec::with_capacity(max_readings.min(4096)),
+            readings: VecDeque::with_capacity(max_readings.min(4096)),
             max_readings: max_readings.max(1),
         }
     }
@@ -58,24 +61,27 @@ impl VitalSignStore {
     /// If the store is at capacity, the oldest reading is evicted.
     pub fn push(&mut self, reading: VitalReading) {
         if self.readings.len() >= self.max_readings {
-            self.readings.remove(0);
+            self.readings.pop_front();
         }
-        self.readings.push(reading);
+        self.readings.push_back(reading);
     }
 
     /// Get the most recent reading, if any.
     #[must_use]
     pub fn latest(&self) -> Option<&VitalReading> {
-        self.readings.last()
+        self.readings.back()
     }
 
     /// Get the last `n` readings (most recent last).
     ///
-    /// Returns fewer than `n` if the store contains fewer readings.
-    #[must_use]
-    pub fn history(&self, n: usize) -> &[VitalReading] {
-        let start = self.readings.len().saturating_sub(n);
-        &self.readings[start..]
+    /// Returns fewer than `n` if the store contains fewer readings. Takes
+    /// `&mut self` because the backing `VecDeque` is rotated in place once
+    /// (`make_contiguous`) to hand back a single contiguous slice; the
+    /// observable contents are unchanged.
+    pub fn history(&mut self, n: usize) -> &[VitalReading] {
+        let contiguous = self.readings.make_contiguous();
+        let start = contiguous.len().saturating_sub(n);
+        &contiguous[start..]
     }
 
     /// Compute summary statistics over all stored readings.

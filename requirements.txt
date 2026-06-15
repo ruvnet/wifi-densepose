@@ -36,3 +36,4 @@ scikit-learn>=1.2.0
 
 # Monitoring dependencies
 prometheus-client>=0.16.0
+psutil>=5.9.0  # system metrics — imported by health.py / metrics.py / status.py / monitoring.py

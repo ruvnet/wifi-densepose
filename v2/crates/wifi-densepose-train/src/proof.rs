@@ -16,8 +16,29 @@
 //! # Trust Kill Switch
 //!
 //! Run `verify-training` to execute this proof.  Exit code 0 = PASS,
-//! 1 = FAIL (loss did not decrease or hash mismatch), 2 = SKIP (no hash
-//! file to compare against).
+//! 1 = FAIL (loss did not decrease by the required margin or hash mismatch),
+//! 2 = SKIP (no committed hash file to compare against).
+//!
+//! # What this proves — and what it does NOT (ADR-155 §Tier-1.4)
+//!
+//! This proof certifies **reproducibility and determinism** of the training
+//! pipeline: identical seeds ⇒ identical weights ⇒ identical hash, and the
+//! optimiser measurably reduces the loss on a fixed synthetic problem. It does
+//! **not** prove that the shipped model weights were produced from real MM-Fi
+//! data, nor that any accuracy claim is met — it runs on a deterministic
+//! synthetic dataset by construction. Accuracy claims are substantiated
+//! separately (see `benchmarks/wiflow-std/RESULTS.md`).
+//!
+//! Two integrity hardenings were applied in ADR-155:
+//!
+//! 1. **Minimum-decrease margin.** A run only counts as "loss decreased" when
+//!    `initial − final ≥ `[`MIN_LOSS_DECREASE`]. Previously *any* decrease
+//!    (including 1e-9 float noise) passed, so a pipeline that does no real
+//!    learning could still self-certify.
+//! 2. **No-hash is a SKIP, not a PASS.** [`ProofResult::is_pass`] now requires
+//!    a *committed* expected hash to match. An absent `expected_proof.sha256`
+//!    yields SKIP (exit 2), so a missing baseline can never be mistaken for a
+//!    green proof.
 
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
@@ -49,6 +70,15 @@ pub const PROOF_BATCH_SIZE: usize = 4;
 /// Number of synthetic samples in the proof dataset.
 pub const PROOF_DATASET_SIZE: usize = 200;
 
+/// Minimum absolute loss decrease (initial − final) required for the proof to
+/// count as "the optimiser is learning" (ADR-155 §Tier-1.4).
+///
+/// Chosen well above f32/f64 round-off noise but far below the decrease a real
+/// gradient step produces on this synthetic problem (observed Δ ≫ 1e-2 over
+/// [`N_PROOF_STEPS`]). A run whose loss only wanders by float noise now FAILS
+/// instead of self-certifying on a 1e-9 "decrease".
+pub const MIN_LOSS_DECREASE: f64 = 1e-4;
+
 /// Filename under `proof_dir` where the expected weight hash is stored.
 const EXPECTED_HASH_FILE: &str = "expected_proof.sha256";
 
@@ -63,8 +93,12 @@ pub struct ProofResult {
     pub initial_loss: f64,
     /// Training loss at the final step.
     pub final_loss: f64,
-    /// `true` when `final_loss < initial_loss`.
+    /// `true` when the loss decreased by at least [`MIN_LOSS_DECREASE`]
+    /// (`initial_loss − final_loss ≥ MIN_LOSS_DECREASE`). A sub-margin or
+    /// negative change is `false` — float noise no longer counts as learning.
     pub loss_decreased: bool,
+    /// Actual loss decrease `initial_loss − final_loss` (may be negative).
+    pub loss_decrease: f64,
     /// Loss at each of the [`N_PROOF_STEPS`] steps.
     pub loss_trajectory: Vec<f64>,
     /// SHA-256 hex digest of all model weight tensors.
@@ -79,20 +113,28 @@ pub struct ProofResult {
 }
 
 impl ProofResult {
-    /// Returns `true` when the proof fully passes (loss decreased AND hash
-    /// matches, or hash is not yet stored).
+    /// Returns `true` only when the proof fully passes: the loss decreased by
+    /// at least [`MIN_LOSS_DECREASE`] **and** a committed expected hash exists
+    /// and matches (ADR-155 §Tier-1.4).
+    ///
+    /// A missing expected hash is **not** a pass — it is a [`Self::is_skip`].
+    /// This prevents an absent baseline from being read as green.
     pub fn is_pass(&self) -> bool {
-        self.loss_decreased && self.hash_matches.unwrap_or(true)
+        self.loss_decreased && self.hash_matches == Some(true)
     }
 
-    /// Returns `true` when there is an expected hash and it does NOT match.
+    /// Returns `true` when the proof definitively fails: the loss did not
+    /// decrease by the required margin, or an expected hash exists and does
+    /// not match.
     pub fn is_fail(&self) -> bool {
-        self.loss_decreased == false || self.hash_matches == Some(false)
+        !self.loss_decreased || self.hash_matches == Some(false)
     }
 
-    /// Returns `true` when no expected hash file exists yet.
+    /// Returns `true` when no committed expected hash exists yet (cannot
+    /// confirm reproducibility ⇒ neither PASS nor FAIL). Note: a sub-margin
+    /// loss decrease is a FAIL, not a SKIP, even with no hash present.
     pub fn is_skip(&self) -> bool {
-        self.expected_hash.is_none()
+        self.expected_hash.is_none() && self.loss_decreased
     }
 }
 
@@ -153,11 +195,11 @@ pub fn run_proof(proof_dir: &Path) -> Result<ProofResult, Box<dyn std::error::Er
         let num_kp = kp.size()[1] as usize;
         let hm_size = cfg.heatmap_size;
 
-        let kp_vec: Vec<f32> = Vec::<f64>::from(kp.to_kind(Kind::Double).flatten(0, -1))
+        let kp_vec: Vec<f32> = Vec::<f64>::try_from(kp.to_kind(Kind::Double).flatten(0, -1))?
             .iter()
             .map(|&x| x as f32)
             .collect();
-        let vis_vec: Vec<f32> = Vec::<f64>::from(vis.to_kind(Kind::Double).flatten(0, -1))
+        let vis_vec: Vec<f32> = Vec::<f64>::try_from(vis.to_kind(Kind::Double).flatten(0, -1))?
             .iter()
             .map(|&x| x as f32)
             .collect();
@@ -196,7 +238,9 @@ pub fn run_proof(proof_dir: &Path) -> Result<ProofResult, Box<dyn std::error::Er
 
     let initial_loss = loss_trajectory.first().copied().unwrap_or(f64::NAN);
     let final_loss = loss_trajectory.last().copied().unwrap_or(f64::NAN);
-    let loss_decreased = final_loss < initial_loss;
+    // ADR-155 §Tier-1.4: require a real, above-noise decrease (not just any Δ).
+    let loss_decrease = initial_loss - final_loss;
+    let loss_decreased = loss_decrease >= MIN_LOSS_DECREASE;
 
     // Compute model weight hash (uses varstore()).
     let model_hash = hash_model_weights(&model);
@@ -212,6 +256,7 @@ pub fn run_proof(proof_dir: &Path) -> Result<ProofResult, Box<dyn std::error::Er
         initial_loss,
         final_loss,
         loss_decreased,
+        loss_decrease,
         loss_trajectory,
         model_hash,
         expected_hash,
@@ -261,7 +306,7 @@ pub fn hash_model_weights(model: &WiFiDensePoseModel) -> String {
             .flatten(0, -1)
             .to_kind(Kind::Float)
             .to_device(Device::Cpu);
-        let values: Vec<f32> = Vec::<f32>::from(&flat);
+        let values: Vec<f32> = Vec::<f32>::try_from(&flat).expect("param tensor to vec");
         let mut buf = vec![0u8; values.len() * 4];
         for (i, v) in values.iter().enumerate() {
             let bytes = v.to_le_bytes();
@@ -290,6 +335,15 @@ pub fn load_expected_hash(proof_dir: &Path) -> Result<Option<String>, std::io::E
     file.read_to_string(&mut contents)?;
     let hash = contents.trim().to_string();
     Ok(if hash.is_empty() { None } else { Some(hash) })
+}
+
+/// Verify that `path` is a valid checkpoint directory.
+///
+/// Returns `true` only when the path exists and is a directory. Deterministic
+/// and side-effect free — repeated calls always return the same result for an
+/// unchanged filesystem.
+pub fn verify_checkpoint_dir(path: &Path) -> bool {
+    path.is_dir()
 }
 
 /// Save the expected model hash to `<proof_dir>/expected_proof.sha256`.
@@ -452,6 +506,64 @@ mod tests {
         // No expected hash file was created → no comparison.
         assert!(result.expected_hash.is_none());
         assert!(result.hash_matches.is_none());
+    }
+
+    #[test]
+    fn no_committed_hash_is_skip_not_pass() {
+        // ADR-155 §Tier-1.4: a real proof run with NO committed expected hash
+        // must be SKIP — never PASS. (Previously is_pass() defaulted a missing
+        // hash to `true`, letting an unbaselined pipeline self-certify.)
+        let tmp = tempdir().unwrap();
+        let result = run_proof(tmp.path()).unwrap();
+        assert!(result.expected_hash.is_none());
+        assert!(!result.is_pass(), "no-hash must not be a PASS");
+        // Loss genuinely decreases on the synthetic problem, so this is a SKIP.
+        assert!(result.loss_decreased, "synthetic proof should learn");
+        assert!(result.is_skip(), "no-hash with learning is a SKIP");
+        assert!(!result.is_fail());
+    }
+
+    #[test]
+    fn submargin_loss_change_fails_even_without_hash() {
+        // ADR-155 §Tier-1.4: a loss decrease below MIN_LOSS_DECREASE is a FAIL,
+        // and the absence of a hash cannot downgrade it to SKIP.
+        let noise = MIN_LOSS_DECREASE / 100.0;
+        let r = ProofResult {
+            initial_loss: 1.0,
+            final_loss: 1.0 - noise,
+            loss_decrease: noise,
+            loss_decreased: noise >= MIN_LOSS_DECREASE,
+            loss_trajectory: vec![1.0, 1.0 - noise],
+            model_hash: "abc".into(),
+            expected_hash: None,
+            hash_matches: None,
+            steps_completed: 2,
+        };
+        assert!(
+            !r.loss_decreased,
+            "sub-margin change must not count as decrease"
+        );
+        assert!(r.is_fail(), "sub-margin change is a FAIL");
+        assert!(!r.is_skip(), "sub-margin change is not a SKIP");
+        assert!(!r.is_pass());
+    }
+
+    #[test]
+    fn committed_matching_hash_with_real_decrease_passes() {
+        let r = ProofResult {
+            initial_loss: 1.0,
+            final_loss: 0.5,
+            loss_decrease: 0.5,
+            loss_decreased: true,
+            loss_trajectory: vec![1.0, 0.5],
+            model_hash: "deadbeef".into(),
+            expected_hash: Some("deadbeef".into()),
+            hash_matches: Some(true),
+            steps_completed: 2,
+        };
+        assert!(r.is_pass());
+        assert!(!r.is_fail());
+        assert!(!r.is_skip());
     }
 
     #[test]

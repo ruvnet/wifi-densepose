@@ -29,6 +29,30 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 # LWIP: enable extended socket options for UDP multicast
 CONFIG_LWIP_SO_RCVBUF=y
 
+# Issue (sibling of #946/#949/#864 cluster): UDP `sendto` returned ENOMEM
+# in a tight loop on both ESP32-S3 (COM8) and ESP32-C6 (COM9) at the v0.7.0
+# CSI packet rate (CSI cb + status + sync + feature_state all sharing the
+# LWIP/WiFi pools). stream_sender.c has a cooldown path so the device
+# doesn't crash, but ~90 % of CSI frames were dropped before reaching the
+# host — boot trace showed `sendto ENOMEM — backing off 100 ms` repeating
+# every capture cycle. Stock IDF v5.4 defaults: UDP recv mbox=6, TCPIP
+# mbox=32, WiFi dynamic TX buffers=32 — too small once CSI promiscuous
+# mode is active. These bumps roughly quadruple the relevant pools at
+# ~3 KB extra heap cost, measured live on both targets Jun 8 2026.
+CONFIG_LWIP_UDP_RECVMBOX_SIZE=32
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=64
+# NOTE: Empirical 25 s measurements on the S3 at COM8 showed these bumps
+# eliminate the csi_collector.sendto failure path (`fail #1..5` →
+# `fail #0`) — real improvement — but do NOT eliminate the broader
+# `feature_state emit` ENOMEM at ~10/s. That residual is the WiFi
+# radio's TX airtime saturating under CSI promiscuous RX, and bigger
+# buffers cap out at the 100 ms backoff window regardless of size
+# (verified at WIFI_DYNAMIC_TX=128 + PBUF_POOL=32 — identical count).
+# The proper fix is rate-limiting adaptive_controller.c's emit cadence
+# from ~50 ms to the intended 1 Hz, which is a code refactor tracked
+# in a separate follow-up issue.
+
 # FreeRTOS: increase task stack for CSI processing
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 

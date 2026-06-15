@@ -26,6 +26,10 @@
 
 use clap::{Parser, Subcommand};
 
+pub mod calibrate;
+pub mod calibrate_api;
+pub mod room;
+#[cfg(feature = "mat")]
 pub mod mat;
 
 /// WiFi-DensePose Command Line Interface
@@ -46,7 +50,31 @@ pub struct Cli {
 /// Top-level commands
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Empty-room baseline calibration (ADR-135).
+    /// Captures CSI frames via UDP and saves a per-subcarrier statistical
+    /// baseline used for real-time motion z-scoring and CIR reference.
+    Calibrate(calibrate::CalibrateArgs),
+
+    /// Run the calibration HTTP API (ADR-135/151) for a UI to drive.
+    /// Receives ESP32 CSI over UDP and exposes start/status/stop/result
+    /// endpoints at `/api/v1/calibration/*` (CORS-enabled).
+    CalibrateServe(calibrate_api::CalibrateServeArgs),
+
+    /// Guided per-room enrollment (ADR-151 Stage 2) — walk the anchor sequence
+    /// against a baseline, writing labelled features.
+    Enroll(room::EnrollArgs),
+
+    /// Train the per-room specialist bank from an enrollment (ADR-151 Stage 4).
+    TrainRoom(room::TrainRoomArgs),
+
+    /// Show a trained specialist bank's summary.
+    RoomStatus(room::RoomStatusArgs),
+
+    /// Live mixture-of-specialists readout from the CSI stream (ADR-151 Stage 5).
+    RoomWatch(room::RoomWatchArgs),
+
     /// Mass Casualty Assessment Tool commands
+    #[cfg(feature = "mat")]
     #[command(subcommand)]
     Mat(mat::MatCommand),
 

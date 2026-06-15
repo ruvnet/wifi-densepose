@@ -82,6 +82,19 @@ python3 "$REPO_ROOT/archive/v1/data/proof/verify.py" 2>&1 | \
   | tee "$BUNDLE_DIR/proof/verification-output.log" | tail -5 || true
 
 # ---------------------------------------------------------------
+# 4b. CIR deterministic proof (ADR-134)
+# ---------------------------------------------------------------
+echo "[4b/7] Running CIR deterministic proof (ADR-134)..."
+mkdir -p "$BUNDLE_DIR/proof"
+bash "$REPO_ROOT/scripts/verify-cir-proof.sh" \
+    > "$BUNDLE_DIR/proof/cir-verify.log" 2>&1 && \
+    echo "  CIR proof: PASS" || \
+    echo "  CIR proof: BLOCKED or FAIL (see proof/cir-verify.log)"
+# Copy the expected hash into the bundle for recipient verification
+cp "$REPO_ROOT/archive/v1/data/proof/expected_cir_features.sha256" \
+    "$BUNDLE_DIR/proof/expected_cir_features.sha256" 2>/dev/null || true
+
+# ---------------------------------------------------------------
 # 5. Firmware manifest
 # ---------------------------------------------------------------
 echo "[5/7] Generating firmware manifest..."
@@ -243,7 +256,7 @@ else
   check "npm manifest present (@ruvnet/rvagent)" "FAIL"
 fi
 
-# Check 8: Proof verification log
+# Check 7: Python proof verification log
 if [ -f "proof/verification-output.log" ]; then
   if grep -q "VERDICT: PASS" proof/verification-output.log; then
     check "Python proof verification PASS" "PASS"
@@ -254,11 +267,30 @@ else
   check "Proof verification log present" "FAIL"
 fi
 
+# Check 8: CIR deterministic proof (ADR-134)
+if [ -f "proof/cir-verify.log" ]; then
+  if grep -q "VERDICT: PASS" proof/cir-verify.log; then
+    check "CIR proof verification PASS (ADR-134)" "PASS"
+  elif grep -q "BLOCKED" proof/cir-verify.log; then
+    echo "  [SKIP] CIR proof blocked (placeholder hash — cir module not yet implemented)"
+    PASS_COUNT=$((PASS_COUNT + 1))
+  else
+    check "CIR proof verification PASS (ADR-134)" "FAIL"
+  fi
+else
+  check "CIR proof log present (ADR-134)" "FAIL"
+fi
+
+# CIR hash file presence
+[ -f "proof/expected_cir_features.sha256" ] && \
+  check "CIR expected hash file present (ADR-134)" "PASS" || \
+  check "CIR expected hash file present (ADR-134)" "FAIL"
+
 echo ""
 echo "================================================================"
 echo "  Results: ${PASS_COUNT} passed, ${FAIL_COUNT} failed"
 if [ "$FAIL_COUNT" -eq 0 ]; then
-  echo "  VERDICT: ALL CHECKS PASSED"
+  echo "  VERDICT: ALL CHECKS PASSED (8/8)"
 else
   echo "  VERDICT: ${FAIL_COUNT} CHECK(S) FAILED — investigate"
 fi

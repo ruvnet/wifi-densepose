@@ -141,6 +141,15 @@ impl BfldPipeline {
     /// builds the frame via [`BfldFrame::from_payload`] so the CRC covers the
     /// section-prefixed bytes.
     ///
+    /// The emitted frame's payload is forced into compliance with the active
+    /// privacy class via [`crate::PrivacyGate::demote`]: at `Anonymous` the
+    /// identity-leaky `compressed_angle_matrix` and `csi_delta` sections are
+    /// stripped, and at `Restricted` the amplitude/phase proxies are stripped
+    /// too. This closes the gap (ADR-141) where a frame stamped with a
+    /// restrictive class byte could otherwise carry the full high-information
+    /// BFI payload across a [`crate::NetworkSink`]. Research classes (`Raw`,
+    /// `Derived`) keep the full payload — `demote` is a no-op there.
+    ///
     /// Returns `None` whenever the gate drops the underlying event (Reject or
     /// Recalibrate), so `process_to_frame` is a strict subset of `process`.
     pub fn process_to_frame(
@@ -151,11 +160,21 @@ impl BfldPipeline {
         embedding: Option<IdentityEmbedding>,
     ) -> Option<BfldFrame> {
         let timestamp_ns = inputs.timestamp_ns;
+        let active_class = self.current_privacy_class();
         let _gate_signal = self.process(inputs, embedding)?;
         let mut header = header_template;
         header.timestamp_ns = timestamp_ns;
-        header.privacy_class = self.current_privacy_class().as_u8();
-        Some(BfldFrame::from_payload(header, &payload))
+        header.privacy_class = active_class.as_u8();
+        let frame = BfldFrame::from_payload(header, &payload);
+        // Enforce the payload-content policy for the stamped class. The frame
+        // is already at `active_class`, so this is a same-class demotion: it
+        // performs no class change but strips the sections that class forbids.
+        // demote() only fails on InvalidDemote (target < source), which cannot
+        // happen here because source == target, so the expect is unreachable.
+        Some(
+            crate::PrivacyGate::demote(frame, active_class)
+                .expect("same-class demote is always valid"),
+        )
     }
 
     /// `true` if `enable_privacy_mode()` has been called more recently than

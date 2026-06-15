@@ -72,6 +72,8 @@ impl Species {
 
 /// Livestock monitor.
 pub struct LivestockMonitor {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
     /// Configured species.
     species: Species,
     /// Whether animal is currently detected (debounced).
@@ -97,6 +99,7 @@ pub struct LivestockMonitor {
 impl LivestockMonitor {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 4],
             species: Species::Cattle,
             animal_present: false,
             presence_frames: 0,
@@ -113,6 +116,7 @@ impl LivestockMonitor {
     /// Create with a specific species.
     pub const fn with_species(species: Species) -> Self {
         Self {
+            events: [(0, 0.0); 4],
             species,
             animal_present: false,
             presence_frames: 0,
@@ -148,7 +152,6 @@ impl LivestockMonitor {
             self.escape_cooldown -= 1;
         }
 
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n_events = 0usize;
 
         let raw_present = presence > 0 || motion_energy > MIN_MOTION_ACTIVE;
@@ -177,7 +180,7 @@ impl LivestockMonitor {
                 {
                     self.escape_cooldown = ESCAPE_COOLDOWN;
                     let minutes_present = self.presence_frames as f32 / (20.0 * 60.0);
-                    unsafe { EVENTS[n_events] = (EVENT_ESCAPE_ALERT, minutes_present); }
+                    self.events[n_events] = (EVENT_ESCAPE_ALERT, minutes_present);
                     n_events += 1;
                 }
 
@@ -190,7 +193,7 @@ impl LivestockMonitor {
             && self.frame_count % PRESENCE_REPORT_INTERVAL == 0
             && n_events < 4
         {
-            unsafe { EVENTS[n_events] = (EVENT_ANIMAL_PRESENT, breathing_bpm); }
+            self.events[n_events] = (EVENT_ANIMAL_PRESENT, breathing_bpm);
             n_events += 1;
         }
 
@@ -209,7 +212,7 @@ impl LivestockMonitor {
             {
                 self.stillness_alerted = true;
                 let minutes_still = self.still_frames as f32 / (20.0 * 60.0);
-                unsafe { EVENTS[n_events] = (EVENT_ABNORMAL_STILLNESS, minutes_still); }
+                self.events[n_events] = (EVENT_ABNORMAL_STILLNESS, minutes_still);
                 n_events += 1;
             }
         }
@@ -226,7 +229,7 @@ impl LivestockMonitor {
             if is_labored {
                 self.labored_debounce = self.labored_debounce.saturating_add(1);
                 if self.labored_debounce >= LABORED_DEBOUNCE && n_events < 4 {
-                    unsafe { EVENTS[n_events] = (EVENT_LABORED_BREATHING, breathing_bpm); }
+                    self.events[n_events] = (EVENT_LABORED_BREATHING, breathing_bpm);
                     n_events += 1;
                     self.labored_debounce = 0; // Reset to allow repeated alerts.
                 }
@@ -235,7 +238,7 @@ impl LivestockMonitor {
             }
         }
 
-        unsafe { &EVENTS[..n_events] }
+        &self.events[..n_events]
     }
 
     /// Whether an animal is currently detected.

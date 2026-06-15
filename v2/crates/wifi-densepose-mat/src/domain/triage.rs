@@ -104,7 +104,20 @@ impl TriageCalculator {
         let movement_status = Self::assess_movement(vitals);
 
         // Step 4: Combine assessments
-        Self::combine_assessments(breathing_status, movement_status)
+        let status = Self::combine_assessments(breathing_status, movement_status);
+
+        // Step 5: SAFETY OVERRIDE — a detectable heartbeat means the survivor is
+        // ALIVE. `combine_assessments` only sees breathing + movement, so a
+        // person with a pulse but no *sensed* breathing/movement (respiratory
+        // arrest, or breathing too shallow for CSI to pick up) would otherwise
+        // be reported Deceased and deprioritized for rescue. No breathing + a
+        // pulse is the most time-critical *savable* state, so escalate to
+        // Immediate rather than ever calling a survivor with a heartbeat dead.
+        if status == TriageStatus::Deceased && vitals.heartbeat.is_some() {
+            return TriageStatus::Immediate;
+        }
+
+        status
     }
 
     /// Assess breathing status
@@ -217,7 +230,9 @@ enum MovementAssessment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{BreathingPattern, ConfidenceScore, MovementProfile};
+    use crate::domain::{
+        BreathingPattern, ConfidenceScore, HeartbeatSignature, MovementProfile, SignalStrength,
+    };
     use chrono::Utc;
 
     fn create_vitals(
@@ -231,6 +246,29 @@ mod tests {
             timestamp: Utc::now(),
             confidence: ConfidenceScore::new(0.8),
         }
+    }
+
+    /// SAFETY regression: a survivor with a detectable heartbeat but no sensed
+    /// breathing or movement is in respiratory arrest — Immediate (Red), and
+    /// must NEVER be reported Deceased. (Before the fix, `combine_assessments`
+    /// ignored heartbeat and returned Deceased; that path was in fact only
+    /// reachable *because* a heartbeat made `has_vitals()` true.)
+    #[test]
+    fn heartbeat_with_no_breathing_or_movement_is_immediate_not_deceased() {
+        let vitals = VitalSignsReading {
+            breathing: None,
+            heartbeat: Some(HeartbeatSignature {
+                rate_bpm: 72.0,
+                variability: 0.1,
+                strength: SignalStrength::Moderate,
+            }),
+            movement: MovementProfile::default(),
+            timestamp: Utc::now(),
+            confidence: ConfidenceScore::new(0.8),
+        };
+        let status = TriageCalculator::calculate(&vitals);
+        assert_eq!(status, TriageStatus::Immediate, "pulse present ⇒ alive");
+        assert_ne!(status, TriageStatus::Deceased);
     }
 
     #[test]

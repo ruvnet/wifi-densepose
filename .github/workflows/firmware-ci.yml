@@ -22,6 +22,8 @@ jobs:
     if: github.ref_type == 'tag'
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Check firmware version.txt == tag
         run: |
           # Tag form: vX.Y.Z-esp32  →  expect version.txt to contain X.Y.Z
@@ -71,6 +73,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Build firmware (${{ matrix.variant }})
         working-directory: firmware/esp32-csi-node

@@ -271,6 +271,9 @@ pub struct PoseTrack {
     pub created_at: u64,
     /// Last update timestamp in microseconds.
     pub updated_at: u64,
+    /// Optional trajectory prior from OccWorld — position hint for next N frames.
+    /// Each entry is (east_m, north_m, up_m) for frame t+1, t+2, ...
+    pub trajectory_prior: Vec<[f32; 3]>,
 }
 
 impl PoseTrack {
@@ -296,16 +299,42 @@ impl PoseTrack {
             consecutive_hits: 1,
             created_at: timestamp_us,
             updated_at: timestamp_us,
+            trajectory_prior: Vec::new(),
         }
     }
 
     /// Predict all keypoints forward by dt seconds.
+    ///
+    /// If a trajectory prior is loaded, pops the first waypoint and applies it
+    /// as a soft measurement on the torso keypoint (index 8, MID_HIP/centroid):
+    /// blended position = 0.80 * Kalman_prediction + 0.20 * prior_waypoint.
     pub fn predict(&mut self, dt: f32, process_noise: f32) {
         for kp in &mut self.keypoints {
             kp.predict(dt, process_noise);
         }
+
+        // Apply trajectory prior soft blend to torso keypoint (index 8).
+        if !self.trajectory_prior.is_empty() {
+            let waypoint = self.trajectory_prior.remove(0);
+            // Torso keypoint index 8 (MID_HIP / centroid anchor).
+            const TORSO_KP: usize = 8;
+            let kp = &mut self.keypoints[TORSO_KP];
+            kp.state[0] = 0.80 * kp.state[0] + 0.20 * waypoint[0];
+            kp.state[1] = 0.80 * kp.state[1] + 0.20 * waypoint[1];
+            kp.state[2] = 0.80 * kp.state[2] + 0.20 * waypoint[2];
+        }
+
         self.age += 1;
         self.time_since_update += 1;
+    }
+
+    /// Set (or replace) the trajectory prior for this track.
+    ///
+    /// The prior is a sequence of position hints `[east_m, north_m, up_m]`
+    /// for frames t+1, t+2, … provided by an OccWorld predictor. Each call to
+    /// [`Self::predict`] consumes the first entry from the front.
+    pub fn set_trajectory_prior(&mut self, prior: Vec<[f32; 3]>) {
+        self.trajectory_prior = prior;
     }
 
     /// Update all keypoints with new measurements.

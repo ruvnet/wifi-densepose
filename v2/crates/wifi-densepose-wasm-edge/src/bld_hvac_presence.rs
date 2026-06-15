@@ -57,6 +57,8 @@ pub enum ActivityLevel {
 
 /// HVAC-optimized presence detector.
 pub struct HvacPresenceDetector {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 3],
     state: HvacState,
     /// Smoothed motion energy (EMA).
     motion_ema: f32,
@@ -73,6 +75,7 @@ pub struct HvacPresenceDetector {
 impl HvacPresenceDetector {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 3],
             state: HvacState::Vacant,
             motion_ema: 0.0,
             activity: ActivityLevel::Sedentary,
@@ -159,7 +162,6 @@ impl HvacPresenceDetector {
         }
 
         // Build output events.
-        static mut EVENTS: [(i32, f32); 3] = [(0, 0.0); 3];
         let mut n = 0usize;
 
         if self.frame_count % EMIT_INTERVAL == 0 {
@@ -168,9 +170,7 @@ impl HvacPresenceDetector {
                 HvacState::Occupied | HvacState::DeparturePending => 1.0,
                 _ => 0.0,
             };
-            unsafe {
-                EVENTS[n] = (EVENT_HVAC_OCCUPIED, occupied_val);
-            }
+            self.events[n] = (EVENT_HVAC_OCCUPIED, occupied_val);
             n += 1;
 
             // Activity level: 0.0 = sedentary, 1.0 = active, plus raw EMA.
@@ -178,9 +178,7 @@ impl HvacPresenceDetector {
                 ActivityLevel::Sedentary => 0.0 + self.motion_ema.min(0.99),
                 ActivityLevel::Active => 1.0,
             };
-            unsafe {
-                EVENTS[n] = (EVENT_ACTIVITY_LEVEL, activity_val);
-            }
+            self.events[n] = (EVENT_ACTIVITY_LEVEL, activity_val);
             n += 1;
         }
 
@@ -191,13 +189,11 @@ impl HvacPresenceDetector {
         {
             let remaining = DEPARTURE_TIMEOUT.saturating_sub(self.absence_frames);
             let fraction = remaining as f32 / DEPARTURE_TIMEOUT as f32;
-            unsafe {
-                EVENTS[n] = (EVENT_DEPARTURE_COUNTDOWN, fraction);
-            }
+            self.events[n] = (EVENT_DEPARTURE_COUNTDOWN, fraction);
             n += 1;
         }
 
-        unsafe { &EVENTS[..n] }
+        &self.events[..n]
     }
 
     /// Get current HVAC state.

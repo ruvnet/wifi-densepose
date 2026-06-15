@@ -1,3 +1,3 @@
-3c4905dd202ccabf4230cbabcc9320f250a60b1a7254eff7424780201bcb2072 *firmware/esp32-csi-node/release_bins/s3-adr110/bootloader.bin
-7a8bf9582c9031fed32f1ada44f5c41dd99bd07fadff8e5c86e07aa0f343e847 *firmware/esp32-csi-node/release_bins/s3-adr110/esp32-csi-node.bin
+b973d7eda65affb746adcfa63ceb18f779f206d240b76f01b8c9ae7485455660 *firmware/esp32-csi-node/release_bins/s3-adr110/bootloader.bin
+e21ef94aba779d534dc048c1b9da731c81e5dbe09d0645cfd70a05ad3642d3e9 *firmware/esp32-csi-node/release_bins/s3-adr110/esp32-csi-node.bin
 67222c257c0477501fd4002275638dc4262b34eb68235b8289fb1337054d322b *firmware/esp32-csi-node/release_bins/s3-adr110/partition-table.bin

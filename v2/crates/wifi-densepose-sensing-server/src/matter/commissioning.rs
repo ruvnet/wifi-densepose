@@ -16,21 +16,29 @@
 //!   generation is a v0.7.1 follow-up (per §9.9 dev-VID note —
 //!   commissioning works in either form with dev VID).
 //!
-//! ## Bit layout (manual code, §5.1.4.1)
+//! ## Digit layout (manual code, §5.1.4.1.1 — VID/PID-absent variant)
+//!
+//! The 11-digit short code is three decimal chunks plus a Verhoeff
+//! check digit. Each chunk packs spec fields so the chunk's maximum
+//! value fits its decimal width exactly (no truncation, no modulo):
 //!
 //! ```text
-//!  bits  width  meaning
-//!  ---- ------- -------------------------------------------------------
-//!   0    1     Version (always 0 today)
-//!   1    1     VID/PID present flag (0 = short code, 1 = with VID/PID)
-//!   2   10     Discriminator (12-bit overall, low 4 bits go elsewhere)
-//!  12   27     Passcode (27-bit setup PIN, range 0..2^27)
-//!  39    4     Discriminator (high 4 bits)
-//!  43    9     Reserved / VID-PID stitched in v0 = 0
+//!  digit(s)  width  packed value
+//!  --------  -----  ------------------------------------------------
+//!   1         1     (vid_pid_present << 2) | (discriminator >> 10)
+//!   2..6      5     ((discriminator & 0x300) << 6) | (passcode & 0x3FFF)
+//!   7..10     4     (passcode >> 14) & 0x1FFF
+//!   11        1     Verhoeff check digit over the 10-digit body
 //! ```
 //!
-//! The bit-packed payload is then base-10 encoded and prefixed with
-//! the Luhn-style check digit.
+//! Only the **upper 4 bits** of the 12-bit discriminator survive in the
+//! manual code (the "short discriminator", bits 8..11); the low 8 bits
+//! are carried only in the QR payload, by design (§5.1.3.1). Chunk
+//! maxima: chunk1 ≤ `(0x300<<6)|0x3FFF` = 65535 < 10^5, chunk2 ≤ 0x1FFF
+//! = 8191 < 10^4, so each chunk is `format!`-padded to its width without
+//! loss. This is the exact §5.1.4.1.1 packing: the canonical reference
+//! vector `(passcode=20202021, discriminator=3840)` encodes to the
+//! Matter-published `34970112332`.
 
 use super::super::matter::clusters::VENDOR_ATTR_PERSON_COUNT as _; // re-export-only guard
 
@@ -99,39 +107,39 @@ impl ManualPairingCode {
     pub fn from_input(input: &SetupCodeInput) -> Result<Self, &'static str> {
         input.validate()?;
 
-        // §5.1.4.1 — 10-digit short code = 1-digit header (encodes
-        // version + VID/PID flag + discriminator high 2 bits) +
-        // 5-digit middle (low passcode + low discriminator bits) +
-        // 4-digit trailer (high passcode bits). Plus 1-digit Verhoeff
+        // §5.1.4.1.1 — 10-digit short code = 1-digit chunk0
+        // (VID/PID-present flag in bit 2 + discriminator bits 10..11) +
+        // 5-digit chunk1 (discriminator bits 8..9 + passcode bits 0..13)
+        // + 4-digit chunk2 (passcode bits 14..26). Plus 1-digit Verhoeff
         // check digit = 11 total.
         //
-        // The numeric chunks are sized to fit their decimal widths
-        // exactly (max value < 10^width), so the format! macro
-        // produces fixed-width output without truncation.
+        // This is the exact spec field-packing. Each chunk's maximum
+        // value is strictly below 10^width, so `format!` zero-pads to a
+        // fixed width with no truncation:
+        //   chunk0 ∈ 0..=7   (1 digit)
+        //   chunk1 ≤ (0x300<<6)|0x3FFF = 65535 < 10^5  (5 digits)
+        //   chunk2 ≤ 0x1FFF = 8191 < 10^4              (4 digits)
         //
-        // This is a placeholder implementation: it produces a
-        // deterministic, validated, 11-digit string suitable for
-        // human display + Verhoeff-check round-trip. The bit-perfect
-        // spec-compliant code (with QR base-38 payload) is generated
-        // by the Matter SDK at P8 once `rs-matter` lands.
-        let disc = input.discriminator as u32;
+        // VID/PID-absent variant: vid_pid_present = 0, so the VID/PID
+        // pair (input.vendor_id / input.product_id) is intentionally not
+        // stitched into the manual code — controllers fall back to the
+        // discriminator advertised in mDNS to resolve the device, and
+        // the QR payload (a separate follow-up) carries VID/PID when
+        // present. We still validate the inputs above so an invalid
+        // passcode/discriminator never produces a code.
+        let disc = u32::from(input.discriminator);
         let pin = input.passcode;
+        let vid_pid_present: u32 = 0; // short-form manual code
 
-        // Bit layout (placeholder — see header comment):
-        //   header  = disc_high_2_bits      → 1 digit (0..3)
-        //   chunk1  = (disc_low_10 << 14) | pin_low_14   → 24 bits, take mod 10^5
-        //   chunk2  = pin_high_13           → 13 bits, take mod 10^4
-        //
-        // The mod-by-10^width step is what differs from a fully
-        // spec-conformant encoder — but it preserves determinism and
-        // input sensitivity, which is what we need until P8 SDK.
-        let header = ((disc >> 10) & 0x3) as u64;
-        let chunk1_raw = ((pin & 0x3FFF) as u64) | (((disc & 0x3FF) as u64) << 14);
-        let chunk1 = chunk1_raw % 100_000;
-        let chunk2_raw = ((pin >> 14) & 0x1FFF) as u64;
-        let chunk2 = chunk2_raw % 10_000;
+        let chunk0 = ((vid_pid_present << 2) | (disc >> 10)) as u64;
+        let chunk1 = (((disc & 0x300) << 6) | (pin & 0x3FFF)) as u64;
+        let chunk2 = ((pin >> 14) & 0x1FFF) as u64;
 
-        let body = format!("{:01}{:05}{:04}", header, chunk1, chunk2);
+        debug_assert!(chunk0 < 10, "chunk0 must be one digit");
+        debug_assert!(chunk1 < 100_000, "chunk1 must be five digits");
+        debug_assert!(chunk2 < 10_000, "chunk2 must be four digits");
+
+        let body = format!("{:01}{:05}{:04}", chunk0, chunk1, chunk2);
         debug_assert_eq!(body.len(), 10, "body must be 10 digits — fix chunk widths");
 
         let check = verhoeff_check_digit(&body);
@@ -145,6 +153,62 @@ impl ManualPairingCode {
         let s = &self.0;
         format!("{}-{}-{}", &s[0..4], &s[4..7], &s[7..11])
     }
+
+    /// Decode a manual pairing code back to its `(short_discriminator,
+    /// passcode)` fields per the inverse of §5.1.4.1.1. This is the
+    /// proof that the encoder is a real, lossless field-packing (a
+    /// controller performs exactly this decode): the recovered passcode
+    /// is bit-for-bit identical, and the recovered discriminator is the
+    /// 4-bit *short* discriminator (manual codes never carry the low 8
+    /// bits — see the module header).
+    ///
+    /// Returns `Err` if the string is not 11 ASCII digits or the
+    /// Verhoeff check digit does not validate.
+    pub fn decode(&self) -> Result<DecodedManualCode, &'static str> {
+        let s = &self.0;
+        if s.len() != 11 || !s.chars().all(|c| c.is_ascii_digit()) {
+            return Err("manual code must be exactly 11 ASCII digits");
+        }
+        let body = &s[0..10];
+        let given_check = s[10..11].parse::<u8>().map_err(|_| "bad check digit")?;
+        if verhoeff_check_digit(body) != given_check {
+            return Err("Verhoeff check digit mismatch");
+        }
+
+        let chunk0: u32 = body[0..1].parse().map_err(|_| "bad chunk0")?;
+        let chunk1: u32 = body[1..6].parse().map_err(|_| "bad chunk1")?;
+        let chunk2: u32 = body[6..10].parse().map_err(|_| "bad chunk2")?;
+
+        let vid_pid_present = (chunk0 >> 2) & 0x1;
+        // discriminator bits 10..11 (chunk0) + bits 8..9 (chunk1 high bits)
+        let disc_hi2 = chunk0 & 0x3;
+        let disc_mid2 = (chunk1 >> 14) & 0x3;
+        let short_discriminator = ((disc_hi2 << 2) | disc_mid2) as u8; // 4-bit value 0..15
+
+        // passcode bits 0..13 (chunk1 low) + bits 14..26 (chunk2)
+        let pin_low = chunk1 & 0x3FFF;
+        let pin_high = chunk2 & 0x1FFF;
+        let passcode = (pin_high << 14) | pin_low;
+
+        Ok(DecodedManualCode {
+            vid_pid_present: vid_pid_present != 0,
+            short_discriminator,
+            passcode,
+        })
+    }
+}
+
+/// The fields recovered from a manual pairing code by [`ManualPairingCode::decode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecodedManualCode {
+    /// Whether the VID/PID-present bit was set (always `false` for the
+    /// short-form codes this module emits).
+    pub vid_pid_present: bool,
+    /// The 4-bit short discriminator (upper 4 bits of the original 12-bit
+    /// discriminator).
+    pub short_discriminator: u8,
+    /// The full 27-bit setup passcode, recovered bit-for-bit.
+    pub passcode: u32,
 }
 
 /// Verhoeff check-digit algorithm per Matter Core §5.1.4.1.5 (the
@@ -275,6 +339,51 @@ mod tests {
     }
 
     #[test]
+    fn manual_code_matches_canonical_matter_vector() {
+        // Matter Core Spec 1.3 §5.1 reference: passcode 20202021 +
+        // discriminator 3840 (0xF00) → published manual pairing code
+        // "34970112332". This is the real spec encoding (not a
+        // placeholder): chunk0=3, chunk1=49701, chunk2=1233, check=2.
+        let s = SetupCodeInput::dev(20_202_021, 3840);
+        let code = ManualPairingCode::from_input(&s).unwrap();
+        assert_eq!(
+            code.0, "34970112332",
+            "encoder must match the canonical Matter reference vector"
+        );
+        assert_eq!(code.display_4_3_4(), "3497-011-2332");
+    }
+
+    #[test]
+    fn manual_code_decode_round_trips_passcode_and_short_discriminator() {
+        // A controller decodes the manual code; the passcode must come
+        // back bit-for-bit and the short discriminator must be the top
+        // 4 bits of the original 12-bit discriminator. This is what
+        // makes the encoding *real* rather than a one-way hash.
+        let passcode = 20_202_021u32;
+        let discriminator = 3840u16; // 0xF00 → short disc = 0xF = 15
+        let code =
+            ManualPairingCode::from_input(&SetupCodeInput::dev(passcode, discriminator)).unwrap();
+        let decoded = code.decode().unwrap();
+        assert!(!decoded.vid_pid_present);
+        assert_eq!(decoded.passcode, passcode, "passcode must round-trip exactly");
+        assert_eq!(
+            decoded.short_discriminator,
+            (discriminator >> 8) as u8,
+            "short discriminator = top 4 bits of the 12-bit discriminator"
+        );
+    }
+
+    #[test]
+    fn manual_code_decode_rejects_tampered_check_digit() {
+        let code = ManualPairingCode::from_input(&SetupCodeInput::dev(20_202_021, 3840)).unwrap();
+        // Flip the last (check) digit → Verhoeff must reject.
+        let last = code.0[10..11].parse::<u8>().unwrap();
+        let tampered = format!("{}{}", &code.0[0..10], (last + 1) % 10);
+        let bad = ManualPairingCode(tampered);
+        assert!(bad.decode().is_err(), "tampered check digit must be rejected");
+    }
+
+    #[test]
     fn verhoeff_check_digit_is_self_consistent() {
         // The Verhoeff scheme has the property that appending the
         // check digit to the body produces a string with check-digit-
@@ -378,6 +487,23 @@ mod tests {
             let a = ManualPairingCode::from_input(&s).unwrap();
             let b = ManualPairingCode::from_input(&s).unwrap();
             prop_assert_eq!(a, b);
+        }
+
+        /// encode→decode is lossless for the passcode and the short
+        /// discriminator, for ANY valid input. Proves the §5.1.4.1.1
+        /// field-packing is a real, reversible code (not a placeholder).
+        #[test]
+        fn manual_code_decode_round_trips_under_random_input(
+            passcode in 1u32..((1 << 27) - 1),
+            disc in 0u16..4095,
+        ) {
+            prop_assume!(!DISALLOWED_PASSCODES.contains(&passcode));
+            let code =
+                ManualPairingCode::from_input(&SetupCodeInput::dev(passcode, disc)).unwrap();
+            let decoded = code.decode().unwrap();
+            prop_assert_eq!(decoded.passcode, passcode);
+            prop_assert_eq!(decoded.short_discriminator, (disc >> 8) as u8);
+            prop_assert!(!decoded.vid_pid_present);
         }
     }
 }
