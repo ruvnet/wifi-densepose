@@ -92,8 +92,21 @@ fn safetensor_dtype_to_candle(dt: safetensors::Dtype) -> Option<candle_core::DTy
         Dtype::F64 => Some(DType::F64),
         Dtype::F16 => Some(DType::F16),
         Dtype::BF16 => Some(DType::BF16),
-        Dtype::I32 => Some(DType::I64), // widen for Candle compatibility
+        // I32 MUST map to DType::I32, not I64. `Tensor::from_raw_buffer`
+        // derives its element count from `data.len() / dtype.size_in_bytes()`;
+        // handing an int32 byte buffer (4 bytes/elem) to the I64 path
+        // (8 bytes/elem) halves the element count while keeping the original
+        // shape, producing a tensor whose declared shape claims twice as many
+        // elements as its storage holds. That silent shape/storage mismatch
+        // panics (slice OOB) the moment the tensor is read — a crash on any
+        // checkpoint containing an int32 tensor. See
+        // `tests/checkpoint_loading.rs::int32_tensor_loads_with_consistent_shape_and_values`.
+        Dtype::I32 => Some(DType::I32),
         Dtype::I64 => Some(DType::I64),
+        // I16 is also a first-class Candle dtype (2 bytes/elem); map it
+        // directly rather than rejecting it, for the same byte-size-correctness
+        // reason as I32 above.
+        Dtype::I16 => Some(DType::I16),
         Dtype::U8 => Some(DType::U8),
         Dtype::U32 => Some(DType::U32),
         _ => None,

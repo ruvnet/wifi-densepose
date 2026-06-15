@@ -206,6 +206,27 @@ impl OccWorldCandle {
             )));
         }
 
+        // Validate the externally-supplied frame and batch counts at this
+        // system boundary. The temporal positional embedding has only
+        // `num_frames * 2` rows, so a larger `f_in` would over-index the
+        // embedding table deep inside the transformer and surface as a cryptic
+        // "gather" index error; a zero frame/batch count would feed a
+        // zero-element tensor into the reshape/conv pipeline. Reject both here
+        // with a clear, domain-level error instead.
+        if f_in == 0 || b == 0 {
+            return Err(OccWorldError::ShapeMismatch(format!(
+                "past_occupancy must have non-zero batch and frame dims, got \
+                 batch={b}, frames={f_in}"
+            )));
+        }
+        if f_in > cfg.num_frames * 2 {
+            return Err(OccWorldError::ShapeMismatch(format!(
+                "past_occupancy frame count {f_in} exceeds the temporal embedding \
+                 capacity ({} = num_frames*2)",
+                cfg.num_frames * 2
+            )));
+        }
+
         // ── Step 1: VQVAE encode each past frame ──────────────────────────
         // Flatten batch*frames: (B, F, H, W, D) → (B*F, H, W, D)
         let occ_flat = past_occupancy
@@ -455,4 +476,8 @@ mod tests {
             "expected CheckpointNotFound, got {result:?}"
         );
     }
+
+    // The `predict` input-validation boundary guards (zero/over-capacity frame
+    // counts) live in `tests/input_validation.rs` so they exercise only the
+    // public API and keep this file under the 500-line limit.
 }

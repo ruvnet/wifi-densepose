@@ -137,6 +137,17 @@ impl VQCodebook {
         let orig_shape = z.shape().clone();
         let orig_dims = orig_shape.dims().to_vec();
         let last = *orig_shape.dims().last().unwrap_or(&0);
+        // Guard the divide below: a scalar (rank-0) or empty-last-dim tensor
+        // would make `last == 0` and panic on the `elem_count() / last`
+        // division. `encode` is a `pub fn` on a `pub struct`, so this is a
+        // reachable public boundary — fail closed with a clear error instead.
+        if last == 0 {
+            return Err(candle_core::Error::Msg(format!(
+                "VQCodebook::encode expects a tensor with a non-zero last dim of \
+                 size embed_dim={}, got shape {orig_dims:?}",
+                self.embed_dim
+            )));
+        }
         // Flatten to (N, embed_dim)
         let n = z.elem_count() / last;
         let z_flat = z.reshape((n, last))?; // (N, D)
@@ -337,6 +348,21 @@ mod tests {
         assert_eq!(z_decoded.dims(), &[4, 512]);
 
         Ok(())
+    }
+
+    #[test]
+    fn encode_rejects_scalar_without_panicking() {
+        // A rank-0 (scalar) tensor has an empty dims list → `last == 0`.
+        // Before the guard this divided by zero and panicked; now it returns
+        // a clean error. `encode` is public, so this is a reachable boundary.
+        let device = Device::Cpu;
+        let codebook = VQCodebook::dummy(4, 8, &device).unwrap();
+        let scalar = Tensor::from_vec(vec![1.0f32], (), &device).unwrap();
+        let result = codebook.encode(&scalar);
+        assert!(
+            result.is_err(),
+            "scalar input must error, not panic; got {result:?}"
+        );
     }
 
     #[test]
