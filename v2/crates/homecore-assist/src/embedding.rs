@@ -150,6 +150,44 @@ mod tests {
     }
 
     #[test]
+    fn embeddings_are_structurally_finite() {
+        // SECURITY (NaN-poisoning): the embedding path takes only `&str` and
+        // produces values via FNV feature-hashing + a guarded L2 normalise.
+        // There is NO external float input and NO unguarded division, so a
+        // crafted utterance cannot inject NaN/±Inf into a vector and poison the
+        // cosine k-NN match. Prove every component is finite across adversarial
+        // inputs (empty, punctuation-only, unicode, very long, control chars).
+        for s in [
+            "",
+            "!!! ???",
+            "turn on the kitchen light",
+            "🔥🔥🔥 \u{0}\u{1}\u{7f} mix",
+            &"x".repeat(10_000),
+            "NaN inf -inf 1e999",
+        ] {
+            let v = embed(s);
+            assert_eq!(v.len(), EMBEDDING_DIM);
+            assert!(
+                v.iter().all(|x| x.is_finite()),
+                "embedding of {s:?} contained a non-finite component"
+            );
+        }
+    }
+
+    #[test]
+    fn cosine_with_zero_vector_is_finite_not_nan() {
+        // SECURITY (NaN-poisoning): an empty/punctuation-only utterance embeds
+        // to the zero vector. Cosine against any exemplar must be a finite 0.0,
+        // never NaN — so a below-threshold comparison stays well-defined and the
+        // recognizer falls through (no action) rather than matching on garbage.
+        let zero = embed("!!! ???");
+        let real = embed("turn on the light");
+        let sim = cosine_similarity(&zero, &real);
+        assert!(sim.is_finite(), "cosine vs zero vector must be finite, got {sim}");
+        assert_eq!(sim, 0.0, "dot product with the zero vector is exactly 0");
+    }
+
+    #[test]
     fn identical_text_is_similarity_one() {
         let a = embed("lock the front door");
         let b = embed("lock the front door");
