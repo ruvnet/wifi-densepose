@@ -42,12 +42,30 @@ impl<'de> Deserialize<'de> for EntityId {
     }
 }
 
+/// Maximum accepted `entity_id` length in bytes. Mirrors Home Assistant's
+/// practical cap (`MAX_LENGTH_STATE_*` family — 255). The state machine and
+/// entity/registry maps are keyed on `EntityId`, and the REST layer
+/// (`homecore-api`) parses untrusted path segments straight through
+/// [`EntityId::parse`]; an unbounded id would let a single `POST
+/// /api/states/<giant>` permanently grow the state map (memory DoS). We
+/// fail closed at the boundary instead.
+pub const MAX_ENTITY_ID_LEN: usize = 255;
+
 impl EntityId {
     /// Validates and constructs an `EntityId`. Returns
     /// [`EntityIdError`] if the input is not `domain.name` shape with
-    /// ASCII lowercase / digits / underscore in each segment.
+    /// ASCII lowercase / digits / underscore in each segment, or if it
+    /// exceeds [`MAX_ENTITY_ID_LEN`] bytes.
     pub fn parse(s: impl Into<String>) -> Result<Self, EntityIdError> {
         let s: String = s.into();
+        // Bound the length BEFORE any further work so an oversized input is
+        // cheap to reject (no per-char scan of megabytes).
+        if s.len() > MAX_ENTITY_ID_LEN {
+            return Err(EntityIdError::TooLong {
+                len: s.len(),
+                max: MAX_ENTITY_ID_LEN,
+            });
+        }
         let (domain, name) = s
             .split_once('.')
             .ok_or_else(|| EntityIdError::MissingDot(s.clone()))?;
@@ -111,6 +129,8 @@ pub enum EntityIdError {
     EmptyName(String),
     #[error("entity_id {entity_id:?} contains invalid character {ch:?} — only [a-z0-9_] allowed (HA-compat ASCII subset; see ADR-127 §Q1)")]
     InvalidChar { entity_id: String, ch: char },
+    #[error("entity_id is {len} bytes, exceeding the {max}-byte limit")]
+    TooLong { len: usize, max: usize },
 }
 
 /// Immutable state snapshot for one entity at one moment in time.
@@ -215,6 +235,39 @@ mod tests {
     fn entity_id_rejects_unicode() {
         // ADR-127 §Q1 — P1 is strict ASCII. Unicode acceptance deferred.
         assert!(EntityId::parse("light.küche").is_err());
+    }
+
+    #[test]
+    fn entity_id_length_boundary() {
+        // The REST layer parses untrusted path segments straight through
+        // `parse`; an unbounded id is a memory-DoS vector (a `POST
+        // /api/states/<giant>` permanently grows the state map). Cap at
+        // MAX_ENTITY_ID_LEN, fail closed above it.
+        //
+        // Construct "sensor." (7 bytes) + N name bytes == exactly MAX.
+        let prefix = "sensor.";
+        let name_len = MAX_ENTITY_ID_LEN - prefix.len();
+        let at_max = format!("{prefix}{}", "a".repeat(name_len));
+        assert_eq!(at_max.len(), MAX_ENTITY_ID_LEN);
+        assert!(
+            EntityId::parse(at_max.clone()).is_ok(),
+            "an id of exactly MAX_ENTITY_ID_LEN bytes must be accepted"
+        );
+
+        let over = format!("{at_max}a"); // MAX + 1
+        assert!(matches!(
+            EntityId::parse(over),
+            Err(EntityIdError::TooLong { .. })
+        ));
+
+        // A multi-megabyte, otherwise-valid id is rejected cheaply rather
+        // than persisted.
+        let huge = format!("sensor.{}", "a".repeat(4 * 1024 * 1024));
+        assert!(matches!(
+            EntityId::parse(huge),
+            Err(EntityIdError::TooLong { len, max })
+                if max == MAX_ENTITY_ID_LEN && len > MAX_ENTITY_ID_LEN
+        ));
     }
 
     #[test]
