@@ -1636,6 +1636,67 @@ mod tests {
         }
     }
 
+    /// Security pin (review 2026-06, ADR-127) — `from_canonical_bytes` is a
+    /// deserialisation boundary for replayed/forwarded captures. A forged header
+    /// advertising an enormous `rows × cols` must be rejected by the
+    /// shape-vs-length check (`expect` uses saturating multiplies) BEFORE the
+    /// `Vec::with_capacity(rows * cols)` allocation — otherwise an attacker could
+    /// drive a multi-GB allocation from a few header bytes (unbounded-memory
+    /// DoS). The check guarantees `rows*cols*16 <= bytes.len()`, so the capacity
+    /// is bounded by the input the caller already holds. This must not OOM.
+    #[test]
+    fn canonical_decode_oversized_shape_is_bounded_not_allocated() {
+        use ndarray::Array2;
+        let meta = CsiMetadata::new(DeviceId::new("n"), FrequencyBand::Band2_4GHz, 1);
+        let data = Array2::from_shape_fn((1, 2), |(_, c)| Complex64::new(c as f64, 0.0));
+        let mut bytes = CsiFrame::new(meta, data).to_canonical_bytes();
+
+        // The (rows, cols) u32 pair is the last 8 bytes before the payload.
+        // Overwrite with a maximal claim (u32::MAX × u32::MAX) and lop off the
+        // payload so the buffer is tiny but the header lies enormously.
+        let shape_off = bytes.len() - 8 - 2 * 16; // 2 samples × 16 bytes payload
+        bytes[shape_off..shape_off + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        bytes[shape_off + 4..shape_off + 8].copy_from_slice(&u32::MAX.to_le_bytes());
+        bytes.truncate(shape_off + 8); // drop the real payload
+
+        // expect = MAX*MAX*16 (saturated) > found → PayloadMismatch, no alloc.
+        assert!(matches!(
+            CsiFrame::from_canonical_bytes(&bytes),
+            Err(CanonicalDecodeError::PayloadMismatch { .. })
+        ));
+    }
+
+    /// Security pin (review 2026-06) — the decoder must never panic on arbitrary
+    /// bytes: every malformed input is a typed `CanonicalDecodeError`, never an
+    /// unwinding panic (panic-on-adversarial-input = 0). Sweep truncations and a
+    /// deterministic fuzz spread.
+    #[test]
+    fn canonical_decode_never_panics_on_arbitrary_bytes() {
+        use ndarray::Array2;
+        let mut meta = CsiMetadata::new(DeviceId::new("node"), FrequencyBand::Band5GHz, 36);
+        meta.antenna_config.spacing_mm = Some(50.0);
+        let data = Array2::from_shape_fn((2, 8), |(r, c)| Complex64::new(r as f64, c as f64));
+        let good = CsiFrame::new(meta, data).to_canonical_bytes();
+
+        // Every prefix of a valid encoding must decode without panicking.
+        for n in 0..good.len() {
+            let _ = CsiFrame::from_canonical_bytes(&good[..n]);
+        }
+        // Deterministic LCG fuzz over varied lengths.
+        let mut st = 0xDEAD_BEEFu64;
+        for len in 0..400usize {
+            let buf: Vec<u8> = (0..len)
+                .map(|_| {
+                    st = st
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1_442_695_040_888_963_407);
+                    (st >> 33) as u8
+                })
+                .collect();
+            let _ = CsiFrame::from_canonical_bytes(&buf);
+        }
+    }
+
     /// AC8c (review finding 7) — `Some(Uuid::nil())` calibration is an
     /// encoding error: nil is the wire sentinel for `None`, so encoding it
     /// would alias two distinct frames to one byte string (and one witness).

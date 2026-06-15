@@ -471,6 +471,54 @@ mod tests {
         assert!(ht.record(&f).is_err());
     }
 
+    /// Security pin (review 2026-06, ADR-127): the UDP parser is the CLI's
+    /// widest attack surface — `calibrate` / `enroll` / `room-watch` bind it to
+    /// 0.0.0.0 by default, so any host on the LAN can send arbitrary bytes. A
+    /// header that *claims* a huge `n_antennas * n_subcarriers` must be rejected
+    /// by the length check BEFORE the `Array2::zeros` allocation, so a single
+    /// small datagram can never trigger a multi-MB allocation (unbounded-memory
+    /// DoS). The largest possible claim (255 × 65535 pairs ≈ 33 MB of IQ) inside
+    /// a RECV_BUF-sized (2048-byte) datagram parses to `None`, never OOMs.
+    #[test]
+    fn test_parse_csi_packet_oversized_claim_is_rejected_not_allocated() {
+        let mut buf = vec![0u8; RECV_BUF];
+        buf[0..4].copy_from_slice(&0xC511_0001u32.to_le_bytes());
+        buf[4] = 1; // node_id
+        buf[5] = 255; // n_antennas (max)
+        buf[6..8].copy_from_slice(&65535u16.to_le_bytes()); // n_subcarriers (max)
+        buf[8..12].copy_from_slice(&2432u32.to_le_bytes());
+        // n_pairs = 255 * 65535 = 16_711_425 → needs ~33 MB of IQ bytes that a
+        // 2048-byte datagram cannot carry → length check fails → None.
+        assert!(parse_csi_packet(&buf, "ht20").is_none());
+    }
+
+    /// Security pin (review 2026-06): the parser must never panic on ANY byte
+    /// string — truncated headers, lying length fields, odd sizes. IQ-loop
+    /// indexing is guarded by the length check; this sweeps a spread of
+    /// adversarial inputs to lock in panic-on-adversarial-input = 0.
+    #[test]
+    fn test_parse_csi_packet_never_panics_on_arbitrary_bytes() {
+        let mut st = 0x1234_5678u64;
+        let mut next = move || {
+            st = st
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (st >> 33) as u8
+        };
+        for len in 0..600usize {
+            let buf: Vec<u8> = (0..len).map(|_| next()).collect();
+            for tier in ["ht20", "he20", "garbage"] {
+                let _ = parse_csi_packet(&buf, tier);
+            }
+        }
+        // Valid magic, lying n_subcarriers, no payload → None (not a panic).
+        let mut buf = vec![0u8; 20];
+        buf[0..4].copy_from_slice(&0xC511_0001u32.to_le_bytes());
+        buf[5] = 3;
+        buf[6..8].copy_from_slice(&500u16.to_le_bytes());
+        assert!(parse_csi_packet(&buf, "ht20").is_none());
+    }
+
     #[test]
     fn test_freq_to_channel_24ghz() {
         assert_eq!(freq_mhz_to_channel(2437), 6);
