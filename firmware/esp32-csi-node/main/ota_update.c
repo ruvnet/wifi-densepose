@@ -10,6 +10,8 @@
 
 #include "ota_update.h"
 
+#include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 #include "esp_log.h"
 #include "esp_ota_ops.h"
@@ -17,14 +19,17 @@
 #include "esp_app_desc.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include "battery_monitor.h"
+#include "csi_collector.h"
+#include "edge_processing.h"
 
 static const char *TAG = "ota_update";
 
 /** OTA HTTP server port. */
 #define OTA_PORT 8032
 
-/** Maximum firmware size (900 KB — matches CI binary size gate). */
-#define OTA_MAX_SIZE (900 * 1024)
+/** Number of samples kept on the web graph. */
+#define GRAPH_HISTORY_SAMPLES 96
 
 /** NVS namespace and key for the OTA pre-shared key. */
 #define OTA_NVS_NAMESPACE "security"
@@ -35,6 +40,273 @@ static const char *TAG = "ota_update";
 
 /** Cached PSK loaded from NVS at init time. Empty = auth disabled. */
 static char s_ota_psk[OTA_PSK_MAX_LEN] = {0};
+
+static const char GRAPH_HTML[] = R"rawliteral(
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RuView Live Graph</title>
+<style>
+:root{
+  color-scheme: dark;
+  --bg:#060708;
+  --panel:#0d1116;
+  --panel2:#111822;
+  --line:#263041;
+  --text:#f2f5f8;
+  --muted:#8d98a6;
+  --green:#77ff7a;
+  --cyan:#5fe1ff;
+  --amber:#ffd36a;
+  --red:#ff667d;
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:radial-gradient(circle at top, #101820 0%, var(--bg) 55%);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+body{padding:18px}
+.shell{max-width:1100px;margin:0 auto;display:grid;gap:14px}
+.top{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:10px}
+.title{font-size:28px;font-weight:700;letter-spacing:.04em}
+.subtitle{color:var(--muted);font-size:12px;line-height:1.4}
+.pill{padding:6px 10px;border:1px solid var(--line);border-radius:999px;background:rgba(255,255,255,.03);font-size:12px}
+.pill.live{color:var(--green);border-color:rgba(119,255,122,.35)}
+.pill.wait{color:var(--amber);border-color:rgba(255,211,106,.35)}
+.grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+.card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:14px;padding:12px 14px;min-height:74px}
+.label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.12em;margin-bottom:8px}
+.value{font-size:24px;line-height:1;font-weight:700}
+.value.small{font-size:17px}
+.canvasWrap{background:linear-gradient(180deg,var(--panel),#0a0d12);border:1px solid var(--line);border-radius:18px;padding:12px;box-shadow:0 18px 48px rgba(0,0,0,.25)}
+canvas{display:block;width:100%;height:360px}
+.foot{display:flex;flex-wrap:wrap;gap:10px;color:var(--muted);font-size:12px;line-height:1.5}
+.foot span{padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05)}
+@media (max-width:900px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}canvas{height:300px}}
+@media (max-width:560px){body{padding:12px}.grid{grid-template-columns:1fr}.title{font-size:22px}canvas{height:240px}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="top">
+    <div>
+      <div class="title">RuView Live Graph</div>
+      <div class="subtitle">Browser view of the same live edge vitals that drive the S3 display graph.</div>
+    </div>
+    <div id="status" class="pill wait">WAITING</div>
+  </div>
+
+  <div class="grid">
+    <div class="card"><div class="label">Motion</div><div id="motion" class="value">--%</div></div>
+    <div class="card"><div class="label">Presence</div><div id="presence" class="value">--%</div></div>
+    <div class="card"><div class="label">RSSI</div><div id="rssi" class="value">-- dBm</div></div>
+    <div class="card"><div class="label">People</div><div id="persons" class="value">--</div></div>
+    <div class="card"><div class="label">Battery</div><div id="battery" class="value small">--</div></div>
+  </div>
+
+  <div class="canvasWrap">
+    <canvas id="chart"></canvas>
+  </div>
+
+  <div class="foot">
+    <span id="breathing">Breathing: -- BPM</span>
+    <span id="heartrate">Heart: -- BPM</span>
+    <span id="batteryState">Power: --</span>
+    <span id="timestamp">Updated: --</span>
+  </div>
+</div>
+
+<script>
+(() => {
+  const HISTORY = 96;
+  const motion = [];
+  const presence = [];
+  const chart = document.getElementById('chart');
+  const ctx = chart.getContext('2d');
+  const status = document.getElementById('status');
+  const $ = (id) => document.getElementById(id);
+
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const push = (arr, value) => {
+    arr.push(value);
+    while (arr.length > HISTORY) arr.shift();
+    while (arr.length < HISTORY) arr.unshift(value);
+  };
+
+  const bpmText = (v) => (Number.isFinite(v) && v > 0 ? `${Math.round(v)} BPM` : '-- BPM');
+
+  function fit() {
+    const rect = chart.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.max(320, Math.floor(rect.width));
+    const h = Math.max(220, Math.floor(rect.height));
+    const nextW = Math.floor(w * dpr);
+    const nextH = Math.floor(h * dpr);
+    if (chart.width !== nextW || chart.height !== nextH) {
+      chart.width = nextW;
+      chart.height = nextH;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+  }
+
+  function drawGrid(w, h, pad) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const y = pad + ((h - pad * 2) / 4) * i;
+      ctx.beginPath();
+      ctx.moveTo(pad, y);
+      ctx.lineTo(w - pad, y);
+      ctx.stroke();
+    }
+  }
+
+  function drawSeries(data, color, w, h, pad, label) {
+    if (data.length === 0) return;
+    ctx.beginPath();
+    data.forEach((value, idx) => {
+      const x = pad + (idx * (w - pad * 2)) / Math.max(1, HISTORY - 1);
+      const y = pad + (1 - clamp(value, 0, 100) / 100) * (h - pad * 2);
+      if (idx === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.font = '12px ui-monospace, monospace';
+    ctx.fillText(label, pad + 6, pad + 16);
+  }
+
+  function render(live) {
+    fit();
+    const w = chart.clientWidth;
+    const h = chart.clientHeight;
+    const pad = 18;
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#050607';
+    ctx.fillRect(0, 0, w, h);
+    drawGrid(w, h, pad);
+    drawSeries(presence, 'rgba(95,225,255,0.95)', w, h, pad, 'Presence');
+    drawSeries(motion, 'rgba(119,255,122,0.95)', w, h, pad, 'Motion');
+
+    if (!live) {
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.font = 'bold 18px ui-monospace, monospace';
+      ctx.fillText('waiting for live vitals...', pad + 8, h / 2);
+    }
+  }
+
+  async function tick() {
+    try {
+      const res = await fetch('/graph/data', { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const live = !!data.live;
+
+      status.textContent = live ? 'LIVE' : 'WAITING';
+      status.className = `pill ${live ? 'live' : 'wait'}`;
+      $('motion').textContent = `${data.motion ?? '--'}%`;
+      $('presence').textContent = `${data.presence ?? '--'}%`;
+      $('rssi').textContent = Number.isFinite(data.rssi) ? `${Math.round(data.rssi)} dBm` : '-- dBm';
+      $('persons').textContent = Number.isFinite(data.persons) ? String(data.persons) : '--';
+      $('battery').textContent = Number.isFinite(data.battery_percent) && data.battery_percent >= 0
+        ? `${data.battery_percent}% / ${data.battery_mv}mV`
+        : 'N/A';
+      $('breathing').textContent = `Breathing: ${bpmText(data.breathing_bpm)}`;
+      $('heartrate').textContent = `Heart: ${bpmText(data.heartrate_bpm)}`;
+      $('batteryState').textContent = `Power: ${data.battery_status || '--'}`;
+      $('timestamp').textContent = `Updated: ${Number.isFinite(data.timestamp_ms) ? `${Math.round(data.timestamp_ms)} ms` : '--'}`;
+
+      push(motion, Number.isFinite(data.motion) ? data.motion : 0);
+      push(presence, Number.isFinite(data.presence) ? data.presence : 0);
+      render(live);
+    } catch (err) {
+      status.textContent = 'WAITING';
+      status.className = 'pill wait';
+      render(false);
+    }
+  }
+
+  window.addEventListener('resize', () => render(status.textContent === 'LIVE'));
+  fit();
+  render(false);
+  tick();
+  setInterval(tick, 250);
+})();
+</script>
+</body>
+</html>
+)rawliteral";
+
+static int clamp_int(int value, int lo, int hi)
+{
+    if (value < lo) return lo;
+    if (value > hi) return hi;
+    return value;
+}
+
+static int scaled_motion_percent(const edge_vitals_pkt_t *vitals)
+{
+    if (!vitals) return 0;
+    return clamp_int((int)(vitals->motion_energy * 18.0f), 0, 100);
+}
+
+static int scaled_presence_percent(const edge_vitals_pkt_t *vitals)
+{
+    if (!vitals) return 0;
+    return clamp_int((int)(vitals->presence_score * 18.0f), 0, 100);
+}
+
+static void build_graph_snapshot(char *response, size_t response_len)
+{
+    edge_vitals_pkt_t vitals;
+    bool has_vitals = edge_get_vitals(&vitals);
+
+    battery_status_t battery = {0};
+    esp_err_t battery_ret = battery_monitor_read(&battery);
+    bool battery_live = (battery_ret == ESP_OK && battery.valid);
+
+    int motion = has_vitals ? scaled_motion_percent(&vitals) : 0;
+    int presence = has_vitals ? scaled_presence_percent(&vitals) : 0;
+    int breathing = has_vitals ? (int)(vitals.breathing_rate / 100U) : 0;
+    int heartrate = has_vitals ? (int)(vitals.heartrate / 10000U) : 0;
+    int rssi = has_vitals ? (int)vitals.rssi : 0;
+    int persons = has_vitals ? (int)vitals.n_persons : 0;
+    int battery_percent = battery_live ? (int)battery.percent : -1;
+    int battery_mv = battery_live ? (int)battery.millivolts : -1;
+    const char *battery_status = battery_live ? battery_monitor_status_name(battery.status) : "UNKNOWN";
+    uint32_t timestamp_ms = has_vitals ? vitals.timestamp_ms : 0;
+    uint8_t node_id = has_vitals ? vitals.node_id : csi_collector_get_node_id();
+
+    snprintf(response, response_len,
+             "{\"live\":%s,\"node_id\":%u,\"motion\":%d,\"presence\":%d,"
+             "\"breathing_bpm\":%d,\"heartrate_bpm\":%d,\"rssi\":%d,\"persons\":%d,"
+             "\"battery_percent\":%d,\"battery_mv\":%d,\"battery_status\":\"%s\","
+             "\"timestamp_ms\":%lu}",
+             has_vitals ? "true" : "false",
+             (unsigned)node_id,
+             motion, presence,
+             breathing, heartrate, rssi, persons,
+             battery_percent, battery_mv, battery_status,
+             (unsigned long)timestamp_ms);
+}
+
+static esp_err_t graph_page_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_send(req, GRAPH_HTML, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static esp_err_t graph_data_handler(httpd_req_t *req)
+{
+    char response[384];
+    build_graph_snapshot(response, sizeof(response));
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, response, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
 
 /**
  * ADR-050: Verify the Authorization header contains the correct PSK.
@@ -95,11 +367,11 @@ static esp_err_t ota_status_handler(httpd_req_t *req)
     int len = snprintf(response, sizeof(response),
         "{\"version\":\"%s\",\"date\":\"%s\",\"time\":\"%s\","
         "\"running_partition\":\"%s\",\"next_partition\":\"%s\","
-        "\"max_size\":%d}",
+        "\"max_size\":%lu}",
         app->version, app->date, app->time,
         running ? running->label : "unknown",
         update ? update->label : "none",
-        OTA_MAX_SIZE);
+        (unsigned long)(update ? update->size : 0));
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, response, len);
@@ -121,16 +393,19 @@ static esp_err_t ota_upload_handler(httpd_req_t *req)
 
     ESP_LOGI(TAG, "OTA update started, content_length=%d", req->content_len);
 
-    if (req->content_len <= 0 || req->content_len > OTA_MAX_SIZE) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                            "Invalid firmware size (must be 1B - 900KB)");
-        return ESP_FAIL;
-    }
-
     const esp_partition_t *update_partition = esp_ota_get_next_update_partition(NULL);
     if (update_partition == NULL) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                             "No OTA partition available");
+        return ESP_FAIL;
+    }
+
+    if (req->content_len <= 0 || req->content_len > (int)update_partition->size) {
+        char err_msg[96];
+        snprintf(err_msg, sizeof(err_msg),
+                 "Invalid firmware size (must be 1B - %luB)",
+                 (unsigned long)update_partition->size);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, err_msg);
         return ESP_FAIL;
     }
 
@@ -214,9 +489,17 @@ static esp_err_t ota_start_server(httpd_handle_t *out_handle)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = OTA_PORT;
-    config.max_uri_handlers = 12;  /* Extra slots for WASM endpoints (ADR-040). */
-    /* Increase receive timeout for large uploads. */
+    config.max_uri_handlers = 16;  /* Extra slots for WASM + ESP32-CAM dual endpoints. */
+    /*
+     * OTA commits validate a >1 MB app image after the request body has been
+     * received. The HTTPD default task stack is tight for that path on S3 and
+     * can reset the connection before esp_ota_set_boot_partition() runs. Give
+     * the handler enough stack and keep the socket alive while validation and
+     * the final JSON response complete.
+     */
+    config.stack_size = 8192;
     config.recv_wait_timeout = 30;
+    config.send_wait_timeout = 30;
 
     httpd_handle_t server = NULL;
     esp_err_t err = httpd_start(&server, &config);
@@ -235,6 +518,30 @@ static esp_err_t ota_start_server(httpd_handle_t *out_handle)
     };
     httpd_register_uri_handler(server, &status_uri);
 
+    httpd_uri_t graph_page_uri = {
+        .uri      = "/",
+        .method   = HTTP_GET,
+        .handler  = graph_page_handler,
+        .user_ctx = NULL,
+    };
+    httpd_register_uri_handler(server, &graph_page_uri);
+
+    httpd_uri_t graph_alias_uri = {
+        .uri      = "/graph",
+        .method   = HTTP_GET,
+        .handler  = graph_page_handler,
+        .user_ctx = NULL,
+    };
+    httpd_register_uri_handler(server, &graph_alias_uri);
+
+    httpd_uri_t graph_data_uri = {
+        .uri      = "/graph/data",
+        .method   = HTTP_GET,
+        .handler  = graph_data_handler,
+        .user_ctx = NULL,
+    };
+    httpd_register_uri_handler(server, &graph_data_uri);
+
     httpd_uri_t upload_uri = {
         .uri      = "/ota",
         .method   = HTTP_POST,
@@ -244,6 +551,9 @@ static esp_err_t ota_start_server(httpd_handle_t *out_handle)
     httpd_register_uri_handler(server, &upload_uri);
 
     ESP_LOGI(TAG, "OTA HTTP server started on port %d", OTA_PORT);
+    ESP_LOGI(TAG, "  GET  /         — live graph page");
+    ESP_LOGI(TAG, "  GET  /graph    — live graph page alias");
+    ESP_LOGI(TAG, "  GET  /graph/data — graph telemetry JSON");
     ESP_LOGI(TAG, "  GET  /ota/status — firmware version info");
     ESP_LOGI(TAG, "  POST /ota        — upload new firmware binary");
 
