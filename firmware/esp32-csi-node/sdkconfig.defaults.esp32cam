@@ -1,0 +1,61 @@
+# RuView ESP32-CAM CSI Node — classic ESP32 / AI Thinker style boards.
+#
+# Build:
+#   idf.py -B build-esp32cam \
+#     -D SDKCONFIG=build-esp32cam/sdkconfig \
+#     -D SDKCONFIG_DEFAULTS=sdkconfig.defaults.esp32cam \
+#     set-target esp32 build
+#
+# Flash:
+#   python -m esptool --chip esp32 --port /dev/ttyUSB0 --baud 460800 \
+#     write_flash --flash_mode dio --flash_size 4MB \
+#     0x1000  build-esp32cam/bootloader/bootloader.bin \
+#     0x8000  build-esp32cam/partition_table/partition-table.bin \
+#     0xf000  build-esp32cam/ota_data_initial.bin \
+#     0x20000 build-esp32cam/esp32-csi-node.bin
+
+CONFIG_IDF_TARGET="esp32"
+
+# Most ESP32-CAM modules ship with 4 MB flash. Keep OTA slots but use the
+# smaller partition table so the same RuView OTA/provision flow still works.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_4mb.csv"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHMODE="dio"
+
+# Real RF sensing path.
+CONFIG_ESP_WIFI_CSI_ENABLED=y
+# CONFIG_CSI_MOCK_ENABLED is not set
+
+# ESP32-CAM has no RuView display, battery monitor, Cardputer audio, mmWave
+# add-on, or WASM memory budget in this profile. The camera module is left idle;
+# this firmware uses the board as a WiFi CSI node.
+# CONFIG_DISPLAY_ENABLE is not set
+# CONFIG_BATTERY_MONITOR_ENABLE is not set
+# CONFIG_WASM_ENABLE is not set
+
+# Defaults are only fallbacks. provision.py writes SSID, target, channel, and
+# node ID to NVS after flashing.
+CONFIG_CSI_NODE_ID=2
+CONFIG_CSI_TARGET_IP="192.168.1.100"
+CONFIG_CSI_TARGET_PORT=5005
+CONFIG_CSI_WIFI_SSID="wifi-densepose"
+CONFIG_CSI_WIFI_PASSWORD=""
+CONFIG_CSI_WIFI_CHANNEL=6
+
+# Keep the edge feature/vitals packets that the desktop UI already understands.
+CONFIG_EDGE_TIER=2
+CONFIG_EDGE_VITAL_INTERVAL_MS=1000
+CONFIG_EDGE_TOP_K=8
+CONFIG_EDGE_FALL_THRESH=15000
+CONFIG_EDGE_POWER_DUTY=100
+
+# Stack sizing needed by the shared adaptive-controller/network callback path.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LWIP_SO_RCVBUF=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH=8192

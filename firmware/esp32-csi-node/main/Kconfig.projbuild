@@ -41,6 +41,140 @@ menu "CSI Node Configuration"
 
 endmenu
 
+menu "Cardputer Battery Monitor"
+
+    config BATTERY_MONITOR_ENABLE
+        bool "Enable Cardputer battery voltage/status monitor"
+        default y
+        help
+            Read battery voltage from an ADC-capable board battery pin
+            and publish it to the display UI plus RuView UDP telemetry.
+
+    config BATTERY_ADC_GPIO
+        int "Battery voltage ADC GPIO"
+        default 38 if IDF_TARGET_ESP32
+        default 10
+        range 0 48
+        depends on BATTERY_MONITOR_ENABLE
+        help
+            M5StickC Plus2 documents battery voltage detection on G38.
+            Cardputer-Adv documents battery voltage detection on G10.
+
+    config BATTERY_ADC_DIVIDER_MILLI
+        int "Battery ADC divider multiplier x1000"
+        default 2000
+        range 1000 4000
+        depends on BATTERY_MONITOR_ENABLE
+        help
+            Multiplier applied to calibrated ADC millivolts. 2000 means
+            a 2:1 divider: pack_mV = adc_mV * 2. Adjust if hardware
+            measurement proves a different divider ratio.
+
+    config BATTERY_CHARGE_GPIO
+        int "Charge-status GPIO (-1 if unavailable)"
+        default -1
+        range -1 48
+        depends on BATTERY_MONITOR_ENABLE
+        help
+            Optional charger-status input. Leave -1 when the board does
+            not expose a charge-status pin to firmware.
+
+    config BATTERY_CHARGE_ACTIVE_LEVEL
+        int "Charge-status active level"
+        default 1
+        range 0 1
+        depends on BATTERY_MONITOR_ENABLE && BATTERY_CHARGE_GPIO >= 0
+
+    config BATTERY_SEND_INTERVAL_MS
+        int "Battery telemetry send interval (ms)"
+        default 5000
+        range 1000 60000
+        depends on BATTERY_MONITOR_ENABLE
+
+endmenu
+
+menu "ESP32-CAM Dual CSI + MJPEG"
+    depends on IDF_TARGET_ESP32
+
+    config ESP32CAM_DUAL_FIRMWARE
+        bool "Enable ESP32-CAM dual CSI + MJPEG stream"
+        default n
+        help
+            Start the OV2640 camera on AI Thinker style ESP32-CAM boards and
+            expose /cam, /cam.jpg, /stream, and /cam/status on the existing
+            OTA HTTP server. CSI UDP telemetry remains active. This is meant
+            for low-rate training-label preview, not high-FPS video.
+
+    config ESP32CAM_STREAM_FPS
+        int "MJPEG stream FPS cap"
+        default 4
+        range 1 12
+        depends on ESP32CAM_DUAL_FIRMWARE
+        help
+            Lower values preserve WiFi airtime for CSI packets. Start at 4 FPS.
+
+    choice ESP32CAM_FRAME_SIZE
+        prompt "Camera frame size"
+        default ESP32CAM_FRAME_QVGA
+        depends on ESP32CAM_DUAL_FIRMWARE
+
+        config ESP32CAM_FRAME_QQVGA
+            bool "160x120 QQVGA"
+
+        config ESP32CAM_FRAME_QVGA
+            bool "320x240 QVGA"
+
+        config ESP32CAM_FRAME_VGA
+            bool "640x480 VGA"
+    endchoice
+
+    config ESP32CAM_JPEG_QUALITY
+        int "JPEG quality"
+        default 14
+        range 10 30
+        depends on ESP32CAM_DUAL_FIRMWARE
+        help
+            ESP camera driver quality value. Lower numbers are better quality
+            and larger packets. 14 is a conservative CSI-friendly default.
+
+    config ESP32CAM_XCLK_FREQ_HZ
+        int "XCLK frequency"
+        default 10000000
+        range 5000000 20000000
+        depends on ESP32CAM_DUAL_FIRMWARE
+
+    config ESP32CAM_PIN_PWDN
+        int "PWDN GPIO"
+        default 32
+        range -1 39
+        depends on ESP32CAM_DUAL_FIRMWARE
+
+    config ESP32CAM_PIN_RESET
+        int "RESET GPIO"
+        default -1
+        range -1 39
+        depends on ESP32CAM_DUAL_FIRMWARE
+
+    config ESP32CAM_PIN_XCLK
+        int "XCLK GPIO"
+        default 0
+        range 0 39
+        depends on ESP32CAM_DUAL_FIRMWARE
+
+    config ESP32CAM_PIN_SIOD
+        int "SIOD/SDA GPIO"
+        default 26
+        range 0 39
+        depends on ESP32CAM_DUAL_FIRMWARE
+
+    config ESP32CAM_PIN_SIOC
+        int "SIOC/SCL GPIO"
+        default 27
+        range 0 39
+        depends on ESP32CAM_DUAL_FIRMWARE
+
+endmenu
+
 menu "Edge Intelligence (ADR-039)"
 
     config EDGE_TIER
@@ -167,6 +301,86 @@ menu "Adaptive Controller (ADR-081)"
             CSI callback rate (per second) below which the controller
             falls back to DEGRADED mode and pins the radio to
             RV_PROFILE_PASSIVE_LOW_RATE. 0 disables the degraded gate.
+
+endmenu
+
+menu "Cardputer-Adv Audio"
+    depends on IDF_TARGET_ESP32S3
+
+    config CARDPUTER_ADV_AUDIO_ENABLE
+        bool "Enable Cardputer-Adv ES8311 speaker and SD WAV support"
+        default y
+        help
+            Initialize the Cardputer-Adv ES8311 codec on G8/G9 and drive
+            the internal speaker over I2S pins G41/G43/G42. This is kept
+            S3-only because classic StickC/PICO and C6 RuView nodes do not
+            have the Cardputer-Adv audio circuit.
+
+    config CARDPUTER_ADV_AUDIO_BOOT_CHIME
+        bool "Play short boot chime"
+        default y
+        depends on CARDPUTER_ADV_AUDIO_ENABLE
+        help
+            Play a short synthesized tone after the display task starts.
+            This proves the ES8311 and I2S path without requiring an SD card.
+
+    config CARDPUTER_ADV_AUDIO_TRY_SD_WAV
+        bool "Try WAV proof from microSD"
+        default y
+        depends on CARDPUTER_ADV_AUDIO_ENABLE
+        help
+            Mount the Cardputer-Adv SPI microSD slot and play a PCM WAV file
+            if one exists. Missing media or missing files are logged but do
+            not block WiFi, CSI streaming, or OTA startup.
+
+    config CARDPUTER_ADV_AUDIO_SD_MOUNT_POINT
+        string "microSD mount point"
+        default "/sdcard"
+        depends on CARDPUTER_ADV_AUDIO_ENABLE
+
+    config CARDPUTER_ADV_AUDIO_SD_WAV_PATH
+        string "Preferred WAV path"
+        default "/sdcard/ruview.wav"
+        depends on CARDPUTER_ADV_AUDIO_ENABLE && CARDPUTER_ADV_AUDIO_TRY_SD_WAV
+        help
+            Preferred PCM WAV file to play during the boot-time SD proof.
+            Supported input is unsigned 8-bit or signed 16-bit PCM, mono
+            or stereo. The M5Unified example's file1.wav/file2.wav/file3.wav
+            names are also tried as fallbacks.
+
+    config CARDPUTER_ADV_AUDIO_VOLUME_PERCENT
+        int "Speaker volume percent"
+        default 35
+        range 0 100
+        depends on CARDPUTER_ADV_AUDIO_ENABLE
+
+    config CARDPUTER_ADV_TRAUTONIUM_ENABLE
+        bool "Enable playable keyboard Trautonium voice"
+        default y
+        depends on CARDPUTER_ADV_AUDIO_ENABLE
+        help
+            Route Cardputer-Adv TCA8418 key press/release events into a
+            lightweight embedded instrument: trapezoid oscillator, subharmonic
+            body, portamento glide, pressure-scaled drive, and vowel/formant
+            color banks. This does not require an SD card.
+
+    config CARDPUTER_ADV_TRAUTONIUM_PORTAMENTO_MS
+        int "Trautonium key glide time (ms)"
+        default 220
+        range 20 1200
+        depends on CARDPUTER_ADV_TRAUTONIUM_ENABLE
+
+    config CARDPUTER_ADV_TRAUTONIUM_BASE_FREQ_HZ
+        int "Trautonium lowest key frequency (Hz)"
+        default 131
+        range 40 220
+        depends on CARDPUTER_ADV_TRAUTONIUM_ENABLE
+
+    config CARDPUTER_ADV_TRAUTONIUM_LEVEL_PERCENT
+        int "Trautonium synth level percent"
+        default 58
+        range 0 100
+        depends on CARDPUTER_ADV_TRAUTONIUM_ENABLE
 
 endmenu
 
