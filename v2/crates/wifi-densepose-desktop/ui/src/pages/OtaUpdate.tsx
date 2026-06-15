@@ -130,10 +130,13 @@ export function OtaUpdate() {
     setBatchNodeStates(new Map(initialStates));
 
     try {
+      const maxConcurrent = strategy === "parallel" ? ips.length : 1;
       const results = await invoke<OtaResult[]>("batch_ota_update", {
         nodeIps: ips,
         firmwarePath,
         psk: psk || null,
+        strategy,
+        maxConcurrent,
       });
       setBatchResults(results);
 

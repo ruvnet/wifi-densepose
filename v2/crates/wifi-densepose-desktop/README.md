@@ -164,7 +164,7 @@ The installer/bundle will be in `target/release/bundle/` (`.msi` on Windows, `.d
 | `Node` | ip, mac, hostname, node_id, firmware_version, chip, mesh_role, health, ... | Full node record |
 | `HealthStatus` | online, offline, degraded, unknown | Node health state |
 | `FlashSession` | port, firmware, chip, baud, progress | Active flash operation |
-| `OtaResult` | node_ip, success, previous_version, new_version, duration_ms | OTA outcome |
+| `OtaResult` | node_ip, success, previous_version, new_version, duration_ms, error | OTA outcome |
 | `WasmModule` | module_id, name, size_bytes, state, node_ip | Edge module record |
 | `ServerStatus` | running, pid, http_port, ws_port | Sensing server state |
 | `SensingUpdate` | timestamp, node_id, subcarrier_count, rssi, activity, confidence | Real-time data |
