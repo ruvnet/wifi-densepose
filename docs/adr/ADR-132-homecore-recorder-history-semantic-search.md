@@ -120,6 +120,42 @@ tested; P3 is planned.
   HOMECORE-API (ADR-130, P3); automation conditions on historical state are
   HOMECORE-automation (ADR-129, P3).
 
+## 3a. Security review (2026-06, post-ADR-154–159 sweep)
+
+A beyond-SOTA security review of `homecore-recorder` covered SQL injection, retention/purge
+correctness, fail-closed write integrity, semantic-store NaN poisoning, and PII exposure.
+
+**Confirmed clean (with evidence):**
+
+- **SQL injection — clean.** Every query in `db.rs` uses bound `?` parameters; no user- or
+  entity-influenceable value is interpolated into SQL via `format!`/concatenation. The only
+  `format!` builds the `LIKE` *pattern* string, which is itself **bound** as a parameter with
+  `ESCAPE '\\'` and `% _ \` escaping — so a metacharacter payload is matched literally. Pinned
+  by `malicious_entity_id_is_stored_literally_not_executed` (a `'; DROP TABLE states; --` state
+  value leaves the table intact and round-trips verbatim) and
+  `like_metacharacters_in_query_are_literal_not_wildcards`.
+- **NaN-index poisoning — structurally impossible.** Embeddings are SHA-256 → `i32` →
+  `f32`; an `i32`→`f32` cast is always finite (never NaN/Inf), and an all-zero-digest is
+  guarded by the `norm > 1e-10` check. Empty-index search, empty-string query, and `k=0` were
+  probed and all return `Ok(0)` with no panic. (Unlike the calibration/vitals/geo paths, no raw
+  sensor float ever reaches the index.)
+- **Fail-closed writes.** A removal event returns `Ok(None)`; semantic-index failure is logged,
+  not propagated, so it never blocks the durable SQLite write; `EntityId` parse failure falls
+  back to a sentinel rather than panicking.
+
+**Fixed (real bounding bugs):**
+
+- **Memory-DoS — `get_state_history` was unbounded.** No `LIMIT`, so a wide time window over a
+  high-frequency entity loaded an unbounded row set into memory. Now capped at
+  `MAX_HISTORY_ROWS` (1,000,000); sibling search paths were already `k`-bounded.
+- **Disk-DoS / documented-but-missing `purge`.** The README advertised `Recorder::purge`, but
+  no retention path existed → unbounded disk growth. Added a **transactional** `purge(older_than)`
+  with an **exclusive** cutoff (idempotent, no off-by-one) that deletes old `states`/`events` and
+  GCs orphaned `state_attributes` blobs (dedup-shared blobs kept until their last referrer is gone).
+
+`homecore-recorder` tests: 19 → 25 (`--no-default-features`) / 25 → 31 (`--features ruvector`),
+0 failed. Python deterministic proof unchanged (recorder is off the signal proof path).
+
 ## 4. Links
 
 - Crate: `v2/crates/homecore-recorder/` — `Cargo.toml`, `README.md`, `src/lib.rs`,
