@@ -1,11 +1,17 @@
 import { usePoseStore } from '@/stores/poseStore';
-import type { SensingFrame } from '@/types/sensing';
+import type { SensingFrame, SensingNode } from '@/types/sensing';
+
+const makeNode = (nodeId: number, rssiDbm: number, position: [number, number, number] = [0, 0, 0]): SensingNode => ({
+  node_id: nodeId,
+  rssi_dbm: rssiDbm,
+  position,
+});
 
 const makeFrame = (overrides: Partial<SensingFrame> = {}): SensingFrame => ({
   type: 'sensing_update',
   timestamp: Date.now(),
   source: 'simulated',
-  nodes: [{ node_id: 1, rssi_dbm: -45, position: [0, 0, 0] }],
+  nodes: [makeNode(1, -45)],
   features: {
     mean_rssi: -45,
     variance: 1.5,
@@ -118,6 +124,28 @@ describe('usePoseStore', () => {
       const frame = makeFrame();
       usePoseStore.getState().handleFrame(frame);
       expect(usePoseStore.getState().lastFrame).toBe(frame);
+      expect(usePoseStore.getState().lastFrame?.nodes).toHaveLength(1);
+    });
+
+    it('stores frames with zero nodes', () => {
+      const frame = makeFrame({ nodes: [] });
+      usePoseStore.getState().handleFrame(frame);
+      expect(usePoseStore.getState().lastFrame?.nodes).toEqual([]);
+    });
+
+    it('stores frames with multiple nodes', () => {
+      const frame = makeFrame({
+        nodes: [
+          makeNode(1, -41, [0, 0, 0]),
+          makeNode(2, -49, [1.5, 0, 0.5]),
+          makeNode(3, -53, [-1.5, 0, 0.5]),
+        ],
+      });
+      usePoseStore.getState().handleFrame(frame);
+
+      const nodes = usePoseStore.getState().lastFrame?.nodes;
+      expect(nodes).toHaveLength(3);
+      expect(nodes).toEqual(frame.nodes);
     });
   });
 
@@ -127,9 +155,10 @@ describe('usePoseStore', () => {
       expect(usePoseStore.getState().connectionStatus).toBe('connected');
     });
 
-    it('sets isSimulated true for simulated status', () => {
+    it('normalizes simulated status to disconnected', () => {
       usePoseStore.getState().setConnectionStatus('simulated');
-      expect(usePoseStore.getState().isSimulated).toBe(true);
+      expect(usePoseStore.getState().connectionStatus).toBe('disconnected');
+      expect(usePoseStore.getState().isSimulated).toBe(false);
     });
 
     it('sets isSimulated false for connected status', () => {
@@ -142,6 +171,34 @@ describe('usePoseStore', () => {
       usePoseStore.getState().setConnectionStatus('simulated');
       usePoseStore.getState().setConnectionStatus('disconnected');
       expect(usePoseStore.getState().isSimulated).toBe(false);
+    });
+
+    it('clears frame-derived state when disconnected', () => {
+      const frame = makeFrame({
+        nodes: [
+          makeNode(1, -41, [0, 0, 0]),
+          makeNode(2, -49, [1, 0, 0]),
+        ],
+        features: {
+          mean_rssi: -41,
+          variance: 1,
+          motion_band_power: 0.2,
+          breathing_band_power: 0.1,
+          spectral_entropy: 0.7,
+        },
+      });
+
+      usePoseStore.getState().handleFrame(frame);
+      usePoseStore.getState().setConnectionStatus('disconnected');
+
+      const state = usePoseStore.getState();
+      expect(state.lastFrame).toBeNull();
+      expect(state.features).toBeNull();
+      expect(state.classification).toBeNull();
+      expect(state.signalField).toBeNull();
+      expect(state.rssiHistory).toEqual([]);
+      expect(state.uptimeStart).toBeNull();
+      expect(state.messageCount).toBe(1);
     });
   });
 

@@ -29,6 +29,17 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 
+typedef struct {
+    bool valid;
+    uint8_t node_id;
+    uint8_t percent;
+    uint8_t flags;
+    uint8_t status;
+    uint16_t millivolts;
+    uint32_t age_ms;
+    uint32_t rx_count;
+} c6_espnow_peer_status_t;
+
 /**
  * Initialize the ESP-NOW sync module. Must be called AFTER WiFi STA is
  * connected (ESP-NOW needs the WiFi driver active).
@@ -62,6 +73,14 @@ uint32_t c6_sync_espnow_tx_count(void);
 uint32_t c6_sync_espnow_tx_fail(void);
 uint32_t c6_sync_espnow_rx_count(void);
 uint32_t c6_sync_espnow_rx_magic_match(void);
+
+/**
+ * Return the freshest non-local ESP-NOW node status heard from the mesh.
+ *
+ * Battery fields are valid when flags bit0 is set. Older firmware beacons
+ * still count as peer presence but will not carry battery details.
+ */
+bool c6_sync_espnow_get_peer_status(c6_espnow_peer_status_t *out);
 
 #ifdef __cplusplus
 }

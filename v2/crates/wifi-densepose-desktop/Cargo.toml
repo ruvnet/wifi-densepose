@@ -31,8 +31,8 @@ flume = "0.11"
 # Serial port (cross-platform)
 tokio-serial = "5.4"
 
-# HTTP client for OTA/WASM (native-tls for Windows compatibility)
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "native-tls"] }
+# HTTP client for OTA/WASM over local HTTP
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }
 
 # Crypto for OTA PSK
 sha2 = "0.10"

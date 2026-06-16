@@ -1,6 +1,7 @@
 ---
 name: ruview-rvagent
 description: Explore and prototype rvAgent + RVF integration for RuView agentic flows. Use when working on cross-cog coordination, operator-facing agents reading BFLD / pose / vitals events live, or persisting agent state alongside sensing data in the same RVF container.
+allowed-tools: Read, Grep, Glob, Bash
 ---
 
 # RuView rvAgent + RVF integration

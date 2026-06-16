@@ -42,6 +42,51 @@ python -m esptool --chip esp32s3 --port COM7 --baud 460800 \
 For 4 MB boards use `release_bins/esp32-csi-node-4mb.bin` and `release_bins/partition-table-4mb.bin`
 with `--flash_size 4MB`.
 
+### ESP32-CAM / AI Thinker profiles
+
+ESP32-CAM boards can join RuView as classic ESP32 CSI nodes. The default
+ESP32-CAM profile leaves the OV2640 camera idle; the board contributes WiFi CSI,
+edge feature, vitals, batteryless telemetry, and OTA/provision support on the
+same UDP protocol as the StickC Plus node.
+
+Use a separate node ID from the StickC Plus, for example node `2`:
+
+```bash
+cd firmware/esp32-csi-node
+./flash_esp32cam.sh /dev/ttyUSB0
+
+python provision.py --port /dev/ttyUSB0 --chip esp32 \
+  --node-id 2 \
+  --ssid "YourSSID" --password "YourPass" \
+  --target-ip 192.168.1.20 --target-port 5005
+```
+
+If flashing times out, put the ESP32-CAM in bootloader mode: hold `GPIO0` to
+GND, reset or power-cycle the board, run the flash command, then release
+`GPIO0` and reset again.
+
+For camera-assisted setup, use the dual profile. It keeps CSI UDP active and
+adds low-rate OV2640 MJPEG endpoints on the existing HTTP server at port `8032`.
+The defaults are QVGA, JPEG quality `14`, and `4` FPS to avoid crowding the CSI
+link.
+
+```bash
+cd firmware/esp32-csi-node
+./flash_esp32cam_dual.sh /dev/ttyUSB0
+
+python provision.py --port /dev/ttyUSB0 --chip esp32 \
+  --node-id 3 \
+  --ssid "YourSSID" --password "YourPass" \
+  --target-ip 192.168.1.20 --target-port 5005
+```
+
+After the node joins WiFi:
+
+- `http://<esp32cam-ip>:8032/cam` opens a simple camera page.
+- `http://<esp32cam-ip>:8032/stream` serves MJPEG.
+- `http://<esp32cam-ip>:8032/cam.jpg` captures one JPEG.
+- `http://<esp32cam-ip>:8032/cam/status` reports the camera profile.
+
 ### 1. Build (Docker -- the only reliable method)
 
 ```bash

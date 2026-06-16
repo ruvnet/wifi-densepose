@@ -1,12 +1,12 @@
 // Training Service for WiFi-DensePose UI
 // Manages training lifecycle, progress streaming, and CSI recordings.
 
-import { buildWsUrl } from '../config/api.config.js';
 import { apiService } from './api.service.js';
 
 export class TrainingService {
   constructor() {
     this.progressSocket = null;
+    this.progressPollTimer = null;
     this.listeners = {};
     this.logger = this.createLogger();
   }
@@ -42,12 +42,48 @@ export class TrainingService {
     });
   }
 
+  normalizeTrainingRequest(payload = {}) {
+    const config = payload.config || {};
+    return {
+      dataset_ids: payload.dataset_ids || [],
+      config: {
+        epochs: Number(config.epochs) || 100,
+        batch_size: Number(config.batch_size) || 32,
+        learning_rate: Number(config.learning_rate) || 3e-4,
+        early_stopping_patience: Number(config.early_stopping_patience ?? config.patience) || 15,
+        pretrained_rvf: config.pretrained_rvf || config.base_model || null,
+        lora_profile: config.lora_profile || config.lora_profile_name || null
+      }
+    };
+  }
+
+  normalizePretrainRequest(payload = {}) {
+    const config = payload.config || {};
+    return {
+      dataset_ids: payload.dataset_ids || [],
+      epochs: Number(config.epochs) || 50,
+      lr: Number(config.learning_rate) || 3e-4
+    };
+  }
+
+  normalizeLoraRequest(payload = {}) {
+    const config = payload.config || {};
+    return {
+      dataset_ids: payload.dataset_ids || [],
+      base_model_id: config.base_model_id || config.base_model || config.pretrained_rvf || '',
+      profile_name: config.profile_name || config.lora_profile_name || config.lora_profile || 'default',
+      rank: Number(config.rank) || 8,
+      epochs: Number(config.epochs) || 30
+    };
+  }
+
   // --- Training API methods ---
 
   async startTraining(config) {
     try {
-      this.logger.info('Starting training', { config });
-      const data = await apiService.post('/api/v1/train/start', config);
+      const request = this.normalizeTrainingRequest(config);
+      this.logger.info('Starting training', { request });
+      const data = await apiService.post('/api/v1/train/start', request);
       this.emit('training-started', data);
       return data;
     } catch (error) {
@@ -78,10 +114,21 @@ export class TrainingService {
     }
   }
 
+  async getRvfReadiness() {
+    try {
+      const data = await apiService.get('/api/v1/train/rvf/readiness');
+      return data;
+    } catch (error) {
+      this.logger.error('Failed to get RVF training readiness', { error: error.message });
+      throw error;
+    }
+  }
+
   async startPretraining(config) {
     try {
-      this.logger.info('Starting pretraining', { config });
-      const data = await apiService.post('/api/v1/train/pretrain', config);
+      const request = this.normalizePretrainRequest(config);
+      this.logger.info('Starting pretraining', { request });
+      const data = await apiService.post('/api/v1/train/pretrain', request);
       this.emit('training-started', data);
       return data;
     } catch (error) {
@@ -92,8 +139,9 @@ export class TrainingService {
 
   async startLoraTraining(config) {
     try {
-      this.logger.info('Starting LoRA training', { config });
-      const data = await apiService.post('/api/v1/train/lora', config);
+      const request = this.normalizeLoraRequest(config);
+      this.logger.info('Starting LoRA training', { request });
+      const data = await apiService.post('/api/v1/train/lora', request);
       this.emit('training-started', data);
       return data;
     } catch (error) {
@@ -151,49 +199,41 @@ export class TrainingService {
     }
   }
 
-  // --- WebSocket progress stream ---
+  // --- Progress stream ---
 
   connectProgressStream() {
-    if (this.progressSocket) {
-      this.logger.warn('Progress stream already connected');
-      return this.progressSocket;
+    if (this.progressPollTimer) {
+      this.logger.warn('Progress polling already connected');
+      return this.progressPollTimer;
     }
 
-    const url = buildWsUrl('/ws/train/progress');
-    this.logger.info('Connecting progress stream', { url });
+    this.logger.info('Connecting progress stream over training status polling');
+    this.emit('progress-connected', { transport: 'polling' });
 
-    const ws = new WebSocket(url);
-
-    ws.onopen = () => {
-      this.logger.info('Progress stream connected');
-      this.emit('progress-connected', {});
-    };
-
-    ws.onmessage = (event) => {
+    const poll = async () => {
       try {
-        const data = JSON.parse(event.data);
-        this.emit('progress', data);
+        const data = await this.getTrainingStatus();
+        if (data) {
+          this.emit('progress', data);
+          if (!data.active && ['completed', 'idle', 'stopped', 'error'].includes(data.status)) {
+            this.disconnectProgressStream();
+          }
+        }
       } catch (err) {
-        this.logger.warn('Failed to parse progress message', { error: err.message });
+        this.logger.warn('Progress polling failed', { error: err.message });
       }
     };
 
-    ws.onerror = (error) => {
-      this.logger.error('Progress stream error', { error });
-      this.emit('progress-error', { error });
-    };
-
-    ws.onclose = () => {
-      this.logger.info('Progress stream disconnected');
-      this.progressSocket = null;
-      this.emit('progress-disconnected', {});
-    };
-
-    this.progressSocket = ws;
-    return ws;
+    poll();
+    this.progressPollTimer = window.setInterval(poll, 750);
+    return this.progressPollTimer;
   }
 
   disconnectProgressStream() {
+    if (this.progressPollTimer) {
+      window.clearInterval(this.progressPollTimer);
+      this.progressPollTimer = null;
+    }
     if (this.progressSocket) {
       this.progressSocket.close();
       this.progressSocket = null;

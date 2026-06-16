@@ -33,6 +33,16 @@ export class SensingTab {
   _buildDOM() {
     this.container.innerHTML = `
       <h2>Live WiFi Sensing</h2>
+      <div class="page-readme">
+        <h3>Sensing README</h3>
+        <p>This page visualizes live CSI-derived signal state from the RuView sensing service.</p>
+        <ul>
+          <li>The viewport updates only from live messages or HTTP status-derived hardware frames.</li>
+          <li>RSSI, variance, motion, breathing, and spectral values stay blank until reported.</li>
+          <li>Disconnected and stale states are shown explicitly; local fallback frames are disabled.</li>
+          <li>How data is used: CSI-derived features drive the 3D field, meters, classification label, sparkline, and node panels.</li>
+        </ul>
+      </div>
 
       <!-- Data-source status banner — updated by _onStateChange -->
       <div id="sensingSourceBanner" class="sensing-source-banner sensing-source-reconnecting"
@@ -72,22 +82,22 @@ export class SensingTab {
               <div class="sensing-meter">
                 <label>Variance</label>
                 <div class="sensing-bar"><div class="sensing-bar-fill" id="barVariance"></div></div>
-                <span class="sensing-meter-val" id="valVariance">0</span>
+                <span class="sensing-meter-val" id="valVariance">--</span>
               </div>
               <div class="sensing-meter">
                 <label>Motion Band</label>
                 <div class="sensing-bar"><div class="sensing-bar-fill motion" id="barMotion"></div></div>
-                <span class="sensing-meter-val" id="valMotion">0</span>
+                <span class="sensing-meter-val" id="valMotion">--</span>
               </div>
               <div class="sensing-meter">
                 <label>Breathing Band</label>
                 <div class="sensing-bar"><div class="sensing-bar-fill breath" id="barBreath"></div></div>
-                <span class="sensing-meter-val" id="valBreath">0</span>
+                <span class="sensing-meter-val" id="valBreath">--</span>
               </div>
               <div class="sensing-meter">
                 <label>Spectral Power</label>
                 <div class="sensing-bar"><div class="sensing-bar-fill spectral" id="barSpectral"></div></div>
-                <span class="sensing-meter-val" id="valSpectral">0</span>
+                <span class="sensing-meter-val" id="valSpectral">--</span>
               </div>
             </div>
           </div>
@@ -96,11 +106,11 @@ export class SensingTab {
           <div class="sensing-card">
             <div class="sensing-card-title">Classification</div>
             <div class="sensing-classification" id="sensingClassification">
-              <div class="sensing-class-label" id="classLabel">ABSENT</div>
+              <div class="sensing-class-label" id="classLabel">UNKNOWN</div>
               <div class="sensing-confidence">
                 <label>Confidence</label>
                 <div class="sensing-bar"><div class="sensing-bar-fill confidence" id="barConfidence"></div></div>
-                <span class="sensing-meter-val" id="valConfidence">0%</span>
+                <span class="sensing-meter-val" id="valConfidence">--</span>
               </div>
             </div>
           </div>
@@ -110,9 +120,8 @@ export class SensingTab {
             <div class="sensing-card-title">About This Data</div>
             <p class="sensing-about-text">
               Metrics are computed from WiFi Channel State Information (CSI).
-              With <strong><span id="sensingNodeCount">0</span> ESP32 node(s)</strong> you get presence detection, breathing
-              estimation, and gross motion. Add <strong>3-4+ ESP32 nodes</strong>
-              around the room for spatial resolution and limb-level tracking.
+              Connected ESP32 node count is reported by the live backend. More nodes improve spatial resolution when
+              the backend provides calibrated CSI streams.
             </p>
           </div>
 
@@ -127,10 +136,10 @@ export class SensingTab {
             <div class="sensing-card-title">Details</div>
             <div class="sensing-details">
               <div class="sensing-detail-row">
-                <span>Dominant Freq</span><span id="valDomFreq">0 Hz</span>
+                <span>Dominant Freq</span><span id="valDomFreq">--</span>
               </div>
               <div class="sensing-detail-row">
-                <span>Change Points</span><span id="valChangePoints">0</span>
+                <span>Change Points</span><span id="valChangePoints">--</span>
               </div>
               <div class="sensing-detail-row">
                 <span>Sample Rate</span><span id="valSampleRate">--</span>
@@ -150,15 +159,26 @@ export class SensingTab {
       return;
     }
 
-    return new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-      script.onload = () => {
-        this._threeLoaded = true;
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (loaded) => {
+        if (settled) return;
+        settled = true;
+        this._threeLoaded = loaded;
         resolve();
       };
-      script.onerror = () => reject(new Error('Failed to load Three.js'));
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
+      script.onload = () => finish(true);
+      script.onerror = () => {
+        console.warn('[SensingTab] Three.js CDN unavailable; using canvas renderer');
+        finish(false);
+      };
       document.head.appendChild(script);
+      setTimeout(() => {
+        console.warn('[SensingTab] Three.js load timed out; using canvas renderer');
+        finish(false);
+      }, 2500);
     });
   }
 
@@ -172,13 +192,17 @@ export class SensingTab {
     viewport.innerHTML = '';
 
     try {
-      this.splatRenderer = new GaussianSplatRenderer(viewport, {
+      const Renderer = window.THREE ? GaussianSplatRenderer : CanvasSensingRenderer;
+      this.splatRenderer = new Renderer(viewport, {
         width: viewport.clientWidth,
         height: viewport.clientHeight || 500,
       });
     } catch (e) {
       console.error('[SensingTab] Failed to init splat renderer:', e);
-      viewport.innerHTML = '<div class="sensing-loading">3D rendering unavailable</div>';
+      this.splatRenderer = new CanvasSensingRenderer(viewport, {
+        width: viewport.clientWidth,
+        height: viewport.clientHeight || 500,
+      });
     }
   }
 
@@ -210,15 +234,22 @@ export class SensingTab {
     const banner = this.container.querySelector('#sensingSourceBanner');
 
     if (dot && text) {
+      const dataSource = sensingService.dataSource;
       const stateLabels = {
         disconnected: 'Disconnected',
         connecting:   'Connecting...',
         connected:    'Connected',
         reconnecting: 'Reconnecting...',
-        simulated:    'Simulated',
       };
-      dot.className = 'sensing-dot ' + state;
-      text.textContent = stateLabels[state] || state;
+      const sourceLabels = {
+        live: 'Live',
+        stale: 'Stale',
+      };
+      const displayState = dataSource === 'live' ? 'connected'
+        : dataSource === 'stale' ? 'reconnecting'
+        : state;
+      dot.className = 'sensing-dot ' + displayState;
+      text.textContent = sourceLabels[dataSource] || stateLabels[state] || state;
     }
 
     if (banner) {
@@ -226,9 +257,8 @@ export class SensingTab {
       const dataSource = sensingService.dataSource;
       const bannerConfig = {
         'live':              { text: 'LIVE \u2014 ESP32 HARDWARE',           cls: 'sensing-source-live' },
-        'server-simulated':  { text: 'SIMULATED \u2014 NO HARDWARE',        cls: 'sensing-source-server-sim' },
+        'stale':             { text: 'STALE \u2014 FEATURE STATE',           cls: 'sensing-source-stale' },
         'reconnecting':      { text: 'RECONNECTING...',                    cls: 'sensing-source-reconnecting' },
-        'simulated':         { text: 'OFFLINE \u2014 CLIENT SIMULATION',    cls: 'sensing-source-simulated' },
       };
       const cfg = bannerConfig[dataSource] || bannerConfig.reconnecting;
       banner.textContent = cfg.text;
@@ -248,31 +278,35 @@ export class SensingTab {
     if (countEl) countEl.textContent = String(nodeCount);
 
     // RSSI
-    this._setText('sensingRssi', `${(f.mean_rssi || -80).toFixed(1)} dBm`);
-    this._setText('sensingSource', data.source || '');
+    const meanRssi = this._finiteNumber(f.mean_rssi);
+    this._setText('sensingRssi', meanRssi == null ? '-- dBm' : `${meanRssi.toFixed(1)} dBm`);
+    this._setText('sensingSource', this._sourceLabel(data.source));
 
     // Bars (scale to 0-100%)
-    this._setBar('barVariance', f.variance, 10, 'valVariance', f.variance);
-    this._setBar('barMotion', f.motion_band_power, 0.5, 'valMotion', f.motion_band_power);
-    this._setBar('barBreath', f.breathing_band_power, 0.3, 'valBreath', f.breathing_band_power);
-    this._setBar('barSpectral', f.spectral_power, 2.0, 'valSpectral', f.spectral_power);
+    this._setBar('barVariance', f.variance, 10, 'valVariance', this._formatMetric(f.variance));
+    this._setBar('barMotion', f.motion_band_power, 0.5, 'valMotion', this._formatMetric(f.motion_band_power));
+    this._setBar('barBreath', f.breathing_band_power, 0.3, 'valBreath', this._formatMetric(f.breathing_band_power));
+    this._setBar('barSpectral', f.spectral_power, 2.0, 'valSpectral', this._formatMetric(f.spectral_power));
 
     // Classification
     const label = this.container.querySelector('#classLabel');
     if (label) {
-      const level = (c.motion_level || 'absent').toUpperCase();
+      const levelRaw = typeof c.motion_level === 'string' && c.motion_level ? c.motion_level : 'unknown';
+      const level = levelRaw.toUpperCase();
       label.textContent = level;
-      label.className = 'sensing-class-label ' + (c.motion_level || 'absent');
+      label.className = 'sensing-class-label ' + levelRaw;
     }
 
-    const confPct = ((c.confidence || 0) * 100).toFixed(0);
-    this._setBar('barConfidence', c.confidence, 1.0, 'valConfidence', confPct + '%');
+    const confidence = this._finiteNumber(c.confidence);
+    const confPct = confidence == null ? '--' : `${(confidence * 100).toFixed(0)}%`;
+    this._setBar('barConfidence', confidence, 1.0, 'valConfidence', confPct);
 
     // Details
-    this._setText('valDomFreq', (f.dominant_freq_hz || 0).toFixed(3) + ' Hz');
-    this._setText('valChangePoints', String(f.change_points || 0));
-    const srcLabel = (data.source === 'simulated' || data.source === 'simulate') ? 'sim' : data.source || 'live';
-    this._setText('valSampleRate', srcLabel);
+    const dominantFreq = this._finiteNumber(f.dominant_freq_hz);
+    const changePoints = this._finiteNumber(f.change_points);
+    this._setText('valDomFreq', dominantFreq == null ? '--' : `${dominantFreq.toFixed(3)} Hz`);
+    this._setText('valChangePoints', changePoints == null ? '--' : String(changePoints));
+    this._setText('valSampleRate', this._sourceLabel(data.source));
 
     // Sparkline
     this._drawSparkline();
@@ -286,13 +320,29 @@ export class SensingTab {
   _setBar(barId, value, maxVal, valId, displayVal) {
     const bar = this.container.querySelector('#' + barId);
     if (bar) {
-      const pct = Math.min(100, Math.max(0, ((value || 0) / maxVal) * 100));
+      const numericValue = this._finiteNumber(value) ?? 0;
+      const pct = Math.min(100, Math.max(0, (numericValue / maxVal) * 100));
       bar.style.width = pct + '%';
     }
     if (valId && displayVal != null) {
       const el = this.container.querySelector('#' + valId);
       if (el) el.textContent = typeof displayVal === 'number' ? displayVal.toFixed(3) : displayVal;
     }
+  }
+
+  _finiteNumber(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  _formatMetric(value) {
+    const number = this._finiteNumber(value);
+    return number == null ? '--' : number.toFixed(3);
+  }
+
+  _sourceLabel(source) {
+    if (!source) return '--';
+    return source;
   }
 
   _drawSparkline() {
@@ -398,5 +448,156 @@ export class SensingTab {
     if (this._resizeObserver) this._resizeObserver.disconnect();
     if (this.splatRenderer) this.splatRenderer.dispose();
     sensingService.stop();
+  }
+}
+
+class CanvasSensingRenderer {
+  constructor(container, opts = {}) {
+    this.container = container;
+    this.canvas = document.createElement('canvas');
+    this.ctx = this.canvas.getContext('2d');
+    this.width = opts.width || container.clientWidth || 800;
+    this.height = opts.height || 500;
+    this._lastData = null;
+    this._animFrame = null;
+    this.resize(this.width, this.height);
+    container.appendChild(this.canvas);
+    this._animate();
+  }
+
+  update(data) {
+    this._lastData = data;
+  }
+
+  resize(width, height) {
+    this.width = Math.max(240, Math.floor(width || this.container.clientWidth || 800));
+    this.height = Math.max(240, Math.floor(height || this.container.clientHeight || 500));
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    this.canvas.width = Math.floor(this.width * dpr);
+    this.canvas.height = Math.floor(this.height * dpr);
+    this.canvas.style.width = `${this.width}px`;
+    this.canvas.style.height = `${this.height}px`;
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  dispose() {
+    if (this._animFrame) cancelAnimationFrame(this._animFrame);
+    if (this.canvas.parentNode) this.canvas.parentNode.removeChild(this.canvas);
+  }
+
+  _animate() {
+    this._animFrame = requestAnimationFrame(() => this._animate());
+    this._draw();
+  }
+
+  _draw() {
+    const ctx = this.ctx;
+    const data = this._lastData;
+    ctx.clearRect(0, 0, this.width, this.height);
+    this._drawBackground(ctx);
+    this._drawSignalField(ctx, data);
+    this._drawNodes(ctx, data);
+    this._drawPresence(ctx, data);
+    this._drawOverlay(ctx, data);
+  }
+
+  _drawBackground(ctx) {
+    const gradient = ctx.createLinearGradient(0, 0, this.width, this.height);
+    gradient.addColorStop(0, '#071015');
+    gradient.addColorStop(1, '#101421');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, this.width, this.height);
+
+    ctx.strokeStyle = 'rgba(50, 184, 198, 0.14)';
+    ctx.lineWidth = 1;
+    const grid = 10;
+    for (let i = 0; i <= grid; i++) {
+      const x = (i / grid) * this.width;
+      const y = (i / grid) * this.height;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, this.height);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(this.width, y);
+      ctx.stroke();
+    }
+  }
+
+  _drawSignalField(ctx, data) {
+    const values = data?.signal_field?.values;
+    const size = Array.isArray(data?.signal_field?.grid_size)
+      ? data.signal_field.grid_size[0]
+      : 20;
+    if (!Array.isArray(values) || values.length === 0) return;
+
+    const cellW = this.width / size;
+    const cellH = this.height / size;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const value = Math.max(0, Math.min(1, Number(values[y * size + x]) || 0));
+        const hue = 205 - value * 190;
+        const alpha = 0.18 + value * 0.62;
+        ctx.fillStyle = `hsla(${hue}, 90%, ${32 + value * 34}%, ${alpha})`;
+        ctx.fillRect(x * cellW, y * cellH, cellW + 1, cellH + 1);
+      }
+    }
+  }
+
+  _drawNodes(ctx, data) {
+    const nodes = Array.isArray(data?.nodes) ? data.nodes : [];
+    const colors = ['#32b8c6', '#ff8a3d', '#35d88f', '#d96cff'];
+    nodes.forEach((node, index) => {
+      const point = this._roomToCanvas(node.position || [0, 0, 0]);
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 9, 0, Math.PI * 2);
+      ctx.fillStyle = colors[index % colors.length];
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      ctx.stroke();
+      ctx.fillStyle = '#f5f7fb';
+      ctx.font = '11px sans-serif';
+      ctx.fillText(`Node ${node.node_id}`, point.x + 12, point.y + 4);
+    });
+  }
+
+  _drawPresence(ctx, data) {
+    if (!data?.classification?.presence) return;
+    const confidence = Math.max(0, Math.min(1, Number(data.classification.confidence) || 0));
+    const motion = Math.max(0, Math.min(1, Number(data.features?.motion_band_power) || 0));
+    const pulse = 0.7 + Math.sin(Date.now() * 0.006) * 0.18;
+    const radius = (52 + motion * 80) * pulse;
+    const x = this.width * (0.5 + Math.sin(Date.now() * 0.00045) * 0.11);
+    const y = this.height * (0.52 + Math.cos(Date.now() * 0.00033) * 0.08);
+    const gradient = ctx.createRadialGradient(x, y, 4, x, y, radius);
+    gradient.addColorStop(0, `rgba(255, 80, 62, ${0.35 + confidence * 0.35})`);
+    gradient.addColorStop(0.5, `rgba(53, 216, 143, ${0.18 + confidence * 0.22})`);
+    gradient.addColorStop(1, 'rgba(50, 184, 198, 0)');
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  _drawOverlay(ctx, data) {
+    const label = data
+      ? `${(data.classification?.motion_level || 'live').toUpperCase()}  ${(data.features?.mean_rssi ?? 0).toFixed(0)} dBm`
+      : 'WAITING FOR LIVE CSI';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.42)';
+    ctx.fillRect(14, 14, 220, 34);
+    ctx.fillStyle = '#e8f9fb';
+    ctx.font = '13px sans-serif';
+    ctx.fillText(label, 24, 36);
+  }
+
+  _roomToCanvas(position) {
+    const x = Array.isArray(position) ? Number(position[0]) || 0 : 0;
+    const z = Array.isArray(position) ? Number(position[2]) || 0 : 0;
+    return {
+      x: this.width * (0.5 + x / 20),
+      y: this.height * (0.5 + z / 20),
+    };
   }
 }

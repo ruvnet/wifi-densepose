@@ -27,6 +27,7 @@
 /* ---- Magic numbers ---- */
 #define EDGE_VITALS_MAGIC     0xC5110002  /**< Vitals packet magic. */
 #define EDGE_COMPRESSED_MAGIC 0xC5110005  /**< Compressed frame magic (was 0xC5110003, reassigned for ADR-069). */
+#define EDGE_BATTERY_MAGIC    0xC5110008  /**< Battery status packet magic. */
 
 /* ---- Buffer sizes ---- */
 #define EDGE_RING_SLOTS       16    /**< SPSC ring buffer slots (power of 2). */
@@ -196,6 +197,20 @@ typedef struct __attribute__((packed)) {
 } edge_fused_vitals_pkt_t;
 
 _Static_assert(sizeof(edge_fused_vitals_pkt_t) == 48, "fused vitals must be 48 bytes");
+
+/* ---- Cardputer battery status packet (16 bytes, wire format) ---- */
+typedef struct __attribute__((packed)) {
+    uint32_t magic;          /**< EDGE_BATTERY_MAGIC = 0xC5110008. */
+    uint8_t  node_id;
+    uint8_t  percent;        /**< 0-100 when valid, 255 when unknown. */
+    uint8_t  flags;          /**< Bit0=valid, Bit1=charging. */
+    uint8_t  status;         /**< battery_power_status_t value. */
+    uint16_t millivolts;     /**< Pack voltage in mV when valid. */
+    uint16_t reserved;
+    uint32_t timestamp_ms;
+} edge_battery_pkt_t;
+
+_Static_assert(sizeof(edge_battery_pkt_t) == 16, "battery packet must be 16 bytes");
 
 /* ---- Edge configuration (from NVS) ---- */
 typedef struct {

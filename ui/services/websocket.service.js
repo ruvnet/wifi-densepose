@@ -1,7 +1,6 @@
 // WebSocket Service for WiFi-DensePose UI
 
 import { API_CONFIG, buildWsUrl } from '../config/api.config.js';
-import { backendDetector } from '../utils/backend-detector.js';
 
 export class WebSocketService {
   constructor() {
@@ -38,19 +37,8 @@ export class WebSocketService {
   async connect(endpoint, params = {}, handlers = {}) {
     this.logger.debug('Attempting to connect to WebSocket', { endpoint, params });
     
-    // Determine if we should use mock WebSockets
-    const useMock = await backendDetector.shouldUseMockServer();
-    
-    let url;
-    if (useMock) {
-      // Use mock WebSocket URL (served from same origin as UI)
-      url = buildWsUrl(endpoint, params).replace('localhost:8000', window.location.host);
-      this.logger.info('Using mock WebSocket server', { url });
-    } else {
-      // Use real backend WebSocket URL
-      url = buildWsUrl(endpoint, params);
-      this.logger.info('Using real backend WebSocket server', { url });
-    }
+    const url = buildWsUrl(endpoint, params);
+    this.logger.info('Using real backend WebSocket server', { url });
     
     // Check if already connected
     if (this.connections.has(url)) {

@@ -105,7 +105,7 @@ body {
   border-radius: 50%;
   display: inline-block;
 }
-.dot--demo { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+.dot--offline { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
 .dot--live { background: var(--green-glow); box-shadow: 0 0 6px var(--green-glow); animation: pulse-dot 2s infinite; }
 
 @keyframes pulse-dot {
@@ -195,6 +195,14 @@ body {
   margin-bottom: 18px;
 }
 .vital-row:last-child { margin-bottom: 0; }
+
+.panel-note {
+  margin: -2px 0 14px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  letter-spacing: 0.4px;
+}
 
 .vital-icon {
   font-size: 20px;

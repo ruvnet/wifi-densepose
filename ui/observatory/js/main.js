@@ -11,7 +11,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-import { DemoDataGenerator } from './demo-data.js';
 import { NebulaBackground } from './nebula-background.js';
 import { PostProcessing } from './post-processing.js';
 import { FigurePool, SKELETON_PAIRS } from './figure-pool.js';
@@ -30,6 +29,12 @@ const C = {
   redHeart:   0xff4060,
   bgDeep:     0x080c14,
 };
+
+const WS_PORT_BY_HTTP_PORT = {
+  '3000': '3001',
+  '8080': '8765',
+};
+const WS_CONNECT_TIMEOUT_MS = 1400;
 
 // SCENARIO_NAMES, DEFAULTS, SETTINGS_VERSION, PRESETS imported from hud-controller.js
 
@@ -89,14 +94,11 @@ class Observatory {
 
     this._clock = new THREE.Clock();
 
-    // Data
-    this._demoData = new DemoDataGenerator();
-    this._demoData.setCycleDuration(this.settings.cycle || 30);
-    if (this.settings.scenario && this.settings.scenario !== 'auto') {
-      this._demoData.setScenario(this.settings.scenario);
-    }
+    // Data: live-only. Do not fabricate poses, vitals, RSSI, or presence.
     this._currentData = null;
     this._currentScenario = null;
+    this._focusedNodeId = null;
+    this._livePaused = false;
 
     // Build scene
     this._setupLighting();
@@ -130,6 +132,9 @@ class Observatory {
     // WebSocket for live data — always try auto-detect on startup
     this._ws = null;
     this._liveData = null;
+    this._httpPollTimer = null;
+    this._httpFallbackBase = null;
+    this._connectSeq = 0;
     this._autoDetectLive();
 
     // Input
@@ -400,15 +405,21 @@ class Observatory {
           this._autopilot = !this._autopilot;
           this._controls.enabled = !this._autopilot;
           break;
-        case 'd': this._demoData.cycleScenario(); break;
+        case 'd':
+          this._cycleLiveNode();
+          break;
         case 'f':
           this._showFps = !this._showFps;
           document.getElementById('fps-counter').style.display = this._showFps ? 'block' : 'none';
           break;
+        case 'r':
+          this._autoDetectLive();
+          break;
         case 's': this._hud.toggleSettings(); break;
         case ' ':
           e.preventDefault();
-          this._demoData.paused = !this._demoData.paused;
+          this._livePaused = !this._livePaused;
+          this._hud.updatePauseBadge(this._livePaused);
           break;
       }
     });
@@ -436,64 +447,382 @@ class Observatory {
   // ---- WebSocket live data ----
 
   _autoDetectLive() {
-    // Probe sensing server health on same origin, then common ports
+    const connectSeq = ++this._connectSeq;
+    this._clearHttpPolling();
+    this._disconnectWS();
+
+    // Probe sensing server health on same origin, then common ports.
+    // For each base, try the low-latency WebSocket first. If it cannot open,
+    // fall through to HTTP status polling. If neither path exists, keep the
+    // local canvas visible with empty live readouts.
     const host = window.location.hostname || 'localhost';
     const candidates = [
       window.location.origin,                   // same origin (e.g. :3000)
+      `http://${host}:3001`,                     // Docker / desktop WS stream
       `http://${host}:8765`,                     // default WS port
       `http://${host}:3000`,                     // default HTTP port
+      `http://${host}:8080`,                     // Python sensing UI
     ];
-    // Deduplicate
     const unique = [...new Set(candidates)];
 
-    const tryNext = (i) => {
+    const tryNext = async (i) => {
+      if (connectSeq !== this._connectSeq) return;
       if (i >= unique.length) {
-        console.log('[Observatory] No sensing server detected, using demo mode');
+        console.log('[Observatory] No sensing server detected; live-only mode is waiting');
+        this._enterCanvasFallback();
         return;
       }
       const base = unique[i];
-      fetch(`${base}/health`, { signal: AbortSignal.timeout(1500) })
-        .then(r => r.ok ? r.json() : Promise.reject())
-        .then(data => {
-          if (data && data.status === 'ok') {
-            const wsProto = base.startsWith('https') ? 'wss:' : 'ws:';
-            const urlObj = new URL(base);
-            const wsUrl = `${wsProto}//${urlObj.host}/ws/sensing`;
-            console.log('[Observatory] Sensing server detected at', base, '→', wsUrl);
-            this.settings.dataSource = 'ws';
-            this.settings.wsUrl = wsUrl;
-            this._connectWS(wsUrl);
-          } else {
-            tryNext(i + 1);
-          }
-        })
-        .catch(() => tryNext(i + 1));
+
+      let health = null;
+      try {
+        const resp = await fetch(`${base}/health`, { signal: AbortSignal.timeout(1500) });
+        if (resp.ok) health = await resp.json();
+      } catch {}
+
+      const httpAvailable = Boolean(
+        health && (health.ok === true || ['ok', 'alive', 'healthy'].includes(health.status))
+      );
+      const wsUrls = this._wsUrlsForBase(base);
+      for (const wsUrl of wsUrls) {
+        const connected = await this._connectWS(wsUrl, {
+          fallbackBase: httpAvailable ? base : null,
+          timeoutMs: WS_CONNECT_TIMEOUT_MS,
+        });
+        if (connectSeq !== this._connectSeq || connected) return;
+      }
+
+      if (httpAvailable) {
+        console.log('[Observatory] HTTP API detected at', base, 'polling live status');
+        this._startHttpPolling(base);
+        return;
+      }
+
+      tryNext(i + 1);
     };
     tryNext(0);
   }
 
-  _connectWS(url) {
-    this._disconnectWS();
+  _defaultWsUrl() {
+    return this._wsUrlsForBase(window.location.origin)[0];
+  }
+
+  _wsUrlsForBase(base) {
     try {
-      this._ws = new WebSocket(url);
-      this._ws.onopen = () => {
-        console.log('[Observatory] WebSocket connected');
-        this._hud.updateSourceBadge('ws', this._ws);
+      const urlObj = new URL(base);
+      const wsProto = urlObj.protocol === 'https:' ? 'wss:' : 'ws:';
+      const urls = [];
+      const mappedPort = WS_PORT_BY_HTTP_PORT[urlObj.port];
+      if (mappedPort) urls.push(`${wsProto}//${urlObj.hostname}:${mappedPort}/ws/sensing`);
+      urls.push(`${wsProto}//${urlObj.host}/ws/sensing`);
+      return [...new Set(urls)];
+    } catch {
+      return ['ws://localhost:3001/ws/sensing'];
+    }
+  }
+
+  _connectWS(url, { fallbackBase = null, timeoutMs = 0 } = {}) {
+    this._disconnectWS();
+    return new Promise((resolve) => {
+      let opened = false;
+      let settled = false;
+      let timeout = null;
+      const settle = (ok) => {
+        if (settled) return;
+        settled = true;
+        if (timeout) clearTimeout(timeout);
+        resolve(ok);
       };
-      this._ws.onmessage = (evt) => { try { this._liveData = JSON.parse(evt.data); } catch {} };
-      this._ws.onclose = () => {
-        console.log('[Observatory] WebSocket closed, falling back to demo');
-        this._ws = null;
-        this.settings.dataSource = 'demo';
-        this._hud.updateSourceBadge('demo', null);
-      };
-      this._ws.onerror = () => {};
-    } catch {}
+
+      try {
+        const ws = new WebSocket(url);
+        this._ws = ws;
+        ws.onopen = () => {
+          if (this._ws !== ws) return;
+          console.log('[Observatory] WebSocket connected');
+          opened = true;
+          this._clearHttpPolling();
+          this._httpFallbackBase = fallbackBase;
+          this.settings.dataSource = 'ws';
+          this.settings.wsUrl = url;
+          const dsSel = document.getElementById('opt-data-source');
+          if (dsSel) dsSel.value = 'ws';
+          const wsInput = document.getElementById('opt-ws-url');
+          if (wsInput) wsInput.value = url;
+          this._hud.updateSourceBadge('ws', ws);
+          settle(true);
+        };
+        ws.onmessage = (evt) => {
+          if (this._ws !== ws) return;
+          try { this._liveData = JSON.parse(evt.data); } catch {}
+        };
+        ws.onclose = () => {
+          console.log('[Observatory] WebSocket closed');
+          if (this._ws !== ws) {
+            if (!opened) settle(false);
+            return;
+          }
+          this._ws = null;
+          if (!opened) {
+            settle(false);
+            return;
+          }
+          if (this._httpFallbackBase) {
+            console.log('[Observatory] Falling back to HTTP status polling at', this._httpFallbackBase);
+            this._startHttpPolling(this._httpFallbackBase);
+          } else {
+            this._enterCanvasFallback();
+          }
+        };
+        ws.onerror = () => {
+          if (!opened) {
+            settle(false);
+            if (this._ws === ws) this._ws = null;
+            try { ws.close(); } catch {}
+          }
+        };
+        if (timeoutMs > 0) {
+          timeout = setTimeout(() => {
+            if (!opened) {
+              settle(false);
+              if (this._ws === ws) {
+                this._ws = null;
+                try { ws.close(); } catch {}
+              }
+            }
+          }, timeoutMs);
+        }
+      } catch {
+        settle(false);
+      }
+    });
   }
 
   _disconnectWS() {
-    if (this._ws) { this._ws.close(); this._ws = null; }
+    if (this._ws) {
+      const ws = this._ws;
+      this._ws = null;
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onclose = null;
+      ws.onerror = null;
+      try { ws.close(); } catch {}
+    }
     this._liveData = null;
+  }
+
+  _clearHttpPolling() {
+    if (this._httpPollTimer) {
+      clearInterval(this._httpPollTimer);
+      this._httpPollTimer = null;
+    }
+  }
+
+  _enterCanvasFallback() {
+    this._disconnectWS();
+    this._clearHttpPolling();
+    this.settings.dataSource = 'canvas';
+    this._liveData = null;
+    this._currentData = null;
+    const dsSel = document.getElementById('opt-data-source');
+    if (dsSel) dsSel.value = 'canvas';
+    this._hud.updateSourceBadge('canvas', null);
+  }
+
+  _startHttpPolling(base) {
+    this._disconnectWS();
+    this._clearHttpPolling();
+    this.settings.dataSource = 'http';
+    this.settings.apiBase = base;
+    const dsSel = document.getElementById('opt-data-source');
+    if (dsSel) dsSel.value = 'http';
+    const poll = () => {
+      fetch(`${base}/api/v1/cardputer/status`, { cache: 'no-store' })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(status => {
+          if (!this._livePaused) {
+            this._liveData = this._statusToFrame(status);
+          }
+          this._hud.updateSourceBadge(status.live ? 'http' : 'offline', null);
+        })
+        .catch(() => {
+          this._liveData = null;
+          this._currentData = null;
+          this._hud.updateSourceBadge('offline', null);
+        });
+    };
+    poll();
+    this._httpPollTimer = setInterval(poll, 1000);
+  }
+
+  _statusToFrame(status) {
+    const nodes = Array.isArray(status?.nodes) ? status.nodes : [];
+    const liveNodes = nodes.filter(n => n.live);
+    const selected = this._focusedNodeId
+      ? nodes.find(n => Number(n.node_id) === this._focusedNodeId)
+      : null;
+    const primary = selected || liveNodes[0] || nodes[0] || {};
+    this._focusedNodeId = Number.isFinite(Number(primary.node_id)) ? Number(primary.node_id) : this._focusedNodeId;
+    const featureState = primary.feature_state || status?.feature_state || {};
+    const edgeVitals = primary.edge_vitals || status?.edge_vitals || {};
+    const edgeFeature = primary.edge_feature || status?.edge_feature || {};
+    const battery = primary.battery || status?.battery || null;
+    const nodeProfiles = nodes.map((node, index) => this._nodeToProfile(node, index, nodes.length));
+    const primaryProfile = this._nodeToProfile(primary, 0, Math.max(nodes.length, 1));
+    const rssi = Number.isFinite(primary.rssi_dbm)
+      ? primary.rssi_dbm
+      : (Number.isFinite(edgeVitals.rssi_dbm) ? edgeVitals.rssi_dbm : null);
+    const presenceScore = Number(featureState.presence_score ?? edgeVitals.presence_score ?? 0);
+    const motionScore = Number(featureState.motion_score ?? edgeVitals.motion_energy ?? 0);
+    const presenceNorm = this._clamp01(Number(edgeFeature.presence_norm ?? primaryProfile.presenceNorm ?? presenceScore / 10));
+    const motionNorm = this._clamp01(Number(edgeFeature.motion_norm ?? primaryProfile.motionNorm ?? motionScore));
+    const breathingNorm = this._clamp01(Number(edgeFeature.breathing_norm ?? primaryProfile.breathingNorm ?? 0));
+    const heartbeatNorm = this._clamp01(Number(edgeFeature.heartbeat_norm ?? featureState.heartbeat_conf ?? 0.8));
+    const varianceNorm = this._clamp01(Number(edgeFeature.phase_variance_norm ?? featureState.node_coherence ?? 0.2));
+    const presence = Boolean(status?.live && (featureState.presence || edgeVitals.presence || presenceNorm >= 0.25));
+    const estimatedPersons = this._estimatePersonCount(status, presence, nodes, edgeVitals);
+    const motionLevel = !presence ? 'absent' : motionNorm > 0.55 ? 'active' : 'present_still';
+    const features = {
+      mean_rssi: rssi,
+      variance: varianceNorm * 5,
+      motion_band_power: motionNorm,
+      breathing_band_power: breathingNorm,
+      spectral_power: Math.max(0.08, Math.max(motionNorm, breathingNorm, heartbeatNorm, varianceNorm) * 0.5),
+    };
+    const classification = {
+      presence,
+      confidence: Math.max(presenceNorm, motionNorm * 0.7),
+      motion_level: motionLevel,
+      fall_detected: Boolean(edgeVitals.fall),
+    };
+    const persons = this._estimatePersons(estimatedPersons, primaryProfile, nodeProfiles, classification);
+    return {
+      source: 'live-http',
+      scenario: primary.node_id != null ? `live_node_${primary.node_id}` : 'live',
+      focused_node_id: primary.node_id ?? null,
+      nodes,
+      persons,
+      estimated_persons: estimatedPersons,
+      classification,
+      features,
+      signal_field: this._generateSignalField(features, classification, nodeProfiles),
+      vital_signs: {
+        heart_rate_bpm: Number(featureState.heartbeat_bpm || edgeVitals.heartbeat_bpm || 0),
+        breathing_rate_bpm: Number(featureState.respiration_bpm || edgeVitals.breathing_bpm || 0),
+      },
+      battery,
+    };
+  }
+
+  _nodeToProfile(node, index, total) {
+    const featureState = node?.feature_state || {};
+    const edgeVitals = node?.edge_vitals || {};
+    const edgeFeature = node?.edge_feature || {};
+    const features = Array.isArray(edgeFeature.features) ? edgeFeature.features : [];
+    const nodeId = Number.isFinite(Number(node?.node_id)) ? Number(node.node_id) : index + 1;
+    const angle = total > 1 ? (index / total) * Math.PI * 2 : ((nodeId % 8) / 8) * Math.PI * 2;
+    const radius = total > 1 ? 2.7 : 1.4;
+    const presenceScore = Number(featureState.presence_score ?? edgeVitals.presence_score ?? 0);
+    const motionScore = Number(featureState.motion_score ?? edgeVitals.motion_energy ?? 0);
+    return {
+      nodeId,
+      position: [Math.cos(angle) * radius, 0, Math.sin(angle) * radius],
+      presenceNorm: this._clamp01(Number(edgeFeature.presence_norm ?? features[0] ?? presenceScore / 10)),
+      motionNorm: this._clamp01(Number(edgeFeature.motion_norm ?? features[1] ?? motionScore)),
+      breathingNorm: this._clamp01(Number(edgeFeature.breathing_norm ?? features[2] ?? 0)),
+      varianceNorm: this._clamp01(Number(edgeFeature.phase_variance_norm ?? features[4] ?? featureState.node_coherence ?? 0.2)),
+      rssi: Number.isFinite(Number(node?.rssi_dbm)) ? Number(node.rssi_dbm) : Number(edgeVitals.rssi_dbm ?? -80),
+      live: Boolean(node?.live),
+    };
+  }
+
+  _estimatePersonCount(status, presence, nodes, edgeVitals) {
+    if (!presence) return 0;
+    const counts = nodes
+      .map(node => node.edge_vitals)
+      .filter(vitals => vitals?.presence)
+      .map(vitals => Number(vitals.n_persons))
+      .filter(Number.isFinite);
+    const edgeCount = Number(edgeVitals?.n_persons);
+    if (edgeVitals?.presence && Number.isFinite(edgeCount) && edgeCount > 0) counts.push(edgeCount);
+    if (counts.length === 0) return 1;
+    return Math.max(1, Math.min(4, Math.max(...counts)));
+  }
+
+  _estimatePersons(count, primaryProfile, nodeProfiles, classification) {
+    if (count <= 0) return [];
+    const baseMotion = this._clamp01(classification.motion_level === 'active' ? primaryProfile.motionNorm : primaryProfile.motionNorm * 0.6);
+    return Array.from({ length: count }, (_, index) => {
+      const profile = nodeProfiles[index % Math.max(nodeProfiles.length, 1)] || primaryProfile;
+      const angle = (index / Math.max(count, 1)) * Math.PI * 2 + Date.now() * 0.00012;
+      const ring = count > 1 ? 1.0 + index * 0.35 : 0;
+      return {
+        id: `live-${profile.nodeId}-${index}`,
+        source: 'hardware_inference',
+        position: [
+          profile.position[0] * 0.35 + Math.cos(angle) * ring,
+          0,
+          profile.position[2] * 0.35 + Math.sin(angle) * ring,
+        ],
+        pose: classification.motion_level === 'active' ? 'walking' : 'standing',
+        facing: angle + Math.PI,
+        motion_score: 18 + baseMotion * 82,
+      };
+    });
+  }
+
+  _generateSignalField(features, classification, nodeProfiles) {
+    const gridSize = 20;
+    const values = [];
+    const t = Date.now() / 1000;
+    const motion = this._clamp01(features.motion_band_power);
+    const breathing = this._clamp01(features.breathing_band_power);
+    const confidence = this._clamp01(classification.confidence);
+    const bodyX = Math.sin(t * 0.35) * 1.5;
+    const bodyZ = Math.cos(t * 0.27) * 1.3;
+
+    for (let z = 0; z < gridSize; z++) {
+      for (let x = 0; x < gridSize; x++) {
+        const wx = (x - gridSize / 2) / 2;
+        const wz = (z - gridSize / 2) / 2;
+        let value = 0.04 + Math.max(0, 1 - Math.hypot(wx, wz) / 7) * 0.15;
+        for (const node of nodeProfiles) {
+          const dist = Math.hypot(wx - node.position[0], wz - node.position[2]);
+          const nodeEnergy = this._clamp01(node.presenceNorm * 0.4 + node.motionNorm * 0.4 + node.varianceNorm * 0.2);
+          value += Math.exp(-(dist * dist) / 5) * (0.08 + nodeEnergy * 0.28);
+        }
+        if (classification.presence) {
+          const distBody = Math.hypot(wx - bodyX, wz - bodyZ);
+          value += Math.exp(-(distBody * distBody) / 3.6) * (0.22 + motion * 0.48 + confidence * 0.18);
+          const breathRadius = 1.4 + Math.sin(t * 2.0) * 0.3;
+          value += Math.exp(-Math.pow(distBody - breathRadius, 2) / 0.55) * breathing * 0.35;
+        }
+        values.push(this._clamp01(value));
+      }
+    }
+    return {
+      grid_size: [gridSize, 1, gridSize],
+      values,
+    };
+  }
+
+  _clamp01(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return 0;
+    return Math.max(0, Math.min(1, number));
+  }
+
+  _cycleLiveNode() {
+    const nodes = Array.isArray(this._liveData?.nodes) ? this._liveData.nodes : [];
+    if (nodes.length === 0) return;
+    const ids = nodes
+      .map(n => Number(n.node_id))
+      .filter(id => Number.isFinite(id))
+      .sort((a, b) => a - b);
+    if (ids.length === 0) return;
+    const currentIdx = ids.indexOf(this._focusedNodeId);
+    this._focusedNodeId = ids[(currentIdx + 1) % ids.length];
+    this._liveData = this._statusToFrame({ nodes, live: nodes.some(n => n.live) });
   }
 
   // ========================================
@@ -506,22 +835,22 @@ class Observatory {
     const elapsed = this._clock.getElapsedTime();
 
     // Data source
-    if (this.settings.dataSource === 'ws' && this._liveData) {
+    if ((this.settings.dataSource === 'ws' || this.settings.dataSource === 'http') && this._liveData) {
       this._currentData = this._liveData;
     } else {
-      this._currentData = this._demoData.update(dt);
+      this._currentData = null;
     }
     const data = this._currentData;
 
     // Updates
     this._nebula.update(dt, elapsed);
     this._figurePool.update(data, elapsed);
-    this._scenarioProps.update(data, this._demoData.currentScenario);
+    this._scenarioProps.update(data, data?.scenario || 'live');
     this._updateDotMatrixMist(data, elapsed);
     this._updateParticleTrail(data, dt, elapsed);
     this._updateWifiWaves(elapsed);
     this._updateSignalField(data);
-    this._hud.updateHUD(data, this._demoData);
+    this._hud.updateHUD(data);
     this._hud.updateSparkline(data);
 
     // Router LED

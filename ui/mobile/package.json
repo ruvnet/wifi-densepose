@@ -19,8 +19,8 @@
     "axios": "^1.15.2",
     "expo": "~55.0.4",
     "expo-status-bar": "~55.0.4",
-    "react": "19.2.0",
-    "react-dom": "19.2.6",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
     "react-native": "0.85.2",
     "react-native-gesture-handler": "~2.30.0",
     "react-native-reanimated": "4.2.1",
@@ -35,6 +35,7 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
+    "@react-native/jest-preset": "^0.85.2",
     "@testing-library/jest-native": "^5.4.3",
     "@testing-library/react-native": "^13.3.3",
     "@types/jest": "^30.0.0",
@@ -47,6 +48,7 @@
     "jest-expo": "^55.0.9",
     "prettier": "^3.8.3",
     "react-native-worklets": "^0.7.4",
+    "react-test-renderer": "^19.2.3",
     "typescript": "~5.9.2"
   },
   "overrides": {

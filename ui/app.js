@@ -3,13 +3,12 @@
 import { TabManager } from './components/TabManager.js';
 import { DashboardTab } from './components/DashboardTab.js';
 import { HardwareTab } from './components/HardwareTab.js';
-import { LiveDemoTab } from './components/LiveDemoTab.js';
+import { LiveViewTab } from './components/LiveViewTab.js';
 import { SensingTab } from './components/SensingTab.js';
 import { apiService } from './services/api.service.js';
 import { wsService } from './services/websocket.service.js';
 import { healthService } from './services/health.service.js';
 import { sensingService } from './services/sensing.service.js';
-import { backendDetector } from './utils/backend-detector.js';
 import { KeyboardShortcuts } from './utils/keyboard-shortcuts.js';
 import { PerfMonitor } from './utils/perf-monitor.js';
 import { toastManager } from './utils/toast.js';
@@ -75,33 +74,20 @@ class WiFiDensePoseApp {
       return response;
     });
 
-    // Detect backend availability and initialize accordingly
-    const useMock = await backendDetector.shouldUseMockServer();
-    
-    if (useMock) {
-      console.log('🧪 Initializing with mock server for testing');
-      // Import and start mock server only when needed
-      const { mockServer } = await import('./utils/mock-server.js');
-      mockServer.start();
-      
-      // Show notification to user
-      this.showBackendStatus('Mock server active - testing mode', 'warning');
-    } else {
-      console.log('🔌 Connecting to backend...');
+    console.log('🔌 Connecting to backend...');
 
-      try {
-        const health = await healthService.checkLiveness();
-        console.log('✅ Backend responding:', health);
-        this.showBackendStatus('Connected to Rust sensing server', 'success');
-      } catch (error) {
-        console.warn('⚠️ Backend not available:', error.message);
-        this.showBackendStatus('Backend unavailable — start sensing-server', 'warning');
-      }
-
-      // Start the sensing WebSocket service early so the dashboard and
-      // live-demo tabs can show the correct data-source status immediately.
-      sensingService.start();
+    try {
+      const health = await healthService.checkLiveness();
+      console.log('✅ Backend responding:', health);
+      this.showBackendStatus('Connected to sensing server', 'success');
+    } catch (error) {
+      console.warn('⚠️ Backend not available:', error.message);
+      this.showBackendStatus('Backend unavailable — no live data', 'warning');
     }
+
+    // Keep hardware status current on every tab. The optional sensing
+    // WebSocket is opened lazily by SensingTab so unrelated pages stay quiet.
+    sensingService.start({ websocket: false });
   }
 
   // Initialize UI components
@@ -143,11 +129,11 @@ class WiFiDensePoseApp {
       this.components.hardware.init();
     }
 
-    // Live demo tab
-    const demoContainer = document.getElementById('demo');
-    if (demoContainer) {
-      this.components.demo = new LiveDemoTab(demoContainer);
-      this.components.demo.init();
+    // Live view tab
+    const liveContainer = document.getElementById('live');
+    if (liveContainer) {
+      this.components.live = new LiveViewTab(liveContainer);
+      this.components.live.init();
     }
 
     // Sensing tab
@@ -304,11 +290,6 @@ class WiFiDensePoseApp {
   handleTabChange(newTab, oldTab) {
     console.log(`Tab changed from ${oldTab} to ${newTab}`);
     
-    // Stop demo if leaving demo tab
-    if (oldTab === 'demo' && this.components.demo) {
-      this.components.demo.stopDemo();
-    }
-    
     // Update components based on active tab
     switch (newTab) {
       case 'dashboard':
@@ -319,8 +300,8 @@ class WiFiDensePoseApp {
         // Hardware visualization is always active
         break;
         
-      case 'demo':
-        // Demo starts manually
+      case 'live':
+        // Live view starts manually
         break;
 
       case 'sensing':

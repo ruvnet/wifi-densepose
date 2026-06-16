@@ -13,7 +13,7 @@
 </head>
 <body>
     <!-- Skip to main content link for keyboard/screen reader users -->
-    <a href="#dashboard" class="skip-to-content">Skip to main content</a>
+    <a href="#live" class="skip-to-content">Skip to main content</a>
 
     <div class="container">
         <!-- Header -->
@@ -29,9 +29,9 @@
 
         <!-- Navigation -->
         <nav class="nav-tabs" role="tablist" aria-label="Main navigation">
-            <button class="nav-tab active" data-tab="dashboard" role="tab" aria-selected="true" aria-controls="dashboard">Dashboard</button>
+            <button class="nav-tab active" data-tab="live" role="tab" aria-selected="true" aria-controls="live">Live View</button>
+            <button class="nav-tab" data-tab="dashboard" role="tab" aria-selected="false" aria-controls="dashboard">Dashboard</button>
             <button class="nav-tab" data-tab="hardware" role="tab" aria-selected="false" aria-controls="hardware">Hardware</button>
-            <button class="nav-tab" data-tab="demo" role="tab" aria-selected="false" aria-controls="demo">Live Demo</button>
             <button class="nav-tab" data-tab="architecture" role="tab" aria-selected="false" aria-controls="architecture">Architecture</button>
             <button class="nav-tab" data-tab="performance" role="tab" aria-selected="false" aria-controls="performance">Performance</button>
             <button class="nav-tab" data-tab="applications" role="tab" aria-selected="false" aria-controls="applications">Applications</button>
@@ -42,14 +42,19 @@
         </nav>
 
         <!-- Dashboard Tab -->
-        <section id="dashboard" class="tab-content active" role="tabpanel" aria-labelledby="dashboard">
+        <section id="dashboard" class="tab-content" role="tabpanel" aria-labelledby="dashboard" aria-hidden="true">
             <div class="hero-section">
-                <h2 data-i18n="dashboard.title">Revolutionary WiFi-Based Human Pose Detection</h2>
-                <p class="hero-description">
-                    AI can track your full-body movement through walls using just WiFi signals. 
-                    Researchers at Carnegie Mellon have trained a neural network to turn basic WiFi 
-                    signals into detailed wireframe models of human bodies.
-                </p>
+                <h2 data-i18n="dashboard.title">Live RuView Status</h2>
+                <div class="page-readme">
+                    <h3>Dashboard README</h3>
+                    <p>This page reports the current local RuView runtime. It should only show values returned by the live HTTP API or hardware packet stream.</p>
+                    <ul>
+                        <li>System Status reads health, hardware, inference, streaming, and data-source state from the running backend.</li>
+                        <li>Node Status lists Cardputer/ESP32 nodes only after packets arrive.</li>
+                        <li>System Metrics stay blank or unavailable when the API does not report them.</li>
+                        <li>How data is used: API status and packet metadata drive health badges, node cards, counters, and warnings only.</li>
+                    </ul>
+                </div>
                 
                 <!-- Error container -->
                 <div class="error-container" style="display: none;"></div>
@@ -68,6 +73,11 @@
                             <span class="status-text">-</span>
                             <span class="status-message"></span>
                         </div>
+                        <div class="component-status" data-component="battery">
+                            <span class="component-name">Battery</span>
+                            <span class="status-text">-</span>
+                            <span class="status-message">Battery telemetry unknown</span>
+                        </div>
                         <div class="component-status" data-component="inference">
                             <span class="component-name">Inference</span>
                             <span class="status-text">-</span>
@@ -84,6 +94,15 @@
                             <span class="status-message"></span>
                         </div>
                     </div>
+                </div>
+
+                <!-- Per-node Cardputer status -->
+                <div class="node-status-panel" id="node-status-panel">
+                    <div class="panel-heading">
+                        <h3>Node Status</h3>
+                        <span class="node-summary" id="node-summary">Waiting for packets</span>
+                    </div>
+                    <div class="node-status-grid" id="node-status-grid"></div>
                 </div>
 
                 <!-- System Metrics -->
@@ -148,41 +167,41 @@
                     <div class="benefit-card">
                         <div class="benefit-icon">🏠</div>
                         <h3>Through Walls</h3>
-                        <p>Works through solid barriers with no line of sight required</p>
+                        <p>Reports only the current sensing state from connected hardware.</p>
                     </div>
                     <div class="benefit-card">
                         <div class="benefit-icon">🔒</div>
                         <h3>Privacy-Preserving</h3>
-                        <p>No cameras or visual recording - just WiFi signal analysis</p>
+                        <p>No camera feed is shown on this dashboard.</p>
                     </div>
                     <div class="benefit-card">
                         <div class="benefit-icon">⚡</div>
-                        <h3>Real-Time</h3>
-                        <p>Maps 24 body regions in real-time at 100Hz sampling rate</p>
+                        <h3>Live Only</h3>
+                        <p>Disconnected or stale sources are shown as unavailable.</p>
                     </div>
                     <div class="benefit-card">
                         <div class="benefit-icon">💰</div>
-                        <h3>Low Cost</h3>
-                        <p>Built using $30 commercial WiFi hardware</p>
+                        <h3>Local Runtime</h3>
+                        <p>Reads from the local RuView server on this machine.</p>
                     </div>
                 </div>
 
                 <div class="system-stats">
                     <div class="stat" data-stat="body-regions">
-                        <span class="stat-value">24</span>
-                        <span class="stat-label">Body Regions</span>
+                        <span class="stat-value">--</span>
+                        <span class="stat-label">Live Keypoints</span>
                     </div>
                     <div class="stat" data-stat="sampling-rate">
-                        <span class="stat-value">100Hz</span>
-                        <span class="stat-label">Sampling Rate</span>
+                        <span class="stat-value">--</span>
+                        <span class="stat-label">Live Sample Rate</span>
                     </div>
                     <div class="stat" data-stat="accuracy">
-                        <span class="stat-value">87.2%</span>
-                        <span class="stat-label">Accuracy (AP@50)</span>
+                        <span class="stat-value">--</span>
+                        <span class="stat-label">Session Accuracy</span>
                     </div>
                     <div class="stat" data-stat="hardware-cost">
-                        <span class="stat-value">$30</span>
-                        <span class="stat-label">Hardware Cost</span>
+                        <span class="stat-value">--</span>
+                        <span class="stat-label">Active Nodes</span>
                     </div>
                 </div>
             </div>
@@ -191,22 +210,32 @@
         <!-- Hardware Tab -->
         <section id="hardware" class="tab-content" role="tabpanel" aria-labelledby="hardware" aria-hidden="true">
             <h2>Hardware Configuration</h2>
+            <div class="page-readme">
+                <h3>Hardware README</h3>
+                <p>This page describes the expected hardware surface and displays live device state when the backend reports it.</p>
+                <ul>
+                    <li>Antenna and node status should come from connected hardware, not hard-coded values.</li>
+                    <li>CSI amplitude, phase, and packet metrics remain blank until live packets arrive.</li>
+                    <li>Configuration values are treated as runtime facts only when the API reports them.</li>
+                    <li>How data is used: hardware packets populate connection state, CSI bars, node labels, and device configuration readouts.</li>
+                </ul>
+            </div>
             
             <div class="hardware-grid">
                 <div class="antenna-section">
                     <h3>3×3 Antenna Array</h3>
-                    <p class="help-text">Click antennas to toggle their state</p>
+                    <p class="help-text">Awaiting live antenna/node status from connected hardware.</p>
                     <div class="antenna-array">
                         <div class="antenna-grid">
-                            <div class="antenna tx active" data-type="TX1"></div>
-                            <div class="antenna tx active" data-type="TX2"></div>
-                            <div class="antenna tx active" data-type="TX3"></div>
-                            <div class="antenna rx active" data-type="RX1"></div>
-                            <div class="antenna rx active" data-type="RX2"></div>
-                            <div class="antenna rx active" data-type="RX3"></div>
-                            <div class="antenna rx active" data-type="RX4"></div>
-                            <div class="antenna rx active" data-type="RX5"></div>
-                            <div class="antenna rx active" data-type="RX6"></div>
+                            <div class="antenna tx" data-type="TX1"></div>
+                            <div class="antenna tx" data-type="TX2"></div>
+                            <div class="antenna tx" data-type="TX3"></div>
+                            <div class="antenna rx" data-type="RX1"></div>
+                            <div class="antenna rx" data-type="RX2"></div>
+                            <div class="antenna rx" data-type="RX3"></div>
+                            <div class="antenna rx" data-type="RX4"></div>
+                            <div class="antenna rx" data-type="RX5"></div>
+                            <div class="antenna rx" data-type="RX6"></div>
                         </div>
                         <div class="antenna-legend">
                             <div class="legend-item">
@@ -227,19 +256,19 @@
                     <div class="config-grid">
                         <div class="config-item">
                             <label>Frequency</label>
-                            <div class="config-value">2.4GHz ± 20MHz</div>
+                            <div class="config-value">--</div>
                         </div>
                         <div class="config-item">
                             <label>Subcarriers</label>
-                            <div class="config-value">30</div>
+                            <div class="config-value">--</div>
                         </div>
                         <div class="config-item">
                             <label>Sampling Rate</label>
-                            <div class="config-value">100 Hz</div>
+                            <div class="config-value">--</div>
                         </div>
                         <div class="config-item">
-                            <label>Total Cost</label>
-                            <div class="config-value">$30</div>
+                            <label>Active Nodes</label>
+                            <div class="config-value">--</div>
                         </div>
                     </div>
 
@@ -249,16 +278,16 @@
                             <div class="csi-row">
                                 <span>Amplitude:</span>
                                 <div class="csi-bar">
-                                    <div class="csi-fill amplitude" style="width: 75%"></div>
+                                    <div class="csi-fill amplitude" style="width: 0%"></div>
                                 </div>
-                                <span class="csi-value">0.75</span>
+                                <span class="csi-value">--</span>
                             </div>
                             <div class="csi-row">
                                 <span>Phase:</span>
                                 <div class="csi-bar">
-                                    <div class="csi-fill phase" style="width: 60%"></div>
+                                    <div class="csi-fill phase" style="width: 0%"></div>
                                 </div>
-                                <span class="csi-value">1.2π</span>
+                                <span class="csi-value">--</span>
                             </div>
                         </div>
                     </div>
@@ -266,62 +295,25 @@
             </div>
         </section>
 
-        <!-- Demo Tab -->
-        <section id="demo" class="tab-content" role="tabpanel" aria-labelledby="demo" aria-hidden="true">
-            <h2>Live Demonstration</h2>
-            
-            <div class="demo-controls">
-                <button id="startDemo" class="btn btn--primary">Start Stream</button>
-                <button id="stopDemo" class="btn btn--secondary" disabled>Stop Stream</button>
-                <div class="demo-status">
-                    <span class="status status--info" id="demoStatus">Ready</span>
-                </div>
-            </div>
-
-            <div class="demo-grid">
-                <div class="signal-panel">
-                    <h3>WiFi Signal Analysis</h3>
-                    <div class="signal-display">
-                        <canvas id="signalCanvas" width="400" height="200"></canvas>
-                    </div>
-                    <div class="signal-metrics">
-                        <div class="metric">
-                            <span>Signal Strength:</span>
-                            <span id="signalStrength">-45 dBm</span>
-                        </div>
-                        <div class="metric">
-                            <span>Processing Latency:</span>
-                            <span id="latency">12 ms</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="pose-panel">
-                    <h3>Human Pose Detection</h3>
-                    <div class="pose-display">
-                        <canvas id="poseCanvas" width="400" height="300"></canvas>
-                    </div>
-                    <div class="detection-info">
-                        <div class="info-item">
-                            <span>Persons Detected:</span>
-                            <span id="personCount">0</span>
-                        </div>
-                        <div class="info-item">
-                            <span>Confidence:</span>
-                            <span id="confidence">0.0%</span>
-                        </div>
-                        <div class="info-item">
-                            <span>Keypoints:</span>
-                            <span id="keypoints">0/0</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
+        <!-- Live View Tab -->
+        <section id="live" class="tab-content active" role="tabpanel" aria-labelledby="live">
+            <h2>Live View</h2>
+            <div class="live-view-loading" role="status">Waiting for live hardware data...</div>
         </section>
 
         <!-- Architecture Tab -->
         <section id="architecture" class="tab-content" role="tabpanel" aria-labelledby="architecture" aria-hidden="true">
             <h2>System Architecture</h2>
+            <div class="page-readme">
+                <h3>Architecture README</h3>
+                <p>This page explains the intended data flow from CSI packets to sensing output.</p>
+                <ul>
+                    <li>Use it as a static architecture map, not as a live telemetry panel.</li>
+                    <li>Live status belongs on Live View, Dashboard, Hardware, and Sensing.</li>
+                    <li>Implementation details should match the local RuView backend and device firmware.</li>
+                    <li>How data is used: CSI packets become normalized features, optional model inputs, pose estimates, recordings, and .rvf artifacts.</li>
+                </ul>
+            </div>
             
             <div class="architecture-flow">
                 <img src="https://pplx-res.cloudinary.com/image/upload/v1748813853/gpt4o_images/m7zztcttnue7vaxclvuw.png" 
@@ -360,45 +352,50 @@
         <!-- Performance Tab -->
         <section id="performance" class="tab-content" role="tabpanel" aria-labelledby="performance" aria-hidden="true">
             <h2>Performance Analysis</h2>
-            
-            <div class="performance-chart">
-                <img src="https://pplx-res.cloudinary.com/image/upload/v1748813924/pplx_code_interpreter/af6ef268_nsauu6.jpg" 
-                     alt="Performance Comparison Chart" class="chart-image">
+            <div class="page-readme">
+                <h3>Performance README</h3>
+                <p>This page is reserved for benchmark results produced by the current RuView runtime or a loaded report file.</p>
+                <ul>
+                    <li>No benchmark percentages are shown until a real evaluation result is available.</li>
+                    <li>Latency, throughput, and model quality should be tied to a timestamped run.</li>
+                    <li>Reference-paper numbers should live in documentation, not in the live app dashboard.</li>
+                    <li>How data is used: recorded run metrics feed charts and comparisons only after a real benchmark or training report exists.</li>
+                </ul>
             </div>
 
             <div class="performance-grid">
                 <div class="performance-card">
-                    <h3>WiFi-based (Same Layout)</h3>
+                    <h3>Current Session</h3>
                     <div class="metric-list">
                         <div class="metric-item">
                             <span>Average Precision:</span>
-                            <span class="metric-value">43.5%</span>
+                            <span class="metric-value">--</span>
                         </div>
                         <div class="metric-item">
                             <span>AP@50:</span>
-                            <span class="metric-value success">87.2%</span>
+                            <span class="metric-value">--</span>
                         </div>
                         <div class="metric-item">
                             <span>AP@75:</span>
-                            <span class="metric-value">44.6%</span>
+                            <span class="metric-value">--</span>
                         </div>
                     </div>
                 </div>
 
                 <div class="performance-card">
-                    <h3>Image-based (Reference)</h3>
+                    <h3>Runtime Metrics</h3>
                     <div class="metric-list">
                         <div class="metric-item">
-                            <span>Average Precision:</span>
-                            <span class="metric-value success">84.7%</span>
+                            <span>Inference Latency:</span>
+                            <span class="metric-value">--</span>
                         </div>
                         <div class="metric-item">
-                            <span>AP@50:</span>
-                            <span class="metric-value success">94.4%</span>
+                            <span>Frames Processed:</span>
+                            <span class="metric-value">--</span>
                         </div>
                         <div class="metric-item">
-                            <span>AP@75:</span>
-                            <span class="metric-value success">77.1%</span>
+                            <span>Active Model:</span>
+                            <span class="metric-value">--</span>
                         </div>
                     </div>
                 </div>
@@ -432,6 +429,16 @@
         <!-- Applications Tab -->
         <section id="applications" class="tab-content" role="tabpanel" aria-labelledby="applications" aria-hidden="true">
             <h2>Real-World Applications</h2>
+            <div class="page-readme">
+                <h3>Applications README</h3>
+                <p>This page lists possible deployment categories. It does not report live detections or make claims about the current room.</p>
+                <ul>
+                    <li>Use Live View and Dashboard for real device state.</li>
+                    <li>Use Training for creating datasets and model files.</li>
+                    <li>Treat these cards as planning notes until tied to a tested installation.</li>
+                    <li>How data is used: deployment notes should be backed by recordings, model evaluations, or live-site validation before claims are made.</li>
+                </ul>
+            </div>
             
             <div class="applications-grid">
                 <div class="app-card">
@@ -505,9 +512,9 @@
                 <h2>Model Training</h2>
                 <p>Record CSI data, train pose estimation models, and manage .rvf files</p>
             </div>
-            <div id="training-container" style="display: flex; gap: 20px; flex-wrap: wrap;">
-                <div id="training-panel-container" style="flex: 1; min-width: 400px;"></div>
-                <div id="model-panel-container" style="flex: 1; min-width: 350px; max-width: 450px;"></div>
+            <div id="training-container" class="training-workspace">
+                <div id="training-panel-container" class="training-workspace-primary"></div>
+                <div id="model-panel-container" class="training-workspace-secondary"></div>
             </div>
         </section>
     </div>

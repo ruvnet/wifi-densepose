@@ -36,6 +36,7 @@ VERIFY_PY="${PROOF_DIR}/verify.py"
 V1_SRC="${SCRIPT_DIR}/archive/v1/src"
 V2_DIR="${SCRIPT_DIR}/v2"
 PY_DIR="${SCRIPT_DIR}/python"
+CRATES_USER_AGENT="${CRATES_USER_AGENT:-RuView-verify/1.0 (local verification; contact: https://github.com/ruvnet/RuView)}"
 
 # Phase toggles (set via flags)
 RUN_PYTHON=1
@@ -234,22 +235,35 @@ if [ $RUN_CRATES -eq 1 ]; then
                          "wifi-densepose-nn" "wifi-densepose-bfld" "wifi-densepose-vitals" \
                          "wifi-densepose-wifiscan" "wifi-densepose-train" \
                          "cog-ha-matter" "cog-person-count" "cog-pose-estimation" )
-        ok=0; miss=0
+        ok=0; miss=0; unreachable=0
+        crates_tmp="$(mktemp)"
         for crate in "${crates_expected[@]}"; do
-            ver=$(curl -sf "https://crates.io/api/v1/crates/$crate" 2>/dev/null \
-                  | $PYTHON -c 'import sys,json; print(json.load(sys.stdin).get("crate",{}).get("max_version","?"))' 2>/dev/null) || ver=""
-            if [ -n "$ver" ] && [ "$ver" != "?" ]; then
+            status="$(curl -sS -A "$CRATES_USER_AGENT" \
+                -o "$crates_tmp" \
+                -w "%{http_code}" \
+                "https://crates.io/api/v1/crates/$crate" 2>/dev/null || true)"
+            ver=""
+            if [ "$status" = "200" ]; then
+                ver="$($PYTHON -c 'import sys,json; print(json.load(sys.stdin).get("crate",{}).get("max_version","?"))' < "$crates_tmp" 2>/dev/null || true)"
+            fi
+            if [ "$status" = "200" ] && [ -n "$ver" ] && [ "$ver" != "?" ]; then
                 echo "    $crate $ver"
                 ok=$((ok+1))
-            else
+            elif [ "$status" = "404" ]; then
                 echo -e "    ${YELLOW}miss${RESET} $crate"
                 miss=$((miss+1))
+            else
+                echo -e "    ${YELLOW}unreachable${RESET} $crate (HTTP ${status:-000})"
+                unreachable=$((unreachable+1))
             fi
         done
-        if [ "$miss" -eq 0 ]; then
+        rm -f "$crates_tmp"
+        if [ "$miss" -eq 0 ] && [ "$unreachable" -eq 0 ]; then
             note_pass "Phase 6: $ok/$ok crates on crates.io"
+        elif [ "$miss" -eq 0 ]; then
+            note_skip "Phase 6: crates.io unreachable for $unreachable crate(s)"
         else
-            note_fail "Phase 6: $miss of ${#crates_expected[@]} crates missing"
+            note_fail "Phase 6: $miss of ${#crates_expected[@]} crates missing ($unreachable unreachable)"
         fi
     else
         note_skip "Phase 6: curl not available"

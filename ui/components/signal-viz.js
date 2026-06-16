@@ -412,42 +412,9 @@ export class SignalVisualization {
     }
   }
 
-  // Generate synthetic demo signal data
-  static generateDemoData(elapsed) {
-    const subcarriers = 30;
-    const dopplerBars = 16;
-
-    // Amplitude: sinusoidal pattern with noise simulating human movement
-    const amplitude = new Float32Array(subcarriers);
-    for (let i = 0; i < subcarriers; i++) {
-      const baseFreq = Math.sin(elapsed * 2 + i * 0.3) * 0.3;
-      const bodyEffect = Math.sin(elapsed * 0.8 + i * 0.15) * 0.25;
-      const noise = (Math.random() - 0.5) * 0.1;
-      amplitude[i] = Math.max(0, Math.min(1, 0.4 + baseFreq + bodyEffect + noise));
-    }
-
-    // Phase: linear with perturbations from movement
-    const phase = new Float32Array(subcarriers);
-    for (let i = 0; i < subcarriers; i++) {
-      const linearPhase = (i / subcarriers) * Math.PI * 2;
-      const bodyPhase = Math.sin(elapsed * 1.5 + i * 0.2) * 0.8;
-      phase[i] = linearPhase + bodyPhase;
-    }
-
-    // Doppler: spectral peaks from movement velocity
-    const doppler = new Float32Array(dopplerBars);
-    const centerBin = dopplerBars / 2 + Math.sin(elapsed * 0.7) * 3;
-    for (let i = 0; i < dopplerBars; i++) {
-      const dist = Math.abs(i - centerBin);
-      doppler[i] = Math.max(0, Math.exp(-dist * dist * 0.15) * (0.6 + Math.sin(elapsed * 1.2) * 0.3));
-      doppler[i] += (Math.random() - 0.5) * 0.05;
-      doppler[i] = Math.max(0, Math.min(1, doppler[i]));
-    }
-
-    // Motion energy: pulsating
-    const motionEnergy = (Math.sin(elapsed * 0.5) + 1) / 2 * 0.7 + 0.15;
-
-    return { amplitude, phase, doppler, motionEnergy };
+  // Runtime local signal synthesis is disabled.
+  static generateUnavailableData() {
+    return null;
   }
 
   getGroup() {

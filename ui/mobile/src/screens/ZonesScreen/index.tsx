@@ -22,7 +22,7 @@ const getLastUpdateSeconds = (timestamp?: number): string => {
 };
 
 const resolveBannerState = (status: ConnectionStatus): 'connected' | 'simulated' | 'disconnected' => {
-  if (status === 'connecting') {
+  if (status === 'connecting' || status === 'simulated') {
     return 'disconnected';
   }
 

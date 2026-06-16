@@ -1,28 +1,15 @@
 import type { RssiService, WifiNetwork } from './rssi.service';
 
 class WebRssiService implements RssiService {
-  private timer: ReturnType<typeof setInterval> | null = null;
   private listeners = new Set<(networks: WifiNetwork[]) => void>();
 
-  startScanning(intervalMs: number): void {
-    console.warn('Web RSSI scanning not available; returning synthetic network data.');
+  startScanning(): void {
+    console.warn('Web RSSI scanning not available; no generated network data will be emitted.');
     this.stopScanning();
-    this.timer = setInterval(() => {
-      this.broadcast([
-        { ssid: 'WiFi-DensePose', bssid: 'AA:BB:CC:DD:EE:01', level: -55 },
-        { ssid: 'WiFi-Guest', bssid: 'AA:BB:CC:DD:EE:02', level: -72 },
-      ]);
-    }, intervalMs);
-    this.broadcast([
-      { ssid: 'WiFi-DensePose', bssid: 'AA:BB:CC:DD:EE:01', level: -55 },
-    ]);
+    this.broadcast([]);
   }
 
   stopScanning(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
   }
 
   subscribe(listener: (networks: WifiNetwork[]) => void): () => void {

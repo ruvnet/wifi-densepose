@@ -7,6 +7,7 @@ import { wsService } from './websocket.service.js';
 export class PoseService {
   constructor() {
     this.streamConnection = null;
+    this.httpStreamTimer = null;
     this.eventConnection = null;
     this.poseSubscribers = [];
     this.eventSubscribers = [];
@@ -21,6 +22,7 @@ export class PoseService {
     };
     this.validationErrors = [];
     this.logger = this.createLogger();
+    this.lastStreamOptions = null;
 
     // Model inference mode tracking
     this.modelActive = false;
@@ -117,9 +119,9 @@ export class PoseService {
 
   // Start pose stream
   async startPoseStream(options = {}) {
-    if (this.streamConnection) {
-      this.logger.warn('Pose stream already active', { connectionId: this.streamConnection });
-      return this.streamConnection;
+    if (this.streamConnection || this.httpStreamTimer) {
+      this.logger.warn('Pose stream already active', { connectionId: this.streamConnection || 'http-poll' });
+      return this.streamConnection || 'http-poll';
     }
 
     this.logger.info('Starting pose stream', { options });
@@ -129,6 +131,11 @@ export class PoseService {
     const validationResult = this.validateStreamOptions(options);
     if (!validationResult.valid) {
       throw new Error(`Invalid stream options: ${validationResult.errors.join(', ')}`);
+    }
+    this.lastStreamOptions = { ...options };
+
+    if (this.shouldUseHttpPoseStream(options)) {
+      return this.startHttpPoseStream(options);
     }
 
     // Use a lower confidence threshold when model inference is active
@@ -191,10 +198,50 @@ export class PoseService {
       return this.streamConnection;
     } catch (error) {
       this.logger.error('Failed to start pose stream', { error: error.message });
-      this.connectionState = 'failed';
-      this.notifyConnectionState('failed', error);
-      throw error;
+      return this.startHttpPoseStream(options, error);
     }
+  }
+
+  shouldUseHttpPoseStream(options = {}) {
+    if (options.transport === 'websocket') return false;
+    if (options.transport === 'http-poll') return true;
+    return window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost';
+  }
+
+  async startHttpPoseStream(options = {}, wsError = null) {
+    if (this.httpStreamTimer) {
+      return 'http-poll';
+    }
+
+    this.logger.info('Starting HTTP pose polling fallback', { reason: wsError?.message || 'websocket unavailable' });
+    this.connectionState = 'connected';
+    this.notifyConnectionState('connected', { transport: 'http-poll', fallbackFrom: 'websocket' });
+    this.notifyPoseSubscribers({ type: 'connected', data: { status: 'connected', transport: 'http-poll' } });
+
+    const poll = async () => {
+      try {
+        const poseData = await this.getCurrentPose({
+          zoneIds: options.zoneIds,
+          confidenceThreshold: options.minConfidence,
+          maxPersons: options.maxPersons,
+          includeKeypoints: true,
+        });
+        this.lastPoseData = poseData;
+        this.performanceMetrics.messageCount++;
+        this.performanceMetrics.lastUpdateTime = Date.now();
+        this.notifyPoseSubscribers({ type: 'pose_update', data: poseData });
+      } catch (error) {
+        this.logger.error('HTTP pose poll failed', { error: error.message });
+        this.connectionState = 'error';
+        this.performanceMetrics.errorCount++;
+        this.notifyConnectionState('error', error);
+        this.notifyPoseSubscribers({ type: 'error', error });
+      }
+    };
+
+    await poll();
+    this.httpStreamTimer = setInterval(poll, 500);
+    return 'http-poll';
   }
 
   validateStreamOptions(options) {
@@ -249,6 +296,11 @@ export class PoseService {
       wsService.disconnect(this.streamConnection);
       this.streamConnection = null;
     }
+    if (this.httpStreamTimer) {
+      clearInterval(this.httpStreamTimer);
+      this.httpStreamTimer = null;
+    }
+    this.connectionState = 'disconnected';
   }
 
   // Subscribe to pose updates
@@ -703,34 +755,28 @@ export class PoseService {
 
   // Force reconnection
   async reconnectStream() {
-    if (!this.streamConnection) {
-      throw new Error('No active stream connection to reconnect');
-    }
-
     this.logger.info('Forcing stream reconnection');
-    
-    // Get current connection stats to preserve options
-    const stats = wsService.getConnectionStats(this.streamConnection);
-    if (!stats) {
-      throw new Error('Cannot get connection stats for reconnection');
-    }
+    let options = this.lastStreamOptions ? { ...this.lastStreamOptions } : null;
 
-    // Extract original options from URL parameters
-    const url = new URL(stats.url);
-    const params = Object.fromEntries(url.searchParams);
-    
-    const options = {
-      zoneIds: params.zone_ids ? params.zone_ids.split(',') : undefined,
-      minConfidence: params.min_confidence ? parseFloat(params.min_confidence) : undefined,
-      maxFps: params.max_fps ? parseInt(params.max_fps) : undefined,
-      token: params.token
-    };
+    if (!options && this.streamConnection) {
+      const stats = wsService.getConnectionStats(this.streamConnection);
+      if (stats) {
+        const url = new URL(stats.url);
+        const params = Object.fromEntries(url.searchParams);
+        options = {
+          zoneIds: params.zone_ids ? params.zone_ids.split(',') : undefined,
+          minConfidence: params.min_confidence ? parseFloat(params.min_confidence) : undefined,
+          maxFps: params.max_fps ? parseInt(params.max_fps) : undefined,
+          token: params.token
+        };
+      }
+    }
 
     // Stop current stream
     this.stopPoseStream();
 
     // Start new stream with same options
-    return this.startPoseStream(options);
+    return this.startPoseStream(options || {});
   }
 
   // Clean up

@@ -130,7 +130,7 @@
       wsClient: null,
       dataProcessor: null,
       stats: null,
-      isDemoMode: true,
+      isDemoMode: false,
       startTime: Date.now()
     };
 
@@ -205,7 +205,7 @@
           onError: (err) => console.error('[VIZ] WebSocket error:', err)
         });
 
-        // Attempt connection (will fall back to demo mode if server unavailable)
+        // Attempt connection. Unavailable servers stay offline.
         state.wsClient.connect();
         setLoadingProgress(95, 'Starting render loop...');
 
@@ -237,16 +237,7 @@
       // Determine data source
       let vizData = null;
 
-      if (state.isDemoMode) {
-        // Generate demo data
-        vizData = state.dataProcessor.generateDemoData(delta);
-
-        // Generate demo signal data
-        const demoSignal = SignalVisualization.generateDemoData(elapsed);
-        state.signalViz.updateSignalData(demoSignal);
-      }
-
-      // If we have viz data (from demo or last processed real data), update visualizations
+      // If we have live data, update visualizations
       if (vizData) {
         // Update body models
         state.bodyModelManager.update(vizData.persons, delta);
@@ -280,7 +271,7 @@
           uptime: wsMetrics.uptime,
           personCount: state.bodyModelManager.getActiveCount(),
           confidence: state.bodyModelManager.getAverageConfidence(),
-          sensingMode: state.isDemoMode ? 'Mock' : (state.wsClient.isRealData ? 'CSI' : 'Mock')
+          sensingMode: state.wsClient.isRealData ? 'CSI' : 'Unavailable'
         });
       }
 
@@ -293,13 +284,7 @@
       const processed = state.dataProcessor.processMessage(message);
       if (!processed) return;
 
-      // Switch off demo mode when we get real data
       if (processed.persons.length > 0) {
-        if (state.isDemoMode) {
-          state.isDemoMode = false;
-          console.log('[VIZ] Switched to live data mode');
-        }
-
         // Update body models
         state.bodyModelManager.update(processed.persons, 0.016);
 
@@ -324,14 +309,9 @@
       console.log(`[VIZ] Connection: ${oldState} -> ${newState}`);
 
       if (newState === 'connected') {
-        // Will switch from demo to real when data arrives
         console.log('[VIZ] Connected to server, waiting for data...');
       } else if (newState === 'error' || newState === 'disconnected') {
-        // Fall back to demo mode
-        if (!state.isDemoMode) {
-          state.isDemoMode = true;
-          console.log('[VIZ] Switched to demo mode (server unavailable)');
-        }
+        console.log('[VIZ] Server unavailable; no generated fallback data will be shown');
       }
     }
 
@@ -353,9 +333,7 @@
           if (state.scene) state.scene.resetCamera();
           break;
         case 'd':
-          // Toggle demo mode
-          state.isDemoMode = !state.isDemoMode;
-          console.log(`[VIZ] Demo mode: ${state.isDemoMode ? 'ON' : 'OFF'}`);
+          console.log('[VIZ] Generated data is disabled; waiting for live frames');
           break;
         case 'c':
           // Force reconnect

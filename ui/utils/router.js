@@ -1,10 +1,10 @@
 // Hash Router - Makes tabs bookmarkable and shareable
-// URL format: #dashboard, #demo, #sensing, etc.
+// URL format: #live, #dashboard, #sensing, etc.
 
 export class Router {
   constructor(app) {
     this.app = app;
-    this.validTabs = ['dashboard', 'hardware', 'demo', 'architecture', 'performance', 'applications', 'sensing', 'training'];
+    this.validTabs = ['live', 'dashboard', 'hardware', 'architecture', 'performance', 'applications', 'sensing', 'training'];
   }
 
   init() {

@@ -1,6 +1,7 @@
 set(SRCS
     "main.c" "csi_collector.c" "stream_sender.c" "nvs_config.c"
     "edge_processing.c" "ota_update.c" "power_mgmt.c"
+    "battery_monitor.c"
     "wasm_runtime.c" "wasm_upload.c" "rvf_parser.c"
     "mmwave_sensor.c"
     "swarm_bridge.c"
@@ -31,13 +32,19 @@ set(REQUIRES
     esp_app_format
     esp_timer
     esp_pm
+    heap
+    esp_adc
     esp_driver_uart
     esp_driver_gpio
     esp_driver_spi
     esp_driver_i2c
+    esp_driver_i2s
+    esp_driver_sdspi
     driver
+    fatfs
     lwip
     mbedtls
+    sdmmc
 )
 
 # ADR-110: C6-only components — pulled in when building for esp32c6.
@@ -58,8 +65,17 @@ if(CONFIG_DISPLAY_ENABLE)
     list(APPEND REQUIRES esp_lcd esp_lcd_touch lvgl)
 endif()
 
+if(CONFIG_CARDPUTER_ADV_AUDIO_ENABLE)
+    list(APPEND SRCS "cardputer_adv_audio.c")
+endif()
+
 if(CONFIG_WASM_ENABLE)
     list(APPEND REQUIRES wasm3)
+endif()
+
+if(CONFIG_ESP32CAM_DUAL_FIRMWARE)
+    list(APPEND SRCS "esp32cam_dual_stream.c")
+    list(APPEND REQUIRES esp32-camera)
 endif()
 
 idf_component_register(

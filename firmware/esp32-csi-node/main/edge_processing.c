@@ -22,6 +22,7 @@
 #include "nvs_config.h"
 #include "csi_collector.h"  /* csi_collector_get_node_id() - defensive #390 */
 #include "mmwave_sensor.h"
+#include "battery_monitor.h"
 
 /* Runtime config — declared in main.c, loaded from NVS at boot. */
 extern nvs_config_t g_nvs_config;
@@ -388,6 +389,9 @@ static float    s_adaptive_threshold;
 
 /** Last vitals send timestamp. */
 static int64_t s_last_vitals_send_us;
+
+/** Last battery telemetry send timestamp. */
+static int64_t s_last_battery_send_us;
 
 /** Delta compression state. */
 static uint8_t s_prev_iq[EDGE_MAX_IQ_BYTES];
@@ -1026,6 +1030,29 @@ static void send_feature_vector(void)
     stream_sender_send((const uint8_t *)&pkt, sizeof(pkt));
 }
 
+static void send_battery_packet(void)
+{
+    edge_battery_pkt_t pkt;
+    battery_status_t battery;
+    memset(&pkt, 0, sizeof(pkt));
+
+    pkt.magic = EDGE_BATTERY_MAGIC;
+    pkt.node_id = csi_collector_get_node_id();
+    pkt.percent = 255;
+    pkt.status = BATTERY_POWER_UNKNOWN;
+    pkt.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
+    if (battery_monitor_read(&battery) == ESP_OK && battery.valid) {
+        pkt.percent = battery.percent;
+        pkt.millivolts = battery.millivolts;
+        pkt.status = (uint8_t)battery.status;
+        pkt.flags |= 0x01;
+        if (battery.charging) pkt.flags |= 0x02;
+    }
+
+    stream_sender_send((const uint8_t *)&pkt, sizeof(pkt));
+}
+
 /* ======================================================================
  * Main DSP Pipeline (runs on Core 1)
  * ====================================================================== */
@@ -1231,6 +1258,14 @@ static void process_frame(const edge_ring_slot_t *slot)
                      (unsigned long)s_ring_drops);
         }
     }
+
+#if CONFIG_BATTERY_MONITOR_ENABLE
+    int64_t battery_interval_us = (int64_t)CONFIG_BATTERY_SEND_INTERVAL_MS * 1000;
+    if ((now_us - s_last_battery_send_us) >= battery_interval_us) {
+        send_battery_packet();
+        s_last_battery_send_us = now_us;
+    }
+#endif
 
     /* --- Step 14 (ADR-040): Dispatch to WASM modules --- */
     if (s_cfg.tier >= 2 && s_pkt_valid) {

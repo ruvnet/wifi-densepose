@@ -19,6 +19,7 @@ jest.mock('axios', () => {
 // Import after mocking so the mock takes effect
 const { apiService } = require('@/services/api.service');
 const mockAxios = axios as jest.Mocked<typeof axios> & { __mockInstance: { request: jest.Mock } };
+const mockIsAxiosError = mockAxios.isAxiosError as unknown as jest.Mock;
 
 describe('ApiService', () => {
   const mockRequest = mockAxios.__mockInstance.request;
@@ -129,7 +130,7 @@ describe('ApiService', () => {
         isAxiosError: true,
       };
       mockRequest.mockRejectedValue(axiosError);
-      (mockAxios.isAxiosError as jest.Mock).mockReturnValue(true);
+      mockIsAxiosError.mockReturnValue(true);
 
       await expect(apiService.get('/test')).rejects.toEqual(
         expect.objectContaining({
@@ -142,7 +143,7 @@ describe('ApiService', () => {
 
     it('normalizes generic Error', async () => {
       mockRequest.mockRejectedValue(new Error('network timeout'));
-      (mockAxios.isAxiosError as jest.Mock).mockReturnValue(false);
+      mockIsAxiosError.mockReturnValue(false);
 
       await expect(apiService.get('/test')).rejects.toEqual(
         expect.objectContaining({ message: 'network timeout' }),
@@ -151,7 +152,7 @@ describe('ApiService', () => {
 
     it('normalizes unknown error', async () => {
       mockRequest.mockRejectedValue('string error');
-      (mockAxios.isAxiosError as jest.Mock).mockReturnValue(false);
+      mockIsAxiosError.mockReturnValue(false);
 
       await expect(apiService.get('/test')).rejects.toEqual(
         expect.objectContaining({ message: 'Unknown error' }),
@@ -163,7 +164,7 @@ describe('ApiService', () => {
     it('retries up to 2 times on failure then throws', async () => {
       const error = new Error('fail');
       mockRequest.mockRejectedValue(error);
-      (mockAxios.isAxiosError as jest.Mock).mockReturnValue(false);
+      mockIsAxiosError.mockReturnValue(false);
 
       await expect(apiService.get('/flaky')).rejects.toEqual(
         expect.objectContaining({ message: 'fail' }),

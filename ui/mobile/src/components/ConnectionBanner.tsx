@@ -25,9 +25,9 @@ const resolveState = (status: ConnectionState) => {
   }
 
   return {
-    label: 'SIMULATED DATA',
-    backgroundColor: '#9A5F0C',
-    textColor: '#FFF3E1',
+    label: 'NO LIVE DATA',
+    backgroundColor: '#8A1E2A',
+    textColor: '#FFE3E7',
   };
 };
 

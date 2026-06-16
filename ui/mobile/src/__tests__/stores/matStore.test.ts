@@ -62,8 +62,7 @@ describe('useMatStore', () => {
       survivors: [],
       alerts: [],
       selectedEventId: null,
-      dataSource: 'simulated',
-      simulationAcknowledged: false,
+      dataSource: 'unavailable',
     });
   });
 
@@ -199,8 +198,8 @@ describe('useMatStore', () => {
   });
 
   describe('dataSource', () => {
-    it('defaults to simulated', () => {
-      expect(useMatStore.getState().dataSource).toBe('simulated');
+    it('defaults to unavailable', () => {
+      expect(useMatStore.getState().dataSource).toBe('unavailable');
     });
 
     it('can be set to real', () => {
@@ -208,21 +207,10 @@ describe('useMatStore', () => {
       expect(useMatStore.getState().dataSource).toBe('real');
     });
 
-    it('can be set back to simulated', () => {
+    it('can be set back to unavailable', () => {
       useMatStore.getState().setDataSource('real');
-      useMatStore.getState().setDataSource('simulated');
-      expect(useMatStore.getState().dataSource).toBe('simulated');
-    });
-  });
-
-  describe('simulationAcknowledged', () => {
-    it('defaults to false', () => {
-      expect(useMatStore.getState().simulationAcknowledged).toBe(false);
-    });
-
-    it('can be acknowledged', () => {
-      useMatStore.getState().acknowledgeSimulation();
-      expect(useMatStore.getState().simulationAcknowledged).toBe(true);
+      useMatStore.getState().setDataSource('unavailable');
+      expect(useMatStore.getState().dataSource).toBe('unavailable');
     });
   });
 });

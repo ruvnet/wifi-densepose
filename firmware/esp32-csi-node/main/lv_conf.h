@@ -2,8 +2,8 @@
  * @file lv_conf.h
  * @brief LVGL compile-time configuration for ESP32-S3 AMOLED display (ADR-045).
  *
- * Tuned for RM67162 536x240 QSPI AMOLED with 8MB PSRAM.
- * Color depth: RGB565 (16-bit) for QSPI bandwidth.
+ * Tuned for Cardputer-Adv ST7789V2 240x135 LCD.
+ * Color depth: RGB565 (16-bit).
  * Double-buffered in SPIRAM, 30fps target.
  */
 
@@ -14,7 +14,7 @@
 
 /* ---- Core ---- */
 #define LV_COLOR_DEPTH          16
-#define LV_COLOR_16_SWAP        1   /* Byte-swap for SPI/QSPI displays */
+#define LV_COLOR_16_SWAP        0   /* ESP-IDF ST7789 SPI panel consumes native RGB565 words */
 #define LV_MEM_CUSTOM           1   /* Use ESP-IDF heap instead of LVGL's internal allocator */
 #define LV_MEM_CUSTOM_INCLUDE   <stdlib.h>
 #define LV_MEM_CUSTOM_ALLOC     malloc
@@ -22,8 +22,8 @@
 #define LV_MEM_CUSTOM_REALLOC   realloc
 
 /* ---- Display ---- */
-#define LV_HOR_RES_MAX          368
-#define LV_VER_RES_MAX          448
+#define LV_HOR_RES_MAX          240
+#define LV_VER_RES_MAX          135
 #define LV_DPI_DEF              200
 
 /* ---- Tick (provided by esp_timer in display_task.c) ---- */
@@ -38,6 +38,8 @@
 #define LV_IMG_CACHE_DEF_SIZE   0
 
 /* ---- Fonts ---- */
+#define LV_FONT_MONTSERRAT_10   1
+#define LV_FONT_MONTSERRAT_12   1
 #define LV_FONT_MONTSERRAT_14   1
 #define LV_FONT_MONTSERRAT_20   1
 #define LV_FONT_DEFAULT         &lv_font_montserrat_14
@@ -79,7 +81,7 @@
 #define LV_USE_ASSERT_MALLOC    1
 
 /* ---- GPU / render ---- */
-#define LV_USE_GPU_ESP32_S3     0   /* No parallel LCD interface — we use QSPI */
+#define LV_USE_GPU_ESP32_S3     0
 
 /* ---- Animation ---- */
 #define LV_USE_ANIM             1

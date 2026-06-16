@@ -11,3 +11,6 @@ dependencies:
 
   ## Onboard WS2812 LED Disabling
   espressif/led_strip: "^3.0.0"
+
+  ## ESP32-CAM OV2640 capture for opt-in dual CSI+MJPEG firmware
+  espressif/esp32-camera: "^2.0.15"

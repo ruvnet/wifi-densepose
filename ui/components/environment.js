@@ -415,26 +415,9 @@ export class Environment {
     }
   }
 
-  // Generate a demo confidence heatmap centered on given positions
-  static generateDemoHeatmap(personPositions, cols, rows, roomWidth, roomDepth) {
-    const map = new Float32Array(cols * rows);
-    const cellW = roomWidth / cols;
-    const cellD = roomDepth / rows;
-
-    for (const pos of (personPositions || [])) {
-      for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-          const cx = (c + 0.5) * cellW - roomWidth / 2;
-          const cz = (r + 0.5) * cellD - roomDepth / 2;
-          const dx = cx - (pos.x || 0);
-          const dz = cz - (pos.z || 0);
-          const dist = Math.sqrt(dx * dx + dz * dz);
-          const conf = Math.exp(-dist * dist * 0.5) * (pos.confidence || 0.8);
-          map[r * cols + c] = Math.max(map[r * cols + c], conf);
-        }
-      }
-    }
-    return map;
+  // Runtime local heatmap synthesis is disabled.
+  static generateUnavailableHeatmap(personPositions, cols, rows, roomWidth, roomDepth) {
+    return new Float32Array(cols * rows);
   }
 
   // Animate AP and RX markers (subtle pulse)

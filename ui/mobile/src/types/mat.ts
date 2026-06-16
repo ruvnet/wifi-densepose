@@ -67,7 +67,7 @@ export interface Survivor {
   zone_id: string;
   x: number;
   y: number;
-  depth: number;
+  depth: number | null;
   triage_status: TriageStatus;
   triage_color: string;
   confidence: number;

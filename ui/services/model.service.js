@@ -68,8 +68,8 @@ export class ModelService {
     try {
       this.logger.info('Loading model', { modelId });
       const data = await apiService.post('/api/v1/models/load', { model_id: modelId });
-      this.activeModel = { model_id: modelId };
-      this.emit('model-loaded', { model_id: modelId });
+      this.activeModel = data?.model_id ? data : { model_id: modelId };
+      this.emit('model-loaded', this.activeModel);
       return data;
     } catch (error) {
       this.logger.error('Failed to load model', { modelId, error: error.message });
@@ -93,7 +93,7 @@ export class ModelService {
   async getActiveModel() {
     try {
       const data = await apiService.get('/api/v1/models/active');
-      this.activeModel = data || null;
+      this.activeModel = data?.model_id ? data : null;
       return this.activeModel;
     } catch (error) {
       if (error.status === 404) {

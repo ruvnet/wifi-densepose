@@ -6,16 +6,23 @@
  * but over ESP-NOW instead of 802.15.4 because the IDF v5.4 ieee802154 RX
  * path doesn't deliver frames to user-space (see WITNESS-LOG-110 §D1).
  *
- * Frame layout (16 bytes payload, broadcast MAC FF:FF:FF:FF:FF:FF):
+ * Frame layout (24 bytes payload, broadcast MAC FF:FF:FF:FF:FF:FF):
  *   [0..3]   Magic         0x53454E50  ('SENP' — Sync via ESP-NOW)
  *   [4]      Protocol ver  0x01
  *   [5]      Leader flag   1 if sender claims leader
- *   [6..7]   Reserved
+ *   [6]      Node ID
+ *   [7]      Battery percent, 0-100 valid, 255 unknown
  *   [8..15]  Leader epoch µs (LE u64)
+ *   [16]     Battery flags: bit0=valid, bit1=charging
+ *   [17]     Battery status
+ *   [18..19] Battery millivolts
+ *   [20..23] Reserved
  */
 
 #include "sdkconfig.h"
 #include "c6_sync_espnow.h"
+#include "battery_monitor.h"
+#include "csi_collector.h"
 #include "esp_log.h"
 #include "esp_now.h"
 #include "esp_wifi.h"
@@ -32,13 +39,19 @@ static const char *TAG = "c6_espnow";
 #define BEACON_PROTO_VER  0x01
 #define BEACON_PERIOD_MS  100
 #define VALID_WINDOW_MS   3000
+#define BEACON_LEGACY_SIZE 16
 
 typedef struct __attribute__((packed)) {
     uint32_t magic;
     uint8_t  proto_ver;
     uint8_t  leader_flag;
-    uint16_t _reserved;
+    uint8_t  node_id;
+    uint8_t  battery_percent;
     uint64_t leader_epoch_us;
+    uint8_t  battery_flags;
+    uint8_t  battery_status;
+    uint16_t battery_millivolts;
+    uint32_t _reserved;
 } espnow_beacon_t;
 
 static const uint8_t s_broadcast_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -54,6 +67,13 @@ static uint32_t s_tx_count = 0;
 static uint32_t s_tx_fail  = 0;
 static uint32_t s_rx_count = 0;
 static uint32_t s_rx_magic_match = 0;
+static c6_espnow_peer_status_t s_peer_status = {0};
+static uint64_t s_peer_seen_us = 0;
+static uint8_t s_cached_battery_percent = 255;
+static uint8_t s_cached_battery_flags = 0;
+static uint8_t s_cached_battery_status = BATTERY_POWER_UNKNOWN;
+static uint16_t s_cached_battery_mv = 0;
+static uint64_t s_last_battery_refresh_us = 0;
 
 /* ADR-110 P10 — EMA-smoothed offset (host-side trajectory in firmware).
  *
@@ -77,14 +97,41 @@ static uint64_t mac6_to_u64(const uint8_t mac[6])
            ((uint64_t)mac[4] <<  8) |  (uint64_t)mac[5];
 }
 
+static void refresh_battery_cache(void)
+{
+    uint64_t now_us = (uint64_t)esp_timer_get_time();
+    if ((now_us - s_last_battery_refresh_us) < 1000000ULL) return;
+    s_last_battery_refresh_us = now_us;
+
+    s_cached_battery_percent = 255;
+    s_cached_battery_flags = 0;
+    s_cached_battery_status = BATTERY_POWER_UNKNOWN;
+    s_cached_battery_mv = 0;
+
+    battery_status_t battery;
+    if (battery_monitor_read(&battery) == ESP_OK && battery.valid) {
+        s_cached_battery_percent = battery.percent;
+        s_cached_battery_flags = 0x01;
+        if (battery.charging) s_cached_battery_flags |= 0x02;
+        s_cached_battery_status = (uint8_t)battery.status;
+        s_cached_battery_mv = battery.millivolts;
+    }
+}
+
 static void send_beacon(void)
 {
+    refresh_battery_cache();
     espnow_beacon_t b = {
         .magic           = BEACON_MAGIC,
         .proto_ver       = BEACON_PROTO_VER,
         .leader_flag     = s_is_leader ? 1 : 0,
-        ._reserved       = 0,
+        .node_id         = csi_collector_get_node_id(),
+        .battery_percent = s_cached_battery_percent,
         .leader_epoch_us = (uint64_t)esp_timer_get_time(),
+        .battery_flags   = s_cached_battery_flags,
+        .battery_status  = s_cached_battery_status,
+        .battery_millivolts = s_cached_battery_mv,
+        ._reserved       = 0,
     };
     esp_err_t r = esp_now_send(s_broadcast_mac, (uint8_t *)&b, sizeof(b));
     s_tx_count++;
@@ -111,12 +158,24 @@ static void on_recv(const uint8_t *src_mac, const uint8_t *data, int len)
 {
 #endif
     s_rx_count++;
-    if (data == NULL || len < (int)sizeof(espnow_beacon_t)) return;
+    if (data == NULL || len < BEACON_LEGACY_SIZE) return;
     const espnow_beacon_t *b = (const espnow_beacon_t *)data;
     if (b->magic != BEACON_MAGIC || b->proto_ver != BEACON_PROTO_VER) return;
     s_rx_magic_match++;
     uint64_t sender_id = src_mac ? mac6_to_u64(src_mac) : 0;
     uint64_t now_us    = (uint64_t)esp_timer_get_time();
+    bool has_status_ext = len >= (int)sizeof(espnow_beacon_t);
+
+    if (sender_id != 0 && sender_id != s_local_id) {
+        s_peer_status.valid = true;
+        s_peer_status.node_id = has_status_ext ? b->node_id : 0;
+        s_peer_status.percent = has_status_ext ? b->battery_percent : 255;
+        s_peer_status.flags = has_status_ext ? b->battery_flags : 0;
+        s_peer_status.status = has_status_ext ? b->battery_status : BATTERY_POWER_UNKNOWN;
+        s_peer_status.millivolts = has_status_ext ? b->battery_millivolts : 0;
+        s_peer_status.rx_count = s_rx_magic_match;
+        s_peer_seen_us = now_us;
+    }
 
     /* Adopt sender as leader if it's claiming leadership AND its ID is
      * lower than our current leader (or we have no leader). Lowest MAC
@@ -258,3 +317,16 @@ uint32_t c6_sync_espnow_tx_count(void)       { return s_tx_count; }
 uint32_t c6_sync_espnow_tx_fail(void)        { return s_tx_fail; }
 uint32_t c6_sync_espnow_rx_count(void)       { return s_rx_count; }
 uint32_t c6_sync_espnow_rx_magic_match(void) { return s_rx_magic_match; }
+
+bool c6_sync_espnow_get_peer_status(c6_espnow_peer_status_t *out)
+{
+    if (!out) return false;
+    if (!s_peer_status.valid) {
+        memset(out, 0, sizeof(*out));
+        return false;
+    }
+    *out = s_peer_status;
+    uint64_t now_us = (uint64_t)esp_timer_get_time();
+    out->age_ms = (uint32_t)((now_us - s_peer_seen_us) / 1000ULL);
+    return out->age_ms < VALID_WINDOW_MS;
+}

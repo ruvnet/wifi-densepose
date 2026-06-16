@@ -38,9 +38,9 @@ export class Onboarding {
         position: 'bottom'
       },
       {
-        title: 'Live Demo',
-        text: 'Switch to the Live Demo tab to see real-time pose detection. Connect an ESP32 sensor or use the built-in simulation.',
-        target: '[data-tab="demo"]',
+        title: 'Live View',
+        text: 'Switch to Live View to see pose output when live ESP32 or backend data is connected.',
+        target: '[data-tab="live"]',
         position: 'bottom'
       },
       {
@@ -57,7 +57,7 @@ export class Onboarding {
       },
       {
         title: 'You\'re all set!',
-        text: 'Explore the dashboard, connect hardware, or start the demo. You can replay this tour anytime from the command palette.',
+        text: 'Explore the dashboard, connect hardware, or start live detection. You can replay this tour anytime from the command palette.',
         target: null,
         position: 'center'
       }

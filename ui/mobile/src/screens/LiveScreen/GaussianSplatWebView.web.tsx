@@ -697,7 +697,7 @@ export const GaussianSplatWebViewWeb = ({ onReady, onFps, onError, frame }: Prop
             const br = Number(vs.breathing_bpm ?? vs.breathing_rate_bpm ?? 0);
             if (br > 0 || hrBpm > 0) {
               ctx.fillStyle = '#44ddaa';
-              ctx.fillText(`Breathing: ${br.toFixed(1)} bpm    Heart: ${hrBpm.toFixed(1)} bpm`, 12, 62);
+              ctx.fillText(`Inference estimates only: BR ${br.toFixed(1)} bpm    HR ${hrBpm.toFixed(1)} bpm`, 12, 62);
             }
           }
           const anyShow = bodies.some((b) => b.fadeIn > 0.01);
@@ -733,7 +733,6 @@ export const GaussianSplatWebViewWeb = ({ onReady, onFps, onError, frame }: Prop
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Failed to initialize 3D renderer');
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
