@@ -174,27 +174,34 @@ void app_main(void)
              target_name, app_desc->version, g_nvs_config.node_id);
 
     /* Turn off onboard WS2812 LED.
-     * S3 dev boards put the LED on GPIO 38; C6 dev boards on GPIO 8.
-     * On C6, GPIO 38 doesn't exist (only 0-30) — gate the init by target. */
+     * S3 dev boards put the LED on GPIO 38 (DevKitC-1 v1.0) or GPIO 48
+     * (DevKitC-1 v1.1 / N16R8 / generic YD-ESP32-S3 clones); C6 dev boards
+     * on GPIO 8. Clear every candidate pin — pulsing a pin with no LED
+     * attached is harmless, and each handle is deleted after clear to free
+     * its RMT channel. On C6, GPIO 38/48 don't exist (only 0-30) — gate by
+     * target. */
 #if defined(CONFIG_IDF_TARGET_ESP32C6)
-    const int led_gpio = 8;
+    const int led_gpios[] = {8};
 #else
-    const int led_gpio = 38;
+    const int led_gpios[] = {38, 48};
 #endif
-    led_strip_handle_t led_strip;
-    led_strip_config_t strip_config = {
-        .strip_gpio_num = led_gpio,
-        .max_leds = 1,
-        .led_model = LED_MODEL_WS2812,
-        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
-        .flags.invert_out = false,
-    };
-    led_strip_rmt_config_t rmt_config = {
-        .resolution_hz = 10 * 1000 * 1000, // 10MHz
-        .flags.with_dma = false,
-    };
-    if (led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip) == ESP_OK) {
-        led_strip_clear(led_strip);
+    for (int i = 0; i < (int)(sizeof(led_gpios) / sizeof(led_gpios[0])); i++) {
+        led_strip_handle_t led_strip;
+        led_strip_config_t strip_config = {
+            .strip_gpio_num = led_gpios[i],
+            .max_leds = 1,
+            .led_model = LED_MODEL_WS2812,
+            .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
+            .flags.invert_out = false,
+        };
+        led_strip_rmt_config_t rmt_config = {
+            .resolution_hz = 10 * 1000 * 1000, // 10MHz
+            .flags.with_dma = false,
+        };
+        if (led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip) == ESP_OK) {
+            led_strip_clear(led_strip);
+            led_strip_del(led_strip);
+        }
     }
 
     /* ADR-110 P4: 802.15.4 mesh time-sync (C6 only).
