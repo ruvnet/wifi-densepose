@@ -280,3 +280,10 @@ assets/MM-Fi/*.zip
 
 # through-wall demo: regenerable trained model artifact
 examples/through-wall/model/
+
+# RuView harness (npx ruview) build artifacts — ADR-182
+harness/**/node_modules/
+harness/**/*.tgz
+harness/**/package-lock.json
+harness/**/.claude-flow/
+harness/**/ruvector.db

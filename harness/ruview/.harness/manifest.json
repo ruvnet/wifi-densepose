@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "generator": "metaharness 0.1.15 + ADR-182 hardening",
+  "template": "vertical:ruview",
+  "name": "@ruvnet/ruview",
+  "vars": {
+    "name": "@ruvnet/ruview",
+    "description": "RuView WiFi-sensing operator agent harness",
+    "host": "claude-code"
+  },
+  "hosts": [
+    "claude-code"
+  ],
+  "files": {
+    ".claude/settings.json": "b0ea971383716f18b89db73010b8f0ea0f1b16bdec4cd1068245772ba1c27bdd",
+    ".claude/skills/calibrate-room/SKILL.md": "6a6c8211a7109feb76620c618963c10ad9a9f633ffce7676e631a80a1181986d",
+    ".claude/skills/onboard/SKILL.md": "22323732fe746b38b77a7c8c052e952dff2fe87ae939ba125379125827385f21",
+    ".claude/skills/provision-node/SKILL.md": "5ffe5a75873e873b80758d9c81005774d4191317227f2e9aa4345cbce3f29751",
+    ".claude/skills/train-pose/SKILL.md": "b3ee95bfb0b678eb3d101138b9ea0e7cab3db3a9906d19c4059f9cca0598e87b",
+    ".claude/skills/verify/SKILL.md": "c0314d5ead465d9089b6a4917fd125051a5be20dc07ba92d5b601fcaada32e19",
+    "CLAUDE.md": "7ecdb2b9d9abcf4aa22dd3ce553b60216a135e147893a59fa944fc1a8c81f5ef",
+    "LICENSE": "631f94984f626818d42ecf717aa6e8e0afd4f9f355ca706bd2effafbd1416d06",
+    "README.md": "b77d30428de8efb6758f2ca3eb22e84849013b2c0e6c601d488d2ea5a6f0da44",
+    "bin/cli.js": "b0d74690cff4329dfe342271fc475eaa140b767bdb66b37cf4992ad209012fe8",
+    "package.json": "2af49561ef0d59cafc4b99885816e580635b2d2ad329dfe17c69b9df6f8afceb",
+    "skills/calibrate-room.md": "6a6c8211a7109feb76620c618963c10ad9a9f633ffce7676e631a80a1181986d",
+    "skills/onboard.md": "22323732fe746b38b77a7c8c052e952dff2fe87ae939ba125379125827385f21",
+    "skills/provision-node.md": "5ffe5a75873e873b80758d9c81005774d4191317227f2e9aa4345cbce3f29751",
+    "skills/train-pose.md": "b3ee95bfb0b678eb3d101138b9ea0e7cab3db3a9906d19c4059f9cca0598e87b",
+    "skills/verify.md": "c0314d5ead465d9089b6a4917fd125051a5be20dc07ba92d5b601fcaada32e19",
+    "src/guardrails.js": "1631cea02c4354fe6126c576300faf5f8b68ae2f5e2e3a658c99eb25a7403e55",
+    "src/mcp-server.js": "e51379f5ebb0b7b4670c7412714e559931ef1be8df20551f8f7309b53f0fb7af",
+    "src/tools.js": "b558f61bb202abf5a967ce3a6ccaea351f2d186238cf49c7fc151d1de028eee8"
+  },
+  "meta": {
+    "surface": "cli+mcp",
+    "adr": "ADR-182"
+  }
+}

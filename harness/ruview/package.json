@@ -1,0 +1,65 @@
+{
+  "name": "@ruvnet/ruview",
+  "version": "0.1.0",
+  "description": "RuView WiFi-sensing operator agent harness — onboard, calibrate, train, and verify camera-free WiFi-CSI sensing, with the project's MEASURED-vs-CLAIMED honesty guardrail enforced. Minted via metaharness (ADR-182).",
+  "type": "module",
+  "bin": {
+    "ruview": "bin/cli.js"
+  },
+  "exports": {
+    ".": "./src/tools.js",
+    "./guardrails": "./src/guardrails.js"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "skills/",
+    ".claude/",
+    ".harness/",
+    "CLAUDE.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "doctor": "node ./bin/cli.js doctor",
+    "mcp": "node ./bin/cli.js mcp start"
+  },
+  "optionalDependencies": {
+    "@metaharness/kernel": "^0.1.0",
+    "@metaharness/host-claude-code": "^0.1.0"
+  },
+  "keywords": [
+    "wifi-sensing",
+    "wifi-densepose",
+    "ruview",
+    "csi",
+    "channel-state-information",
+    "pose-estimation",
+    "presence-detection",
+    "esp32",
+    "agent-harness",
+    "metaharness",
+    "mcp",
+    "mcp-server",
+    "claude-code",
+    "ambient-intelligence"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "license": "MIT",
+  "author": "ruvnet",
+  "homepage": "https://github.com/ruvnet/RuView#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ruvnet/RuView.git",
+    "directory": "harness/ruview"
+  },
+  "bugs": {
+    "url": "https://github.com/ruvnet/RuView/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
