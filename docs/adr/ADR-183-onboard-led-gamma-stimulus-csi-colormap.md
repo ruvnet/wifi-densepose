@@ -74,11 +74,13 @@ therefore provably `ruv-neural-viz`'s, and the motion is provably real.
 - Confirms #962's GPIO-48 fix visually (the LED lights on N16R8).
 
 **Negative / risks**
-- Changes *default* firmware behaviour: the onboard LED now animates instead of staying
-  off (minor power + a visible flicker some may not want). Gate behind a Kconfig
-  (`CONFIG_LED_GAMMA_VIZ`) if a dark default is preferred — follow-up.
-- A 40 Hz flicker can be an issue for photosensitive users; document on the enclosure.
-- `LED_MOTION_FULLSCALE` (0.25) is hand-tuned, not calibrated per-environment.
+- Changes the *default* firmware behaviour: the onboard LED animates instead of staying
+  off. Now **gated by `CONFIG_LED_GAMMA_VIZ`** (default `y`); set it `n` for a dark,
+  lower-power boot (the LED is just cleared) — no source change needed.
+- A 40 Hz flicker can be an issue for photosensitive users; document on the enclosure
+  and disable `CONFIG_LED_GAMMA_VIZ` in those deployments.
+- The saturation point is now `CONFIG_LED_MOTION_FULLSCALE_MILLI` (default 250 = 0.25),
+  operator-tunable; still not auto-calibrated per-environment.
 - The colour uses a baked LUT, not the live Rust `ColorMap` (FFI path deferred — needs
   the ESP Rust/xtensa toolchain, not yet in CI).
 

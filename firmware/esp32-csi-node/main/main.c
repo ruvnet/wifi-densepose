@@ -144,6 +144,7 @@ static void wifi_init_sta(void)
     }
 }
 
+#if CONFIG_LED_GAMMA_VIZ
 /* Viridis colormap (60 steps), generated from ruv-neural-viz::ColorMap::viridis()
  * — the rUv-Neural brain-topology colormap, now no_std (ruvnet/ruv-neural#3 /
  * RuView#1126). Used as the ON-phase colour of the 40 Hz gamma flicker below:
@@ -164,8 +165,8 @@ static const uint8_t VIRIDIS_LUT[60][3] = {
 };
 static led_strip_handle_t s_viz_led;
 
-/* motion_energy that saturates the colormap to yellow (tunable). */
-#define LED_MOTION_FULLSCALE 0.25f
+/* motion_energy that saturates the colormap to yellow (CONFIG, milli-units). */
+#define LED_MOTION_FULLSCALE ((float)CONFIG_LED_MOTION_FULLSCALE_MILLI / 1000.0f)
 
 /* GENUS-style 40 Hz gamma flicker: full on/off square wave, 50% duty (toggled
  * every 12.5 ms → 40 Hz). The ON colour is live CSI motion (edge motion_energy)
@@ -189,6 +190,7 @@ static void led_gamma_40hz_cb(void *arg)
     }
     led_strip_refresh(s_viz_led);
 }
+#endif /* CONFIG_LED_GAMMA_VIZ */
 
 void app_main(void)
 {
@@ -219,10 +221,11 @@ void app_main(void)
     ESP_LOGI(TAG, "%s CSI Node (ADR-018 / ADR-110) — v%s — Node ID: %d",
              target_name, app_desc->version, g_nvs_config.node_id);
 
-    /* Onboard WS2812: sweep the ruv-neural-viz viridis colormap at 40 Hz.
-     * C6 dev boards wire the LED to GPIO 8; S3 boards to GPIO 38 (DevKitC-1 v1.0)
+    /* Onboard WS2812. C6 wires the LED to GPIO 8; S3 to GPIO 38 (DevKitC-1 v1.0)
      * or GPIO 48 (DevKitC-1 v1.1 / N16R8 — see #962). On S3 we drive 48 (the
-     * common module). On C6, GPIO 38/48 don't exist (only 0-30) — gate by target. */
+     * common module). On C6, GPIO 38/48 don't exist (only 0-30) — gate by target.
+     * Behaviour is set by CONFIG_LED_GAMMA_VIZ (ADR-183): on = 40 Hz gamma flicker
+     * coloured by CSI motion; off = clear the LED at boot. */
 #if defined(CONFIG_IDF_TARGET_ESP32C6)
     const int led_gpio = 8;
 #else
@@ -239,6 +242,7 @@ void app_main(void)
         .resolution_hz = 10 * 1000 * 1000, // 10MHz
         .flags.with_dma = false,
     };
+#if CONFIG_LED_GAMMA_VIZ
     if (led_strip_new_rmt_device(&strip_config, &rmt_config, &s_viz_led) == ESP_OK) {
         const esp_timer_create_args_t viz_args = {
             .callback = &led_gamma_40hz_cb,
@@ -250,6 +254,14 @@ void app_main(void)
             ESP_LOGI(TAG, "Onboard WS2812: 40 Hz gamma flicker (GENUS), colour=CSI motion via ruv-neural-viz, GPIO %d", led_gpio);
         }
     }
+#else
+    /* Viz disabled — clear the onboard LED at boot and release the RMT channel. */
+    led_strip_handle_t led_strip;
+    if (led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip) == ESP_OK) {
+        led_strip_clear(led_strip);
+        led_strip_del(led_strip);
+    }
+#endif /* CONFIG_LED_GAMMA_VIZ */
 
     /* ADR-110 P4: 802.15.4 mesh time-sync (C6 only).
      * Initialized BEFORE WiFi so it's available even when WiFi STA can't

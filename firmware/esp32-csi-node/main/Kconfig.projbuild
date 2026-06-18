@@ -468,3 +468,29 @@ menu "Mock CSI (QEMU Testing)"
         depends on CSI_MOCK_ENABLED
         default n
 endmenu
+
+menu "Onboard LED (ADR-183)"
+
+    config LED_GAMMA_VIZ
+        bool "Onboard WS2812: 40 Hz gamma flicker + CSI-motion colour"
+        default y
+        help
+            Drive the onboard WS2812 as a GENUS-style 40 Hz gamma square wave
+            (12.5 ms on / 12.5 ms off, 50% duty). The ON-phase colour is live
+            CSI motion (edge motion_energy) mapped through the ruv-neural-viz
+            viridis colormap (still=purple, moving=yellow).
+
+            Disable to leave the LED off at boot — lower power, no flicker.
+            NOTE: a 40 Hz flicker can affect photosensitive users; disable or
+            shield the LED in those environments. Not a medical device.
+
+    config LED_MOTION_FULLSCALE_MILLI
+        int "Motion value (x1000) that saturates the colormap to yellow"
+        depends on LED_GAMMA_VIZ
+        default 250
+        range 1 100000
+        help
+            edge motion_energy that maps to the top (yellow) of the viridis
+            colormap, in milli-units (250 = 0.25). Lower = more sensitive
+            (reaches yellow with less motion).
+endmenu
