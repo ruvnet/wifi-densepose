@@ -41,7 +41,7 @@ CONFIG_LWIP_SO_RCVBUF=y
 # ~3 KB extra heap cost, measured live on both targets Jun 8 2026.
 CONFIG_LWIP_UDP_RECVMBOX_SIZE=32
 CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
-CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=64
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=128
 # NOTE: Empirical 25 s measurements on the S3 at COM8 showed these bumps
 # eliminate the csi_collector.sendto failure path (`fail #1..5` →
 # `fail #0`) — real improvement — but do NOT eliminate the broader

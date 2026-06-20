@@ -376,7 +376,7 @@ static void wifi_promiscuous_cb(void *buf, wifi_promiscuous_pkt_type_t type)
  * are sparse beacons (often non-OFDM DSSS), so wifi_csi_callback can starve to
  * yield=0pps -> DEGRADED -> motion/presence=0 (#521, #954).
  *
- * This guarantees a ~50 Hz OFDM unicast floor by pinging the STA's own gateway:
+ * This guarantees a ~10 Hz OFDM unicast floor by pinging the STA's own gateway:
  * the router's ICMP echo replies are OFDM frames destined to this station, which
  * drive the CSI engine regardless of promiscuous filter state or ambient traffic.
  * It is ADDITIVE — promiscuous capture (#396/#893) is left fully intact so
@@ -409,7 +409,9 @@ static void csi_start_self_ping(void)
     esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
     cfg.target_addr     = target;
     cfg.count           = ESP_PING_COUNT_INFINITE;
-    cfg.interval_ms     = 20;     /* 50 Hz -> ~50 received OFDM replies/sec */
+    cfg.interval_ms     = 100;    /* 10 Hz: cut self-ping TX flood that exhausts
+                                     S3 WiFi TX buffers -> sendto ENOMEM (#1135).
+                                     10 Hz still keeps the CSI OFDM source alive. */
     cfg.data_size       = 1;
     cfg.task_stack_size = 4096;
 
@@ -422,7 +424,7 @@ static void csi_start_self_ping(void)
 
     if (esp_ping_new_session(&cfg, &cbs, &s_self_ping) == ESP_OK && s_self_ping != NULL) {
         esp_ping_start(s_self_ping);
-        ESP_LOGI(TAG, "self-ping started -> %s @50Hz (CSI OFDM source, fix #521/#954)", gw_str);
+        ESP_LOGI(TAG, "self-ping started -> %s @10Hz (CSI OFDM source, fix #521/#954, S3 ENOMEM #1135)", gw_str);
     } else {
         ESP_LOGW(TAG, "self-ping: esp_ping_new_session failed");
         s_self_ping = NULL;
