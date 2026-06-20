@@ -70,6 +70,13 @@ CONFIG_LWIP_SO_RCVBUF=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH=8192
 
+# ── Wi-Fi dynamic TX buffers: pin to the C6's verified value ──
+# The S3 ENOMEM fix (#1135) raises CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM to 128
+# in the base sdkconfig.defaults. That fix was hardware-verified on the S3 only,
+# so keep the C6 build at its previously-shipping 64 rather than silently
+# inheriting 128 on an untested target. Re-tune here if the C6 ever needs it.
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=64
+
 # ── Power: keep CPU at max 160 MHz (C6 ceiling) for DSP throughput ──
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=160

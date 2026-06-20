@@ -26,7 +26,8 @@ static struct sockaddr_in s_dest_addr;
  * rapid-fire CSI callbacks can exhaust the pbuf pool and crash the device.
  */
 static int64_t s_backoff_until_us = 0;       /* esp_timer timestamp to resume */
-#define ENOMEM_COOLDOWN_MS  100              /* suppress sends for 100 ms */
+#define ENOMEM_COOLDOWN_MS  300              /* suppress sends for 300 ms — 100 ms
+                                              * was too short to drain on S3 (#1135) */
 #define ENOMEM_LOG_INTERVAL 50               /* log every Nth suppressed send */
 static uint32_t s_enomem_suppressed = 0;
 

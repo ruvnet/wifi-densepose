@@ -225,7 +225,7 @@ static void fast_loop_cb(TimerHandle_t t)
      * the default 200 ms fast period), which combined with CSI promiscuous
      * RX saturated the WiFi TX airtime — measured live on COM8 (S3) and
      * COM9 (C6): every adaptive cycle showed `sendto ENOMEM — backing off
-     * for 100 ms`, and bumping LWIP/WiFi buffer pools to 4× had no effect
+     * for the ENOMEM cooldown`, and bumping LWIP/WiFi buffer pools to 4× had no effect
      * on the rate because the bottleneck was radio TX time, not pool size.
      * Dropping to 1 Hz (5× less feature_state traffic) frees the TX queue
      * for CSI sends and lands well within the spec. */
