@@ -1422,7 +1422,7 @@ esp_err_t edge_processing_init(const edge_config_t *cfg)
         "edge_dsp",
         8192,       /* 8 KB stack — sufficient for DSP pipeline. */
         NULL,
-        5,          /* Priority 5 — above idle, below WiFi. */
+        4,          /* Priority 4 — leave core-1 idle/WDT room under tier-2 bursts. */
         NULL,
         dsp_core);
 
@@ -1431,7 +1431,7 @@ esp_err_t edge_processing_init(const edge_config_t *cfg)
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_LOGI(TAG, "Edge DSP task created on core %d (stack=8192, priority=5)",
+    ESP_LOGI(TAG, "Edge DSP task created on core %d (stack=8192, priority=4)",
              (int)dsp_core);
     return ESP_OK;
 }
