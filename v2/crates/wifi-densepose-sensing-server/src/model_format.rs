@@ -209,7 +209,14 @@ pub fn safetensors_to_rvf(data: &[u8], model_id: &str) -> Result<Vec<u8>, ModelL
         .filter(|&e| e <= data.len())
         .ok_or_else(|| fail(format!("declared header length {header_len} exceeds file size")))?;
 
-    let header: serde_json::Value = serde_json::from_slice(&data[header_start..header_end])
+    // The safetensors spec lets the header buffer be larger than the JSON and
+    // padded out to align the tensor data. The reference exporter pads with
+    // spaces, but some exporters (incl. ruvnet/wifi-densepose-pretrained) pad
+    // with NUL bytes. `from_slice` is strict and rejects the trailing `\0`s
+    // ("trailing characters at column N"), so parse only the first JSON value
+    // via the streaming deserializer and ignore whatever padding follows.
+    let mut de = serde_json::Deserializer::from_slice(&data[header_start..header_end]);
+    let header = <serde_json::Value as serde::Deserialize>::deserialize(&mut de)
         .map_err(|e| fail(format!("safetensors header is not valid JSON: {e}")))?;
     let obj = header
         .as_object()
@@ -443,6 +450,37 @@ mod tests {
         assert_eq!(la.model_name, "wifi-densepose-pretrained");
         let lc = loader.load_layer_c().expect("Layer C");
         assert_eq!(lc.all_weights, vec![1.0, 2.0, 3.0, 4.0], "weights round-trip");
+    }
+
+    /// REGRESSION: the published `ruvnet/wifi-densepose-pretrained/model.safetensors`
+    /// pads its header with NUL bytes (not the spec's spaces). `from_slice` rejected
+    /// the trailing `\0`s ("trailing characters at column 1462") and conversion failed.
+    /// The streaming parse must read the JSON value and ignore the padding.
+    #[test]
+    fn safetensors_with_nul_padded_header_converts() {
+        // Build a normal buffer, then splice NUL padding between the JSON header
+        // and the tensor data, bumping the declared header length to match.
+        let weights = [1.0f32, 2.0, 3.0, 4.0];
+        let header = serde_json::json!({
+            "weight": { "dtype": "F32", "shape": [weights.len()], "data_offsets": [0, weights.len() * 4] }
+        });
+        let json = serde_json::to_vec(&header).unwrap();
+        let pad = [0u8; 3]; // <-- NUL padding, like the real file
+        let declared = json.len() + pad.len();
+
+        let mut st = Vec::new();
+        st.extend_from_slice(&(declared as u64).to_le_bytes());
+        st.extend_from_slice(&json);
+        st.extend_from_slice(&pad);
+        for &w in &weights {
+            st.extend_from_slice(&w.to_le_bytes());
+        }
+
+        let rvf = safetensors_to_rvf(&st, "wifi-densepose-pretrained")
+            .expect("NUL-padded safetensors header must still convert");
+        let mut loader = ProgressiveLoader::new(&rvf).expect("converted RVF must load");
+        let lc = loader.load_layer_c().expect("Layer C");
+        assert_eq!(lc.all_weights, vec![1.0, 2.0, 3.0, 4.0], "weights round-trip through NUL pad");
     }
 
     /// CORE #894 PROOF: feeding the HF quant magic to the classifier yields the
