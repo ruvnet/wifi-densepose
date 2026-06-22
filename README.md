@@ -38,6 +38,20 @@ The system learns each environment locally using spiking neural networks that ad
 
 RuView turns ordinary WiFi into a contactless sensor. A $9 ESP32 board reads the radio reflections off the people in a room, and a small pretrained model — published on Hugging Face at [`ruvnet/wifi-densepose-pretrained`](https://huggingface.co/ruvnet/wifi-densepose-pretrained) — tells you who's there, how they're breathing, and how their heart rate is trending. The model fits in 8 KB (4-bit quantized) and runs in microseconds on a Raspberry Pi. (The [v2 encoder](https://huggingface.co/ruvnet/wifi-densepose-pretrained) reports an honest, label-free held-out **temporal-triplet accuracy of 82.3%** — up from 66.4% raw; the older "100% presence" figure was measured on a single-class recording and has been retracted in favor of this.) No cameras, no wearables, no app on the user's phone.
 
+## Run `RuView` in Google Colab
+
+Experience `RuView` virtually using Google Colab. This notebook sets up and runs the `wifi-densepose-sensing-server` in a cloud environment.
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ruvnet/RuView/blob/main/path/to/your/notebook.ipynb) <!-- IMPORTANT: Replace `path/to/your/notebook.ipynb` with the actual path to your Colab notebook in this repo -->
+
+### Quick Start:
+
+1.  **Open the Colab Notebook** using the badge above.
+2.  **Obtain an ngrok Auth Token** from [ngrok.com](https://dashboard.ngrok.com/get-started/your-authtoken) and paste it into `NGROK_AUTH_TOKEN` in Cell 0.
+3.  **Run All Cells** (`Runtime` > `Run all`).
+4.  After Cell 6 provides a "Public URL", copy the hostname (e.g., `example.ngrok-free.dev`) and update `NGROK_HOST` in Cell 5 with it. Re-run Cell 5 and subsequent cells.
+5.  **Access the UI** via the ngrok public URL displayed in Cell 6.
+
 ### Built for low-power edge applications
 
 [Edge modules](#edge-intelligence-adr-041) are small programs that run directly on the ESP32 sensor — no internet needed, no cloud fees, instant response.
