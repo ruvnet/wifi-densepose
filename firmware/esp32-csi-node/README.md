@@ -803,6 +803,7 @@ No physical ESP32 hardware is needed in CI.
 | CSI callback not firing | Promiscuous mode issue | Verify `esp_wifi_set_promiscuous(true)` in `csi_collector.c` |
 | WASM upload rejected | Signature verification | Disable with `wasm_verify=0` via NVS for development, or sign with Ed25519 |
 | High frame drop rate | Ring buffer overflow | Reduce `edge_tier` or increase `dwell_ms` |
+| `edge_dsp` task watchdog with 3x ESP32-S3 tier-2 nodes | Sustained tier-2 DSP bursts on core 1 | Use firmware newer than v0.6.5; `edge_dsp` now runs at priority 4 so the idle watchdog can run under dense multi-node load |
 | Vitals readings unstable | Calibration period | Wait 60 seconds for adaptive threshold to settle |
 | OTA update fails | Binary too large | Check binary is < 1 MB; current headroom is ~6% |
 | Docker path error on Windows | MSYS path conversion | Prefix command with `MSYS_NO_PATHCONV=1` |
