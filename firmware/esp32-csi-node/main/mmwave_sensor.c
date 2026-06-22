@@ -26,6 +26,7 @@
  */
 
 #include "mmwave_sensor.h"
+#include "mmwave_detect.h"
 
 #include <string.h>
 #include <math.h>
@@ -401,10 +402,12 @@ static mmwave_type_t probe_at_baud(uint32_t baud)
                     }
                 }
             }
-            /* LD2410: 4-byte header 0xF4F3F2F1 (already specific enough). */
-            if (i + 3 < len && buf[i] == 0xF4 && buf[i+1] == 0xF3
-                && buf[i+2] == 0xF2 && buf[i+3] == 0xF1
-                && baud == MMWAVE_LD2410_BAUD) {
+            /* LD2410: require a *full validated* report frame, not just the
+             * 4-byte head. A floating UART1 at 256000 baud can emit the head
+             * pattern 0xF4F3F2F1 from line noise (#1135 bug #2). The shared
+             * predicate (host-unit-tested in mmwave_detect.h) demands a sane
+             * intra-frame length AND the matching tail 0xF8F7F6F5. */
+            if (baud == MMWAVE_LD2410_BAUD && mmwave_ld2410_valid_at(buf, i, len)) {
                 ld2410_header_seen++;
             }
         }

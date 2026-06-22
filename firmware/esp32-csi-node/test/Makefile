@@ -44,9 +44,9 @@ FUZZ_DURATION ?= 30
 FUZZ_JOBS     ?= 1
 
 .PHONY: all clean run_serialize run_edge run_nvs run_all test_adr110 run_adr110 \
-        test_vitals run_vitals host_tests
+        test_vitals run_vitals test_mmwave_detect run_mmwave_detect host_tests
 
-all: fuzz_serialize fuzz_edge fuzz_nvs test_adr110 test_vitals
+all: fuzz_serialize fuzz_edge fuzz_nvs test_adr110 test_vitals test_mmwave_detect
 
 # --- ADR-110 encoding unit tests ---
 # Host-side, no libFuzzer needed — plain C99 deterministic table tests
@@ -69,8 +69,19 @@ test_vitals: test_vitals_count_presence.c $(MAIN_DIR)/edge_processing.h
 run_vitals: test_vitals
 	./test_vitals
 
-host_tests: run_adr110 run_vitals
-	@echo "Host tests passed (ADR-110 + vitals #998/#996)"
+# --- mmWave LD2410 detection predicate (#1135 bug #2) ---
+# Host-side, no libFuzzer. Proves a floating-UART head pattern (0xF4F3F2F1)
+# without a valid frame length+tail is REJECTED, so a phantom LD2410 is never
+# detected on a node with no sensor wired. Tests the real predicate the
+# firmware uses (../main/mmwave_detect.h) — test and firmware can't disagree.
+test_mmwave_detect: test_mmwave_detect.c $(MAIN_DIR)/mmwave_detect.h
+	cc -std=c99 -Wall -Wextra -I$(MAIN_DIR) -o $@ $<
+
+run_mmwave_detect: test_mmwave_detect
+	./test_mmwave_detect
+
+host_tests: run_adr110 run_vitals run_mmwave_detect
+	@echo "Host tests passed (ADR-110 + vitals #998/#996 + mmwave detect #1135)"
 
 # --- Serialize fuzzer ---
 # Tests csi_serialize_frame() with random wifi_csi_info_t inputs.
