@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
-use wifi_densepose_signal::hardware_norm::{CanonicalCsiFrame, HardwareType};
+use wifi_densepose_signal::hardware_norm::{CanonicalCsiFrame, HardwareNormalizer, HardwareType};
 use wifi_densepose_signal::ruvsense::multiband::MultiBandCsiFrame;
 use wifi_densepose_signal::ruvsense::multistatic::{FusedSensingFrame, MultistaticFuser};
 
@@ -26,6 +26,15 @@ const DEFAULT_FREQ_MHZ: u32 = 2437; // Channel 6
 /// are relative to this instant, avoiding wall-clock/monotonic mixing issues.
 static EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
 
+/// Shared normalizer used to resample every node's raw amplitude onto the
+/// canonical subcarrier grid (default 56 tones) before fusion. ESP32 nodes
+/// report heterogeneous subcarrier counts depending on capture mode (HT20 ≈ 64,
+/// HT40 ≈ 128/192 bins); the `MultistaticFuser` takes the first node's length as
+/// the expected dimension and rejects any node that differs with
+/// `MultistaticError::DimensionMismatch`. Canonicalizing here makes every node
+/// frame uniform so multistatic fusion actually runs on a mixed mesh.
+static NORMALIZER: LazyLock<HardwareNormalizer> = LazyLock::new(HardwareNormalizer::new);
+
 /// Convert a single `NodeState` into a `MultiBandCsiFrame` suitable for
 /// multistatic fusion.
 ///
@@ -38,7 +47,17 @@ pub fn node_frame_from_state(node_id: u8, ns: &NodeState) -> Option<MultiBandCsi
         return None;
     }
 
-    let amplitude: Vec<f32> = latest.iter().map(|&v| v as f32).collect();
+    // Resample the raw per-node amplitude onto the canonical 56-tone grid so
+    // heterogeneous nodes (ESP32 HT20 ≈ 64, HT40 ≈ 128/192 tones) all present
+    // the same dimension to the fuser. Resample-only (no z-score) preserves the
+    // amplitude scale that downstream person-scoring depends on. Without this,
+    // the fuser rejected every mixed-count cycle with `DimensionMismatch` and
+    // multistatic fusion silently fell back to per-node sum/dedup.
+    let amplitude: Vec<f32> = NORMALIZER
+        .resample_to_canonical(latest)
+        .iter()
+        .map(|&v| v as f32)
+        .collect();
     let n_sub = amplitude.len();
     let phase = vec![0.0_f32; n_sub];
 
@@ -201,13 +220,69 @@ mod tests {
         assert_eq!(frame.channel_frames.len(), 1);
 
         let ch = &frame.channel_frames[0];
-        assert_eq!(ch.amplitude.len(), 3);
-        assert!((ch.amplitude[0] - 10.0_f32).abs() < f32::EPSILON);
-        assert!((ch.amplitude[1] - 20.0_f32).abs() < f32::EPSILON);
-        assert!((ch.amplitude[2] - 30.5_f32).abs() < f32::EPSILON);
+        // Raw input is resampled onto the canonical 56-tone grid before fusion.
+        assert_eq!(ch.amplitude.len(), 56);
+        assert_eq!(ch.phase.len(), 56);
+        // Cubic resampling preserves the endpoints of the source vector.
+        assert!((ch.amplitude[0] - 10.0_f32).abs() < 1e-4);
+        assert!((ch.amplitude[55] - 30.5_f32).abs() < 1e-4);
         // Phase should be all zeros
         assert!(ch.phase.iter().all(|&p| p == 0.0));
         assert_eq!(ch.hardware_type, HardwareType::Esp32S3);
+    }
+
+    /// REGRESSION (engine_bridge `DimensionMismatch` flood): real ESP32 nodes
+    /// report different raw subcarrier counts depending on capture mode (HT20 ≈
+    /// 64, HT40 ≈ 128/192 bins). Before canonical resampling, the fuser took the
+    /// first node's length as "expected" and rejected every node that differed —
+    /// the live server logged an escalating `governed trust cycle failed: fusion
+    /// error: Dimension mismatch` and multistatic fusion never ran on a mixed
+    /// mesh. Every node frame must now be canonicalized to 56 tones so fusion
+    /// succeeds instead of falling back.
+    #[test]
+    fn heterogeneous_node_counts_canonicalize_and_fuse() {
+        let now = Some(Instant::now());
+        let mut states: HashMap<u8, NodeState> = HashMap::new();
+        // Node 0: 64-tone HT20-style frame.
+        states.insert(
+            0,
+            make_node_state(
+                VecDeque::from(vec![(0..64).map(|i| 1.0 + 0.1 * i as f64).collect()]),
+                now,
+                1,
+            ),
+        );
+        // Node 3: 192-tone HT40-style frame — the count that flooded the log.
+        states.insert(
+            3,
+            make_node_state(
+                VecDeque::from(vec![(0..192).map(|i| 1.0 + 0.05 * i as f64).collect()]),
+                now,
+                1,
+            ),
+        );
+
+        let frames = node_frames_from_states(&states);
+        assert_eq!(frames.len(), 2, "both active nodes contribute a frame");
+        for f in &frames {
+            assert_eq!(
+                f.channel_frames[0].amplitude.len(),
+                56,
+                "node {} must be canonicalized to 56 tones",
+                f.node_id
+            );
+        }
+
+        // Mixed 64/192 counts must now FUSE rather than DimensionMismatch →
+        // fallback. `fused` is Some and the fallback person count is None.
+        let fuser = MultistaticFuser::new();
+        let (fused, fallback) = fuse_or_fallback(&fuser, &states, 3.0);
+        assert!(
+            fused.is_some(),
+            "heterogeneous node counts must fuse after canonicalization"
+        );
+        assert!(fallback.is_none(), "no per-node fallback when fusion succeeds");
+        assert_eq!(fused.unwrap().active_nodes, 2);
     }
 
     #[test]

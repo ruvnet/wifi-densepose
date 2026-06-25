@@ -247,7 +247,7 @@ impl EngineBridge {
 mod tests {
     use super::*;
     use std::collections::VecDeque;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
     use wifi_densepose_bfld::PrivacyClass;
 
     fn node_state_with_history(amp: f64, n_sub: usize) -> NodeState {
@@ -402,17 +402,34 @@ mod tests {
         assert!(!bridge.suppress_raw_outputs());
     }
 
-    /// Error wiring (review finding 1a): two live nodes with mismatched
-    /// subcarrier counts make fusion return a `DimensionMismatch` →
-    /// `EngineError` — previously dropped by `if let Some(Ok(..))` at the
-    /// call sites. The counter must increment and the last good trust state
-    /// must survive a later failure.
+    /// Error wiring (review finding 1a): a fusion error must increment the
+    /// engine-error counter (previously dropped by `if let Some(Ok(..))` at the
+    /// call sites) and leave the last good trust state intact.
+    ///
+    /// The error is forced via a timestamp spread beyond the hard guard
+    /// (`MultistaticError::TimestampMismatch`). A subcarrier-count mismatch can
+    /// no longer reach the fuser — `node_frames_from_states` canonicalizes every
+    /// node onto a uniform 56-tone grid upstream — so the previous 56-vs-30
+    /// setup would now fuse cleanly.
     #[test]
     fn observe_cycle_counts_engine_errors() {
         let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "r", "R");
+        // Two fresh 56-tone nodes captured 200 ms apart → spread exceeds the
+        // 60 ms hard guard → fusion errors. Both times are derived from one
+        // base instant with node 1 offset *forward*: the bridge's frame
+        // timestamps are `last_frame_time.duration_since(EPOCH)`, and
+        // `Instant::duration_since` saturates to zero for any instant predating
+        // the lazily-initialized `EPOCH`. Offsetting forward keeps both times
+        // ≥ EPOCH, so the 200 ms spread survives regardless of EPOCH timing.
+        // Neither node is stale (< 10 s).
+        let base = Instant::now();
         let mut mismatched = HashMap::new();
-        mismatched.insert(0u8, node_state_with_history(1.0, 56));
-        mismatched.insert(1u8, node_state_with_history(1.05, 30)); // 30 ≠ 56 subcarriers
+        let mut a = node_state_with_history(1.0, 56);
+        a.last_frame_time = Some(base);
+        let mut b = node_state_with_history(1.05, 56);
+        b.last_frame_time = Some(base + Duration::from_millis(200));
+        mismatched.insert(0u8, a);
+        mismatched.insert(1u8, b);
 
         assert!(bridge.observe_cycle(&mismatched, 1_000).is_none());
         assert_eq!(bridge.engine_error_count(), 1);

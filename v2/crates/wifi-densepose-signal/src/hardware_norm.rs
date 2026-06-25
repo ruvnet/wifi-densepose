@@ -167,6 +167,24 @@ impl HardwareNormalizer {
             hardware_type: hw,
         })
     }
+
+    /// Resample a raw 1-D CSI vector onto the canonical subcarrier grid
+    /// **without** z-score normalization.
+    ///
+    /// [`Self::normalize`] z-scores amplitude (mean→0, std→1), which is correct
+    /// for model inference but destroys the absolute amplitude scale. The live
+    /// multistatic bridge's person-scoring uses the squared coefficient of
+    /// variation (`variance / mean²`) of the *fused* amplitude — z-scoring would
+    /// drive the mean to ~0 and saturate that score. For that path, length-only
+    /// canonicalization is exactly what's needed: it makes heterogeneous node
+    /// frames (e.g. ESP32 HT20=64, HT40=128/192 tones) fusable on a uniform grid
+    /// while preserving the amplitude statistics downstream consumers rely on.
+    ///
+    /// Identity passthrough when `raw.len()` already equals the canonical count.
+    #[must_use]
+    pub fn resample_to_canonical(&self, raw: &[f64]) -> Vec<f64> {
+        resample_cubic(raw, self.canonical_subcarriers)
+    }
 }
 
 impl Default for HardwareNormalizer {
