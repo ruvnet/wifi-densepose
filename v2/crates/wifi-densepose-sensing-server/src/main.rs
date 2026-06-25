@@ -448,6 +448,11 @@ struct NodeState {
     debounce_candidate: String,
     baseline_motion: f64,
     baseline_frames: u64,
+    /// EMA of this node's per-frame presence (1.0 present / 0.0 absent), used by
+    /// `aggregate_person_count` for spatial node-agreement counting. A node only
+    /// "votes" as an occupant when it *sustains* presence, so a flickering node
+    /// (e.g. one seeing a person only intermittently) doesn't inflate the count.
+    presence_ema: f64,
     smoothed_hr: f64,
     smoothed_br: f64,
     smoothed_hr_conf: f64,
@@ -672,6 +677,7 @@ impl NodeState {
             debounce_candidate: "absent".to_string(),
             baseline_motion: 0.0,
             baseline_frames: 0,
+            presence_ema: 0.0,
             smoothed_hr: 0.0,
             smoothed_br: 0.0,
             smoothed_hr_conf: 0.0,
@@ -2071,8 +2077,21 @@ fn smooth_and_classify(state: &mut AppStateInner, raw: &mut ClassificationInfo, 
         // During warm-up, aggressively learn the baseline.
         state.baseline_motion = state.baseline_motion * 0.9 + raw_motion * 0.1;
     } else if raw_motion < state.smoothed_motion + 0.05 {
-        state.baseline_motion =
+        // Presence-gated baseline. The old (1-α)·base + α·raw EMA drifted the
+        // baseline UP to whatever steady level the room sat at — so a person
+        // sitting still was slowly absorbed into the "empty-room" floor and
+        // vanished after ~1 min. Now the baseline may only climb while we
+        // currently believe the room is EMPTY (motion_level == "absent"); once
+        // presence is asserted the baseline can only ratchet DOWN, so stationary
+        // occupants stay above the floor. After everyone leaves the room reads
+        // absent again and the empty floor is re-learned normally.
+        let cand =
             state.baseline_motion * (1.0 - BASELINE_EMA_ALPHA) + raw_motion * BASELINE_EMA_ALPHA;
+        state.baseline_motion = if state.current_motion_level == "absent" {
+            cand
+        } else {
+            cand.min(state.baseline_motion)
+        };
     }
 
     // 2. Subtract baseline and clamp.
@@ -2117,8 +2136,17 @@ fn smooth_and_classify_node(ns: &mut NodeState, raw: &mut ClassificationInfo, ra
     if ns.baseline_frames < BASELINE_WARMUP {
         ns.baseline_motion = ns.baseline_motion * 0.9 + raw_motion * 0.1;
     } else if raw_motion < ns.smoothed_motion + 0.05 {
-        ns.baseline_motion =
+        // Presence-gated baseline — see smooth_and_classify(): the per-node
+        // baseline may only climb while this node reads "absent"; once it sees
+        // presence it can only ratchet down, so a stationary occupant near this
+        // node is never absorbed into its empty-room floor.
+        let cand =
             ns.baseline_motion * (1.0 - BASELINE_EMA_ALPHA) + raw_motion * BASELINE_EMA_ALPHA;
+        ns.baseline_motion = if ns.current_motion_level == "absent" {
+            cand
+        } else {
+            cand.min(ns.baseline_motion)
+        };
     }
 
     let adjusted = (raw_motion - ns.baseline_motion * 0.7).max(0.0);
@@ -2146,6 +2174,8 @@ fn smooth_and_classify_node(ns: &mut NodeState, raw: &mut ClassificationInfo, ra
     raw.motion_level = ns.current_motion_level.clone();
     raw.presence = sm > csi::presence_floor();
     raw.confidence = (0.4 + sm * 0.6).clamp(0.0, 1.0);
+    // Track sustained presence for spatial node-agreement counting.
+    ns.presence_ema = ns.presence_ema * 0.9 + if raw.presence { 0.1 } else { 0.0 };
 }
 
 /// If an adaptive model is loaded, override the classification with the
@@ -3743,7 +3773,60 @@ fn aggregate_person_count(
         .map(|n| n.prev_person_count)
         .max()
         .unwrap_or(0);
-    activity_count.max(node_max)
+
+    // Spatial node-agreement: each non-stale node that *sustains* independent
+    // presence counts as evidence of one occupant in its vicinity. With a node
+    // beside each person (e.g. one each side of a couch), two side-nodes each
+    // hold presence while a node merely *near* both flickers and doesn't clear
+    // the sustain bar — so two still people read as 2 where the motion-intensity
+    // score alone pins at 1. A lone person mostly lights one node strongly, so
+    // this stays at 1. Vote bar is tunable via RUVIEW_NODE_VOTE (default 0.55).
+    let vote_bar = node_vote_threshold();
+    let nonvoting = nonvoting_nodes();
+    let now = std::time::Instant::now();
+    let spatial_count = node_states
+        .iter()
+        .filter(|(id, n)| {
+            !nonvoting.contains(*id)
+                && n.last_frame_time
+                    .is_some_and(|t| now.duration_since(t).as_secs() < 10)
+                && n.presence_ema >= vote_bar
+        })
+        .count();
+
+    activity_count.max(node_max).max(spatial_count)
+}
+
+/// Node IDs that participate in presence/fusion but do NOT cast a person-vote in
+/// spatial node-agreement counting (e.g. a "front" node that sees every occupant
+/// and would otherwise inflate the count by one). Comma-separated via
+/// `RUVIEW_NONVOTING_NODES` (e.g. "1" or "1,4").
+fn nonvoting_nodes() -> &'static std::collections::HashSet<u8> {
+    static SET: std::sync::OnceLock<std::collections::HashSet<u8>> = std::sync::OnceLock::new();
+    SET.get_or_init(|| {
+        std::env::var("RUVIEW_NONVOTING_NODES")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .filter_map(|t| t.trim().parse::<u8>().ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    })
+}
+
+/// Sustained-presence EMA a node must reach to "vote" as a distinct occupant in
+/// spatial node-agreement counting. Lower → more sensitive (more likely to read
+/// the full node count); higher → stricter. Tunable via `RUVIEW_NODE_VOTE`.
+fn node_vote_threshold() -> f64 {
+    static BAR: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    *BAR.get_or_init(|| {
+        std::env::var("RUVIEW_NODE_VOTE")
+            .ok()
+            .and_then(|s| s.parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0 && *v <= 1.0)
+            .unwrap_or(0.55)
+    })
 }
 
 #[cfg(test)]
@@ -5969,8 +6052,19 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     };
 
                     // Aggregate person count: gate on presence first (matching WiFi path).
+                    // Presence is OR'd across all non-stale nodes (via their
+                    // sustained-presence EMA) rather than keyed to whichever
+                    // node's frame happened to arrive last — otherwise the count
+                    // dropped to "none" every time a quieter node's frame landed
+                    // while the side nodes clearly saw someone.
                     let now = std::time::Instant::now();
-                    let total_persons = if classification.presence {
+                    let any_node_present = classification.presence
+                        || s.node_states.values().any(|n| {
+                            n.last_frame_time
+                                .is_some_and(|t| now.duration_since(t).as_secs() < 10)
+                                && n.presence_ema >= 0.5
+                        });
+                    let total_persons = if any_node_present {
                         let dedup = s.dedup_factor;
                         let (fused, fallback_count) = multistatic_bridge::fuse_or_fallback(
                             &s.multistatic_fuser,
