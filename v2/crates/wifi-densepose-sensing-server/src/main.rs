@@ -518,17 +518,25 @@ const NOVELTY_HISTORY_CAPACITY: usize = 64;
 /// subcarrier ordering / normalisation so banks reject stale data.
 const NOVELTY_SKETCH_VERSION: u16 = 1;
 
+/// Smallest inter-arrival delta that can be treated as a real CSI cadence
+/// sample. Faster arrivals are UDP/OS burst delivery artifacts, not node
+/// frame production. This keeps the estimator valid for the documented
+/// ESP32 CSI range up to 100 Hz while rejecting sub-ms bursts.
+const MIN_CSI_FPS_SAMPLE_DT_SEC: f64 = 0.010;
+const MAX_CSI_FPS_SAMPLE_DT_SEC: f64 = 1.0;
+
 /// ADR-110 iter 18 — EMA update for per-node CSI fps tracking.
 ///
 /// Returns the new EMA value, or `None` if the delta is implausible
-/// (≤ 0, or > 1 second — likely a connection gap, not a real frame
-/// rate sample). α = 1/8 fixed shift, ~8-sample effective window,
-/// matching the firmware-side ESP-NOW offset smoother in §A0.10.
+/// (≤ 0, too short to be a real frame-production cadence, or ≥ 1 second
+/// — likely a connection gap, not a real frame rate sample). α = 1/8
+/// fixed shift, ~8-sample effective window, matching the firmware-side
+/// ESP-NOW offset smoother in §A0.10.
 ///
 /// Free function for testability — every transformation that doesn't
 /// touch the rest of `NodeState` lives outside the `impl` block.
 pub(crate) fn update_csi_fps_ema(prev_fps: f64, dt_sec: f64) -> Option<f64> {
-    if !(dt_sec > 0.0 && dt_sec < 1.0) {
+    if !(MIN_CSI_FPS_SAMPLE_DT_SEC..MAX_CSI_FPS_SAMPLE_DT_SEC).contains(&dt_sec) {
         return None;
     }
     let instantaneous = 1.0 / dt_sec;
@@ -563,6 +571,28 @@ mod fps_ema_tests {
     fn nonpositive_dt_rejected() {
         assert!(update_csi_fps_ema(15.0, 0.0).is_none());
         assert!(update_csi_fps_ema(15.0, -0.1).is_none());
+    }
+
+    #[test]
+    fn tiny_burst_dt_rejected_as_arrival_jitter() {
+        assert!(update_csi_fps_ema(40.0, 0.000_036).is_none());
+        assert!(update_csi_fps_ema(40.0, 0.009).is_none());
+        assert!(update_csi_fps_ema(40.0, 0.010).is_some());
+    }
+
+    #[test]
+    fn burst_interleaved_with_40hz_cadence_stays_near_true_rate() {
+        let mut fps = 20.0;
+        for _ in 0..40 {
+            fps = update_csi_fps_ema(fps, 0.025).unwrap();
+            for burst_dt in [0.000_036, 0.000_080, 0.000_250] {
+                assert!(update_csi_fps_ema(fps, burst_dt).is_none());
+            }
+        }
+        assert!(
+            (fps - 40.0).abs() < 0.2,
+            "expected burst-filtered EMA to settle near 40 Hz, got {fps}"
+        );
     }
 
     #[test]
