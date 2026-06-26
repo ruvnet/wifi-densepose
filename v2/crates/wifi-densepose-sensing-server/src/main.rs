@@ -2062,7 +2062,7 @@ const DEBOUNCE_FRAMES: u32 = 4;
 /// EMA alpha for motion smoothing (~1s time constant at 10 FPS).
 const MOTION_EMA_ALPHA: f64 = 0.15;
 /// EMA alpha for slow-adapting baseline (~30s time constant at 10 FPS).
-const BASELINE_EMA_ALPHA: f64 = 0.003;
+const BASELINE_EMA_ALPHA: f64 = 0.02;
 /// Number of warm-up frames before baseline subtraction kicks in.
 const BASELINE_WARMUP: u64 = 50;
 
@@ -2074,24 +2074,14 @@ fn smooth_and_classify(state: &mut AppStateInner, raw: &mut ClassificationInfo, 
     //    (i.e. during calm periods) so walking doesn't inflate the baseline.
     state.baseline_frames += 1;
     if state.baseline_frames < BASELINE_WARMUP {
-        // During warm-up, aggressively learn the baseline.
+        // During warm-up, aggressively learn the baseline (calibrate the floor).
         state.baseline_motion = state.baseline_motion * 0.9 + raw_motion * 0.1;
     } else if raw_motion < state.smoothed_motion + 0.05 {
-        // Presence-gated baseline. The old (1-α)·base + α·raw EMA drifted the
-        // baseline UP to whatever steady level the room sat at — so a person
-        // sitting still was slowly absorbed into the "empty-room" floor and
-        // vanished after ~1 min. Now the baseline may only climb while we
-        // currently believe the room is EMPTY (motion_level == "absent"); once
-        // presence is asserted the baseline can only ratchet DOWN, so stationary
-        // occupants stay above the floor. After everyone leaves the room reads
-        // absent again and the empty floor is re-learned normally.
-        let cand =
+        // Continuously track the quiet-room floor (but not during motion bursts,
+        // so walking doesn't inflate the baseline). This tracks the empty-room
+        // noise floor of these RF-noisy nodes so an empty room reads absent.
+        state.baseline_motion =
             state.baseline_motion * (1.0 - BASELINE_EMA_ALPHA) + raw_motion * BASELINE_EMA_ALPHA;
-        state.baseline_motion = if state.current_motion_level == "absent" {
-            cand
-        } else {
-            cand.min(state.baseline_motion)
-        };
     }
 
     // 2. Subtract baseline and clamp.
@@ -2136,17 +2126,9 @@ fn smooth_and_classify_node(ns: &mut NodeState, raw: &mut ClassificationInfo, ra
     if ns.baseline_frames < BASELINE_WARMUP {
         ns.baseline_motion = ns.baseline_motion * 0.9 + raw_motion * 0.1;
     } else if raw_motion < ns.smoothed_motion + 0.05 {
-        // Presence-gated baseline — see smooth_and_classify(): the per-node
-        // baseline may only climb while this node reads "absent"; once it sees
-        // presence it can only ratchet down, so a stationary occupant near this
-        // node is never absorbed into its empty-room floor.
-        let cand =
+        // Continuously track this node's quiet-room floor (see smooth_and_classify).
+        ns.baseline_motion =
             ns.baseline_motion * (1.0 - BASELINE_EMA_ALPHA) + raw_motion * BASELINE_EMA_ALPHA;
-        ns.baseline_motion = if ns.current_motion_level == "absent" {
-            cand
-        } else {
-            cand.min(ns.baseline_motion)
-        };
     }
 
     let adjusted = (raw_motion - ns.baseline_motion * 0.7).max(0.0);
