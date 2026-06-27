@@ -402,17 +402,36 @@ mod tests {
         assert!(!bridge.suppress_raw_outputs());
     }
 
-    /// Error wiring (review finding 1a): two live nodes with mismatched
-    /// subcarrier counts make fusion return a `DimensionMismatch` →
-    /// `EngineError` — previously dropped by `if let Some(Ok(..))` at the
+    /// Error wiring (review finding 1a): a live cycle that fails fusion yields
+    /// an `EngineError` — previously dropped by `if let Some(Ok(..))` at the
     /// call sites. The counter must increment and the last good trust state
     /// must survive a later failure.
+    ///
+    /// Originally this forced the failure with a 56-vs-30 subcarrier mismatch
+    /// (`DimensionMismatch`). Since #1170 the live bridge canonicalizes every
+    /// node onto the 56-tone grid, so heterogeneous counts now fuse cleanly —
+    /// a frame-timestamp spread wider than the fuser's 60 ms guard interval is
+    /// the remaining deterministic way to provoke a fusion error here.
     #[test]
     fn observe_cycle_counts_engine_errors() {
+        // Both nodes are 56-subcarrier (canonicalization-clean), but their
+        // frame timestamps are 500 ms apart — far beyond the 60 ms guard —
+        // so the fuser rejects the cycle with TimestampMismatch. Future
+        // offsets keep both instants safely after the bridge's lazy EPOCH.
+        fn mismatched_states() -> HashMap<u8, NodeState> {
+            let now = Instant::now();
+            let mut a = node_state_with_history(1.0, 56);
+            a.last_frame_time = Some(now + std::time::Duration::from_millis(600));
+            let mut b = node_state_with_history(1.05, 56);
+            b.last_frame_time = Some(now + std::time::Duration::from_millis(100));
+            let mut m = HashMap::new();
+            m.insert(0u8, a);
+            m.insert(1u8, b);
+            m
+        }
+
         let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "r", "R");
-        let mut mismatched = HashMap::new();
-        mismatched.insert(0u8, node_state_with_history(1.0, 56));
-        mismatched.insert(1u8, node_state_with_history(1.05, 30)); // 30 ≠ 56 subcarriers
+        let mismatched = mismatched_states();
 
         assert!(bridge.observe_cycle(&mismatched, 1_000).is_none());
         assert_eq!(bridge.engine_error_count(), 1);

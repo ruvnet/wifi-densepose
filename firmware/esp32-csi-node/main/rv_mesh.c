@@ -188,7 +188,9 @@ size_t rv_mesh_encode_calibration_start(uint8_t sender_role,
 esp_err_t rv_mesh_send(const uint8_t *frame, size_t len)
 {
     if (frame == NULL || len == 0) return ESP_ERR_INVALID_ARG;
-    int sent = stream_sender_send(frame, len);
+    /* Mesh control packets (HEALTH, anomaly) are low-rate and tiny — send them
+     * on the priority path so the CSI ENOMEM backoff can't starve them (#1183). */
+    int sent = stream_sender_send_priority(frame, len);
     if (sent < 0) {
         ESP_LOGW(TAG, "rv_mesh_send: stream_sender failed (len=%u)",
                  (unsigned)len);

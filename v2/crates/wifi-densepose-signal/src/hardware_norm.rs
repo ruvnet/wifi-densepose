@@ -167,6 +167,22 @@ impl HardwareNormalizer {
             hardware_type: hw,
         })
     }
+
+    /// Resample a raw 1-D CSI vector onto the canonical subcarrier grid
+    /// **without** z-score normalization (length-only canonicalization).
+    ///
+    /// Used by the live multistatic bridge (issue #1170): heterogeneous
+    /// ESP32 capture modes report different subcarrier counts (HT20 ≈ 64,
+    /// HT40 ≈ 128/192), and [`MultistaticFuser`] requires every node frame
+    /// to share one dimension. Full [`Self::normalize`] would z-score the
+    /// amplitude (mean → 0), which saturates the downstream person-score
+    /// (a squared coefficient of variation `variance / mean²`); resampling
+    /// alone makes frames fusable while preserving amplitude scale.
+    ///
+    /// [`MultistaticFuser`]: crate::ruvsense::multistatic::MultistaticFuser
+    pub fn resample_to_canonical(&self, raw: &[f64]) -> Vec<f64> {
+        resample_cubic(raw, self.canonical_subcarriers)
+    }
 }
 
 impl Default for HardwareNormalizer {
@@ -342,6 +358,25 @@ mod tests {
         for &v in &resample_cubic(&vec![const_val; 64], 56) {
             assert!((v - const_val).abs() < 1e-10);
         }
+    }
+
+    #[test]
+    fn resample_to_canonical_is_length_only_no_zscore() {
+        // Issue #1170: resample_to_canonical must change length to 56 but
+        // NOT z-score (mean must be preserved, not driven to ~0). A raw
+        // amplitude vector with a large positive mean keeps that mean.
+        let norm = HardwareNormalizer::new();
+        let raw: Vec<f64> = (0..192).map(|i| 50.0 + 0.1 * i as f64).collect();
+        let out = norm.resample_to_canonical(&raw);
+        assert_eq!(out.len(), 56, "must resample onto the 56-tone grid");
+        let mean = out.iter().sum::<f64>() / out.len() as f64;
+        assert!(
+            mean > 40.0,
+            "resample-only must preserve amplitude scale (mean ~60), got {mean}"
+        );
+        // Endpoints preserved.
+        assert!((out[0] - raw[0]).abs() < 1e-6);
+        assert!((out[55] - raw[191]).abs() < 0.5);
     }
 
     #[test]

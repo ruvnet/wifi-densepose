@@ -121,6 +121,34 @@ int stream_sender_send(const uint8_t *data, size_t len)
     return sent;
 }
 
+int stream_sender_send_priority(const uint8_t *data, size_t len)
+{
+    if (s_sock < 0) {
+        return -1;
+    }
+
+    /* Priority path (#1183): low-rate control packets (feature_state, HEALTH,
+     * mesh sync) bypass the global ENOMEM backoff gate so the high-rate CSI
+     * stream cannot starve them. These are ≤48 B at ≤1 Hz — negligible pbuf
+     * pressure, so they won't re-trigger the crash cascade that the backoff
+     * (driven by the 50 Hz CSI flood) exists to prevent.
+     *
+     * Crucially, an ENOMEM here is reported quietly and does NOT extend the
+     * global streak/backoff: a tiny control packet failing is a symptom of
+     * the bulk-stream pressure, not a cause, so it must not feed the cooldown
+     * that suppresses the next CSI frame. Likewise a success does not reset
+     * the streak — the bulk path owns that signal. */
+    int sent = sendto(s_sock, data, len, 0,
+                      (struct sockaddr *)&s_dest_addr, sizeof(s_dest_addr));
+    if (sent < 0) {
+        if (errno != ENOMEM) {
+            ESP_LOGW(TAG, "priority sendto failed: errno %d", errno);
+        }
+        return -1;
+    }
+    return sent;
+}
+
 void stream_sender_deinit(void)
 {
     if (s_sock >= 0) {

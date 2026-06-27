@@ -518,17 +518,31 @@ const NOVELTY_HISTORY_CAPACITY: usize = 64;
 /// subcarrier ordering / normalisation so banks reject stale data.
 const NOVELTY_SKETCH_VERSION: u16 = 1;
 
+/// Lower plausibility floor (seconds) for a CSI inter-frame delta.
+///
+/// The firmware caps CSI sends at `CSI_MIN_SEND_INTERVAL_US = 20 ms`
+/// (`csi_collector.c`), so a single node cannot physically produce frames
+/// faster than 50 fps. UDP/OS buffering, however, delivers frames in tight
+/// bursts whose intra-burst arrival deltas are tens of microseconds apart —
+/// a 36 µs delta yields `1/dt ≈ 27 kHz`, which the old `< 1 s` guard let
+/// straight into the EMA and inflated `csi_fps_ema` by 1–3 orders of
+/// magnitude (issue #1180). We reject any delta implying more than 200 fps
+/// (4× the physical ceiling, leaving slack for benign arrival jitter); such
+/// deltas are burst artifacts, not distinct production intervals.
+pub(crate) const MIN_PLAUSIBLE_CSI_DT_SEC: f64 = 0.005;
+
 /// ADR-110 iter 18 — EMA update for per-node CSI fps tracking.
 ///
 /// Returns the new EMA value, or `None` if the delta is implausible
-/// (≤ 0, or > 1 second — likely a connection gap, not a real frame
-/// rate sample). α = 1/8 fixed shift, ~8-sample effective window,
-/// matching the firmware-side ESP-NOW offset smoother in §A0.10.
+/// (below [`MIN_PLAUSIBLE_CSI_DT_SEC`] — a sub-ms burst artifact, see
+/// issue #1180 — or `> 1 second`, likely a connection gap rather than a
+/// real frame-rate sample). α = 1/8 fixed shift, ~8-sample effective
+/// window, matching the firmware-side ESP-NOW offset smoother in §A0.10.
 ///
 /// Free function for testability — every transformation that doesn't
 /// touch the rest of `NodeState` lives outside the `impl` block.
 pub(crate) fn update_csi_fps_ema(prev_fps: f64, dt_sec: f64) -> Option<f64> {
-    if !(dt_sec > 0.0 && dt_sec < 1.0) {
+    if !(dt_sec >= MIN_PLAUSIBLE_CSI_DT_SEC && dt_sec < 1.0) {
         return None;
     }
     let instantaneous = 1.0 / dt_sec;
@@ -568,6 +582,35 @@ mod fps_ema_tests {
     #[test]
     fn long_gap_rejected_as_implausible() {
         assert!(update_csi_fps_ema(20.0, 2.0).is_none());
+    }
+
+    #[test]
+    fn subms_burst_delta_rejected() {
+        // Issue #1180: a 36 µs intra-burst delta implies ~27 kHz and must
+        // not enter the EMA. Anything below the 5 ms floor is rejected.
+        assert!(update_csi_fps_ema(40.0, 0.000_036).is_none());
+        assert!(update_csi_fps_ema(40.0, 0.001).is_none());
+        // Just above the floor is accepted.
+        assert!(update_csi_fps_ema(40.0, 0.005).is_some());
+    }
+
+    #[test]
+    fn burst_interleaved_with_nominal_stays_in_band() {
+        // A true ~40 fps node whose frames arrive in sub-ms bursts: feeding
+        // only the plausible (nominal-cadence) deltas keeps the EMA near the
+        // ground truth instead of blowing up. Burst deltas are rejected by
+        // the caller (see NodeState::observe_csi_frame_arrival), so the EMA
+        // only ever sees the ~25 ms inter-group gaps.
+        let mut fps = 40.0;
+        for _ in 0..40 {
+            // nominal 25 ms gap (40 fps); intervening sub-ms bursts skipped
+            fps = update_csi_fps_ema(fps, 0.025).unwrap();
+            assert!(update_csi_fps_ema(fps, 0.000_040).is_none());
+        }
+        assert!(
+            (fps - 40.0).abs() < 1.0,
+            "EMA should stay within ~1 Hz of the 40 fps ground truth, got {fps}"
+        );
     }
 }
 
@@ -653,6 +696,15 @@ impl NodeState {
     pub(crate) fn observe_csi_frame_arrival(&mut self, now: std::time::Instant) {
         if let Some(prev) = self.last_frame_time {
             let dt = now.duration_since(prev).as_secs_f64();
+            // Burst arrivals (sub-floor dt, issue #1180): do NOT re-anchor on
+            // them. Keeping the previous anchor means the next genuine
+            // inter-frame gap measures the true cadence across the whole
+            // burst instead of intra-burst jitter — so a 50 fps node whose
+            // frames arrive in 36 µs bursts every 25 ms still reads ~40 fps,
+            // not 27 kHz.
+            if dt < MIN_PLAUSIBLE_CSI_DT_SEC {
+                return;
+            }
             if let Some(new_ema) = update_csi_fps_ema(self.csi_fps_ema, dt) {
                 self.csi_fps_ema = new_ema;
                 self.csi_fps_samples = self.csi_fps_samples.saturating_add(1);
@@ -8035,6 +8087,36 @@ mod sync_snapshot_helper_tests {
         assert_eq!(snap.sequence, 20);
         assert!((snap.csi_fps_ema - 10.5).abs() < 1e-9);
         assert_eq!(snap.csi_fps_samples, 42);
+    }
+
+    #[test]
+    fn observe_csi_frame_arrival_ignores_subms_bursts() {
+        // Issue #1180 regression: a ~40 fps node whose frames are delivered
+        // in tight UDP bursts (sub-ms intra-burst deltas) must still report
+        // ~40 fps, not tens of kHz. Synthesize the arrival stream by adding
+        // Durations to a base Instant.
+        use std::time::Duration;
+        let base = std::time::Instant::now();
+        let mut ns = NodeState::new();
+        ns.csi_fps_ema = 40.0; // pretend already warmed up
+        ns.csi_fps_samples = 10;
+
+        // 30 nominal 25 ms groups, each preceded by a 3-frame sub-ms burst.
+        for g in 0..30u64 {
+            let group_t = base + Duration::from_millis(25 * g);
+            ns.observe_csi_frame_arrival(group_t);
+            // burst: two extra arrivals 40 µs and 80 µs later — must be
+            // ignored for rate purposes (anchor must not advance to them).
+            ns.observe_csi_frame_arrival(group_t + Duration::from_micros(40));
+            ns.observe_csi_frame_arrival(group_t + Duration::from_micros(80));
+        }
+
+        assert!(
+            (ns.csi_fps_ema - 40.0).abs() < 2.0,
+            "csi_fps_ema must stay near the 40 fps ground truth despite \
+             sub-ms bursts, got {}",
+            ns.csi_fps_ema
+        );
     }
 
     #[test]
