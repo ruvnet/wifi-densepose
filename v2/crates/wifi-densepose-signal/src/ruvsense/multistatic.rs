@@ -226,6 +226,13 @@ impl MultistaticFuser {
         }
     }
 
+    /// Replace the fusion configuration in place, preserving node positions
+    /// and any attached CIR estimator. Lets a composition root push a
+    /// TDM-derived guard interval (issue #1031/#1049) onto an existing fuser.
+    pub fn set_config(&mut self, config: MultistaticConfig) {
+        self.config = config;
+    }
+
     /// Attach a shared `CirEstimator` for CIR-domain coherence gating (ADR-134).
     ///
     /// One estimator is shared across all links.  Build it via
@@ -950,6 +957,36 @@ mod tests {
                 Err(MultistaticError::TimestampMismatch { .. })
             ),
             "a spread beyond a full TDM cycle must still be rejected"
+        );
+    }
+
+    /// The shipped 3-node × 50 ms-dwell default (issue #1031/#1049): a real
+    /// 120 ms inter-node spread fuses, while a spread beyond the 180 ms hard
+    /// guard is still rejected. This is the schedule the live server now uses
+    /// when no `WDP_TDM_*` env override is set.
+    #[test]
+    fn default_three_node_schedule_accepts_120ms_rejects_over_180ms() {
+        let cfg = MultistaticConfig::for_tdm_schedule(3, 50_000);
+        assert_eq!(cfg.guard_interval_us, 180_000, "3 × 50 ms + 20% headroom");
+        let fuser = MultistaticFuser::with_config(cfg);
+
+        // A 120 ms spread (observed on the live 3-node mesh) must fuse.
+        let f0 = make_node_frame(0, 0, 56, 1.0);
+        let f1 = make_node_frame(1, 120_000, 56, 1.0);
+        assert!(
+            fuser.fuse(&[f0, f1]).is_ok(),
+            "a real 3-node 120 ms spread must fuse under the 180 ms guard"
+        );
+
+        // A spread beyond the hard guard is still rejected.
+        let g0 = make_node_frame(0, 0, 56, 1.0);
+        let g1 = make_node_frame(1, 200_000, 56, 1.0);
+        assert!(
+            matches!(
+                fuser.fuse(&[g0, g1]),
+                Err(MultistaticError::TimestampMismatch { .. })
+            ),
+            "a 200 ms spread (> 180 ms guard) must still be rejected"
         );
     }
 

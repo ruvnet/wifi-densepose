@@ -6483,7 +6483,12 @@ fn multistatic_guard_config_from(
         slot_us.and_then(|s| s.trim().parse::<u64>().ok()),
     ) {
         (Some(n), Some(us)) if n >= 1 && us >= 1 => MultistaticConfig::for_tdm_schedule(n, us),
-        _ => MultistaticConfig::default(),
+        // No explicit schedule: default to the shipped 3-node mesh at the
+        // firmware's 50 ms per-channel dwell (csi_collector.c `s_dwell_ms = 50`),
+        // i.e. a 150 ms cycle → 180 ms hard / 50 ms soft guard. The library's
+        // bare 60 ms default was tuned for a 2-node × 18 ms cycle and rejects
+        // every legitimate ≥3-node cycle (issue #1031/#1049).
+        _ => MultistaticConfig::for_tdm_schedule(3, 50_000),
     };
 
     // Direct hard-guard override (#1049). Ignored when unset/zero/unparseable so
@@ -7602,12 +7607,19 @@ async fn main() {
             }
             fuser
         },
-        engine_bridge: engine_bridge::EngineBridge::new(
-            wifi_densepose_bfld::PrivacyMode::PrivateHome,
-            1,
-            "default",
-            "Default Room",
-        ),
+        engine_bridge: {
+            // The governed trust-path engine has its own fuser; give it the
+            // same TDM-derived guard as the legacy fuser so ≥3-node cycles
+            // aren't rejected at the 60 ms default (issue #1031/#1049).
+            let mut eb = engine_bridge::EngineBridge::new(
+                wifi_densepose_bfld::PrivacyMode::PrivateHome,
+                1,
+                "default",
+                "Default Room",
+            );
+            eb.set_multistatic_config(multistatic_guard_config_from_env());
+            eb
+        },
         field_model: if args.calibrate {
             info!("Field model calibration enabled — room should be empty during startup");
             FieldModel::new(field_bridge::single_link_config()).ok()
@@ -7903,9 +7915,19 @@ mod multistatic_guard_config_tests {
 
     #[test]
     fn default_guard_when_nothing_set() {
+        // With no env schedule we now ship the 3-node × 50 ms firmware-dwell
+        // default (150 ms cycle → 180 ms hard / 50 ms soft), NOT the library's
+        // bare 60 ms — which silently rejected every ≥3-node cycle
+        // (issue #1031/#1049).
         let cfg = multistatic_guard_config_from(None, None, None, None);
-        assert_eq!(cfg.guard_interval_us, MultistaticConfig::default().guard_interval_us);
-        assert_eq!(cfg.soft_guard_us, MultistaticConfig::default().soft_guard_us);
+        let expected = MultistaticConfig::for_tdm_schedule(3, 50_000);
+        assert_eq!(cfg.guard_interval_us, expected.guard_interval_us);
+        assert_eq!(cfg.soft_guard_us, expected.soft_guard_us);
+        assert_eq!(cfg.guard_interval_us, 180_000, "3 × 50 ms cycle + 20% headroom");
+        // The new default must accept a real 3-node spread that the old 60 ms
+        // guard rejected.
+        assert!(120_000 < cfg.guard_interval_us);
+        assert!(cfg.guard_interval_us > MultistaticConfig::default().guard_interval_us);
     }
 
     #[test]
@@ -7947,12 +7969,13 @@ mod multistatic_guard_config_tests {
 
     #[test]
     fn malformed_or_zero_override_falls_back_to_base() {
-        // Garbage / zero must not break fusion — fall back to the base config.
+        // Garbage / zero must not break fusion — fall back to the base config,
+        // which (with no TDM env schedule) is the shipped 3-node × 50 ms default.
+        let base = MultistaticConfig::for_tdm_schedule(3, 50_000).guard_interval_us;
         for bad in ["", "abc", "0", "-5", "12.5"] {
             let cfg = multistatic_guard_config_from(None, None, Some(bad), None);
             assert_eq!(
-                cfg.guard_interval_us,
-                MultistaticConfig::default().guard_interval_us,
+                cfg.guard_interval_us, base,
                 "override {bad:?} should be ignored"
             );
         }

@@ -38,6 +38,7 @@ use wifi_densepose_bfld::{PrivacyClass, PrivacyMode};
 use wifi_densepose_engine::{AdapterInfo, EngineError, StreamingEngine, TrustedOutput};
 use wifi_densepose_geo::types::GeoRegistration;
 use wifi_densepose_signal::ruvsense::fusion_quality::CalibrationId;
+use wifi_densepose_signal::ruvsense::multistatic::MultistaticConfig;
 use wifi_densepose_worldgraph::WorldId;
 
 use super::multistatic_bridge::node_frames_from_states;
@@ -105,6 +106,14 @@ impl EngineBridge {
     /// loop; see `WorldGraph::prune_semantic_states`).
     pub fn set_semantic_retention(&mut self, max_states: usize) {
         self.engine.set_semantic_retention(max_states);
+    }
+
+    /// Override the governed engine's multistatic fusion config so the live
+    /// trust path uses the same TDM-derived guard as the legacy fuser
+    /// (issue #1031/#1049). Otherwise the engine keeps the 60 ms default and
+    /// rejects every ≥3-node cycle.
+    pub fn set_multistatic_config(&mut self, config: MultistaticConfig) {
+        self.engine.set_multistatic_config(config);
     }
 
     /// Switch the active privacy mode (operator/control-plane action).
