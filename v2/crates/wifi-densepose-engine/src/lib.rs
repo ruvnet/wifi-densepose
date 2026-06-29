@@ -291,6 +291,13 @@ impl StreamingEngine {
         self.semantic_retention = max_states.max(1);
     }
 
+    /// Override the multistatic fusion config (e.g. a TDM-derived guard
+    /// interval). Without this the engine fuser keeps the 60 ms / 20 ms
+    /// default, which rejects legitimate ≥3-node spreads (issue #1031/#1049).
+    pub fn set_multistatic_config(&mut self, config: MultistaticConfig) {
+        self.fuser.set_config(config);
+    }
+
     /// ADR-139 live loop: create or update a `PersonTrack` node by stable
     /// `track_id`, locate it in `room`, and wire an `Observes` edge from
     /// `sensor` (so the privacy rollup can suppress it under identity-strict
