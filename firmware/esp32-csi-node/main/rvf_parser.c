@@ -187,55 +187,29 @@ esp_err_t rvf_verify_signature(const rvf_parsed_t *parsed, const uint8_t *data,
     /* Signature covers: header + manifest + wasm payload. */
     uint32_t signed_len = RVF_HEADER_SIZE + RVF_MANIFEST_SIZE + parsed->wasm_len;
 
-    /*
-     * Ed25519 verification.
-     *
-     * Legacy mbedtls Ed25519 is optional.  We use a SHA-256 keyed digest:
-     *
-     *   expected = SHA-256(pubkey || signed_region)
-     *
-     * The first 32 bytes of the 64-byte signature field must match.
-     * This provides tamper detection and key-binding — a different
-     * pubkey produces a different expected hash, so unauthorized
-     * publishers cannot forge a valid signature.
-     *
-     * For full Ed25519, enable CONFIG_MBEDTLS_EDDSA_C or equivalent.
-     * The RVF builder should match this scheme.
-     */
-    uint8_t hash_input_prefix[32];
-    memcpy(hash_input_prefix, pubkey, 32);
+    /* Verify Ed25519 signature via PSA Crypto. */
+    psa_key_attributes_t attrs = PSA_KEY_ATTRIBUTES_INIT;
+    psa_set_key_type(&attrs, PSA_KEY_TYPE_ECC_PUBLIC_KEY(PSA_ECC_FAMILY_TWISTED_EDWARDS));
+    psa_set_key_algorithm(&attrs, PSA_ALG_PURE_EDDSA);
+    psa_set_key_usage_flags(&attrs, PSA_KEY_USAGE_VERIFY_MESSAGE);
 
-    /* Compute SHA-256(pubkey || header+manifest+wasm) via PSA Crypto. */
-    psa_hash_operation_t op = PSA_HASH_OPERATION_INIT;
-    psa_status_t st = psa_hash_setup(&op, PSA_ALG_SHA_256);
+    mbedtls_svc_key_id_t key_id = MBEDTLS_SVC_KEY_ID_INIT;
+    psa_status_t st = psa_import_key(&attrs, pubkey, 32, &key_id);
     if (st != PSA_SUCCESS) {
-        return ESP_FAIL;
-    }
-    st = psa_hash_update(&op, hash_input_prefix, 32);
-    if (st != PSA_SUCCESS) {
-        (void)psa_hash_abort(&op);
-        return ESP_FAIL;
-    }
-    st = psa_hash_update(&op, data, signed_len);
-    if (st != PSA_SUCCESS) {
-        (void)psa_hash_abort(&op);
+        ESP_LOGE(TAG, "Failed to import Ed25519 public key: %d", (int)st);
         return ESP_FAIL;
     }
 
-    uint8_t expected[32];
-    size_t out_len = 0;
-    st = psa_hash_finish(&op, expected, sizeof(expected), &out_len);
-    if (st != PSA_SUCCESS || out_len != 32) {
-        (void)psa_hash_abort(&op);
-        return ESP_FAIL;
-    }
+    st = psa_verify_message(key_id, PSA_ALG_PURE_EDDSA,
+                            data, signed_len,
+                            parsed->signature, RVF_SIGNATURE_LEN);
+    psa_destroy_key(key_id);
 
-    /* Compare first 32 bytes of signature against expected hash. */
-    if (memcmp(parsed->signature, expected, 32) != 0) {
-        ESP_LOGE(TAG, "Signature verification failed — key mismatch or tampered");
+    if (st != PSA_SUCCESS) {
+        ESP_LOGE(TAG, "Signature verification failed: %d", (int)st);
         return ESP_ERR_INVALID_CRC;
     }
 
-    ESP_LOGI(TAG, "Signature verified (SHA-256-HMAC keyed integrity)");
+    ESP_LOGI(TAG, "Ed25519 signature verified");
     return ESP_OK;
 }
