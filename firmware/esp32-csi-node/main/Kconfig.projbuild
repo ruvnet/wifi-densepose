@@ -39,6 +39,21 @@ menu "CSI Node Configuration"
         help
             WiFi channel to listen on for CSI data.
 
+    config CSI_FORCE_DATA_CAPTURE
+        bool "Force MGMT+DATA promiscuous capture even on AMOLED display boards"
+        default n
+        help
+            The AMOLED (SH8601) build normally runs MGMT-only promiscuous
+            capture (RuView#396/#893) to avoid QSPI/flash-cache contention with
+            the display, relying on the #954 self-ping for CSI yield. But a
+            single node->router link is a poor sensing channel: empty vs
+            occupied is nearly indistinguishable in the features. Enabling this
+            forces the full MGMT+DATA promiscuous filter on the AMOLED too, so
+            the CSI sees the room's multipath and a moving person registers.
+            Trade-off: reintroduces the #893 contention risk (possible display
+            glitches or dropped CSI). Leave off on display-less / ST7789 boards
+            (they already capture DATA). Experimental.
+
 endmenu
 
 menu "Edge Intelligence (ADR-039)"

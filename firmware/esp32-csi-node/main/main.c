@@ -494,6 +494,15 @@ void app_main(void)
      * keep full MGMT+DATA capture for proper CSI yield even with the display on. */
     has_display = false;
 #endif
+#ifdef CONFIG_CSI_FORCE_DATA_CAPTURE
+    /* Sensing-quality override: the AMOLED build normally captures MGMT-only
+     * (self-ping OFDM floor keeps yield alive), but a single node↔router link is
+     * a poor sensing channel — empty vs occupied is nearly indistinguishable. This
+     * forces MGMT+DATA promiscuous even on the AMOLED so the CSI sees the room's
+     * multipath. Trades against the #893 QSPI/flash-cache contention the AMOLED
+     * guard was avoiding — watch for display glitches / dropped CSI. */
+    has_display = false;
+#endif
     if (!has_display) {
         csi_collector_enable_data_capture();
     }
