@@ -2057,8 +2057,21 @@ fn raw_classify(score: f64) -> String {
     }
 }
 
-/// Debounce frames required before state transition (at ~10 FPS = ~0.4s).
-const DEBOUNCE_FRAMES: u32 = 4;
+/// Debounce frames required before a motion/presence state transition (~10 FPS).
+/// Env-tunable via RUVIEW_DEBOUNCE_FRAMES so operators can trade responsiveness
+/// for stability against brief empty-room sm spikes WITHOUT a rebuild. Default 6
+/// (~0.6s). Presence is derived from this debounced level (not raw sm>floor), so
+/// a single-frame noise spike over the floor no longer flips presence.
+fn debounce_frames() -> u32 {
+    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("RUVIEW_DEBOUNCE_FRAMES")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .filter(|v| *v >= 1)
+            .unwrap_or(6)
+    })
+}
 /// EMA alpha for motion smoothing (~1s time constant at 10 FPS).
 const MOTION_EMA_ALPHA: f64 = 0.15;
 /// EMA alpha for slow-adapting baseline (~30s time constant at 10 FPS).
@@ -2102,7 +2115,7 @@ fn smooth_and_classify(state: &mut AppStateInner, raw: &mut ClassificationInfo, 
         state.debounce_candidate = candidate;
     } else if candidate == state.debounce_candidate {
         state.debounce_counter += 1;
-        if state.debounce_counter >= DEBOUNCE_FRAMES {
+        if state.debounce_counter >= debounce_frames() {
             // Transition accepted.
             state.current_motion_level = candidate;
             state.debounce_counter = 0;
@@ -2115,7 +2128,9 @@ fn smooth_and_classify(state: &mut AppStateInner, raw: &mut ClassificationInfo, 
 
     // 6. Write the smoothed result back into the classification.
     raw.motion_level = state.current_motion_level.clone();
-    raw.presence = sm > csi::presence_floor();
+    // Presence follows the DEBOUNCED motion level, not the raw sm>floor: a brief
+    // empty-room sm spike over the floor no longer flips presence for one frame.
+    raw.presence = state.current_motion_level != "absent";
     raw.confidence = (0.4 + sm * 0.6).clamp(0.0, 1.0);
 }
 
@@ -2144,7 +2159,7 @@ fn smooth_and_classify_node(ns: &mut NodeState, raw: &mut ClassificationInfo, ra
         ns.debounce_candidate = candidate;
     } else if candidate == ns.debounce_candidate {
         ns.debounce_counter += 1;
-        if ns.debounce_counter >= DEBOUNCE_FRAMES {
+        if ns.debounce_counter >= debounce_frames() {
             ns.current_motion_level = candidate;
             ns.debounce_counter = 0;
         }
@@ -2154,7 +2169,9 @@ fn smooth_and_classify_node(ns: &mut NodeState, raw: &mut ClassificationInfo, ra
     }
 
     raw.motion_level = ns.current_motion_level.clone();
-    raw.presence = sm > csi::presence_floor();
+    // Presence follows the DEBOUNCED motion level (see smooth_and_classify) so a
+    // one-frame empty-room sm spike over the floor no longer flips presence.
+    raw.presence = ns.current_motion_level != "absent";
     raw.confidence = (0.4 + sm * 0.6).clamp(0.0, 1.0);
     // Track sustained presence for spatial node-agreement counting.
     ns.presence_ema = ns.presence_ema * 0.9 + if raw.presence { 0.1 } else { 0.0 };
@@ -5956,6 +5973,20 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         raw_motion,
                     ) = extract_features_from_frame(&frame, &ns.frame_history, sample_rate_hz);
                     smooth_and_classify_node(ns, &mut classification, raw_motion);
+                    // TEMP DIAG: surface the real motion pipeline values per node
+                    // (throttled ~every 20 frames) so empty vs walking can be
+                    // compared on raw_motion / smoothed / baseline, not variance.
+                    if ns.baseline_frames % 20 == 0 {
+                        info!(
+                            "DIAG node={} raw_motion={:.3} sm={:.3} base={:.3} var={:.0} level={}",
+                            node_id,
+                            raw_motion,
+                            ns.smoothed_motion,
+                            ns.baseline_motion,
+                            features.variance,
+                            classification.motion_level
+                        );
+                    }
 
                     // Adaptive override using cloned model (safe, no raw pointers).
                     if let Some(ref model) = adaptive_model_clone {
