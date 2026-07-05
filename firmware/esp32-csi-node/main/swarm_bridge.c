@@ -60,11 +60,23 @@ static uint32_t s_cnt_heartbeats;
 static uint32_t s_cnt_ingests;
 static uint32_t s_cnt_errors;
 
+/* ---- ADR-084 Pass 4: mesh-exchange compression state ----
+ * A 1-bit-per-dimension sign sketch of the last vector we actually sent
+ * over the wire. Only the ingest cycle (not the heartbeat) is gated —
+ * heartbeats stay unconditional because they're the Seed's liveness
+ * signal, not a happiness observation. */
+static uint8_t  s_last_sent_sketch;
+static bool     s_have_last_sketch;
+static uint32_t s_last_full_send_s;
+static uint32_t s_cnt_suppressed;
+
 /* ---- Forward declarations ---- */
 static void swarm_task(void *arg);
 static esp_err_t swarm_post_json(esp_http_client_handle_t client,
                                  const char *json, int json_len);
 static void swarm_get_ip_str(char *buf, size_t buf_len);
+static uint8_t swarm_sketch8(const float *v);
+static uint8_t swarm_hamming8(uint8_t a, uint8_t b);
 
 /* ------------------------------------------------------------------ */
 
@@ -85,6 +97,12 @@ esp_err_t swarm_bridge_init(const swarm_config_t *cfg, uint8_t node_id)
     if (s_cfg.ingest_sec == 0) {
         s_cfg.ingest_sec = 5;
     }
+    if (s_cfg.novelty_threshold == 0) {
+        s_cfg.novelty_threshold = SWARM_NOVELTY_THRESHOLD_DEFAULT;
+    }
+    if (s_cfg.max_suppress_sec == 0) {
+        s_cfg.max_suppress_sec = SWARM_MAX_SUPPRESS_SEC_DEFAULT;
+    }
 
     s_mutex = xSemaphoreCreateMutex();
     if (s_mutex == NULL) {
@@ -98,6 +116,10 @@ esp_err_t swarm_bridge_init(const swarm_config_t *cfg, uint8_t node_id)
     s_cnt_heartbeats = 0;
     s_cnt_ingests = 0;
     s_cnt_errors = 0;
+    s_have_last_sketch = false;
+    s_last_sent_sketch = 0;
+    s_last_full_send_s = 0;
+    s_cnt_suppressed = 0;
 
     BaseType_t ret = xTaskCreatePinnedToCore(
         swarm_task, "swarm", SWARM_TASK_STACK, NULL,
@@ -110,9 +132,10 @@ esp_err_t swarm_bridge_init(const swarm_config_t *cfg, uint8_t node_id)
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "bridge init OK — seed=%s zone=%s hb=%us ingest=%us",
+    ESP_LOGI(TAG, "bridge init OK — seed=%s zone=%s hb=%us ingest=%us novelty_thr=%u max_suppress=%us",
              s_cfg.seed_url, s_cfg.zone_name,
-             s_cfg.heartbeat_sec, s_cfg.ingest_sec);
+             s_cfg.heartbeat_sec, s_cfg.ingest_sec,
+             s_cfg.novelty_threshold, s_cfg.max_suppress_sec);
     return ESP_OK;
 }
 
@@ -150,6 +173,39 @@ void swarm_bridge_get_stats(uint32_t *regs, uint32_t *heartbeats,
     if (heartbeats) *heartbeats = s_cnt_heartbeats;
     if (ingests)    *ingests    = s_cnt_ingests;
     if (errors)     *errors     = s_cnt_errors;
+}
+
+uint32_t swarm_bridge_get_suppressed_count(void)
+{
+    return s_cnt_suppressed;
+}
+
+/* ---- ADR-084 Pass 4: sign sketch + hamming distance ----
+ * Same sign-quantization rule as wifi-densepose-ruvector::sketch::Sketch —
+ * one bit per dimension, 1 if the value is > 0.0. 8 dims fit in a single
+ * byte, so no allocation and no dependency on the Rust sketch crate is
+ * needed on the MCU side; this is the smallest useful instance of the
+ * same idea. */
+static uint8_t swarm_sketch8(const float *v)
+{
+    uint8_t bits = 0;
+    for (uint8_t i = 0; i < SWARM_VECTOR_DIM; i++) {
+        if (v[i] > 0.0f) {
+            bits |= (uint8_t)(1u << i);
+        }
+    }
+    return bits;
+}
+
+static uint8_t swarm_hamming8(uint8_t a, uint8_t b)
+{
+    uint8_t x = (uint8_t)(a ^ b);
+    uint8_t count = 0;
+    while (x) {
+        count += (uint8_t)(x & 1);
+        x >>= 1;
+    }
+    return count;
 }
 
 /* ---- HTTP POST helper ---- */
@@ -316,16 +372,40 @@ static void swarm_task(void *arg)
 
             bool presence = vit_valid && (vit.flags & 0x01);
             if (presence) {
-                /* Happiness ID: node_id * 1000000 + 200000 + ts_sec */
-                uint32_t h_id = (uint32_t)s_node_id * 1000000U + 200000U + (ts / 1000U % 100000U);
-                char json[SWARM_JSON_BUF];
-                int len = snprintf(json, sizeof(json),
-                    "{\"vectors\":[[%lu,[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]]]}",
-                    (unsigned long)h_id,
-                    hv[0], hv[1], hv[2], hv[3], hv[4], hv[5], hv[6], hv[7]);
+                /* ADR-084 Pass 4: mesh-exchange compression. Sketch the
+                 * current vector and compare against the last vector we
+                 * actually put on the wire. A stable room repeats the same
+                 * sign pattern every cycle — no reason to re-send 8 floats
+                 * for it every 5 seconds. `max_suppress_sec` is the safety
+                 * valve so a long-stable room still refreshes the Seed's
+                 * view periodically instead of going silent forever. */
+                uint8_t sketch = swarm_sketch8(hv);
+                uint8_t distance = s_have_last_sketch
+                    ? swarm_hamming8(sketch, s_last_sent_sketch)
+                    : SWARM_VECTOR_DIM;
+                uint32_t elapsed_since_full = uptime_s - s_last_full_send_s;
 
-                if (swarm_post_json(client, json, len) == ESP_OK) {
-                    s_cnt_ingests++;
+                bool should_send = !s_have_last_sketch
+                    || distance >= s_cfg.novelty_threshold
+                    || elapsed_since_full >= s_cfg.max_suppress_sec;
+
+                if (should_send) {
+                    /* Happiness ID: node_id * 1000000 + 200000 + ts_sec */
+                    uint32_t h_id = (uint32_t)s_node_id * 1000000U + 200000U + (ts / 1000U % 100000U);
+                    char json[SWARM_JSON_BUF];
+                    int len = snprintf(json, sizeof(json),
+                        "{\"vectors\":[[%lu,[%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f]]]}",
+                        (unsigned long)h_id,
+                        hv[0], hv[1], hv[2], hv[3], hv[4], hv[5], hv[6], hv[7]);
+
+                    if (swarm_post_json(client, json, len) == ESP_OK) {
+                        s_cnt_ingests++;
+                        s_last_sent_sketch = sketch;
+                        s_have_last_sketch = true;
+                        s_last_full_send_s = uptime_s;
+                    }
+                } else {
+                    s_cnt_suppressed++;
                 }
             }
         }
