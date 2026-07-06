@@ -488,6 +488,14 @@ struct NodeState {
     /// Most recent novelty score in [0.0, 1.0] (0 = exact-match in bank,
     /// 1 = no overlap). Consumed by the model-wake gate downstream.
     pub(crate) last_novelty_score: Option<f32>,
+    /// ADR-084 Pass 5 — privacy-preserving audit trail of this node's
+    /// novelty events. Stores `(sketch_bytes, sketch_version, novelty,
+    /// witness_sha256)` tuples instead of raw `Vec<f32>` embeddings, so
+    /// anyone with read access to this log (or a future serialization of
+    /// it) cannot reconstruct the source CSI. Populated alongside
+    /// `last_novelty_score` in `update_novelty`; `last_novelty_score`
+    /// itself stays as the cheap ephemeral read, this is the durable trail.
+    pub(crate) privacy_log: wifi_densepose_ruvector::PrivacyEventLog,
     /// ADR-110 / issue #1005: the `(n_subcarriers, ppdu_type)` grid this
     /// node's rolling windows were built on. ESP32-C6 nodes interleave
     /// HE-SU 256-bin frames with HT 64-bin frames on one socket; mixing
@@ -517,6 +525,10 @@ const NOVELTY_HISTORY_CAPACITY: usize = 64;
 /// ADR-084 Pass 3 — feature-vector schema version. Bump on changes to
 /// subcarrier ordering / normalisation so banks reject stale data.
 const NOVELTY_SKETCH_VERSION: u16 = 1;
+/// ADR-084 Pass 5 — max events retained per-node in the privacy-preserving
+/// audit log before FIFO eviction. 256 events at ~6 bytes/sketch (56-dim
+/// packed to 7 bytes) + ~50 fixed bytes is well under 15 KiB per node.
+const PRIVACY_LOG_CAPACITY: usize = 256;
 
 /// Lower plausibility floor (seconds) for a CSI inter-frame delta.
 ///
@@ -751,6 +763,7 @@ impl NodeState {
                 ),
             ),
             last_novelty_score: None,
+            privacy_log: wifi_densepose_ruvector::PrivacyEventLog::new(PRIVACY_LOG_CAPACITY),
             active_grid: None,
         }
     }
@@ -802,6 +815,21 @@ impl NodeState {
 
         // Score before insert so a query doesn't see itself.
         self.last_novelty_score = history.novelty(&feature);
+
+        // ADR-084 Pass 5 — privacy-preserving event log. Sketch the same
+        // feature vector `novelty()` just scored (never the raw `feature`
+        // Vec<f32> itself) and push it to the durable audit trail.
+        if let Some(score) = self.last_novelty_score {
+            let sketch = wifi_densepose_ruvector::Sketch::from_embedding(
+                &feature,
+                NOVELTY_SKETCH_VERSION,
+            );
+            let timestamp_us = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_micros() as u64)
+                .unwrap_or(0);
+            self.privacy_log.push(&sketch, score, timestamp_us);
+        }
 
         let _ = history.push(
             wifi_densepose_signal::ruvsense::longitudinal::EmbeddingEntry {

@@ -7533,7 +7533,6 @@ dependencies = [
  "tokio-test",
  "toml 0.8.23",
  "tracing",
- "wifi-densepose-core",
 ]
 
 [[package]]
@@ -11154,6 +11153,7 @@ dependencies = [
  "wifi-densepose-geo",
  "wifi-densepose-hardware",
  "wifi-densepose-rufield",
+ "wifi-densepose-ruvector",
  "wifi-densepose-signal",
  "wifi-densepose-wifiscan",
  "wifi-densepose-worldgraph",
@@ -11275,17 +11275,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "wifi-densepose-geo",
-]
-
-[[package]]
-name = "wifi-densepose-worldmodel"
-version = "0.3.1"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "wifi-densepose-worldgraph",
 ]
 
 [[package]]

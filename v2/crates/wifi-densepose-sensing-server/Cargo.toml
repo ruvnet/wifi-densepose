@@ -49,6 +49,7 @@ wifi-densepose-wifiscan = { version = "0.3.0", path = "../wifi-densepose-wifisca
 # `--no-default-features` at the workspace root can produce a Windows-friendly
 # build without vcpkg/openblas (issue #366, #415).
 wifi-densepose-signal = { version = "0.3.1", path = "../wifi-densepose-signal", default-features = false }
+wifi-densepose-ruvector = { version = "0.3.2", path = "../wifi-densepose-ruvector" }
 
 # Hardware crate — SyncPacket decoder for ADR-110 §A0.12 mesh-aligned timestamps.
 wifi-densepose-hardware = { version = "0.3.0", path = "../wifi-densepose-hardware" }
