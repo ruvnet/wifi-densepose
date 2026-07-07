@@ -93,6 +93,8 @@ All 5 ruvector crates integrated in workspace:
 
 **Not supported:** ESP32 (original), ESP32-C3 — single-core, can't run CSI DSP pipeline.
 
+**⚠️ Compact boards (SuperMini, ESP32-S3-Zero, other coin-sized clones) run hot:** the firmware keeps the WiFi radio on continuously (`WIFI_PS_NONE`) and runs a full DSP pipeline (`edge_tier=2`), which is sustained high current draw. Full-size dev boards handle this fine; coin-sized clones with minimal PCB copper and budget regulators can run uncomfortably hot and, per at least one field report, have failed to power on again after a hot session. Give them airflow and check by touch during the first few minutes. See `firmware/esp32-csi-node/README.md` for details.
+
 ### Build & Test Commands (this repo)
 ```bash
 # Rust — full workspace tests (1,031+ tests, ~2 min)

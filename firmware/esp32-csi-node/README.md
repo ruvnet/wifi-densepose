@@ -105,6 +105,8 @@ curl http://<ESP32_IP>:8032/wasm/list
 
 > **Tip:** A single node provides presence and vital signs along its line of sight. Multiple nodes (3-6) create a multistatic mesh that resolves 3D pose with <30 mm jitter and zero identity swaps.
 
+> **⚠️ Thermal warning — compact boards (ESP32-S3-Zero, SuperMini, other coin-sized clones):** This firmware runs the WiFi radio with modem sleep disabled (`WIFI_PS_NONE`, required for continuous CSI capture) plus a full edge-processing DSP pipeline on Core 1 (`edge_tier=2`) plus, on ADR-183 builds, a continuous 40 Hz onboard LED driver. That's sustained high current draw with no duty-cycling. Full-size dev boards (DevKitC-1, XIAO) have more copper pour and thermal mass around the regulator and tolerate this fine. Coin-sized clones with minimal PCB area and budget regulators may run hot to the touch during normal operation, and in at least one field report, boards that ran hot during a session failed to power on afterward (regulator damage suspected — see issue tracker). Give these boards airflow, don't stack or enclose them, and check them by touch during the first several minutes of a new deployment. If a board is uncomfortably hot (not just warm), power it down and let it cool before continuing.
+
 ---
 
 ## Firmware Architecture
