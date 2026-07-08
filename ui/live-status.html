@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>RuView — Live Status</title>
+<style>
+  :root { color-scheme: dark light; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #0f1115;
+    color: #e8eaed;
+    margin: 0;
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.5rem;
+  }
+  h1 { margin: 0; font-size: 1.4rem; font-weight: 600; }
+  #status-badge {
+    font-size: 0.85rem;
+    padding: 0.25rem 0.75rem;
+    border-radius: 999px;
+    font-weight: 600;
+  }
+  .badge-ok { background: #103b23; color: #4ade80; }
+  .badge-stale { background: #3b1010; color: #f87171; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem;
+    width: 100%;
+    max-width: 900px;
+  }
+  .card {
+    background: #1a1d24;
+    border: 1px solid #2a2e37;
+    border-radius: 12px;
+    padding: 1.25rem;
+    text-align: center;
+  }
+  .card .label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #9aa0aa;
+    margin-bottom: 0.5rem;
+  }
+  .card .value {
+    font-size: 2rem;
+    font-weight: 700;
+  }
+  .card .unit {
+    font-size: 0.9rem;
+    color: #9aa0aa;
+    margin-left: 0.25rem;
+  }
+  .presence-on { color: #4ade80; }
+  .presence-off { color: #6b7280; }
+  #last-updated {
+    font-size: 0.8rem;
+    color: #6b7280;
+  }
+  #error-banner {
+    display: none;
+    background: #3b1010;
+    color: #f87171;
+    padding: 0.75rem 1.25rem;
+    border-radius: 8px;
+    max-width: 900px;
+    width: 100%;
+    box-sizing: border-box;
+    font-size: 0.9rem;
+  }
+</style>
+</head>
+<body>
+  <h1>RuView — Live Sensing Status</h1>
+  <span id="status-badge" class="badge-stale">connecting…</span>
+
+  <div id="error-banner"></div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="label">Presence</div>
+      <div class="value" id="v-presence">—</div>
+    </div>
+    <div class="card">
+      <div class="label">People Detected</div>
+      <div class="value" id="v-persons">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Motion</div>
+      <div class="value" id="v-motion">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Breathing Rate</div>
+      <div class="value" id="v-breathing">—<span class="unit">bpm</span></div>
+    </div>
+    <div class="card">
+      <div class="label">Heart Rate</div>
+      <div class="value" id="v-heart">—<span class="unit">bpm</span></div>
+    </div>
+    <div class="card">
+      <div class="label">Confidence</div>
+      <div class="value" id="v-confidence">—</div>
+    </div>
+  </div>
+
+  <div id="last-updated">waiting for first update…</div>
+
+<script>
+  const API_URL = "http://localhost:3000/api/v1/sensing/latest";
+  const POLL_MS = 1000;
+
+  const badge = document.getElementById("status-badge");
+  const errBanner = document.getElementById("error-banner");
+  const lastUpdated = document.getElementById("last-updated");
+
+  function setBadge(ok, text) {
+    badge.textContent = text;
+    badge.className = ok ? "badge-ok" : "badge-stale";
+  }
+
+  function showError(msg) {
+    errBanner.style.display = "block";
+    errBanner.textContent = msg;
+  }
+  function clearError() {
+    errBanner.style.display = "none";
+  }
+
+  async function poll() {
+    try {
+      const res = await fetch(API_URL, { cache: "no-store" });
+      if (res.status === 503) {
+        setBadge(false, "stale — no recent data");
+        clearError();
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const d = await res.json();
+
+      document.getElementById("v-presence").textContent = d.presence ? "YES" : "NO";
+      document.getElementById("v-presence").className = "value " + (d.presence ? "presence-on" : "presence-off");
+      document.getElementById("v-persons").textContent = d.n_persons ?? "—";
+      document.getElementById("v-motion").textContent = (d.motion !== undefined) ? (d.motion >= 0.5 ? "YES" : "no") : "—";
+      document.getElementById("v-breathing").innerHTML = (d.breathing_rate_bpm !== undefined ? d.breathing_rate_bpm.toFixed(1) : "—") + '<span class="unit">bpm</span>';
+      document.getElementById("v-heart").innerHTML = (d.heartrate_bpm !== undefined ? d.heartrate_bpm.toFixed(1) : "—") + '<span class="unit">bpm</span>';
+      document.getElementById("v-confidence").textContent = (d.confidence !== undefined) ? (d.confidence * 100).toFixed(0) + "%" : "—";
+
+      setBadge(true, "live");
+      clearError();
+      lastUpdated.textContent = "last update: " + new Date().toLocaleTimeString();
+    } catch (e) {
+      setBadge(false, "disconnected");
+      showError("Can't reach sensing server at " + API_URL + " — is ruview-sensing-server.py running? (" + e.message + ")");
+    }
+  }
+
+  poll();
+  setInterval(poll, POLL_MS);
+</script>
+</body>
+</html>
