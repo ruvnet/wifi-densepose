@@ -133,6 +133,44 @@
     color: #6b7280;
     text-align: right;
   }
+  .chart-wrap { margin-top: 1.1rem; }
+  .chart-title {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #9aa0aa;
+    margin-bottom: 0.4rem;
+  }
+  .chart {
+    width: 100%;
+    height: 44px;
+    display: block;
+    border-radius: 6px;
+    background: #20242c;
+  }
+  .chart-axis {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.6rem;
+    color: #6b7280;
+    margin-top: 0.3rem;
+  }
+  .chart-legend {
+    display: flex;
+    gap: 0.9rem;
+    flex-wrap: wrap;
+    font-size: 0.62rem;
+    color: #9aa0aa;
+    margin-top: 0.5rem;
+  }
+  .chart-legend .swatch {
+    display: inline-block;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 2px;
+    margin-right: 0.3rem;
+    vertical-align: middle;
+  }
   #empty-state {
     color: #6b7280;
     font-size: 0.9rem;
@@ -158,6 +196,7 @@
 <script>
   const API_BASE = "http://localhost:3000";
   const POLL_MS = 1000;
+  const HISTORY_POLL_MS = 30000;
   const STALE_S = 10;
   const LABEL_KEY = "ruview-floor-labels";
 
@@ -214,6 +253,19 @@
         <div class="card"><div class="label">Confidence</div><div class="value" data-el="confidence">—</div></div>
       </div>
       <div class="node-footer" data-el="footer">waiting for data…</div>
+
+      <div class="chart-wrap">
+        <div class="chart-title">Presence — last 24h (10 min buckets)</div>
+        <svg class="chart" data-el="chart" viewBox="0 0 720 60" preserveAspectRatio="none"></svg>
+        <div class="chart-axis" data-el="chartAxis"></div>
+        <div class="chart-legend">
+          <span><span class="swatch" style="background:#20242c;border:1px solid #33394a;"></span>no data</span>
+          <span><span class="swatch" style="background:#2a2e37;"></span>empty</span>
+          <span><span class="swatch" style="background:rgba(74,222,128,0.85);"></span>occupied</span>
+          <span><span class="swatch" style="background:#4ade80;"></span>| became present</span>
+          <span><span class="swatch" style="background:#94a3b8;"></span>| became absent</span>
+        </div>
+      </div>
     `;
     nodesEl.appendChild(card);
 
@@ -228,6 +280,8 @@
       heart: card.querySelector('[data-el="heart"]'),
       confidence: card.querySelector('[data-el="confidence"]'),
       footer: card.querySelector('[data-el="footer"]'),
+      chart: card.querySelector('[data-el="chart"]'),
+      chartAxis: card.querySelector('[data-el="chartAxis"]'),
     };
     refs.label.addEventListener("change", () => saveLabel(nodeId, refs.label.value.trim() || ("Node " + nodeId)));
     cardEls.set(nodeId, refs);
@@ -248,6 +302,68 @@
     if (res.status === 503) return null;
     if (!res.ok) throw new Error(`HTTP ${res.status} for node ${nodeId}`);
     return res.json();
+  }
+
+  async function fetchHistory(nodeId) {
+    const res = await fetch(
+      `${API_BASE}/api/v1/sensing/history/${encodeURIComponent(nodeId)}?hours=24&bucket_min=10`,
+      { cache: "no-store" }
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status} for node ${nodeId} history`);
+    return res.json();
+  }
+
+  function bucketColor(b) {
+    if (!b.has_data) return "#20242c";
+    if (!b.presence_frac) return "#2a2e37";
+    const alpha = (0.35 + b.presence_frac * 0.65).toFixed(2);
+    return `rgba(74, 222, 128, ${alpha})`;
+  }
+
+  function fmtTime(ts) {
+    return new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function renderHistory(refs, hist) {
+    const buckets = hist.buckets;
+    const n = buckets.length;
+    if (n === 0) { refs.chart.innerHTML = ""; refs.chartAxis.innerHTML = ""; return; }
+
+    const W = 720, H = 60;
+    const barW = W / n;
+    const t0 = buckets[0].ts_start;
+    const t1 = buckets[n - 1].ts_end;
+    const total = Math.max(1, t1 - t0);
+    const tToX = (ts) => ((ts - t0) / total) * W;
+
+    let svg = "";
+    for (let i = 0; i < n; i++) {
+      const b = buckets[i];
+      const x = i * barW;
+      const w = Math.max(barW - 0.4, 0.6);
+      const desc = !b.has_data
+        ? `${fmtTime(b.ts_start)} — no data`
+        : (b.presence_frac > 0
+            ? `${fmtTime(b.ts_start)} — ${Math.round(b.presence_frac * 100)}% occupied`
+            : `${fmtTime(b.ts_start)} — empty`);
+      svg += `<rect x="${x.toFixed(2)}" y="0" width="${w.toFixed(2)}" height="${H}" fill="${bucketColor(b)}"><title>${desc}</title></rect>`;
+    }
+    for (const ch of hist.changes) {
+      const x = tToX(ch.ts).toFixed(2);
+      const color = ch.presence ? "#4ade80" : "#94a3b8";
+      const label = `${fmtTime(ch.ts)} — ${ch.presence ? "became present" : "became absent"}`;
+      svg += `<line x1="${x}" y1="0" x2="${x}" y2="${H}" stroke="${color}" stroke-width="1.5"><title>${label}</title></line>`;
+    }
+    refs.chart.innerHTML = svg;
+
+    // Axis labels every ~3h (18 buckets at 10-min resolution).
+    const step = Math.max(1, Math.round(n / 8));
+    const axisLabels = [];
+    for (let i = 0; i < n; i += step) {
+      axisLabels.push(`<span>${fmtTime(buckets[i].ts_start)}</span>`);
+    }
+    axisLabels.push(`<span>now</span>`);
+    refs.chartAxis.innerHTML = axisLabels.join("");
   }
 
   function renderVitals(refs, d) {
@@ -297,8 +413,22 @@
     }
   }
 
+  async function pollHistory() {
+    for (const [nodeId, refs] of cardEls) {
+      try {
+        const hist = await fetchHistory(nodeId);
+        renderHistory(refs, hist);
+      } catch (e) {
+        // Leave the last-rendered chart in place; vitals polling already
+        // surfaces connectivity errors via the status badge.
+      }
+    }
+  }
+
   poll();
   setInterval(poll, POLL_MS);
+  pollHistory();
+  setInterval(pollHistory, HISTORY_POLL_MS);
 </script>
 </body>
 </html>
