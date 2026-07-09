@@ -1288,14 +1288,22 @@ fn parse_esp32_feature_state(buf: &[u8]) -> Option<Esp32VitalsPacket> {
     if magic != 0xC511_0006 {
         return None;
     }
+    // The node writes a *raw* detector magnitude into `presence_score` /
+    // `motion_score` even though rv_feature_state.h documents them as 0..1
+    // (firmware adaptive_controller.c copies the unclamped observation). A
+    // NaN/Inf or a >1 value would otherwise surface as e.g. "1338%" confidence
+    // in the UI, so normalise defensively at this trust boundary: coerce
+    // non-finite to 0 and clamp to [0, 1]. The presence/motion *booleans* are
+    // derived from the clamped score, so a raw 13.38 still reads as present.
     let f32_at = |o: usize| f32::from_le_bytes([buf[o], buf[o + 1], buf[o + 2], buf[o + 3]]);
+    let unit = |v: f32| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
 
     let node_id = buf[4];
     let ts_us = u64::from_le_bytes([
         buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15],
     ]);
-    let motion_score = f32_at(16);
-    let presence_score = f32_at(20);
+    let motion_score = unit(f32_at(16));
+    let presence_score = unit(f32_at(20));
     let respiration_bpm = f32_at(24);
     let heartbeat_bpm = f32_at(32);
     let quality_flags = u16::from_le_bytes([buf[52], buf[53]]);
@@ -1526,6 +1534,26 @@ mod feature_state_parser_tests {
         let v = parse_esp32_feature_state(&pkt).expect("must parse");
         assert!(!v.presence);
         assert_eq!(v.n_persons, 0);
+    }
+
+    #[test]
+    fn clamps_raw_and_non_finite_scores_to_unit_range() {
+        // Firmware writes a *raw* unclamped detector magnitude into
+        // presence_score/motion_score (observed 13.38 on real hardware) despite
+        // the 0..1 contract. The parser must normalise so the UI never shows
+        // e.g. "1338%" confidence, while presence still asserts.
+        let pkt = build_feature_state(1, 5.0, 13.381, 15.0, 60.0, 0x01, 0);
+        let v = parse_esp32_feature_state(&pkt).expect("must parse");
+        assert!(v.presence, "raw score >= 0.5 → present");
+        assert!((v.presence_score - 1.0).abs() < 1e-6, "presence clamped to 1.0");
+        assert!((v.motion_energy - 1.0).abs() < 1e-6, "motion clamped to 1.0");
+
+        // Non-finite → coerced to 0.0 (fail-closed, not NaN-poisoned).
+        let nan_pkt = build_feature_state(1, f32::NAN, f32::INFINITY, 0.0, 0.0, 0x01, 0);
+        let nv = parse_esp32_feature_state(&nan_pkt).expect("must parse");
+        assert_eq!(nv.presence_score, 0.0);
+        assert_eq!(nv.motion_energy, 0.0);
+        assert!(!nv.presence, "non-finite score must not assert presence");
     }
 
     #[test]
