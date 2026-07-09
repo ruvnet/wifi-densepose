@@ -57,12 +57,12 @@ def test_heart_rate_extract_per_frame_cost(benchmark) -> None:
     hr = HeartRateExtractor.esp32_default()
     rng = Random(43)
     for i in range(1500):
-        residuals, weights = _synth_frame(56, 100.0, i / 100.0, 1.2, rng)
-        hr.extract(residuals=residuals, weights=weights)
+        residuals, phases = _synth_frame(56, 100.0, i / 100.0, 1.2, rng)
+        hr.extract(residuals=residuals, phases=phases)
 
     def _one_frame():
-        residuals, weights = _synth_frame(56, 100.0, 16.0, 1.2, rng)
-        return hr.extract(residuals=residuals, weights=weights)
+        residuals, phases = _synth_frame(56, 100.0, 16.0, 1.2, rng)
+        return hr.extract(residuals=residuals, phases=phases)
 
     benchmark(_one_frame)
 
