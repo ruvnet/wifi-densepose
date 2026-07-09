@@ -1262,6 +1262,66 @@ fn parse_esp32_vitals(buf: &[u8]) -> Option<Esp32VitalsPacket> {
     })
 }
 
+// ── ADR-081: Feature State Packet (magic 0xC511_0006) ────────────────────────
+//
+// This is the *default* upstream payload from a node (rv_feature_state.h): a
+// compact 60-byte per-node sensing state that replaced the raw ADR-018 CSI
+// stream as the primary wire format. The board computes presence / motion /
+// respiration / heartbeat on-chip and ships this instead of raw CSI. We decode
+// it into the existing Esp32VitalsPacket so it flows through the same
+// SensingUpdate path as ADR-039 vitals (0xC511_0002).
+//
+// Wire layout (packed, little-endian):
+//   [0..4]  magic 0xC511_0006     [4]    node_id      [5]     mode
+//   [6..8]  seq                    [8..16] ts_us (u64)
+//   [16..20] motion_score  f32     [20..24] presence_score   f32
+//   [24..28] respiration_bpm f32   [28..32] respiration_conf f32
+//   [32..36] heartbeat_bpm  f32    [36..40] heartbeat_conf   f32
+//   [40..44] anomaly_score  f32    [44..48] env_shift_score  f32
+//   [48..52] node_coherence f32    [52..54] quality_flags u16
+//   [54..56] reserved              [56..60] crc32
+fn parse_esp32_feature_state(buf: &[u8]) -> Option<Esp32VitalsPacket> {
+    if buf.len() < 60 {
+        return None;
+    }
+    let magic = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+    if magic != 0xC511_0006 {
+        return None;
+    }
+    let f32_at = |o: usize| f32::from_le_bytes([buf[o], buf[o + 1], buf[o + 2], buf[o + 3]]);
+
+    let node_id = buf[4];
+    let ts_us = u64::from_le_bytes([
+        buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15],
+    ]);
+    let motion_score = f32_at(16);
+    let presence_score = f32_at(20);
+    let respiration_bpm = f32_at(24);
+    let heartbeat_bpm = f32_at(32);
+    let quality_flags = u16::from_le_bytes([buf[52], buf[53]]);
+
+    // RV_QFLAG_PRESENCE_VALID = bit0. Treat presence as asserted when the node
+    // flags it valid AND the 1 s presence score clears 0.5; motion uses the
+    // 100 ms motion score.
+    let presence_valid = (quality_flags & 0x01) != 0;
+    let presence = presence_valid && presence_score >= 0.5;
+    let motion = motion_score >= 0.5;
+
+    Some(Esp32VitalsPacket {
+        node_id,
+        presence,
+        fall_detected: false,
+        motion,
+        breathing_rate_bpm: respiration_bpm as f64,
+        heartrate_bpm: heartbeat_bpm as f64,
+        rssi: 0, // feature_state carries no RSSI
+        n_persons: if presence { 1 } else { 0 },
+        motion_energy: motion_score,
+        presence_score,
+        timestamp_ms: (ts_us / 1000) as u32,
+    })
+}
+
 // ── ADR-040: WASM Output Packet (magic 0xC511_0007 — reassigned per #928) ─────
 
 /// Single WASM event (type + value).
@@ -1403,6 +1463,83 @@ fn parse_edge_fused_vitals(buf: &[u8]) -> Option<EdgeFusedVitalsPacket> {
         mmwave_targets,
         mmwave_confidence,
     })
+}
+
+#[cfg(test)]
+mod feature_state_parser_tests {
+    //! ADR-081 feature_state (`0xC511_0006`) is the node's *default* upstream
+    //! payload (see firmware `rv_feature_state.h`). The server historically
+    //! parsed only CSI/vitals/fused/WASM and silently dropped this stream, so a
+    //! node emitting its default payload produced zero UI updates. These tests
+    //! guard the parser + its mapping into `Esp32VitalsPacket`.
+    use super::*;
+
+    /// Build a 60-byte feature_state packet with the given field values.
+    fn build_feature_state(
+        node_id: u8,
+        motion: f32,
+        presence: f32,
+        resp: f32,
+        hb: f32,
+        quality_flags: u16,
+        ts_us: u64,
+    ) -> Vec<u8> {
+        let mut b = vec![0u8; 60];
+        b[0..4].copy_from_slice(&0xC511_0006u32.to_le_bytes());
+        b[4] = node_id;
+        b[5] = 0; // mode
+        b[6..8].copy_from_slice(&1u16.to_le_bytes()); // seq
+        b[8..16].copy_from_slice(&ts_us.to_le_bytes());
+        b[16..20].copy_from_slice(&motion.to_le_bytes());
+        b[20..24].copy_from_slice(&presence.to_le_bytes());
+        b[24..28].copy_from_slice(&resp.to_le_bytes()); // respiration_bpm
+        b[28..32].copy_from_slice(&0.8f32.to_le_bytes()); // respiration_conf
+        b[32..36].copy_from_slice(&hb.to_le_bytes()); // heartbeat_bpm
+        b[36..40].copy_from_slice(&0.8f32.to_le_bytes()); // heartbeat_conf
+        b[40..44].copy_from_slice(&0.0f32.to_le_bytes()); // anomaly
+        b[44..48].copy_from_slice(&0.0f32.to_le_bytes()); // env_shift
+        b[48..52].copy_from_slice(&1.0f32.to_le_bytes()); // node_coherence
+        b[52..54].copy_from_slice(&quality_flags.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn parses_fields_and_maps_presence_when_valid() {
+        // PRESENCE_VALID (bit0) set, presence_score 0.9 → presence asserted.
+        let pkt = build_feature_state(7, 0.7, 0.9, 15.0, 60.0, 0x01, 12_345_000);
+        let v = parse_esp32_feature_state(&pkt).expect("0xC511_0006 must parse");
+        assert_eq!(v.node_id, 7);
+        assert!(v.presence, "presence_valid && score>=0.5 → present");
+        assert!(v.motion, "motion_score 0.7 >= 0.5 → moving");
+        assert_eq!(v.n_persons, 1);
+        assert!((v.breathing_rate_bpm - 15.0).abs() < 1e-6);
+        assert!((v.heartrate_bpm - 60.0).abs() < 1e-6);
+        assert!((v.presence_score - 0.9).abs() < 1e-6);
+        assert_eq!(v.timestamp_ms, 12_345); // ts_us / 1000
+    }
+
+    #[test]
+    fn presence_false_when_valid_flag_clear() {
+        // High score but PRESENCE_VALID clear → must NOT assert presence
+        // (fail-closed on the node's own validity flag).
+        let pkt = build_feature_state(1, 0.0, 0.95, 0.0, 0.0, 0x00, 0);
+        let v = parse_esp32_feature_state(&pkt).expect("must parse");
+        assert!(!v.presence);
+        assert_eq!(v.n_persons, 0);
+    }
+
+    #[test]
+    fn rejects_wrong_magic() {
+        let mut pkt = build_feature_state(1, 0.0, 0.0, 0.0, 0.0, 0x01, 0);
+        pkt[0..4].copy_from_slice(&0xC511_0002u32.to_le_bytes()); // vitals magic
+        assert!(parse_esp32_feature_state(&pkt).is_none());
+    }
+
+    #[test]
+    fn rejects_short_buffer() {
+        let pkt = build_feature_state(1, 0.0, 0.0, 0.0, 0.0, 0x01, 0);
+        assert!(parse_esp32_feature_state(&pkt[..59]).is_none());
+    }
 }
 
 #[cfg(test)]
@@ -5432,8 +5569,14 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
     loop {
         match socket.recv_from(&mut buf).await {
             Ok((len, src)) => {
-                // ADR-039: Try edge vitals packet first (magic 0xC511_0002).
-                if let Some(vitals) = parse_esp32_vitals(&buf[..len]) {
+                // ADR-039: Try edge vitals packet first (magic 0xC511_0002);
+                // fall back to the ADR-081 feature_state packet (magic
+                // 0xC511_0006), which is the node's *default* primary payload.
+                // Both decode into Esp32VitalsPacket and share the SensingUpdate
+                // path below.
+                if let Some(vitals) = parse_esp32_vitals(&buf[..len])
+                    .or_else(|| parse_esp32_feature_state(&buf[..len]))
+                {
                     debug!(
                         "ESP32 vitals from {src}: node={} br={:.1} hr={:.1} pres={}",
                         vitals.node_id,
