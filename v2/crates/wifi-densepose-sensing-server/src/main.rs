@@ -1084,6 +1084,12 @@ struct AppStateInner {
     br_buffer: VecDeque<f64>,
     /// ADR-039: Latest edge vitals packet from ESP32.
     edge_vitals: Option<Esp32VitalsPacket>,
+    /// When the last ADR-081 feature_state (0xC511_0006) presence was received.
+    /// The node computes presence on-chip against a 60 s empty-room baseline, so
+    /// its presence flag is authoritative; the server's raw-CSI classifier is
+    /// uncalibrated for the room and false-positives on ambient variance. Used
+    /// to prefer the node's presence when a fresh feature_state exists.
+    last_feature_state_at: Option<std::time::Instant>,
     /// ADR-040: Latest WASM output packet from ESP32.
     latest_wasm_events: Option<WasmOutputPacket>,
     // ── Model management fields ─────────────────────────────────────────────
@@ -1262,6 +1268,74 @@ fn parse_esp32_vitals(buf: &[u8]) -> Option<Esp32VitalsPacket> {
     })
 }
 
+// ── ADR-081: Feature State Packet (magic 0xC511_0006) ────────────────────────
+//
+// This is the *default* upstream payload from a node (rv_feature_state.h): a
+// compact 60-byte per-node sensing state that replaced the raw ADR-018 CSI
+// stream as the primary wire format. The board computes presence / motion /
+// respiration / heartbeat on-chip and ships this instead of raw CSI. We decode
+// it into the existing Esp32VitalsPacket so it flows through the same
+// SensingUpdate path as ADR-039 vitals (0xC511_0002).
+//
+// Wire layout (packed, little-endian):
+//   [0..4]  magic 0xC511_0006     [4]    node_id      [5]     mode
+//   [6..8]  seq                    [8..16] ts_us (u64)
+//   [16..20] motion_score  f32     [20..24] presence_score   f32
+//   [24..28] respiration_bpm f32   [28..32] respiration_conf f32
+//   [32..36] heartbeat_bpm  f32    [36..40] heartbeat_conf   f32
+//   [40..44] anomaly_score  f32    [44..48] env_shift_score  f32
+//   [48..52] node_coherence f32    [52..54] quality_flags u16
+//   [54..56] reserved              [56..60] crc32
+fn parse_esp32_feature_state(buf: &[u8]) -> Option<Esp32VitalsPacket> {
+    if buf.len() < 60 {
+        return None;
+    }
+    let magic = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+    if magic != 0xC511_0006 {
+        return None;
+    }
+    // The node writes a *raw* detector magnitude into `presence_score` /
+    // `motion_score` even though rv_feature_state.h documents them as 0..1
+    // (firmware adaptive_controller.c copies the unclamped observation). A
+    // NaN/Inf or a >1 value would otherwise surface as e.g. "1338%" confidence
+    // in the UI, so normalise defensively at this trust boundary: coerce
+    // non-finite to 0 and clamp to [0, 1]. The presence/motion *booleans* are
+    // derived from the clamped score, so a raw 13.38 still reads as present.
+    let f32_at = |o: usize| f32::from_le_bytes([buf[o], buf[o + 1], buf[o + 2], buf[o + 3]]);
+    let unit = |v: f32| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+
+    let node_id = buf[4];
+    let ts_us = u64::from_le_bytes([
+        buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15],
+    ]);
+    let motion_score = unit(f32_at(16));
+    let presence_score = unit(f32_at(20));
+    let respiration_bpm = f32_at(24);
+    let heartbeat_bpm = f32_at(32);
+    let quality_flags = u16::from_le_bytes([buf[52], buf[53]]);
+
+    // RV_QFLAG_PRESENCE_VALID = bit0. Treat presence as asserted when the node
+    // flags it valid AND the 1 s presence score clears 0.5; motion uses the
+    // 100 ms motion score.
+    let presence_valid = (quality_flags & 0x01) != 0;
+    let presence = presence_valid && presence_score >= 0.5;
+    let motion = motion_score >= 0.5;
+
+    Some(Esp32VitalsPacket {
+        node_id,
+        presence,
+        fall_detected: false,
+        motion,
+        breathing_rate_bpm: respiration_bpm as f64,
+        heartrate_bpm: heartbeat_bpm as f64,
+        rssi: 0, // feature_state carries no RSSI
+        n_persons: if presence { 1 } else { 0 },
+        motion_energy: motion_score,
+        presence_score,
+        timestamp_ms: (ts_us / 1000) as u32,
+    })
+}
+
 // ── ADR-040: WASM Output Packet (magic 0xC511_0007 — reassigned per #928) ─────
 
 /// Single WASM event (type + value).
@@ -1403,6 +1477,148 @@ fn parse_edge_fused_vitals(buf: &[u8]) -> Option<EdgeFusedVitalsPacket> {
         mmwave_targets,
         mmwave_confidence,
     })
+}
+
+#[cfg(test)]
+mod feature_state_parser_tests {
+    //! ADR-081 feature_state (`0xC511_0006`) is the node's *default* upstream
+    //! payload (see firmware `rv_feature_state.h`). The server historically
+    //! parsed only CSI/vitals/fused/WASM and silently dropped this stream, so a
+    //! node emitting its default payload produced zero UI updates. These tests
+    //! guard the parser + its mapping into `Esp32VitalsPacket`.
+    use super::*;
+
+    /// Build a 60-byte feature_state packet with the given field values.
+    fn build_feature_state(
+        node_id: u8,
+        motion: f32,
+        presence: f32,
+        resp: f32,
+        hb: f32,
+        quality_flags: u16,
+        ts_us: u64,
+    ) -> Vec<u8> {
+        let mut b = vec![0u8; 60];
+        b[0..4].copy_from_slice(&0xC511_0006u32.to_le_bytes());
+        b[4] = node_id;
+        b[5] = 0; // mode
+        b[6..8].copy_from_slice(&1u16.to_le_bytes()); // seq
+        b[8..16].copy_from_slice(&ts_us.to_le_bytes());
+        b[16..20].copy_from_slice(&motion.to_le_bytes());
+        b[20..24].copy_from_slice(&presence.to_le_bytes());
+        b[24..28].copy_from_slice(&resp.to_le_bytes()); // respiration_bpm
+        b[28..32].copy_from_slice(&0.8f32.to_le_bytes()); // respiration_conf
+        b[32..36].copy_from_slice(&hb.to_le_bytes()); // heartbeat_bpm
+        b[36..40].copy_from_slice(&0.8f32.to_le_bytes()); // heartbeat_conf
+        b[40..44].copy_from_slice(&0.0f32.to_le_bytes()); // anomaly
+        b[44..48].copy_from_slice(&0.0f32.to_le_bytes()); // env_shift
+        b[48..52].copy_from_slice(&1.0f32.to_le_bytes()); // node_coherence
+        b[52..54].copy_from_slice(&quality_flags.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn parses_fields_and_maps_presence_when_valid() {
+        // PRESENCE_VALID (bit0) set, presence_score 0.9 → presence asserted.
+        let pkt = build_feature_state(7, 0.7, 0.9, 15.0, 60.0, 0x01, 12_345_000);
+        let v = parse_esp32_feature_state(&pkt).expect("0xC511_0006 must parse");
+        assert_eq!(v.node_id, 7);
+        assert!(v.presence, "presence_valid && score>=0.5 → present");
+        assert!(v.motion, "motion_score 0.7 >= 0.5 → moving");
+        assert_eq!(v.n_persons, 1);
+        assert!((v.breathing_rate_bpm - 15.0).abs() < 1e-6);
+        assert!((v.heartrate_bpm - 60.0).abs() < 1e-6);
+        assert!((v.presence_score - 0.9).abs() < 1e-6);
+        assert_eq!(v.timestamp_ms, 12_345); // ts_us / 1000
+    }
+
+    #[test]
+    fn presence_false_when_valid_flag_clear() {
+        // High score but PRESENCE_VALID clear → must NOT assert presence
+        // (fail-closed on the node's own validity flag).
+        let pkt = build_feature_state(1, 0.0, 0.95, 0.0, 0.0, 0x00, 0);
+        let v = parse_esp32_feature_state(&pkt).expect("must parse");
+        assert!(!v.presence);
+        assert_eq!(v.n_persons, 0);
+    }
+
+    #[test]
+    fn clamps_raw_and_non_finite_scores_to_unit_range() {
+        // Firmware writes a *raw* unclamped detector magnitude into
+        // presence_score/motion_score (observed 13.38 on real hardware) despite
+        // the 0..1 contract. The parser must normalise so the UI never shows
+        // e.g. "1338%" confidence, while presence still asserts.
+        let pkt = build_feature_state(1, 5.0, 13.381, 15.0, 60.0, 0x01, 0);
+        let v = parse_esp32_feature_state(&pkt).expect("must parse");
+        assert!(v.presence, "raw score >= 0.5 → present");
+        assert!((v.presence_score - 1.0).abs() < 1e-6, "presence clamped to 1.0");
+        assert!((v.motion_energy - 1.0).abs() < 1e-6, "motion clamped to 1.0");
+
+        // Non-finite → coerced to 0.0 (fail-closed, not NaN-poisoned).
+        let nan_pkt = build_feature_state(1, f32::NAN, f32::INFINITY, 0.0, 0.0, 0x01, 0);
+        let nv = parse_esp32_feature_state(&nan_pkt).expect("must parse");
+        assert_eq!(nv.presence_score, 0.0);
+        assert_eq!(nv.motion_energy, 0.0);
+        assert!(!nv.presence, "non-finite score must not assert presence");
+    }
+
+    #[test]
+    fn rejects_wrong_magic() {
+        let mut pkt = build_feature_state(1, 0.0, 0.0, 0.0, 0.0, 0x01, 0);
+        pkt[0..4].copy_from_slice(&0xC511_0002u32.to_le_bytes()); // vitals magic
+        assert!(parse_esp32_feature_state(&pkt).is_none());
+    }
+
+    #[test]
+    fn rejects_short_buffer() {
+        let pkt = build_feature_state(1, 0.0, 0.0, 0.0, 0.0, 0x01, 0);
+        assert!(parse_esp32_feature_state(&pkt[..59]).is_none());
+    }
+}
+
+#[cfg(test)]
+mod prefer_board_presence_tests {
+    //! Fix A: the node's on-chip feature_state presence (empty-room-calibrated
+    //! on-device) must override the server's uncalibrated raw-CSI classifier,
+    //! which false-positives on ambient CSI variance.
+    use super::*;
+
+    fn cls(motion: &str, present: bool) -> ClassificationInfo {
+        ClassificationInfo {
+            motion_level: motion.to_string(),
+            presence: present,
+            confidence: 0.9,
+        }
+    }
+
+    #[test]
+    fn board_empty_overrides_server_false_positive() {
+        // Server hallucinated presence on ambient variance; board says empty.
+        let mut c = cls("present_moving", true);
+        assert!(prefer_board_presence(&mut c, Some((false, false))));
+        assert!(!c.presence);
+        assert_eq!(c.motion_level, "absent");
+        assert!((c.confidence - 0.9).abs() < 1e-9, "confidence untouched");
+    }
+
+    #[test]
+    fn board_present_moving_and_still_win() {
+        let mut m = cls("absent", false);
+        prefer_board_presence(&mut m, Some((true, true)));
+        assert!(m.presence && m.motion_level == "present_moving");
+
+        let mut s = cls("absent", false);
+        prefer_board_presence(&mut s, Some((true, false)));
+        assert!(s.presence && s.motion_level == "present_still");
+    }
+
+    #[test]
+    fn no_fresh_feature_state_leaves_server_classification() {
+        let mut c = cls("present_still", true);
+        assert!(!prefer_board_presence(&mut c, None));
+        assert!(c.presence);
+        assert_eq!(c.motion_level, "present_still");
+    }
 }
 
 #[cfg(test)]
@@ -2084,6 +2300,38 @@ fn extract_features_from_frame(
         sub_variances,
         motion_score,
     )
+}
+
+/// Fix A: prefer a node's on-chip `feature_state` (ADR-081, 0xC511_0006)
+/// presence over the server's raw-CSI motion classifier.
+///
+/// The ESP32 computes presence against a 60 s empty-room baseline on-device, so
+/// its flag is authoritative for the room. The server's `raw_classify` pipeline
+/// is uncalibrated for the specific room and false-positives on ambient CSI
+/// variance (the node's own 50 Hz self-ping traffic, other WiFi, multipath), so
+/// an empty room the node reports as empty was being rendered "present".
+///
+/// When `board` is `Some((presence, motion))`, overwrites `classification`'s
+/// presence + motion_level and returns `true`. `None` (no fresh feature_state)
+/// leaves the server classification untouched and returns `false`. Confidence is
+/// deliberately left as the server pipeline computed it.
+fn prefer_board_presence(
+    classification: &mut ClassificationInfo,
+    board: Option<(bool, bool)>,
+) -> bool {
+    let Some((present, motion)) = board else {
+        return false;
+    };
+    classification.presence = present;
+    classification.motion_level = if motion {
+        "present_moving"
+    } else if present {
+        "present_still"
+    } else {
+        "absent"
+    }
+    .to_string();
+    true
 }
 
 /// Simple threshold classification (no smoothing) — used as the "raw" input.
@@ -5432,8 +5680,14 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
     loop {
         match socket.recv_from(&mut buf).await {
             Ok((len, src)) => {
-                // ADR-039: Try edge vitals packet first (magic 0xC511_0002).
-                if let Some(vitals) = parse_esp32_vitals(&buf[..len]) {
+                // ADR-039: Try edge vitals packet first (magic 0xC511_0002);
+                // fall back to the ADR-081 feature_state packet (magic
+                // 0xC511_0006), which is the node's *default* primary payload.
+                // Both decode into Esp32VitalsPacket and share the SensingUpdate
+                // path below.
+                if let Some(vitals) = parse_esp32_vitals(&buf[..len])
+                    .or_else(|| parse_esp32_feature_state(&buf[..len]))
+                {
                     debug!(
                         "ESP32 vitals from {src}: node={} br={:.1} hr={:.1} pres={}",
                         vitals.node_id,
@@ -5694,6 +5948,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     }
                     s.latest_update = Some(update);
                     s.edge_vitals = Some(vitals);
+                    s.last_feature_state_at = Some(std::time::Instant::now());
                     continue;
                 }
 
@@ -5867,6 +6122,25 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     // to avoid unsafe raw pointer (review finding #2).
                     let adaptive_model_clone = s.adaptive_model.clone();
 
+                    // Fix A: capture the node's on-chip feature_state (0xC511_0006)
+                    // presence BEFORE borrowing node_states. The ESP32 computes
+                    // presence against a 60 s empty-room baseline on-device, so it
+                    // is authoritative; the server's raw-CSI motion classifier below
+                    // is uncalibrated for the room and reads ambient CSI variance
+                    // (self-ping traffic / WiFi / multipath) as motion. When a fresh
+                    // feature_state exists, its presence overrides the classifier.
+                    let board_presence: Option<(bool, bool)> = {
+                        let fresh = s.last_feature_state_at.is_some_and(|t| {
+                            std::time::Instant::now().duration_since(t)
+                                < std::time::Duration::from_secs(5)
+                        });
+                        if fresh {
+                            s.edge_vitals.as_ref().map(|v| (v.presence, v.motion))
+                        } else {
+                            None
+                        }
+                    };
+
                     let ns = s.node_states.entry(node_id).or_insert_with(NodeState::new);
                     // ADR-110 iter 19 — feed the per-node fps EMA from real
                     // CSI arrivals. The helper sets `last_frame_time` as a
@@ -5915,6 +6189,15 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         classification.presence = label != "absent";
                         classification.confidence =
                             (conf * 0.7 + classification.confidence * 0.3).clamp(0.0, 1.0);
+                    }
+
+                    // Fix A: the node's calibrated feature_state presence wins over
+                    // the server's raw-CSI classifier. Override the room/aggregate
+                    // classification (and this node's motion level) so an empty room
+                    // the ESP32 reports as empty is not turned "present" by ambient
+                    // CSI variance. Confidence is left from the server pipeline.
+                    if prefer_board_presence(&mut classification, board_presence) {
+                        ns.current_motion_level = classification.motion_level.clone();
                     }
 
                     ns.rssi_history.push_back(features.mean_rssi);
@@ -7548,6 +7831,7 @@ async fn main() {
         hr_buffer: VecDeque::with_capacity(8),
         br_buffer: VecDeque::with_capacity(8),
         edge_vitals: None,
+        last_feature_state_at: None,
         latest_wasm_events: None,
         // Model management
         discovered_models: initial_models,
