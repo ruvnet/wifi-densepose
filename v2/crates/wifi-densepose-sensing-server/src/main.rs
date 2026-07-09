@@ -1084,6 +1084,12 @@ struct AppStateInner {
     br_buffer: VecDeque<f64>,
     /// ADR-039: Latest edge vitals packet from ESP32.
     edge_vitals: Option<Esp32VitalsPacket>,
+    /// When the last ADR-081 feature_state (0xC511_0006) presence was received.
+    /// The node computes presence on-chip against a 60 s empty-room baseline, so
+    /// its presence flag is authoritative; the server's raw-CSI classifier is
+    /// uncalibrated for the room and false-positives on ambient variance. Used
+    /// to prefer the node's presence when a fresh feature_state exists.
+    last_feature_state_at: Option<std::time::Instant>,
     /// ADR-040: Latest WASM output packet from ESP32.
     latest_wasm_events: Option<WasmOutputPacket>,
     // ── Model management fields ─────────────────────────────────────────────
@@ -1567,6 +1573,51 @@ mod feature_state_parser_tests {
     fn rejects_short_buffer() {
         let pkt = build_feature_state(1, 0.0, 0.0, 0.0, 0.0, 0x01, 0);
         assert!(parse_esp32_feature_state(&pkt[..59]).is_none());
+    }
+}
+
+#[cfg(test)]
+mod prefer_board_presence_tests {
+    //! Fix A: the node's on-chip feature_state presence (empty-room-calibrated
+    //! on-device) must override the server's uncalibrated raw-CSI classifier,
+    //! which false-positives on ambient CSI variance.
+    use super::*;
+
+    fn cls(motion: &str, present: bool) -> ClassificationInfo {
+        ClassificationInfo {
+            motion_level: motion.to_string(),
+            presence: present,
+            confidence: 0.9,
+        }
+    }
+
+    #[test]
+    fn board_empty_overrides_server_false_positive() {
+        // Server hallucinated presence on ambient variance; board says empty.
+        let mut c = cls("present_moving", true);
+        assert!(prefer_board_presence(&mut c, Some((false, false))));
+        assert!(!c.presence);
+        assert_eq!(c.motion_level, "absent");
+        assert!((c.confidence - 0.9).abs() < 1e-9, "confidence untouched");
+    }
+
+    #[test]
+    fn board_present_moving_and_still_win() {
+        let mut m = cls("absent", false);
+        prefer_board_presence(&mut m, Some((true, true)));
+        assert!(m.presence && m.motion_level == "present_moving");
+
+        let mut s = cls("absent", false);
+        prefer_board_presence(&mut s, Some((true, false)));
+        assert!(s.presence && s.motion_level == "present_still");
+    }
+
+    #[test]
+    fn no_fresh_feature_state_leaves_server_classification() {
+        let mut c = cls("present_still", true);
+        assert!(!prefer_board_presence(&mut c, None));
+        assert!(c.presence);
+        assert_eq!(c.motion_level, "present_still");
     }
 }
 
@@ -2249,6 +2300,38 @@ fn extract_features_from_frame(
         sub_variances,
         motion_score,
     )
+}
+
+/// Fix A: prefer a node's on-chip `feature_state` (ADR-081, 0xC511_0006)
+/// presence over the server's raw-CSI motion classifier.
+///
+/// The ESP32 computes presence against a 60 s empty-room baseline on-device, so
+/// its flag is authoritative for the room. The server's `raw_classify` pipeline
+/// is uncalibrated for the specific room and false-positives on ambient CSI
+/// variance (the node's own 50 Hz self-ping traffic, other WiFi, multipath), so
+/// an empty room the node reports as empty was being rendered "present".
+///
+/// When `board` is `Some((presence, motion))`, overwrites `classification`'s
+/// presence + motion_level and returns `true`. `None` (no fresh feature_state)
+/// leaves the server classification untouched and returns `false`. Confidence is
+/// deliberately left as the server pipeline computed it.
+fn prefer_board_presence(
+    classification: &mut ClassificationInfo,
+    board: Option<(bool, bool)>,
+) -> bool {
+    let Some((present, motion)) = board else {
+        return false;
+    };
+    classification.presence = present;
+    classification.motion_level = if motion {
+        "present_moving"
+    } else if present {
+        "present_still"
+    } else {
+        "absent"
+    }
+    .to_string();
+    true
 }
 
 /// Simple threshold classification (no smoothing) — used as the "raw" input.
@@ -5865,6 +5948,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     }
                     s.latest_update = Some(update);
                     s.edge_vitals = Some(vitals);
+                    s.last_feature_state_at = Some(std::time::Instant::now());
                     continue;
                 }
 
@@ -6038,6 +6122,25 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     // to avoid unsafe raw pointer (review finding #2).
                     let adaptive_model_clone = s.adaptive_model.clone();
 
+                    // Fix A: capture the node's on-chip feature_state (0xC511_0006)
+                    // presence BEFORE borrowing node_states. The ESP32 computes
+                    // presence against a 60 s empty-room baseline on-device, so it
+                    // is authoritative; the server's raw-CSI motion classifier below
+                    // is uncalibrated for the room and reads ambient CSI variance
+                    // (self-ping traffic / WiFi / multipath) as motion. When a fresh
+                    // feature_state exists, its presence overrides the classifier.
+                    let board_presence: Option<(bool, bool)> = {
+                        let fresh = s.last_feature_state_at.is_some_and(|t| {
+                            std::time::Instant::now().duration_since(t)
+                                < std::time::Duration::from_secs(5)
+                        });
+                        if fresh {
+                            s.edge_vitals.as_ref().map(|v| (v.presence, v.motion))
+                        } else {
+                            None
+                        }
+                    };
+
                     let ns = s.node_states.entry(node_id).or_insert_with(NodeState::new);
                     // ADR-110 iter 19 — feed the per-node fps EMA from real
                     // CSI arrivals. The helper sets `last_frame_time` as a
@@ -6086,6 +6189,15 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         classification.presence = label != "absent";
                         classification.confidence =
                             (conf * 0.7 + classification.confidence * 0.3).clamp(0.0, 1.0);
+                    }
+
+                    // Fix A: the node's calibrated feature_state presence wins over
+                    // the server's raw-CSI classifier. Override the room/aggregate
+                    // classification (and this node's motion level) so an empty room
+                    // the ESP32 reports as empty is not turned "present" by ambient
+                    // CSI variance. Confidence is left from the server pipeline.
+                    if prefer_board_presence(&mut classification, board_presence) {
+                        ns.current_motion_level = classification.motion_level.clone();
                     }
 
                     ns.rssi_history.push_back(features.mean_rssi);
@@ -7719,6 +7831,7 @@ async fn main() {
         hr_buffer: VecDeque::with_capacity(8),
         br_buffer: VecDeque::with_capacity(8),
         edge_vitals: None,
+        last_feature_state_at: None,
         latest_wasm_events: None,
         // Model management
         discovered_models: initial_models,
