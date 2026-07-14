@@ -93,6 +93,8 @@ All 5 ruvector crates integrated in workspace:
 
 **Not supported:** ESP32 (original), ESP32-C3 — single-core, can't run CSI DSP pipeline.
 
+**WARNING:** Continuous deployments on compact ESP32-S3 clones may lead to thermal risks. It is advisable to monitor operating temperatures and performance closely to prevent overheating and potential hardware damage.
+
 ### Build & Test Commands (this repo)
 ```bash
 # Rust — full workspace tests (1,031+ tests, ~2 min)
