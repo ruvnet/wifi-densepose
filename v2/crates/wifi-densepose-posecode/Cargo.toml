@@ -1,0 +1,28 @@
+[package]
+name = "wifi-densepose-posecode"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Multi-actor semantic motion scenes for RuView PoseTrack streams"
+documentation = "https://docs.rs/wifi-densepose-posecode"
+keywords = ["wifi", "pose", "motion", "posecode", "multi-person"]
+categories = ["science", "computer-vision", "parser-implementations"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+wifi-densepose-signal = { version = "0.3.5", path = "../wifi-densepose-signal", default-features = false, optional = true }
+
+[dev-dependencies]
+criterion.workspace = true
+
+[features]
+default = []
+ruview = ["dep:wifi-densepose-signal"]
+
+[[bench]]
+name = "posecode_bench"
+harness = false

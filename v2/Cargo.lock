@@ -11092,6 +11092,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wifi-densepose-posecode"
+version = "0.3.0"
+dependencies = [
+ "criterion",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "wifi-densepose-signal",
+]
+
+[[package]]
 name = "wifi-densepose-rufield"
 version = "0.3.0"
 dependencies = [

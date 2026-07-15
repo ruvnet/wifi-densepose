@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Multi-actor PoseCode scene crate (`wifi-densepose-posecode`, ADR-266).** Adds a deterministic Rust scene model for multiple persistent RuView actors, synchronized poses, inter-person contacts, confidence and observation provenance. Includes a bounded line parser, canonical serializer, direct `PoseTrack` adapter, confidence-aware phase segmentation, provenance-sensitive range validation, 14 feature-enabled unit tests and Criterion parser/serializer benchmarks. Raw 20 Hz observations remain separate from semantic phases; observed range anomalies are warnings rather than medical safety claims. MEASURED on the implementation container: two-actor parse 3.40 µs, serialization 3.29 µs.
+
 ### Changed
 - **`@ruvnet/rvagent` startup optimization — stdio time-to-first-response ~242 ms → ~189 ms (−22%; MEASURED, median of repeated `initialize` round-trips against `dist/index.js`, this container, reproduce with a piped-stdin timer).** Two changes: (1) `./http-transport.js` is now imported **lazily** inside the `RVAGENT_HTTP_PORT` branch — it chain-loads the MCP SDK's `streamableHttp` module (~48 ms MEASURED via per-module `import()` timing), which the default stdio path never uses; (2) the advertised JSON Schemas generated from the Zod sources are memoized per tool instead of re-walking the Zod tree on every `tools/list` (matters under the session-per-server HTTP model where each session lists tools). No behavior change: 99/99 jest tests, HTTP session flow re-smoke-tested through the lazy path. The `@ruvnet/ruview` harness CLI was profiled too and left alone — 50 ms vs the ~29 ms bare `node -e ''` floor on the same box (MEASURED), i.e. already near the interpreter floor with zero dependencies.
 

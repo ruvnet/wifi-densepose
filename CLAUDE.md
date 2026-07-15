@@ -14,6 +14,7 @@ Dual codebase: Python v1 (`v1/`) and Rust port (`v2/`).
 | `wifi-densepose-mat` | Mass Casualty Assessment Tool — disaster survivor detection |
 | `wifi-densepose-hardware` | ESP32 aggregator, TDM protocol, channel hopping firmware; `ieee80211bf/` 802.11bf forward-compat protocol model (ADR-153) |
 | `wifi-densepose-ruvector` | RuVector v2.0.4 integration + cross-viewpoint fusion (5 modules) |
+| `wifi-densepose-posecode` | ADR-266 multi-actor semantic motion scenes, PoseTrack adapter, bounded parser, confidence-aware phase segmentation |
 | `wifi-densepose-wasm` | WebAssembly bindings for browser deployment |
 | `wifi-densepose-cli` | CLI tool (`wifi-densepose` binary) — `calibrate`/`calibrate-serve`/`enroll`/`train-room`/`room-watch` + MAT (MAT gated behind the `mat` feature; build `--no-default-features` for the aarch64/appliance calibration binary) |
 | `wifi-densepose-calibration` | ADR-151 per-room calibration & specialist training — `baseline → enroll → extract → train` → bank of small specialists (presence/posture/breathing/heartbeat/restlessness/anomaly) + multistatic fusion; pure Rust, edge-deployable |
@@ -81,6 +82,7 @@ All 5 ruvector crates integrated in workspace:
 - ADR-263: `@ruvnet/ruview` npm harness deep review + optimization strategy (Proposed)
 - ADR-264: `@ruvnet/rvagent` MCP server + `@ruv/ruview-cli` deep review + optimization strategy (Proposed)
 - ADR-265: RuView npm distribution strategy — CI gate, provenance, version single-sourcing (Proposed)
+- ADR-266: Multi-actor PoseCode scenes from persistent RuView tracks (Accepted)
 
 ### Supported Hardware
 

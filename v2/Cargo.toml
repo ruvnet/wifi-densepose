@@ -46,6 +46,9 @@ members = [
     # PR #491 slot heuristic with a Candle network + Stoer-Wagner fusion.
     # Motivated by #499 ghost-skeleton reports.
     "crates/cog-person-count",
+    # ADR-266: Multi-actor PoseCode scene protocol. Converts persistent
+    # RuvSense PoseTracks into confidence-scored, deterministic motion scenes.
+    "crates/wifi-densepose-posecode",
     # ADR-116: Home Assistant + Matter Cognitum Seed cog. Wraps the
     # ADR-115 MQTT publisher as a Seed-installable artifact with
     # mDNS, embedded broker, RuVector thresholds, Ed25519 witness.
@@ -215,6 +218,7 @@ wifi-densepose-hardware = { version = "0.3.0", path = "crates/wifi-densepose-har
 wifi-densepose-wasm = { version = "0.3.0", path = "crates/wifi-densepose-wasm" }
 wifi-densepose-mat = { version = "0.3.0", path = "crates/wifi-densepose-mat" }
 wifi-densepose-ruvector = { version = "0.3.0", path = "crates/wifi-densepose-ruvector" }
+wifi-densepose-posecode = { version = "0.3.0", path = "crates/wifi-densepose-posecode" }
 wifi-densepose-worldmodel = { version = "0.3.0", path = "crates/worldgraph/wifi-densepose-worldmodel" }
 
 [profile.release]
