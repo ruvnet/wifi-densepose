@@ -54,5 +54,9 @@ async def run_test():
         print("SUCCESS: Event loop remained fully responsive during metrics query!")
         sys.exit(0)
 
-if __name__ == "__main__":
-    asyncio.run(run_test())
+@pytest.mark.asyncio
+async def test_get_system_metrics_does_not_starve_event_loop():
+    max_gap, duration = await run_test()
+    # ticker sleeps 0.1s; allow slack for CI, but we should not see ~1s gaps
+    assert max_gap < 0.6
+    assert duration < 0.6
