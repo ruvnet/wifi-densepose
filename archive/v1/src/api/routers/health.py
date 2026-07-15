@@ -2,6 +2,7 @@
 Health check API endpoints
 """
 
+import asyncio
 import logging
 import psutil
 from typing import Dict, Any, Optional
@@ -168,7 +169,7 @@ async def health_check(request: Request):
             overall_status = "degraded"
         
         # Get system metrics
-        system_metrics = get_system_metrics()
+        system_metrics = await asyncio.to_thread(get_system_metrics)
         
         uptime_seconds = (datetime.now() - _APP_START_TIME).total_seconds()
         
@@ -263,11 +264,12 @@ async def get_health_metrics(
 ):
     """Get detailed system metrics."""
     try:
-        metrics = get_system_metrics()
+        metrics = await asyncio.to_thread(get_system_metrics)
         
         # Add additional metrics if authenticated
         if current_user:
-            metrics.update(get_detailed_metrics())
+            detailed = await asyncio.to_thread(get_detailed_metrics)
+            metrics.update(detailed)
         
         return {
             "timestamp": datetime.utcnow().isoformat(),
@@ -300,7 +302,7 @@ def get_system_metrics() -> Dict[str, Any]:
     """Get basic system metrics."""
     try:
         # CPU metrics
-        cpu_percent = psutil.cpu_percent(interval=1)
+        cpu_percent = psutil.cpu_percent(interval=None)
         cpu_count = psutil.cpu_count()
         
         # Memory metrics
