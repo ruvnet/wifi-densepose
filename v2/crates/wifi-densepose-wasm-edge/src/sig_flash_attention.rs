@@ -25,6 +25,8 @@ pub const EVENT_SPATIAL_FOCUS_ZONE: i32 = 702;
 
 /// Flash Attention spatial focus estimator.
 pub struct FlashAttention {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 3],
     prev_group_phases: [f32; N_GROUPS],
     attention_weights: [f32; N_GROUPS],
     smoothed_entropy: f32,
@@ -37,6 +39,7 @@ pub struct FlashAttention {
 impl FlashAttention {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 3],
             prev_group_phases: [0.0; N_GROUPS],
             attention_weights: [0.0; N_GROUPS],
             smoothed_entropy: MAX_ENTROPY,
@@ -50,7 +53,6 @@ impl FlashAttention {
         let n_sc = phases.len().min(amplitudes.len()).min(MAX_SC);
         if n_sc < N_GROUPS { return &[]; }
 
-        static mut EVENTS: [(i32, f32); 3] = [(0, 0.0); 3];
 
         // Per-group means for Q and V.
         let subs_per = n_sc / N_GROUPS;
@@ -117,12 +119,10 @@ impl FlashAttention {
         for g in 0..N_GROUPS { self.prev_group_phases[g] = q[g]; }
 
         // Emit events.
-        unsafe {
-            EVENTS[0] = (EVENT_ATTENTION_PEAK_SC, peak_idx as f32);
-            EVENTS[1] = (EVENT_ATTENTION_SPREAD, self.smoothed_entropy);
-            EVENTS[2] = (EVENT_SPATIAL_FOCUS_ZONE, centroid);
-            &EVENTS[..3]
-        }
+        self.events[0] = (EVENT_ATTENTION_PEAK_SC, peak_idx as f32);
+        self.events[1] = (EVENT_ATTENTION_SPREAD, self.smoothed_entropy);
+        self.events[2] = (EVENT_SPATIAL_FOCUS_ZONE, centroid);
+        &self.events[..3]
     }
 
     pub fn weights(&self) -> &[f32; N_GROUPS] { &self.attention_weights }

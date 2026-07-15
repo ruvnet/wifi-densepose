@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Cognitum Cog: learned multi-person counter from WiFi CSI (ADR-103). Replaces the PR #491 slot heuristic with a Candle-based count head + Stoer-Wagner multi-node fusion."
+description = "Cognitum Cog: WiFi-CSI presence detector + (data-gated) person count (ADR-103). Candle-based head trained on classes 0/1 (presence); the 8-class count head ships but counts above the trained range are flagged low_confidence. Stoer-Wagner multi-node fusion."
 
 [[bin]]
 name = "cog-person-count"
@@ -34,6 +34,12 @@ safetensors = "0.4"
 [dev-dependencies]
 tempfile = "3"
 approx = "0.5"
+# ADR-163: steady-state infer latency bench (real count_v1 weights, Device::Cpu).
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "infer_bench"
+harness = false
 
 [features]
 default = []

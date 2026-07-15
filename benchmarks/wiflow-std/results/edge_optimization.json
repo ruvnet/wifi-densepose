@@ -1,0 +1,772 @@
+{
+  "torch": {
+    "env": {
+      "torch": "2.12.0+cpu",
+      "platform": "Windows-11-10.0.26200-SP0",
+      "processor": "Intel64 Family 6 Model 197 Stepping 2, GenuineIntel",
+      "num_threads": 16,
+      "checkpoint": "results\\retrained_best_pose_model.pth",
+      "params": 2225042
+    },
+    "variants": {
+      "fp32": {
+        "file": "retrained_fp32_resaved.pth",
+        "size_bytes": 9068948,
+        "size_mb": 9.068948,
+        "latency_batch1": {
+          "batch_size": 1,
+          "runs": 100,
+          "median_ms_per_batch": 24.903650000851485,
+          "median_ms_per_window": 24.903650000851485,
+          "windows_per_second": 40.15475642991324
+        },
+        "latency_batch64": {
+          "batch_size": 64,
+          "runs": 30,
+          "median_ms_per_batch": 184.02919999789447,
+          "median_ms_per_window": 2.875456249967101,
+          "windows_per_second": 347.77089723115813
+        },
+        "accuracy": {
+          "samples": 10000,
+          "pck@20": 0.9668200004577636,
+          "pck@50": 0.9915333324432373,
+          "mpjpe": 0.00936222033649683,
+          "wall_seconds": 37.85407733917236
+        }
+      },
+      "fp16": {
+        "file": "retrained_fp16.pth",
+        "size_bytes": 4580332,
+        "size_mb": 4.580332,
+        "latency_batch1": {
+          "batch_size": 1,
+          "runs": 100,
+          "median_ms_per_batch": 23.936699999467237,
+          "median_ms_per_window": 23.936699999467237,
+          "windows_per_second": 41.776853117691964
+        },
+        "latency_batch64": {
+          "batch_size": 64,
+          "runs": 30,
+          "median_ms_per_batch": 102.32584999903338,
+          "median_ms_per_window": 1.5988414062348966,
+          "windows_per_second": 625.4529036465817
+        },
+        "accuracy": {
+          "samples": 10000,
+          "pck@20": 0.966773332977295,
+          "pck@50": 0.9915066654205322,
+          "mpjpe": 0.009460017587244511,
+          "wall_seconds": 21.632277250289917
+        }
+      },
+      "int8_dynamic": {
+        "file": "retrained_int8_dynamic.pth",
+        "size_bytes": 9068948,
+        "size_mb": 9.068948,
+        "latency_batch1": {
+          "batch_size": 1,
+          "runs": 100,
+          "median_ms_per_batch": 18.105350000041653,
+          "median_ms_per_window": 18.105350000041653,
+          "windows_per_second": 55.23229321707117
+        },
+        "latency_batch64": {
+          "batch_size": 64,
+          "runs": 30,
+          "median_ms_per_batch": 168.77549999844632,
+          "median_ms_per_window": 2.6371171874757238,
+          "windows_per_second": 379.20195763359703
+        },
+        "accuracy": {
+          "samples": 10000,
+          "pck@20": 0.9668200004577636,
+          "pck@50": 0.9915333324432373,
+          "mpjpe": 0.00936222033649683,
+          "wall_seconds": 45.35376596450806
+        }
+      }
+    },
+    "int8_dynamic_quant_report": {
+      "eligible_module_counts": {
+        "nn.Linear": 0,
+        "nn.Conv1d": 21,
+        "nn.Conv2d": 22
+      },
+      "modules_actually_quantized": [],
+      "n_modules_quantized": 0,
+      "params_total": 2225042,
+      "params_quantized": 0,
+      "params_quantized_fraction": 0.0
+    },
+    "accuracy_subset": {
+      "description": "seed-42 file-level 70/15/15 test split, corrupted windows (files 487-499) excluded, seed-42 random subset",
+      "subset_size": 10000,
+      "clean_test_total": 10000
+    }
+  },
+  "onnx": {
+    "env": {
+      "torch": "2.12.0+cpu",
+      "onnxruntime": "1.26.0",
+      "platform": "Windows-11-10.0.26200-SP0"
+    },
+    "export": {
+      "mode": "dynamic-batch",
+      "exporter": "torchscript",
+      "file": "retrained_fp32_dynamic.onnx",
+      "size_mb": 8.971781
+    },
+    "parity": {
+      "fixture": "results/parity_fixture.npz (batch 2, seed 42)",
+      "max_abs_diff_vs_stored_fixture": 2.384185791015625e-07,
+      "max_abs_diff_vs_torch_now": 2.384185791015625e-07,
+      "pass_lt_1e-4": true
+    },
+    "latency": {
+      "batch1": {
+        "batch_size": 1,
+        "runs": 100,
+        "median_ms_per_batch": 2.5410999987798277,
+        "median_ms_per_window": 2.5410999987798277,
+        "windows_per_second": 393.5303610563043
+      },
+      "batch64": {
+        "batch_size": 64,
+        "runs": 30,
+        "median_ms_per_batch": 181.95204999938142,
+        "median_ms_per_window": 2.8430007812403346,
+        "windows_per_second": 351.7410218803118
+      }
+    },
+    "ort_int8_dynamic_supplementary": {
+      "file": "retrained_int8_ort_dynamic.onnx",
+      "size_mb": 2.438794,
+      "runs": true,
+      "max_abs_diff_vs_fp32_fixture": 0.00827130675315857
+    }
+  },
+  "onnx_accuracy": {
+    "onnx_fp32": {
+      "samples": 10000,
+      "pck@20": 0.9668200004577636,
+      "pck@50": 0.9915333324432373,
+      "mpjpe": 0.00936222568154335,
+      "wall_seconds": 22.34790802001953
+    },
+    "onnx_int8_ort_dynamic": {
+      "samples": 10000,
+      "pck@20": 0.965240001964569,
+      "pck@50": 0.9915466655731201,
+      "mpjpe": 0.01108054072111845,
+      "wall_seconds": 55.742953062057495
+    }
+  },
+  "latency_controlled_rerun": {
+    "note": "3 interleaved repetitions per variant, median ms/window; quiet box",
+    "fp32": {
+      "batch1_ms_per_window_median": 10.969150001983508,
+      "batch1_reps": [
+        10.969150001983508,
+        12.646450000829645,
+        10.49820000116597
+      ],
+      "batch64_ms_per_window_median": 2.2734187500077496,
+      "batch64_reps": [
+        2.377234374989712,
+        2.124126562478068,
+        2.2734187500077496
+      ]
+    },
+    "fp16": {
+      "batch1_ms_per_window_median": 24.313550000442774,
+      "batch1_reps": [
+        25.1078499986761,
+        21.856999999727122,
+        24.313550000442774
+      ],
+      "batch64_ms_per_window_median": 2.414695312495496,
+      "batch64_reps": [
+        2.5705156249955508,
+        1.7137437499741281,
+        2.414695312495496
+      ]
+    },
+    "int8_dynamic": {
+      "batch1_ms_per_window_median": 15.627150000000256,
+      "batch1_reps": [
+        17.67525000104797,
+        14.627999998992891,
+        15.627150000000256
+      ],
+      "batch64_ms_per_window_median": 2.0546906250160646,
+      "batch64_reps": [
+        2.0546906250160646,
+        2.03407343752815,
+        2.9325796875241394
+      ]
+    },
+    "onnx_fp32": {
+      "batch1_ms_per_window_median": 3.186650001225644,
+      "batch1_reps": [
+        2.7332500012562377,
+        3.1995500012271805,
+        3.186650001225644
+      ],
+      "batch64_ms_per_window_median": 1.9893374999924163,
+      "batch64_reps": [
+        1.5590843750032946,
+        1.9893374999924163,
+        2.2144343749914697
+      ]
+    },
+    "onnx_int8_ort_dynamic": {
+      "batch1_ms_per_window_median": 6.50984999811044,
+      "batch1_reps": [
+        6.50984999811044,
+        6.455249998907675,
+        6.789299999581999
+      ],
+      "batch64_ms_per_window_median": 5.770093750015803,
+      "batch64_reps": [
+        5.770093750015803,
+        3.912374999970325,
+        7.8067296875019565
+      ]
+    }
+  },
+  "onnx_static_ptq": {
+    "env": {
+      "onnxruntime": "1.26.0",
+      "torch": "2.12.0+cpu",
+      "platform": "Windows-11-10.0.26200-SP0",
+      "source_model": "retrained_fp32_dynamic.onnx",
+      "preprocessed_model": {
+        "file": "retrained_fp32_preproc.onnx",
+        "size_mb": 8.981529
+      }
+    },
+    "variants": {
+      "minmax_all": {
+        "file": "retrained_int8_static_minmax_all.onnx",
+        "size_bytes": 2604286,
+        "size_mb": 2.604286,
+        "calibration": {
+          "method": "minmax",
+          "windows": 1000,
+          "percentile": null,
+          "seconds": 5.052440166473389
+        },
+        "scope": "all",
+        "per_channel": true,
+        "activation_type": "QInt8",
+        "weight_type": "QInt8",
+        "node_counts": {
+          "Add": 9,
+          "AveragePool": 1,
+          "BatchNormalization": 12,
+          "Concat": 10,
+          "Conv": 43,
+          "DequantizeLinear": 283,
+          "Einsum": 4,
+          "Gather": 16,
+          "Mul": 39,
+          "QuantizeLinear": 181,
+          "Reshape": 14,
+          "Shape": 2,
+          "Sigmoid": 37,
+          "Slice": 8,
+          "Softmax": 2,
+          "Squeeze": 1,
+          "Transpose": 7,
+          "Unsqueeze": 11
+        },
+        "max_abs_diff_vs_fp32_fixture": 0.015945255756378174,
+        "accuracy": {
+          "samples": 10000,
+          "pck@20": 0.9545266661643982,
+          "pck@50": 0.9913666645050049,
+          "mpjpe": 0.014860070134699345,
+          "wall_seconds": 43.455235958099365
+        }
+      },
+      "minmax_conv": {
+        "file": "retrained_int8_static_minmax_conv.onnx",
+        "size_bytes": 2527421,
+        "size_mb": 2.527421,
+        "calibration": {
+          "method": "minmax",
+          "windows": 1000,
+          "percentile": null,
+          "seconds": 4.380746126174927
+        },
+        "scope": "conv",
+        "per_channel": true,
+        "activation_type": "QInt8",
+        "weight_type": "QInt8",
+        "node_counts": {
+          "Add": 9,
+          "AveragePool": 1,
+          "BatchNormalization": 12,
+          "Concat": 10,
+          "Conv": 43,
+          "DequantizeLinear": 156,
+          "Einsum": 4,
+          "Gather": 16,
+          "Mul": 39,
+          "QuantizeLinear": 78,
+          "Reshape": 14,
+          "Shape": 2,
+          "Sigmoid": 37,
+          "Slice": 8,
+          "Softmax": 2,
+          "Squeeze": 1,
+          "Transpose": 7,
+          "Unsqueeze": 11
+        },
+        "max_abs_diff_vs_fp32_fixture": 0.010693132877349854,
+        "accuracy": {
+          "samples": 10000,
+          "pck@20": 0.9663399996757507,
+          "pck@50": 0.9918666641235352,
+          "mpjpe": 0.01084446222037077,
+          "wall_seconds": 35.937947034835815
+        }
+      },
+      "entropy_all": {
+        "file": "retrained_int8_static_entropy_all.onnx",
+        "size_bytes": 2604268,
+        "size_mb": 2.604268,
+        "calibration": {
+          "method": "entropy",
+          "windows": 512,
+          "percentile": null,
+          "seconds": 23.835066318511963
+        },
+        "scope": "all",
+        "per_channel": true,
+        "activation_type": "QInt8",
+        "weight_type": "QInt8",
+        "node_counts": {
+          "Add": 9,
+          "AveragePool": 1,
+          "BatchNormalization": 12,
+          "Concat": 10,
+          "Conv": 43,
+          "DequantizeLinear": 283,
+          "Einsum": 4,
+          "Gather": 16,
+          "Mul": 39,
+          "QuantizeLinear": 181,
+          "Reshape": 14,
+          "Shape": 2,
+          "Sigmoid": 37,
+          "Slice": 8,
+          "Softmax": 2,
+          "Squeeze": 1,
+          "Transpose": 7,
+          "Unsqueeze": 11
+        },
+        "max_abs_diff_vs_fp32_fixture": 0.015280365943908691,
+        "accuracy": {
+          "samples": 10000,
+          "pck@20": 0.9530466662406921,
+          "pck@50": 0.9912600006103516,
+          "mpjpe": 0.015098519864678382,
+          "wall_seconds": 51.514281034469604
+        }
+      },
+      "entropy_conv": {
+        "file": "retrained_int8_static_entropy_conv.onnx",
+        "size_bytes": 2527403,
+        "size_mb": 2.527403,
+        "calibration": {
+          "method": "entropy",
+          "windows": 512,
+          "percentile": null,
+          "seconds": 9.634419918060303
+        },
+        "scope": "conv",
+        "per_channel": true,
+        "activation_type": "QInt8",
+        "weight_type": "QInt8",
+        "node_counts": {
+          "Add": 9,
+          "AveragePool": 1,
+          "BatchNormalization": 12,
+          "Concat": 10,
+          "Conv": 43,
+          "DequantizeLinear": 156,
+          "Einsum": 4,
+          "Gather": 16,
+          "Mul": 39,
+          "QuantizeLinear": 78,
+          "Reshape": 14,
+          "Shape": 2,
+          "Sigmoid": 37,
+          "Slice": 8,
+          "Softmax": 2,
+          "Squeeze": 1,
+          "Transpose": 7,
+          "Unsqueeze": 11
+        },
+        "max_abs_diff_vs_fp32_fixture": 0.012535125017166138,
+        "accuracy": {
+          "samples": 10000,
+          "pck@20": 0.9659599989891052,
+          "pck@50": 0.9918666648864746,
+          "mpjpe": 0.010778637571632861,
+          "wall_seconds": 41.01180171966553
+        }
+      },
+      "percentile_all": {
+        "file": "retrained_int8_static_percentile_all.onnx",
+        "size_bytes": 2604052,
+        "size_mb": 2.604052,
+        "calibration": {
+          "method": "percentile",
+          "windows": 512,
+          "percentile": 99.99,
+          "seconds": 20.221954584121704
+        },
+        "scope": "all",
+        "per_channel": true,
+        "activation_type": "QInt8",
+        "weight_type": "QInt8",
+        "node_counts": {
+          "Add": 9,
+          "AveragePool": 1,
+          "BatchNormalization": 12,
+          "Concat": 10,
+          "Conv": 43,
+          "DequantizeLinear": 283,
+          "Einsum": 4,
+          "Gather": 16,
+          "Mul": 39,
+          "QuantizeLinear": 181,
+          "Reshape": 14,
+          "Shape": 2,
+          "Sigmoid": 37,
+          "Slice": 8,
+          "Softmax": 2,
+          "Squeeze": 1,
+          "Transpose": 7,
+          "Unsqueeze": 11
+        },
+        "max_abs_diff_vs_fp32_fixture": 0.017689883708953857,
+        "accuracy": {
+          "samples": 10000,
+          "pck@20": 0.9639333323478698,
+          "pck@50": 0.9916799991607667,
+          "mpjpe": 0.012176512064039708,
+          "wall_seconds": 49.365190744400024
+        }
+      },
+      "percentile_conv": {
+        "file": "retrained_int8_static_percentile_conv.onnx",
+        "size_bytes": 2527241,
+        "size_mb": 2.527241,
+        "calibration": {
+          "method": "percentile",
+          "windows": 512,
+          "percentile": 99.99,
+          "seconds": 8.223475694656372
+        },
+        "scope": "conv",
+        "per_channel": true,
+        "activation_type": "QInt8",
+        "weight_type": "QInt8",
+        "node_counts": {
+          "Add": 9,
+          "AveragePool": 1,
+          "BatchNormalization": 12,
+          "Concat": 10,
+          "Conv": 43,
+          "DequantizeLinear": 156,
+          "Einsum": 4,
+          "Gather": 16,
+          "Mul": 39,
+          "QuantizeLinear": 78,
+          "Reshape": 14,
+          "Shape": 2,
+          "Sigmoid": 37,
+          "Slice": 8,
+          "Softmax": 2,
+          "Squeeze": 1,
+          "Transpose": 7,
+          "Unsqueeze": 11
+        },
+        "max_abs_diff_vs_fp32_fixture": 0.014725983142852783,
+        "accuracy": {
+          "samples": 10000,
+          "pck@20": 0.9660599988937378,
+          "pck@50": 0.9916066654205322,
+          "mpjpe": 0.010310938355326652,
+          "wall_seconds": 36.89548587799072
+        }
+      }
+    },
+    "latency": {
+      "note": "3 interleaved repetitions per variant, median ms/window; onnx_fp32 / onnx_int8_ort_dynamic are same-session references",
+      "onnx_fp32": {
+        "batch1_reps": [
+          4.5327999996516155,
+          2.535649999117595,
+          2.167549997466267
+        ],
+        "batch64_reps": [
+          1.9354515624740998,
+          2.4948054687854437,
+          1.9334703125082342
+        ],
+        "batch1_ms_per_window_median": 2.535649999117595,
+        "batch64_ms_per_window_median": 1.9354515624740998
+      },
+      "onnx_int8_ort_dynamic": {
+        "batch1_reps": [
+          5.698599999959697,
+          5.721350000385428,
+          4.805099997611251
+        ],
+        "batch64_reps": [
+          4.096601562508795,
+          4.857628124995017,
+          4.583800000006022
+        ],
+        "batch1_ms_per_window_median": 5.698599999959697,
+        "batch64_ms_per_window_median": 4.583800000006022
+      },
+      "entropy_all": {
+        "batch1_reps": [
+          6.444149999879301,
+          5.038299999796436,
+          5.713200000172947
+        ],
+        "batch64_reps": [
+          4.149468750028973,
+          3.437125000004926,
+          4.410960937491382
+        ],
+        "batch1_ms_per_window_median": 5.713200000172947,
+        "batch64_ms_per_window_median": 4.149468750028973
+      },
+      "entropy_conv": {
+        "batch1_reps": [
+          4.874750000453787,
+          5.169099998965976,
+          5.236699998931726
+        ],
+        "batch64_reps": [
+          3.010160156236452,
+          3.1175546875203963,
+          3.516850781238645
+        ],
+        "batch1_ms_per_window_median": 5.169099998965976,
+        "batch64_ms_per_window_median": 3.1175546875203963
+      },
+      "percentile_all": {
+        "batch1_reps": [
+          5.184749999898486,
+          5.2898499998264015,
+          5.916899999647285
+        ],
+        "batch64_reps": [
+          4.305105468745296,
+          4.460741406262514,
+          4.184502343747454
+        ],
+        "batch1_ms_per_window_median": 5.2898499998264015,
+        "batch64_ms_per_window_median": 4.305105468745296
+      },
+      "percentile_conv": {
+        "batch1_reps": [
+          4.916449999655015,
+          7.150899999032845,
+          5.284949998895172
+        ],
+        "batch64_reps": [
+          3.855813281262499,
+          4.688969531230214,
+          5.220103124997877
+        ],
+        "batch1_ms_per_window_median": 5.284949998895172,
+        "batch64_ms_per_window_median": 4.688969531230214
+      },
+      "minmax_all": {
+        "batch1_reps": [
+          6.463300000177696,
+          7.149449998905766,
+          5.3209000016067876
+        ],
+        "batch64_reps": [
+          3.9251343750095202,
+          4.033442187505898,
+          3.428199218745931
+        ],
+        "batch1_ms_per_window_median": 6.463300000177696,
+        "batch64_ms_per_window_median": 3.9251343750095202
+      },
+      "minmax_conv": {
+        "batch1_reps": [
+          5.9961499991914025,
+          5.236549999608542,
+          4.854399998293957
+        ],
+        "batch64_reps": [
+          4.368359375007458,
+          3.249617187492504,
+          3.0238906249735464
+        ],
+        "batch1_ms_per_window_median": 5.236549999608542,
+        "batch64_ms_per_window_median": 3.249617187492504
+      }
+    },
+    "accuracy_subset": {
+      "description": "seed-42 file-level 70/15/15 test split, corrupted windows excluded, seed-42 random subset (same as quantize_bench/eval_ort_accuracy)",
+      "subset_size": 10000
+    }
+  },
+  "tiny_variant": {
+    "env": {
+      "torch": "2.12.0+cpu",
+      "onnxruntime": "1.26.0",
+      "platform": "Windows-11-10.0.26200-SP0",
+      "num_threads": 16,
+      "checkpoint": "results\\tiny_best.pth",
+      "checkpoint_size_bytes": 340555,
+      "params": 56290,
+      "variant_config": {
+        "tcn": [
+          68,
+          56,
+          44,
+          32
+        ],
+        "conv": [
+          2,
+          4,
+          8,
+          16
+        ],
+        "attn_groups": 2,
+        "groups_mode": "depthwise",
+        "input_pw_groups": 4
+      }
+    },
+    "export": {
+      "mode": "dynamic-batch",
+      "exporter": "torchscript",
+      "opset": 17,
+      "file": "tiny_fp32_dynamic.onnx",
+      "size_bytes": 295279,
+      "size_mb": 0.295279,
+      "verified_batches": [
+        1,
+        2,
+        64
+      ],
+      "note": "AdaptiveAvgPool2d((15,1)) replaced at export by an exact mean(-1) + constant averaging matmul (final_width 16 is not a multiple of 15, which the TorchScript exporter rejects); exactness proven by the parity check vs the original torch model"
+    },
+    "parity": {
+      "fixture": "results/parity_fixture.npz input (batch 2, seed 42); reference output recomputed with the tiny torch model",
+      "max_abs_diff_vs_torch": 1.4901161193847656e-07,
+      "pass_lt_1e-4": true
+    },
+    "int8_static_percentile_conv": {
+      "file": "tiny_int8_static_percentile_conv.onnx",
+      "size_bytes": 248278,
+      "size_mb": 0.248278,
+      "calibration": {
+        "method": "percentile",
+        "percentile": 99.99,
+        "windows": 512,
+        "scope": "conv-only TRAIN-split corruption-free",
+        "seconds": 1.5347836017608643
+      },
+      "per_channel": true,
+      "activation_type": "QInt8",
+      "weight_type": "QInt8",
+      "max_abs_diff_vs_fp32_fixture": 0.018491357564926147
+    },
+    "latency": {
+      "note": "3 interleaved repetitions per variant, median ms/window; full-model sessions are same-session references",
+      "tiny_onnx_fp32": {
+        "batch1_reps": [
+          0.6312500008789357,
+          0.6834500018157996,
+          0.6595999984710943
+        ],
+        "batch64_reps": [
+          0.37747578119251557,
+          0.24196640623586063,
+          0.2314671875183194
+        ],
+        "batch1_ms_per_window_median": 0.6595999984710943,
+        "batch64_ms_per_window_median": 0.24196640623586063
+      },
+      "tiny_onnx_int8_static_percentile_conv": {
+        "batch1_reps": [
+          0.7988500001374632,
+          0.9382499993080273,
+          0.8451000030618161
+        ],
+        "batch64_reps": [
+          0.9211476562995813,
+          1.3045390625165965,
+          1.026230468767153
+        ],
+        "batch1_ms_per_window_median": 0.8451000030618161,
+        "batch64_ms_per_window_median": 1.026230468767153
+      },
+      "full_onnx_fp32_reference": {
+        "batch1_reps": [
+          2.267249998112675,
+          2.80170000041835,
+          2.132149998942623
+        ],
+        "batch64_reps": [
+          1.3050578124875756,
+          1.4244992187855132,
+          1.8014164062947202
+        ],
+        "batch1_ms_per_window_median": 2.267249998112675,
+        "batch64_ms_per_window_median": 1.4244992187855132
+      },
+      "full_onnx_int8_static_percentile_conv_reference": {
+        "batch1_reps": [
+          5.529599999135826,
+          4.768399998283712,
+          6.215800000063609
+        ],
+        "batch64_reps": [
+          3.815724218725336,
+          3.1025562500417436,
+          4.333318749957016
+        ],
+        "batch1_ms_per_window_median": 5.529599999135826,
+        "batch64_ms_per_window_median": 3.815724218725336
+      }
+    },
+    "accuracy_subset": {
+      "description": "seed-42 file-level 70/15/15 test split, corrupted windows excluded, seed-42 random subset (same as quantize_bench/eval_ort_accuracy/static_ptq_bench)",
+      "subset_size": 10000
+    },
+    "accuracy": {
+      "tiny_onnx_fp32": {
+        "samples": 10000,
+        "pck@20": 0.941106667804718,
+        "pck@50": 0.99369333152771,
+        "mpjpe": 0.012527281279861927,
+        "wall_seconds": 10.927234888076782
+      },
+      "tiny_onnx_int8_static_percentile_conv": {
+        "samples": 10000,
+        "pck@20": 0.9268133331298828,
+        "pck@50": 0.9932933319091797,
+        "mpjpe": 0.014906252065300942,
+        "wall_seconds": 12.320892333984375
+      }
+    }
+  }
+}

@@ -50,6 +50,15 @@ serde_json = "1"
 # UUIDs for config entry IDs in host_abi.rs.
 uuid = { version = "1", features = ["v4"] }
 
+# ── ADR-162 P4: plugin signature + integrity verification ──────────────────
+# Reuses the same in-repo crypto stack as cog-ha-matter (witness_signing.rs):
+# Ed25519 over a SHA-256 module digest. All four are already in the workspace
+# Cargo.lock (cog-ha-matter / bfld pull them in) — no new external dep tree.
+ed25519-dalek = "2.1"
+sha2 = { workspace = true }
+hex = "0.4"
+base64 = "0.22"
+
 # Optional Wasmtime runtime (P2, default-off — 30 MB dep).
 # Bumped from 25.0.3 → 42 to remediate RUSTSEC-2026-0095 and RUSTSEC-2026-0096
 # (Cranelift/Winch sandbox-escape CVEs, CVSS 9.0 — iter-11 security sprint HC-03/04).

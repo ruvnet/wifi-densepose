@@ -1,0 +1,157 @@
+name: ruview-swarm CI guard
+
+# Dedicated guard for the ADR-148 drone swarm crate (`v2/crates/ruview-swarm`).
+# The main ci.yml runs `cargo test --workspace --no-default-features`, which
+# only exercises ruview-swarm's DEFAULT feature set. This guard additionally:
+#   - tests every feature combination (train / ruflo+itar / full)
+#   - fails on ANY clippy warning in the crate's own code (--no-deps)
+#   - asserts the ITAR + publish guards stay in place (USML Cat VIII(h)(12))
+#   - builds the GPU training binary under the `train` feature
+#
+# Path-scoped so it only runs when the crate or this workflow changes.
+
+on:
+  push:
+    branches: [ main, 'feat/*' ]
+    paths:
+      - 'v2/crates/ruview-swarm/**'
+      - '.github/workflows/ruview-swarm-ci.yml'
+  pull_request:
+    paths:
+      - 'v2/crates/ruview-swarm/**'
+      - '.github/workflows/ruview-swarm-ci.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Feature-matrix tests ─────────────────────────────────────────────────
+  tests:
+    name: tests (${{ matrix.features.label }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - { label: 'default',          flags: '--no-default-features' }
+          - { label: 'train',            flags: '--features train' }
+          - { label: 'ruflo',            flags: '--features ruflo' }
+          - { label: 'full+train',       flags: '--features full,train' }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            v2/target
+          key: ${{ runner.os }}-ruview-swarm-${{ hashFiles('v2/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-ruview-swarm-
+      - name: cargo test -p ruview-swarm ${{ matrix.features.flags }}
+        working-directory: v2
+        run: cargo test -p ruview-swarm ${{ matrix.features.flags }} --lib
+
+  # ── Clippy: zero warnings in the crate's own code ────────────────────────
+  clippy:
+    name: clippy (-D warnings, --no-deps)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      # v2/rust-toolchain.toml pins channel "1.89" with profile "minimal" (no
+      # clippy). dtolnay@stable installs clippy on the floating "stable"
+      # toolchain, but the override makes cargo use the separate "1.89"
+      # toolchain — so `cargo clippy` errors "cargo-clippy is not installed for
+      # 1.89". Install clippy on the pinned toolchain that cargo actually uses.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.89"
+          components: clippy
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            v2/target
+          key: ${{ runner.os }}-ruview-swarm-clippy-${{ hashFiles('v2/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-ruview-swarm-clippy-
+      # --no-deps confines linting to ruview-swarm's own source, so pre-existing
+      # warnings in dependency crates don't gate this PR.
+      - name: clippy (default)
+        working-directory: v2
+        run: cargo clippy -p ruview-swarm --no-default-features --no-deps -- -D warnings
+      - name: clippy (full,train)
+        working-directory: v2
+        run: cargo clippy -p ruview-swarm --features full,train --no-deps -- -D warnings
+
+  # ── Build the GPU training binary (train feature) ────────────────────────
+  train-bin:
+    name: build train_marl bin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            v2/target
+          key: ${{ runner.os }}-ruview-swarm-bin-${{ hashFiles('v2/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-ruview-swarm-bin-
+      - name: cargo build --bin train_marl --features train
+        working-directory: v2
+        run: cargo build -p ruview-swarm --features train --bin train_marl
+      - name: train_marl is excluded from the default build
+        working-directory: v2
+        run: |
+          # The training binary requires the `train` feature; a default `--bins`
+          # build must NOT produce it (keeps default/CI builds light + Candle-free).
+          # Remove any prior artifact first so this checks what the DEFAULT build
+          # produces, not a leftover from the train-feature build above.
+          rm -f target/debug/train_marl
+          cargo build -p ruview-swarm --no-default-features --bins
+          if [ -f target/debug/train_marl ]; then
+            echo "ERROR: train_marl built without the 'train' feature" >&2
+            exit 1
+          fi
+          echo "OK: train_marl correctly gated behind the 'train' feature"
+
+  # ── ITAR + publish guards ────────────────────────────────────────────────
+  export-control-guard:
+    name: ITAR / publish guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: publish = false is present (no accidental crates.io publish)
+        run: |
+          CARGO=v2/crates/ruview-swarm/Cargo.toml
+          if ! grep -qE '^\s*publish\s*=\s*false' "$CARGO"; then
+            echo "ERROR: ruview-swarm Cargo.toml must keep 'publish = false' until" >&2
+            echo "       PR merge + dependency publish + ITAR export sign-off." >&2
+            exit 1
+          fi
+          echo "OK: publish = false present"
+      - name: default feature set does NOT enable itar-unrestricted
+        run: |
+          CARGO=v2/crates/ruview-swarm/Cargo.toml
+          # USML Cat VIII(h)(12): swarming coordination must be opt-in, never default.
+          DEFAULT_LINE=$(grep -E '^\s*default\s*=' "$CARGO" || true)
+          echo "default = $DEFAULT_LINE"
+          if echo "$DEFAULT_LINE" | grep -q 'itar-unrestricted'; then
+            echo "ERROR: 'itar-unrestricted' must NOT be in the default feature set" >&2
+            exit 1
+          fi
+          echo "OK: ITAR-gated coordination features are opt-in, not default"

@@ -1,10 +1,20 @@
-//! Cardiac arrhythmia detection — ADR-041 Category 1 Medical module.
+//! Cardiac-rhythm anomaly flagging — ADR-041 Category 1 Medical module.
 //!
-//! Monitors heart rate from host CSI pipeline and detects:
-//!   - Tachycardia: sustained HR > 100 BPM
-//!   - Bradycardia: sustained HR < 50 BPM
-//!   - Missed beats: sudden HR dips > 30% below running average
-//!   - HRV anomaly: RMSSD outside normal range over 30-second window
+//! ⚠️ EXPERIMENTAL RESEARCH MODULE — NOT VALIDATED AGAINST CLINICAL DATA.
+//! ⚠️ NOT A MEDICAL DEVICE. Do NOT use for diagnosis or patient monitoring.
+//! ⚠️ This module flags *candidate* arrhythmia-like heart-rate signatures only
+//! ⚠️ (sustained high/low rate estimates, abrupt drops, variability proxies);
+//! ⚠️ it has never been compared against ECG or any reference standard, and its
+//! ⚠️ accuracy is unproven (see ADR-160 §A1). Gated behind the non-default
+//! ⚠️ `medical-experimental` cargo feature.
+//!
+//! Monitors a heart-rate estimate from the host CSI pipeline and flags:
+//!   - Tachycardia-like: sustained rate estimate > 100 BPM
+//!   - Bradycardia-like: sustained rate estimate < 50 BPM
+//!   - Missed-beat-like: sudden rate dips > 30% below running average
+//!   - HRV-like anomaly: RMSSD proxy outside a coarse band over 30 seconds
+//!
+//! These are experimental signal proxies, NOT clinical measurements.
 //!
 //! Events:
 //!   TACHYCARDIA  (110) — sustained high heart rate
@@ -87,6 +97,8 @@ pub struct CardiacArrhythmiaDetector {
     cd_hrv: u16,
     /// Frame counter.
     frame_count: u32,
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
 }
 
 impl CardiacArrhythmiaDetector {
@@ -106,6 +118,7 @@ impl CardiacArrhythmiaDetector {
             cd_missed: 0,
             cd_hrv: 0,
             frame_count: 0,
+            events: [(0, 0.0); 4],
         }
     }
 
@@ -122,14 +135,13 @@ impl CardiacArrhythmiaDetector {
         self.cd_missed = self.cd_missed.saturating_sub(1);
         self.cd_hrv = self.cd_hrv.saturating_sub(1);
 
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n = 0usize;
 
         // Ignore invalid / zero / NaN readings.
         // NaN comparisons return false, so we must check explicitly to prevent
         // NaN from contaminating the EMA and RMSSD calculations.
         if !(hr_bpm >= 1.0) {
-            return unsafe { &EVENTS[..n] };
+            return &self.events[..n];
         }
 
         // ── EMA update ──────────────────────────────────────────────────
@@ -156,7 +168,7 @@ impl CardiacArrhythmiaDetector {
         if hr_bpm > TACHY_THRESH {
             self.tachy_count = self.tachy_count.saturating_add(1);
             if self.tachy_count >= SUSTAINED_SECS && self.cd_tachy == 0 && n < 4 {
-                unsafe { EVENTS[n] = (EVENT_TACHYCARDIA, hr_bpm); }
+                self.events[n] = (EVENT_TACHYCARDIA, hr_bpm);
                 n += 1;
                 self.cd_tachy = COOLDOWN_SECS;
             }
@@ -168,7 +180,7 @@ impl CardiacArrhythmiaDetector {
         if hr_bpm < BRADY_THRESH {
             self.brady_count = self.brady_count.saturating_add(1);
             if self.brady_count >= SUSTAINED_SECS && self.cd_brady == 0 && n < 4 {
-                unsafe { EVENTS[n] = (EVENT_BRADYCARDIA, hr_bpm); }
+                self.events[n] = (EVENT_BRADYCARDIA, hr_bpm);
                 n += 1;
                 self.cd_brady = COOLDOWN_SECS;
             }
@@ -180,7 +192,7 @@ impl CardiacArrhythmiaDetector {
         if self.ema_init && self.hr_ema > 1.0 {
             let drop_frac = (self.hr_ema - hr_bpm) / self.hr_ema;
             if drop_frac > MISSED_BEAT_DROP && self.cd_missed == 0 && n < 4 {
-                unsafe { EVENTS[n] = (EVENT_MISSED_BEAT, hr_bpm); }
+                self.events[n] = (EVENT_MISSED_BEAT, hr_bpm);
                 n += 1;
                 self.cd_missed = COOLDOWN_SECS;
             }
@@ -190,13 +202,13 @@ impl CardiacArrhythmiaDetector {
         if self.rr_len >= HRV_WINDOW && n < 4 {
             let rmssd = self.compute_rmssd();
             if (rmssd < RMSSD_LOW || rmssd > RMSSD_HIGH) && self.cd_hrv == 0 {
-                unsafe { EVENTS[n] = (EVENT_HRV_ANOMALY, rmssd); }
+                self.events[n] = (EVENT_HRV_ANOMALY, rmssd);
                 n += 1;
                 self.cd_hrv = COOLDOWN_SECS;
             }
         }
 
-        unsafe { &EVENTS[..n] }
+        &self.events[..n]
     }
 
     /// Compute RMSSD from the RR-diff ring buffer.

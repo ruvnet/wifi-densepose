@@ -25,7 +25,7 @@
 
 use clap::Parser;
 use std::path::PathBuf;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use wifi_densepose_train::{
     config::TrainingConfig,
@@ -170,8 +170,13 @@ fn main() {
             train_ds.len(),
             val_ds.len()
         );
+        warn!(
+            "[SMOKE-TEST ONLY] --dry-run trains and validates on SYNTHETIC data. \
+             Any val_pck/val_oks is a pipeline smoke-test and MUST NOT be reported \
+             as accuracy (ADR-155 §Tier-1.2)."
+        );
 
-        run_training(config, &train_ds, &val_ds);
+        run_smoke_test(config, &train_ds, &val_ds);
     } else {
         info!("Loading MM-Fi dataset from {}", data_dir.display());
 
@@ -199,22 +204,47 @@ fn main() {
 
         info!("Dataset: {} samples", train_ds.len());
 
-        // Use a small synthetic validation set when running without a split.
-        let val_syn_cfg = SyntheticConfig {
-            num_subcarriers: config.num_subcarriers,
-            num_antennas_tx: config.num_antennas_tx,
-            num_antennas_rx: config.num_antennas_rx,
-            window_frames: config.window_frames,
-            num_keypoints: config.num_keypoints,
-            signal_frequency_hz: 2.4e9,
-        };
-        let val_ds = SyntheticCsiDataset::new(config.batch_size.max(1), val_syn_cfg);
-        info!(
-            "Using synthetic validation set ({} samples) for pipeline verification",
-            val_ds.len()
-        );
-
-        run_training(config, &train_ds, &val_ds);
+        // ADR-155 §Tier-1.2: prefer a REAL, leak-free, subject-disjoint split so
+        // any reported PCK/OKS is honest. MM-Fi windows are stride-1 (≈99%
+        // overlap), so an index-level split would leak; a synthetic val set
+        // makes the metric meaningless. Split at the subject level when the
+        // dataset has ≥2 subjects.
+        match train_ds.subject_disjoint_split(0.2, config.seed) {
+            Ok((train_view, val_view)) => {
+                info!(
+                    "Leak-free subject-disjoint split: {} train windows (subjects {:?}) / \
+                     {} val windows (subjects {:?})",
+                    train_view.len(),
+                    train_view.subjects(),
+                    val_view.len(),
+                    val_view.subjects(),
+                );
+                run_training(config, &train_view, &val_view);
+            }
+            Err(e) => {
+                // Cannot form a real split (e.g. a single subject). Fall back to
+                // a SYNTHETIC val set, but make it UNMISTAKABLE that this is a
+                // smoke-test only — its metric is NOT a reportable number.
+                warn!("Cannot build a leak-free subject-disjoint split: {e}");
+                warn!(
+                    "[SMOKE-TEST ONLY] Falling back to a SYNTHETIC validation set. \
+                     ANY val_pck/val_oks printed below is a PIPELINE SMOKE-TEST on \
+                     synthetic data and MUST NOT be reported or claimed as accuracy \
+                     (ADR-155 §Tier-1.2). Provide a multi-subject dataset for a real \
+                     measurement."
+                );
+                let val_syn_cfg = SyntheticConfig {
+                    num_subcarriers: config.num_subcarriers,
+                    num_antennas_tx: config.num_antennas_tx,
+                    num_antennas_rx: config.num_antennas_rx,
+                    window_frames: config.window_frames,
+                    num_keypoints: config.num_keypoints,
+                    signal_frequency_hz: 2.4e9,
+                };
+                let val_ds = SyntheticCsiDataset::new(config.batch_size.max(1), val_syn_cfg);
+                run_smoke_test(config, &train_ds, &val_ds);
+            }
+        }
     }
 }
 
@@ -263,6 +293,55 @@ fn run_training(_config: TrainingConfig, train_ds: &dyn CsiDataset, val_ds: &dyn
          cargo run --features tch-backend --bin train"
     );
     info!("Config and dataset infrastructure: OK");
+}
+
+// ---------------------------------------------------------------------------
+// run_smoke_test — synthetic-validation path (NOT a reportable metric)
+// ---------------------------------------------------------------------------
+//
+// ADR-155 §Tier-1.2: identical to `run_training` but every metric it surfaces
+// is prefixed/labelled as a SMOKE-TEST so a synthetic-val PCK can never be
+// mistaken for a measured accuracy number.
+
+#[cfg(feature = "tch-backend")]
+fn run_smoke_test(config: TrainingConfig, train_ds: &dyn CsiDataset, val_ds: &dyn CsiDataset) {
+    use wifi_densepose_train::trainer::Trainer;
+
+    warn!(
+        "[SMOKE-TEST] Starting SYNTHETIC-validation run: {} train / {} val samples. \
+         Reported PCK/OKS below are NOT measurements.",
+        train_ds.len(),
+        val_ds.len()
+    );
+
+    let mut trainer = Trainer::new(config);
+    match trainer.train(train_ds, val_ds) {
+        Ok(result) => {
+            warn!("[SMOKE-TEST] Pipeline ran end-to-end (no crash). Metrics are synthetic:");
+            warn!(
+                "[SMOKE-TEST] (DO NOT REPORT) best_pck@0.2={:.4} @ epoch {} — synthetic val",
+                result.best_pck, result.best_epoch
+            );
+            info!(
+                "[SMOKE-TEST] Final train loss: {:.6}",
+                result.final_train_loss
+            );
+        }
+        Err(e) => {
+            error!("[SMOKE-TEST] Pipeline failed: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(not(feature = "tch-backend"))]
+fn run_smoke_test(_config: TrainingConfig, train_ds: &dyn CsiDataset, val_ds: &dyn CsiDataset) {
+    warn!(
+        "[SMOKE-TEST] Pipeline verification only: {} train / {} synthetic-val samples loaded. \
+         No metric is produced; build with --features tch-backend to run the pipeline.",
+        train_ds.len(),
+        val_ds.len()
+    );
 }
 
 // ---------------------------------------------------------------------------

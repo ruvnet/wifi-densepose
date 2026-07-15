@@ -274,18 +274,40 @@ impl DisasterEvent {
         self.scan_zones.retain(|z| z.id() != zone_id);
     }
 
-    /// Record a new detection
+    /// Record a new detection.
+    ///
+    /// Deduplication is two-tiered so that the same trapped person re-detected
+    /// across successive scan cycles is updated in place rather than counted as a
+    /// new survivor (which would fabricate a mass-casualty event):
+    ///
+    /// 1. **Spatial** — if the detection has a real `location`, match an existing
+    ///    survivor within `LOCATION_DEDUP_RADIUS_M`.
+    /// 2. **Zone + vitals-signature** — if there is NO usable location (no
+    ///    multi-node geometry / RSSI available, which is the common edge case
+    ///    for a single-node deployment), match an existing *active* survivor in
+    ///    the SAME zone whose most recent vital-sign signature is compatible
+    ///    (same breathing presence and rate band, same heartbeat presence, same
+    ///    movement class). Without this, every scan cycle would push a brand new
+    ///    survivor for the one person actually present.
+    ///
+    /// This is conservative on the safety side: two genuinely distinct survivors
+    /// in the same zone with materially different vitals (e.g. different
+    /// breathing-rate bands, or one with a pulse and one without) are kept
+    /// separate; only readings that are plausibly the same person collapse.
     pub fn record_detection(
         &mut self,
         zone_id: ScanZoneId,
         vitals: VitalSignsReading,
         location: Option<Coordinates3D>,
     ) -> Result<&Survivor, MatError> {
-        // Check if this might be an existing survivor
+        // Tier 1: spatial dedup when a real location is available.
         let existing_id = if let Some(loc) = &location {
-            self.find_nearby_survivor(loc, 2.0).cloned()
+            self.find_nearby_survivor(loc, Self::LOCATION_DEDUP_RADIUS_M)
+                .cloned()
         } else {
-            None
+            // Tier 2: zone + vitals-signature dedup when location is unavailable.
+            self.find_matching_survivor_by_signature(&zone_id, &vitals)
+                .cloned()
         };
 
         if let Some(existing) = existing_id {
@@ -312,6 +334,10 @@ impl DisasterEvent {
             .expect("survivors is non-empty after push"))
     }
 
+    /// Radius (metres) within which a located detection is treated as the same
+    /// survivor for spatial deduplication.
+    const LOCATION_DEDUP_RADIUS_M: f64 = 2.0;
+
     /// Find a survivor near a location
     fn find_nearby_survivor(&self, location: &Coordinates3D, radius: f64) -> Option<&SurvivorId> {
         for survivor in &self.survivors {
@@ -322,6 +348,79 @@ impl DisasterEvent {
             }
         }
         None
+    }
+
+    /// Find an existing *active*, *un-located* survivor in the same zone whose
+    /// most-recent vital signature is compatible with `vitals`.
+    ///
+    /// Only survivors without a fixed location participate: a survivor that has
+    /// a known position is handled by spatial dedup, and collapsing a located
+    /// survivor into an un-located reading would lose information. Returns the
+    /// first compatible match (there is normally at most one un-located survivor
+    /// per zone precisely because this dedup keeps it from multiplying).
+    fn find_matching_survivor_by_signature(
+        &self,
+        zone_id: &ScanZoneId,
+        vitals: &VitalSignsReading,
+    ) -> Option<&SurvivorId> {
+        for survivor in &self.survivors {
+            if survivor.zone_id() != zone_id {
+                continue;
+            }
+            if survivor.location().is_some() {
+                continue;
+            }
+            if !matches!(
+                survivor.status(),
+                super::survivor::SurvivorStatus::Active | super::survivor::SurvivorStatus::Lost
+            ) {
+                continue;
+            }
+            if let Some(latest) = survivor.vital_signs().latest() {
+                if Self::vitals_signature_matches(latest, vitals) {
+                    return Some(survivor.id());
+                }
+            }
+        }
+        None
+    }
+
+    /// Decide whether two vital-sign readings are plausibly the same person.
+    ///
+    /// Matches on coarse, detection-stable features rather than exact values
+    /// (CSI-derived rates jitter cycle-to-cycle): breathing presence + rate band,
+    /// heartbeat presence, and movement class. Breathing rate is bucketed into
+    /// START-relevant bands (<10, 10–30, >30 bpm) with a small tolerance so a
+    /// breath rate hovering near a band edge does not split one person in two.
+    fn vitals_signature_matches(a: &VitalSignsReading, b: &VitalSignsReading) -> bool {
+        // Breathing presence must agree.
+        if a.breathing.is_some() != b.breathing.is_some() {
+            return false;
+        }
+        if let (Some(ba), Some(bb)) = (&a.breathing, &b.breathing) {
+            // Same START rate band, with a 1.5 bpm tolerance at band edges.
+            const EDGE_TOL: f32 = 1.5;
+            let band = |r: f32| -> i8 {
+                if r < 10.0 - EDGE_TOL {
+                    0
+                } else if r > 30.0 + EDGE_TOL {
+                    2
+                } else {
+                    1
+                }
+            };
+            if band(ba.rate_bpm) != band(bb.rate_bpm) {
+                return false;
+            }
+        }
+
+        // Heartbeat presence must agree.
+        if a.heartbeat.is_some() != b.heartbeat.is_some() {
+            return false;
+        }
+
+        // Movement class must agree.
+        a.movement.movement_type == b.movement.movement_type
     }
 
     /// Get survivor by ID
@@ -485,5 +584,64 @@ mod tests {
             DisasterType::Avalanche.expected_survival_hours()
                 < DisasterType::Earthquake.expected_survival_hours()
         );
+    }
+
+    /// Count-inflation regression (FAILS on the old code, which returned 3).
+    ///
+    /// Three detections of the SAME person (identical vitals, no usable location
+    /// because no multi-node geometry is available) must collapse to a single
+    /// survivor. Previously, `record_detection` only deduplicated when a location
+    /// was present, so an un-located trapped person re-detected every scan cycle
+    /// produced N survivors — a fabricated mass-casualty count.
+    #[test]
+    fn test_identical_vitals_no_location_dedup_to_one() {
+        let mut event = DisasterEvent::new(DisasterType::Earthquake, Point::new(0.0, 0.0), "Test");
+        let zone = ScanZone::new("Zone A", ZoneBounds::rectangle(0.0, 0.0, 10.0, 10.0));
+        let zone_id = zone.id().clone();
+        event.add_zone(zone);
+
+        for _ in 0..3 {
+            event
+                .record_detection(zone_id.clone(), create_test_vitals(), None)
+                .unwrap();
+        }
+
+        assert_eq!(
+            event.survivors().len(),
+            1,
+            "same un-located person detected 3x must be ONE survivor, not three"
+        );
+    }
+
+    /// Counterpart: two genuinely DIFFERENT survivors in the same zone (different
+    /// breathing-rate bands) must remain separate — dedup must not under-count.
+    #[test]
+    fn test_distinct_vitals_no_location_stay_separate() {
+        let mut event = DisasterEvent::new(DisasterType::Earthquake, Point::new(0.0, 0.0), "Test");
+        let zone = ScanZone::new("Zone A", ZoneBounds::rectangle(0.0, 0.0, 10.0, 10.0));
+        let zone_id = zone.id().clone();
+        event.add_zone(zone);
+
+        // Person 1: normal breathing (16 bpm band 1).
+        event
+            .record_detection(zone_id.clone(), create_test_vitals(), None)
+            .unwrap();
+
+        // Person 2: tachypneic breathing (38 bpm band 2) — distinct survivor.
+        let fast = VitalSignsReading {
+            breathing: Some(BreathingPattern {
+                rate_bpm: 38.0,
+                amplitude: 0.8,
+                regularity: 0.5,
+                pattern_type: BreathingType::Labored,
+            }),
+            heartbeat: None,
+            movement: Default::default(),
+            timestamp: Utc::now(),
+            confidence: ConfidenceScore::new(0.8),
+        };
+        event.record_detection(zone_id, fast, None).unwrap();
+
+        assert_eq!(event.survivors().len(), 2);
     }
 }

@@ -19,7 +19,7 @@ The production CSI node firmware (`firmware/esp32-csi-node`) was built around th
 
 | C6 capability | What it enables for sensing | Why we can't get it on S3 |
 |---|---|---|
-| **802.11ax (Wi-Fi 6) HE-LTF CSI** | 242 subcarriers per HE20 frame (vs 52 for HT-LTF), HE-MU/HE-TB PPDU types, OFDMA-aware channel sounding | S3 radio is HT-only (n) |
+| **802.11ax (Wi-Fi 6) HE-LTF CSI** | 242 subcarriers per HE20 frame (vs 52 for HT-LTF), HE-MU/HE-TB PPDU types, OFDMA-aware channel sounding. **Hardware-confirmed 2026-06-11** (issue #1005, external production deployment): requires **ESP-IDF ≥ 5.5** — the v5.4 driver blob silently downconverts to 64-subcarrier HT even on a confirmed-HE link; v5.5.2 delivers 532 B frames = 256 bins (242 active tones), PPDU 0x01 (HE-SU). See WITNESS-LOG-110 §B1 (resolved). | S3 radio is HT-only (n) |
 | **802.15.4 (Thread / Zigbee)** | Cross-node time-sync over a separate radio — frees Wi-Fi airtime for CSI, ±100 µs alignment possible without coordination traffic on the sensing channel | S3 has no 802.15.4 |
 | **TWT (Target Wake Time)** | Sensor negotiates a deterministic wake slot with the AP; CSI cadence becomes scheduler-bounded instead of opportunistic | Requires 802.11ax — S3 can't speak it |
 | **LP-core + hibernation (~5 µA)** | Always-on motion gate runs on a separate RISC-V LP core in deep sleep; HP core stays off until a real event | S3 ULP is FSM-only, ~10 µA floor |

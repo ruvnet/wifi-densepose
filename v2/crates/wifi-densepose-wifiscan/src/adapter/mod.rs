@@ -2,11 +2,15 @@
 //!
 //! Each adapter targets a specific platform scanning mechanism:
 //! - [`NetshBssidScanner`]: Tier 1 -- parses `netsh wlan show networks mode=bssid` (Windows).
-//! - [`WlanApiScanner`]: Tier 2 -- async wrapper with metrics and future native FFI path (Windows).
+//! - [`WlanApiScanner`]: Tier 2 -- native `wlanapi.dll` BSS-list FFI with a
+//!   `netsh` fallback, metrics, and a measured-rate benchmark (Windows).
 //! - [`MacosCoreWlanScanner`]: CoreWLAN via Swift helper binary (macOS, ADR-025).
 //! - [`LinuxIwScanner`]: parses `iw dev <iface> scan` output (Linux).
 
 pub(crate) mod netsh_scanner;
+/// Native `wlanapi.dll` BSS-list FFI (real on Windows, typed `Unsupported`
+/// elsewhere). Backs the Tier 2 native scan path.
+pub(crate) mod wlanapi_native;
 pub mod wlanapi_scanner;
 
 #[cfg(target_os = "macos")]

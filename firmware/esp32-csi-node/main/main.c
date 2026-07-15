@@ -144,6 +144,54 @@ static void wifi_init_sta(void)
     }
 }
 
+#if CONFIG_LED_GAMMA_VIZ
+/* Viridis colormap (60 steps), generated from ruv-neural-viz::ColorMap::viridis()
+ * — the rUv-Neural brain-topology colormap, now no_std (ruvnet/ruv-neural#3 /
+ * RuView#1126). Used as the ON-phase colour of the 40 Hz gamma flicker below:
+ * dark-purple (still) -> teal -> green -> yellow (strong motion). */
+static const uint8_t VIRIDIS_LUT[60][3] = {
+    { 68,  1, 84},{ 67,  6, 88},{ 67, 12, 91},{ 66, 17, 95},{ 66, 23, 99},
+    { 65, 28,103},{ 64, 34,106},{ 64, 39,110},{ 63, 45,114},{ 63, 50,118},
+    { 62, 56,121},{ 61, 61,125},{ 61, 67,129},{ 60, 72,132},{ 59, 78,136},
+    { 59, 83,139},{ 57, 87,139},{ 55, 92,139},{ 53, 96,139},{ 52,100,139},
+    { 50,104,139},{ 48,109,139},{ 46,113,139},{ 44,117,140},{ 43,122,140},
+    { 41,126,140},{ 39,130,140},{ 37,134,140},{ 36,139,140},{ 34,143,140},
+    { 35,147,139},{ 39,151,136},{ 43,154,133},{ 47,158,130},{ 52,162,127},
+    { 56,166,124},{ 60,170,121},{ 64,173,119},{ 68,177,116},{ 72,181,113},
+    { 76,185,110},{ 81,189,107},{ 85,192,104},{ 89,196,102},{ 93,200, 99},
+    {102,203, 95},{113,205, 91},{124,207, 87},{134,209, 82},{145,211, 78},
+    {156,213, 74},{167,215, 70},{178,217, 66},{188,219, 62},{199,221, 58},
+    {210,223, 54},{221,225, 49},{231,227, 45},{242,229, 41},{253,231, 37},
+};
+static led_strip_handle_t s_viz_led;
+
+/* motion_energy that saturates the colormap to yellow (CONFIG, milli-units). */
+#define LED_MOTION_FULLSCALE ((float)CONFIG_LED_MOTION_FULLSCALE_MILLI / 1000.0f)
+
+/* GENUS-style 40 Hz gamma flicker: full on/off square wave, 50% duty (toggled
+ * every 12.5 ms → 40 Hz). The ON colour is live CSI motion (edge motion_energy)
+ * mapped through the ruv-neural-viz viridis LUT — still=purple, moving=yellow.
+ * So the LED is a real 40 Hz gamma stimulus whose hue tracks sensed motion. */
+static void led_gamma_40hz_cb(void *arg)
+{
+    static bool on = false;
+    on = !on;
+    if (on) {
+        edge_vitals_pkt_t v;
+        float m = edge_get_vitals(&v) ? v.motion_energy : 0.0f;
+        float norm = m / LED_MOTION_FULLSCALE;
+        if (norm < 0.0f) norm = 0.0f;
+        if (norm > 1.0f) norm = 1.0f;
+        int idx = (int)(norm * 59.0f + 0.5f);
+        const uint8_t *c = VIRIDIS_LUT[idx];
+        led_strip_set_pixel(s_viz_led, 0, c[0], c[1], c[2]); /* R,G,B (driver maps to GRB) */
+    } else {
+        led_strip_set_pixel(s_viz_led, 0, 0, 0, 0);          /* off phase */
+    }
+    led_strip_refresh(s_viz_led);
+}
+#endif /* CONFIG_LED_GAMMA_VIZ */
+
 void app_main(void)
 {
     /* Initialize NVS */
@@ -173,15 +221,16 @@ void app_main(void)
     ESP_LOGI(TAG, "%s CSI Node (ADR-018 / ADR-110) — v%s — Node ID: %d",
              target_name, app_desc->version, g_nvs_config.node_id);
 
-    /* Turn off onboard WS2812 LED.
-     * S3 dev boards put the LED on GPIO 38; C6 dev boards on GPIO 8.
-     * On C6, GPIO 38 doesn't exist (only 0-30) — gate the init by target. */
+    /* Onboard WS2812. C6 wires the LED to GPIO 8; S3 to GPIO 38 (DevKitC-1 v1.0)
+     * or GPIO 48 (DevKitC-1 v1.1 / N16R8 — see #962). On S3 we drive 48 (the
+     * common module). On C6, GPIO 38/48 don't exist (only 0-30) — gate by target.
+     * Behaviour is set by CONFIG_LED_GAMMA_VIZ (ADR-183): on = 40 Hz gamma flicker
+     * coloured by CSI motion; off = clear the LED at boot. */
 #if defined(CONFIG_IDF_TARGET_ESP32C6)
     const int led_gpio = 8;
 #else
-    const int led_gpio = 38;
+    const int led_gpio = 48;
 #endif
-    led_strip_handle_t led_strip;
     led_strip_config_t strip_config = {
         .strip_gpio_num = led_gpio,
         .max_leds = 1,
@@ -193,9 +242,26 @@ void app_main(void)
         .resolution_hz = 10 * 1000 * 1000, // 10MHz
         .flags.with_dma = false,
     };
+#if CONFIG_LED_GAMMA_VIZ
+    if (led_strip_new_rmt_device(&strip_config, &rmt_config, &s_viz_led) == ESP_OK) {
+        const esp_timer_create_args_t viz_args = {
+            .callback = &led_gamma_40hz_cb,
+            .name = "led_gamma_40hz",
+        };
+        esp_timer_handle_t viz_timer;
+        if (esp_timer_create(&viz_args, &viz_timer) == ESP_OK) {
+            esp_timer_start_periodic(viz_timer, 12500); // 12.5 ms toggle → 40 Hz square wave
+            ESP_LOGI(TAG, "Onboard WS2812: 40 Hz gamma flicker (GENUS), colour=CSI motion via ruv-neural-viz, GPIO %d", led_gpio);
+        }
+    }
+#else
+    /* Viz disabled — clear the onboard LED at boot and release the RMT channel. */
+    led_strip_handle_t led_strip;
     if (led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip) == ESP_OK) {
         led_strip_clear(led_strip);
+        led_strip_del(led_strip);
     }
+#endif /* CONFIG_LED_GAMMA_VIZ */
 
     /* ADR-110 P4: 802.15.4 mesh time-sync (C6 only).
      * Initialized BEFORE WiFi so it's available even when WiFi STA can't
@@ -409,6 +475,21 @@ void app_main(void)
         ESP_LOGW(TAG, "Display init returned: %s", esp_err_to_name(disp_ret));
     }
 #endif
+
+    /* RuView#893/#521: the MGMT-only promiscuous filter (set in
+     * csi_collector_init as the #396 display-crash workaround) starves the CSI
+     * callback on display-less boards — yield collapses to 0 pps and the node
+     * looks dead despite being on the network. Now that the display probe has
+     * run, boards with no AMOLED panel (no QSPI/SPI-flash cache contention)
+     * upgrade the filter to capture DATA frames too, restoring CSI yield. */
+#ifdef CONFIG_DISPLAY_ENABLE
+    bool has_display = display_is_active();   /* runtime panel probe result */
+#else
+    bool has_display = false;                 /* display support not compiled in */
+#endif
+    if (!has_display) {
+        csi_collector_enable_data_capture();
+    }
 
     ESP_LOGI(TAG, "CSI streaming active → %s:%d (edge_tier=%u, OTA=%s, WASM=%s, mmWave=%s, swarm=%s, adapt=%s)",
              g_nvs_config.target_ip, g_nvs_config.target_port,

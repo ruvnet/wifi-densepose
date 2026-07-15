@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>WiFlow · live WiFi-inferred pose</title>
+<style>
+  :root{--bg:#0a0c10;--panel:#11151c;--amber:#ffb840;--green:#46e08a;--red:#ff5a5a;--mute:#7d8796;--line:#1d2430}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:#dfe6ee;font:14px/1.5 'JetBrains Mono',ui-monospace,Menlo,monospace}
+  header{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  h1{font-size:15px;margin:0;letter-spacing:1px;text-transform:uppercase;font-weight:600}
+  h1 span{color:var(--amber)}
+  #banner{margin-left:auto;padding:5px 12px;border-radius:5px;font-weight:600;font-size:12px;letter-spacing:.5px}
+  .live{background:rgba(70,224,138,.15);color:var(--green);border:1px solid var(--green)}
+  .sim{background:rgba(255,184,64,.15);color:var(--amber);border:1px solid var(--amber)}
+  .down{background:rgba(255,90,90,.15);color:var(--red);border:1px solid var(--red)}
+  main{display:flex;gap:18px;padding:18px;flex-wrap:wrap}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+  canvas{background:#070a0e;border-radius:8px;display:block}
+  .label{font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--mute);margin-bottom:8px}
+  .stats{min-width:240px}
+  .row{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dashed var(--line)}
+  .row .k{color:var(--mute)} .row .v{color:var(--amber);font-variant-numeric:tabular-nums}
+  .v.green{color:var(--green)}
+  .note{margin-top:12px;font-size:11px;color:var(--mute);line-height:1.6;max-width:300px}
+  .note b{color:#dfe6ee}
+</style>
+</head>
+<body>
+<header>
+  <h1>WiFlow · <span>live WiFi-inferred pose</span></h1>
+  <div id="banner" class="down">CONNECTING…</div>
+</header>
+<main>
+  <div class="card">
+    <div class="label">CSI → pose (skeleton) overlaid on your laptop camera</div>
+    <div id="stage" style="width:420px;height:560px;border-radius:8px;overflow:hidden;background:#070a0e">
+      <video id="cam" autoplay muted playsinline style="position:absolute;width:2px;height:2px;opacity:0;pointer-events:none"></video>
+      <canvas id="cv" width="420" height="560"></canvas>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button id="camBtn" style="background:var(--amber);color:#0a0c10;border:0;border-radius:6px;padding:7px 14px;font:inherit;font-weight:600;cursor:pointer">enable laptop camera</button>
+      <select id="camSel" style="display:none;background:var(--panel);color:#dfe6ee;border:1px solid var(--line);border-radius:6px;padding:6px;font:inherit;max-width:220px"></select>
+    </div>
+    <div id="camStatus" style="margin-top:6px;font-size:11px;color:var(--mute)">camera: off</div>
+    <div class="note" style="margin-top:8px">Camera is a <b>visual reference only</b> — it is NOT fed to the model. Overlay alignment is approximate (model trained in a different camera's frame).</div>
+  </div>
+  <div class="card stats">
+    <div class="label">live</div>
+    <div class="row"><span class="k">CSI source</span><span class="v" id="src">—</span></div>
+    <div class="row"><span class="k">nodes</span><span class="v" id="nodes">—</span></div>
+    <div class="row"><span class="k">presence</span><span class="v" id="pres">—</span></div>
+    <div class="row"><span class="k">motion</span><span class="v" id="motion">—</span></div>
+    <div class="row"><span class="k">pose fps</span><span class="v" id="fps">—</span></div>
+    <div class="note">
+      This skeleton is inferred <b>from WiFi CSI only</b> — no camera in the loop here. A model was
+      trained on paired (camera-pose, CSI) data in this room (ADR-079/180).
+      <br/><br/>
+      <b>Honest accuracy:</b> ~<b>59.5% PCK@0.10</b> on held-out data (vs a 50% mean-pose baseline →
+      <b>+9.4 pp real signal</b>). It captures <b>coarse</b> pose; fine detail is weak (PCK@0.05 ≈ 24%).
+      Same person / room / session — not validated cross-day or through-wall.
+    </div>
+  </div>
+</main>
+<script>
+const POSE_WS = (new URLSearchParams(location.search)).get('ws') || `ws://${location.hostname||'localhost'}:8770/pose`;
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const $ = id => document.getElementById(id);
+let edges = [[5,7],[7,9],[6,8],[8,10],[5,6],[11,12],[5,11],[6,12],[11,13],[13,15],[12,14],[14,16],[0,1],[0,2],[1,3],[2,4],[0,5],[0,6]];
+let last = null, frames = 0, t0 = performance.now();
+
+function banner(state, txt){ const b=$('banner'); b.className=state; b.textContent=txt; }
+
+// per-joint smoothing (EMA) so dropped/jittery CSI frames render fluidly (ADR-180 dead-reckoning, lite)
+let sm = null;
+function smooth(kps){
+  if(!sm){ sm = kps.map(p=>[p[0],p[1]]); return sm; }
+  const a=0.35; for(let i=0;i<kps.length;i++){ sm[i][0]+=a*(kps[i][0]-sm[i][0]); sm[i][1]+=a*(kps[i][1]-sm[i][1]); }
+  return sm;
+}
+const camEl=document.getElementById('cam');
+function draw(p){
+  const W=cv.width, H=cv.height;
+  // paint the live camera frame onto the canvas (robust — no z-index/overlay tricks)
+  if(camEl && camEl.videoWidth>0){
+    ctx.save(); ctx.globalAlpha=0.9;
+    // cover-fit the camera frame into the canvas
+    const vr=camEl.videoWidth/camEl.videoHeight, cr=W/H;
+    let dw=W, dh=H, dx=0, dy=0;
+    if(vr>cr){ dh=H; dw=H*vr; dx=(W-dw)/2; } else { dw=W; dh=W/vr; dy=(H-dh)/2; }
+    ctx.drawImage(camEl, dx, dy, dw, dh); ctx.restore();
+  } else {
+    ctx.fillStyle='#070a0e'; ctx.fillRect(0,0,W,H);
+  }
+  if(!p || !p.kps){ return; }
+  const s = smooth(p.kps);
+  const k = s.map(([x,y])=>[x*W, y*H]);
+  ctx.lineWidth=5; ctx.strokeStyle=p.presence?'rgba(70,224,138,.95)':'rgba(125,135,150,.8)'; ctx.lineCap='round';
+  ctx.shadowColor='rgba(70,224,138,.6)'; ctx.shadowBlur=8;
+  for(const [a,b] of edges){ ctx.beginPath(); ctx.moveTo(k[a][0],k[a][1]); ctx.lineTo(k[b][0],k[b][1]); ctx.stroke(); }
+  ctx.shadowBlur=0;
+  for(const [x,y] of k){ ctx.beginPath(); ctx.arc(x,y,5,0,7); ctx.fillStyle=p.presence?'#ffb840':'#667'; ctx.fill(); }
+}
+
+// ---- laptop webcam (visual reference only; NOT fed to the model) ----
+let camStream=null;
+async function startCam(deviceId){
+  if(camStream){ camStream.getTracks().forEach(t=>t.stop()); }
+  const constraints = deviceId ? {video:{deviceId:{exact:deviceId}}} : {video:true};
+  const st=document.getElementById('camStatus');
+  try{
+    st.textContent='camera: requesting…';
+    camStream = await navigator.mediaDevices.getUserMedia(constraints);
+    const v=document.getElementById('cam'); v.muted=true; v.srcObject=camStream;
+    v.onloadedmetadata=()=>{ v.play().catch(err=>st.textContent='camera: play() blocked '+err.name); };
+    await v.play().catch(()=>{});
+    const tr=camStream.getVideoTracks()[0]; const ss=tr.getSettings();
+    // live readout: shows if real frames are flowing (videoWidth>0) and which device
+    const tick=()=>{ st.textContent = `camera: "${tr.label}" ${v.videoWidth}x${v.videoHeight} ${tr.readyState} ${v.paused?'PAUSED':'playing'}`; };
+    tick(); setInterval(tick, 1000);
+    document.getElementById('camBtn').textContent='switch camera ↻';
+    // populate the picker now that we have permission (labels need permission)
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
+    const sel=document.getElementById('camSel'); sel.style.display = devs.length>1?'inline-block':'none';
+    sel.innerHTML = devs.map((d,i)=>`<option value="${d.deviceId}">${d.label||('camera '+(i+1))}</option>`).join('');
+    const cur = camStream.getVideoTracks()[0].getSettings().deviceId; if(cur) sel.value=cur;
+  }catch(e){
+    document.getElementById('camBtn').textContent = 'camera error: '+e.name+(e.name==='NotReadableError'?' (in use by Zoom/Teams?)':'');
+    console.error('getUserMedia', e);
+  }
+}
+document.getElementById('camBtn').addEventListener('click', ()=>startCam());
+document.getElementById('camSel').addEventListener('change', e=>startCam(e.target.value));
+
+function connect(){
+  banner('down','CONNECTING…');
+  const ws = new WebSocket(POSE_WS);
+  ws.onopen = ()=> banner('sim','WAITING FOR POSE…');
+  ws.onmessage = ev => {
+    const d = JSON.parse(ev.data);
+    if(d.type==='meta'){ edges = d.edges; return; }
+    if(d.type!=='pose') return;
+    last=d; frames++;
+    if(d.src==='esp32') banner('live','LIVE — WiFi-inferred pose (real ESP32 CSI)');
+    else banner('sim','SIMULATED CSI — not real ('+d.src+')');
+    $('src').textContent=d.src; $('src').className = d.src==='esp32'?'v green':'v';
+    $('nodes').textContent=(d.nodes||[]).join(', ')||'—';
+    $('pres').textContent=d.presence?'PRESENT':'—';
+    $('motion').textContent=(d.motion!=null?Math.round(d.motion):'—');
+  };
+  ws.onclose = ()=>{ banner('down','NO BRIDGE — start wiflow_infer.py'); setTimeout(connect,1500); };
+  ws.onerror = ()=> ws.close();
+}
+function loop(){ draw(last); const now=performance.now(); if(now-t0>1000){ $('fps').textContent=frames; frames=0; t0=now; } requestAnimationFrame(loop); }
+connect(); loop();
+</script>
+</body>
+</html>

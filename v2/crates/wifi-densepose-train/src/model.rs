@@ -126,7 +126,15 @@ impl WiFiDensePoseModel {
         tch::no_grad(|| self.forward_impl(amplitude, phase, false))
     }
 
-    /// Save model weights to a file (tch safetensors / .pt format).
+    /// Save model weights to a file. The tch `VarStore` dispatches the format
+    /// on the file extension: `.safetensors` → safetensors, anything else →
+    /// torch `.pt`.
+    ///
+    /// **Platform constraint:** prefer `.safetensors`. The `.pt` path
+    /// (`_save_parameters`/`_load_parameters`) is broken on Windows with
+    /// torch 2.11 (GenericDict internal assert on the load roundtrip — see
+    /// `wiflow_std/model.rs::save_and_load_roundtrip`), which is why
+    /// [`crate::trainer::Trainer`] writes `.safetensors` checkpoints.
     ///
     /// # Errors
     ///
@@ -137,7 +145,8 @@ impl WiFiDensePoseModel {
             .map_err(|e| TrainError::training_step(format!("save failed: {e}")))
     }
 
-    /// Load model weights from a file.
+    /// Load model weights from a file (format dispatched on extension; see
+    /// the `.pt`-on-Windows caveat on [`Self::save`]).
     ///
     /// # Errors
     ///
@@ -182,7 +191,7 @@ impl WiFiDensePoseModel {
         self.vs
             .trainable_variables()
             .iter()
-            .map(|t| t.numel())
+            .map(|t| t.numel() as i64)
             .sum()
     }
 
@@ -297,7 +306,12 @@ fn apply_antenna_attention(x: &Tensor, lambda: f32) -> Tensor {
         let xi = x.select(0, bi as i64); // [n_ant, n_sc]
 
         // Move to CPU and convert to f32 for the pure-Rust attention kernel.
-        let flat: Vec<f32> = Vec::from(xi.to_kind(Kind::Float).to_device(Device::Cpu).contiguous());
+        let flat: Vec<f32> = Vec::<f32>::try_from(
+            xi.to_kind(Kind::Float)
+                .to_device(Device::Cpu)
+                .flatten(0, -1),
+        )
+        .expect("antenna tensor to vec");
 
         // Q = K = V = the antenna features (self-attention over antenna paths).
         let out = attn_mincut(
@@ -350,7 +364,12 @@ fn apply_spatial_attention(x: &Tensor) -> Tensor {
     for bi in 0..b {
         // Extract [C, H*W] and transpose to [H*W, C].
         let xi = x.select(0, bi).reshape([c, h * w]).transpose(0, 1); // [H*W, C]
-        let flat: Vec<f32> = Vec::from(xi.to_kind(Kind::Float).to_device(Device::Cpu).contiguous());
+        let flat: Vec<f32> = Vec::<f32>::try_from(
+            xi.to_kind(Kind::Float)
+                .to_device(Device::Cpu)
+                .flatten(0, -1),
+        )
+        .expect("spatial tensor to vec");
 
         // Build token slices — one per spatial position.
         let tokens: Vec<&[f32]> = (0..n_spatial).map(|i| &flat[i * d..(i + 1) * d]).collect();
@@ -973,7 +992,9 @@ mod tests {
         let mut model = WiFiDensePoseModel::new(&cfg, Device::Cpu);
 
         let tmp = tempdir().expect("tempdir");
-        let path = tmp.path().join("weights.pt");
+        // safetensors, not .pt: this torch build's .pt roundtrip is broken on
+        // Windows (torch 2.11 GenericDict internal assert).
+        let path = tmp.path().join("weights.safetensors");
 
         model.save(&path).expect("save should succeed");
         model.load(&path).expect("load should succeed");

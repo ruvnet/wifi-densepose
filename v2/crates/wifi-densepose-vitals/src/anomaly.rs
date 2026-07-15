@@ -9,6 +9,7 @@
 //! for numerically stable running statistics.
 
 use crate::types::VitalReading;
+use std::collections::VecDeque;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -80,10 +81,10 @@ pub struct VitalAnomalyDetector {
     rr_stats: WelfordStats,
     /// Running statistics for heart rate.
     hr_stats: WelfordStats,
-    /// Recent respiratory rate values for windowed analysis.
-    rr_history: Vec<f64>,
-    /// Recent heart rate values for windowed analysis.
-    hr_history: Vec<f64>,
+    /// Recent respiratory rate values for windowed analysis (O(1) eviction).
+    rr_history: VecDeque<f64>,
+    /// Recent heart rate values for windowed analysis (O(1) eviction).
+    hr_history: VecDeque<f64>,
     /// Maximum window size for history.
     window: usize,
     /// Z-score threshold for anomaly detection.
@@ -100,8 +101,8 @@ impl VitalAnomalyDetector {
         Self {
             rr_stats: WelfordStats::new(),
             hr_stats: WelfordStats::new(),
-            rr_history: Vec::with_capacity(window),
-            hr_history: Vec::with_capacity(window),
+            rr_history: VecDeque::with_capacity(window),
+            hr_history: VecDeque::with_capacity(window),
             window,
             z_threshold,
         }
@@ -123,14 +124,15 @@ impl VitalAnomalyDetector {
         let rr = reading.respiratory_rate.value_bpm;
         let hr = reading.heart_rate.value_bpm;
 
-        // Update histories
-        self.rr_history.push(rr);
+        // Update histories. `VecDeque` evicts the oldest in O(1) (was a `Vec`
+        // with an O(n) `remove(0)` — ADR-157 §A1).
+        self.rr_history.push_back(rr);
         if self.rr_history.len() > self.window {
-            self.rr_history.remove(0);
+            self.rr_history.pop_front();
         }
-        self.hr_history.push(hr);
+        self.hr_history.push_back(hr);
         if self.hr_history.len() > self.window {
-            self.hr_history.remove(0);
+            self.hr_history.pop_front();
         }
 
         // Update running statistics

@@ -1,6 +1,6 @@
 # ADR-080: QE Analysis Remediation Plan
 
-- **Status:** Proposed
+- **Status:** Proposed — P0 security findings #1–#3 **RESOLVED** on the shipped Rust sensing-server boundary (2026-06-13; closes ADR-164 G11)
 - **Date:** 2026-04-06
 - **Source:** [QE Analysis Gist (2026-04-05)](https://gist.github.com/proffesor-for-testing/a6b84d7a4e26b7bbef0cf12f932925b7)
 - **Full Reports:** [proffesor-for-testing/RuView `qe-reports` branch](https://github.com/proffesor-for-testing/RuView/tree/qe-reports/docs/qe-reports)
@@ -13,25 +13,38 @@ An 8-agent QE swarm analyzed ~305K lines across Rust, Python, C firmware, and Ty
 
 Address the 15 prioritized issues from the QE analysis in three waves: P0 (immediate), P1 (this sprint), P2 (this quarter).
 
+## Security P0 closure note (2026-06-13) — Rust sensing-server boundary
+
+The three P0 security findings below were logged against the **Python v1** API
+(`archive/v1/src/…`). ADR-164 G11 re-scoped them to the *shipped* boundary:
+`wifi-densepose-sensing-server` (Rust). They were verified against the current
+Rust crate and closed on branch `fix/adr-080-sensing-server-security`. Each fix
+(or already-fixed finding) is pinned by a test that fails on the old behavior.
+**The Python v1 paths remain as-is** — v1 is archived and not the shipped
+surface; this closure governs the live Rust server only.
+
 ## P0 — Fix Immediately
 
-### 1. Rate Limiter Bypass (Security HIGH)
+### 1. Rate Limiter Bypass / XFF spoofing (Security HIGH) — **RESOLVED (verified absent on Rust boundary)**
 
-- **Location:** `archive/v1/src/middleware/rate_limit.py:200-206`
+- **Original location (v1):** `archive/v1/src/middleware/rate_limit.py:200-206`
 - **Problem:** Trusts `X-Forwarded-For` without validation. Any client bypasses rate limits via header spoofing.
-- **Fix:** Validate forwarded headers against trusted proxy list, or use connection IP directly.
+- **Rust verification (2026-06-13):** The Rust sensing-server has **no XFF-trusting control to bypass** — there is no IP-based rate-limiter and no IP-allowlist, and neither security middleware reads a forwarded header. `bearer_auth.rs` authenticates on the token alone (`require_bearer` inspects only the `AUTHORIZATION` header); `host_validation.rs` decides on the `Host` header only. A repo-wide grep for `x-forwarded-for|forwarded|peer_addr|client_ip|real-ip` over `wifi-densepose-sensing-server` returns nothing. The only "rate limiter" is the MQTT *sample-rate* gate (`mqtt/state.rs`), a per-entity publish throttle with no IP/header input.
+- **Resolution:** No code change needed (no vulnerable surface). Regression tests pin the immunity: `bearer_auth::tests::xff_header_never_affects_auth_decision` (spoofed XFF never flips a 401↔200 decision) and `host_validation::tests::forwarded_headers_never_bypass_host_allowlist` (spoofed `X-Forwarded-Host: localhost` never lets a foreign `Host: evil.com` past the allowlist). Residual: if an IP-based control is ever added, it must derive the peer from the socket (`ConnectInfo<SocketAddr>`) and only honor XFF from an explicit `--trusted-proxy` CIDR — captured as guidance in the test docstrings.
 
-### 2. Exception Details Leaked in Responses (Security HIGH)
+### 2. Exception Details Leaked in Responses (Security HIGH, CWE-209) — **RESOLVED**
 
-- **Location:** `archive/v1/src/api/routers/pose.py:140`, `stream.py:297`, +5 endpoints
-- **Problem:** Stack traces visible regardless of environment.
-- **Fix:** Wrap with generic error responses in production; log details server-side only.
+- **Original location (v1):** `archive/v1/src/api/routers/pose.py:140`, `stream.py:297`, +5 endpoints
+- **Problem:** Internal error/stack-trace detail serialized into client responses.
+- **Rust finding (2026-06-13):** Six handlers in `wifi-densepose-sensing-server/src/main.rs` serialized the internal error `Display` into the JSON body: `edge_registry_endpoint` returned a panicked `spawn_blocking` `JoinError` (`"task … panicked"`) in a `500` and the raw upstream error in a `503`; `delete_model`/`delete_recording`/`start_recording` returned `std::io::Error` strings (OS detail / path); `calibration_start`/`calibration_stop` returned the `FieldModel` error chain.
+- **Fix:** New `src/error_response.rs` module — `internal_error` / `internal_error_json` / `upstream_unavailable` log the full detail **server-side only** (tagged with a correlation id) and return a generic body (`{"error":"internal_error","correlation_id":…}`) with no `panicked`, no file paths, no Debug chain. All six call-sites rewired. Pinned by `error_response::tests::internal_error_body_does_not_leak_detail` (leak-substring guard, verified to fail on the reverted old body) + 4 sibling tests.
 
-### 3. WebSocket JWT in URL (Security HIGH, CWE-598)
+### 3. WebSocket JWT in URL (Security HIGH, CWE-598) — **RESOLVED (verified absent on Rust boundary)**
 
-- **Location:** `archive/v1/src/api/routers/stream.py:74`, `archive/v1/src/middleware/auth.py:243`
+- **Original location (v1):** `archive/v1/src/api/routers/stream.py:74`, `archive/v1/src/middleware/auth.py:243`
 - **Problem:** Tokens in query strings visible in logs/proxies/browser history.
-- **Fix:** Use WebSocket subprotocol or first-message auth pattern.
+- **Rust verification (2026-06-13):** The Rust sensing-server never reads a token from the URL. `require_bearer` (`bearer_auth.rs`) inspects only the `Authorization` header; the WebSocket handlers (`ws_sensing_handler`/`ws_introspection_handler`/`ws_pose_handler`) take a bare `WebSocketUpgrade` with no `Query` extractor; the single `Query` in the crate (`EdgeRegistryParams`) is a non-secret `refresh` flag.
+- **Resolution:** No code change needed (no query-token path exists). Regression test `bearer_auth::tests::query_string_token_is_never_accepted` proves `?token=`/`?access_token=` in the URL never authenticates (stays `401`) while the same token in the header succeeds (`200`) — verified to fail if a query-token path is re-introduced.
 
 ### 4. Rust Tests Not in CI
 

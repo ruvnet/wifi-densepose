@@ -7,7 +7,7 @@ pub mod state;
 pub mod tokens;
 pub mod ws;
 
-pub use app::{router, AppState};
+pub use app::{build_cors_layer, router, AppState};
 pub use error::{ApiError, ApiResult};
 pub use state::SharedState;
 pub use tokens::LongLivedTokenStore;

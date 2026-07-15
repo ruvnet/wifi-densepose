@@ -1,0 +1,96 @@
+name: AetherArena harness gate (ADR-149)
+
+# Runs the AetherArena scoring harness as a PR build gate. Every PR that touches
+# the scorer, the metrics, or the benchmark scaffold must keep the deterministic
+# score hash stable (ADR-149 §2.5 determinism_gate). If the scoring maths changes,
+# the hash moves and this gate fails until `expected_score.sha256` is regenerated
+# and reviewed — so scorer drift can never land silently.
+#
+# This is the "a PR that runs the harness as part of the build process" requirement.
+
+on:
+  pull_request:
+    paths:
+      - 'v2/crates/wifi-densepose-train/src/ruview_metrics.rs'
+      - 'v2/crates/wifi-densepose-train/src/ablation.rs'
+      - 'v2/crates/wifi-densepose-train/src/bin/aa_score_runner.rs'
+      - 'aether-arena/**'
+      - '.github/workflows/aether-arena-harness.yml'
+  push:
+    branches: ['feat/adr-149-aether-arena']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  harness-gate:
+    name: Run AA scorer harness (determinism gate)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: v2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        run: rustup show && rustc --version
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            v2/target
+          key: aa-harness-${{ runner.os }}-${{ hashFiles('v2/Cargo.lock') }}
+
+      # 1. Build the pure-Rust scorer (no torch / no GPU → fast PR gate).
+      - name: Build AA score runner
+        run: cargo build -p wifi-densepose-train --bin aa_score_runner --no-default-features
+
+      # 2. Determinism gate: the committed expected hash must still match. A
+      #    non-zero exit here fails the PR.
+      - name: Run determinism gate
+        run: cargo run -q -p wifi-densepose-train --bin aa_score_runner --no-default-features
+
+      # 3. Repeatability analysis (witness chain): the harness must produce one
+      #    identical proof hash across many runs — any nondeterminism fails here.
+      - name: Repeatability analysis (16 runs)
+        run: cargo run -q -p wifi-densepose-train --bin aa_score_runner --no-default-features -- --repeat 16
+
+      # 4. Real-scoring smoke: score a sample prediction against the public smoke
+      #    split, exercising the actual model-scoring path (not just the fixture).
+      - name: Real-scoring smoke test
+        run: |
+          cargo run -q -p wifi-densepose-train --bin aa_score_runner --no-default-features -- \
+            --split ../aether-arena/fixtures/smoke_split.json \
+            --pred  ../aether-arena/fixtures/smoke_pred.json --json
+
+      # 5. Witness ledger chain integrity: the append-only results ledger must
+      #    verify (every prev_hash link + row_hash intact = no silent edits).
+      - name: Verify witness ledger chain
+        working-directory: aether-arena/ledger
+        run: python3 ledger_tools.py verify
+
+      # 6. Emit the witness row + repeatability into the PR run summary.
+      - name: Witness row → job summary
+        if: always()
+        run: |
+          ROW=$(cargo run -q -p wifi-densepose-train --bin aa_score_runner --no-default-features -- --json)
+          REP=$(cargo run -q -p wifi-densepose-train --bin aa_score_runner --no-default-features -- --repeat 16)
+          {
+            echo "## AetherArena harness gate (witness chain)"
+            echo ""
+            echo "Deterministic witness (ADR-149 §2.2 / proof + repeatability):"
+            echo '```json'
+            echo "$ROW"
+            echo "$REP"
+            echo '```'
+            echo ""
+            echo "If the determinism gate failed, the scoring maths changed: regenerate with"
+            echo '`cargo run -p wifi-densepose-train --bin aa_score_runner --no-default-features -- --generate-hash > aether-arena/fixtures/expected_score.sha256` and review the diff.'
+          } >> "$GITHUB_STEP_SUMMARY"

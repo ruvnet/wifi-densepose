@@ -37,6 +37,26 @@ clap = { version = "4", features = ["derive", "env"] }
 anyhow = "1"
 serde_json = "1"
 axum = { version = "0.7", features = ["macros"] }
+# Static-file serving for the HOMECORE-UI dashboard (ADR-131) mounted at
+# /homecore, request tracing, and the CORS allowlist applied to BOTH the
+# homecore-api routes AND the merged BFF gateway routes (ADR-131 §11).
+tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
+# BFF gateway (ADR-131 §11): reverse-proxy the calibration API + aggregate
+# upstreams. rustls is requested here, but NOTE this is a WORKSPACE-WIDE
+# concern: cargo feature-unification means a sibling crate that enables
+# reqwest's default `native-tls` re-introduces OpenSSL into the final binary
+# regardless of this opt-out. A real "no OpenSSL on the appliance" guarantee
+# requires every crate that pulls reqwest to align on rustls-only (tracked in
+# CHANGELOG / ADR-131 security note).
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+# Concurrent fan-out of per-bank RoomState fetches in the gateway (§11 perf).
+futures = "0.3"
+
+[dev-dependencies]
+# Drive the assembled router in integration tests via ServiceExt::oneshot.
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
 
 [features]
 default = []

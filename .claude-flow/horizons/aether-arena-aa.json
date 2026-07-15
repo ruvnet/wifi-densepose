@@ -1,0 +1,119 @@
+{
+  "id": "aether-arena-aa",
+  "name": "AetherArena (AA) — Official Spatial-Intelligence Benchmark",
+  "adr": "ADR-149",
+  "adrPath": "docs/adr/ADR-149-public-community-leaderboard-huggingface.md",
+  "status": "Accepted",
+  "initializedDate": "2026-05-30",
+  "targetDate": "2026-08-31",
+  "exitCriteria": "Benchmark INFRASTRUCTURE done, tested, CI-gated, deploy-ready: aa_score_runner.rs passes deterministic fixture test; CI harness-gate green on every PR; aether-arena repo scaffold committed (README four-part framing + aa-submission.toml schema + VERIFY.md); public smoke split committed; HF Space lifecycle skeleton deployed; signed Parquet ledger functional; RuView baseline PCK@20 ~2.5% entered; ADR-149 §7 acceptance test (five-step stranger test) passes. NOTE: ML SOTA (MM-Fi PCK@20 ~72%) is a separate long-running stretch goal blocked on ADR-079 camera-ground-truth — it is NOT an infra exit criterion.",
+  "baselineState": {
+    "adrStatus": "Accepted, committed 2026-05-30",
+    "scorerCode": "ruview_metrics.rs + ablation.rs + proof.rs exist in wifi-densepose-train; aa_score_runner.rs not yet created",
+    "aetherArenaRepo": "does not exist yet — needs user authorization to create ruvnet/aether-arena public repo",
+    "hfSpace": "does not exist yet — needs HF_TOKEN and user authorization to deploy ruvnet/aether-arena HF Space",
+    "smokeDataset": "not committed",
+    "resultsLedger": "not created",
+    "ruviewBaseline": "PCK@20 ~2.5% self-reported, not formally entered",
+    "ciGate": "not added to workflow"
+  },
+  "milestones": {
+    "m1": {
+      "name": "ADR-149 Accepted + committed",
+      "status": "DONE",
+      "completedDate": "2026-05-30",
+      "completionCriteria": "ADR-149 file committed to docs/adr/ with status Accepted",
+      "notes": "Done this session. File at docs/adr/ADR-149-public-community-leaderboard-huggingface.md"
+    },
+    "m2": {
+      "name": "Deterministic scorer runner bin (aa_score_runner.rs)",
+      "status": "NOT_STARTED",
+      "completionCriteria": "aa_score_runner.rs compiles, runs ruview_metrics on a committed fixture, emits RuViewTier + SHA-256 proof hash, mirrors existing *_proof_runner.rs pattern; cargo test passes",
+      "estimatedEffort": "3-5 days",
+      "owner": "wifi-densepose-train crate or new aa-scorer crate"
+    },
+    "m3": {
+      "name": "CI harness-gate: GitHub Actions workflow",
+      "status": "NOT_STARTED",
+      "completionCriteria": "A GitHub Actions workflow runs aa_score_runner on every PR as a build gate; PR fails if scorer fails determinism check; workflow committed and green",
+      "estimatedEffort": "2-3 days",
+      "dependency": "M2 must be done first"
+    },
+    "m4": {
+      "name": "aether-arena repo scaffold",
+      "status": "NOT_STARTED",
+      "completionCriteria": "ruvnet/aether-arena repo created with: README (four-part framing: Public leaderboard / Private eval split / Open scorer / Signed results); aa-submission.toml manifest schema; VERIFY.md (ADR-149 §7 stranger acceptance test); neutrality/governance section (§2.8); contribution guide",
+      "estimatedEffort": "3-5 days",
+      "blockers": ["Needs user authorization to create public ruvnet/aether-arena repo on GitHub"]
+    },
+    "m5": {
+      "name": "Public smoke split committed + private MM-Fi held-out split prep",
+      "status": "NOT_STARTED",
+      "completionCriteria": "Public smoke split committed to aether-arena repo (stranger can score locally); private MM-Fi held-out split prepared under non-public path with CC BY-NC 4.0 attribution; Wi-Pose explicitly excluded from v0",
+      "estimatedEffort": "5-7 days",
+      "riskNotes": "MM-Fi CC BY-NC 4.0: AA must remain non-commercial and carry MM-Fi attribution; raw frames stay in private split; only derived CSI features + scores may be exposed"
+    },
+    "m6": {
+      "name": "HF Space (Gradio) skeleton",
+      "status": "BLOCKED",
+      "completionCriteria": "HF Space deployed at ruvnet/aether-arena with submission lifecycle (submitted->validated->quarantined->smoke_scored->full_scored->published/rejected); sandboxed scorer container wired; basic leaderboard table rendered",
+      "estimatedEffort": "7-10 days",
+      "blockers": [
+        "Needs HF_TOKEN — check .env for HF_TOKEN or HUGGINGFACE_TOKEN",
+        "Needs user authorization to create/deploy ruvnet/aether-arena HF Space (outward-facing public deployment)"
+      ]
+    },
+    "m7": {
+      "name": "Signed append-only Parquet results ledger",
+      "status": "NOT_STARTED",
+      "completionCriteria": "HF dataset ruvnet/aether-arena-results created; append-only Parquet ledger with signed rows; determinism_gate enforced; no row can be silently edited",
+      "estimatedEffort": "3-5 days",
+      "ledgerSchema": "submitter, model_ref, category, feature_set, tier, pck20, oks, mota, vitals_bpm_err, latency_p50, latency_p95, privacy_leakage, cross_room_deg, proof_sha256, scored_at, harness_version",
+      "dependency": "M6 must be scaffolded first"
+    },
+    "m8": {
+      "name": "RuView baseline entry + public launch",
+      "status": "NOT_STARTED",
+      "completionCriteria": "RuView wifi-densepose-pretrained baseline entered (honest PCK@20 ~2.5%); ADR-149 §7 five-step stranger acceptance test passes; v0 live with Presence + Pose + Edge-latency + Determinism categories active; Privacy and Cross-room shown as gated/coming-soon",
+      "estimatedEffort": "3-5 days",
+      "dependency": "M4+M5+M6+M7 complete",
+      "notes": "ML SOTA improvement (PCK@20 ~72%) is a SEPARATE stretch goal blocked on ADR-079 P7-P9 camera ground truth. NOT a blocker for infra launch."
+    }
+  },
+  "activeMilestone": "m2",
+  "completedMilestones": ["m1"],
+  "knownRisks": [
+    "HF_TOKEN not confirmed present in .env — check before M6 work begins",
+    "ruvnet/aether-arena public repo creation is outward-facing — needs explicit user authorization",
+    "MM-Fi CC BY-NC 4.0: AA must stay legally non-commercial and brand-distinct from commercial RuView product; or seek MM-Fi commercial grant before any paid tier",
+    "Wi-Pose has research-use-only terms (no redistribution grant) — excluded from v0; revisit only if terms are clarified with authors",
+    "HF Space free CPU tier may be too slow for Candle/tch inference pipeline — may need ZeroGPU or self-hosted scorer on cognitum-20260110 GCloud A100/L4",
+    "ADR-079 camera-ground-truth (PCK@20 SOTA) is P7-P9 pending — NOT an infra blocker; must not be conflated with AA infra completion",
+    "Neutrality/governance risk: RuView seeded the scorer — must be demonstrably scored through the same public pipeline as any other entrant (§2.8 controls)"
+  ],
+  "driftSignals": {
+    "timeline": "GREEN — just initialized, no timeline pressure yet",
+    "scope": "GREEN — scope locked at four-part structure per ADR-149 §2 decision",
+    "approach": "GREEN — reuse pattern (existing ruview_metrics + proof.rs) confirmed in ADR-149",
+    "dependency": "YELLOW — HF_TOKEN and ruvnet/aether-arena repo authorization are external blockers with unknown ETA",
+    "priority": "GREEN — active feature branch feat/adr-136-146-streaming-engine in progress; AA infra can proceed in parallel on its own branch"
+  },
+  "stretchGoals": {
+    "sotaML": "MM-Fi PCK@20 SOTA ~72% — separate ML effort blocked on ADR-079 P7-P9 camera-ground-truth data collection; NOT an infra exit criterion",
+    "privacyAxis": "ADR-145 §10 membership-inference attacker — activate Privacy leaderboard axis once attacker is implemented and published",
+    "crossRoom": "Multi-room held-out split — activate Cross-room generalization axis",
+    "multiOrgSteering": "Invite co-maintainers from other projects once >=N external entries land"
+  },
+  "sessionHistory": [
+    {
+      "date": "2026-05-30",
+      "type": "initialization",
+      "accomplished": [
+        "ADR-149 Accepted and committed to docs/adr/",
+        "Horizon record initialized in .claude-flow/horizons/aether-arena-aa.json",
+        "Memory stored in horizons namespace under key horizon-aether-arena-aa",
+        "Session check-in record stored in horizon-sessions namespace"
+      ]
+    }
+  ]
+}

@@ -50,6 +50,10 @@ fn readme_references_companion_adrs_118_through_123() {
 fn readme_quickstart_uses_canonical_public_api() {
     // The quickstart snippets must reference the actual operator-facing
     // surface — drift here would mislead first-time users.
+    // Normalize line endings so the multi-line needle below is robust to a
+    // CRLF checkout (Windows / `core.autocrlf=true`); the README renders
+    // identically either way on crates.io.
+    let readme = README.replace("\r\n", "\n");
     for needle in [
         "BfldPipeline::new",
         "BfldConfig::new",
@@ -62,7 +66,7 @@ fn readme_quickstart_uses_canonical_public_api() {
         "BfldPipelineHandle::spawn",
         "PipelineInput",
     ] {
-        assert!(README.contains(needle), "quickstart missing canonical API: {needle}");
+        assert!(readme.contains(needle), "quickstart missing canonical API: {needle}");
     }
 }
 

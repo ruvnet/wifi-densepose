@@ -22,6 +22,9 @@ pub mod geometry;
 
 // Re-export primary types at the module root for ergonomic imports.
 pub use attention::{CrossViewpointAttention, GeometricBias};
-pub use coherence::{CoherenceGate, CoherenceState};
+pub use coherence::{
+    ClockGateDecision, ClockQualityGate, ClockQualityScore, ClockRejectReason, CoherenceGate,
+    CoherenceState,
+};
 pub use fusion::{FusedEmbedding, FusionConfig, MultistaticArray, ViewpointEmbedding};
 pub use geometry::{CramerRaoBound, GeometricDiversityIndex};

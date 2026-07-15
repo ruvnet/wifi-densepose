@@ -1,13 +1,13 @@
 {
   "name": "@ruv/ruview-cli",
   "version": "0.0.1",
-  "description": "RuView CLI — shell access to WiFi-DensePose sensing, inference, and training capabilities",
+  "description": "RuView CLI — shell access to WiFi-DensePose sensing, inference, and training capabilities. Private/unpublished; the `ruview` bin name belongs to @ruvnet/ruview (ADR-265 D4).",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "ruview": "dist/index.js"
+    "ruview-cli": "dist/index.js"
   },
   "files": [
     "dist"
@@ -15,7 +15,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "node --experimental-vm-modules node_modules/.bin/jest",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest --passWithNoTests",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit"
   },

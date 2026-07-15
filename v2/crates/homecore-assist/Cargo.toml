@@ -43,5 +43,13 @@ regex = "1"
 # Structured logging.
 tracing = "0.1"
 
+[features]
+default = ["semantic"]
+# Enables SemanticIntentRecognizer's embedding-based exact cosine k-NN match.
+# Self-contained: deterministic feature-hash embeddings + an in-memory cosine
+# scan, with no external index/storage dependency (the small intent vocabularies
+# make an exact scan faster and far more robust than an ANN backend).
+semantic = []
+
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }

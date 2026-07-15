@@ -57,6 +57,8 @@ pub enum DetectorState {
 
 /// Intrusion detector.
 pub struct IntrusionDetector {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
     /// Per-subcarrier baseline amplitude.
     baseline_amp: [f32; MAX_SC],
     /// Per-subcarrier baseline variance.
@@ -86,6 +88,7 @@ pub struct IntrusionDetector {
 impl IntrusionDetector {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 4],
             baseline_amp: [0.0; MAX_SC],
             baseline_var: [0.0; MAX_SC],
             prev_phases: [0.0; MAX_SC],
@@ -119,7 +122,6 @@ impl IntrusionDetector {
             self.cooldown -= 1;
         }
 
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n_events = 0usize;
 
         match self.state {
@@ -165,9 +167,7 @@ impl IntrusionDetector {
                 if self.quiet_frames >= ARM_FRAMES {
                     self.state = DetectorState::Armed;
                     if n_events < 4 {
-                        unsafe {
-                            EVENTS[n_events] = (EVENT_INTRUSION_ARMED, 1.0);
-                        }
+                        self.events[n_events] = (EVENT_INTRUSION_ARMED, 1.0);
                         n_events += 1;
                     }
                 }
@@ -190,18 +190,14 @@ impl IntrusionDetector {
                         self.cooldown = ALERT_COOLDOWN;
 
                         if n_events < 4 {
-                            unsafe {
-                                EVENTS[n_events] = (EVENT_INTRUSION_ALERT, disturbance);
-                            }
+                            self.events[n_events] = (EVENT_INTRUSION_ALERT, disturbance);
                             n_events += 1;
                         }
 
                         // Find the most disturbed zone.
                         let zone = self.find_disturbed_zone(amplitudes, n_sc);
                         if n_events < 4 {
-                            unsafe {
-                                EVENTS[n_events] = (EVENT_INTRUSION_ZONE, zone as f32);
-                            }
+                            self.events[n_events] = (EVENT_INTRUSION_ZONE, zone as f32);
                             n_events += 1;
                         }
                     }
@@ -235,7 +231,7 @@ impl IntrusionDetector {
             }
         }
 
-        unsafe { &EVENTS[..n_events] }
+        &self.events[..n_events]
     }
 
     /// Compute overall disturbance score.

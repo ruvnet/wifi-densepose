@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RuView · Through-Wall WiFi Sensing · LIVE CSI (no skeleton, no simulation)</title>
+    <!--
+      THROUGH-WALL WiFi-CSI SENSING DEMO  —  honest, real-data-only.
+
+      Renders ONLY what the running sensing-server actually streams over
+      ws://localhost:8765/ws/sensing :
+        - the 20x20 `signal_field` floor heatmap (real values)
+        - a coarse RF-localization puck from persons[0].position (NOT pose)
+        - live motion / presence / rssi / confidence meters
+        - the real `source` ("esp32" = LIVE) verbatim in the banner
+
+      It deliberately does NOT draw a skeleton. The server's
+      persons[].keypoints carry confidence:0.0 (image-pixel garbage, not
+      real 3D joints) so we never render them. WiFi CSI gives
+      motion/presence/coarse-position — that is the honest wow, and it
+      penetrates drywall. See README.md.
+    -->
+    <style>
+        :root {
+            --bg: #050507; --bg-panel: rgba(8,10,14,0.80);
+            --amber: #ffb840; --amber-hot: #ffe09f;
+            --cyan: #4cf; --magenta: #ff4cc8;
+            --text: #d8c69a; --text-mute: #6b6155;
+            --green: #4f4; --red: #f64;
+            --border: rgba(255,184,64,0.18);
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0; background: var(--bg); color: var(--text); overflow: hidden;
+            font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+            -webkit-font-smoothing: antialiased; font-size: 12px;
+        }
+        canvas { display: block; }
+        .overlay-frame {
+            position: fixed; inset: 0; pointer-events: none; z-index: 5;
+            background:
+                radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.55) 100%),
+                linear-gradient(180deg, rgba(0,0,0,0.32) 0%, transparent 18%, transparent 82%, rgba(0,0,0,0.38) 100%);
+        }
+        .scanlines {
+            position: fixed; inset: 0; pointer-events: none; z-index: 6;
+            background: repeating-linear-gradient(0deg, rgba(0,0,0,0.04) 0px, rgba(0,0,0,0.04) 1px, transparent 1px, transparent 3px);
+            mix-blend-mode: overlay; opacity: 0.5;
+        }
+        .panel {
+            position: absolute; background: var(--bg-panel); border: 1px solid var(--border);
+            border-radius: 4px; padding: 12px 14px; backdrop-filter: blur(8px);
+            box-shadow: 0 1px 0 rgba(255,184,64,0.04), 0 8px 32px rgba(0,0,0,0.55); z-index: 10;
+        }
+        .panel h2 {
+            margin: 0 0 8px 0; font-size: 10px; text-transform: uppercase; letter-spacing: 2px;
+            color: var(--amber); font-weight: 600; border-bottom: 1px solid var(--border); padding-bottom: 6px;
+        }
+
+        /* ---- Honest status banner (top-center, mutually exclusive states) ---- */
+        #banner {
+            position: fixed; top: 0; left: 0; right: 0; z-index: 30;
+            text-align: center; padding: 7px 12px; font-size: 12px; letter-spacing: 1px;
+            font-weight: 600; border-bottom: 1px solid rgba(0,0,0,0.4);
+            transition: background 0.3s, color 0.3s;
+        }
+        #banner.live  { background: rgba(40,255,80,0.12); color: var(--green); border-bottom-color: rgba(80,255,120,0.4); }
+        #banner.sim   { background: rgba(255,120,40,0.16); color: #ffae5a; border-bottom-color: rgba(255,140,60,0.5); }
+        #banner.noserver { background: rgba(255,80,80,0.16); color: var(--red); border-bottom-color: rgba(255,90,90,0.5); }
+        #banner .src { opacity: 0.8; font-weight: 400; }
+        #banner-caption {
+            position: fixed; top: 30px; left: 0; right: 0; z-index: 29;
+            text-align: center; font-size: 10px; color: var(--text-mute); letter-spacing: 0.5px;
+            pointer-events: none; padding-top: 2px;
+        }
+
+        #info { top: 64px; left: 20px; min-width: 270px; }
+        #info h1 { margin: 0 0 1px 0; font-size: 13px; letter-spacing: 1px; color: var(--amber-hot); font-weight: 600; }
+        #info .sub { font-size: 10px; color: var(--text-mute); letter-spacing: 0.5px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+        #info .row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
+        #info .row .k { color: var(--text-mute); font-size: 11px; }
+        #info .row .v { color: var(--text); font-variant-numeric: tabular-nums; font-size: 11px; }
+        #info .row .v.amber { color: var(--amber); }
+        #info .row .v.cyan  { color: var(--cyan); }
+        #info .row .v.green { color: var(--green); }
+        #info .row .v.red   { color: var(--red); }
+        #info .row .v.mag   { color: var(--magenta); }
+        #info .row .v.mute  { color: var(--text-mute); }
+
+        #csi { top: 64px; right: 20px; min-width: 270px; }
+        #csi .bar-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 10px; }
+        #csi .bar-row .label { width: 86px; color: var(--text-mute); }
+        #csi .bar-row .bar-track { flex: 1; height: 6px; background: rgba(255,184,64,0.08); border-radius: 2px; overflow: hidden; }
+        #csi .bar-row .bar-fill {
+            height: 100%; background: linear-gradient(90deg, var(--amber-hot), var(--amber));
+            box-shadow: 0 0 6px var(--amber); transition: width 0.1s linear;
+        }
+        #csi .bar-row .val { width: 44px; text-align: right; color: var(--amber); font-variant-numeric: tabular-nums; }
+        #csi .spark { margin-top: 8px; }
+        #csi canvas { width: 100%; height: 38px; display: block; border: 1px solid var(--border); border-radius: 3px; background: rgba(0,0,0,0.3); }
+        #csi .legend { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 10px; color: var(--text-mute); line-height: 1.5; }
+
+        /* ---- waiting / no-server overlay ---- */
+        #waiting {
+            position: fixed; inset: 0; z-index: 25; display: none;
+            flex-direction: column; align-items: center; justify-content: center;
+            background: rgba(5,5,7,0.94); color: var(--amber); text-align: center; padding: 24px;
+        }
+        #waiting.show { display: flex; }
+        #waiting .big { font-size: 22px; letter-spacing: 2px; color: var(--red); margin-bottom: 16px; text-transform: uppercase; }
+        #waiting code {
+            display: block; text-align: left; max-width: 640px; margin: 8px auto;
+            background: rgba(255,184,64,0.06); border: 1px solid var(--border); border-radius: 4px;
+            padding: 10px 14px; color: var(--amber-hot); font-size: 12px; white-space: pre-wrap;
+        }
+        #waiting .pulse { animation: pulse 1.4s ease-in-out infinite; }
+        @keyframes pulse { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
+
+        /* ---- optional webcam ground-truth tile ---- */
+        #cam-tile {
+            position: absolute; bottom: 20px; right: 20px; width: 240px; z-index: 12;
+            background: var(--bg-panel); border: 1px solid var(--border); border-radius: 4px;
+            padding: 8px; backdrop-filter: blur(8px);
+        }
+        #cam-tile h2 { margin: 0 0 6px 0; font-size: 9px; text-transform: uppercase; letter-spacing: 1.5px;
+            color: var(--cyan); font-weight: 600; }
+        #cam-tile .gt-note { font-size: 9px; color: var(--text-mute); margin-top: 4px; line-height: 1.4; }
+        #cam-video { width: 100%; border-radius: 3px; display: none; background: #000; }
+        #cam-tile button {
+            width: 100%; margin-top: 6px; padding: 5px 8px; font-family: inherit; font-size: 11px;
+            background: transparent; color: var(--cyan); border: 1px solid var(--cyan); border-radius: 3px; cursor: pointer;
+        }
+        #cam-tile button:hover { background: rgba(68,204,255,0.12); }
+        #cam-tile button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        #legend-nodes {
+            position: absolute; bottom: 20px; left: 20px; min-width: 220px;
+            background: var(--bg-panel); border: 1px solid var(--border); border-radius: 4px;
+            padding: 12px 14px; backdrop-filter: blur(8px); z-index: 10;
+        }
+        #legend-nodes h2 { margin: 0 0 8px 0; font-size: 10px; text-transform: uppercase; letter-spacing: 2px;
+            color: var(--amber); font-weight: 600; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+        #legend-nodes .lr { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 11px; }
+        #legend-nodes .dot { width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 6px currentColor; flex: 0 0 auto; }
+        #legend-nodes .muted { color: var(--text-mute); }
+    </style>
+
+    <!-- three.js r128 + addons (same CDN set as examples/three.js/demos/05) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+</head>
+<body>
+    <div id="banner" class="noserver">NO SERVER — start the sensing-server <span class="src"></span></div>
+    <div id="banner-caption">Real WiFi CSI motion / presence / coarse-localization — penetrates drywall. Not skeletal pose.</div>
+
+    <div class="overlay-frame"></div>
+    <div class="scanlines"></div>
+
+    <div class="panel" id="info">
+        <h1>THROUGH-WALL WiFi SENSING</h1>
+        <div class="sub">Live CSI · ws://localhost:8765/ws/sensing</div>
+        <div class="row"><span class="k">source</span><span class="v amber" id="m-source">—</span></div>
+        <div class="row"><span class="k">presence</span><span class="v" id="m-presence">—</span></div>
+        <div class="row"><span class="k">motion level</span><span class="v" id="m-motion">—</span></div>
+        <div class="row"><span class="k">confidence</span><span class="v cyan" id="m-conf">—</span></div>
+        <div class="row"><span class="k">est. persons</span><span class="v amber" id="m-persons">—</span></div>
+        <div class="row"><span class="k">active nodes</span><span class="v" id="m-nodes">—</span></div>
+        <div class="row"><span class="k">tick</span><span class="v" id="m-tick">—</span></div>
+        <div class="row"><span class="k">update rate</span><span class="v cyan" id="m-fps">—</span></div>
+    </div>
+
+    <div class="panel" id="csi">
+        <h2>Live RF features</h2>
+        <div class="bar-row"><span class="label">motion</span><div class="bar-track"><div class="bar-fill" id="bar-motion"></div></div><span class="val" id="v-motion">—</span></div>
+        <div class="bar-row"><span class="label">breathing</span><div class="bar-track"><div class="bar-fill" id="bar-breath"></div></div><span class="val" id="v-breath">—</span></div>
+        <div class="bar-row"><span class="label">variance</span><div class="bar-track"><div class="bar-fill" id="bar-var"></div></div><span class="val" id="v-var">—</span></div>
+        <div class="bar-row"><span class="label">mean rssi</span><div class="bar-track"><div class="bar-fill" id="bar-rssi"></div></div><span class="val" id="v-rssi">—</span></div>
+        <div class="spark"><canvas id="spark" width="252" height="38"></canvas></div>
+        <div class="legend">motion sparkline (last ~6s of real motion_band_power)</div>
+    </div>
+
+    <div id="legend-nodes">
+        <h2>Sensor nodes</h2>
+        <div class="lr"><span class="dot" style="color:#4cf"></span><span>ESP32-S3 office <span class="muted">(node 9)</span></span></div>
+        <div class="lr"><span class="dot" style="color:#ff4cc8"></span><span>ESP32-S3 hallway <span class="muted">(node 13)</span></span></div>
+        <div class="lr" style="margin-top:6px"><span class="dot" style="color:#4f4"></span><span>RF localization <span class="muted">(coarse)</span></span></div>
+        <div class="lr"><span class="muted" style="font-size:10px;line-height:1.4">Office &amp; hallway split by a wall + doorway. WiFi motion still shows through drywall.</span></div>
+    </div>
+
+    <div id="cam-tile">
+        <h2>camera — ground truth when visible</h2>
+        <video id="cam-video" autoplay muted playsinline></video>
+        <button id="cam-btn">▶ enable webcam (optional)</button>
+        <div class="gt-note">Independent of the CSI sensing. The WiFi works in the dark and through walls; the camera does not.</div>
+    </div>
+
+    <div id="waiting" class="show">
+        <div class="big pulse">Waiting for live sensing-server</div>
+        <div>No connection to <b>ws://localhost:8765/ws/sensing</b>. Start the real server, then this page connects automatically.</div>
+        <code>cd v2
+cargo build -p wifi-densepose-sensing-server
+./target/debug/sensing-server.exe --ws-port 8765 --udp-port 5005</code>
+        <div style="margin-top:10px; color:var(--text-mute); font-size:11px;">This demo renders ONLY real data. It never invents frames.</div>
+    </div>
+
+<script>
+"use strict";
+// =====================================================================
+//  Config + WS endpoint (allow ?ws= override)
+// =====================================================================
+const params   = new URLSearchParams(location.search);
+const WS_URL   = params.get('ws') || 'ws://localhost:8765/ws/sensing';
+const ROOM_HALF = 5;             // half-extent of the floor plane in metres
+const GRID_N    = 20;            // signal_field is 20 x 20
+
+// Known node anchor positions (server sends node 9 @ [2,0,1.5]; node 13
+// joins later from the hallway side once its firmware is flashed). These
+// are anchors for the room model + labels, NOT fabricated sensing data.
+const NODE_ANCHORS = {
+    9:  { pos: [ 2.0, 0.0,  1.5], color: 0x44ccff, label: 'office (node 9)' },
+    13: { pos: [-2.0, 0.0, -3.0], color: 0xff4cc8, label: 'hallway (node 13)' },
+};
+
+// =====================================================================
+//  Three.js scene (reused pattern from demos/05-skinned-realtime.html)
+// =====================================================================
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x050507);
+scene.fog = new THREE.FogExp2(0x050507, 0.045);
+
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.05, 100);
+camera.position.set(4.5, 4.2, 6.0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.85;
+renderer.outputEncoding = THREE.sRGBEncoding;
+document.body.appendChild(renderer.domElement);
+
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0.4, -0.5);
+controls.enableDamping = true; controls.dampingFactor = 0.06;
+controls.minDistance = 3; controls.maxDistance = 18;
+controls.maxPolarAngle = Math.PI * 0.49;
+
+scene.add(new THREE.HemisphereLight(0x553a18, 0x080606, 0.7));
+const keyLight = new THREE.DirectionalLight(0xffc070, 0.9);
+keyLight.position.set(3, 6, 4);
+scene.add(keyLight);
+
+// Post-processing — gentle bloom so the heatmap + puck glow.
+const composer = new THREE.EffectComposer(renderer);
+composer.addPass(new THREE.RenderPass(scene, camera));
+const bloom = new THREE.UnrealBloomPass(
+    new THREE.Vector2(window.innerWidth, window.innerHeight), 0.55, 0.45, 0.82);
+composer.addPass(bloom);
+
+// =====================================================================
+//  Room: floor grid + wall + doorway dividing office / hallway
+// =====================================================================
+const gridHelper = new THREE.GridHelper(2*ROOM_HALF, GRID_N, 0x554a32, 0x2a2418);
+gridHelper.position.y = 0.002;
+scene.add(gridHelper);
+
+// Dividing wall runs along world X near z = -1 (office z>-1, hallway z<-1),
+// with a doorway gap. Two wall segments leave a gap in the middle.
+const wallMat = new THREE.MeshStandardMaterial({
+    color: 0x1b2330, transparent: true, opacity: 0.55, roughness: 0.9,
+    side: THREE.DoubleSide,
+});
+const wallH = 1.4, wallZ = -1.0;
+function addWallSeg(cx, w) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, wallH, 0.08), wallMat);
+    m.position.set(cx, wallH/2, wallZ);
+    scene.add(m);
+    // top edge highlight
+    const edge = new THREE.Mesh(new THREE.BoxGeometry(w, 0.02, 0.10),
+        new THREE.MeshBasicMaterial({ color: 0x4cf, transparent: true, opacity: 0.5 }));
+    edge.position.set(cx, wallH, wallZ);
+    scene.add(edge);
+}
+// left segment, doorway gap (-0.7..0.7), right segment
+addWallSeg(-3.15, 3.7);
+addWallSeg( 3.15, 3.7);
+
+// Room labels (sprite text) for OFFICE / HALLWAY
+function makeLabel(text, color) {
+    const c = document.createElement('canvas'); c.width = 256; c.height = 64;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = color; ctx.font = 'bold 30px Consolas, monospace';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(text, 128, 34);
+    const tex = new THREE.CanvasTexture(c);
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+    spr.scale.set(2.0, 0.5, 1);
+    return spr;
+}
+const officeLbl = makeLabel('OFFICE', '#ffb840');  officeLbl.position.set(2.6, 0.06, 2.6); scene.add(officeLbl);
+const hallLbl   = makeLabel('HALLWAY', '#ff4cc8'); hallLbl.position.set(-2.6, 0.06, -3.2); scene.add(hallLbl);
+
+// =====================================================================
+//  Node markers (office / hallway). The hallway node is dimmed until it
+//  actually appears in the live `nodes` list.
+// =====================================================================
+const nodeMeshes = {};
+function buildNode(id) {
+    const a = NODE_ANCHORS[id];
+    const g = new THREE.Group();
+    const post = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.05, 0.07, 0.9, 12),
+        new THREE.MeshStandardMaterial({ color: a.color, emissive: a.color, emissiveIntensity: 0.4, roughness: 0.4 }));
+    post.position.y = 0.45; g.add(post);
+    const orb = new THREE.Mesh(
+        new THREE.SphereGeometry(0.12, 20, 16),
+        new THREE.MeshBasicMaterial({ color: a.color }));
+    orb.position.y = 0.95; g.add(orb);
+    const ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.18, 0.24, 32),
+        new THREE.MeshBasicMaterial({ color: a.color, transparent: true, opacity: 0.6, side: THREE.DoubleSide }));
+    ring.rotation.x = -Math.PI/2; ring.position.y = 0.01; g.add(ring);
+    const lbl = makeLabel('ESP32-S3 ' + a.label, '#' + a.color.toString(16).padStart(6,'0'));
+    lbl.scale.set(2.6, 0.65, 1); lbl.position.set(0, 1.25, 0); g.add(lbl);
+    g.position.set(a.pos[0], 0, a.pos[2]);
+    g.userData.parts = { post, orb, ring };
+    scene.add(g);
+    return g;
+}
+Object.keys(NODE_ANCHORS).forEach(id => { nodeMeshes[id] = buildNode(+id); });
+function setNodeActive(id, active) {
+    const g = nodeMeshes[id]; if (!g) return;
+    const o = active ? 1.0 : 0.22;
+    const parts = g.userData.parts;
+    parts.orb.material.opacity = o; parts.orb.material.transparent = true;
+    parts.ring.material.opacity = 0.6 * o;
+    parts.post.material.emissiveIntensity = active ? 0.5 : 0.12;
+}
+setNodeActive(9, false); setNodeActive(13, false);
+
+// =====================================================================
+//  signal_field 20x20 floor heatmap — instanced colored tiles.
+//  Driven ONLY by real `signal_field.values` (400 floats ~0..1).
+// =====================================================================
+const TILE = (2*ROOM_HALF) / GRID_N;
+const heatGeo = new THREE.PlaneGeometry(TILE * 0.96, TILE * 0.96);
+const heatMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.85, side: THREE.DoubleSide });
+const heatMesh = new THREE.InstancedMesh(heatGeo, heatMat, GRID_N * GRID_N);
+heatMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+const heatColor = new THREE.InstancedBufferAttribute(new Float32Array(GRID_N * GRID_N * 3), 3);
+heatMesh.instanceColor = heatColor;
+const _m = new THREE.Matrix4();
+const _q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), -Math.PI/2);
+const _s = new THREE.Vector3(1,1,1);
+const _p = new THREE.Vector3();
+// gridCell (gx,gz) -> world (x,z). gx,gz in [0,GRID_N).
+function cellToWorld(gx, gz) {
+    return [ (gx + 0.5) * TILE - ROOM_HALF, (gz + 0.5) * TILE - ROOM_HALF ];
+}
+for (let gz = 0; gz < GRID_N; gz++) {
+    for (let gx = 0; gx < GRID_N; gx++) {
+        const i = gz * GRID_N + gx;
+        const [wx, wz] = cellToWorld(gx, gz);
+        _p.set(wx, 0.012, wz);
+        _m.compose(_p, _q, _s);
+        heatMesh.setMatrixAt(i, _m);
+        heatColor.setXYZ(i, 0.02, 0.02, 0.03);
+    }
+}
+heatMesh.instanceMatrix.needsUpdate = true;
+scene.add(heatMesh);
+
+// amber→white heat ramp for a value in [0,1]
+function heatRamp(v, out) {
+    v = Math.max(0, Math.min(1, v));
+    // dark -> amber -> hot white
+    const r = Math.min(1, 0.05 + 1.6 * v);
+    const g = Math.min(1, 0.02 + 1.1 * v * v);
+    const b = Math.min(1, 0.04 + 0.9 * Math.pow(v, 3));
+    out.set(r, g, b);
+    return out;
+}
+const _c = new THREE.Color();
+let lastFieldPeak = { gx: GRID_N/2|0, gz: GRID_N/2|0, v: 0 };
+function updateHeatmap(field) {
+    if (!field || !Array.isArray(field.values)) return;
+    const vals = field.values;
+    // grid_size is [20,1,20]; values are row-major 400 floats.
+    let peakV = -1, peakGx = lastFieldPeak.gx, peakGz = lastFieldPeak.gz;
+    const n = Math.min(vals.length, GRID_N * GRID_N);
+    for (let i = 0; i < n; i++) {
+        const v = vals[i];
+        heatRamp(v, _c);
+        heatColor.setXYZ(i, _c.r, _c.g, _c.b);
+        if (v > peakV) { peakV = v; peakGx = i % GRID_N; peakGz = (i / GRID_N) | 0; }
+    }
+    heatColor.needsUpdate = true;
+    lastFieldPeak = { gx: peakGx, gz: peakGz, v: peakV };
+}
+
+// =====================================================================
+//  RF-localization puck — from persons[0].position (coarse, NOT pose).
+//  Falls back to the signal_field peak cell when no person is present.
+// =====================================================================
+const puck = new THREE.Group();
+const puckCore = new THREE.Mesh(
+    new THREE.SphereGeometry(0.16, 24, 18),
+    new THREE.MeshBasicMaterial({ color: 0x66ff88 }));
+puckCore.position.y = 0.16; puck.add(puckCore);
+const puckRing = new THREE.Mesh(
+    new THREE.RingGeometry(0.28, 0.36, 40),
+    new THREE.MeshBasicMaterial({ color: 0x66ff88, transparent: true, opacity: 0.7, side: THREE.DoubleSide }));
+puckRing.rotation.x = -Math.PI/2; puckRing.position.y = 0.02; puck.add(puckRing);
+const puckBeam = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.03, 0.03, 1.2, 8),
+    new THREE.MeshBasicMaterial({ color: 0x66ff88, transparent: true, opacity: 0.35 }));
+puckBeam.position.y = 0.6; puck.add(puckBeam);
+puck.visible = false;
+scene.add(puck);
+const puckTarget = new THREE.Vector3(0, 0, 0);
+
+function updatePuck(frame) {
+    let wx = null, wz = null, present = false;
+    const persons = frame.persons || [];
+    if (persons.length && Array.isArray(persons[0].position)) {
+        // server position is [x, 0, z] in metres, origin at room centre
+        wx = persons[0].position[0];
+        wz = persons[0].position[2];
+        present = true;
+    }
+    // If no person but the field has clear energy, show the peak cell
+    // (coarse) so the puck honestly tracks "where the RF energy is".
+    if (!present && lastFieldPeak.v > 0.55) {
+        const peak = cellToWorld(lastFieldPeak.gx, lastFieldPeak.gz);
+        wx = peak[0]; wz = peak[1]; present = true;
+    }
+    if (present && wx !== null) {
+        // clamp into the room so it never flies off the floor
+        wx = Math.max(-ROOM_HALF+0.3, Math.min(ROOM_HALF-0.3, wx));
+        wz = Math.max(-ROOM_HALF+0.3, Math.min(ROOM_HALF-0.3, wz));
+        puckTarget.set(wx, 0, wz);
+        puck.visible = true;
+    } else {
+        puck.visible = false;
+    }
+}
+
+// =====================================================================
+//  HUD updates
+// =====================================================================
+const $ = id => document.getElementById(id);
+function clamp01(x){ return Math.max(0, Math.min(1, x)); }
+function setBar(barId, valId, frac, text) {
+    $(barId).style.width = (clamp01(frac) * 100).toFixed(0) + '%';
+    $(valId).textContent = text;
+}
+
+// motion sparkline ring buffer
+const sparkCtx = $('spark').getContext('2d');
+const SPARK_N = 120;
+const sparkBuf = new Array(SPARK_N).fill(0);
+function pushSpark(v) {
+    sparkBuf.push(v); if (sparkBuf.length > SPARK_N) sparkBuf.shift();
+    const w = sparkCtx.canvas.width, h = sparkCtx.canvas.height;
+    sparkCtx.clearRect(0,0,w,h);
+    let maxV = 40; for (const x of sparkBuf) if (x > maxV) maxV = x;
+    sparkCtx.strokeStyle = '#ffb840'; sparkCtx.lineWidth = 1.5; sparkCtx.beginPath();
+    for (let i = 0; i < sparkBuf.length; i++) {
+        const x = (i / (SPARK_N-1)) * w;
+        const y = h - (sparkBuf[i] / maxV) * (h - 3) - 1.5;
+        i === 0 ? sparkCtx.moveTo(x, y) : sparkCtx.lineTo(x, y);
+    }
+    sparkCtx.stroke();
+}
+
+// =====================================================================
+//  Honest status banner (strict, mutually exclusive)
+// =====================================================================
+const banner = $('banner');
+function setBannerLive(source, nodeCount) {
+    if (source === 'esp32') {
+        banner.className = 'live';
+        banner.innerHTML = 'LIVE — real ESP32 CSI <span class="src">(source=' + source + ', ' + nodeCount + ' node' + (nodeCount === 1 ? '' : 's') + ')</span>';
+    } else {
+        // anything not esp32 = explicitly NOT real, badged
+        banner.className = 'sim';
+        banner.innerHTML = 'SIMULATED — not real <span class="src">(source=' + source + ' — start an ESP32 for live CSI)</span>';
+    }
+}
+function setBannerNoServer() {
+    banner.className = 'noserver';
+    banner.innerHTML = 'NO SERVER — start the sensing-server <span class="src">(ws://localhost:8765/ws/sensing unreachable)</span>';
+}
+
+// =====================================================================
+//  WebSocket — render ONLY real frames. Reconnect; never fabricate.
+// =====================================================================
+let ws = null, gotFrame = false;
+let frameTimes = [];          // for measured update rate (fps)
+let lastFrame = null;         // most recent real frame (render loop interpolates puck)
+
+function connect() {
+    setBannerNoServer();
+    try { ws = new WebSocket(WS_URL); }
+    catch (e) { scheduleReconnect(); return; }
+
+    ws.onopen = () => { /* wait for first frame before claiming LIVE */ };
+    ws.onmessage = (ev) => {
+        let d; try { d = JSON.parse(ev.data); } catch (e) { return; }
+        if (!d || d.type !== 'sensing_update') return;
+        onFrame(d);
+    };
+    ws.onclose = () => { gotFrame = false; $('waiting').classList.add('show'); setBannerNoServer(); scheduleReconnect(); };
+    ws.onerror = () => { try { ws.close(); } catch (e) {} };
+}
+let reconnectT = null;
+function scheduleReconnect() {
+    if (reconnectT) return;
+    reconnectT = setTimeout(() => { reconnectT = null; connect(); }, 1500);
+}
+
+function onFrame(d) {
+    gotFrame = true;
+    lastFrame = d;
+    $('waiting').classList.remove('show');
+
+    const source = d.source || 'unknown';
+    const nodes  = Array.isArray(d.nodes) ? d.nodes : [];
+    setBannerLive(source, nodes.length);
+
+    // measured update rate
+    const now = performance.now();
+    frameTimes.push(now);
+    while (frameTimes.length && now - frameTimes[0] > 2000) frameTimes.shift();
+    const fps = frameTimes.length > 1 ? (frameTimes.length - 1) / ((frameTimes[frameTimes.length-1] - frameTimes[0]) / 1000) : 0;
+
+    const cls  = d.classification || {};
+    const feat = d.features || {};
+
+    // info panel
+    $('m-source').textContent  = source.toUpperCase();
+    $('m-source').className     = 'v ' + (source === 'esp32' ? 'green' : 'red');
+    const presence = !!cls.presence;
+    $('m-presence').textContent = presence ? (cls.motion_level === 'present_moving' ? 'PRESENT · MOVING' : 'PRESENT') : 'CLEAR';
+    $('m-presence').className    = 'v ' + (presence ? 'green' : 'mute');
+    $('m-motion').textContent   = cls.motion_level || '—';
+    $('m-conf').textContent     = (cls.confidence != null) ? cls.confidence.toFixed(2) : '—';
+    $('m-persons').textContent  = (d.estimated_persons != null) ? d.estimated_persons : '—';
+    $('m-nodes').textContent    = nodes.length + ' (' + nodes.map(n => n.node_id).join(', ') + ')';
+    $('m-tick').textContent     = (d.tick != null) ? d.tick : '—';
+    $('m-fps').textContent      = fps ? fps.toFixed(1) + ' Hz' : '—';
+
+    // feature bars (real values, scaled into 0..1 for the bar width only)
+    const motion = feat.motion_band_power || 0;
+    const breath = feat.breathing_band_power || 0;
+    const variance = feat.variance || 0;
+    const rssi = feat.mean_rssi != null ? feat.mean_rssi : -100;
+    setBar('bar-motion', 'v-motion', motion / 100,  motion.toFixed(1));
+    setBar('bar-breath', 'v-breath', breath / 100,  breath.toFixed(1));
+    setBar('bar-var',    'v-var',    variance / 80,  variance.toFixed(1));
+    // rssi: map -90..-30 dBm -> 0..1
+    setBar('bar-rssi',   'v-rssi',   (rssi + 90) / 60, rssi.toFixed(0));
+    pushSpark(motion);
+
+    // node activity
+    const activeIds = new Set(nodes.map(n => n.node_id));
+    [9, 13].forEach(id => setNodeActive(id, activeIds.has(id)));
+
+    // heatmap + puck
+    updateHeatmap(d.signal_field);
+    updatePuck(d);
+}
+
+// =====================================================================
+//  Optional webcam ground-truth tile (reused from demos/05). Camera is
+//  separate from CSI sensing — labeled "ground truth when visible".
+// =====================================================================
+let camStream = null;
+$('cam-btn').addEventListener('click', async () => {
+    const btn = $('cam-btn');
+    if (camStream) {  // toggle off
+        camStream.getTracks().forEach(t => t.stop());
+        $('cam-video').style.display = 'none'; camStream = null;
+        btn.textContent = '▶ enable webcam (optional)';
+        return;
+    }
+    btn.disabled = true; btn.textContent = 'requesting camera…';
+    try {
+        camStream = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }, audio: false,
+        });
+        const v = $('cam-video'); v.srcObject = camStream; v.style.display = 'block';
+        btn.textContent = '■ stop webcam'; btn.disabled = false;
+    } catch (e) {
+        btn.textContent = '✗ camera unavailable'; btn.disabled = false; console.error(e);
+        setTimeout(() => { if (!camStream) btn.textContent = '▶ enable webcam (optional)'; }, 2000);
+    }
+});
+
+// =====================================================================
+//  Render loop — smooth the puck toward its real target; pulse rings.
+// =====================================================================
+const clock = new THREE.Clock();
+function animate() {
+    requestAnimationFrame(animate);
+    const t = clock.getElapsedTime();
+    controls.update();
+
+    if (puck.visible) {
+        puck.position.lerp(puckTarget, 0.18);
+        const pulse = 0.8 + 0.25 * Math.sin(t * 3.0);
+        puckRing.scale.set(pulse, pulse, pulse);
+        puckRing.material.opacity = 0.5 + 0.25 * Math.sin(t * 3.0);
+    }
+    // node rings breathe when active
+    [9,13].forEach(id => {
+        const g = nodeMeshes[id]; if (!g) return;
+        const r = g.userData.parts.ring;
+        const s = 1 + 0.08 * Math.sin(t * 2 + id);
+        r.scale.set(s, s, s);
+    });
+
+    composer.render();
+}
+animate();
+
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    composer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// kick off
+connect();
+</script>
+</body>
+</html>

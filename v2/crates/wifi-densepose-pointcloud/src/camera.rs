@@ -188,6 +188,8 @@ Thread.sleep(forTimeInterval: 3)"#,
     bail!("macOS camera capture requires GUI session with camera permission")
 }
 
+// Used only by the macOS capture path above; dead on other targets.
+#[allow(dead_code)]
 fn decode_jpeg_to_rgb(path: &PathBuf, _width: u32, _height: u32) -> Result<Frame> {
     let data = std::fs::read(path)?;
     let _ = std::fs::remove_file(path);

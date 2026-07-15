@@ -46,6 +46,8 @@ pub enum LoiterState {
 
 /// Loitering detector.
 pub struct LoiteringDetector {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 2],
     state: LoiterState,
     /// Consecutive frames with presence detected.
     presence_frames: u32,
@@ -65,6 +67,7 @@ pub struct LoiteringDetector {
 impl LoiteringDetector {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 2],
             state: LoiterState::Absent,
             presence_frames: 0,
             dwell_frames: 0,
@@ -88,7 +91,6 @@ impl LoiteringDetector {
         self.frame_count += 1;
         self.post_end_cd = self.post_end_cd.saturating_sub(1);
 
-        static mut EVENTS: [(i32, f32); 2] = [(0, 0.0); 2];
         let mut ne = 0usize;
 
         // Determine if someone is present and roughly stationary.
@@ -133,9 +135,7 @@ impl LoiteringDetector {
 
                         if ne < 2 {
                             let dwell_seconds = self.dwell_frames as f32 / 20.0;
-                            unsafe {
-                                EVENTS[ne] = (EVENT_LOITERING_START, dwell_seconds);
-                            }
+                            self.events[ne] = (EVENT_LOITERING_START, dwell_seconds);
                             ne += 1;
                         }
                     }
@@ -161,9 +161,7 @@ impl LoiteringDetector {
                         self.ongoing_timer = 0;
                         if ne < 2 {
                             let total_seconds = self.dwell_frames as f32 / 20.0;
-                            unsafe {
-                                EVENTS[ne] = (EVENT_LOITERING_ONGOING, total_seconds);
-                            }
+                            self.events[ne] = (EVENT_LOITERING_ONGOING, total_seconds);
                             ne += 1;
                         }
                     }
@@ -177,9 +175,7 @@ impl LoiteringDetector {
 
                         if ne < 2 {
                             let total_seconds = self.dwell_frames as f32 / 20.0;
-                            unsafe {
-                                EVENTS[ne] = (EVENT_LOITERING_END, total_seconds);
-                            }
+                            self.events[ne] = (EVENT_LOITERING_END, total_seconds);
                             ne += 1;
                         }
 
@@ -191,7 +187,7 @@ impl LoiteringDetector {
             }
         }
 
-        unsafe { &EVENTS[..ne] }
+        &self.events[..ne]
     }
 
     pub fn state(&self) -> LoiterState { self.state }

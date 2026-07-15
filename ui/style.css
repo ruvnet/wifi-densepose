@@ -4088,6 +4088,20 @@ a:focus-visible,
   color: #fff;
 }
 
+.qs-text-input {
+  padding: var(--space-6) var(--space-8);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-secondary);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+}
+
+.qs-text-input:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
 /* --- Screenshot Flash --- */
 
 .screenshot-flash {

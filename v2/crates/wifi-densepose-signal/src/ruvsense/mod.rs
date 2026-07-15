@@ -58,9 +58,34 @@ pub mod pose_tracker;
 // ADR-134: CIR estimation (ISTA + NeumannSolver warm-start)
 pub mod cir;
 
+// ADR-137: Fusion-engine quality scoring (evidence + contradiction flags)
+pub mod fusion_quality;
+
+// ADR-138: Array coordinator — clock-quality gating + directional evidence
+pub mod array_coordinator;
+
+// ADR-142: Evolution tracker + temporal VoxelMap (Bayesian, privacy-gated)
+pub mod evolution;
+
+// ADR-143: RF-SLAM persistent reflector discovery + static-anchor learning
+pub mod rf_slam;
+
+// ADR-135: Empty-room baseline calibration (Welford online, circular phase)
+pub mod calibration;
+
 // Re-export core types for ergonomic access
 pub use coherence::CoherenceState;
 pub use coherence_gate::{GateDecision, GatePolicy};
+pub use array_coordinator::{
+    ArrayCoordinator, ArrayCoordinatorConfig, ArrayNodeInput, DirectionalEvidence,
+};
+pub use evolution::{
+    ChangePoint, EvolutionTracker, TemporalVoxel, TemporalVoxelMap, VoxelGate, VoxelPrivacy,
+};
+pub use rf_slam::{PersistentReflector, ReflectorClass, ReflectorObservation, RfSlam};
+pub use fusion_quality::{
+    CalibrationId, ContradictionFlag, EvidenceRef, FamilyId, QualityScore,
+};
 pub use multiband::MultiBandCsiFrame;
 pub use multistatic::FusedSensingFrame;
 pub use phase_align::{PhaseAlignError, PhaseAligner};
@@ -139,6 +164,73 @@ pub enum RuvSenseError {
 
 /// Common result type for RuvSense operations.
 pub type Result<T> = std::result::Result<T, RuvSenseError>;
+
+// =============================================================================
+// ADR-136 — Streaming-engine contract surface (Stage / Versioned / QualityScored)
+// =============================================================================
+
+/// `FrameMeta` is the streaming-engine vocabulary alias for the core
+/// `CsiMetadata` (ADR-136 §2.2). It *is* the same struct — re-exported, not
+/// copied — so cross-stage hops carry provenance (`calibration_id`, `model_id`,
+/// `model_version`) without conversion cost.
+pub use wifi_densepose_core::types::CsiMetadata as FrameMeta;
+
+/// Result type returned by a [`Stage`] transform.
+pub type StageResult<O> = std::result::Result<O, RuvSenseError>;
+
+/// A pipeline stage that transforms one typed frame into another (ADR-136 §2.4).
+///
+/// Stages are `Send + Sync`. Determinism rule: given the same input bytes and
+/// the same `&self` configuration, [`Stage::process`] MUST produce the same
+/// output bytes (ADR-136 §2.5 replay contract). Mutable runtime state (rolling
+/// windows, Welford accumulators) lives behind `&self` interior types whose
+/// effect on output is captured by the deterministic-replay fixture.
+///
+/// **Boundary rule:** a stage never mutates its input's `FrameMeta.calibration_id`
+/// or `model_id`/`model_version` except the calibration stage (sets
+/// `calibration_id`) and the model-binding stage (sets the model fields). This
+/// keeps provenance append-only along the chain.
+pub trait Stage<I, O>: Send + Sync {
+    /// Human/stage identifier, e.g. `"phase_align"`, `"calibration"`.
+    fn name(&self) -> &'static str;
+
+    /// Transform one input frame into one output frame.
+    ///
+    /// # Errors
+    /// Returns [`RuvSenseError`] if the stage cannot process the input.
+    fn process(&self, input: I) -> StageResult<O>;
+}
+
+/// Forward-compatible version stamp (ADR-136 §2.4, mirrors ADR-119 §2.1).
+///
+/// A `(major, minor)` pair plus a reserved-flags word so future revisions extend
+/// without breaking the deterministic byte layout.
+pub trait Versioned {
+    /// `(major, minor)` version of this stage's output contract.
+    fn version(&self) -> (u8, u8);
+
+    /// Reserved forward-compat flags (ADR-119 reserved bits 2..15). Default `0`.
+    fn reserved_flags(&self) -> u16 {
+        0
+    }
+
+    /// True if a consumer at `other` can consume output produced at
+    /// [`Self::version`] — equal major and `self.minor >= other.minor`.
+    fn is_compatible_with(&self, other: (u8, u8)) -> bool {
+        let (maj, min) = self.version();
+        maj == other.0 && min >= other.1
+    }
+}
+
+/// A stage output carrying a scalar quality score and a confidence interval
+/// (ADR-136 §2.4). Consumed by ADR-137 (fusion quality) and ADR-145 (ablation).
+pub trait QualityScored {
+    /// Scalar quality in `[0.0, 1.0]`; higher is better.
+    fn quality_score(&self) -> f32;
+
+    /// `(lower, upper)` confidence bounds with `0.0 <= lower <= upper <= 1.0`.
+    fn confidence_bounds(&self) -> (f32, f32);
+}
 
 /// Configuration for the RuvSense pipeline.
 #[derive(Debug, Clone)]
@@ -293,6 +385,97 @@ mod tests {
     #[test]
     fn num_keypoints_is_17() {
         assert_eq!(NUM_KEYPOINTS, 17);
+    }
+
+    // ===== ADR-136 trait-surface acceptance tests =====
+
+    // Tiny stages forming a Stage<u32,u32> -> Stage<u32,String> chain (AC4).
+    struct Doubler;
+    impl Stage<u32, u32> for Doubler {
+        fn name(&self) -> &'static str {
+            "doubler"
+        }
+        fn process(&self, input: u32) -> StageResult<u32> {
+            Ok(input * 2)
+        }
+    }
+    struct Stringify;
+    impl Stage<u32, String> for Stringify {
+        fn name(&self) -> &'static str {
+            "stringify"
+        }
+        fn process(&self, input: u32) -> StageResult<String> {
+            Ok(format!("v{input}"))
+        }
+    }
+
+    /// AC4 — heterogeneous `Stage` chain composes and visits stages in order.
+    #[test]
+    fn ac4_stage_chain_composition() {
+        let s1 = Doubler;
+        let s2 = Stringify;
+        let mut visited = Vec::new();
+        visited.push(s1.name());
+        let mid = s1.process(21).unwrap();
+        visited.push(s2.name());
+        let out = s2.process(mid).unwrap();
+        assert_eq!(out, "v42");
+        assert_eq!(visited, vec!["doubler", "stringify"]);
+    }
+
+    struct V(u8, u8);
+    impl Versioned for V {
+        fn version(&self) -> (u8, u8) {
+            (self.0, self.1)
+        }
+    }
+
+    /// AC5 — `Versioned` compatibility: equal major, minor >= consumer's.
+    #[test]
+    fn ac5_versioned_compatibility() {
+        let v = V(1, 3);
+        assert!(v.is_compatible_with((1, 3)), "equal");
+        assert!(v.is_compatible_with((1, 0)), "newer minor accepts older consumer");
+        assert!(!v.is_compatible_with((1, 4)), "older producer rejects newer consumer");
+        assert!(!v.is_compatible_with((2, 0)), "major mismatch rejected");
+        assert_eq!(v.reserved_flags(), 0);
+    }
+
+    struct Q(f32, f32, f32);
+    impl QualityScored for Q {
+        fn quality_score(&self) -> f32 {
+            self.0
+        }
+        fn confidence_bounds(&self) -> (f32, f32) {
+            (self.1, self.2)
+        }
+    }
+
+    /// AC8 — `QualityScored` bounds invariant: 0 <= lower <= upper <= 1.
+    #[test]
+    fn ac8_quality_scored_bounds() {
+        let q = Q(0.9, 0.7, 0.95);
+        let s = q.quality_score();
+        let (lo, hi) = q.confidence_bounds();
+        assert!((0.0..=1.0).contains(&s));
+        assert!(0.0 <= lo && lo <= hi && hi <= 1.0);
+    }
+
+    /// `FrameMeta` is the same type as core `CsiMetadata` (ADR-136 §2.2).
+    #[test]
+    fn frame_meta_is_csi_metadata() {
+        fn assert_same<T>(_: &T, _: &T) {}
+        let a = FrameMeta::new(
+            wifi_densepose_core::types::DeviceId::new("n"),
+            wifi_densepose_core::types::FrequencyBand::Band2_4GHz,
+            1,
+        );
+        let b = wifi_densepose_core::types::CsiMetadata::new(
+            wifi_densepose_core::types::DeviceId::new("n"),
+            wifi_densepose_core::types::FrequencyBand::Band2_4GHz,
+            1,
+        );
+        assert_same(&a, &b); // compiles only if FrameMeta == CsiMetadata
     }
 
     #[test]

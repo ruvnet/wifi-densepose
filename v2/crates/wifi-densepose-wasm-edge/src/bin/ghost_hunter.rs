@@ -20,6 +20,7 @@ use wifi_densepose_wasm_edge::{
     host_get_phase, host_get_amplitude, host_get_variance,
     host_get_presence, host_get_motion_energy,
     host_emit_event, host_log,
+    sanitize_host_f32,
     exo_ghost_hunter::GhostHunterDetector,
 };
 
@@ -64,14 +65,16 @@ pub extern "C" fn on_frame(n_subcarriers: i32) {
 
     for i in 0..max_sc {
         unsafe {
-            phases[i] = host_get_phase(i as i32);
-            amplitudes[i] = host_get_amplitude(i as i32);
-            variances[i] = host_get_variance(i as i32);
+            // Sanitize at the boundary: a non-finite host value would otherwise
+            // latch NaN into the detector's persistent anomaly-energy state.
+            phases[i] = sanitize_host_f32(host_get_phase(i as i32));
+            amplitudes[i] = sanitize_host_f32(host_get_amplitude(i as i32));
+            variances[i] = sanitize_host_f32(host_get_variance(i as i32));
         }
     }
 
     let presence = unsafe { host_get_presence() };
-    let motion_energy = unsafe { host_get_motion_energy() };
+    let motion_energy = sanitize_host_f32(unsafe { host_get_motion_energy() });
 
     let detector = unsafe { &mut *core::ptr::addr_of_mut!(DETECTOR) };
     let events = detector.process_frame(

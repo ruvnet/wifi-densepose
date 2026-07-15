@@ -33,11 +33,19 @@ pub fn read_secrets(path: &Path) -> Result<HashMap<String, String>, MigrateError
         return Ok(HashMap::new());
     }
 
-    let parsed: serde_yaml::Value =
-        serde_yaml::from_str(&raw).map_err(|e| MigrateError::YamlParse {
+    // SECURITY: do NOT use `MigrateError::YamlParse` here. serde_yaml error
+    // messages can quote the offending scalar verbatim (a typed-tag coercion
+    // error renders `invalid value: string "<the-secret-value>"`), and that
+    // message would be printed to stderr by the CLI — leaking a secret value.
+    // `MigrateError::SecretsParse` carries only the path + line/column.
+    let parsed: serde_yaml::Value = serde_yaml::from_str(&raw).map_err(|e| {
+        let loc = e.location();
+        MigrateError::SecretsParse {
             path: path.display().to_string(),
-            source: e,
-        })?;
+            line: loc.as_ref().map_or(0, |l| l.line()),
+            column: loc.as_ref().map_or(0, |l| l.column()),
+        }
+    })?;
 
     let map = match parsed {
         serde_yaml::Value::Mapping(m) => m,
@@ -92,6 +100,59 @@ mod tests {
         f.write_all(b"").unwrap();
         let secrets = read_secrets(f.path()).unwrap();
         assert!(secrets.is_empty());
+    }
+
+    /// SECURITY regression (fails on the pre-fix `YamlParse` path): a malformed
+    /// `secrets.yaml` whose offending scalar is a secret value must NOT have that
+    /// value rendered in the returned error. serde_yaml's own error message for a
+    /// typed-tag coercion failure embeds the scalar verbatim
+    /// (`invalid value: string "<secret>"`); the old code wrapped that message
+    /// into `MigrateError::YamlParse { source }`, so `Display` leaked the secret.
+    #[test]
+    fn malformed_secrets_error_never_contains_secret_value() {
+        // `!!int` forces integer coercion of a string scalar; serde_yaml reports
+        // the scalar text in its message. The scalar here is a stand-in secret.
+        let yaml = "api_port: !!int s3cr3t_TOKEN_VALUE\n";
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(yaml.as_bytes()).unwrap();
+
+        let err = read_secrets(f.path()).unwrap_err();
+        let rendered = err.to_string();
+
+        // The secret VALUE must never appear in the error output...
+        assert!(
+            !rendered.contains("s3cr3t_TOKEN_VALUE"),
+            "secret value leaked into error: {rendered}"
+        );
+        // ...and the full chain (with #[source]) must also be clean, since the
+        // CLI/anyhow prints the source chain too.
+        let mut source = std::error::Error::source(&err);
+        while let Some(s) = source {
+            assert!(
+                !s.to_string().contains("s3cr3t_TOKEN_VALUE"),
+                "secret value leaked into error source chain: {s}"
+            );
+            source = s.source();
+        }
+
+        // It should still be a structured, locatable error (fail-closed).
+        assert!(
+            matches!(err, MigrateError::SecretsParse { .. }),
+            "expected SecretsParse, got: {err:?}"
+        );
+    }
+
+    /// A secret KEY name is non-sensitive context and is fine to surface, but the
+    /// redacting error must still help the user locate the problem (line/column).
+    #[test]
+    fn malformed_secrets_error_reports_location() {
+        let yaml = "api_port: !!int notanumber\n";
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(yaml.as_bytes()).unwrap();
+        let err = read_secrets(f.path()).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("line"), "should report a line: {rendered}");
+        assert!(rendered.contains("redacted"), "should signal redaction: {rendered}");
     }
 
     #[test]

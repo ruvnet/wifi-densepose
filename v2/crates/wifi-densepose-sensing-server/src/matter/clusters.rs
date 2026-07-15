@@ -145,6 +145,8 @@ pub fn matter_mapping(entity: EntityKind) -> Option<MatterClusterMapping> {
 }
 
 /// True iff the entity has a Matter exposure on a current spec cluster.
+// P2 Matter-publisher API surface; real Matter exposure is deferred (ADR-159 §A5).
+#[allow(dead_code)]
 pub fn entity_on_matter(entity: EntityKind) -> bool {
     matter_mapping(entity).is_some()
 }
@@ -152,6 +154,8 @@ pub fn entity_on_matter(entity: EntityKind) -> bool {
 /// Compute the next available endpoint ID for a node-scoped entity,
 /// given a starting offset (the bridge's first child endpoint). Used
 /// by the publisher to assign per-primitive endpoints deterministically.
+// P2 Matter-publisher API surface; real Matter exposure is deferred (ADR-159 §A5).
+#[allow(dead_code)]
 pub fn next_endpoint(base: u16, primitive_index: u16) -> u16 {
     base.saturating_add(primitive_index)
 }

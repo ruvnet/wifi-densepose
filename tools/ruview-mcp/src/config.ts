@@ -8,6 +8,7 @@
 
 import os from "node:os";
 import path from "node:path";
+import { existsSync } from "node:fs";
 import type { RuviewConfig } from "./types.js";
 
 function env(key: string): string | undefined {
@@ -51,17 +52,35 @@ export function loadConfig(): RuviewConfig {
 }
 
 /**
- * Attempt to locate a cog binary on PATH or in common install locations.
- * Returns the bare binary name if not found (will fail gracefully at invocation).
+ * Ordered cog-binary candidate paths for a host of the given CPU architecture.
+ * The native-arch build is probed FIRST: an appliance that ships both
+ * `cog-<id>-arm` and `cog-<id>-x86_64` must never hand back the wrong-arch
+ * binary (ADR-264 F8/O7 — the pre-review order tried `-arm` unconditionally).
+ * The `/usr/local/bin` and bare-name (PATH) fallbacks follow, arch-agnostic.
+ *
+ * Pure and arch-injectable so the ordering is unit-testable.
+ */
+export function cogBinaryCandidates(
+  name: string,
+  arch: string = process.arch
+): string[] {
+  const id = name.replace("cog-", "");
+  const dir = `/var/lib/cognitum/apps/${id}`;
+  const arm = `${dir}/cog-${id}-arm`;
+  const x86 = `${dir}/cog-${id}-x86_64`;
+  // arm64 → prefer -arm; everything else (notably x64) → prefer -x86_64.
+  const archOrdered = arch === "arm64" ? [arm, x86] : [x86, arm];
+  return [...archOrdered, `/usr/local/bin/${name}`];
+}
+
+/**
+ * Locate a cog binary in the common appliance install locations, probing each
+ * candidate in native-arch-first order. Falls back to the bare name (PATH
+ * resolution at spawn time) when no candidate exists.
  */
 function detectCogBinary(name: string): string {
-  // Common install paths for Cognitum cog binaries on Linux/macOS appliances.
-  const candidates = [
-    `/var/lib/cognitum/apps/${name.replace("cog-", "")}/cog-${name.replace("cog-", "")}-arm`,
-    `/var/lib/cognitum/apps/${name.replace("cog-", "")}/cog-${name.replace("cog-", "")}-x86_64`,
-    `/usr/local/bin/${name}`,
-    name, // bare name — rely on PATH
-  ];
-  // Return the first candidate that might exist; actual existence is checked at call time.
-  return candidates[candidates.length - 1] ?? name;
+  for (const candidate of cogBinaryCandidates(name)) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return name; // bare name — rely on PATH; spawn fails gracefully if absent
 }

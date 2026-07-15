@@ -23,6 +23,10 @@
 //! # References
 //! - ADR-030 Tier 5: Cross-Room Identity Continuity
 
+/// Denominator guard for cosine similarity (ADR-154 §7.4 — de-magicked):
+/// a product of norms below this is treated as a zero-norm vector ⇒ 0.0.
+const COSINE_SIMILARITY_EPSILON: f32 = 1e-9;
+
 // ---------------------------------------------------------------------------
 // Error types
 // ---------------------------------------------------------------------------
@@ -359,12 +363,15 @@ impl CrossRoomTracker {
 }
 
 /// Cosine similarity between two f32 vectors.
+///
+/// Returns `0.0` when either vector has (near-)zero norm — the product of
+/// norms falls below [`COSINE_SIMILARITY_EPSILON`] and the division is skipped.
 fn cosine_similarity_f32(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
     let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
     let denom = norm_a * norm_b;
-    if denom < 1e-9 {
+    if denom < COSINE_SIMILARITY_EPSILON {
         0.0
     } else {
         dot / denom
@@ -622,5 +629,24 @@ mod tests {
         let b = vec![0.0_f32, 1.0, 0.0, 0.0];
         let sim = cosine_similarity_f32(&a, &b);
         assert!(sim.abs() < 1e-5);
+    }
+
+    // -- ADR-154 §7.4: de-magic-constant + boundary characterization tests.
+
+    /// De-magicked epsilon must equal the prior literal.
+    #[test]
+    fn cosine_epsilon_unchanged_from_literal() {
+        assert_eq!(COSINE_SIMILARITY_EPSILON, 1e-9_f32);
+    }
+
+    /// A zero-norm vector falls below the denominator epsilon ⇒ similarity 0.0.
+    /// Previously untested (both existing tests use unit-norm vectors).
+    #[test]
+    fn test_cosine_similarity_zero_vector() {
+        let zero = vec![0.0_f32; 4];
+        let v = vec![1.0_f32, 2.0, 3.0, 4.0];
+        assert_eq!(cosine_similarity_f32(&zero, &v), 0.0);
+        assert_eq!(cosine_similarity_f32(&v, &zero), 0.0);
+        assert_eq!(cosine_similarity_f32(&zero, &zero), 0.0);
     }
 }

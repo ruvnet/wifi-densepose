@@ -59,6 +59,8 @@ impl PersonSlot {
 
 /// Min-cut person identity matcher.
 pub struct PersonMatcher {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 8],
     slots: [PersonSlot; MAX_PERSONS],
     active_count: u8,
     prev_assignment: [u8; MAX_PERSONS],
@@ -69,6 +71,7 @@ pub struct PersonMatcher {
 impl PersonMatcher {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 8],
             slots: [
                 PersonSlot::new(0),
                 PersonSlot::new(1),
@@ -98,7 +101,6 @@ impl PersonMatcher {
         self.frame_count += 1;
         let n_det = n_persons.min(MAX_PERSONS);
 
-        static mut EVENTS: [(i32, f32); 8] = [(0, 0.0); 8];
         let mut n_events = 0usize;
 
         // Extract per-person feature vectors (spatial region -> top-8 variances).
@@ -134,9 +136,7 @@ impl PersonMatcher {
                 self.swap_count += 1;
                 if n_events < 7 {
                     let swap_val = (prev as f32) * 16.0 + (curr as f32);
-                    unsafe {
-                        EVENTS[n_events] = (EVENT_PERSON_ID_SWAP, swap_val);
-                    }
+                    self.events[n_events] = (EVENT_PERSON_ID_SWAP, swap_val);
                     n_events += 1;
                 }
             }
@@ -177,9 +177,7 @@ impl PersonMatcher {
                     0.0
                 };
                 let val = slot.person_id as f32 + confidence.min(0.99) * 0.01;
-                unsafe {
-                    EVENTS[n_events] = (EVENT_PERSON_ID_ASSIGNED, val);
-                }
+                self.events[n_events] = (EVENT_PERSON_ID_ASSIGNED, val);
                 n_events += 1;
             }
         }
@@ -213,9 +211,7 @@ impl PersonMatcher {
             avg_conf /= n_det as f32;
 
             if n_events < 8 {
-                unsafe {
-                    EVENTS[n_events] = (EVENT_MATCH_CONFIDENCE, avg_conf);
-                }
+                self.events[n_events] = (EVENT_MATCH_CONFIDENCE, avg_conf);
                 n_events += 1;
             }
         }
@@ -223,7 +219,7 @@ impl PersonMatcher {
         // Save current assignment for next-frame swap detection.
         self.prev_assignment = assignment;
 
-        unsafe { &EVENTS[..n_events] }
+        &self.events[..n_events]
     }
 
     /// Extract top-FEAT_DIM variance values (descending) from a subcarrier range.

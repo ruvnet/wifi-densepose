@@ -9,7 +9,7 @@ on:
 
 env:
   PYTHON_VERSION: '3.11'
-  NODE_VERSION: '18'
+  NODE_VERSION: '20' # ADR-265: all Node packages in this repo declare engines >= 20
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
@@ -29,6 +29,7 @@ jobs:
       continue-on-error: true
       uses: actions/checkout@v4
       with:
+        submodules: recursive
         fetch-depth: 0
 
     - name: Set up Python
@@ -82,6 +83,13 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
+      # ADR-262 P1: `wifi-densepose-rufield` path-deps the `vendor/rufield`
+      # submodule. Without a recursive checkout the workspace build fails to
+      # resolve those path deps in CI even though it passes locally.
+      with:
+        submodules: recursive
 
     # `wifi-densepose-desktop` is a Tauri v2 app — `glib-sys`, `gtk-sys`,
     # `webkit2gtk-sys`, etc. need the Linux dev libraries via pkg-config or the
@@ -108,20 +116,37 @@ jobs:
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
 
-    - name: Cache cargo
-      uses: actions/cache@v4
+    # Swatinem/rust-cache replaces a naive `actions/cache` of the whole
+    # `v2/target`. That manual cache of a 38-crate target dir (multi-GB) was an
+    # intermittent failure source — several CI runs this cycle died at the
+    # cache/setup step (after toolchain install, before "Run Rust tests"),
+    # needing a rerun. rust-cache is purpose-built for Rust: it caches the
+    # registry + git + a pruned target, evicts stale deps, and restores far more
+    # reliably (and faster) on large workspaces. `workspaces: v2` points it at
+    # the v2/ cargo workspace (keys on v2/Cargo.lock, caches v2/target).
+    - name: Cache cargo (Swatinem/rust-cache)
+      uses: Swatinem/rust-cache@v2
       with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          v2/target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('v2/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-
+        workspaces: v2
 
+    # The 38-crate workspace debug build exhausts the runner's disk when built
+    # with full debuginfo (observed: "final link failed: No space left on
+    # device" once the engine/benchmark crates landed; the same tree's local
+    # debug target measured 151 GB). Debuginfo is useless in CI — tests either
+    # pass or print their failure — so build without it; target shrinks ~5-10x.
     - name: Run Rust tests
       working-directory: v2
+      env:
+        CARGO_PROFILE_DEV_DEBUG: "0"
+        CARGO_PROFILE_TEST_DEBUG: "0"
       run: cargo test --workspace --no-default-features
+
+    - name: Run ADR-147 worldmodel tests
+      working-directory: v2
+      env:
+        CARGO_PROFILE_DEV_DEBUG: "0"
+        CARGO_PROFILE_TEST_DEBUG: "0"
+      run: cargo test -p wifi-densepose-worldmodel --no-default-features
 
     # ADR-134 CIR tests are behind the `cir` feature so the bench dependency
     # (Criterion) only pulls when actually exercised. Run them as a separate
@@ -141,6 +166,9 @@ jobs:
     #     > ../archive/v1/data/proof/expected_cir_features.sha256
     - name: ADR-134 CIR witness proof (determinism guard)
       run: bash scripts/verify-cir-proof.sh
+
+    - name: ADR-135 calibration witness proof (determinism guard)
+      run: bash scripts/verify-calibration-proof.sh
 
   # Unit and Integration Tests
   # Python pytest matrix — runs against the archived v1 Python tree.
@@ -182,6 +210,8 @@ jobs:
     - name: Checkout code
       continue-on-error: true
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Set up Python ${{ matrix.python-version }}
       continue-on-error: true
@@ -247,6 +277,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -258,23 +290,45 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install locust
+        pip install pytest   # the perf suite is pytest, not locust
 
-    - name: Start application
-      working-directory: archive/v1
-      run: |
-        uvicorn src.api.main:app --host 0.0.0.0 --port 8000 &
-        sleep 10
+    # No "Start application" step: the gated test (test_frame_budget.py) drives
+    # the CSIProcessor pipeline in-process and makes no HTTP calls, so the old
+    # uvicorn server + `sleep 10` were dead weight — they only existed for the
+    # now-excluded api_throughput/inference_speed tests, and on every run dumped
+    # ~50 misleading "router requires hardware setup" ERROR lines for a server
+    # no test touched. MOCK_POSE_DATA is server-only and unused here.
 
     - name: Run performance tests
+      working-directory: archive/v1
       run: |
-        locust -f tests/performance/locustfile.py --headless --users 50 --spawn-rate 5 --run-time 60s --host http://localhost:8000
+        # Gate only on the genuine, deterministic perf guard:
+        # test_frame_budget.py times the *real* CSIProcessor pipeline against
+        # the ADR 50 ms per-frame budget (single-frame, p95 over 100 frames,
+        # +Doppler) — a true regression signal.
+        #
+        # test_api_throughput.py / test_inference_speed.py are excluded: every
+        # test there is a TDD red-phase stub (suffix `_should_fail_initially`)
+        # that times a *mock that sleeps* — meaningless as a perf signal, with
+        # machine-dependent wall-clock asserts (e.g. `actual_rps >= 40`,
+        # `batch_time < individual_time`) that are inherently flaky on shared
+        # CI runners, plus a cross-class fixture-scope bug. Forcing them green
+        # would be manufacturing a false signal; they stay in-repo for local
+        # TDD but do not gate CI until the underlying features are implemented.
+        #
+        # `python -m pytest` (not the bare `pytest` script) puts the cwd
+        # (archive/v1) on sys.path so `from src.core...` resolves — the bare
+        # script omits cwd and raises ModuleNotFoundError: No module named 'src'.
+        # -o addopts="" drops the root pyproject's --cov/--cov-fail-under=100.
+        python -m pytest tests/performance/test_frame_budget.py \
+          -o addopts="" -v --junitxml=perf-junit.xml
 
     - name: Upload performance results
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: performance-results
-        path: locust_report.html
+        path: archive/v1/perf-junit.xml
 
   # Docker Build and Test
   # NOTE: the canonical Docker build for the sensing-server is now
@@ -293,6 +347,8 @@ jobs:
     - name: Checkout code
       continue-on-error: true
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Set up Docker Buildx
       continue-on-error: true
@@ -360,9 +416,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: [docker-build]
     if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write   # gh-pages deploy needs write (GITHUB_TOKEN is read-only by default -> 403)
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -377,6 +437,8 @@ jobs:
 
     - name: Generate OpenAPI spec
       working-directory: archive/v1
+      env:
+        MOCK_POSE_DATA: "true"   # no CSI hardware in CI
       run: |
         python -c "
         from src.api.main import app
@@ -387,6 +449,7 @@ jobs:
 
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v4
+      continue-on-error: true   # openapi generation above is the real validation; deploy is best-effort (Pages may be disabled)
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./docs

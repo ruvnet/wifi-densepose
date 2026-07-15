@@ -42,6 +42,8 @@ struct ZoneState {
 
 /// Occupancy zone detector.
 pub struct OccupancyDetector {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 12],
     zones: [ZoneState; MAX_ZONES],
     n_zones: usize,
     /// Calibration accumulators.
@@ -61,6 +63,7 @@ impl OccupancyDetector {
             prev_occupied: false,
         };
         Self {
+            events: [(0, 0.0); 12],
             zones: [ZONE_INIT; MAX_ZONES],
             n_zones: 0,
             calib_sum: [0.0; MAX_ZONES],
@@ -163,7 +166,6 @@ impl OccupancyDetector {
 
         // Build output events in a static buffer.
         // We re-use a static to avoid allocation in no_std.
-        static mut EVENTS: [(i32, f32); 12] = [(0, 0.0); 12];
         let mut n_events = 0usize;
 
         // Emit per-zone occupancy (every 10 frames to limit bandwidth).
@@ -172,18 +174,14 @@ impl OccupancyDetector {
                 if self.zones[z].occupied && n_events < 10 {
                     // Encode zone_id in integer part, confidence in fractional.
                     let val = z as f32 + self.zones[z].score.min(0.99);
-                    unsafe {
-                        EVENTS[n_events] = (EVENT_ZONE_OCCUPIED, val);
-                    }
+                    self.events[n_events] = (EVENT_ZONE_OCCUPIED, val);
                     n_events += 1;
                 }
             }
 
             // Emit total occupied zone count.
             if n_events < 11 {
-                unsafe {
-                    EVENTS[n_events] = (EVENT_ZONE_COUNT, total_occupied as f32);
-                }
+                self.events[n_events] = (EVENT_ZONE_COUNT, total_occupied as f32);
                 n_events += 1;
             }
         }
@@ -192,14 +190,12 @@ impl OccupancyDetector {
         for z in 0..zone_count {
             if self.zones[z].occupied != self.zones[z].prev_occupied && n_events < 12 {
                 let val = z as f32 + if self.zones[z].occupied { 0.5 } else { 0.0 };
-                unsafe {
-                    EVENTS[n_events] = (EVENT_ZONE_TRANSITION, val);
-                }
+                self.events[n_events] = (EVENT_ZONE_TRANSITION, val);
                 n_events += 1;
             }
         }
 
-        unsafe { &EVENTS[..n_events] }
+        &self.events[..n_events]
     }
 
     /// Get the number of currently occupied zones.

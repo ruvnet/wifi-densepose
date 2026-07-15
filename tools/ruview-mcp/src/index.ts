@@ -1,29 +1,39 @@
 #!/usr/bin/env node
 /**
- * @ruv/ruview-mcp — RuView MCP Server
+ * @ruvnet/rvagent — RuView MCP Server
  *
  * Exposes RuView's WiFi-DensePose sensing capabilities as Model Context Protocol
  * (MCP) tools that Claude Code, Cursor, Codex, and other MCP-compatible agents
  * can call directly.
  *
- * Tools exposed:
- *   ruview_csi_latest    — pull the latest CSI window from the sensing-server
- *   ruview_pose_infer    — single-shot 17-keypoint pose estimation
- *   ruview_count_infer   — single-shot person count with confidence interval
- *   ruview_registry_list — list cogs from the Cognitum edge registry (ADR-102)
- *   ruview_train_count   — kick off a count-cog training run (returns job ID)
- *   ruview_job_status    — poll a background training job
+ * Transports (ADR-264 O3):
+ *   stdio (default)      node dist/index.js
+ *   Streamable HTTP      RVAGENT_HTTP_PORT=3001 node dist/index.js
+ *                        (127.0.0.1-bound, Origin-gated, optional bearer token —
+ *                        see http-transport.ts for the security model)
  *
- * Usage:
- *   node dist/index.js                   # stdio transport (default)
- *   RUVIEW_SENSING_SERVER_URL=http://cognitum-v0:3000 node dist/index.js
+ * Tool naming (ADR-264 O4): canonical names are underscore-form
+ * (host tool-name regexes commonly enforce ^[a-zA-Z0-9_-]{1,64}$). The
+ * pre-ADR-264 dotted names (ruview.bfld.last_scan, …) remain callable as
+ * router-only aliases for one deprecation cycle; tools/list advertises the
+ * underscore form only.
+ *
+ * Validation (ADR-264 O5): each tool declares ONE Zod schema. The CallTool
+ * gate parses exactly once and hands the typed result to the handler; the
+ * advertised JSON Schema is generated from the same Zod source, so what is
+ * advertised is what is enforced.
  *
  * To register with Claude Code:
- *   claude mcp add ruview -- node /path/to/tools/ruview-mcp/dist/index.js
+ *   claude mcp add ruview -- npx -y @ruvnet/rvagent
  *
- * See ADR-104 for the full design rationale and security model.
+ * See ADR-104 for the original design rationale and ADR-264 for the npm
+ * deep-review this layout implements.
  */
 
+import { createRequire } from "node:module";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { argv } from "node:process";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -32,6 +42,8 @@ import {
   McpError,
   ErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
+import type { z } from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
 
 import { loadConfig } from "./config.js";
 import { csiLatestSchema, csiLatest } from "./tools/csi-latest.js";
@@ -44,40 +56,51 @@ import {
   jobStatusSchema,
   jobStatus,
 } from "./tools/train-count.js";
-import { TOOL_INPUT_SCHEMAS } from "./schemas/index.js";
-import { bfldLastScan } from "./tools/bfld-last-scan.js";
-import { bfldSubscribe } from "./tools/bfld-subscribe.js";
-import { presenceNow } from "./tools/presence-now.js";
-import { vitalsGetBreathing } from "./tools/vitals-get-breathing.js";
-import { vitalsGetHeartRate } from "./tools/vitals-get-heart-rate.js";
-import { vitalsGetAll } from "./tools/vitals-get-all.js";
+import { bfldLastScanSchema, bfldLastScan } from "./tools/bfld-last-scan.js";
+import { bfldSubscribeSchema, bfldSubscribe } from "./tools/bfld-subscribe.js";
+import { presenceNowSchema, presenceNow } from "./tools/presence-now.js";
+import {
+  vitalsGetBreathingSchema,
+  vitalsGetBreathing,
+} from "./tools/vitals-get-breathing.js";
+import {
+  vitalsGetHeartRateSchema,
+  vitalsGetHeartRate,
+} from "./tools/vitals-get-heart-rate.js";
+import { vitalsGetAllSchema, vitalsGetAll } from "./tools/vitals-get-all.js";
+// NOTE: ./http-transport.js is imported lazily in main() — it chain-loads the
+// SDK's streamableHttp module (~48 ms MEASURED), which the default stdio path
+// never uses.
 
-const PACKAGE_VERSION = "0.1.0";
+// Single-source the version from package.json (ADR-264 O8/ADR-265 D3).
+const require = createRequire(import.meta.url);
+const PACKAGE_VERSION: string = (
+  require("../package.json") as { version: string }
+).version;
 const SERVER_NAME = "rvagent";
 
 // ── Tool registry ──────────────────────────────────────────────────────────
 
-const TOOLS = [
+type RuviewConfig = ReturnType<typeof loadConfig>;
+
+interface ToolDef {
+  name: string;
+  description: string;
+  /** The single validation source; the advertised JSON Schema derives from it. */
+  schema: z.ZodTypeAny;
+  handler: (parsedArgs: unknown, config: RuviewConfig) => Promise<object>;
+}
+
+export const TOOLS: ToolDef[] = [
   {
     name: "ruview_csi_latest",
     description:
       "Pull the latest CSI window from a running wifi-densepose-sensing-server. " +
       "Returns 56-subcarrier × 20-frame amplitude/phase arrays suitable for " +
       "downstream inference or research analysis.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        sensing_server_url: {
-          type: "string",
-          description:
-            "Base URL of the sensing-server (default: RUVIEW_SENSING_SERVER_URL or http://localhost:3000).",
-        },
-      },
-    },
-    handler: async (args: unknown, config: ReturnType<typeof loadConfig>) => {
-      const input = csiLatestSchema.parse(args);
-      return csiLatest(input, config);
-    },
+    schema: csiLatestSchema,
+    handler: (args, config) =>
+      csiLatest(args as Parameters<typeof csiLatest>[0], config),
   },
   {
     name: "ruview_pose_infer",
@@ -86,23 +109,9 @@ const TOOLS = [
       "cog-pose-estimation Cog binary (ADR-101). Accepts a CSI window JSON file " +
       "or uses the live sensing-server if no window is provided. " +
       "Returns [{keypoints: [[x,y]×17], confidence}] per detected person.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        window_path: {
-          type: "string",
-          description: "Path to a CSI window JSON file. Omit to use the live sensing-server.",
-        },
-        cog_binary: {
-          type: "string",
-          description: "Path to cog-pose-estimation binary.",
-        },
-      },
-    },
-    handler: async (args: unknown, config: ReturnType<typeof loadConfig>) => {
-      const input = poseInferSchema.parse(args);
-      return poseInfer(input, config);
-    },
+    schema: poseInferSchema,
+    handler: (args, config) =>
+      poseInfer(args as Parameters<typeof poseInfer>[0], config),
   },
   {
     name: "ruview_count_infer",
@@ -110,29 +119,9 @@ const TOOLS = [
       "Run a single-shot person-count inference using the cog-person-count Cog " +
       "binary (ADR-103). Returns {count, confidence, count_p95_low, count_p95_high} " +
       "with a Stoer-Wagner multi-node fusion upper bound when multiple nodes are active.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        window_path: {
-          type: "string",
-          description: "Path to a CSI window JSON file. Omit to use the live sensing-server.",
-        },
-        cog_binary: {
-          type: "string",
-          description: "Path to cog-person-count binary.",
-        },
-        max_persons: {
-          type: "integer",
-          minimum: 1,
-          maximum: 7,
-          description: "Upper bound on person count (1–7). Default: 7.",
-        },
-      },
-    },
-    handler: async (args: unknown, config: ReturnType<typeof loadConfig>) => {
-      const input = countInferSchema.parse(args);
-      return countInfer(input, config);
-    },
+    schema: countInferSchema,
+    handler: (args, config) =>
+      countInfer(args as Parameters<typeof countInfer>[0], config),
   },
   {
     name: "ruview_registry_list",
@@ -140,33 +129,9 @@ const TOOLS = [
       "List cogs from the Cognitum edge module registry (ADR-102). " +
       "Fetches /api/v1/edge/registry from the sensing-server, which proxies the " +
       "canonical GCS catalog (105 cogs, 11 categories). Supports category filter and search.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        category: {
-          type: "string",
-          description:
-            "Filter by category: health, security, building, retail, industrial, " +
-            "research, ai, swarm, signal, network, developer.",
-        },
-        search: {
-          type: "string",
-          description: "Search substring matched against cog id and name (case-insensitive).",
-        },
-        refresh: {
-          type: "boolean",
-          description: "Bypass the 1-hour registry cache.",
-        },
-        sensing_server_url: {
-          type: "string",
-          description: "Override the sensing-server URL.",
-        },
-      },
-    },
-    handler: async (args: unknown, config: ReturnType<typeof loadConfig>) => {
-      const input = registryListSchema.parse(args);
-      return registryList(input, config);
-    },
+    schema: registryListSchema,
+    handler: (args, config) =>
+      registryList(args as Parameters<typeof registryList>[0], config),
   },
   {
     name: "ruview_train_count",
@@ -174,211 +139,139 @@ const TOOLS = [
       "Kick off a cog-person-count training run using the Candle GPU trainer " +
       "(ADR-103). The paired JSONL file provides CSI windows + camera-derived " +
       "person-count labels. Returns a job_id to poll with ruview_job_status.",
-    inputSchema: {
-      type: "object" as const,
-      required: ["paired_jsonl"],
-      properties: {
-        paired_jsonl: {
-          type: "string",
-          description:
-            "Path to the paired JSONL training file (produced by scripts/align-ground-truth.js).",
-        },
-        epochs: {
-          type: "integer",
-          minimum: 1,
-          maximum: 10000,
-          description: "Training epochs (default: 400).",
-        },
-        learning_rate: {
-          type: "number",
-          description: "Initial learning rate (default: 0.001).",
-        },
-        output_dir: {
-          type: "string",
-          description:
-            "Directory for model artifacts (default: v2/crates/cog-person-count/cog/artifacts/).",
-        },
-      },
-    },
-    handler: async (args: unknown, config: ReturnType<typeof loadConfig>) => {
-      const input = trainCountSchema.parse(args);
-      return trainCount(input, config);
-    },
+    schema: trainCountSchema,
+    handler: (args, config) =>
+      trainCount(args as Parameters<typeof trainCount>[0], config),
   },
   {
     name: "ruview_job_status",
     description:
       "Poll the status of a background training job started by ruview_train_count. " +
       "Returns {status, epochs_done, epochs_total, recent_log} for the given job_id.",
-    inputSchema: {
-      type: "object" as const,
-      required: ["job_id"],
-      properties: {
-        job_id: {
-          type: "string",
-          description: "UUID returned by ruview_train_count.",
-        },
-      },
-    },
-    handler: async (args: unknown, config: ReturnType<typeof loadConfig>) => {
-      const input = jobStatusSchema.parse(args);
-      return jobStatus(input, config);
-    },
+    schema: jobStatusSchema,
+    handler: (args, config) =>
+      jobStatus(args as Parameters<typeof jobStatus>[0], config),
   },
-  // ── ADR-124 BFLD tools (Phase 4 Refinement) ──────────────────────────────
+  // ── ADR-124 BFLD tools (Phase 4 Refinement; underscore names per ADR-264) ─
   {
-    name: "ruview.bfld.last_scan",
+    name: "ruview_bfld_last_scan",
     description:
       "Return the most recent BFLD scan result for a node (ADR-118/ADR-121). " +
       "Fields: node_id, identity_risk_score [0,1], privacy_class, n_frames, timestamp_ms. " +
       "Proxied from sensing-server GET /api/v1/bfld/<node_id>/last_scan which aggregates " +
       "the MQTT state topics ruview/<node_id>/bfld/* (ADR-122 §2.2).",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        node_id: {
-          type: "string",
-          description: "Target node id. Omit to use the single active node.",
-        },
-        sensing_server_url: {
-          type: "string",
-          description: "Override sensing-server URL for this call only.",
-        },
-      },
-    },
-    handler: async (args: unknown, config: ReturnType<typeof loadConfig>) => {
-      return bfldLastScan(args as Parameters<typeof bfldLastScan>[0], config);
-    },
+    schema: bfldLastScanSchema,
+    handler: (args, config) =>
+      bfldLastScan(args as Parameters<typeof bfldLastScan>[0], config),
   },
   {
-    name: "ruview.bfld.subscribe",
+    name: "ruview_bfld_subscribe",
     description:
       "Subscribe to BFLD events on ruview/<node_id>/bfld/* for duration_s seconds (ADR-122). " +
       "Returns {ok, subscription_id, expires_at, topic}. When the sensing-server is unreachable, " +
       "returns a synthetic envelope with ok:false,warn:true so the caller can distinguish " +
       "a network error from an invalid request.",
-    inputSchema: {
-      type: "object" as const,
-      required: ["duration_s"],
-      properties: {
-        node_id: {
-          type: "string",
-          description: "Target node id. Omit to use the single active node.",
-        },
-        duration_s: {
-          type: "number",
-          minimum: 0,
-          maximum: 3600,
-          description: "Subscription duration in seconds (max 3600).",
-        },
-        sensing_server_url: {
-          type: "string",
-          description: "Override sensing-server URL for this call only.",
-        },
-      },
-    },
-    handler: async (args: unknown, config: ReturnType<typeof loadConfig>) => {
-      return bfldSubscribe(args as Parameters<typeof bfldSubscribe>[0], config);
-    },
+    schema: bfldSubscribeSchema,
+    handler: (args, config) =>
+      bfldSubscribe(args as Parameters<typeof bfldSubscribe>[0], config),
   },
-  // ── ADR-124 Presence + Vitals tools (Phase 4 Refinement iter 5) ──────────
+  // ── ADR-124 Presence + Vitals tools ───────────────────────────────────────
   {
-    name: "ruview.presence.now",
+    name: "ruview_presence_now",
     description:
       "Return current occupancy for a node: present, n_persons, confidence, timestamp_ms. " +
       "Wraps EdgeVitalsMessage.presence + n_persons (ADR-124 §4.1, ws.py:74-88).",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        node_id: { type: "string", description: "Target node id." },
-        sensing_server_url: { type: "string", description: "Override sensing-server URL." },
-      },
-    },
-    handler: async (args: unknown, config: ReturnType<typeof loadConfig>) =>
+    schema: presenceNowSchema,
+    handler: (args, config) =>
       presenceNow(args as Parameters<typeof presenceNow>[0], config),
   },
   {
-    name: "ruview.vitals.get_breathing",
+    name: "ruview_vitals_get_breathing",
     description:
       "Return breathing rate for a node: breathing_rate_bpm (null if unavailable), " +
       "confidence, timestamp_ms. Wraps EdgeVitalsMessage.breathing_rate_bpm (ws.py:82).",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        node_id: { type: "string", description: "Target node id." },
-        window_s: { type: "number", description: "Averaging window in seconds (max 300)." },
-        sensing_server_url: { type: "string", description: "Override sensing-server URL." },
-      },
-    },
-    handler: async (args: unknown, config: ReturnType<typeof loadConfig>) =>
+    schema: vitalsGetBreathingSchema,
+    handler: (args, config) =>
       vitalsGetBreathing(args as Parameters<typeof vitalsGetBreathing>[0], config),
   },
   {
-    name: "ruview.vitals.get_heart_rate",
+    name: "ruview_vitals_get_heart_rate",
     description:
       "Return heart rate for a node: heartrate_bpm (null if unavailable), " +
       "confidence, timestamp_ms. Wraps EdgeVitalsMessage.heartrate_bpm (ws.py:83).",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        node_id: { type: "string", description: "Target node id." },
-        window_s: { type: "number", description: "Averaging window in seconds (max 300)." },
-        sensing_server_url: { type: "string", description: "Override sensing-server URL." },
-      },
-    },
-    handler: async (args: unknown, config: ReturnType<typeof loadConfig>) =>
+    schema: vitalsGetHeartRateSchema,
+    handler: (args, config) =>
       vitalsGetHeartRate(args as Parameters<typeof vitalsGetHeartRate>[0], config),
   },
   {
-    name: "ruview.vitals.get_all",
+    name: "ruview_vitals_get_all",
     description:
       "Return the full EdgeVitalsMessage for a node (all fields except raw): " +
       "presence, n_persons, confidence, breathing_rate_bpm, heartrate_bpm, motion, zone_id. " +
       "Full surface of ws.py:74-88.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        node_id: { type: "string", description: "Target node id." },
-        sensing_server_url: { type: "string", description: "Override sensing-server URL." },
-      },
-    },
-    handler: async (args: unknown, config: ReturnType<typeof loadConfig>) =>
+    schema: vitalsGetAllSchema,
+    handler: (args, config) =>
       vitalsGetAll(args as Parameters<typeof vitalsGetAll>[0], config),
   },
-] as const;
+];
 
-// ── Server bootstrap ────────────────────────────────────────────────────────
+/**
+ * Pre-ADR-264 dotted tool names, accepted at call time for one deprecation
+ * cycle. Router-only: tools/list never advertises these.
+ */
+export const TOOL_ALIASES: Record<string, string> = {
+  "ruview.bfld.last_scan": "ruview_bfld_last_scan",
+  "ruview.bfld.subscribe": "ruview_bfld_subscribe",
+  "ruview.presence.now": "ruview_presence_now",
+  "ruview.vitals.get_breathing": "ruview_vitals_get_breathing",
+  "ruview.vitals.get_heart_rate": "ruview_vitals_get_heart_rate",
+  "ruview.vitals.get_all": "ruview_vitals_get_all",
+};
 
-async function main(): Promise<void> {
-  const config = loadConfig();
+/**
+ * Advertised JSON Schema, generated from the Zod source (ADR-264 O5).
+ * Memoized: schemas are static for the process lifetime, and tools/list is
+ * called once per session (per HTTP session under the session-per-server
+ * model) — no point re-walking the Zod tree each time.
+ */
+const jsonSchemaCache = new Map<string, object>();
+export function toolInputJsonSchema(def: ToolDef): object {
+  const cached = jsonSchemaCache.get(def.name);
+  if (cached !== undefined) return cached;
+  const raw = zodToJsonSchema(def.schema, { $refStrategy: "none" }) as Record<
+    string,
+    unknown
+  >;
+  delete raw["$schema"];
+  jsonSchemaCache.set(def.name, raw);
+  return raw;
+}
 
+// ── Server factory ──────────────────────────────────────────────────────────
+
+/**
+ * Build a fully-wired MCP Server. A factory (not a singleton) because each
+ * Streamable-HTTP session needs its own Server instance (ADR-264 F7/O3).
+ */
+export function buildServer(config: RuviewConfig = loadConfig()): Server {
   const server = new Server(
-    {
-      name: SERVER_NAME,
-      version: PACKAGE_VERSION,
-    },
-    {
-      capabilities: {
-        tools: {},
-      },
-    }
+    { name: SERVER_NAME, version: PACKAGE_VERSION },
+    { capabilities: { tools: {} } }
   );
 
-  // List tools handler.
   server.setRequestHandler(ListToolsRequestSchema, () => ({
     tools: TOOLS.map((t) => ({
       name: t.name,
       description: t.description,
-      inputSchema: t.inputSchema,
+      inputSchema: toolInputJsonSchema(t),
     })),
   }));
 
-  // Call tool handler — uniform Zod validation gate (ADR-124 §3 Architecture).
-  // If TOOL_INPUT_SCHEMAS has a schema for the tool name, run safeParse first.
-  // Parse failures throw McpError(InvalidParams) so the client sees a typed
-  // JSON-RPC error rather than a wrapped string error.
+  // Call tool handler — the SINGLE Zod validation gate (ADR-264 O5): parse
+  // once, hand the typed result (with defaults applied) to the handler.
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
+    const { name: rawName, arguments: args } = request.params;
+    const name = TOOL_ALIASES[rawName] ?? rawName;
     const tool = TOOLS.find((t) => t.name === name);
 
     if (!tool) {
@@ -388,7 +281,7 @@ async function main(): Promise<void> {
             type: "text" as const,
             text: JSON.stringify({
               ok: false,
-              error: `Unknown tool "${name}". Available tools: ${TOOLS.map((t) => t.name).join(", ")}`,
+              error: `Unknown tool "${rawName}". Available tools: ${TOOLS.map((t) => t.name).join(", ")}`,
             }),
           },
         ],
@@ -396,22 +289,16 @@ async function main(): Promise<void> {
       };
     }
 
-    // Schema validation gate — applies to all tools registered in TOOL_INPUT_SCHEMAS.
-    const schemaEntry = Object.prototype.hasOwnProperty.call(TOOL_INPUT_SCHEMAS, name)
-      ? TOOL_INPUT_SCHEMAS[name as keyof typeof TOOL_INPUT_SCHEMAS]
-      : undefined;
-    if (schemaEntry !== undefined) {
-      const parsed = schemaEntry.safeParse(args ?? {});
-      if (!parsed.success) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          `Invalid arguments for tool "${name}": ${parsed.error.message}`
-        );
-      }
+    const parsed = tool.schema.safeParse(args ?? {});
+    if (!parsed.success) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `Invalid arguments for tool "${rawName}": ${parsed.error.message}`
+      );
     }
 
     try {
-      const result = await tool.handler(args ?? {}, config);
+      const result = await tool.handler(parsed.data, config);
       return {
         content: [
           {
@@ -438,18 +325,59 @@ async function main(): Promise<void> {
     }
   });
 
-  // Wire up stdio transport.
+  return server;
+}
+
+// ── Server bootstrap ────────────────────────────────────────────────────────
+
+async function main(): Promise<void> {
+  const config = loadConfig();
+
+  // stdio transport (default, always on).
+  const stdioServer = buildServer(config);
   const transport = new StdioServerTransport();
-  await server.connect(transport);
+  await stdioServer.connect(transport);
+
+  // Streamable HTTP transport — explicit opt-in only (ADR-264 O3). Lazily
+  // imported so the stdio path never pays the streamableHttp load cost.
+  const httpPort = process.env["RVAGENT_HTTP_PORT"];
+  let httpNote = "";
+  if (httpPort !== undefined && httpPort !== "") {
+    const { createHttpTransport } = await import("./http-transport.js");
+    const { boundAddress } = await createHttpTransport(
+      () => buildServer(config),
+      { port: Number(httpPort) }
+    );
+    httpNote = ` HTTP: ${boundAddress}/mcp.`;
+  }
 
   // Log to stderr so it doesn't interfere with the MCP stdio protocol.
   process.stderr.write(
     `[@ruvnet/rvagent] Server v${PACKAGE_VERSION} started. ` +
-      `Sensing server: ${config.sensingServerUrl}\n`
+      `Sensing server: ${config.sensingServerUrl}.${httpNote}\n`
   );
 }
 
-main().catch((e) => {
-  process.stderr.write(`[ruview-mcp] Fatal: ${String(e)}\n`);
-  process.exit(1);
-});
+// CLI guard: boot the server only when this module is the entrypoint — invoked
+// as the `rvagent` / `ruview-mcp` bin or `node dist/index.js`. Importing it as a
+// library (`import { buildServer } from "@ruvnet/rvagent"`) must NOT side-effect
+// connect a StdioServerTransport to the consumer's stdin/stdout. Realpath both
+// sides because npm's bin shim is a symlink and passes a non-normalized,
+// possibly case-skewed argv[1] on Windows (mirrors harness/ruview/bin/cli.js).
+const invokedDirectly = (() => {
+  if (!argv[1]) return false;
+  try {
+    const a = realpathSync(argv[1]);
+    const b = realpathSync(fileURLToPath(import.meta.url));
+    return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+  } catch {
+    return false;
+  }
+})();
+
+if (invokedDirectly) {
+  main().catch((e) => {
+    process.stderr.write(`[ruview-mcp] Fatal: ${String(e)}\n`);
+    process.exit(1);
+  });
+}

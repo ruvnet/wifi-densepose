@@ -13,6 +13,26 @@ use homecore::{EntityId, StateMachine};
 
 use crate::error::AutomationError;
 
+/// Instruction budget for a single template render (HC-SEC-01).
+///
+/// Templates come from user automation config; without a bound a single
+/// `template:` condition like
+/// `{% for i in range(10000) %}{% for j in range(10000) %}x{% endfor %}{% endfor %}`
+/// renders a multi-gigabyte string and pins a CPU for tens of seconds —
+/// a memory/CPU denial-of-service (the bfld-class "unbounded expansion").
+/// MiniJinja's `fuel` feature charges ~1 unit per VM instruction; a
+/// nested loop burns one unit per iteration, so the budget caps total
+/// work regardless of how the loops are nested. 1,000,000 instructions is
+/// far more than any legitimate HA template needs (a typical condition is
+/// a few dozen) while killing the attack in well under a second.
+const TEMPLATE_FUEL: u64 = 1_000_000;
+
+/// Hard cap on the source length of a template (HC-SEC-01, defense in
+/// depth). A legitimate HA `value_template` is a one-liner; anything past
+/// 64 KiB is rejected before compilation so a pathological source string
+/// can neither be compiled nor emitted verbatim.
+const MAX_TEMPLATE_SOURCE_BYTES: usize = 64 * 1024;
+
 /// MiniJinja environment pre-loaded with HA-compatible globals.
 ///
 /// Constructed once per `AutomationEngine` and shared via `Arc`. The
@@ -26,6 +46,10 @@ impl TemplateEnvironment {
     /// Build a new environment backed by the given state machine.
     pub fn new(states: Arc<StateMachine>) -> Self {
         let mut env = Environment::new();
+
+        // Bound per-render work so a hostile `template:` condition cannot
+        // DoS the engine via nested loops / huge repeats (HC-SEC-01).
+        env.set_fuel(Some(TEMPLATE_FUEL));
 
         // --- states(entity_id) ---
         // Returns the current state string of an entity, or "unavailable".
@@ -88,7 +112,21 @@ impl TemplateEnvironment {
     }
 
     /// Render a template string and return the string output.
+    ///
+    /// Renders are bounded by an instruction budget ([`TEMPLATE_FUEL`]) and
+    /// a source-length cap ([`MAX_TEMPLATE_SOURCE_BYTES`]); a malicious
+    /// template that exhausts the budget returns a [`AutomationError::TemplateRender`]
+    /// error rather than running unbounded (HC-SEC-01).
     pub fn render(&self, template_str: &str) -> Result<String, AutomationError> {
+        // Reject pathologically large sources before compilation (defense
+        // in depth — fuel already bounds runtime work).
+        if template_str.len() > MAX_TEMPLATE_SOURCE_BYTES {
+            return Err(AutomationError::TemplateRender(format!(
+                "template source too large: {} bytes (max {})",
+                template_str.len(),
+                MAX_TEMPLATE_SOURCE_BYTES
+            )));
+        }
         // Wrap bare expressions like `{{ states('light.kitchen') }}`
         // in a minimal template wrapper.
         let tmpl = self
@@ -190,5 +228,69 @@ mod tests {
         assert!(!env.render_bool("false").unwrap());
         assert!(!env.render_bool("0").unwrap());
         assert!(!env.render_bool("off").unwrap());
+    }
+
+    // ── HC-SEC-01: template DoS is bounded by fuel ─────────────────────
+    //
+    // A `template:` condition is user config. Before the fuel bound a
+    // nested-loop template rendered a multi-GB string over ~11 s (proven
+    // empirically). With fuel enabled it must fail FAST with an error
+    // instead of expanding unboundedly. On the pre-fix code (no `fuel`
+    // feature / `set_fuel`) this render succeeds and burns CPU+RAM, so
+    // this test fails on old (it would `Ok` and exceed the time bound).
+    #[test]
+    fn nested_loop_template_is_bounded_not_unbounded_dos() {
+        use std::time::Instant;
+        let sm = Arc::new(StateMachine::new());
+        let env = TemplateEnvironment::new(sm);
+        // 5000 * 5000 = 25M iterations on the old engine (~100 MB, ~11 s).
+        let malicious =
+            "{% for i in range(5000) %}{% for j in range(5000) %}xxxx{% endfor %}{% endfor %}";
+        let start = Instant::now();
+        let result = env.render(malicious);
+        let elapsed = start.elapsed();
+        assert!(
+            result.is_err(),
+            "malicious nested-loop template must be rejected (ran out of fuel), got Ok"
+        );
+        assert!(
+            elapsed.as_secs() < 3,
+            "bounded render must fail fast; took {elapsed:?} (unbounded DoS on old engine)"
+        );
+    }
+
+    // ── HC-SEC-01: a single huge repeat is also bounded ────────────────
+    #[test]
+    fn single_huge_repeat_template_is_bounded() {
+        let sm = Arc::new(StateMachine::new());
+        let env = TemplateEnvironment::new(sm);
+        // range() caps at 10k per call, but multiplied bodies still need a
+        // bound; drive enough instructions to exhaust fuel via deep nesting.
+        let malicious = "{% for a in range(9999) %}{% for b in range(9999) %}\
+            {% for c in range(9999) %}z{% endfor %}{% endfor %}{% endfor %}";
+        let result = env.render(malicious);
+        assert!(result.is_err(), "deeply nested loops must exhaust fuel and error");
+    }
+
+    // ── HC-SEC-01: oversized template source is rejected pre-compile ───
+    #[test]
+    fn oversized_template_source_is_rejected() {
+        let sm = Arc::new(StateMachine::new());
+        let env = TemplateEnvironment::new(sm);
+        // 128 KiB of literal text — exceeds MAX_TEMPLATE_SOURCE_BYTES.
+        let big = "x".repeat(128 * 1024);
+        let result = env.render(&big);
+        assert!(result.is_err(), "oversized template source must be rejected");
+    }
+
+    // ── A legitimate small template still renders fine within budget ───
+    #[test]
+    fn legitimate_template_still_renders_within_fuel() {
+        let sm = sm_with("light.kitchen", "on", serde_json::json!({}));
+        let env = TemplateEnvironment::new(sm);
+        // A normal HA condition with a modest loop — well under budget.
+        let ok = "{% for i in range(50) %}{{ states('light.kitchen') }}{% endfor %}";
+        let out = env.render(ok).expect("legitimate template must render");
+        assert!(out.contains("on"));
     }
 }

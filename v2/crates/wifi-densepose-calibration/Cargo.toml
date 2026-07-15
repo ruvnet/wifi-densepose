@@ -1,0 +1,21 @@
+[package]
+name = "wifi-densepose-calibration"
+version.workspace = true
+edition.workspace = true
+description = "ADR-151 per-room calibration & specialized model training (baseline → enroll → extract → train)"
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+wifi-densepose-core = { workspace = true }
+wifi-densepose-signal = { version = "0.3.0", path = "../wifi-densepose-signal", default-features = false }
+
+serde = { workspace = true }
+serde_json = "1.0"
+thiserror = { workspace = true }
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+[dev-dependencies]
+ndarray = { workspace = true }
+num-complex = { workspace = true }

@@ -1,6 +1,6 @@
 [package]
 name = "wifi-densepose-signal"
-version = "0.3.1"
+version = "0.3.5"
 edition.workspace = true
 description = "WiFi CSI signal processing for DensePose estimation"
 license.workspace = true
@@ -46,6 +46,9 @@ ruvector-solver = { workspace = true }
 midstreamer-temporal-compare = { workspace = true }
 midstreamer-attractor = { workspace = true }
 
+# ADR-136: deterministic calibration-id → FrameMeta.calibration_id (ADR-135 link)
+uuid = { version = "1.6", features = ["v4"] }
+
 # Internal
 wifi-densepose-core = { version = "0.3.0", path = "../wifi-densepose-core" }
 # ADR-084 Pass 2: sketch-prefilter for the EmbeddingHistory search loop.
@@ -61,6 +64,17 @@ harness = false
 
 [[bench]]
 name = "aether_prefilter_bench"
+harness = false
+
+## ADR-154: FFT-planner caching (PSD) + DTW Sakoe-Chiba band perf benches.
+[[bench]]
+name = "features_bench"
+harness = false
+
+## ADR-154 Milestone-2: P2 "bench-first" perf items (§7.4 #5/#6/#7/#8/#20).
+## #8 (field_model eigendecompose) is measured only under the eigenvalue feature.
+[[bench]]
+name = "dsp_perf_bench"
 harness = false
 
 ## ADR-134: CIR estimator throughput benchmarks
@@ -79,3 +93,13 @@ path = "src/bin/cir_proof_runner.rs"
 # implementation agent; this addition is purely additive.
 [dependencies.sha2]
 workspace = true
+
+## ADR-135: calibration module throughput benchmarks
+[[bench]]
+name = "calibration_bench"
+harness = false
+
+# ADR-135: calibration deterministic proof runner binary.
+[[bin]]
+name = "calibration_proof_runner"
+path = "src/bin/calibration_proof_runner.rs"

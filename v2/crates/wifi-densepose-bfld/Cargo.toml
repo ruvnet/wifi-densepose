@@ -2,7 +2,7 @@
 name = "wifi-densepose-bfld"
 description = "BFLD — Beamforming Feedback Layer for Detection. Privacy-gated WiFi BFI sensing primitives. See ADR-118."
 readme = "README.md"
-version.workspace = true
+version = "0.3.1"  # ADR-141: privacy control plane (modes/actions/attestation)
 edition.workspace = true
 authors.workspace = true
 license.workspace = true

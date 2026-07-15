@@ -148,3 +148,16 @@ export class ApiService {
 
 // Create singleton instance
 export const apiService = new ApiService();
+
+// Storage key shared with the QuickSettings "API Access" panel.
+export const API_TOKEN_STORAGE_KEY = 'ruview-api-token';
+
+// Apply a previously-saved bearer token at module load — before app init
+// dispatches its first request — so a configured RUVIEW_API_TOKEN works from
+// the very first /api/v1/* call. The server only ever checks the
+// `Authorization: Bearer` header (see bearer_auth.rs) — this intentionally
+// never puts the token in a URL query string.
+try {
+  const storedToken = localStorage.getItem(API_TOKEN_STORAGE_KEY);
+  if (storedToken) apiService.setAuthToken(storedToken);
+} catch { /* storage unavailable (private browsing etc.) */ }

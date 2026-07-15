@@ -12,7 +12,10 @@
 mod adaptive_classifier;
 pub mod cli;
 pub mod csi;
+mod engine_bridge;
 mod field_bridge;
+mod field_localize;
+mod model_format;
 mod multistatic_bridge;
 pub mod pose;
 mod rvf_container;
@@ -22,7 +25,9 @@ pub mod types;
 mod vital_signs;
 
 // Training pipeline modules (exposed via lib.rs)
-use wifi_densepose_sensing_server::{dataset, embedding, graph_transformer, trainer};
+use wifi_densepose_sensing_server::{
+    dataset, embedding, error_response, graph_transformer, rufield_surface, trainer,
+};
 
 use ruvector_mincut::{DynamicMinCut, MinCutBuilder};
 use std::collections::{HashMap, VecDeque};
@@ -108,6 +113,13 @@ struct Args {
     #[arg(long)]
     disable_host_validation: bool,
 
+    /// MQTT publisher (HA auto-discovery) + privacy-mode flags (ADR-115).
+    /// Flattened so `--mqtt*` reach the binary's parser and the publisher
+    /// in `mqtt::` is actually started (fixes #872). Uses the *lib* crate's
+    /// `MqttArgs` type so it's compatible with `mqtt::config::from_args`.
+    #[command(flatten)]
+    mqtt_opts: wifi_densepose_sensing_server::cli::MqttArgs,
+
     /// Data source: auto, wifi, esp32, simulate
     #[arg(long, default_value = "auto")]
     source: String,
@@ -135,6 +147,16 @@ struct Args {
     /// Export an RVF container package and exit (no server)
     #[arg(long, value_name = "PATH")]
     export_rvf: Option<PathBuf>,
+
+    /// Convert a published model file (model.safetensors / model.rvf.jsonl) to
+    /// the RVF binary container the --model loader expects, then exit (#894).
+    /// Pair with --convert-out for the destination path.
+    #[arg(long, value_name = "PATH")]
+    convert_model: Option<PathBuf>,
+
+    /// Output path for --convert-model (defaults to <input>.rvf).
+    #[arg(long, value_name = "PATH")]
+    convert_out: Option<PathBuf>,
 
     /// Run training mode (train a model and exit)
     #[arg(long)]
@@ -219,13 +241,26 @@ struct Esp32Frame {
     magic: u32,
     node_id: u8,
     n_antennas: u8,
-    n_subcarriers: u8,
+    /// u16 since ADR-110 / issue #1005: ESP32-C6 HE-SU frames carry 256
+    /// subcarrier bins (242 active HE20 tones). HT frames stay ≤128.
+    n_subcarriers: u16,
     freq_mhz: u16,
     sequence: u32,
     rssi: i8,
     noise_floor: i8,
+    /// ADR-110 byte 18: PPDU type the CSI was sampled from. Pre-ADR-110
+    /// firmware sends 0 ⇒ `PpduType::HtLegacy`.
+    ppdu_type: wifi_densepose_hardware::PpduType,
     amplitudes: Vec<f64>,
     phases: Vec<f64>,
+}
+
+impl Esp32Frame {
+    /// The `(n_subcarriers, ppdu_type)` symbol-grid identity of this frame.
+    /// HT-LTF and HE-LTF grids are not bin-comparable (ADR-110 / #1005).
+    fn grid(&self) -> (u16, wifi_densepose_hardware::PpduType) {
+        (self.n_subcarriers, self.ppdu_type)
+    }
 }
 
 /// Sensing update broadcast to WebSocket clients
@@ -372,6 +407,24 @@ struct PersonDetection {
     keypoints: Vec<PoseKeypoint>,
     bbox: BoundingBox,
     zone: String,
+    /// Room-world position `[x, y, z]` (Observatory scene units / meters),
+    /// derived from the strongest `signal_field` peak this person sits on
+    /// (issue #1050). `y` is `0.0` — the field is a floor-plane grid. This is
+    /// a real field-peak readout, not calibrated triangulation; see
+    /// `field_localize` for the honesty caveat. Defaults to `[0,0,0]` until
+    /// field positions are attached by `attach_field_positions`.
+    #[serde(default)]
+    position: [f64; 3],
+    /// Motion magnitude on the Observatory's `0..100` scale, passed through
+    /// from the measured `motion_band_power` (issue #1050).
+    #[serde(default)]
+    motion_score: f64,
+    /// Coarse posture label (`"standing"`/`"lying"`/…) when a **real** aggregate
+    /// posture estimate exists, else `None`. Never fabricated — per-person
+    /// skeletal pose in room coordinates remains gated on the pose model
+    /// (ADR-079). The Observatory defaults to `'standing'` when this is absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pose: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -435,6 +488,12 @@ struct NodeState {
     /// Most recent novelty score in [0.0, 1.0] (0 = exact-match in bank,
     /// 1 = no overlap). Consumed by the model-wake gate downstream.
     pub(crate) last_novelty_score: Option<f32>,
+    /// ADR-110 / issue #1005: the `(n_subcarriers, ppdu_type)` grid this
+    /// node's rolling windows were built on. ESP32-C6 nodes interleave
+    /// HE-SU 256-bin frames with HT 64-bin frames on one socket; mixing
+    /// the two symbol grids in `frame_history` corrupts variance/baseline
+    /// statistics. See [`NodeState::accept_grid`].
+    active_grid: Option<(u16, wifi_densepose_hardware::PpduType)>,
 }
 
 /// Default EMA alpha for temporal keypoint smoothing (RuVector Phase 2).
@@ -459,17 +518,31 @@ const NOVELTY_HISTORY_CAPACITY: usize = 64;
 /// subcarrier ordering / normalisation so banks reject stale data.
 const NOVELTY_SKETCH_VERSION: u16 = 1;
 
+/// Lower plausibility floor (seconds) for a CSI inter-frame delta.
+///
+/// The firmware caps CSI sends at `CSI_MIN_SEND_INTERVAL_US = 20 ms`
+/// (`csi_collector.c`), so a single node cannot physically produce frames
+/// faster than 50 fps. UDP/OS buffering, however, delivers frames in tight
+/// bursts whose intra-burst arrival deltas are tens of microseconds apart —
+/// a 36 µs delta yields `1/dt ≈ 27 kHz`, which the old `< 1 s` guard let
+/// straight into the EMA and inflated `csi_fps_ema` by 1–3 orders of
+/// magnitude (issue #1180). We reject any delta implying more than 200 fps
+/// (4× the physical ceiling, leaving slack for benign arrival jitter); such
+/// deltas are burst artifacts, not distinct production intervals.
+pub(crate) const MIN_PLAUSIBLE_CSI_DT_SEC: f64 = 0.005;
+
 /// ADR-110 iter 18 — EMA update for per-node CSI fps tracking.
 ///
 /// Returns the new EMA value, or `None` if the delta is implausible
-/// (≤ 0, or > 1 second — likely a connection gap, not a real frame
-/// rate sample). α = 1/8 fixed shift, ~8-sample effective window,
-/// matching the firmware-side ESP-NOW offset smoother in §A0.10.
+/// (below [`MIN_PLAUSIBLE_CSI_DT_SEC`] — a sub-ms burst artifact, see
+/// issue #1180 — or `> 1 second`, likely a connection gap rather than a
+/// real frame-rate sample). α = 1/8 fixed shift, ~8-sample effective
+/// window, matching the firmware-side ESP-NOW offset smoother in §A0.10.
 ///
 /// Free function for testability — every transformation that doesn't
 /// touch the rest of `NodeState` lives outside the `impl` block.
 pub(crate) fn update_csi_fps_ema(prev_fps: f64, dt_sec: f64) -> Option<f64> {
-    if !(dt_sec > 0.0 && dt_sec < 1.0) {
+    if !(dt_sec >= MIN_PLAUSIBLE_CSI_DT_SEC && dt_sec < 1.0) {
         return None;
     }
     let instantaneous = 1.0 / dt_sec;
@@ -509,6 +582,35 @@ mod fps_ema_tests {
     #[test]
     fn long_gap_rejected_as_implausible() {
         assert!(update_csi_fps_ema(20.0, 2.0).is_none());
+    }
+
+    #[test]
+    fn subms_burst_delta_rejected() {
+        // Issue #1180: a 36 µs intra-burst delta implies ~27 kHz and must
+        // not enter the EMA. Anything below the 5 ms floor is rejected.
+        assert!(update_csi_fps_ema(40.0, 0.000_036).is_none());
+        assert!(update_csi_fps_ema(40.0, 0.001).is_none());
+        // Just above the floor is accepted.
+        assert!(update_csi_fps_ema(40.0, 0.005).is_some());
+    }
+
+    #[test]
+    fn burst_interleaved_with_nominal_stays_in_band() {
+        // A true ~40 fps node whose frames arrive in sub-ms bursts: feeding
+        // only the plausible (nominal-cadence) deltas keeps the EMA near the
+        // ground truth instead of blowing up. Burst deltas are rejected by
+        // the caller (see NodeState::observe_csi_frame_arrival), so the EMA
+        // only ever sees the ~25 ms inter-group gaps.
+        let mut fps = 40.0;
+        for _ in 0..40 {
+            // nominal 25 ms gap (40 fps); intervening sub-ms bursts skipped
+            fps = update_csi_fps_ema(fps, 0.025).unwrap();
+            assert!(update_csi_fps_ema(fps, 0.000_040).is_none());
+        }
+        assert!(
+            (fps - 40.0).abs() < 1.0,
+            "EMA should stay within ~1 Hz of the 40 fps ground truth, got {fps}"
+        );
     }
 }
 
@@ -594,6 +696,15 @@ impl NodeState {
     pub(crate) fn observe_csi_frame_arrival(&mut self, now: std::time::Instant) {
         if let Some(prev) = self.last_frame_time {
             let dt = now.duration_since(prev).as_secs_f64();
+            // Burst arrivals (sub-floor dt, issue #1180): do NOT re-anchor on
+            // them. Keeping the previous anchor means the next genuine
+            // inter-frame gap measures the true cadence across the whole
+            // burst instead of intra-burst jitter — so a 50 fps node whose
+            // frames arrive in 36 µs bursts every 25 ms still reads ~40 fps,
+            // not 27 kHz.
+            if dt < MIN_PLAUSIBLE_CSI_DT_SEC {
+                return;
+            }
             if let Some(new_ema) = update_csi_fps_ema(self.csi_fps_ema, dt) {
                 self.csi_fps_ema = new_ema;
                 self.csi_fps_samples = self.csi_fps_samples.saturating_add(1);
@@ -640,6 +751,35 @@ impl NodeState {
                 ),
             ),
             last_novelty_score: None,
+            active_grid: None,
+        }
+    }
+
+    /// ADR-110 / issue #1005 grid gate: decide whether a frame on `grid`
+    /// may enter this node's feature path, and update `active_grid`.
+    ///
+    /// Returns `true` to accept. Policy: lock onto the densest grid seen.
+    /// On a grid *upgrade* (more subcarriers — e.g. the first HE-SU 256-bin
+    /// frame after HT 64-bin history) the rolling amplitude history and
+    /// motion baseline are cleared so HT and HE symbol grids are never
+    /// mixed in one window. Sparser-grid frames (the ~16% HT minority an
+    /// ESP32-C6 keeps emitting alongside HE) are rejected from the feature
+    /// path; the caller still records the arrival for fps/liveness.
+    fn accept_grid(&mut self, grid: (u16, wifi_densepose_hardware::PpduType)) -> bool {
+        match self.active_grid {
+            None => {
+                self.active_grid = Some(grid);
+                true
+            }
+            Some(active) if active == grid => true,
+            Some((active_n, _)) if grid.0 > active_n => {
+                self.active_grid = Some(grid);
+                self.frame_history.clear();
+                self.baseline_motion = 0.0;
+                self.baseline_frames = 0;
+                true
+            }
+            Some(_) => false,
         }
     }
 
@@ -981,6 +1121,13 @@ struct AppStateInner {
     last_tracker_instant: Option<std::time::Instant>,
     /// Attention-weighted multi-node CSI fusion engine.
     multistatic_fuser: MultistaticFuser,
+    /// Governed trust-path bridge (ADR-135..146): runs the same live frames
+    /// through the privacy/provenance/witness control plane. Does not alter
+    /// person-count behavior; its trust state (witness, effective class,
+    /// recalibration flag, error count) is recorded on the bridge itself and
+    /// exposed via `GET /api/v1/status`, and a Restricted-class cycle strips
+    /// per-node raw amplitudes from the live publish (review finding 1).
+    engine_bridge: engine_bridge::EngineBridge,
     /// SVD-based room field model for eigenvalue person counting (None until calibration).
     field_model: Option<FieldModel>,
     // ── ADR-044 §5.2: adaptive rolling-p95 normalization ─────────────────────
@@ -998,6 +1145,14 @@ struct AppStateInner {
     pub(crate) dedup_factor: f64,
     /// Data directory for persisting runtime config (parent of `firmware_dir`).
     pub(crate) data_dir: std::path::PathBuf,
+    /// ADR-262 P3: the live RuField surface. Holds the dedicated ed25519 signer
+    /// + a bounded ring of recent signed `FieldEvent`s + the `/ws/field`
+    /// broadcast topic. The governed sensing cycle calls `emit()` on it once per
+    /// cycle (joining `SensingUpdate` features/classification/signal_field with
+    /// the `TrustedOutput` trust class); `/api/field` + `/ws/field` read it.
+    /// Held behind its own `Arc<RwLock<_>>` so the additive field router can
+    /// take it as state without re-locking `AppStateInner`.
+    field_surface: rufield_surface::FieldState,
 }
 
 /// If no ESP32 frame arrives within this duration, source reverts to offline.
@@ -1107,7 +1262,7 @@ fn parse_esp32_vitals(buf: &[u8]) -> Option<Esp32VitalsPacket> {
     })
 }
 
-// ── ADR-040: WASM Output Packet (magic 0xC511_0004) ───────────────────────────
+// ── ADR-040: WASM Output Packet (magic 0xC511_0007 — reassigned per #928) ─────
 
 /// Single WASM event (type + value).
 #[derive(Debug, Clone, Serialize)]
@@ -1124,13 +1279,14 @@ struct WasmOutputPacket {
     events: Vec<WasmEvent>,
 }
 
-/// Parse a WASM output packet (magic 0xC511_0004).
+/// Parse a WASM output packet (magic 0xC511_0007 — reassigned per issue #928;
+/// the original 0xC511_0004 was a collision with ADR-063 fused vitals).
 fn parse_wasm_output(buf: &[u8]) -> Option<WasmOutputPacket> {
     if buf.len() < 8 {
         return None;
     }
     let magic = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
-    if magic != 0xC511_0004 {
+    if magic != 0xC511_0007 {
         return None;
     }
 
@@ -1162,6 +1318,187 @@ fn parse_wasm_output(buf: &[u8]) -> Option<WasmOutputPacket> {
     })
 }
 
+// ── ADR-063: Edge Fused Vitals Packet (magic 0xC511_0004) ─────────────────────
+//
+// 48-byte packed struct emitted by the ESP32-C6 + MR60BHA2 mmWave config when
+// `mmwave_sensor_get_state().detected` is true. Byte layout from
+// `firmware/esp32-csi-node/main/edge_processing.h` line 129 — kept in lockstep
+// with the firmware's `_Static_assert(sizeof(edge_fused_vitals_pkt_t) == 48)`.
+// Issue #928 surfaced that this magic was being parsed as WASM output and the
+// fused vitals were silently lost. Adding the proper parser here.
+
+#[derive(Debug, Clone, Serialize)]
+struct EdgeFusedVitalsPacket {
+    node_id: u8,
+    /// Bit0=presence, Bit1=fall, Bit2=motion, Bit3=mmwave_present.
+    flags: u8,
+    /// Fused breathing rate in BPM (firmware sends BPM*100; we scale here).
+    breathing_rate_bpm: f32,
+    /// Fused heartrate in BPM (firmware sends BPM*10000; we scale here).
+    heartrate_bpm: f32,
+    rssi: i8,
+    n_persons: u8,
+    /// `mmwave_type_t` enum value from firmware.
+    mmwave_type: u8,
+    /// 0-100 fusion quality score.
+    fusion_confidence: u8,
+    motion_energy: f32,
+    presence_score: f32,
+    timestamp_ms: u32,
+    /// Raw mmWave heart rate (BPM).
+    mmwave_hr_bpm: f32,
+    /// Raw mmWave breathing rate (BPM).
+    mmwave_br_bpm: f32,
+    /// Distance to nearest target (cm).
+    mmwave_distance_cm: f32,
+    /// Target count from mmWave.
+    mmwave_targets: u8,
+    /// mmWave signal quality 0-100.
+    mmwave_confidence: u8,
+}
+
+/// Parse an ADR-063 edge fused vitals packet (magic 0xC511_0004, 48 bytes).
+fn parse_edge_fused_vitals(buf: &[u8]) -> Option<EdgeFusedVitalsPacket> {
+    if buf.len() < 48 {
+        return None;
+    }
+    let magic = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+    if magic != 0xC511_0004 {
+        return None;
+    }
+
+    let node_id = buf[4];
+    let flags = buf[5];
+    let breathing_raw = u16::from_le_bytes([buf[6], buf[7]]);
+    let heartrate_raw = u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]);
+    let rssi = buf[12] as i8;
+    let n_persons = buf[13];
+    let mmwave_type = buf[14];
+    let fusion_confidence = buf[15];
+    let motion_energy = f32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]);
+    let presence_score = f32::from_le_bytes([buf[20], buf[21], buf[22], buf[23]]);
+    let timestamp_ms = u32::from_le_bytes([buf[24], buf[25], buf[26], buf[27]]);
+    let mmwave_hr_bpm = f32::from_le_bytes([buf[28], buf[29], buf[30], buf[31]]);
+    let mmwave_br_bpm = f32::from_le_bytes([buf[32], buf[33], buf[34], buf[35]]);
+    let mmwave_distance_cm = f32::from_le_bytes([buf[36], buf[37], buf[38], buf[39]]);
+    let mmwave_targets = buf[40];
+    let mmwave_confidence = buf[41];
+    // buf[42..48] are firmware reserved fields (reserved3 u16 + reserved4 u32).
+
+    Some(EdgeFusedVitalsPacket {
+        node_id,
+        flags,
+        breathing_rate_bpm: breathing_raw as f32 / 100.0,
+        heartrate_bpm: heartrate_raw as f32 / 10000.0,
+        rssi,
+        n_persons,
+        mmwave_type,
+        fusion_confidence,
+        motion_energy,
+        presence_score,
+        timestamp_ms,
+        mmwave_hr_bpm,
+        mmwave_br_bpm,
+        mmwave_distance_cm,
+        mmwave_targets,
+        mmwave_confidence,
+    })
+}
+
+#[cfg(test)]
+mod issue_928_magic_collision_tests {
+    //! Issue #928 — `0xC511_0004` was being parsed as WASM output, eating the
+    //! C6+mmWave fused-vitals packets. After this fix, `0xC511_0004` routes to
+    //! `parse_edge_fused_vitals` and WASM output owns the freshly-allocated
+    //! `0xC511_0007` slot. Tests guard both halves of the swap.
+    use super::*;
+
+    /// Build a 48-byte synthetic fused-vitals packet matching the firmware's
+    /// `edge_fused_vitals_pkt_t` layout from `edge_processing.h:129`.
+    fn build_fused_vitals_packet() -> Vec<u8> {
+        let mut buf = vec![0u8; 48];
+        buf[0..4].copy_from_slice(&0xC511_0004u32.to_le_bytes());
+        buf[4] = 9;                                            // node_id
+        buf[5] = 0b0000_1001;                                   // flags: presence | mmwave_present
+        buf[6..8].copy_from_slice(&1600u16.to_le_bytes());      // breathing 16.00 BPM
+        buf[8..12].copy_from_slice(&720_000u32.to_le_bytes());  // heartrate 72.0 BPM
+        buf[12] = (-55i8) as u8;                                // rssi
+        buf[13] = 1;                                            // n_persons
+        buf[14] = 2;                                            // mmwave_type
+        buf[15] = 85;                                           // fusion_confidence
+        buf[16..20].copy_from_slice(&0.42f32.to_le_bytes());    // motion_energy
+        buf[20..24].copy_from_slice(&0.95f32.to_le_bytes());    // presence_score
+        buf[24..28].copy_from_slice(&1_234_567u32.to_le_bytes()); // timestamp_ms
+        buf[28..32].copy_from_slice(&71.5f32.to_le_bytes());    // mmwave_hr_bpm
+        buf[32..36].copy_from_slice(&15.8f32.to_le_bytes());    // mmwave_br_bpm
+        buf[36..40].copy_from_slice(&182.0f32.to_le_bytes());   // mmwave_distance_cm
+        buf[40] = 1;                                            // mmwave_targets
+        buf[41] = 90;                                           // mmwave_confidence
+        // bytes 42..48 — firmware reserved fields, left as zero
+        buf
+    }
+
+    #[test]
+    fn parse_edge_fused_vitals_extracts_fields_correctly() {
+        let buf = build_fused_vitals_packet();
+        let pkt = parse_edge_fused_vitals(&buf).expect("must parse a well-formed packet");
+        assert_eq!(pkt.node_id, 9);
+        assert_eq!(pkt.flags, 0b0000_1001);
+        assert!((pkt.breathing_rate_bpm - 16.0).abs() < 1e-3, "breathing scale 100");
+        assert!((pkt.heartrate_bpm - 72.0).abs() < 1e-3, "heartrate scale 10000");
+        assert_eq!(pkt.rssi, -55);
+        assert_eq!(pkt.n_persons, 1);
+        assert_eq!(pkt.mmwave_type, 2);
+        assert_eq!(pkt.fusion_confidence, 85);
+        assert!((pkt.motion_energy - 0.42).abs() < 1e-6);
+        assert!((pkt.presence_score - 0.95).abs() < 1e-6);
+        assert_eq!(pkt.timestamp_ms, 1_234_567);
+        assert!((pkt.mmwave_hr_bpm - 71.5).abs() < 1e-6);
+        assert!((pkt.mmwave_br_bpm - 15.8).abs() < 1e-3);
+        assert!((pkt.mmwave_distance_cm - 182.0).abs() < 1e-6);
+        assert_eq!(pkt.mmwave_targets, 1);
+        assert_eq!(pkt.mmwave_confidence, 90);
+    }
+
+    #[test]
+    fn parse_edge_fused_vitals_rejects_short_buffer() {
+        let buf = build_fused_vitals_packet();
+        // Truncate to 47 bytes — one short of the 48-byte minimum.
+        assert!(parse_edge_fused_vitals(&buf[..47]).is_none());
+    }
+
+    #[test]
+    fn parse_edge_fused_vitals_rejects_wrong_magic() {
+        let mut buf = build_fused_vitals_packet();
+        buf[0..4].copy_from_slice(&0xC511_0007u32.to_le_bytes()); // WASM magic, not fused
+        assert!(parse_edge_fused_vitals(&buf).is_none());
+    }
+
+    #[test]
+    fn parse_wasm_output_rejects_legacy_0004_magic() {
+        // The old WASM magic collided with fused vitals — must no longer be
+        // accepted. A real fused-vitals packet starts with 0xC511_0004 and
+        // would have been misparsed before this fix.
+        let buf = build_fused_vitals_packet();
+        assert!(parse_wasm_output(&buf).is_none(),
+                "issue #928: WASM parser must NOT accept 0xC511_0004");
+    }
+
+    #[test]
+    fn parse_wasm_output_accepts_new_0007_magic() {
+        // Build a tiny well-formed WASM output packet on the new magic.
+        let mut buf = vec![0u8; 8];
+        buf[0..4].copy_from_slice(&0xC511_0007u32.to_le_bytes());
+        buf[4] = 5;                                          // node_id
+        buf[5] = 1;                                          // module_id
+        buf[6..8].copy_from_slice(&0u16.to_le_bytes());      // event_count = 0
+        let pkt = parse_wasm_output(&buf).expect("0xC511_0007 must parse");
+        assert_eq!(pkt.node_id, 5);
+        assert_eq!(pkt.module_id, 1);
+        assert!(pkt.events.is_empty());
+    }
+}
+
 // ── ESP32 UDP frame parser ───────────────────────────────────────────────────
 
 fn parse_esp32_frame(buf: &[u8]) -> Option<Esp32Frame> {
@@ -1185,19 +1522,25 @@ fn parse_esp32_frame(buf: &[u8]) -> Option<Esp32Frame> {
     //   [17]     noise_floor (i8)
     //   [18..19] reserved
     //   [20..]   I/Q data
+    // Issue #1005: until 2026-06 this code read n_subcarriers from byte 6
+    // alone (an ESP32-C6 HE-SU frame's 256 = 0x0100 LE decoded as 0 — the
+    // frame parsed with zero subcarriers) and read sequence/rssi/noise at
+    // stale offsets 10/14/15. Offsets below match the comment (and firmware).
     let node_id = buf[4];
     let n_antennas = buf[5];
-    let n_subcarriers = buf[6];
-    let freq_mhz = u16::from_le_bytes([buf[8], buf[9]]);
-    let sequence = u32::from_le_bytes([buf[10], buf[11], buf[12], buf[13]]);
-    let rssi_raw = buf[14] as i8;
+    let n_subcarriers = u16::from_le_bytes([buf[6], buf[7]]);
+    let freq_mhz =
+        u16::try_from(u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]])).unwrap_or(0);
+    let sequence = u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]);
+    let rssi_raw = buf[16] as i8;
     // Fix RSSI sign: ensure it's always negative (dBm convention).
     let rssi = if rssi_raw > 0 {
         rssi_raw.saturating_neg()
     } else {
         rssi_raw
     };
-    let noise_floor = buf[15] as i8;
+    let noise_floor = buf[17] as i8;
+    let ppdu_type = wifi_densepose_hardware::PpduType::from_byte(buf[18]);
 
     let iq_start = 20;
     let n_pairs = n_antennas as usize * n_subcarriers as usize;
@@ -1226,9 +1569,69 @@ fn parse_esp32_frame(buf: &[u8]) -> Option<Esp32Frame> {
         sequence,
         rssi,
         noise_floor,
+        ppdu_type,
         amplitudes,
         phases,
     })
+}
+
+#[cfg(test)]
+mod issue_1009_n_subcarriers_u16_tests {
+    //! Issue #1009 §1c — `parse_esp32_frame` must read `n_subcarriers` as a
+    //! u16 LE at bytes 6..7 (ADR-018 wire format), not a single byte at 6.
+    //!
+    //! An ESP32-C6 HE20 frame carries 256 subcarriers → byte 6 = 0x00,
+    //! byte 7 = 0x01. The pre-#1005 single-byte read decoded this as 0
+    //! subcarriers, silently dropping every real HE20 frame. This was the same
+    //! truncation as the CLI parser (`wifi-densepose-cli` calibrate.rs); this
+    //! module pins that the sensing-server template stays u16-correct.
+    use super::*;
+
+    /// Build an ADR-018 CSI frame (magic 0xC511_0001, 20-byte header).
+    fn build_csi_frame(n_subcarriers: u16) -> Vec<u8> {
+        let mut buf = vec![0u8; 20 + n_subcarriers as usize * 2];
+        buf[0..4].copy_from_slice(&0xC511_0001u32.to_le_bytes());
+        buf[4] = 7; // node_id
+        buf[5] = 1; // n_antennas
+        buf[6..8].copy_from_slice(&n_subcarriers.to_le_bytes()); // u16 LE
+        buf[8..12].copy_from_slice(&5180u32.to_le_bytes()); // freq_mhz (5 GHz HE)
+        buf[12..16].copy_from_slice(&42u32.to_le_bytes()); // sequence
+        buf[16] = (-40i8) as u8; // rssi
+        buf[17] = (-90i8) as u8; // noise_floor
+        buf[18] = 0; // ppdu_type
+        buf[19] = 0;
+        for k in 0..n_subcarriers as usize {
+            buf[20 + k * 2] = (5 + (k % 40) as i8) as u8; // i
+            buf[20 + k * 2 + 1] = (k % 30) as u8; // q
+        }
+        buf
+    }
+
+    #[test]
+    fn parse_esp32_frame_he20_256_bins_not_truncated() {
+        // 256 = 0x0100 LE: byte6 = 0x00, byte7 = 0x01. A u8 read of byte 6
+        // would see 0 subcarriers; a u16 read sees 256.
+        let buf = build_csi_frame(256);
+        assert_eq!(buf.len(), 532, "256-bin frame wire size = 20 + 256*2");
+        let frame = parse_esp32_frame(&buf).expect("256-bin HE20 frame must parse");
+        assert_eq!(
+            frame.n_subcarriers, 256,
+            "n_subcarriers must read as u16 (256), not the byte-6-only 0"
+        );
+        assert_eq!(frame.amplitudes.len(), 256);
+        assert_eq!(frame.node_id, 7);
+        assert_eq!(frame.rssi, -40);
+        assert_eq!(frame.sequence, 42);
+    }
+
+    #[test]
+    fn parse_esp32_frame_ht20_64_bins_still_parses() {
+        // Regression guard for the common single-byte (≤255) case.
+        let buf = build_csi_frame(64);
+        let frame = parse_esp32_frame(&buf).expect("64-bin HT20 frame must parse");
+        assert_eq!(frame.n_subcarriers, 64);
+        assert_eq!(frame.amplitudes.len(), 64);
+    }
 }
 
 // ── Signal field generation ──────────────────────────────────────────────────
@@ -2107,11 +2510,12 @@ async fn windows_wifi_task(state: SharedState, tick_ms: u64) {
             magic: 0xC511_0001,
             node_id: 0,
             n_antennas: 1,
-            n_subcarriers: obs_count.min(255) as u8,
+            n_subcarriers: obs_count.min(u16::MAX as usize) as u16,
             freq_mhz: 2437,
             sequence: seq,
             rssi: first_rssi.clamp(-128.0, 127.0) as i8,
             noise_floor: -90,
+            ppdu_type: wifi_densepose_hardware::PpduType::HtLegacy,
             amplitudes: multi_ap_frame.amplitudes.clone(),
             phases: multi_ap_frame.phases.clone(),
         };
@@ -2247,6 +2651,8 @@ async fn windows_wifi_task(state: SharedState, tick_ms: u64) {
         if !tracked.is_empty() {
             update.persons = Some(tracked);
         }
+        // #1050: attach real signal_field-peak positions to each person.
+        attach_field_positions(&mut update);
 
         if let Ok(json) = serde_json::to_string(&update) {
             let _ = s.tx.send(json);
@@ -2293,6 +2699,7 @@ async fn windows_wifi_fallback_tick(state: &SharedState, seq: u32) {
         sequence: seq,
         rssi: rssi_dbm as i8,
         noise_floor: -90,
+        ppdu_type: wifi_densepose_hardware::PpduType::HtLegacy,
         amplitudes: vec![signal_pct],
         phases: vec![0.0],
     };
@@ -2399,6 +2806,8 @@ async fn windows_wifi_fallback_tick(state: &SharedState, seq: u32) {
     if !tracked.is_empty() {
         update.persons = Some(tracked);
     }
+    // #1050: attach real signal_field-peak positions to each person.
+    attach_field_positions(&mut update);
 
     if let Ok(json) = serde_json::to_string(&update) {
         let _ = s.tx.send(json);
@@ -2426,13 +2835,214 @@ async fn probe_esp32(port: u16) -> bool {
     let addr = format!("0.0.0.0:{port}");
     match UdpSocket::bind(&addr).await {
         Ok(sock) => {
-            let mut buf = [0u8; 256];
+            // 2048 covers the largest ADR-018 frame: an ESP32-C6 HE-SU
+            // capture is 532 bytes (issue #1005); on Windows a too-small
+            // recv buffer makes recv_from error on the oversized datagram,
+            // which made this probe fail against HE-only streams.
+            let mut buf = [0u8; 2048];
             match tokio::time::timeout(Duration::from_secs(2), sock.recv_from(&mut buf)).await {
                 Ok(Ok((len, _))) => parse_esp32_frame(&buf[..len]).is_some(),
                 _ => false,
             }
         }
         Err(_) => false,
+    }
+}
+
+// ── Source resolution state machine (issue #1004) ────────────────────────────
+
+/// What background tasks to start, derived from `--source` and the boot probes.
+///
+/// Issue #1004: a one-shot startup probe latched `auto` to `simulate` forever
+/// when no CSI happened to be flowing at boot (the normal case — the firmware
+/// and the server race to come up). The UDP :5005 receiver was then never
+/// bound, so real CSI arriving seconds later was silently ignored and the
+/// server served simulated poses for the rest of the process. The UI looked
+/// live; the data was fake. This is the exact "where's the real data?" failure
+/// class the project fights.
+///
+/// The robust resolution: in `auto` mode **always bind the UDP receiver**
+/// regardless of the boot probe. If no real source is up yet, serve simulated
+/// data *and* keep the UDP receiver listening; the receiver promotes
+/// `source` → `esp32` the instant the first real frame lands (see
+/// `udp_receiver_task`, which sets `s.source = "esp32"`), mirroring the inverse
+/// `esp32 → esp32:offline` reversion already in `effective_source()`.
+///
+/// Explicit `--source simulated` is a hard override for offline demos: it does
+/// NOT bind UDP, so no promotion ever happens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SourcePlan {
+    /// The `AppStateInner.source` value to start with.
+    initial_source: String,
+    /// Bind the UDP :5005 receiver (and thus allow simulate→esp32 promotion).
+    bind_udp: bool,
+    /// Run the simulated-data generator (serves poses until a real frame arrives).
+    run_simulator: bool,
+    /// Run the Windows WiFi capture task.
+    run_wifi: bool,
+}
+
+/// Pure decision function — fully unit-testable without binding sockets.
+///
+/// `requested` is the normalized `--source` value. `esp32_detected` /
+/// `wifi_detected` are the boot-probe results (only consulted in `auto` mode).
+/// Returns `None` for an unknown source that names neither a real source nor a
+/// simulate alias (the caller maps that to its own pass-through/exit policy).
+fn plan_source(requested: &str, esp32_detected: bool, wifi_detected: bool) -> SourcePlan {
+    match requested {
+        "auto" => {
+            if esp32_detected {
+                // Real CSI already flowing — bind UDP, no simulator.
+                SourcePlan {
+                    initial_source: "esp32".to_string(),
+                    bind_udp: true,
+                    run_simulator: false,
+                    run_wifi: false,
+                }
+            } else if wifi_detected {
+                SourcePlan {
+                    initial_source: "wifi".to_string(),
+                    bind_udp: false,
+                    run_simulator: false,
+                    run_wifi: true,
+                }
+            } else {
+                // No real source *yet*. Serve simulated data, but ALSO bind UDP
+                // so the receiver can promote to esp32 when the first real
+                // frame arrives (issue #1004). Never latch on simulate.
+                SourcePlan {
+                    initial_source: "simulated".to_string(),
+                    bind_udp: true,
+                    run_simulator: true,
+                    run_wifi: false,
+                }
+            }
+        }
+        // Explicit overrides. "simulate" is a back-compat alias for "simulated".
+        "simulate" | "simulated" => SourcePlan {
+            initial_source: "simulated".to_string(),
+            bind_udp: false, // hard override: offline demo, no live promotion
+            run_simulator: true,
+            run_wifi: false,
+        },
+        "esp32" => SourcePlan {
+            initial_source: "esp32".to_string(),
+            bind_udp: true,
+            run_simulator: false,
+            run_wifi: false,
+        },
+        "wifi" => SourcePlan {
+            initial_source: "wifi".to_string(),
+            bind_udp: false,
+            run_simulator: false,
+            run_wifi: true,
+        },
+        // Unknown source — preserve it verbatim, no tasks (caller's policy).
+        other => SourcePlan {
+            initial_source: other.to_string(),
+            bind_udp: false,
+            run_simulator: false,
+            run_wifi: false,
+        },
+    }
+}
+
+#[cfg(test)]
+mod issue_1004_source_plan_tests {
+    //! Issue #1004 — `--source auto` must NOT latch on `simulate` forever.
+    //!
+    //! Old behavior: a one-shot boot probe resolved the source once. With no CSI
+    //! flowing at boot (the normal case), the server either latched on simulate
+    //! (never binding UDP :5005, so later real CSI was silently ignored) or
+    //! hard-exited (#937), never picking up CSI that started after launch.
+    //!
+    //! New behavior (`plan_source`): in `auto` the UDP receiver is ALWAYS bound,
+    //! simulated data is served only until the first real frame, then
+    //! `udp_receiver_task` promotes `source` → "esp32". These tests pin the
+    //! resolution/promotion state machine directly (no sockets bound).
+    use super::*;
+
+    // FAILS ON OLD CODE: the old `auto`-with-no-source path bound no UDP
+    // receiver (it spawned only `simulated_data_task`, or exited). This asserts
+    // UDP IS bound even when the boot probe finds no source.
+    #[test]
+    fn auto_with_no_boot_source_still_binds_udp_and_simulates() {
+        let plan = plan_source("auto", false, false);
+        assert!(plan.bind_udp, "auto must bind UDP :5005 even with no boot source (#1004)");
+        assert!(plan.run_simulator, "auto must serve simulated data until real CSI arrives");
+        assert!(!plan.run_wifi);
+        assert_eq!(plan.initial_source, "simulated");
+    }
+
+    #[test]
+    fn auto_with_esp32_detected_binds_udp_no_simulator() {
+        let plan = plan_source("auto", true, false);
+        assert!(plan.bind_udp);
+        assert!(!plan.run_simulator, "real CSI present → no synthetic frames");
+        assert_eq!(plan.initial_source, "esp32");
+    }
+
+    #[test]
+    fn auto_with_wifi_detected_runs_wifi_no_udp() {
+        let plan = plan_source("auto", false, true);
+        assert!(plan.run_wifi);
+        assert!(!plan.bind_udp);
+        assert!(!plan.run_simulator);
+        assert_eq!(plan.initial_source, "wifi");
+    }
+
+    // Explicit `--source simulated` is a hard offline override: it must NOT bind
+    // UDP (so it can never be promoted to live), distinguishing it from
+    // auto-mode simulate.
+    #[test]
+    fn explicit_simulated_is_offline_override_no_udp() {
+        for s in ["simulated", "simulate"] {
+            let plan = plan_source(s, false, false);
+            assert!(!plan.bind_udp, "{s}: explicit simulate must not bind UDP (offline demo)");
+            assert!(plan.run_simulator);
+            assert_eq!(plan.initial_source, "simulated");
+        }
+    }
+
+    #[test]
+    fn explicit_esp32_binds_udp() {
+        let plan = plan_source("esp32", false, false);
+        assert!(plan.bind_udp);
+        assert!(!plan.run_simulator);
+        assert_eq!(plan.initial_source, "esp32");
+    }
+
+    // Promotion check: the runtime promotes by setting `AppStateInner.source`
+    // to "esp32" on the first real frame; `effective_source()` then reports it
+    // (and reverts to "esp32:offline" after a 5 s gap). This asserts the
+    // promotion direction the simulator/receiver rely on, without binding a
+    // socket — it exercises the same `source` field the UDP task writes.
+    #[test]
+    fn effective_source_promotes_from_simulated_to_esp32_on_real_frame() {
+        // Start as the auto/simulate plan would: source = "simulated".
+        let mut src = "simulated".to_string();
+        // effective_source() logic for the simulate state: stays "simulated".
+        assert_eq!(promote_view(&src, None), "simulated");
+        // First real frame arrives → udp_receiver_task sets source = "esp32".
+        src = "esp32".to_string();
+        let fresh = Some(std::time::Duration::from_millis(10));
+        assert_eq!(promote_view(&src, fresh), "esp32", "fresh esp32 frame ⇒ live");
+        // After a >5 s gap it reverts to offline (inverse machinery, #1004).
+        let stale = Some(ESP32_OFFLINE_TIMEOUT + std::time::Duration::from_secs(1));
+        assert_eq!(promote_view(&src, stale), "esp32:offline");
+    }
+
+    /// Mirror of `AppStateInner::effective_source` over just (source, age) so the
+    /// promotion/reversion logic is testable without constructing full state.
+    fn promote_view(source: &str, last_frame_age: Option<std::time::Duration>) -> String {
+        if source == "esp32" {
+            if let Some(age) = last_frame_age {
+                if age > ESP32_OFFLINE_TIMEOUT {
+                    return "esp32:offline".to_string();
+                }
+            }
+        }
+        source.to_string()
     }
 }
 
@@ -2455,11 +3065,12 @@ fn generate_simulated_frame(tick: u64) -> Esp32Frame {
         magic: 0xC511_0001,
         node_id: 1,
         n_antennas: 1,
-        n_subcarriers: n_sub as u8,
+        n_subcarriers: n_sub as u16,
         freq_mhz: 2437,
         sequence: tick as u32,
         rssi: (-40.0 + 5.0 * (t * 0.2).sin()) as i8,
         noise_floor: -90,
+        ppdu_type: wifi_densepose_hardware::PpduType::HtLegacy,
         amplitudes,
         phases,
     }
@@ -2635,12 +3246,21 @@ async fn handle_ws_pose_client(mut socket: WebSocket, state: SharedState) {
                                                 x: kp[0], y: kp[1], z: kp[2], confidence: kp[3],
                                             })
                                             .collect();
+                                        let [nx, _ny, nz] = sensing.signal_field.grid_size;
+                                        let peak = field_localize::extract_peaks(
+                                            &sensing.signal_field.values, nx, nz, 1, 3.0,
+                                        ).into_iter().next();
                                         vec![PersonDetection {
                                             id: 1,
                                             confidence: sensing.classification.confidence,
                                             bbox: BoundingBox { x: 260.0, y: 150.0, width: 120.0, height: 220.0 },
                                             keypoints,
                                             zone: "zone_1".into(),
+                                            position: peak.map_or([0.0, 0.0, 0.0], |p| p.position),
+                                            motion_score: field_localize::motion_score_from_power(
+                                                sensing.features.motion_band_power,
+                                            ),
+                                            pose: sensing.posture.clone(),
                                         }]
                                     }).unwrap_or_else(|| {
                                         // Prefer tracked persons from broadcast if available
@@ -3017,6 +3637,80 @@ fn estimate_persons_from_correlation(frame_history: &VecDeque<Vec<f64>>) -> usiz
     }
 }
 
+/// Map a DynamicMinCut occupancy estimate (`estimate_persons_from_correlation`,
+/// 0–3) onto a target score whose steady state round-trips back through
+/// `score_to_person_count` to the *same* count (issue #803).
+///
+/// The CSI path EMA-smooths this target and re-discretises it via
+/// `score_to_person_count`. The previous `corr_persons / 3.0` mapping put a
+/// 2-person estimate at 0.667 — just under the 0.70 up-threshold — so the
+/// smoothed score could never climb past 1, pinning the per-node count to 1
+/// even when the min-cut cleanly separated two people. These anchors sit
+/// inside the hysteresis bands so a *sustained* estimate converges to the
+/// matching count while transient noise stays gated by the EMA:
+///   1 → 0.40  (below the 0.55 down-threshold)
+///   2 → 0.74  (between the 0.70 up- and 0.78 down-thresholds → reachable
+///              both climbing from 1 and falling from 3)
+///   3 → 0.96  (above the 0.92 up-threshold)
+fn corr_persons_to_score(corr_persons: usize) -> f64 {
+    match corr_persons {
+        0 => 0.20,
+        1 => 0.40,
+        2 => 0.74,
+        _ => 0.96,
+    }
+}
+
+#[cfg(test)]
+mod corr_persons_round_trip_tests {
+    //! Issue #803 — a sustained min-cut occupancy estimate must survive the
+    //! CSI path's EMA + `score_to_person_count` re-discretisation instead of
+    //! collapsing back to 1.
+    use super::*;
+
+    /// Replays the CSI-loop smoothing (`score = score*0.92 + target*0.08`)
+    /// followed by `score_to_person_count`, exactly as the per-node path does,
+    /// and returns the steady-state reported count.
+    fn converge(corr_persons: usize) -> usize {
+        let mut score = 0.0f64;
+        let mut count = 1usize;
+        for _ in 0..400 {
+            let target = corr_persons_to_score(corr_persons);
+            score = score * 0.92 + target * 0.08;
+            count = score_to_person_count(score, count);
+        }
+        count
+    }
+
+    #[test]
+    fn sustained_one_person_estimate_reports_one() {
+        assert_eq!(converge(1), 1);
+    }
+
+    #[test]
+    fn sustained_two_person_estimate_reports_two() {
+        assert_eq!(converge(2), 2, "#803: min-cut=2 must round-trip to count 2");
+    }
+
+    #[test]
+    fn sustained_three_person_estimate_reports_three() {
+        assert_eq!(converge(3), 3);
+    }
+
+    #[test]
+    fn old_div3_mapping_would_pin_two_people_to_one() {
+        // Regression-documents the bug: 2/3 = 0.667 never crosses the 0.70
+        // up-threshold, so the old mapping reported 1 for two people.
+        let mut score = 0.0f64;
+        let mut count = 1usize;
+        for _ in 0..400 {
+            score = score * 0.92 + (2.0 / 3.0) * 0.08;
+            count = score_to_person_count(score, count);
+        }
+        assert_eq!(count, 1, "old corr_persons/3.0 mapping was the #803 bug");
+    }
+}
+
 /// Convert smoothed person score to discrete count with hysteresis.
 ///
 /// Uses asymmetric thresholds: higher threshold to *add* a person, lower to
@@ -3059,6 +3753,92 @@ fn score_to_person_count(smoothed_score: f64, prev_count: usize) -> usize {
                 3 // hold
             }
         }
+    }
+}
+
+/// Combine the activity-score-derived aggregate count with the count-aware
+/// per-node estimates (issue #803).
+///
+/// The aggregate `s.person_count()` is driven by `smoothed_person_score`, an
+/// EMA-smoothed *activity* score (amplitude variance / motion / spectral
+/// energy). That score saturates near a single occupant — one moving person
+/// can max it out — so it cannot discriminate occupancy *count*, leaving the
+/// reported value pinned at 1. Meanwhile the per-node paths already derive a
+/// genuinely count-aware estimate (ESP32 firmware `n_persons`, or the
+/// DynamicMinCut `corr_persons`) and stash it in `NodeState::prev_person_count`
+/// — but that value was being discarded by the aggregator.
+///
+/// This takes the larger of the two. It can only ever *raise* the count when a
+/// node has positively estimated more occupants, so it never regresses the
+/// single-person case (a lone occupant yields `node_max == 1`).
+fn aggregate_person_count(
+    activity_count: usize,
+    node_states: &std::collections::HashMap<u8, NodeState>,
+) -> usize {
+    let node_max = node_states
+        .values()
+        .map(|n| n.prev_person_count)
+        .max()
+        .unwrap_or(0);
+    activity_count.max(node_max)
+}
+
+#[cfg(test)]
+mod aggregate_person_count_tests {
+    //! Issue #803 — the saturating activity score must not clamp a
+    //! count-aware per-node estimate back down to 1.
+    use super::*;
+    use std::collections::HashMap;
+
+    fn node_with_count(c: usize) -> NodeState {
+        let mut n = NodeState::new();
+        n.prev_person_count = c;
+        n
+    }
+
+    #[test]
+    fn empty_nodes_fall_back_to_activity_count() {
+        let nodes: HashMap<u8, NodeState> = HashMap::new();
+        assert_eq!(aggregate_person_count(1, &nodes), 1);
+        assert_eq!(aggregate_person_count(0, &nodes), 0);
+    }
+
+    #[test]
+    fn node_estimate_raises_a_saturated_activity_count() {
+        // The activity score saturates at 1, but a node positively reports 2.
+        let mut nodes = HashMap::new();
+        nodes.insert(1u8, node_with_count(2));
+        assert_eq!(
+            aggregate_person_count(1, &nodes),
+            2,
+            "a node reporting 2 must not be discarded by the activity count"
+        );
+    }
+
+    #[test]
+    fn activity_count_wins_when_higher_than_nodes() {
+        // Never *lower* a confident activity-derived count to a stale node value.
+        let mut nodes = HashMap::new();
+        nodes.insert(1u8, node_with_count(1));
+        assert_eq!(aggregate_person_count(3, &nodes), 3);
+    }
+
+    #[test]
+    fn takes_max_across_multiple_nodes() {
+        let mut nodes = HashMap::new();
+        nodes.insert(1u8, node_with_count(1));
+        nodes.insert(2u8, node_with_count(3));
+        nodes.insert(3u8, node_with_count(2));
+        assert_eq!(aggregate_person_count(1, &nodes), 3);
+    }
+
+    #[test]
+    fn single_occupant_is_never_inflated() {
+        // Regression guard: a lone occupant (every node sees 1) stays 1.
+        let mut nodes = HashMap::new();
+        nodes.insert(1u8, node_with_count(1));
+        nodes.insert(2u8, node_with_count(1));
+        assert_eq!(aggregate_person_count(1, &nodes), 1);
     }
 }
 
@@ -3259,6 +4039,127 @@ fn derive_single_person_pose(
             height: (max_y - min_y).max(160.0),
         },
         zone: format!("zone_{}", person_idx + 1),
+        // Position/motion_score/pose are attached from the real signal_field
+        // peaks by `attach_field_positions` after the tracker step (#1050);
+        // default here so the synthetic-skeleton geometry stays unchanged.
+        position: [0.0, 0.0, 0.0],
+        motion_score: 0.0,
+        pose: None,
+    }
+}
+
+/// Attach real, field-derived per-person world positions to a `SensingUpdate`'s
+/// `persons` (issue #1050).
+///
+/// For each detected person we read a strongest-peak position out of the frame's
+/// real `signal_field` (the same grid the Observatory already renders) and map
+/// it to room-world coordinates via `field_localize::cell_to_world`. `motion_score`
+/// is passed through from the measured `motion_band_power`; `pose` is taken from
+/// the real aggregate `posture` estimate when present, else left `None` (never
+/// fabricated). Persons beyond the number of resolvable field peaks fall back to
+/// the strongest peak so they remain co-located with real energy rather than at
+/// a fake origin; if the field has no peak above threshold the position stays at
+/// `[0,0,0]` and `motion_score` still reflects real motion power.
+/// ADR-262 P3: emit one signed RuField `FieldEvent` for this sensing cycle.
+///
+/// Joins the cycle's [`SensingUpdate`] (features / classification /
+/// signal_field) with the governed engine's trust state (`effective_class` /
+/// `demoted`, recorded on `engine_bridge` by `observe_cycle`) into a
+/// `SensingSnapshot`, then surfaces it via the P1 bridge on `/api/field` +
+/// `/ws/field`. The bridge maps privacy by information content and the surface
+/// applies the §10 network egress gate, so above-policy cycles never reach the
+/// wire.
+///
+/// **No phantom events:** an empty/no-presence cycle (`presence == false`)
+/// emits nothing — there is no person to describe, so no event is fabricated
+/// (ADR-262 §4 P3 / §6). Cycles before the governed engine has produced a trust
+/// class are likewise skipped (no class ⇒ nothing honest to stamp).
+///
+/// `identity_bound` is `false` on the live path: RuView's live cycle does not
+/// bind an enrolled identity to the surface yet (that is a per-room-calibration
+/// / AETHER concern, ADR-262 §8 Q4). This is conservative for egress — it only
+/// ever *lowers* a Derived cycle from P5 to P4, both of which are already held
+/// edge-local, so it cannot leak.
+fn emit_rufield_event(s: &AppStateInner, update: &SensingUpdate, node_id: u8) {
+    // No-presence ⇒ no phantom event.
+    if !update.classification.presence {
+        return;
+    }
+    // Need a governed trust class before we can honestly stamp privacy.
+    let Some(effective_class) = s.engine_bridge.effective_class() else {
+        return;
+    };
+
+    let timestamp_ns = if update.timestamp.is_finite() && update.timestamp > 0.0 {
+        (update.timestamp * 1_000_000_000.0) as u64
+    } else {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0)
+    };
+
+    let snap = rufield_surface::build_snapshot(
+        timestamp_ns,
+        format!("esp32_node_{node_id}"),
+        rufield_surface::SensingFeatures {
+            mean_rssi: update.features.mean_rssi,
+            variance: update.features.variance,
+            motion_band_power: update.features.motion_band_power,
+            breathing_band_power: update.features.breathing_band_power,
+            dominant_freq_hz: update.features.dominant_freq_hz,
+            change_points: update.features.change_points,
+            spectral_power: update.features.spectral_power,
+        },
+        rufield_surface::SensingClass {
+            motion_level: update.classification.motion_level.clone(),
+            presence: update.classification.presence,
+            confidence: update.classification.confidence,
+        },
+        Some(rufield_surface::SignalField {
+            grid_size: update.signal_field.grid_size,
+            values: update.signal_field.values.clone(),
+        }),
+        rufield_surface::ruview_class_from_bfld(effective_class),
+        s.engine_bridge.demoted(),
+        false, // identity_bound — see fn-doc (conservative, cannot leak).
+    );
+
+    // `field_surface` is its own Arc<RwLock<_>>; `try_write` is non-blocking and
+    // never deadlocks against the `s` guard (a different lock). The only other
+    // touchers are the read-only `/api/field` / `/ws/field` handlers, so
+    // contention is negligible; a rare miss just drops one cycle's event.
+    if let Ok(mut fs) = s.field_surface.try_write() {
+        fs.emit(&snap);
+    }
+}
+
+fn attach_field_positions(update: &mut SensingUpdate) {
+    let Some(persons) = update.persons.as_mut() else {
+        return;
+    };
+    if persons.is_empty() {
+        return;
+    }
+
+    let [nx, _ny, nz] = update.signal_field.grid_size;
+    let peaks = field_localize::extract_peaks(
+        &update.signal_field.values,
+        nx,
+        nz,
+        persons.len().max(1),
+        3.0,
+    );
+
+    let motion_score = field_localize::motion_score_from_power(update.features.motion_band_power);
+    let pose_label = update.posture.clone();
+
+    for (i, person) in persons.iter_mut().enumerate() {
+        if let Some(peak) = peaks.get(i).or_else(|| peaks.first()) {
+            person.position = peak.position;
+        }
+        person.motion_score = motion_score;
+        person.pose = pose_label.clone();
     }
 }
 
@@ -3385,11 +4286,31 @@ async fn health_live(State(state): State<SharedState>) -> Json<serde_json::Value
     }))
 }
 
+/// Lowercase hex of a 32-byte witness for JSON exposure.
+fn witness_hex(w: [u8; 32]) -> String {
+    use std::fmt::Write;
+    w.iter().fold(String::with_capacity(64), |mut acc, b| {
+        let _ = write!(acc, "{b:02x}");
+        acc
+    })
+}
+
 async fn health_ready(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
     Json(serde_json::json!({
         "status": "ready",
         "source": s.effective_source(),
+        // Governed trust-path state (ADR-135..146; review finding 1b): latest
+        // witness + privacy class + recalibration flag, and the engine error
+        // audit — previously write-only on AppState, now readable here.
+        "trust": {
+            "last_witness": s.engine_bridge.last_trust_witness().map(witness_hex),
+            "effective_class": s.engine_bridge.effective_class().map(|c| format!("{c:?}")),
+            "demoted": s.engine_bridge.demoted(),
+            "recalibration_recommended": s.engine_bridge.recalibration_recommended(),
+            "engine_error_count": s.engine_bridge.engine_error_count(),
+            "raw_outputs_suppressed": s.engine_bridge.suppress_raw_outputs(),
+        },
     }))
 }
 
@@ -3574,7 +4495,7 @@ async fn delete_model(
     State(state): State<SharedState>,
     Path(id): Path<String>,
 ) -> Json<serde_json::Value> {
-    // ADR-050: Sanitize path to prevent directory traversal
+    // ADR-166: Sanitize path to prevent directory traversal
     let safe_id = std::path::Path::new(&id)
         .file_name()
         .and_then(|f| f.to_str())
@@ -3585,10 +4506,9 @@ async fn delete_model(
     let path = effective_models_dir().join(format!("{}.rvf", safe_id));
     if path.exists() {
         if let Err(e) = std::fs::remove_file(&path) {
-            warn!("Failed to delete model file {:?}: {}", path, e);
-            return Json(
-                serde_json::json!({ "error": format!("delete failed: {e}"), "success": false }),
-            );
+            // ADR-080 #2: log the OS error (incl. path) server-side only; the
+            // client gets a generic body + correlation id, no leaked path.
+            return error_response::internal_error_json("model delete", e);
         }
         // If this was the active model, unload it
         let mut s = state.write().await;
@@ -3728,11 +4648,9 @@ async fn start_recording(
     let file = match std::fs::File::create(&rec_path) {
         Ok(f) => f,
         Err(e) => {
-            warn!("Failed to create recording file {:?}: {}", rec_path, e);
-            return Json(serde_json::json!({
-                "error": format!("cannot create file: {e}"),
-                "success": false,
-            }));
+            // ADR-080 #2: the OS error can carry the recordings path; log it
+            // server-side only and return a generic body + correlation id.
+            return error_response::internal_error_json("recording create", e);
         }
     };
 
@@ -3844,7 +4762,7 @@ async fn delete_recording(
     State(state): State<SharedState>,
     Path(id): Path<String>,
 ) -> Json<serde_json::Value> {
-    // ADR-050: Sanitize path to prevent directory traversal
+    // ADR-166: Sanitize path to prevent directory traversal
     let safe_id = std::path::Path::new(&id)
         .file_name()
         .and_then(|f| f.to_str())
@@ -3855,10 +4773,8 @@ async fn delete_recording(
     let path = PathBuf::from("data/recordings").join(format!("{}.jsonl", safe_id));
     if path.exists() {
         if let Err(e) = std::fs::remove_file(&path) {
-            warn!("Failed to delete recording {:?}: {}", path, e);
-            return Json(
-                serde_json::json!({ "error": format!("delete failed: {e}"), "success": false }),
-            );
+            // ADR-080 #2: log the OS error (incl. path) server-side only.
+            return error_response::internal_error_json("recording delete", e);
         }
         let mut s = state.write().await;
         s.recordings
@@ -4067,10 +4983,8 @@ async fn calibration_start(State(state): State<SharedState>) -> Json<serde_json:
                 "message": "Calibration started — keep room empty while frames accumulate.",
             }))
         }
-        Err(e) => Json(serde_json::json!({
-            "success": false,
-            "error": format!("{e}"),
-        })),
+        // ADR-080 #2: FieldModel init error chain stays server-side only.
+        Err(e) => error_response::internal_error_json("calibration start", e),
     }
 }
 
@@ -4090,10 +5004,8 @@ async fn calibration_stop(State(state): State<SharedState>) -> Json<serde_json::
                     "frame_count": fm.calibration_frame_count(),
                 }))
             }
-            Err(e) => Json(serde_json::json!({
-                "success": false,
-                "error": format!("{e}"),
-            })),
+            // ADR-080 #2: finalize error chain stays server-side only.
+            Err(e) => error_response::internal_error_json("calibration stop", e),
         }
     } else {
         Json(serde_json::json!({
@@ -4189,26 +5101,13 @@ async fn edge_registry_endpoint(
         Ok(Ok(resp)) => Ok(Json(
             serde_json::to_value(resp).unwrap_or(serde_json::json!({})),
         )),
-        Ok(Err(err)) => {
-            tracing::warn!(error = %err, "edge_registry upstream fetch failed and no cache");
-            Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({
-                    "error": "edge_registry_upstream_unavailable",
-                    "detail": err.to_string()
-                })),
-            ))
-        }
-        Err(join_err) => {
-            tracing::error!(error = %join_err, "edge_registry spawn_blocking task panicked");
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": "edge_registry_internal_error",
-                    "detail": join_err.to_string()
-                })),
-            ))
-        }
+        // ADR-080 #2: the upstream error can carry an internal URL/connection
+        // detail — log it server-side only and return a generic 503.
+        Ok(Err(err)) => Err(error_response::upstream_unavailable("edge_registry", err)),
+        // ADR-080 #2: a panicked spawn_blocking surfaces "task … panicked" via
+        // JoinError::Display — never ship that to the client. Generic 500 +
+        // correlation id; the panic detail is logged server-side.
+        Err(join_err) => Err(error_response::internal_error("edge_registry", join_err)),
     }
 }
 
@@ -4620,16 +5519,37 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                                     );
                                 s.smoothed_person_score =
                                     s.smoothed_person_score * 0.90 + score * 0.10;
-                                let count = s.person_count();
+                                // #803: don't let the saturating activity score
+                                // discard count-aware per-node estimates.
+                                let count =
+                                    aggregate_person_count(s.person_count(), &s.node_states);
                                 s.prev_person_count = count;
                                 count.max(1) // presence=true => at least 1
                             }
-                            None => fallback_count.unwrap_or(0).max(1),
+                            None => {
+                                aggregate_person_count(fallback_count.unwrap_or(0), &s.node_states)
+                                    .max(1)
+                            }
                         }
                     } else {
                         s.prev_person_count = 0;
                         0
                     };
+
+                    // Governed trust cycle (ADR-135..146): run the same live
+                    // frames through the privacy/provenance/witness control
+                    // plane. Trust state is recorded on the bridge (exposed on
+                    // /api/v1/status); engine errors are counted + rate-limit
+                    // logged instead of being swallowed (review finding 1).
+                    // Split-borrow the two distinct fields off the guard.
+                    {
+                        let sref: &mut AppStateInner = &mut s;
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0);
+                        sref.engine_bridge.observe_cycle(&sref.node_states, now_ms);
+                    }
 
                     // Feed field model calibration if active (use per-node history for ESP32).
                     if let Some(frame_history) = s
@@ -4766,6 +5686,8 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     if !tracked.is_empty() {
                         update.persons = Some(tracked);
                     }
+                    // #1050: attach real signal_field-peak positions to each person.
+                    attach_field_positions(&mut update);
 
                     if let Ok(json) = serde_json::to_string(&update) {
                         let _ = s.tx.send(json);
@@ -4806,7 +5728,45 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     }
                 }
 
-                // ADR-040: Try WASM output packet (magic 0xC511_0004).
+                // ADR-063: Try edge fused vitals packet (magic 0xC511_0004).
+                // Must come BEFORE the WASM parser — issue #928: these two
+                // packet types shared a magic and the WASM parser was eating
+                // fused-vitals frames on the C6+mmWave config. The reassign of
+                // WASM_OUTPUT_MAGIC → 0xC511_0007 (firmware side) plus this
+                // dedicated parser resolve the collision.
+                if let Some(fused) = parse_edge_fused_vitals(&buf[..len]) {
+                    debug!(
+                        "Edge fused vitals from {src}: node={} br={:.1} hr={:.1} \
+                         mmwave_targets={} fusion_conf={}",
+                        fused.node_id, fused.breathing_rate_bpm, fused.heartrate_bpm,
+                        fused.mmwave_targets, fused.fusion_confidence,
+                    );
+                    let s = state.write().await;
+                    if let Ok(json) = serde_json::to_string(&serde_json::json!({
+                        "type": "edge_fused_vitals",
+                        "node_id": fused.node_id,
+                        "breathing_rate_bpm": fused.breathing_rate_bpm,
+                        "heartrate_bpm": fused.heartrate_bpm,
+                        "n_persons": fused.n_persons,
+                        "fusion_confidence": fused.fusion_confidence,
+                        "mmwave": {
+                            "hr_bpm": fused.mmwave_hr_bpm,
+                            "br_bpm": fused.mmwave_br_bpm,
+                            "distance_cm": fused.mmwave_distance_cm,
+                            "targets": fused.mmwave_targets,
+                            "confidence": fused.mmwave_confidence,
+                            "type": fused.mmwave_type,
+                        },
+                        "motion_energy": fused.motion_energy,
+                        "presence_score": fused.presence_score,
+                        "timestamp_ms": fused.timestamp_ms,
+                    })) {
+                        let _ = s.tx.send(json);
+                    }
+                    continue;
+                }
+
+                // ADR-040: Try WASM output packet (magic 0xC511_0007 post-#928).
                 if let Some(wasm_output) = parse_wasm_output(&buf[..len]) {
                     debug!(
                         "WASM output from {src}: node={} module={} events={}",
@@ -4837,6 +5797,34 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     let mut s = state.write().await;
                     s.source = "esp32".to_string();
                     s.last_esp32_frame = Some(std::time::Instant::now());
+
+                    // ── ADR-110 / issue #1005: per-node subcarrier-grid gate ──
+                    // ESP32-C6 nodes interleave HE-SU 256-bin frames (~84%)
+                    // with HT 64-bin frames on the same socket. HT-LTF and
+                    // HE-LTF symbol grids are not bin-comparable, so a frame
+                    // on a different grid than the node's rolling window must
+                    // not enter the feature path. Policy (NodeState::accept_grid):
+                    // lock onto the densest grid seen, clear+re-warm on
+                    // upgrade, skip sparser-grid frames (arrival still
+                    // recorded for fps/liveness).
+                    let grid_accepted = s
+                        .node_states
+                        .entry(frame.node_id)
+                        .or_insert_with(NodeState::new)
+                        .accept_grid(frame.grid());
+                    if !grid_accepted {
+                        debug!(
+                            "node {}: skipping {}-subcarrier {:?} frame (active grid {:?})",
+                            frame.node_id,
+                            frame.n_subcarriers,
+                            frame.ppdu_type,
+                            s.node_states.get(&frame.node_id).and_then(|ns| ns.active_grid),
+                        );
+                        if let Some(ns) = s.node_states.get_mut(&frame.node_id) {
+                            ns.observe_csi_frame_arrival(std::time::Instant::now());
+                        }
+                        continue;
+                    }
 
                     // Also maintain global frame_history for backward compat
                     // (simulation path, REST endpoints, etc.).
@@ -4942,7 +5930,11 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
 
                     // DynamicMinCut person estimation from subcarrier correlation.
                     let corr_persons = estimate_persons_from_correlation(&ns.frame_history);
-                    let raw_score = corr_persons as f64 / 3.0;
+                    // #803: map the min-cut count onto a threshold-aligned score
+                    // so it round-trips back to the same count. The old
+                    // `corr_persons / 3.0` left 2 people at 0.667 — under the
+                    // 0.70 up-threshold — so the count was pinned at 1.
+                    let raw_score = corr_persons_to_score(corr_persons);
                     ns.smoothed_person_score = ns.smoothed_person_score * 0.92 + raw_score * 0.08;
                     if classification.presence {
                         let count =
@@ -4996,16 +5988,37 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                                     );
                                 s.smoothed_person_score =
                                     s.smoothed_person_score * 0.90 + score * 0.10;
-                                let count = s.person_count();
+                                // #803: don't let the saturating activity score
+                                // discard count-aware per-node estimates.
+                                let count =
+                                    aggregate_person_count(s.person_count(), &s.node_states);
                                 s.prev_person_count = count;
                                 count.max(1)
                             }
-                            None => fallback_count.unwrap_or(0).max(1),
+                            None => {
+                                aggregate_person_count(fallback_count.unwrap_or(0), &s.node_states)
+                                    .max(1)
+                            }
                         }
                     } else {
                         s.prev_person_count = 0;
                         0
                     };
+
+                    // Governed trust cycle (ADR-135..146): run the same live
+                    // frames through the privacy/provenance/witness control
+                    // plane. Trust state is recorded on the bridge (exposed on
+                    // /api/v1/status); engine errors are counted + rate-limit
+                    // logged instead of being swallowed (review finding 1).
+                    // Split-borrow the two distinct fields off the guard.
+                    {
+                        let sref: &mut AppStateInner = &mut s;
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0);
+                        sref.engine_bridge.observe_cycle(&sref.node_states, now_ms);
+                    }
 
                     // Feed field model calibration if active (use per-node history for ESP32).
                     if let Some(frame_history) = s
@@ -5018,7 +6031,15 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         }
                     }
 
-                    // Build nodes array with all active nodes.
+                    // Build nodes array with all active nodes. ADR-141 output
+                    // gating (review finding 1c): when the governed engine
+                    // emitted this cycle at class Restricted (base mode, or a
+                    // contradiction/mesh-risk demotion below the configured
+                    // class), the per-node raw amplitude vectors are suppressed
+                    // from the live publish — the same field mapping bfld's
+                    // privacy gate applies at Restricted (drop amplitude/phase
+                    // proxies).
+                    let suppress_raw = s.engine_bridge.suppress_raw_outputs();
                     let active_nodes: Vec<NodeInfo> = s
                         .node_states
                         .iter()
@@ -5030,12 +6051,19 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                             node_id: id,
                             rssi_dbm: n.rssi_history.back().copied().unwrap_or(0.0),
                             position: [2.0, 0.0, 1.5],
-                            amplitude: n
-                                .frame_history
-                                .back()
-                                .map(|a| a.iter().take(56).cloned().collect())
-                                .unwrap_or_default(),
-                            subcarrier_count: n.frame_history.back().map_or(0, |a| a.len()),
+                            amplitude: if suppress_raw {
+                                vec![]
+                            } else {
+                                n.frame_history
+                                    .back()
+                                    .map(|a| a.iter().take(56).cloned().collect())
+                                    .unwrap_or_default()
+                            },
+                            subcarrier_count: if suppress_raw {
+                                0
+                            } else {
+                                n.frame_history.back().map_or(0, |a| a.len())
+                            },
                             // ADR-110 iter 23 / iter 30 — single source of truth.
                             sync: n.sync_snapshot(),
                         })
@@ -5090,10 +6118,24 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     if !tracked.is_empty() {
                         update.persons = Some(tracked);
                     }
+                    // #1050: attach real signal_field-peak positions to each person.
+                    attach_field_positions(&mut update);
 
                     if let Ok(json) = serde_json::to_string(&update) {
                         let _ = s.tx.send(json);
                     }
+
+                    // ── ADR-262 P3: emit a signed RuField FieldEvent ────────
+                    // Join this cycle's SensingUpdate (features / classification
+                    // / signal_field) with the governed engine's trust state
+                    // (effective_class / demoted, recorded by `observe_cycle`
+                    // above) into a `SensingSnapshot`, and surface it on
+                    // `/api/field` + `/ws/field` via the P1 bridge. Only cycles
+                    // whose mapped privacy class clears the §10 network egress
+                    // gate are surfaced (P1/P2); a `Derived → P4/P5` cycle is
+                    // held edge-local. `presence == false` ⇒ no phantom event.
+                    emit_rufield_event(&s, &update, node_id);
+
                     s.latest_update = Some(update);
 
                     // Evict stale nodes every 100 ticks to prevent memory leak.
@@ -5133,6 +6175,18 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
         interval.tick().await;
 
         let mut s = state.write().await;
+
+        // Issue #1004: in `auto` mode this task runs alongside `udp_receiver_task`.
+        // Once a real frame promotes `source` → "esp32", stop emitting synthetic
+        // frames so we never clobber live CSI with simulated poses. (For an
+        // explicit `--source simulated` demo, `source` stays "simulated" and the
+        // simulator keeps running — that path never binds UDP, so it is never
+        // promoted.) The task stays alive so it can resume serving if the real
+        // source later ages out to "esp32:offline".
+        if s.effective_source() == "esp32" {
+            continue;
+        }
+
         s.tick += 1;
         let tick = s.tick;
 
@@ -5251,6 +6305,8 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
         if !tracked.is_empty() {
             update.persons = Some(tracked);
         }
+        // #1050: attach real signal_field-peak positions to each person.
+        attach_field_positions(&mut update);
 
         if update.classification.presence {
             s.total_detections += 1;
@@ -5291,6 +6347,349 @@ async fn broadcast_tick_task(state: SharedState, tick_ms: u64) {
             }
         }
     }
+}
+
+/// Map one sensing-broadcast JSON document into the `VitalsSnapshot`(s) to
+/// publish over MQTT (issues #872/#898).
+///
+/// Multi-node sources carry a `nodes` array where **each node has its own
+/// `classification`** (`motion_level`, `presence`, `confidence`) and RSSI — so
+/// each node must surface its *own* presence/motion, not the room-level
+/// aggregate. Previously the bridge applied the aggregate `classification` to
+/// every per-node Home-Assistant device, so a node in an empty corner inherited
+/// another node's "present" (and `motion_level: "absent"` was mis-mapped to full
+/// motion). Vitals (breathing / heart rate) and the person count are room-level
+/// and shared across the per-node devices. Falls back to a single aggregate
+/// snapshot when there is no per-node data (e.g. wifi / simulate sources).
+#[cfg(feature = "mqtt")]
+fn vitals_snapshots_from_sensing_json(
+    v: &serde_json::Value,
+    base_id: &str,
+) -> Vec<wifi_densepose_sensing_server::mqtt::state::VitalsSnapshot> {
+    use wifi_densepose_sensing_server::mqtt::state::VitalsSnapshot;
+
+    // motion_level string -> motion scalar. "absent"/"none"/"still"/"idle"/""
+    // are non-moving; anything else (walking, …) is motion. `fallback` is used
+    // when the field is absent so a partial per-node payload defers to the
+    // room aggregate rather than silently reading 0.
+    fn motion_of(level: Option<&str>, fallback: f64) -> f64 {
+        match level {
+            Some("none") | Some("still") | Some("idle") | Some("absent") | Some("") => 0.0,
+            Some(_) => 1.0,
+            None => fallback,
+        }
+    }
+
+    let ts = (v["timestamp"].as_f64().unwrap_or(0.0) * 1000.0) as i64;
+    let vit = &v["vital_signs"];
+    let breathing = vit["breathing_rate_bpm"].as_f64();
+    let hr = vit["heart_rate_bpm"].as_f64();
+    let n_persons = v["persons"]
+        .as_array()
+        .map(|a| a.len() as u32)
+        .or_else(|| v["estimated_persons"].as_u64().map(|x| x as u32))
+        .unwrap_or(0);
+
+    // Room-level aggregate: the no-nodes fallback, and the per-node default for
+    // any field a node omits.
+    let acls = &v["classification"];
+    let agg_presence = acls["presence"].as_bool().unwrap_or(false);
+    let agg_motion = motion_of(acls["motion_level"].as_str(), 0.0);
+    let agg_conf = acls["confidence"].as_f64().unwrap_or(0.0);
+
+    let mk = |node_id: String, presence: bool, motion: f64, conf: f64, rssi: Option<f64>| {
+        VitalsSnapshot {
+            node_id,
+            timestamp_ms: ts,
+            presence,
+            motion,
+            presence_score: if presence { conf.max(0.0) } else { 0.0 },
+            breathing_rate_bpm: breathing,
+            heartrate_bpm: hr,
+            n_persons,
+            rssi_dbm: rssi,
+            vital_confidence: conf,
+            ..Default::default()
+        }
+    };
+
+    match v["nodes"].as_array() {
+        Some(arr) if !arr.is_empty() => arr
+            .iter()
+            .map(|node| {
+                let n = node["node_id"].as_u64().unwrap_or(0);
+                // Each node carries its OWN classification — use it, deferring to
+                // the room aggregate only for fields the node omits.
+                let ncls = &node["classification"];
+                let presence = ncls["presence"].as_bool().unwrap_or(agg_presence);
+                let motion = motion_of(ncls["motion_level"].as_str(), agg_motion);
+                let conf = ncls["confidence"].as_f64().unwrap_or(agg_conf);
+                mk(
+                    format!("{base_id}-node{n}"),
+                    presence,
+                    motion,
+                    conf,
+                    node["rssi_dbm"].as_f64(),
+                )
+            })
+            .collect(),
+        _ => vec![mk(
+            base_id.to_string(),
+            agg_presence,
+            agg_motion,
+            agg_conf,
+            v["nodes"][0]["rssi_dbm"].as_f64(),
+        )],
+    }
+}
+
+/// Build the multistatic guard config from the environment (#1031, #1049).
+///
+/// Three precedence layers, most-specific wins:
+/// 1. `WDP_GUARD_INTERVAL_US` (+ optional `WDP_SOFT_GUARD_US`) — a **direct**
+///    hard-guard override. This is the #1049 escape hatch: WiFi/ESP-NOW-synced
+///    ESP32 nodes drift 10–150 ms (the 100 ms beacon + WiFi-MAC jitter cannot
+///    hold two independently-clocked boards within the published default), so a
+///    deployment can simply lift the guard past its measured spread (e.g.
+///    `WDP_GUARD_INTERVAL_US=200000`) without knowing its exact TDM schedule.
+/// 2. `WDP_TDM_SLOTS` + `WDP_TDM_SLOT_US` (both positive) — derive the guard
+///    from the declared schedule via [`MultistaticConfig::for_tdm_schedule`].
+/// 3. Otherwise the published default (60 ms hard / 20 ms soft).
+///
+/// The direct override (1) is applied **on top of** whichever base (2 or 3) is
+/// selected, so `WDP_GUARD_INTERVAL_US` always wins for the hard guard while a
+/// TDM-derived soft band is preserved unless it would exceed the new hard guard.
+/// `min_nodes` is *not* set here — the caller overrides it for single-node
+/// passthrough.
+fn multistatic_guard_config_from_env() -> MultistaticConfig {
+    multistatic_guard_config_from(
+        std::env::var("WDP_TDM_SLOTS").ok().as_deref(),
+        std::env::var("WDP_TDM_SLOT_US").ok().as_deref(),
+        std::env::var("WDP_GUARD_INTERVAL_US").ok().as_deref(),
+        std::env::var("WDP_SOFT_GUARD_US").ok().as_deref(),
+    )
+}
+
+/// Pure core of [`multistatic_guard_config_from_env`] for testability.
+fn multistatic_guard_config_from(
+    slots: Option<&str>,
+    slot_us: Option<&str>,
+    guard_us: Option<&str>,
+    soft_us: Option<&str>,
+) -> MultistaticConfig {
+    // Base: TDM-schedule-derived when both slot params are valid, else default.
+    let mut cfg = match (
+        slots.and_then(|s| s.trim().parse::<usize>().ok()),
+        slot_us.and_then(|s| s.trim().parse::<u64>().ok()),
+    ) {
+        (Some(n), Some(us)) if n >= 1 && us >= 1 => MultistaticConfig::for_tdm_schedule(n, us),
+        _ => MultistaticConfig::default(),
+    };
+
+    // Direct hard-guard override (#1049). Ignored when unset/zero/unparseable so
+    // a malformed env var falls back to the base rather than breaking fusion.
+    if let Some(g) = guard_us
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|&g| g >= 1)
+    {
+        cfg.guard_interval_us = g;
+        // Keep the soft band strictly below the (possibly lowered) hard guard.
+        if cfg.soft_guard_us >= g {
+            cfg.soft_guard_us = g.saturating_sub(1).max(1);
+        }
+    }
+
+    // Optional explicit soft-guard override, always clamped strictly below hard.
+    if let Some(s) = soft_us
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|&s| s >= 1)
+    {
+        cfg.soft_guard_us = s.min(cfg.guard_interval_us.saturating_sub(1).max(1));
+    }
+
+    cfg
+}
+
+/// Turn a `ProgressiveLoader::new` failure into an actionable diagnostic (#894).
+///
+/// The published HuggingFace `ruvnet/wifi-densepose-pretrained` files
+/// (`model.safetensors`, `model-q{2,4,8}.bin`, `model.rvf.jsonl`) are a
+/// different *format* — and a different encoder architecture — than the RVF
+/// binary container the `--model` progressive loader expects (`RVFS` magic
+/// `0x52564653`). Feeding one to `--model` produced a bare
+/// "invalid magic at offset 0 …" that left users stuck. Detect the common
+/// cases and explain plainly what's loadable instead.
+///
+/// Superseded in the live load path by [`load_or_convert_model`] (which now
+/// converts the convertible formats instead of just explaining), but retained
+/// as the human-readable format-landscape summary and exercised by tests.
+#[allow(dead_code)]
+fn diagnose_model_load_error(path: &std::path::Path, data: &[u8], err: &str) -> String {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    // safetensors: 8-byte LE header length, then a JSON object starting with '{'.
+    let looks_safetensors = ext == "safetensors" || (data.len() > 9 && data[8] == b'{');
+    // JSONL manifest: starts with '{' (or the well-known suffix).
+    let looks_jsonl =
+        ext == "jsonl" || name.ends_with(".rvf.jsonl") || data.first() == Some(&b'{');
+    // Quantized weight blob shipped on HF (model-q2/q4/q8.bin).
+    let looks_quant_bin = ext == "bin" || name.contains("-q");
+
+    let kind = if looks_safetensors {
+        "a safetensors weight file"
+    } else if looks_jsonl {
+        "a JSONL manifest, not the binary container"
+    } else if looks_quant_bin {
+        "a quantized weight blob (e.g. HuggingFace model-q4.bin)"
+    } else {
+        "not an RVF binary container"
+    };
+
+    format!(
+        "model `{}` could not be loaded: it is {kind}. The --model flag expects an \
+         RVF binary container (`RVFS` magic 0x52564653) produced by the \
+         wifi-densepose-train pipeline. The HuggingFace ruvnet/wifi-densepose-pretrained \
+         files are a different format and encoder architecture, so they do not load \
+         here directly (issue #894). Continuing with signal heuristics. (loader: {err})",
+        path.display()
+    )
+}
+
+/// Load a model for `--model`, auto-detecting + converting the published
+/// HuggingFace formats when the native RVF loader rejects them (issue #894).
+///
+/// Order of operations:
+/// 1. Try the native RVF `ProgressiveLoader` (the only format with `RVFS` magic).
+/// 2. On failure, **auto-detect** the format. If it is convertible
+///    (`safetensors` / `model.rvf.jsonl`), convert it in-memory to RVF and load
+///    that — so the published `model.safetensors` becomes loadable here.
+/// 3. If it is a non-convertible format (quantized blob / unknown), return the
+///    typed, actionable [`model_format::ModelLoadError`] message — never the
+///    opaque "invalid magic …" string.
+///
+/// Returns the loaded `ProgressiveLoader` or a human-actionable error string.
+fn load_or_convert_model(
+    path: &std::path::Path,
+    data: &[u8],
+) -> Result<ProgressiveLoader, String> {
+    use model_format::{convert_to_rvf, detect_format, ModelFormat};
+
+    // 1. Native RVF.
+    if let Ok(loader) = ProgressiveLoader::new(data) {
+        return Ok(loader);
+    }
+
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    let model_id = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("converted-model");
+
+    match detect_format(data, &name) {
+        // 2. Convertible formats: convert in-memory, then load.
+        ModelFormat::Safetensors | ModelFormat::JsonlManifest => {
+            match convert_to_rvf(data, &name, model_id) {
+                Ok(rvf_bytes) => {
+                    info!(
+                        "Model `{}` is {} — converting to RVF in-memory and loading (issue #894)",
+                        path.display(),
+                        detect_format(data, &name).label()
+                    );
+                    ProgressiveLoader::new(&rvf_bytes).map_err(|e| {
+                        format!(
+                            "converted {} to RVF but the container failed to load: {e}",
+                            detect_format(data, &name).label()
+                        )
+                    })
+                }
+                Err(conv_err) => Err(conv_err.to_string()),
+            }
+        }
+        // 3. Non-convertible: typed actionable error.
+        _ => Err(model_format::classify_load_failure(
+            data,
+            &name,
+            "RVF container parse failed",
+        )
+        .to_string()),
+    }
+}
+
+/// `--convert-model` entry point (issue #894): read `in_path`, convert it to an
+/// RVF binary container, write it to `out_path`, and verify the result loads.
+/// Returns a process exit code (0 = success).
+fn run_convert_model(in_path: &std::path::Path, out_path: &std::path::Path) -> i32 {
+    let data = match std::fs::read(in_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("convert-model: failed to read {}: {e}", in_path.display());
+            return 1;
+        }
+    };
+    let name = in_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    let model_id = in_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("converted-model");
+
+    let detected = model_format::detect_format(&data, &name);
+    eprintln!(
+        "convert-model: detected {} ({} bytes)",
+        detected.label(),
+        data.len()
+    );
+
+    match model_format::convert_to_rvf(&data, &name, model_id) {
+        Ok(rvf_bytes) => {
+            // Verify the converted bytes actually load before writing.
+            if let Err(e) = ProgressiveLoader::new(&rvf_bytes) {
+                eprintln!("convert-model: produced RVF did NOT load (bug): {e}");
+                return 1;
+            }
+            if let Err(e) = std::fs::write(out_path, &rvf_bytes) {
+                eprintln!("convert-model: failed to write {}: {e}", out_path.display());
+                return 1;
+            }
+            eprintln!(
+                "convert-model: wrote {} ({} bytes). Load it with `--model {}`.",
+                out_path.display(),
+                rvf_bytes.len(),
+                out_path.display()
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("convert-model: {e}");
+            1
+        }
+    }
+}
+
+/// Whether `--export-rvf` should emit the placeholder container-format demo.
+///
+/// It must only do so **standalone**. Combined with `--train`/`--pretrain` the
+/// real model is produced by the training pipeline, so short-circuiting here
+/// would silently skip training and write placeholder weights — the #894 bug
+/// where the documented `--train … --export-rvf` workflow produced a fake model.
+fn export_emits_placeholder_demo(export_set: bool, train: bool, pretrain: bool) -> bool {
+    export_set && !train && !pretrain
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
@@ -5336,9 +6735,35 @@ async fn main() {
         return;
     }
 
-    // Handle --export-rvf mode: build an RVF container package and exit
-    if let Some(ref rvf_path) = args.export_rvf {
-        eprintln!("Exporting RVF container package...");
+    // Handle --convert-model: turn a published HF model file (safetensors /
+    // model.rvf.jsonl) into the RVF binary container --model expects, then exit
+    // (issue #894). Gives the reporter a one-command path off the heuristics.
+    if let Some(ref in_path) = args.convert_model {
+        let out_path = args
+            .convert_out
+            .clone()
+            .unwrap_or_else(|| in_path.with_extension("rvf"));
+        std::process::exit(run_convert_model(in_path, &out_path));
+    }
+
+    // Handle --export-rvf: writes a CONTAINER-FORMAT DEMO with placeholder
+    // weights — it is NOT a trained model. Only short-circuit when standalone:
+    // combined with --train/--pretrain the real model is exported by the
+    // training pipeline, and short-circuiting here would silently skip training
+    // and write placeholder weights (#894 — the documented `--train …
+    // --export-rvf` workflow produced a placeholder and never trained).
+    if export_emits_placeholder_demo(args.export_rvf.is_some(), args.train, args.pretrain) {
+        let rvf_path = args
+            .export_rvf
+            .as_ref()
+            .expect("export_emits_placeholder_demo implies export_rvf is set");
+        eprintln!(
+            "WARNING: --export-rvf writes a CONTAINER-FORMAT DEMO with placeholder \
+             weights — it is NOT a trained model. Train one with \
+             `--train --dataset <DIR>` (which exports a calibrated .rvf to the \
+             models/ directory), or download a pretrained encoder. See issue #894."
+        );
+        eprintln!("Exporting RVF container package (placeholder weights)...");
         use rvf_pipeline::RvfModelBuilder;
 
         let mut builder = RvfModelBuilder::new("wifi-densepose", "1.0.0");
@@ -5387,6 +6812,13 @@ async fn main() {
             }
         }
         return;
+    } else if args.export_rvf.is_some() {
+        // --export-rvf alongside --train/--pretrain: don't emit a placeholder.
+        // Fall through so training runs; it exports the real calibrated model.
+        eprintln!(
+            "Note: --export-rvf is ignored in training mode — the trained model \
+             is exported by the training pipeline to the models/ directory."
+        );
     }
 
     // Handle --pretrain mode: self-supervised contrastive pretraining (ADR-024)
@@ -5782,8 +7214,12 @@ async fn main() {
         eprintln!("Starting training for {} epochs...", args.epochs);
         let result = t.run_training(train_data, val_data);
         eprintln!("Training complete in {:.1}s", result.total_time_secs);
+        // ADR-155 §2.1: `best_pck` is RAW-threshold PCK (no torso norm) and
+        // `best_oks` uses the fake-Gold area=1.0 proxy — NOT the canonical
+        // hip↔hip `pck_canonical` / COCO OKS. Label them distinctly so the
+        // printed numbers are never read as claim-grade canonical metrics.
         eprintln!(
-            "  Best epoch: {}, PCK@0.2: {:.4}, OKS mAP: {:.4}",
+            "  Best epoch: {}, pck_raw@0.2: {:.4}, oks_map(area=1.0 proxy): {:.4}",
             result.best_epoch, result.best_pck, result.best_oks
         );
 
@@ -5843,25 +7279,48 @@ async fn main() {
     info!("  UI path:   {}", args.ui_path.display());
     info!("  Source:    {}", args.source);
 
-    // Auto-detect data source
-    let source = match args.source.as_str() {
-        "auto" => {
-            info!("Auto-detecting data source...");
-            if probe_esp32(args.udp_port).await {
-                info!("  ESP32 CSI detected on UDP :{}", args.udp_port);
-                "esp32"
-            } else if probe_windows_wifi().await {
-                info!("  Windows WiFi detected");
-                "wifi"
-            } else {
-                info!("  No hardware detected, using simulation");
-                "simulate"
-            }
+    // Resolve the data source into a concrete task plan (issue #1004).
+    //
+    // Issue #937 (prior fix): `auto` must never serve fake CSI *tagged as
+    // production telemetry*. We keep that guarantee — in the gap before real
+    // CSI arrives, `source` is the honest string "simulated" (downstream
+    // `/api/v1/sensing/latest`, `/ws/sensing` see `source: "simulated"`, not a
+    // production tag). What #937's hard-exit got wrong: at boot the firmware and
+    // server race, so CSI usually is NOT flowing during the 2 s probe. Exiting
+    // (or latching on simulate) meant the server could never pick up CSI that
+    // started seconds later. The robust resolution (see `plan_source`): in
+    // `auto` always bind the UDP :5005 receiver; serve simulated until the first
+    // real frame; then `udp_receiver_task` promotes `source` → "esp32". Explicit
+    // `--source simulated` stays a hard, UDP-free override for offline demos.
+    let normalized = if args.source == "simulate" { "simulated" } else { args.source.as_str() };
+    let plan = if normalized == "auto" {
+        info!("Auto-detecting data source (UDP :{} bound either way)...", args.udp_port);
+        let esp32 = probe_esp32(args.udp_port).await;
+        let wifi = if esp32 { false } else { probe_windows_wifi().await };
+        if esp32 {
+            info!("  ESP32 CSI detected on UDP :{}", args.udp_port);
+        } else if wifi {
+            info!("  Windows WiFi detected");
+        } else {
+            warn!(
+                "No real CSI source at boot — serving SIMULATED data (tagged as \
+                 'simulated', not production) while the UDP :{} receiver stays bound. \
+                 The server promotes to live the instant a real frame arrives (issue \
+                 #1004). For an offline demo with no live promotion, pass \
+                 --source simulated explicitly.",
+                args.udp_port
+            );
         }
-        other => other,
+        plan_source("auto", esp32, wifi)
+    } else {
+        plan_source(normalized, false, false)
     };
+    let source: &str = plan.initial_source.as_str();
 
-    info!("Data source: {source}");
+    info!(
+        "Data source: {source} (udp_receiver={}, simulator={}, wifi={})",
+        plan.bind_udp, plan.run_simulator, plan.run_wifi
+    );
 
     // Shared state
     // Vital sign sample rate derives from tick interval (e.g. 500ms tick => 2 Hz)
@@ -5919,7 +7378,7 @@ async fn main() {
         if args.progressive || args.model.is_some() {
             info!("Loading trained model (progressive) from {}", mp.display());
             match std::fs::read(mp) {
-                Ok(data) => match ProgressiveLoader::new(&data) {
+                Ok(data) => match load_or_convert_model(mp, &data) {
                     Ok(mut loader) => {
                         if let Ok(la) = loader.load_layer_a() {
                             info!(
@@ -5930,7 +7389,15 @@ async fn main() {
                         model_loaded = true;
                         progressive_loader = Some(loader);
                     }
-                    Err(e) => error!("Progressive loader init failed: {e}"),
+                    Err(e) => {
+                        // #894: typed, actionable message (never the opaque magic)
+                        // and a LOUD warning that we are degrading to heuristics.
+                        error!("{e}");
+                        error!(
+                            "Model NOT loaded — falling back to signal heuristics. \
+                             Pose/person-count output will be approximate (issue #894)."
+                        );
+                    }
                 },
                 Err(e) => error!("Failed to read model file: {e}"),
             }
@@ -5985,6 +7452,73 @@ async fn main() {
     // consumed by `/ws/introspection`. Same ring size as `tx` (256) — slow
     // clients drop oldest, identical backpressure shape.
     let (intro_tx, _) = broadcast::channel::<String>(256);
+
+    // #872: actually start the MQTT publisher when `--mqtt` is set. The publisher
+    // (mqtt::) consumes a typed VitalsSnapshot stream; we bridge the existing JSON
+    // sensing broadcast into it with a defensive serde_json::Value mapping (absent
+    // fields default — never publish wrong values). Gated on the `mqtt` feature
+    // (the Docker image is built `--features mqtt`); without it `--mqtt` WARNs and
+    // no-ops, matching the documented contract.
+    if args.mqtt_opts.mqtt {
+        #[cfg(feature = "mqtt")]
+        {
+            use wifi_densepose_sensing_server::mqtt;
+            let mcfg = std::sync::Arc::new(mqtt::config::MqttConfig::from_args(&args.mqtt_opts));
+            match mcfg.validate() {
+                Ok(()) => {
+                    let node_id = mcfg.client_id.clone();
+                    let builder = mqtt::publisher::OwnedDiscoveryBuilder {
+                        discovery_prefix: mcfg.discovery_prefix.clone(),
+                        node_id: node_id.clone(),
+                        node_friendly_name: Some("RuView".to_string()),
+                        sw_version: env!("CARGO_PKG_VERSION").to_string(),
+                        model: "RuView WiFi Sensing".to_string(),
+                        via_device: None,
+                    };
+                    let (vtx, vrx) = broadcast::channel::<mqtt::state::VitalsSnapshot>(64);
+                    let (host, port) = (mcfg.host.clone(), mcfg.port);
+                    mqtt::publisher::spawn(mcfg, builder, vrx);
+                    let mut jrx = tx.subscribe();
+                    tokio::spawn(async move {
+                        while let Ok(json) = jrx.recv().await {
+                            let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) else {
+                                continue;
+                            };
+                            // #898/#872: emit one snapshot per physical node so
+                            // each surfaces as its own Home-Assistant device with
+                            // its *own* presence/motion/RSSI (see
+                            // vitals_snapshots_from_sensing_json). Falls back to a
+                            // single aggregate snapshot for per-node-less sources.
+                            for snap in vitals_snapshots_from_sensing_json(&v, &node_id) {
+                                let _ = vtx.send(snap);
+                            }
+                        }
+                    });
+                    tracing::info!("MQTT publisher started -> {host}:{port}");
+                }
+                Err(e) => tracing::error!("MQTT config invalid: {e}; publisher not started"),
+            }
+        }
+        #[cfg(not(feature = "mqtt"))]
+        tracing::warn!(
+            "--mqtt set but this binary was built without the `mqtt` feature; the publisher is a \
+             no-op. Use the official Docker image (built `--features mqtt`) or rebuild with \
+             `cargo build -p wifi-densepose-sensing-server --features mqtt`."
+        );
+    }
+
+    // ADR-262 P3: build the live RuField surface (dedicated ed25519 signer from
+    // WDP_RUFIELD_SIGNING_SEED, else a logged dev default). The same Arc is
+    // stored in AppStateInner (so the sensing loop can `emit()` per cycle) and
+    // cloned into the additive `/api/field` + `/ws/field` router below.
+    let field_surface: rufield_surface::FieldState =
+        Arc::new(RwLock::new(rufield_surface::FieldSurface::from_env()));
+
+    // Populated inside the `multistatic_fuser` field initializer below, then
+    // threaded into `engine_bridge` so both fusion paths honor the same
+    // WDP_TDM_SLOTS/WDP_GUARD_INTERVAL_US-derived guard (#1049/#1057).
+    let mut engine_bridge_multistatic_cfg: Option<MultistaticConfig> = None;
+
     let state: SharedState = Arc::new(RwLock::new(AppStateInner {
         latest_update: None,
         rssi_history: VecDeque::new(),
@@ -6047,9 +7581,19 @@ async fn main() {
         pose_tracker: PoseTracker::new(),
         last_tracker_instant: None,
         multistatic_fuser: {
+            // #1031/#1049: the default guard (60 ms hard / 20 ms soft)
+            // accommodates a real TDM slot offset. A deployment overrides it via
+            // WDP_GUARD_INTERVAL_US (direct, e.g. 200000 for WiFi/ESP-NOW sync —
+            // #1049) or WDP_TDM_SLOTS + WDP_TDM_SLOT_US (derive from schedule).
+            let cfg = multistatic_guard_config_from_env();
+            info!(
+                "Multistatic fusion guard: {} µs hard / {} µs soft (override via \
+                 WDP_GUARD_INTERVAL_US / WDP_SOFT_GUARD_US, or WDP_TDM_SLOTS+WDP_TDM_SLOT_US)",
+                cfg.guard_interval_us, cfg.soft_guard_us
+            );
             let mut fuser = MultistaticFuser::with_config(MultistaticConfig {
                 min_nodes: 1, // single-node passthrough
-                ..Default::default()
+                ..cfg.clone()
             });
             if let Some(ref pos_str) = args.node_positions {
                 let positions = field_bridge::parse_node_positions(pos_str);
@@ -6061,8 +7605,19 @@ async fn main() {
                     fuser.set_node_positions(positions);
                 }
             }
+            engine_bridge_multistatic_cfg = Some(MultistaticConfig {
+                min_nodes: 1,
+                ..cfg
+            });
             fuser
         },
+        engine_bridge: engine_bridge::EngineBridge::new(
+            wifi_densepose_bfld::PrivacyMode::PrivateHome,
+            1,
+            "default",
+            "Default Room",
+            engine_bridge_multistatic_cfg,
+        ),
         field_model: if args.calibrate {
             info!("Field model calibration enabled — room should be empty during startup");
             FieldModel::new(field_bridge::single_link_config()).ok()
@@ -6076,23 +7631,28 @@ async fn main() {
         // ADR-044 §5.3: runtime-configurable dedup factor (persisted).
         dedup_factor: runtime_config.dedup_factor,
         data_dir: data_dir.clone(),
+        field_surface: field_surface.clone(),
     }));
 
-    // Start background tasks based on source
-    match source {
-        "esp32" => {
-            tokio::spawn(udp_receiver_task(state.clone(), args.udp_port));
-            tokio::spawn(broadcast_tick_task(state.clone(), args.tick_ms));
-        }
-        "wifi" => {
-            tokio::spawn(windows_wifi_task(state.clone(), args.tick_ms));
-        }
-        _ => {
-            tokio::spawn(simulated_data_task(state.clone(), args.tick_ms));
-        }
+    // Start background tasks from the resolved plan (issue #1004).
+    //
+    // In `auto` mode with no boot source, `bind_udp` AND `run_simulator` are
+    // both true: the UDP receiver is bound so real CSI can promote the source,
+    // and the simulator serves poses in the meantime (it self-suspends once
+    // promoted — see `simulated_data_task`). Explicit `--source simulated` has
+    // `bind_udp = false`, so it serves simulated data only, with no live binding.
+    if plan.bind_udp {
+        tokio::spawn(udp_receiver_task(state.clone(), args.udp_port));
+        tokio::spawn(broadcast_tick_task(state.clone(), args.tick_ms));
+    }
+    if plan.run_wifi {
+        tokio::spawn(windows_wifi_task(state.clone(), args.tick_ms));
+    }
+    if plan.run_simulator {
+        tokio::spawn(simulated_data_task(state.clone(), args.tick_ms));
     }
 
-    // ADR-050: Parse bind address once, use for all listeners
+    // ADR-166: Parse bind address once, use for all listeners
     let bind_ip: std::net::IpAddr = args
         .bind_addr
         .parse()
@@ -6145,11 +7705,15 @@ async fn main() {
     let ws_app = Router::new()
         .route("/ws/sensing", get(ws_sensing_handler))
         .route("/health", get(health))
+        .with_state(ws_state)
+        // ADR-262 P3: additive `/ws/field` (+ `/api/field`) on the WS port too,
+        // so a client on :8765 can stream signed RuField FieldEvents alongside
+        // `/ws/sensing`. Merged with its own FieldState (different state type).
+        .merge(rufield_surface::router(field_surface.clone()))
         .layer(axum::middleware::from_fn_with_state(
             host_allowlist.clone(),
             wifi_densepose_sensing_server::host_validation::require_allowed_host,
-        ))
-        .with_state(ws_state);
+        ));
 
     let ws_addr = SocketAddr::from((bind_ip, args.ws_port));
     let ws_listener = tokio::net::TcpListener::bind(ws_addr)
@@ -6263,15 +7827,24 @@ async fn main() {
             bearer_auth_state.clone(),
             wifi_densepose_sensing_server::bearer_auth::require_bearer,
         ))
+        .with_state(state.clone())
+        // ADR-262 P3: additive RuField surface (`/api/field` + `/ws/field`).
+        // Merged AFTER `.with_state` (so http_app is already `Router<()>` and
+        // can absorb the field router's own `FieldState`). These routes sit
+        // OUTSIDE `/api/v1/*` so they are not bearer-gated, but the
+        // host-validation layer below still applies (it is added last, so it
+        // runs first, over the whole merged router). The surface's own §10
+        // egress gate is what keeps above-policy classes off the wire.
+        .merge(rufield_surface::router(field_surface.clone()))
         // DNS-rebinding defense: applied last so it runs first on the request
         // path (axum layers run outermost-in). Rejects requests whose `Host`
         // header is not in the allowlist before any handler — including
-        // `/health` and `/ws/*` — observes the body.
+        // `/health`, `/ws/*`, and the merged `/api/field` + `/ws/field` —
+        // observes the body.
         .layer(axum::middleware::from_fn_with_state(
             host_allowlist.clone(),
             wifi_densepose_sensing_server::host_validation::require_allowed_host,
-        ))
-        .with_state(state.clone());
+        ));
 
     let http_addr = SocketAddr::from((bind_ip, args.http_port));
     let http_listener = tokio::net::TcpListener::bind(http_addr)
@@ -6328,6 +7901,72 @@ async fn main() {
     }
 
     info!("Server shut down cleanly");
+}
+
+#[cfg(test)]
+mod multistatic_guard_config_tests {
+    //! #1049 — the multistatic guard interval must be operator-configurable so a
+    //! WiFi/ESP-NOW deployment (10–150 ms inter-node clock drift) can lift the
+    //! guard past its measured timestamp spread instead of being permanently
+    //! demoted to Restricted with no escape hatch.
+    use super::*;
+
+    #[test]
+    fn default_guard_when_nothing_set() {
+        let cfg = multistatic_guard_config_from(None, None, None, None);
+        assert_eq!(cfg.guard_interval_us, MultistaticConfig::default().guard_interval_us);
+        assert_eq!(cfg.soft_guard_us, MultistaticConfig::default().soft_guard_us);
+    }
+
+    #[test]
+    fn direct_guard_override_wins_and_unblocks_wifi_spread() {
+        // The #1049 reporter's measured ~70 ms spread exceeds the 60 ms default
+        // → permanent demotion. A direct 200 ms override accepts it.
+        let cfg = multistatic_guard_config_from(None, None, Some("200000"), None);
+        assert_eq!(cfg.guard_interval_us, 200_000);
+        assert!(cfg.soft_guard_us < cfg.guard_interval_us);
+        // 70 ms spread now sits inside the guard.
+        assert!(70_000 < cfg.guard_interval_us);
+    }
+
+    #[test]
+    fn direct_guard_override_beats_tdm_derived() {
+        // Both TDM params AND a direct override set → the direct hard guard wins,
+        // the TDM-derived soft band is preserved (still strictly below hard).
+        let cfg = multistatic_guard_config_from(Some("2"), Some("18000"), Some("200000"), None);
+        assert_eq!(cfg.guard_interval_us, 200_000);
+        assert!(cfg.soft_guard_us < cfg.guard_interval_us);
+        assert!(cfg.soft_guard_us >= 1);
+    }
+
+    #[test]
+    fn soft_override_is_clamped_strictly_below_hard() {
+        // A soft guard ≥ hard would be nonsensical → clamped below the hard guard.
+        let cfg = multistatic_guard_config_from(None, None, Some("50000"), Some("999999"));
+        assert_eq!(cfg.guard_interval_us, 50_000);
+        assert!(cfg.soft_guard_us < 50_000);
+    }
+
+    #[test]
+    fn lowering_hard_below_default_soft_pulls_soft_down() {
+        // Override hard to 10 ms (< default 20 ms soft) → soft drops below it.
+        let cfg = multistatic_guard_config_from(None, None, Some("10000"), None);
+        assert_eq!(cfg.guard_interval_us, 10_000);
+        assert!(cfg.soft_guard_us < 10_000);
+    }
+
+    #[test]
+    fn malformed_or_zero_override_falls_back_to_base() {
+        // Garbage / zero must not break fusion — fall back to the base config.
+        for bad in ["", "abc", "0", "-5", "12.5"] {
+            let cfg = multistatic_guard_config_from(None, None, Some(bad), None);
+            assert_eq!(
+                cfg.guard_interval_us,
+                MultistaticConfig::default().guard_interval_us,
+                "override {bad:?} should be ignored"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -6458,6 +8097,36 @@ mod sync_snapshot_helper_tests {
         assert_eq!(snap.sequence, 20);
         assert!((snap.csi_fps_ema - 10.5).abs() < 1e-9);
         assert_eq!(snap.csi_fps_samples, 42);
+    }
+
+    #[test]
+    fn observe_csi_frame_arrival_ignores_subms_bursts() {
+        // Issue #1180 regression: a ~40 fps node whose frames are delivered
+        // in tight UDP bursts (sub-ms intra-burst deltas) must still report
+        // ~40 fps, not tens of kHz. Synthesize the arrival stream by adding
+        // Durations to a base Instant.
+        use std::time::Duration;
+        let base = std::time::Instant::now();
+        let mut ns = NodeState::new();
+        ns.csi_fps_ema = 40.0; // pretend already warmed up
+        ns.csi_fps_samples = 10;
+
+        // 30 nominal 25 ms groups, each preceded by a 3-frame sub-ms burst.
+        for g in 0..30u64 {
+            let group_t = base + Duration::from_millis(25 * g);
+            ns.observe_csi_frame_arrival(group_t);
+            // burst: two extra arrivals 40 µs and 80 µs later — must be
+            // ignored for rate purposes (anchor must not advance to them).
+            ns.observe_csi_frame_arrival(group_t + Duration::from_micros(40));
+            ns.observe_csi_frame_arrival(group_t + Duration::from_micros(80));
+        }
+
+        assert!(
+            (ns.csi_fps_ema - 40.0).abs() < 2.0,
+            "csi_fps_ema must stay near the 40 fps ground truth despite \
+             sub-ms bursts, got {}",
+            ns.csi_fps_ema
+        );
     }
 
     #[test]
@@ -6785,5 +8454,339 @@ mod rolling_p95_tests {
         assert_eq!(p.len(), 0);
         p.push(1.0);
         assert_eq!(p.len(), 1);
+    }
+}
+
+#[cfg(all(test, feature = "mqtt"))]
+mod mqtt_bridge_tests {
+    use super::vitals_snapshots_from_sensing_json;
+    use serde_json::json;
+
+    /// Regression for the per-node presence bug (#872/#898): each node must
+    /// surface its OWN classification, not the room-level aggregate. Node 1 is
+    /// present+moving; node 2 is absent — node 2 must NOT inherit node 1's
+    /// "present".
+    #[test]
+    fn per_node_presence_uses_each_nodes_own_classification() {
+        let v = json!({
+            "timestamp": 1.0,
+            "classification": { "presence": true, "motion_level": "walking", "confidence": 0.9 },
+            "vital_signs": { "breathing_rate_bpm": 14.0, "heart_rate_bpm": 60.0 },
+            "persons": [{}, {}],
+            "nodes": [
+                { "node_id": 1, "rssi_dbm": -40.0,
+                  "classification": { "presence": true, "motion_level": "walking", "confidence": 0.8 } },
+                { "node_id": 2, "rssi_dbm": -70.0,
+                  "classification": { "presence": false, "motion_level": "absent", "confidence": 0.1 } }
+            ]
+        });
+        let snaps = vitals_snapshots_from_sensing_json(&v, "ruview");
+        assert_eq!(snaps.len(), 2, "one snapshot per node");
+
+        let n1 = snaps.iter().find(|s| s.node_id == "ruview-node1").unwrap();
+        let n2 = snaps.iter().find(|s| s.node_id == "ruview-node2").unwrap();
+
+        assert!(n1.presence && n1.motion > 0.0, "node1 present + moving");
+        assert!(
+            !n2.presence && n2.motion == 0.0,
+            "node2 must be absent — not inherit the room aggregate"
+        );
+        // Per-node RSSI preserved.
+        assert_eq!(n1.rssi_dbm, Some(-40.0));
+        assert_eq!(n2.rssi_dbm, Some(-70.0));
+        // Vitals + person count are room-level, shared across node devices.
+        assert_eq!(n1.n_persons, 2);
+        assert_eq!(n2.n_persons, 2);
+        assert_eq!(n1.breathing_rate_bpm, Some(14.0));
+        assert_eq!(n2.heartrate_bpm, Some(60.0));
+        // presence_score is gated on presence.
+        assert!(n1.presence_score > 0.0);
+        assert_eq!(n2.presence_score, 0.0);
+    }
+
+    /// A node that omits a classification field defers to the room aggregate
+    /// rather than silently reading false/0.
+    #[test]
+    fn per_node_missing_fields_fall_back_to_aggregate() {
+        let v = json!({
+            "timestamp": 1.0,
+            "classification": { "presence": true, "motion_level": "still", "confidence": 0.7 },
+            "vital_signs": {},
+            "nodes": [ { "node_id": 3, "rssi_dbm": -55.0 } ]  // no per-node classification
+        });
+        let snaps = vitals_snapshots_from_sensing_json(&v, "n");
+        assert_eq!(snaps.len(), 1);
+        assert_eq!(snaps[0].node_id, "n-node3");
+        assert!(snaps[0].presence, "defers to aggregate presence");
+        assert_eq!(snaps[0].motion, 0.0, "aggregate 'still' => no motion");
+    }
+
+    /// No `nodes` array (wifi / simulate sources): single aggregate snapshot
+    /// keyed by the base id.
+    #[test]
+    fn falls_back_to_single_aggregate_when_no_nodes() {
+        let v = json!({
+            "timestamp": 2.0,
+            "classification": { "presence": true, "motion_level": "idle", "confidence": 0.6 },
+            "vital_signs": { "breathing_rate_bpm": 12.0 },
+            "persons": [{}]
+        });
+        let snaps = vitals_snapshots_from_sensing_json(&v, "ruview");
+        assert_eq!(snaps.len(), 1);
+        assert_eq!(snaps[0].node_id, "ruview");
+        assert!(snaps[0].presence);
+        assert_eq!(snaps[0].motion, 0.0, "idle => no motion");
+        assert_eq!(snaps[0].n_persons, 1);
+    }
+
+    /// `motion_level: "absent"` must map to zero motion (the old aggregate
+    /// match fell through to `Some(_) => 1.0`, treating absent as full motion).
+    #[test]
+    fn absent_motion_level_is_zero_motion() {
+        let v = json!({
+            "timestamp": 0.0,
+            "classification": { "presence": false, "motion_level": "absent", "confidence": 0.0 },
+            "vital_signs": {}
+        });
+        let snaps = vitals_snapshots_from_sensing_json(&v, "x");
+        assert_eq!(snaps[0].motion, 0.0);
+        assert!(!snaps[0].presence);
+    }
+}
+
+#[cfg(test)]
+mod model_load_diagnostic_tests {
+    use super::diagnose_model_load_error;
+    use std::path::Path;
+
+    #[test]
+    fn safetensors_is_named_and_points_at_894() {
+        // 8-byte LE header length then '{' — the safetensors signature.
+        let data = [0x10, 0, 0, 0, 0, 0, 0, 0, b'{', b'"'];
+        let msg = diagnose_model_load_error(
+            Path::new("models/wifi-densepose-pretrained/model.safetensors"),
+            &data,
+            "invalid magic at offset 0",
+        );
+        assert!(msg.contains("safetensors"), "{msg}");
+        assert!(msg.contains("#894"), "{msg}");
+        assert!(msg.contains("signal heuristics"), "{msg}");
+    }
+
+    #[test]
+    fn quantized_bin_is_identified() {
+        let data = [0x35, 0x57, 0x45, 0x77]; // the 0x77455735 the loader reports
+        let msg = diagnose_model_load_error(Path::new("model-q4.bin"), &data, "bad magic");
+        assert!(msg.contains("quantized weight blob"), "{msg}");
+        assert!(msg.contains("RVFS") || msg.contains("0x52564653"), "{msg}");
+    }
+
+    #[test]
+    fn jsonl_manifest_is_identified() {
+        let data = *b"{\"seg\":0}";
+        let msg = diagnose_model_load_error(Path::new("model.rvf.jsonl"), &data, "x");
+        assert!(msg.contains("JSONL manifest"), "{msg}");
+    }
+
+    #[test]
+    fn unknown_format_still_gives_guidance() {
+        let data = [0u8, 1, 2, 3];
+        let msg = diagnose_model_load_error(Path::new("weird.dat"), &data, "x");
+        assert!(msg.contains("RVF binary container"), "{msg}");
+        assert!(msg.contains("wifi-densepose-train"), "{msg}");
+    }
+}
+
+#[cfg(test)]
+mod export_rvf_mode_tests {
+    use super::export_emits_placeholder_demo;
+
+    #[test]
+    fn standalone_export_emits_placeholder() {
+        // --export-rvf alone → the container-format demo (placeholder weights).
+        assert!(export_emits_placeholder_demo(true, false, false));
+    }
+
+    #[test]
+    fn export_with_train_does_not_short_circuit() {
+        // #894: `--train --export-rvf` must NOT emit a placeholder + skip
+        // training — it must fall through to the real training pipeline.
+        assert!(!export_emits_placeholder_demo(true, true, false));
+        assert!(!export_emits_placeholder_demo(true, false, true));
+        assert!(!export_emits_placeholder_demo(true, true, true));
+    }
+
+    #[test]
+    fn no_export_flag_never_emits() {
+        assert!(!export_emits_placeholder_demo(false, false, false));
+        assert!(!export_emits_placeholder_demo(false, true, false));
+    }
+}
+
+#[cfg(test)]
+mod observatory_persons_field_position_tests {
+    //! Issue #1050 — the Observatory 3D figure animates from per-person
+    //! `position` / `motion_score` / `pose` carried on `sensing_update.persons`.
+    //!
+    //! These tests pin the public WS contract: a frame that detects a person on
+    //! a known signal_field peak must emit a `persons` array whose first entry
+    //! carries a `position` derived from that peak (matching the Observatory's
+    //! cell→world transform), a real `motion_score`, and a serialized frame
+    //! that round-trips. An empty / no-presence field must emit `persons: []`
+    //! (or no person), never a phantom person at a fabricated origin.
+
+    use super::*;
+
+    /// Build a 20×20 signal_field that is background everywhere except a single
+    /// strong normalized peak at grid cell `(ix, iz)`.
+    fn field_with_peak(ix: usize, iz: usize) -> SignalField {
+        let nx = 20usize;
+        let nz = 20usize;
+        let mut values = vec![0.05f64; nx * nz];
+        values[iz * nx + ix] = 1.0;
+        SignalField {
+            grid_size: [nx, 1, nz],
+            values,
+        }
+    }
+
+    /// Build an all-background (below-threshold) 20×20 field — no localizable
+    /// hotspot, modelling an empty / no-presence room.
+    fn empty_field() -> SignalField {
+        SignalField {
+            grid_size: [20, 1, 20],
+            values: vec![0.05f64; 20 * 20],
+        }
+    }
+
+    fn base_update(signal_field: SignalField, presence: bool, motion_band_power: f64) -> SensingUpdate {
+        SensingUpdate {
+            msg_type: "sensing_update".to_string(),
+            timestamp: 1.0,
+            source: "test".to_string(),
+            tick: 1,
+            nodes: vec![],
+            features: FeatureInfo {
+                mean_rssi: -60.0,
+                variance: 48.6,
+                motion_band_power,
+                breathing_band_power: 0.0,
+                dominant_freq_hz: 1.0,
+                change_points: 0,
+                spectral_power: 0.0,
+            },
+            classification: ClassificationInfo {
+                motion_level: if presence { "present_moving".to_string() } else { "absent".to_string() },
+                presence,
+                confidence: 0.8,
+            },
+            signal_field,
+            vital_signs: None,
+            enhanced_motion: None,
+            enhanced_breathing: None,
+            posture: None,
+            signal_quality_score: None,
+            quality_verdict: None,
+            bssid_count: None,
+            pose_keypoints: None,
+            model_status: None,
+            persons: None,
+            estimated_persons: Some(1),
+            node_features: None,
+        }
+    }
+
+    #[test]
+    fn sensing_update_emits_persons_with_field_derived_position() {
+        // Person present, motion energy 63.3, a hotspot at cell (15, 4).
+        let peak_ix = 15;
+        let peak_iz = 4;
+        let mut update = base_update(field_with_peak(peak_ix, peak_iz), true, 63.3);
+
+        // Pipeline order: derive raw skeleton, then attach real field positions.
+        update.persons = Some(derive_pose_from_sensing(&update));
+        attach_field_positions(&mut update);
+
+        let persons = update.persons.as_ref().expect("persons should be Some");
+        assert!(!persons.is_empty(), "a present person must be emitted");
+
+        // Position must match the Observatory cell→world transform for (15, 4):
+        // x = (15-10)*0.6 = 3.0 ; z = (4-10)*0.5 = -3.0 ; y = 0.
+        let p0 = &persons[0];
+        assert!((p0.position[0] - 3.0).abs() < 1e-6, "x={}", p0.position[0]);
+        assert!((p0.position[1] - 0.0).abs() < 1e-9);
+        assert!((p0.position[2] - (-3.0)).abs() < 1e-6, "z={}", p0.position[2]);
+
+        // motion_score is the measured motion_band_power passed through (≤100).
+        assert!((p0.motion_score - 63.3).abs() < 1e-6, "motion_score={}", p0.motion_score);
+
+        // The serialized WS frame must carry the new fields by their exact
+        // contract names the Observatory UI reads.
+        let v = serde_json::to_value(&update).unwrap();
+        let arr = v["persons"].as_array().expect("persons must be a JSON array");
+        assert_eq!(arr.len(), persons.len());
+        let pj = &arr[0];
+        assert!(pj.get("position").is_some(), "person.position missing from WS frame");
+        assert!(pj.get("motion_score").is_some(), "person.motion_score missing from WS frame");
+        assert!((pj["position"][0].as_f64().unwrap() - 3.0).abs() < 1e-6);
+        assert!((pj["position"][2].as_f64().unwrap() - (-3.0)).abs() < 1e-6);
+        assert!((pj["motion_score"].as_f64().unwrap() - 63.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pose_is_real_when_posture_present_and_absent_otherwise() {
+        // No aggregate posture estimate → pose is None (never fabricated).
+        let mut no_posture = base_update(field_with_peak(10, 10), true, 40.0);
+        no_posture.persons = Some(derive_pose_from_sensing(&no_posture));
+        attach_field_positions(&mut no_posture);
+        let p = &no_posture.persons.as_ref().unwrap()[0];
+        assert!(p.pose.is_none(), "pose must stay None when no real posture exists");
+        // skip_serializing_if drops the key entirely (UI defaults to 'standing').
+        let v = serde_json::to_value(&no_posture).unwrap();
+        assert!(v["persons"][0].get("pose").is_none());
+
+        // Real aggregate posture present → pose is carried through verbatim.
+        let mut with_posture = base_update(field_with_peak(10, 10), true, 40.0);
+        with_posture.posture = Some("lying".to_string());
+        with_posture.persons = Some(derive_pose_from_sensing(&with_posture));
+        attach_field_positions(&mut with_posture);
+        let p2 = &with_posture.persons.as_ref().unwrap()[0];
+        assert_eq!(p2.pose.as_deref(), Some("lying"));
+        let v2 = serde_json::to_value(&with_posture).unwrap();
+        assert_eq!(v2["persons"][0]["pose"], "lying");
+    }
+
+    #[test]
+    fn empty_room_yields_no_phantom_person() {
+        // No presence → derive_pose_from_sensing returns no persons at all.
+        let mut update = base_update(empty_field(), false, 2.0);
+        update.persons = Some(derive_pose_from_sensing(&update));
+        attach_field_positions(&mut update);
+
+        let persons = update.persons.as_ref().unwrap();
+        assert!(
+            persons.is_empty(),
+            "no-presence frame must not emit a phantom person, got {} persons",
+            persons.len()
+        );
+
+        // And in the serialized frame the array is empty (no fake origin person).
+        let v = serde_json::to_value(&update).unwrap();
+        assert_eq!(v["persons"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn present_but_below_threshold_field_keeps_position_at_origin_not_fabricated() {
+        // Presence is true but the field has no peak above PEAK_THRESHOLD — we
+        // must NOT invent a position; it stays at the [0,0,0] default while
+        // motion_score still reflects the real measured motion power. This is
+        // the honest degenerate case (no localizable hotspot to report).
+        let mut update = base_update(empty_field(), true, 55.0);
+        update.persons = Some(derive_pose_from_sensing(&update));
+        attach_field_positions(&mut update);
+
+        let p = &update.persons.as_ref().unwrap()[0];
+        assert_eq!(p.position, [0.0, 0.0, 0.0], "no peak → default origin, not fabricated coords");
+        assert!((p.motion_score - 55.0).abs() < 1e-6, "motion_score stays real");
     }
 }

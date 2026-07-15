@@ -1,7 +1,17 @@
-//! Seizure detection — ADR-041 Category 1 Medical module.
+//! Seizure-like motion-signature flagging — ADR-041 Category 1 Medical module.
 //!
-//! Detects tonic-clonic seizures via high-energy rhythmic motion in the
-//! 3-8 Hz band, discriminating from:
+//! ⚠️ EXPERIMENTAL RESEARCH MODULE — NOT VALIDATED AGAINST CLINICAL DATA.
+//! ⚠️ NOT A MEDICAL DEVICE. Do NOT use for diagnosis, seizure monitoring, or any
+//! ⚠️ clinical decision. This module flags *candidate* seizure-like motion
+//! ⚠️ signatures (high-energy rhythmic 3-8 Hz motion) only; it has never been
+//! ⚠️ validated against EEG/video-EEG or any reference standard, and its
+//! ⚠️ accuracy is unproven (see ADR-160 §A1). Seizure detection cannot be
+//! ⚠️ validated without clinical data — this module does not claim to do so.
+//! ⚠️ Gated behind the non-default `medical-experimental` cargo feature.
+//!
+//! Flags candidate tonic-clonic-seizure-like motion signatures (experimental)
+//! via high-energy rhythmic motion in the 3-8 Hz band, attempting to
+//! discriminate from:
 //!   - Falls: single impulse followed by stillness
 //!   - Tremor: lower amplitude, higher regularity
 //!
@@ -125,6 +135,9 @@ pub struct SeizureDetector {
 
     /// Frame counter.
     frame_count: u32,
+
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
 }
 
 impl SeizureDetector {
@@ -143,6 +156,7 @@ impl SeizureDetector {
             cooldown: 0,
             seizure_count: 0,
             frame_count: 0,
+            events: [(0, 0.0); 4],
         }
     }
 
@@ -172,7 +186,6 @@ impl SeizureDetector {
         self.amp_idx = (self.amp_idx + 1) % PHASE_WINDOW;
         if self.amp_len < PHASE_WINDOW { self.amp_len += 1; }
 
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n = 0usize;
 
         // No detection without presence.
@@ -182,7 +195,7 @@ impl SeizureDetector {
                 self.state_frames = 0;
                 self.high_energy_frames = 0;
             }
-            return unsafe { &EVENTS[..n] };
+            return &self.events[..n];
         }
 
         // Tick cooldown.
@@ -192,7 +205,7 @@ impl SeizureDetector {
                 self.phase = SeizurePhase::Monitoring;
                 self.state_frames = 0;
             }
-            return unsafe { &EVENTS[..n] };
+            return &self.events[..n];
         }
 
         // ── State machine ───────────────────────────────────────────────
@@ -222,7 +235,7 @@ impl SeizureDetector {
                         self.phase = SeizurePhase::Monitoring;
                         self.state_frames = 0;
                         self.high_energy_frames = 0;
-                        return unsafe { &EVENTS[..n] };
+                        return &self.events[..n];
                     }
                 }
 
@@ -232,7 +245,7 @@ impl SeizureDetector {
                     self.phase = SeizurePhase::Tonic;
                     self.state_frames = 0;
                     self.seizure_count += 1;
-                    unsafe { EVENTS[n] = (EVENT_SEIZURE_ONSET, motion_energy); }
+                    self.events[n] = (EVENT_SEIZURE_ONSET, motion_energy);
                     n += 1;
                 }
 
@@ -244,10 +257,10 @@ impl SeizureDetector {
                         self.phase = SeizurePhase::Clonic;
                         self.state_frames = 0;
                         self.seizure_count += 1;
-                        unsafe { EVENTS[n] = (EVENT_SEIZURE_ONSET, motion_energy); }
+                        self.events[n] = (EVENT_SEIZURE_ONSET, motion_energy);
                         n += 1;
                         if n < 4 {
-                            unsafe { EVENTS[n] = (EVENT_SEIZURE_CLONIC, period as f32); }
+                            self.events[n] = (EVENT_SEIZURE_CLONIC, period as f32);
                             n += 1;
                         }
                     }
@@ -271,13 +284,13 @@ impl SeizureDetector {
                     if energy_var > TONIC_VAR_CEIL {
                         if let Some(period) = self.detect_rhythm() {
                             if self.state_frames >= TONIC_MIN_FRAMES && n < 4 {
-                                unsafe { EVENTS[n] = (EVENT_SEIZURE_TONIC, self.state_frames as f32); }
+                                self.events[n] = (EVENT_SEIZURE_TONIC, self.state_frames as f32);
                                 n += 1;
                             }
                             self.phase = SeizurePhase::Clonic;
                             self.state_frames = 0;
                             if n < 4 {
-                                unsafe { EVENTS[n] = (EVENT_SEIZURE_CLONIC, period as f32); }
+                                self.events[n] = (EVENT_SEIZURE_CLONIC, period as f32);
                                 n += 1;
                             }
                         }
@@ -289,7 +302,7 @@ impl SeizureDetector {
                     self.low_energy_frames += 1;
                     if self.low_energy_frames >= POST_ICTAL_MIN_FRAMES {
                         if self.state_frames >= TONIC_MIN_FRAMES && n < 4 {
-                            unsafe { EVENTS[n] = (EVENT_SEIZURE_TONIC, self.state_frames as f32); }
+                            self.events[n] = (EVENT_SEIZURE_TONIC, self.state_frames as f32);
                             n += 1;
                         }
                         self.phase = SeizurePhase::PostIctal;
@@ -318,7 +331,7 @@ impl SeizureDetector {
             SeizurePhase::PostIctal => {
                 self.state_frames += 1;
                 if self.state_frames == 1 && n < 4 {
-                    unsafe { EVENTS[n] = (EVENT_POST_ICTAL, 1.0); }
+                    self.events[n] = (EVENT_POST_ICTAL, 1.0);
                     n += 1;
                 }
 
@@ -337,7 +350,7 @@ impl SeizureDetector {
             }
         }
 
-        unsafe { &EVENTS[..n] }
+        &self.events[..n]
     }
 
     /// Compute variance of recent motion energy.

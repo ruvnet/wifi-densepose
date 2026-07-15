@@ -1,6 +1,8 @@
 // Quick Settings Panel - Centralized configuration for all UI features
 // Accessible via gear icon in header
 
+import { apiService, API_TOKEN_STORAGE_KEY } from '../services/api.service.js';
+
 export class QuickSettings {
   constructor(app) {
     this.app = app;
@@ -9,6 +11,8 @@ export class QuickSettings {
     this.isOpen = false;
   }
 
+  // A stored token is applied at api.service.js module load (before any
+  // request fires) — this panel only saves/clears it.
   init() {
     this.createButton();
     this.createPanel();
@@ -71,6 +75,18 @@ export class QuickSettings {
           </label>
         </div>
         <div class="qs-section">
+          <div class="qs-section-title">API Access</div>
+          <div class="qs-row" style="flex-direction: column; align-items: stretch; gap: 6px;">
+            <span>Bearer token (set only if the server enforces RUVIEW_API_TOKEN)</span>
+            <input type="password" id="qs-api-token" class="qs-text-input" placeholder="Paste token..." autocomplete="off" style="width: 100%; box-sizing: border-box;">
+            <div style="display: flex; gap: 8px;">
+              <button class="qs-btn" id="qs-api-token-save">Save & Apply</button>
+              <button class="qs-btn-danger" id="qs-api-token-clear">Clear</button>
+            </div>
+            <span id="qs-api-token-status" style="font-size: 0.85em; opacity: 0.75;"></span>
+          </div>
+        </div>
+        <div class="qs-section">
           <div class="qs-section-title">Data</div>
           <div class="qs-row">
             <span>Clear local data</span>
@@ -110,6 +126,30 @@ export class QuickSettings {
       } else {
         document.dispatchEvent(new CustomEvent('health-polling-toggle', { detail: false }));
       }
+    });
+
+    this.panel.querySelector('#qs-api-token-save').addEventListener('click', () => {
+      const input = this.panel.querySelector('#qs-api-token');
+      const status = this.panel.querySelector('#qs-api-token-status');
+      const token = input.value.trim();
+      if (!token) {
+        status.textContent = 'Enter a token first, or use Clear to remove one.';
+        return;
+      }
+      try { localStorage.setItem(API_TOKEN_STORAGE_KEY, token); } catch { /* noop */ }
+      apiService.setAuthToken(token);
+      status.textContent = 'Token saved and applied. Reloading...';
+      setTimeout(() => window.location.reload(), 600);
+    });
+
+    this.panel.querySelector('#qs-api-token-clear').addEventListener('click', () => {
+      const input = this.panel.querySelector('#qs-api-token');
+      const status = this.panel.querySelector('#qs-api-token-status');
+      try { localStorage.removeItem(API_TOKEN_STORAGE_KEY); } catch { /* noop */ }
+      apiService.setAuthToken(null);
+      input.value = '';
+      status.textContent = 'Token cleared. Reloading...';
+      setTimeout(() => window.location.reload(), 600);
     });
 
     this.panel.querySelector('#qs-clear-data').addEventListener('click', () => {
@@ -154,6 +194,10 @@ export class QuickSettings {
     if (this.getSetting('compact')) {
       document.body.classList.add('compact-mode');
     }
+    const status = this.panel.querySelector('#qs-api-token-status');
+    let hasToken = false;
+    try { hasToken = !!localStorage.getItem(API_TOKEN_STORAGE_KEY); } catch { /* noop */ }
+    if (status) status.textContent = hasToken ? 'A token is currently set.' : 'No token set (auth is off or unnecessary).';
   }
 
   prefersReducedMotion() {

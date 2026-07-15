@@ -184,4 +184,43 @@ mod tests {
         let fused = fuse_clouds(&[&a], 0.5);
         assert_eq!(fused.points.len(), 1, "three close points → one voxel");
     }
+
+    // ── degenerate-input robustness (no panic, sensible output) ────────────
+    //
+    // These pin that the voxel accumulators handle empty / single / all-
+    // coincident inputs without dividing by zero or panicking. The per-voxel
+    // count is always >= 1 (the entry is created on first insert), so the
+    // `/n` averaging is safe — but make that contract explicit so a future
+    // refactor cannot silently reintroduce a div-by-zero.
+
+    #[test]
+    fn fuse_clouds_empty_input_is_empty() {
+        let fused = fuse_clouds(&[], 0.1);
+        assert!(fused.points.is_empty(), "no clouds → no points");
+        let empty = PointCloud::new("empty");
+        let fused2 = fuse_clouds(&[&empty], 0.1);
+        assert!(fused2.points.is_empty(), "empty cloud → no points");
+    }
+
+    #[test]
+    fn fuse_clouds_single_point_is_finite() {
+        let a = cloud_with("a", &[(1.0, 2.0, 3.0)]);
+        let fused = fuse_clouds(&[&a], 0.1);
+        assert_eq!(fused.points.len(), 1);
+        let p = &fused.points[0];
+        assert!(
+            p.x.is_finite() && p.y.is_finite() && p.z.is_finite() && p.intensity.is_finite(),
+            "single-point voxel must average to a finite point"
+        );
+    }
+
+    #[test]
+    fn fuse_clouds_all_coincident_collapses_finite() {
+        // Many identical points → one voxel, finite averaged centroid.
+        let a = cloud_with("a", &[(0.5, 0.5, 0.5); 100]);
+        let fused = fuse_clouds(&[&a], 0.25);
+        assert_eq!(fused.points.len(), 1, "coincident points → one voxel");
+        let p = &fused.points[0];
+        assert!((p.x - 0.5).abs() < 1e-4 && p.x.is_finite());
+    }
 }

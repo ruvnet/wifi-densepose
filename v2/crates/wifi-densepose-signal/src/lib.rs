@@ -67,6 +67,13 @@ pub use phase_sanitizer::{
 pub use ruvsense::cir;
 pub use ruvsense::cir::{Cir, CirConfig, CirError, CirEstimator};
 
+// ADR-135: Baseline calibration top-level re-exports
+pub use ruvsense::calibration;
+pub use ruvsense::calibration::{
+    BaselineCalibration, CalibrationConfig, CalibrationDeviationScore, CalibrationError,
+    CalibrationRecorder, PhyTier, SubcarrierBaseline,
+};
+
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

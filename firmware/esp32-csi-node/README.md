@@ -4,7 +4,7 @@
 
 This firmware captures WiFi Channel State Information (CSI) from an ESP32-S3 (production) or ESP32-C6 (research target — Wi-Fi 6 / 802.15.4 / TWT / LP-core hibernation, see [ADR-110](../../docs/adr/ADR-110-esp32-c6-firmware-extension.md)) and transforms it into real-time presence detection, vital sign monitoring, and programmable sensing -- all without cameras or wearables. Part of the [WiFi-DensePose](../../README.md) project.
 
-[![ESP-IDF v5.2](https://img.shields.io/badge/ESP--IDF-v5.2-blue.svg)](https://docs.espressif.com/projects/esp-idf/en/v5.2/)
+[![ESP-IDF v5.4](https://img.shields.io/badge/ESP--IDF-v5.4-blue.svg)](https://docs.espressif.com/projects/esp-idf/en/v5.4/)
 [![Target: ESP32-S3 / ESP32-C6](https://img.shields.io/badge/target-ESP32--S3%20%7C%20ESP32--C6-purple.svg)](https://www.espressif.com/en/products/socs/esp32-s3)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](../../LICENSE)
 [![Binary: ~943 KB](https://img.shields.io/badge/binary-~943%20KB-orange.svg)](#memory-budget)
@@ -48,9 +48,17 @@ with `--flash_size 4MB`.
 # From the repository root:
 MSYS_NO_PATHCONV=1 docker run --rm \
   -v "$(pwd)/firmware/esp32-csi-node:/project" -w /project \
-  espressif/idf:v5.2 bash -c \
+  espressif/idf:v5.4 bash -c \
   "rm -rf build sdkconfig && idf.py set-target esp32s3 && idf.py build"
 ```
+
+> **Display-less boards (ESP32-S3-DevKitC-1 and similar):** build with the
+> `sdkconfig.defaults.devkitc` overlay instead — the default build compiles
+> display support in, and the runtime panel probe false-positives on boards
+> with no panel, which disables the RuView#893 MGMT+DATA CSI upgrade and
+> collapses CSI yield to 0 pps. See the header of
+> [`sdkconfig.defaults.devkitc`](sdkconfig.defaults.devkitc) for the exact
+> build command.
 
 ### 2. Flash
 
@@ -250,7 +258,7 @@ Offset  Size  Field
 # From the repository root:
 MSYS_NO_PATHCONV=1 docker run --rm \
   -v "$(pwd)/firmware/esp32-csi-node:/project" -w /project \
-  espressif/idf:v5.2 bash -c \
+  espressif/idf:v5.4 bash -c \
   "rm -rf build sdkconfig && idf.py set-target esp32s3 && idf.py build"
 ```
 
@@ -268,7 +276,7 @@ To change Kconfig settings before building:
 ```bash
 MSYS_NO_PATHCONV=1 docker run --rm -it \
   -v "$(pwd)/firmware/esp32-csi-node:/project" -w /project \
-  espressif/idf:v5.2 bash -c \
+  espressif/idf:v5.4 bash -c \
   "idf.py set-target esp32s3 && idf.py menuconfig"
 ```
 

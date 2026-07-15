@@ -16,7 +16,8 @@
 //! 12      4     Sequence number (LE u32)
 //! 16      1     RSSI (i8)
 //! 17      1     Noise floor (i8)
-//! 18      2     Reserved
+//! 18      1     PPDU type (ADR-110: 0=HT/legacy, 1=HE-SU, 2=HE-MU, 3=HE-TB)
+//! 19      1     Flags (ADR-110: bit0 bw40, bit2 STBC, bit3 LDPC, bit4 15.4-sync)
 //! 20      N*2   I/Q pairs (n_antennas * n_subcarriers * 2 bytes)
 //! ```
 //!
@@ -240,12 +241,31 @@ impl Esp32CsiParser {
             }
         }
 
-        // Determine bandwidth from subcarrier count
-        let bandwidth = match n_subcarriers {
-            0..=56 => Bandwidth::Bw20,
-            57..=114 => Bandwidth::Bw40,
-            115..=242 => Bandwidth::Bw80,
-            _ => Bandwidth::Bw160,
+        // Determine bandwidth from PPDU type + subcarrier count (ADR-110).
+        //
+        // HE-LTF uses a 4x denser tone grid than HT-LTF on the same channel
+        // width: HE20 = 256-FFT (242 active tones), HE40 = 512-FFT (484
+        // active). So a 256-bin frame on an HE PPDU is *20 MHz*, not 160.
+        // For HE frames the firmware also writes the bandwidth into byte 19
+        // bit 0 (see Adr018Flags::bw40) — prefer that when set.
+        //
+        // HT/legacy keeps the count heuristic, with 64 included in the 20 MHz
+        // bucket: ESP32 HT20 CSI delivers the full 64-bin FFT grid (live
+        // capture evidence: 148-byte frames = 64 subcarriers on a 20 MHz
+        // channel, issue #1005).
+        let bandwidth = if ppdu_type.is_he() {
+            if adr018_flags.bw40 || n_subcarriers > 256 {
+                Bandwidth::Bw40
+            } else {
+                Bandwidth::Bw20
+            }
+        } else {
+            match n_subcarriers {
+                0..=64 => Bandwidth::Bw20,
+                65..=128 => Bandwidth::Bw40,
+                129..=242 => Bandwidth::Bw80,
+                _ => Bandwidth::Bw160,
+            }
         };
 
         let frame = CsiFrame {

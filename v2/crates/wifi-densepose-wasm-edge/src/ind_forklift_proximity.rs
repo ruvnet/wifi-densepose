@@ -59,6 +59,8 @@ pub const EVENT_HUMAN_NEAR_VEHICLE: i32 = 502;
 
 /// Forklift proximity detector.
 pub struct ForkliftProximityDetector {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
     /// Per-subcarrier baseline amplitude (calibrated).
     baseline_amp: [f32; MAX_SC],
     /// Phase history ring buffer for frequency analysis.
@@ -83,6 +85,7 @@ pub struct ForkliftProximityDetector {
 impl ForkliftProximityDetector {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 4],
             baseline_amp: [0.0; MAX_SC],
             phase_history: [[0.0; MAX_SC]; PHASE_HISTORY],
             phase_hist_idx: 0,
@@ -139,7 +142,6 @@ impl ForkliftProximityDetector {
             self.phase_hist_len += 1;
         }
 
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n_events = 0usize;
 
         // Calibration phase: 100 frames (~5 seconds).
@@ -158,7 +160,7 @@ impl ForkliftProximityDetector {
                 }
                 self.calibrated = true;
             }
-            return unsafe { &EVENTS[..0] };
+            return &self.events[..0];
         }
 
         // --- Step 1: Detect forklift/AGV signature ---
@@ -182,9 +184,7 @@ impl ForkliftProximityDetector {
 
         // Emit vehicle detected on transition.
         if self.vehicle_present && !was_vehicle && n_events < 4 {
-            unsafe {
-                EVENTS[n_events] = (EVENT_VEHICLE_DETECTED, amp_ratio);
-            }
+            self.events[n_events] = (EVENT_VEHICLE_DETECTED, amp_ratio);
             n_events += 1;
         }
 
@@ -197,9 +197,7 @@ impl ForkliftProximityDetector {
 
             // Emit human-near-vehicle event on transition (debounce threshold reached).
             if self.proximity_debounce == PROXIMITY_DEBOUNCE && n_events < 4 {
-                unsafe {
-                    EVENTS[n_events] = (EVENT_HUMAN_NEAR_VEHICLE, motion_energy);
-                }
+                self.events[n_events] = (EVENT_HUMAN_NEAR_VEHICLE, motion_energy);
                 n_events += 1;
             }
 
@@ -215,9 +213,7 @@ impl ForkliftProximityDetector {
                 } else {
                     2.0 // caution
                 };
-                unsafe {
-                    EVENTS[n_events] = (EVENT_PROXIMITY_WARNING, dist_cat);
-                }
+                self.events[n_events] = (EVENT_PROXIMITY_WARNING, dist_cat);
                 n_events += 1;
                 self.cooldown = ALERT_COOLDOWN;
             }
@@ -225,7 +221,7 @@ impl ForkliftProximityDetector {
             self.proximity_debounce = 0;
         }
 
-        unsafe { &EVENTS[..n_events] }
+        &self.events[..n_events]
     }
 
     /// Compute mean amplitude ratio vs baseline across subcarriers.

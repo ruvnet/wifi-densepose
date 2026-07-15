@@ -201,12 +201,29 @@ fn find_static_subcarriers(
 
 /// Estimate per-channel phase offsets using iterative Neumann-style refinement.
 ///
-/// Channel 0 is the reference (offset = 0).
+/// Channel 0 is the reference (offset = 0). Thin wrapper that drops the
+/// iteration count; `estimate_phase_offsets_counted` is the instrumented core.
 fn estimate_phase_offsets(
     frames: &[CanonicalCsiFrame],
     static_indices: &[usize],
     config: &PhaseAlignConfig,
 ) -> std::result::Result<Vec<f32>, PhaseAlignError> {
+    estimate_phase_offsets_counted(frames, static_indices, config).map(|(offsets, _iters)| offsets)
+}
+
+/// Core of [`estimate_phase_offsets`], also returning the number of refinement
+/// iterations actually executed.
+///
+/// The returned count is bounded by `config.max_iterations` — that bound is the
+/// convergence cap that guarantees termination on inputs the damped Neumann
+/// update never drives below `config.tolerance` (ADR-154 §7.4 #16). The offset
+/// vector is identical to the public `estimate_phase_offsets` path; only the
+/// iteration count is surfaced (for the cap test).
+fn estimate_phase_offsets_counted(
+    frames: &[CanonicalCsiFrame],
+    static_indices: &[usize],
+    config: &PhaseAlignConfig,
+) -> std::result::Result<(Vec<f32>, usize), PhaseAlignError> {
     let n_ch = frames.len();
     let mut offsets = vec![0.0_f32; n_ch];
 
@@ -220,7 +237,7 @@ fn estimate_phase_offsets(
     }
 
     // Iterative refinement (Neumann-style)
-    for _iter in 0..config.max_iterations {
+    for iter in 0..config.max_iterations {
         let mut max_update = 0.0_f32;
 
         for c in 1..n_ch {
@@ -241,12 +258,13 @@ fn estimate_phase_offsets(
         }
 
         if max_update < config.tolerance {
-            return Ok(offsets);
+            return Ok((offsets, iter + 1));
         }
     }
 
-    // Even if we do not converge tightly, return best estimate
-    Ok(offsets)
+    // Even if we do not converge tightly, return best estimate. The loop ran the
+    // full cap — termination is guaranteed by `config.max_iterations`.
+    Ok((offsets, config.max_iterations))
 }
 
 /// Apply phase correction: subtract offset from each subcarrier phase.
@@ -444,6 +462,73 @@ mod tests {
         assert!((cfg.tolerance - 1e-4).abs() < 1e-8);
         assert!((cfg.static_fraction - 0.3).abs() < 1e-6);
         assert_eq!(cfg.min_static_subcarriers, 5);
+    }
+
+    // ADR-154 §7.4 #16: the iterative LO-offset refinement must TERMINATE at the
+    // `max_iterations` cap on a non-converging input — no unbounded loop.
+    //
+    // We force non-convergence by setting `tolerance` to an unreachable value
+    // (the damped Neumann update on bounded phase residuals can never drive
+    // `max_update` below 0.0), so the `max_update < tolerance` early-exit is
+    // never taken. The instrumented core must then run *exactly*
+    // `max_iterations` and return — proving the cap, not convergence, is what
+    // bounds the loop.
+    #[test]
+    fn refinement_terminates_at_iteration_cap_when_not_converging() {
+        let n_sub = 56;
+        let max_iterations = 7;
+        let config = PhaseAlignConfig {
+            max_iterations,
+            // Unreachable tolerance: `max_update` is always ≥ 0, never < 0.0,
+            // so the convergence branch can never fire.
+            tolerance: 0.0,
+            static_fraction: 0.3,
+            min_static_subcarriers: 5,
+        };
+        // Two channels with a real, persistent offset so each iteration keeps
+        // producing a non-zero update.
+        let f0 = make_frame_with_phase(n_sub, 0.0, 0.0);
+        let f1 = make_frame_with_phase(n_sub, 0.0, 1.3);
+        let frames = vec![f0, f1];
+        let static_indices = find_static_subcarriers(&frames, &config).unwrap();
+
+        let (offsets, iters) =
+            estimate_phase_offsets_counted(&frames, &static_indices, &config).unwrap();
+
+        // The cap, not convergence, terminated the loop.
+        assert_eq!(
+            iters, max_iterations,
+            "expected the loop to run the full cap ({max_iterations}), got {iters}"
+        );
+        // It still returns a finite best-estimate offset vector.
+        assert_eq!(offsets.len(), 2);
+        assert!(offsets.iter().all(|o| o.is_finite()));
+        // Reference channel offset stays 0.
+        assert_eq!(offsets[0], 0.0);
+    }
+
+    // Convergent companion: a near-identical input converges *before* the cap,
+    // so the cap is an upper bound, not the only exit.
+    #[test]
+    fn refinement_converges_before_cap_on_easy_input() {
+        let n_sub = 56;
+        let config = PhaseAlignConfig {
+            max_iterations: 50,
+            tolerance: 1e-2, // loose: a tiny offset converges in a few iters
+            static_fraction: 0.3,
+            min_static_subcarriers: 5,
+        };
+        let f0 = make_frame_with_phase(n_sub, 0.0, 0.0);
+        let f1 = make_frame_with_phase(n_sub, 0.0, 0.02);
+        let frames = vec![f0, f1];
+        let static_indices = find_static_subcarriers(&frames, &config).unwrap();
+        let (_offsets, iters) =
+            estimate_phase_offsets_counted(&frames, &static_indices, &config).unwrap();
+        assert!(
+            iters < config.max_iterations,
+            "easy input should converge before the cap, ran {iters}/{}",
+            config.max_iterations
+        );
     }
 
     #[test]

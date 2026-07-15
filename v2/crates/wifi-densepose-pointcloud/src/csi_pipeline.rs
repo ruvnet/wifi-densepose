@@ -700,4 +700,79 @@ mod tests {
             assert!(conf > 0.7, "self-similarity should exceed match threshold");
         }
     }
+
+    // ── NaN-state-poisoning guard (the proven recurring bug class) ──────────
+    //
+    // The calibration/vitals crates were both bitten by a single non-finite
+    // sample latching into persistent state and freezing all outputs forever.
+    // Here the auto-accumulating persistent state is `occupancy` (an EMA:
+    // `*occ = *occ*0.7 + new*0.3`) and `vitals` (motion/breathing/heart).
+    //
+    // The UDP parser can only ever emit finite amplitudes/phases (sqrt and
+    // atan2 of i8 values), so the realistic ingress is already safe. This test
+    // is stronger: it injects an adversarial hand-built `CsiFrame` carrying
+    // NaN/inf amplitudes and phases (possible because the fields are public),
+    // and pins that the persistent state self-heals to finite values rather
+    // than latching NaN and silently freezing — i.e. the bug class is absent.
+    #[test]
+    fn nonfinite_frame_does_not_poison_persistent_state() {
+        let mut s = CsiPipelineState::default();
+        // Warm up with valid frames so vitals/occupancy are populated.
+        seed_state_with_frames(&mut s, 60);
+
+        // A valid baseline must be finite to start.
+        assert!(s.occupancy.iter().all(|d| d.is_finite()));
+        assert!(s.vitals.breathing_rate.is_finite());
+        assert!(s.vitals.motion_score.is_finite());
+
+        // Inject a stream of poisoned frames: NaN/inf amplitudes + phases on a
+        // valid header (node_id 1, finite rssi). Mimics a corrupt sensor.
+        for i in 0..40 {
+            let nan_frame = CsiFrame {
+                node_id: 1,
+                n_antennas: 1,
+                n_subcarriers: 32,
+                channel: 6,
+                rssi: -50,
+                noise_floor: -90,
+                timestamp_us: 10_000 + i,
+                iq_data: vec![0i8; 64],
+                amplitudes: vec![f32::NAN; 32],
+                phases: vec![f32::INFINITY; 32],
+            };
+            s.process_frame(nan_frame);
+        }
+
+        // Persistent auto-accumulating state must remain finite — a single
+        // poisoned frame (or 40) must not permanently corrupt outputs.
+        assert!(
+            s.occupancy.iter().all(|d| d.is_finite()),
+            "occupancy EMA must not latch NaN/inf"
+        );
+        assert!(
+            s.vitals.breathing_rate.is_finite(),
+            "breathing_rate must stay finite, got {}",
+            s.vitals.breathing_rate
+        );
+        assert!(
+            s.vitals.heart_rate.is_finite(),
+            "heart_rate must stay finite, got {}",
+            s.vitals.heart_rate
+        );
+        assert!(
+            s.vitals.motion_score.is_finite(),
+            "motion_score must stay finite, got {}",
+            s.vitals.motion_score
+        );
+
+        // And the pipeline must recover: feeding valid frames again yields a
+        // finite, in-range breathing estimate (not a frozen NaN).
+        seed_state_with_frames(&mut s, 60);
+        assert!(s.vitals.breathing_rate.is_finite());
+        assert!(
+            (0.0..=40.0).contains(&s.vitals.breathing_rate),
+            "breathing must be in clamp range after recovery, got {}",
+            s.vitals.breathing_rate
+        );
+    }
 }

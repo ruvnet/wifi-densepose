@@ -128,6 +128,38 @@ fn zone_payload_is_json_string_with_quotes() {
 }
 
 #[test]
+fn zone_payload_escapes_json_metacharacters() {
+    // A zone name containing a double-quote or backslash must not break out of
+    // the JSON string literal it is emitted into. ha_discovery.rs already
+    // escapes operator-controlled strings via push_str_field; render_events
+    // must do the same for parity so the state-topic payload is always valid
+    // JSON that Home Assistant can parse.
+    let ev = BfldEvent::with_privacy_gating(
+        "seed-01".into(),
+        0,
+        true,
+        0.1,
+        1,
+        0.9,
+        Some(r#"living"room\back"#.into()),
+        PrivacyClass::Anonymous,
+        None,
+        None,
+    );
+    let msgs = render_events(&ev);
+    let zone = msgs
+        .iter()
+        .find(|m| m.topic.contains("zone_activity"))
+        .expect("zone_activity topic");
+    // Expected: the inner quote and backslash are backslash-escaped, wrapped in
+    // one pair of unescaped delimiter quotes -> a single valid JSON string.
+    assert_eq!(zone.payload, r#""living\"room\\back""#);
+    // And it must parse as JSON back to the original zone string.
+    let parsed: String = serde_json::from_str(&zone.payload).expect("valid JSON string");
+    assert_eq!(parsed, r#"living"room\back"#);
+}
+
+#[test]
 fn identity_risk_payload_is_fixed_precision_decimal() {
     let msgs = render_events(&sample_event(PrivacyClass::Anonymous, false));
     let risk = msgs

@@ -1,6 +1,6 @@
 [package]
 name = "wifi-densepose-nn"
-version.workspace = true
+version = "0.3.1"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -57,4 +57,13 @@ tempfile = "3.10"
 
 [[bench]]
 name = "inference_bench"
+harness = false
+
+[[bench]]
+name = "onnx_bench"
+harness = false
+required-features = ["onnx"]
+
+[[bench]]
+name = "native_conv_bench"
 harness = false

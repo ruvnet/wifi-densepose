@@ -260,7 +260,6 @@ fn should_detect_unsanitized_phase_when_variance_exceeds_threshold() {
 /// Verifies the full pipeline: generate CSI → sanitize → estimate → dominant tap
 /// is at or near the expected delay bin. This is the success-path integration test.
 #[test]
-#[ignore = "ADR-134 P2: end-to-end dominant_tap_ratio gated on ISTA hyperparameter tuning."]
 fn should_produce_clean_estimate_after_correct_pipeline_order() {
     let cfg = CirConfig::for_bandwidth_mhz(20);
     let k_active = cfg.delay_bins / 3;

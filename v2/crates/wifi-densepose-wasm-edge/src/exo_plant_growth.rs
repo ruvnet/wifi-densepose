@@ -95,6 +95,8 @@ pub const EVENT_WATERING_EVENT: i32 = 643;
 /// and phase to detect growth drift, circadian oscillation, wilting,
 /// and watering events.
 pub struct PlantGrowthDetector {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
     /// Slow EWMA of amplitude per subcarrier group.
     amp_baseline: [Ema; N_GROUPS],
     /// Fast EWMA of amplitude per subcarrier group.
@@ -124,6 +126,7 @@ pub struct PlantGrowthDetector {
 impl PlantGrowthDetector {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 4],
             amp_baseline: [
                 Ema::new(BASELINE_ALPHA), Ema::new(BASELINE_ALPHA),
                 Ema::new(BASELINE_ALPHA), Ema::new(BASELINE_ALPHA),
@@ -174,7 +177,6 @@ impl PlantGrowthDetector {
         variance: &[f32],
         presence: i32,
     ) -> &[(i32, f32)] {
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n_ev = 0usize;
 
         self.frame_count += 1;
@@ -264,9 +266,7 @@ impl PlantGrowthDetector {
             self.drift_interval_count = 0;
 
             if fabsf(avg_drift) > GROWTH_THRESHOLD {
-                unsafe {
-                    EVENTS[n_ev] = (EVENT_GROWTH_RATE, avg_drift);
-                }
+                self.events[n_ev] = (EVENT_GROWTH_RATE, avg_drift);
                 n_ev += 1;
             }
         }
@@ -288,9 +288,7 @@ impl PlantGrowthDetector {
             if avg_osc > CIRCADIAN_MIN_MAGNITUDE {
                 // Normalize to [0, 1] range (cap at 1.0).
                 let normalized = if avg_osc > 1.0 { 1.0 } else { avg_osc };
-                unsafe {
-                    EVENTS[n_ev] = (EVENT_CIRCADIAN_PHASE, normalized);
-                }
+                self.events[n_ev] = (EVENT_CIRCADIAN_PHASE, normalized);
                 n_ev += 1;
             }
         }
@@ -315,9 +313,7 @@ impl PlantGrowthDetector {
             }
             // Need majority of groups to agree.
             if amp_rise_count >= (N_GROUPS / 2) as u8 && var_drop_count >= 2 {
-                unsafe {
-                    EVENTS[n_ev] = (EVENT_WILT_DETECTED, 1.0);
-                }
+                self.events[n_ev] = (EVENT_WILT_DETECTED, 1.0);
                 n_ev += 1;
             }
         }
@@ -333,14 +329,12 @@ impl PlantGrowthDetector {
                 }
             }
             if drop_count >= (N_GROUPS / 2) as u8 {
-                unsafe {
-                    EVENTS[n_ev] = (EVENT_WATERING_EVENT, 1.0);
-                }
+                self.events[n_ev] = (EVENT_WATERING_EVENT, 1.0);
                 n_ev += 1;
             }
         }
 
-        unsafe { &EVENTS[..n_ev] }
+        &self.events[..n_ev]
     }
 
     /// Get the number of empty-room frames accumulated.

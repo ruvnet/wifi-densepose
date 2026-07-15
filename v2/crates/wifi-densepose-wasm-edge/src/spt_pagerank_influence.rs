@@ -48,6 +48,8 @@ pub const EVENT_INFLUENCE_CHANGE: i32 = 762;
 
 /// PageRank influence tracker.
 pub struct PageRankInfluence {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 8],
     /// Weighted adjacency matrix (row-major, adj[i][j] = correlation i<->j).
     adj: [[f32; MAX_PERSONS]; MAX_PERSONS],
     /// Current PageRank vector.
@@ -63,6 +65,7 @@ pub struct PageRankInfluence {
 impl PageRankInfluence {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 8],
             adj: [[0.0; MAX_PERSONS]; MAX_PERSONS],
             rank: [0.25; MAX_PERSONS],
             prev_rank: [0.25; MAX_PERSONS],
@@ -190,9 +193,8 @@ impl PageRankInfluence {
         }
     }
 
-    /// Build output events into a static buffer.
-    fn build_events(&self, np: usize) -> &[(i32, f32)] {
-        static mut EVENTS: [(i32, f32); 8] = [(0, 0.0); 8];
+    /// Build output events into the owned per-call buffer.
+    fn build_events(&mut self, np: usize) -> &[(i32, f32)] {
         let mut n = 0usize;
 
         // Find dominant person.
@@ -206,15 +208,11 @@ impl PageRankInfluence {
         }
 
         // Emit dominant person every frame.
-        unsafe {
-            EVENTS[n] = (EVENT_DOMINANT_PERSON, best_idx as f32);
-        }
+        self.events[n] = (EVENT_DOMINANT_PERSON, best_idx as f32);
         n += 1;
 
         // Emit influence score every frame.
-        unsafe {
-            EVENTS[n] = (EVENT_INFLUENCE_SCORE, best_rank);
-        }
+        self.events[n] = (EVENT_INFLUENCE_SCORE, best_rank);
         n += 1;
 
         // Emit change events for persons whose rank shifted significantly.
@@ -223,14 +221,12 @@ impl PageRankInfluence {
             if fabsf(delta) > CHANGE_THRESHOLD && n < 8 {
                 // Encode: integer part = person_id, fractional = clamped delta.
                 let encoded = i as f32 + delta.clamp(-0.49, 0.49);
-                unsafe {
-                    EVENTS[n] = (EVENT_INFLUENCE_CHANGE, encoded);
-                }
+                self.events[n] = (EVENT_INFLUENCE_CHANGE, encoded);
                 n += 1;
             }
         }
 
-        unsafe { &EVENTS[..n] }
+        &self.events[..n]
     }
 
     /// Get the current PageRank score for a person.

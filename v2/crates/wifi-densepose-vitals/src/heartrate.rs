@@ -10,6 +10,7 @@
 //! than single-channel amplitude analysis.
 
 use crate::types::{VitalEstimate, VitalStatus};
+use std::collections::VecDeque;
 
 /// IIR bandpass filter state (2nd-order resonator).
 #[derive(Clone, Debug)]
@@ -31,11 +32,20 @@ impl Default for IirState {
     }
 }
 
+/// Lowest physiologically plausible heart rate, in BPM. Estimates below this
+/// (e.g. a lock onto a breathing harmonic, which the firmware #987 fix also
+/// guards against) are rejected rather than emitted as a confident vital — a
+/// false low HR is a safety problem. Value-identical to the prior literal.
+const HR_PLAUSIBLE_MIN_BPM: f64 = 40.0;
+/// Highest physiologically plausible heart rate, in BPM. Estimates above this
+/// are rejected. Value-identical to the prior literal.
+const HR_PLAUSIBLE_MAX_BPM: f64 = 180.0;
+
 /// Heart rate extractor using bandpass filtering and autocorrelation
 /// peak detection.
 pub struct HeartRateExtractor {
-    /// Per-sample filtered signal history.
-    filtered_history: Vec<f64>,
+    /// Per-sample filtered signal history (sliding window; O(1) push/pop).
+    filtered_history: VecDeque<f64>,
     /// Sample rate in Hz.
     sample_rate: f64,
     /// Analysis window in seconds.
@@ -63,7 +73,7 @@ impl HeartRateExtractor {
     pub fn new(n_subcarriers: usize, sample_rate: f64, window_secs: f64) -> Self {
         let capacity = (sample_rate * window_secs) as usize;
         Self {
-            filtered_history: Vec::with_capacity(capacity),
+            filtered_history: VecDeque::with_capacity(capacity),
             sample_rate,
             window_secs,
             n_subcarriers,
@@ -101,11 +111,21 @@ impl HeartRateExtractor {
         // Apply cardiac-band IIR bandpass filter
         let filtered = self.bandpass_filter(phase_signal);
 
-        // Append to history, enforce window limit
-        self.filtered_history.push(filtered);
+        // Defense-in-depth: a non-finite filter output (e.g. a diverged
+        // resonator pole at a pathological sample rate) must never enter the
+        // history buffer, or `acf0` would become NaN and the extractor would
+        // stall permanently. Mirrors the NaN-bypass guard in ADR-154 §3.
+        if !filtered.is_finite() {
+            return None;
+        }
+
+        // Append to history, enforce window limit. `VecDeque` gives O(1)
+        // push_back + pop_front for the sliding window (was a `Vec` with an
+        // O(n) `remove(0)` per sample — ADR-157 §A1).
+        self.filtered_history.push_back(filtered);
         let max_len = (self.sample_rate * self.window_secs) as usize;
         if self.filtered_history.len() > max_len {
-            self.filtered_history.remove(0);
+            self.filtered_history.pop_front();
         }
 
         // Need at least 5 seconds of data for cardiac detection
@@ -114,13 +134,13 @@ impl HeartRateExtractor {
             return None;
         }
 
-        // Use autocorrelation to find the dominant periodicity
-        let (period_samples, acf_peak) = autocorrelation_peak(
-            &self.filtered_history,
-            self.sample_rate,
-            self.freq_low,
-            self.freq_high,
-        );
+        // Use autocorrelation to find the dominant periodicity. The
+        // autocorrelation/peak loop needs a contiguous slice; `make_contiguous`
+        // rotates the ring buffer in place once per `extract()` so the slice is
+        // free for the rest of this call.
+        let history = self.filtered_history.make_contiguous();
+        let (period_samples, acf_peak) =
+            autocorrelation_peak(history, self.sample_rate, self.freq_low, self.freq_high);
 
         if period_samples == 0 {
             return None;
@@ -129,8 +149,11 @@ impl HeartRateExtractor {
         let frequency_hz = self.sample_rate / period_samples as f64;
         let bpm = frequency_hz * 60.0;
 
-        // Validate BPM is in physiological range (40-180 BPM)
-        if !(40.0..=180.0).contains(&bpm) {
+        // Validate BPM is in the physiological plausibility band. An estimate
+        // outside [HR_PLAUSIBLE_MIN_BPM, HR_PLAUSIBLE_MAX_BPM] is rejected
+        // rather than emitted, so an out-of-band autocorrelation lock can never
+        // surface as a confident heart rate.
+        if !(HR_PLAUSIBLE_MIN_BPM..=HR_PLAUSIBLE_MAX_BPM).contains(&bpm) {
             return None;
         }
 
@@ -166,11 +189,33 @@ impl HeartRateExtractor {
         let bw = omega_high - omega_low;
         let center = f64::midpoint(omega_low, omega_high);
 
-        let r = 1.0 - bw / 2.0;
+        // Resonator pole radius. The pole magnitude is `|r|`; stability needs
+        // `|r| < 1`. When the normalized bandwidth `bw = 2*pi*(f_high-f_low)/fs`
+        // exceeds 4 (i.e. a very low `fs` relative to the band width),
+        // `1 - bw/2` falls below -1, pushing the pole *outside* the unit circle
+        // and diverging the filter exponentially to ±inf. A merely-negative `r`
+        // (|r| < 1) is still stable, so the clamp's job is the `|r| >= 1` case.
+        // Clamp to a stable range so the pole stays inside the unit circle for
+        // any `sample_rate` / band-edge configuration (ADR-157 §A3).
+        let r = (1.0 - bw / 2.0).clamp(0.0, 0.9999);
         let cos_w0 = center.cos();
 
         let output =
             (1.0 - r) * (input - state.x2) + 2.0 * r * cos_w0 * state.y1 - r * r * state.y2;
+
+        // Self-healing non-finite guard (ADR-158 §A1). A single non-finite
+        // sample — a NaN/inf residual from a corrupt CSI frame, or a transient
+        // overflow — would otherwise be written into `y1`/`y2` and poison the
+        // resonator recurrence *permanently*: every later output stays NaN, the
+        // `extract()` finite-check drops it, `acf0` never recomputes on fresh
+        // data, and heart-rate extraction is dead until `reset()`. Resetting the
+        // filter state here lets the resonator recover on the next clean frame;
+        // the 0.0 returned for this frame is still dropped by the caller's
+        // `is_finite()` check, so no spurious sample enters history.
+        if !output.is_finite() {
+            *state = IirState::default();
+            return 0.0;
+        }
 
         state.x2 = state.x1;
         state.x1 = input;
@@ -399,5 +444,121 @@ mod tests {
     fn esp32_default_creates_correctly() {
         let ext = HeartRateExtractor::esp32_default();
         assert_eq!(ext.n_subcarriers, 56);
+    }
+
+    /// Pin the physiological plausibility band to its documented values. If a
+    /// future edit widens these, an implausible HR could be emitted as a
+    /// confident vital — this characterization test forces that to be a
+    /// deliberate, reviewed change.
+    #[test]
+    fn plausibility_band_constants_pinned() {
+        assert!((HR_PLAUSIBLE_MIN_BPM - 40.0).abs() < f64::EPSILON);
+        assert!((HR_PLAUSIBLE_MAX_BPM - 180.0).abs() < f64::EPSILON);
+    }
+
+    /// ADR-158 §A1 bug-catching test: a single non-finite residual must NOT
+    /// permanently poison the IIR filter state.
+    ///
+    /// The cardiac resonator latches `y[n]` into `state.y1`/`y2`. Before the
+    /// fix, one NaN/inf residual produced a NaN `output` that was stored into
+    /// the state; the `extract()` finite-guard dropped that frame from history,
+    /// but every subsequent output stayed NaN, so the history buffer never
+    /// refilled and HR extraction was dead until `reset()`. After a leading NaN
+    /// frame, the OLD code returned `None` with `history_len() == 0` forever.
+    /// This asserts recovery (FAILS on the old code).
+    #[test]
+    fn nan_frame_does_not_permanently_poison_filter() {
+        let sr = 50.0;
+        let feed_clean = |ext: &mut HeartRateExtractor| {
+            let mut last = None;
+            for i in 0..1200 {
+                let t = i as f64 / sr;
+                let base = (2.0 * std::f64::consts::PI * 1.2 * t).sin();
+                let r = vec![base * 0.1, base * 0.08, base * 0.12, base * 0.09];
+                last = ext.extract(&r, &[0.0, 0.01, 0.02, 0.03]);
+            }
+            last
+        };
+
+        let mut control = HeartRateExtractor::new(4, sr, 20.0);
+        feed_clean(&mut control);
+        assert!(control.history_len() > 0, "control clean run must accumulate history");
+
+        let mut ext = HeartRateExtractor::new(4, sr, 20.0);
+        ext.extract(&[f64::NAN, 0.1, 0.1, 0.1], &[0.0, 0.01, 0.02, 0.03]);
+        feed_clean(&mut ext);
+        assert!(
+            ext.history_len() > 0,
+            "HR extractor must recover and refill history after a NaN frame (got {})",
+            ext.history_len()
+        );
+    }
+
+    /// Safety negative: pure broadband noise (no cardiac component) must NOT be
+    /// reported as a clinically `Valid` heart rate. A false "HR = 72 bpm" on
+    /// noise is a safety problem (false reassurance / false alert). The
+    /// extractor may still emit a low-confidence guess, but its status must be
+    /// `Degraded`/`Unreliable`, never `Valid`. Mirrors the honest-negative
+    /// requirement in the review brief.
+    #[test]
+    fn pure_noise_is_never_reported_valid() {
+        let mut seed: u64 = 0x1234_5678;
+        let mut rng = || {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((seed >> 33) as f64 / (1u64 << 31) as f64) - 1.0
+        };
+        let mut ext = HeartRateExtractor::new(8, 50.0, 20.0);
+        let mut last = None;
+        for _ in 0..1500 {
+            let r: Vec<f64> = (0..8).map(|_| rng()).collect();
+            let p: Vec<f64> = (0..8).map(|_| rng()).collect();
+            last = ext.extract(&r, &p);
+        }
+        if let Some(est) = last {
+            assert_ne!(
+                est.status,
+                VitalStatus::Valid,
+                "pure noise must not yield a clinically Valid HR (bpm={}, conf={})",
+                est.value_bpm,
+                est.confidence
+            );
+            assert!(
+                est.confidence < 0.6,
+                "noise HR confidence must stay below the Valid cutoff: {}",
+                est.confidence
+            );
+        }
+    }
+
+    /// ADR-157 §A3 bug-catching test.
+    ///
+    /// Divergence needs the pole *magnitude* `|r| >= 1`, i.e. `bw >= 4`. With
+    /// the cardiac band widened to 0.1-0.9 Hz at `fs = 0.5` Hz,
+    /// `bw = 2*pi*(0.9-0.1)/0.5 = 10.05`, so the OLD pole radius
+    /// `r = 1 - bw/2 = -4.03` has `|r| = 4.03 > 1` — the filter diverges
+    /// exponentially. After ~600 unit-step frames the OLD output overflows f64
+    /// to ±inf/NaN; once that lands in `filtered_history`, `acf0` becomes NaN
+    /// and the extractor stalls permanently. The clamp (`r.clamp(0.0, 0.9999)`)
+    /// plus the finite-guard before the push keep every accumulated sample
+    /// finite. This test FAILS on the old code (verified by reverting).
+    #[test]
+    fn low_sample_rate_filter_stays_finite() {
+        let mut ext = HeartRateExtractor::new(4, 0.5, 3600.0);
+        ext.freq_low = 0.1;
+        ext.freq_high = 0.9;
+        // Feed a unit step across 4 coherent subcarriers for 600 frames — enough
+        // for the un-clamped resonator to overflow to inf.
+        for _ in 0..600 {
+            ext.extract(&[1.0, 1.0, 1.0, 1.0], &[0.0, 0.01, 0.02, 0.03]);
+        }
+        assert!(
+            ext.history_len() > 0,
+            "history should have accumulated samples"
+        );
+        for (i, &v) in ext.filtered_history.iter().enumerate() {
+            assert!(v.is_finite(), "filtered_history[{i}] must be finite, got {v}");
+        }
     }
 }

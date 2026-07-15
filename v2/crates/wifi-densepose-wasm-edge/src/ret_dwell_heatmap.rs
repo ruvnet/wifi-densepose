@@ -80,6 +80,8 @@ const ZONE_INIT: ZoneState = ZoneState {
 
 /// Tracks dwell time across a 3x3 spatial zone grid.
 pub struct DwellHeatmapTracker {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); MAX_EVENTS],
     zones: [ZoneState; NUM_ZONES],
     /// Frame counter.
     frame_count: u32,
@@ -96,6 +98,7 @@ pub struct DwellHeatmapTracker {
 impl DwellHeatmapTracker {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); MAX_EVENTS],
             zones: [ZONE_INIT; NUM_ZONES],
             frame_count: 0,
             any_present: false,
@@ -176,7 +179,6 @@ impl DwellHeatmapTracker {
         self.any_present = is_present || any_zone_occupied;
 
         // Build events.
-        static mut EVENTS: [(i32, f32); MAX_EVENTS] = [(0, 0.0); MAX_EVENTS];
         let mut ne = 0usize;
 
         // Periodic zone updates.
@@ -186,9 +188,7 @@ impl DwellHeatmapTracker {
                 if self.zones[z].dwell_seconds > 0.0 && ne < MAX_EVENTS - 3 {
                     // Encode zone_id in integer part, dwell seconds in value.
                     let val = z as f32 * 1000.0 + self.zones[z].dwell_seconds;
-                    unsafe {
-                        EVENTS[ne] = (EVENT_DWELL_ZONE_UPDATE, val);
-                    }
+                    self.events[ne] = (EVENT_DWELL_ZONE_UPDATE, val);
                     ne += 1;
                 }
             }
@@ -211,16 +211,12 @@ impl DwellHeatmapTracker {
             }
 
             if hot_dwell > 0.0 && ne < MAX_EVENTS {
-                unsafe {
-                    EVENTS[ne] = (EVENT_HOT_ZONE, hot_zone as f32 + hot_dwell / 1000.0);
-                }
+                self.events[ne] = (EVENT_HOT_ZONE, hot_zone as f32 + hot_dwell / 1000.0);
                 ne += 1;
             }
 
             if cold_dwell < f32::MAX && ne < MAX_EVENTS {
-                unsafe {
-                    EVENTS[ne] = (EVENT_COLD_ZONE, cold_zone as f32 + cold_dwell / 1000.0);
-                }
+                self.events[ne] = (EVENT_COLD_ZONE, cold_zone as f32 + cold_dwell / 1000.0);
                 ne += 1;
             }
         }
@@ -230,14 +226,12 @@ impl DwellHeatmapTracker {
             self.session_active = false;
             let session_duration = (self.frame_count - self.session_start_frame) as f32 / FRAME_RATE;
             if ne < MAX_EVENTS {
-                unsafe {
-                    EVENTS[ne] = (EVENT_SESSION_SUMMARY, session_duration);
-                }
+                self.events[ne] = (EVENT_SESSION_SUMMARY, session_duration);
                 ne += 1;
             }
         }
 
-        unsafe { &EVENTS[..ne] }
+        &self.events[..ne]
     }
 
     /// Get dwell time (seconds) for a specific zone in the current session.

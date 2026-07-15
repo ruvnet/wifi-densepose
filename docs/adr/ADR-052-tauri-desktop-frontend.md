@@ -5,7 +5,7 @@
 | Status | Proposed |
 | Date | 2026-03-06 |
 | Deciders | ruv |
-| Depends on | ADR-012 (ESP32 CSI Mesh), ADR-039 (Edge Intelligence), ADR-040 (WASM Programmable Sensing), ADR-044 (Provisioning Enhancements), ADR-050 (Security Hardening), ADR-051 (Server Decomposition) |
+| Depends on | ADR-012 (ESP32 CSI Mesh), ADR-039 (Edge Intelligence), ADR-040 (WASM Programmable Sensing), ADR-044 (Provisioning Enhancements), ADR-166 (Security Hardening, renumbered from ADR-050), ADR-051 (Server Decomposition) |
 | Issue | [#177](https://github.com/ruvnet/RuView/issues/177) |
 
 ## Context
@@ -211,7 +211,7 @@ pub struct FlashProgress {
 // commands/ota.rs
 
 /// Push firmware to a node via HTTP OTA (port 8032).
-/// Includes PSK authentication per ADR-050.
+/// Includes PSK authentication per ADR-166.
 #[tauri::command]
 async fn ota_update(
     node_ip: String,
@@ -801,7 +801,7 @@ Total estimated effort: ~11 weeks for a single developer.
 - ADR-039: ESP32 Edge Intelligence
 - ADR-040: WASM Programmable Sensing
 - ADR-044: Provisioning Tool Enhancements
-- ADR-050: Quality Engineering — Security Hardening
+- ADR-166: Quality Engineering — Security Hardening (renumbered from ADR-050)
 - ADR-051: Sensing Server Decomposition
 - `firmware/esp32-csi-node/` — ESP32 firmware source
 - `firmware/esp32-csi-node/provision.py` — Current provisioning script

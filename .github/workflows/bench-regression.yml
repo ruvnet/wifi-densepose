@@ -1,0 +1,199 @@
+name: Bench Regression Guard
+
+# Sub-deliverable 8.3 of the benchmark/optimization milestone.
+#
+# HONEST SCOPE (read this before assuming this gates on timing):
+#   * The `bench-compile` job is a REAL, HARD-FAILING regression gate. It runs
+#     `cargo bench --no-default-features --no-run`, which type-checks and links
+#     EVERY criterion bench in the v2/ workspace without running a single
+#     measurement. Benches are not part of `cargo test`, so they silently
+#     bit-rot when a public API they call changes — this job catches that the
+#     moment it happens. This is the part of this workflow that can fail a PR.
+#
+#   * The `bench-fast-run` job runs a small, curated subset of pure-CPU benches
+#     in criterion "quick mode" (short warm-up / measurement / 10 samples) and
+#     is INFORMATIONAL ONLY (`continue-on-error: true`). It does NOT gate on
+#     timing. Wall-clock timings on shared GitHub-hosted runners vary by
+#     2-3x run-to-run (noisy neighbours, CPU throttling, no pinned frequency),
+#     so a hard ">X ms" threshold here would flake constantly and teach
+#     everyone to ignore it. We deliberately do not pretend to do timing
+#     regression-gating we cannot deliver reliably. The numbers are surfaced in
+#     the job log + uploaded as an artifact for humans to eyeball trends.
+#
+# WHY NO criterion --baseline COMPARE GATE:
+#   criterion's `--save-baseline` / `--baseline` compare is the textbook
+#   regression mechanism, but it only produces a trustworthy verdict when the
+#   baseline and the candidate were measured on the SAME hardware under the SAME
+#   conditions. GitHub-hosted runners give neither (the baseline commit and the
+#   PR commit land on different physical machines). Committing a baseline JSON
+#   measured on one runner and comparing a different runner against it would
+#   manufacture false regressions. If/when these benches run on a dedicated,
+#   frequency-pinned self-hosted runner, a `--baseline` compare with a generous
+#   (>2x) noise floor becomes honest and can be added then. Until then,
+#   compile-verify + informational-run is the honest gate.
+
+on:
+  push:
+    branches: [ main, develop, 'feat/*' ]
+    paths:
+      - 'v2/crates/**/benches/**'
+      - 'v2/crates/**/Cargo.toml'
+      - 'v2/crates/**/src/**'
+      - 'v2/Cargo.toml'
+      - 'v2/Cargo.lock'
+      - '.github/workflows/bench-regression.yml'
+  pull_request:
+    paths:
+      - 'v2/crates/**/benches/**'
+      - 'v2/crates/**/Cargo.toml'
+      - 'v2/crates/**/src/**'
+      - 'v2/Cargo.toml'
+      - 'v2/Cargo.lock'
+      - '.github/workflows/bench-regression.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Debuginfo is useless in CI and the 38-crate workspace target dir otherwise
+  # exhausts the runner disk (mirrors ci.yml's rust-tests job). The bench
+  # profile inherits release + debug = true (v2/Cargo.toml [profile.bench]);
+  # force it off so the link step does not run out of space.
+  CARGO_PROFILE_BENCH_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+
+jobs:
+  # ── HARD GATE: every bench must still compile + link ─────────────────────
+  bench-compile:
+    name: bench compile-verify (--no-run)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (recursive — wifi-densepose-rufield path-deps vendor/rufield)
+        uses: actions/checkout@v4
+        with:
+          # The workspace includes `wifi-densepose-rufield`, which path-deps the
+          # `vendor/rufield` submodule crates. Without a recursive checkout the
+          # whole workspace fails to resolve before any bench is built.
+          submodules: recursive
+
+      # The workspace pulls in `wifi-densepose-desktop` (Tauri v2) whose -sys
+      # crates need the GTK/WebKit/serial dev libraries via pkg-config, exactly
+      # as ci.yml's rust-tests job documents. A `--workspace` bench build links
+      # the whole graph, so these are required here too.
+      - name: Install Tauri / GTK / serial system dev libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libudev-dev \
+            libdbus-1-dev \
+            libssl-dev \
+            pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo (Swatinem/rust-cache)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: v2
+          # Distinct cache scope from ci.yml's rust-tests so the bench profile
+          # artifacts (release+opt) do not evict the test profile cache.
+          key: bench-regression
+
+      # The core regression guard. `--no-run` compiles + links every bench
+      # target in the workspace's DEFAULT feature set but runs no measurement,
+      # so it is deterministic and fast-ish (build only). A bench that no longer
+      # compiles — because a type/signature it calls changed and nobody updated
+      # the bench — fails the build here. `--no-default-features` is the
+      # workspace's standard gate flag (openblas/tch/ort/onnx stay opt-out).
+      - name: Compile all workspace benches (default features)
+        working-directory: v2
+        run: cargo bench --workspace --no-default-features --no-run
+
+      # Feature-gated benches are skipped by the default build above because
+      # their `[[bench]]` entries carry `required-features`. Compile the ones we
+      # can guard so they are also covered against bit-rot.
+      #   * cir → wifi-densepose-signal/benches/cir_bench.rs (ADR-134). The
+      #     `cir` feature is pure-Rust (`cir = []`), so it builds on the stock
+      #     runner and is a real, hard-failing guard like the step above.
+      #
+      # NOT guarded here (honest scope):
+      #   * crv → wifi-densepose-ruvector/benches/crv_bench.rs. The `crv` feature
+      #     pulls the crates.io dependency `ruvector-crv 0.1.1`, which currently
+      #     FAILS to compile on stable (E0308 type mismatch in its own
+      #     `stage_iii.rs` — an UPSTREAM bug, unrelated to bench bit-rot).
+      #     Adding a hard `--features crv` compile step would make this workflow
+      #     red for a reason this gate is not meant to police. Re-add this step
+      #     once `ruvector-crv` ships a fixed release. (mqtt/onnx benches are
+      #     likewise left to their own crate workflows.)
+      - name: Compile feature-gated benches (cir)
+        working-directory: v2
+        run: cargo bench -p wifi-densepose-signal --no-default-features --features cir --bench cir_bench --no-run
+
+  # ── INFORMATIONAL: run a curated fast subset (never gates) ───────────────
+  bench-fast-run:
+    name: bench fast-run (informational, non-gating)
+    runs-on: ubuntu-latest
+    # NEVER fail the workflow on this job — timings are noise-prone on shared
+    # runners (see header). It exists to surface trends for humans, not to gate.
+    continue-on-error: true
+    needs: [bench-compile]
+    steps:
+      - name: Checkout (recursive)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo (Swatinem/rust-cache)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: v2
+          key: bench-regression
+
+      # Curated subset = pure-CPU, fast, dependency-light criterion benches that
+      # finish in seconds under quick-mode flags. Each is targeted by `--bench`
+      # (NOT a bare `cargo bench -p`) because the crates' lib targets use the
+      # libtest harness, which rejects criterion's CLI flags (--warm-up-time
+      # etc.) and aborts the run. Quick-mode: 1s warm-up, 2s measure, 10 samples.
+      - name: nvsim pipeline_throughput (quick)
+        working-directory: v2
+        run: |
+          mkdir -p ../bench-out
+          cargo bench -p nvsim --no-default-features --bench pipeline_throughput -- \
+            --warm-up-time 1 --measurement-time 2 --sample-size 10 \
+            | tee ../bench-out/nvsim_pipeline_throughput.txt
+
+      - name: ruvector sketch_bench (quick)
+        working-directory: v2
+        run: |
+          cargo bench -p wifi-densepose-ruvector --no-default-features --bench sketch_bench -- \
+            --warm-up-time 1 --measurement-time 2 --sample-size 10 \
+            | tee ../bench-out/ruvector_sketch_bench.txt
+
+      - name: ruvector fusion_bench (quick)
+        working-directory: v2
+        run: |
+          cargo bench -p wifi-densepose-ruvector --no-default-features --bench fusion_bench -- \
+            --warm-up-time 1 --measurement-time 2 --sample-size 10 \
+            | tee ../bench-out/ruvector_fusion_bench.txt
+
+      - name: Upload informational bench logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-fast-run-logs
+          path: bench-out/
+          if-no-files-found: warn

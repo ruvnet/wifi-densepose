@@ -14,3 +14,18 @@
 	path = vendor/rvcsi
 	url = https://github.com/ruvnet/rvcsi
 	branch = main
+[submodule "v2/crates/ruv-neural"]
+	path = v2/crates/ruv-neural
+	url = https://github.com/ruvnet/ruv-neural.git
+	branch = main
+[submodule "vendor/rufield"]
+	path = vendor/rufield
+	url = https://github.com/ruvnet/rufield
+[submodule "v2/crates/ruview-swarm"]
+	path = v2/crates/ruview-swarm
+	url = https://github.com/ruvnet/ruv-drone.git
+	branch = main
+[submodule "v2/crates/worldgraph"]
+	path = v2/crates/worldgraph
+	url = https://github.com/ruvnet/worldgraph.git
+	branch = main

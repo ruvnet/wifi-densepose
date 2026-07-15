@@ -1,3 +1,4 @@
-0.6.6
-git-sha: cbcb389cb (pre-commit)
-built: 2026-05-21
+0.6.7
+git-sha: 8703ade9b
+built: 2026-06-02
+note: RuView#893 — display-less boards capture DATA frames (CSI yield 0pps fix); hardware-verified on ESP32-C6 (0->27 pps)

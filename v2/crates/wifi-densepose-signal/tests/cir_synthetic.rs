@@ -154,6 +154,8 @@ fn save_fixture(path: &str, k_active: usize, csi: &[Complex64], expected_dominan
 }
 
 // ---------------------------------------------------------------------------
+
+
 // Shared test logic: inject 3-tap channel, run estimator, assert
 // ---------------------------------------------------------------------------
 
@@ -253,7 +255,6 @@ fn run_3tap_test(label: &str, cfg: CirConfig, bandwidth_mhz: u16, dominant_ratio
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "ADR-134 P2: ISTA hyperparameter tuning needed for 3-tap@SNR=20dB. dominant_tap_ratio currently below floor."]
 fn should_recover_3tap_channel_ht20() {
     // HT20: K_active=52, G=168 (3×), lambda=0.05, max_iter=30
     // ADR-134 Table §2.3: dominant_tap_ratio floor = 0.30 for HT20
@@ -266,7 +267,6 @@ fn should_recover_3tap_channel_ht20() {
 }
 
 #[test]
-#[ignore = "ADR-134 P2: ISTA hyperparameter tuning needed for 3-tap@SNR=20dB. dominant_tap_ratio currently below floor."]
 fn should_recover_3tap_channel_ht40() {
     // HT40: K_active=108, G=342 (3×), lambda=0.03, max_iter=35
     let cfg = CirConfig::for_bandwidth_mhz(40);
@@ -278,7 +278,6 @@ fn should_recover_3tap_channel_ht40() {
 }
 
 #[test]
-#[ignore = "ADR-134 P2: ISTA hyperparameter tuning needed for 3-tap@SNR=20dB. dominant_tap_ratio currently below floor."]
 fn should_recover_3tap_channel_he20() {
     // HE20: K_active=242, G=726 (3×), lambda=0.03, max_iter=32
     // ADR-134: better conditioning → higher dominant_tap_ratio floor
@@ -317,7 +316,6 @@ fn should_return_none_for_dominant_tof_at_20mhz() {
 }
 
 #[test]
-#[ignore = "ADR-134 P2: ranging_valid gated on dominant_tap_ratio >= 0.3 which requires further ISTA tuning."]
 fn should_return_tof_at_40mhz() {
     // Ranging is enabled at 40 MHz (Tier B) per ADR-134 §2.3
     let cfg = CirConfig::for_bandwidth_mhz(40);
@@ -344,7 +342,6 @@ fn should_return_tof_at_40mhz() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "ADR-134 P2: RMS delay spread sensitive to ISTA convergence quality; gated on tuning pass."]
 fn should_produce_positive_rms_delay_spread() {
     let cfg = CirConfig::for_bandwidth_mhz(20);
     let k_active = cfg.delay_bins / 3;

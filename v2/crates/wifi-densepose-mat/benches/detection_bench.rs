@@ -220,6 +220,9 @@ fn create_test_sensors(count: usize) -> Vec<SensorPosition> {
                 z: 1.5,
                 sensor_type: SensorType::Transceiver,
                 is_operational: true,
+                // No live RSSI plumbed for synthetic bench sensors (simulated
+                // zone) — localization must not fabricate one.
+                last_rssi: None,
             }
         })
         .collect()

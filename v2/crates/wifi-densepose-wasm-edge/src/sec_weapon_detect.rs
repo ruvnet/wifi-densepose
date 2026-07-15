@@ -11,7 +11,14 @@
 //! variance ratio compared to a person without metal, because metal strongly
 //! reflects RF energy while producing less phase dispersion than diffuse tissue.
 //!
-//! Events: METAL_ANOMALY(220), WEAPON_ALERT(221), CALIBRATION_NEEDED(222).
+//! ⚠️ HONEST-NAMING NOTE (ADR-160 §A3): this module measures RF **reflectivity**
+//! ⚠️ (an amplitude-variance / phase-variance ratio), not weapons. A variance
+//! ⚠️ ratio cannot discriminate a weapon from any other highly-reflective metal
+//! ⚠️ object (keys, laptop, belt buckle). The high-ratio event is therefore named
+//! ⚠️ `HIGH_METAL_REFLECTIVITY`, NOT a weapon alert — the physical quantity the
+//! ⚠️ code can actually back.
+//!
+//! Events: METAL_ANOMALY(220), HIGH_METAL_REFLECTIVITY(221), CALIBRATION_NEEDED(222).
 //! Budget: S (<5 ms).
 
 #[cfg(not(feature = "std"))]
@@ -26,16 +33,17 @@ const MAX_SC: usize = 32;
 const BASELINE_FRAMES: u32 = 100;
 /// Amplitude variance / phase variance ratio threshold for metal detection.
 const METAL_RATIO_THRESH: f32 = 4.0;
-/// Elevated ratio for weapon-grade alert (very high reflectivity).
-const WEAPON_RATIO_THRESH: f32 = 8.0;
+/// Elevated reflectivity-ratio threshold (very high RF reflectivity).
+/// NOTE (ADR-160 §A3): a variance ratio measures reflectivity, not weapons.
+const HIGH_REFLECTIVITY_THRESH: f32 = 8.0;
 /// Minimum motion energy to consider detection valid (ignore static scenes).
 const MIN_MOTION_ENERGY: f32 = 0.5;
 /// Minimum presence required (person must be present).
 const MIN_PRESENCE: i32 = 1;
 /// Consecutive frames for metal anomaly debounce.
 const METAL_DEBOUNCE: u8 = 4;
-/// Consecutive frames for weapon alert debounce.
-const WEAPON_DEBOUNCE: u8 = 6;
+/// Consecutive frames for high-reflectivity debounce.
+const HIGH_REFLECTIVITY_DEBOUNCE: u8 = 6;
 /// Cooldown frames after event emission.
 const COOLDOWN: u16 = 60;
 /// Re-calibration trigger: if baseline drift exceeds this ratio.
@@ -44,7 +52,9 @@ const RECALIB_DRIFT_THRESH: f32 = 3.0;
 const VAR_WINDOW: usize = 16;
 
 pub const EVENT_METAL_ANOMALY: i32 = 220;
-pub const EVENT_WEAPON_ALERT: i32 = 221;
+/// High RF reflectivity (formerly mislabelled `EVENT_WEAPON_ALERT`, ADR-160 §A3).
+/// A variance ratio measures reflectivity, not weapon-grade discrimination.
+pub const EVENT_HIGH_METAL_REFLECTIVITY: i32 = 221;
 pub const EVENT_CALIBRATION_NEEDED: i32 = 222;
 
 /// Concealed metallic object detector.
@@ -74,12 +84,14 @@ pub struct WeaponDetector {
     run_count: u32,
     /// Debounce counters.
     metal_run: u8,
-    weapon_run: u8,
+    high_refl_run: u8,
     /// Cooldowns.
     cd_metal: u16,
-    cd_weapon: u16,
+    cd_high_refl: u16,
     cd_recalib: u16,
     frame_count: u32,
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 3],
 }
 
 impl WeaponDetector {
@@ -101,11 +113,12 @@ impl WeaponDetector {
             run_phase_m2: [0.0; MAX_SC],
             run_count: 0,
             metal_run: 0,
-            weapon_run: 0,
+            high_refl_run: 0,
             cd_metal: 0,
-            cd_weapon: 0,
+            cd_high_refl: 0,
             cd_recalib: 0,
             frame_count: 0,
+            events: [(0, 0.0); 3],
         }
     }
 
@@ -125,10 +138,9 @@ impl WeaponDetector {
 
         self.frame_count += 1;
         self.cd_metal = self.cd_metal.saturating_sub(1);
-        self.cd_weapon = self.cd_weapon.saturating_sub(1);
+        self.cd_high_refl = self.cd_high_refl.saturating_sub(1);
         self.cd_recalib = self.cd_recalib.saturating_sub(1);
 
-        static mut EVENTS: [(i32, f32); 3] = [(0, 0.0); 3];
         let mut ne = 0usize;
 
         // Calibration phase: collect baseline statistics in empty room.
@@ -153,7 +165,7 @@ impl WeaponDetector {
                 }
                 self.calibrated = true;
             }
-            return unsafe { &EVENTS[..0] };
+            return &self.events[..0];
         }
 
         // Update running Welford statistics.
@@ -176,7 +188,7 @@ impl WeaponDetector {
         // Only detect when someone is present and moving.
         if presence < MIN_PRESENCE || motion_energy < MIN_MOTION_ENERGY {
             self.metal_run = 0;
-            self.weapon_run = 0;
+            self.high_refl_run = 0;
             // Reset running stats periodically when no one is present.
             if self.run_count > 200 {
                 self.run_count = 0;
@@ -187,12 +199,12 @@ impl WeaponDetector {
                     self.run_phase_m2[i] = 0.0;
                 }
             }
-            return unsafe { &EVENTS[..0] };
+            return &self.events[..0];
         }
 
         // Compute current amplitude variance / phase variance ratio.
         if self.run_count < 4 {
-            return unsafe { &EVENTS[..0] };
+            return &self.events[..0];
         }
 
         let mut ratio_sum = 0.0f32;
@@ -221,14 +233,14 @@ impl WeaponDetector {
         }
 
         if valid_sc < 2 {
-            return unsafe { &EVENTS[..0] };
+            return &self.events[..0];
         }
 
         let mean_ratio = ratio_sum / valid_sc as f32;
 
         // Check for re-calibration need.
         if max_drift > RECALIB_DRIFT_THRESH && self.cd_recalib == 0 && ne < 3 {
-            unsafe { EVENTS[ne] = (EVENT_CALIBRATION_NEEDED, max_drift); }
+            self.events[ne] = (EVENT_CALIBRATION_NEEDED, max_drift);
             ne += 1;
             self.cd_recalib = COOLDOWN * 5; // Less frequent recalibration alerts.
         }
@@ -240,28 +252,28 @@ impl WeaponDetector {
             self.metal_run = self.metal_run.saturating_sub(1);
         }
 
-        // Weapon-grade detection (higher threshold).
-        if mean_ratio > WEAPON_RATIO_THRESH {
-            self.weapon_run = self.weapon_run.saturating_add(1);
+        // High-reflectivity detection (higher threshold). NOT weapon discrimination.
+        if mean_ratio > HIGH_REFLECTIVITY_THRESH {
+            self.high_refl_run = self.high_refl_run.saturating_add(1);
         } else {
-            self.weapon_run = self.weapon_run.saturating_sub(1);
+            self.high_refl_run = self.high_refl_run.saturating_sub(1);
         }
 
         // Emit metal anomaly.
         if self.metal_run >= METAL_DEBOUNCE && self.cd_metal == 0 && ne < 3 {
-            unsafe { EVENTS[ne] = (EVENT_METAL_ANOMALY, mean_ratio); }
+            self.events[ne] = (EVENT_METAL_ANOMALY, mean_ratio);
             ne += 1;
             self.cd_metal = COOLDOWN;
         }
 
-        // Emit weapon alert (supersedes metal anomaly in severity).
-        if self.weapon_run >= WEAPON_DEBOUNCE && self.cd_weapon == 0 && ne < 3 {
-            unsafe { EVENTS[ne] = (EVENT_WEAPON_ALERT, mean_ratio); }
+        // Emit high-reflectivity event (supersedes metal anomaly in severity).
+        if self.high_refl_run >= HIGH_REFLECTIVITY_DEBOUNCE && self.cd_high_refl == 0 && ne < 3 {
+            self.events[ne] = (EVENT_HIGH_METAL_REFLECTIVITY, mean_ratio);
             ne += 1;
-            self.cd_weapon = COOLDOWN;
+            self.cd_high_refl = COOLDOWN;
         }
 
-        unsafe { &EVENTS[..ne] }
+        &self.events[..ne]
     }
 
     pub fn is_calibrated(&self) -> bool { self.calibrated }
@@ -311,7 +323,7 @@ mod tests {
             let ev = det.process_frame(&p, &[20.0; 16], &[0.01; 16], 0.0, 0);
             for &(et, _) in ev {
                 assert_ne!(et, EVENT_METAL_ANOMALY);
-                assert_ne!(et, EVENT_WEAPON_ALERT);
+                assert_ne!(et, EVENT_HIGH_METAL_REFLECTIVITY);
             }
         }
     }
@@ -369,7 +381,7 @@ mod tests {
             }
             let ev = det.process_frame(&p, &a, &[0.01; 16], 1.0, 1);
             for &(et, _) in ev {
-                assert_ne!(et, EVENT_WEAPON_ALERT, "normal person should not trigger weapon alert");
+                assert_ne!(et, EVENT_HIGH_METAL_REFLECTIVITY, "normal person should not trigger weapon alert");
             }
         }
     }

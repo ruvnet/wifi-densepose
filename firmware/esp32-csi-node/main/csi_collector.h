@@ -91,6 +91,19 @@ void csi_hop_next_channel(void);
 void csi_collector_start_hop_timer(void);
 
 /**
+ * Upgrade the promiscuous filter to capture DATA frames in addition to MGMT
+ * (RuView#893/#521).
+ *
+ * Called on display-less boards: the MGMT-only filter (the #396 display-crash
+ * workaround set in csi_collector_init) only fires the CSI callback on sparse
+ * management frames, so yield collapses to 0 pps under real traffic and the
+ * node looks dead. A board with no AMOLED panel has no QSPI/SPI-flash cache
+ * contention, so it can safely capture DATA frames — restoring abundant CSI.
+ * Display boards keep MGMT-only to avoid the #396 crash.
+ */
+void csi_collector_enable_data_capture(void);
+
+/**
  * Inject an NDP (Null Data Packet) frame for sensing.
  *
  * Uses esp_wifi_80211_tx() to send a preamble-only frame (~24 us airtime)

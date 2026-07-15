@@ -80,6 +80,8 @@ pub enum TableState {
 
 /// Tracks table occupancy state transitions and turnover metrics.
 pub struct TableTurnoverTracker {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); MAX_EVENTS],
     /// Current table state.
     state: TableState,
     /// Smoothed motion energy.
@@ -109,6 +111,7 @@ pub struct TableTurnoverTracker {
 impl TableTurnoverTracker {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); MAX_EVENTS],
             state: TableState::Empty,
             motion_ema: Ema::new(MOTION_EMA_ALPHA),
             presence_frames: 0,
@@ -143,7 +146,6 @@ impl TableTurnoverTracker {
         let smoothed_motion = self.motion_ema.update(motion_energy);
         let n = if n_persons < 0 { 0 } else { n_persons };
 
-        static mut EVENTS: [(i32, f32); MAX_EVENTS] = [(0, 0.0); MAX_EVENTS];
         let mut ne = 0usize;
 
         match self.state {
@@ -158,9 +160,7 @@ impl TableTurnoverTracker {
                         self.absence_frames = 0;
 
                         if ne < MAX_EVENTS {
-                            unsafe {
-                                EVENTS[ne] = (EVENT_TABLE_SEATED, n as f32);
-                            }
+                            self.events[ne] = (EVENT_TABLE_SEATED, n as f32);
                             ne += 1;
                         }
                     }
@@ -202,9 +202,7 @@ impl TableTurnoverTracker {
                         let duration_s = self.session_frames as f32 / FRAME_RATE;
 
                         if ne < MAX_EVENTS {
-                            unsafe {
-                                EVENTS[ne] = (EVENT_TABLE_VACATED, duration_s);
-                            }
+                            self.events[ne] = (EVENT_TABLE_VACATED, duration_s);
                             ne += 1;
                         }
 
@@ -241,9 +239,7 @@ impl TableTurnoverTracker {
 
                         let duration_s = self.session_frames as f32 / FRAME_RATE;
                         if ne < MAX_EVENTS {
-                            unsafe {
-                                EVENTS[ne] = (EVENT_TABLE_VACATED, duration_s);
-                            }
+                            self.events[ne] = (EVENT_TABLE_VACATED, duration_s);
                             ne += 1;
                         }
 
@@ -270,9 +266,7 @@ impl TableTurnoverTracker {
                     self.peak_persons = 0;
 
                     if ne < MAX_EVENTS {
-                        unsafe {
-                            EVENTS[ne] = (EVENT_TABLE_AVAILABLE, 1.0);
-                        }
+                        self.events[ne] = (EVENT_TABLE_AVAILABLE, 1.0);
                         ne += 1;
                     }
                 } else if is_present {
@@ -285,9 +279,7 @@ impl TableTurnoverTracker {
                         self.presence_frames = 0;
 
                         if ne < MAX_EVENTS {
-                            unsafe {
-                                EVENTS[ne] = (EVENT_TABLE_SEATED, n as f32);
-                            }
+                            self.events[ne] = (EVENT_TABLE_SEATED, n as f32);
                             ne += 1;
                         }
                     }
@@ -301,14 +293,12 @@ impl TableTurnoverTracker {
         if self.frame_count % TURNOVER_REPORT_INTERVAL == 0 && self.frame_count > 0 {
             let rate = self.turnover_rate();
             if ne < MAX_EVENTS {
-                unsafe {
-                    EVENTS[ne] = (EVENT_TURNOVER_RATE, rate);
-                }
+                self.events[ne] = (EVENT_TURNOVER_RATE, rate);
                 ne += 1;
             }
         }
 
-        unsafe { &EVENTS[..ne] }
+        &self.events[..ne]
     }
 
     /// Compute turnovers per hour (rolling window).

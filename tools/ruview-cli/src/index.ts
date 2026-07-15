@@ -25,6 +25,7 @@
  * See ADR-104 for the full design rationale and security model.
  */
 
+import { createRequire } from "node:module";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 import { csiCommand } from "./commands/csi.js";
@@ -34,9 +35,15 @@ import { cogsCommand } from "./commands/cogs.js";
 import { trainCommand } from "./commands/train.js";
 import { jobCommand } from "./commands/job.js";
 
+// Single-source the version from package.json (ADR-265 D3).
+const require = createRequire(import.meta.url);
+const VERSION: string = (require("../package.json") as { version: string }).version;
+
+// Bin name is `ruview-cli`: the bare `ruview` bin belongs to @ruvnet/ruview
+// (ADR-264 O9 / ADR-265 D4).
 const cli = yargs(hideBin(process.argv))
-  .scriptName("ruview")
-  .version("0.0.1")
+  .scriptName("ruview-cli")
+  .version(VERSION)
   .usage("$0 <command> [options]")
   .strict()
   .help()

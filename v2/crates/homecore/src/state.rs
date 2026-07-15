@@ -80,11 +80,37 @@ impl StateMachine {
         context: Context,
     ) -> Arc<State> {
         let new_state_str = new_state.into();
-        let old = self.inner.states.get(&entity_id).map(|r| Arc::clone(&*r));
+
+        // Hold the DashMap shard write-lock across the entire
+        // read→decide→insert→fire sequence. `entry()` locks the shard for
+        // the lifetime of `slot`, so a concurrent writer on the same entity
+        // cannot interleave between our read of `old` and our commit. This
+        // is what makes the write atomic as ADR-127 §2.1 promises ("writer
+        // atomically replaces the map entry") — the previous get→insert pair
+        // released the lock in between, a TOCTOU that let concurrent writers
+        // compute the no-op / `last_changed` decision off a stale `old` and
+        // drop or reorder real `state_changed` events.
+        //
+        // `tx.send` is non-blocking, non-async, and never re-enters the map,
+        // so firing under the lock cannot deadlock and keeps the global
+        // event order in lock-step with the global commit order.
+        use dashmap::mapref::entry::Entry;
+        let slot = self.inner.states.entry(entity_id.clone());
+
+        let old: Option<Arc<State>> = match &slot {
+            Entry::Occupied(o) => Some(Arc::clone(o.get())),
+            Entry::Vacant(_) => None,
+        };
+        // `slot` continues to hold the shard write-lock below.
 
         let next = match &old {
             Some(prev) => Arc::new(prev.next(new_state_str.clone(), attributes.clone(), context)),
-            None => Arc::new(State::new(entity_id.clone(), new_state_str.clone(), attributes.clone(), context)),
+            None => Arc::new(State::new(
+                entity_id.clone(),
+                new_state_str.clone(),
+                attributes.clone(),
+                context,
+            )),
         };
 
         // HA suppresses no-op writes (same state + same attributes).
@@ -94,7 +120,12 @@ impl StateMachine {
             None => false,
         };
 
-        self.inner.states.insert(entity_id.clone(), Arc::clone(&next));
+        // Commit through the same locked entry and KEEP the shard guard
+        // alive across the broadcast `send`, so the event is published
+        // before any concurrent writer on this entity can observe the new
+        // value and fire its own event. This makes global event order match
+        // global commit order (no insert/send reorder window).
+        let _guard = slot.insert_entry(Arc::clone(&next));
 
         if !is_noop {
             let event = StateChangedEvent {
@@ -106,6 +137,7 @@ impl StateMachine {
             // err = no receivers; that's fine, write still committed.
             let _ = self.inner.tx.send(event);
         }
+        // `_guard` (and the shard lock) drops here, after the event is sent.
         next
     }
 
@@ -217,5 +249,136 @@ mod tests {
         let evt = rx.recv().await.unwrap();
         assert!(evt.new_state.is_none());
         assert!(evt.old_state.is_some());
+    }
+
+    /// Concurrency invariant (ADR-127 §2.1 "writer atomically replaces the
+    /// map entry"): under concurrent writers on the SAME entity the fired
+    /// `state_changed` stream must be a faithful, gap-free log of the
+    /// committed transitions — in particular the LAST event the bus
+    /// delivers must carry the SAME value that is finally committed in the
+    /// map.
+    ///
+    /// This pins the TOCTOU in `set`: it does `get` (release shard lock) →
+    /// compute `next` + no-op decision → `insert` (re-acquire shard lock) →
+    /// `send`. Because the insert and the send are not atomic with respect
+    /// to a concurrent writer, two writers can interleave as
+    /// `insert(A); insert(B); send(B); send(A)` — leaving the map holding A
+    /// while the last event the bus ever delivers says B. A subscriber that
+    /// trusts "the last event reflects current state" (the recorder, the WS
+    /// push API, an automation engine) is then permanently wrong about the
+    /// entity until the next write. A correctly-locked store holds the shard
+    /// lock across read→insert→send so the global event order matches the
+    /// global commit order.
+    ///
+    /// A dedicated drain thread pulls events as they arrive so the bounded
+    /// channel never lags during the run (a `Lagged` here would be a test
+    /// artefact, not the bug under test).
+    ///
+    /// The writers toggle the SAME entity between exactly two values so the
+    /// no-op suppression branch is constantly in play.
+    ///
+    /// Invariant: in correctly serialised code, two *consecutive* fired
+    /// `state_changed` events can never carry the same `new_state` value.
+    /// Proof: event k fires only for a committed transition old≠new, so its
+    /// `new_state` = X differs from the value before it; the next committed
+    /// transition therefore starts at X and (being a real change) commits
+    /// some Z≠X, so event k+1 carries Z≠X. A no-op (X→X) is suppressed and
+    /// never fires. Therefore adjacent fired events always differ.
+    ///
+    /// The `set()` TOCTOU breaks this: it does `get` (release shard lock) →
+    /// compute `next` + the no-op decision → `insert` (re-acquire shard
+    /// lock) → `send`, all non-atomically. A writer that read a STALE `old`
+    /// mis-classifies a genuine transition as a no-op (dropping that real
+    /// event — a missed automation trigger) and/or fires an event whose
+    /// `new_state` duplicates the previously delivered one (a spurious
+    /// trigger for any automation keyed on `old_state != new_state`). The
+    /// probe behind this test observed ~93k such duplicate-adjacent events
+    /// across 200 trials on the racy code; the corrected store produces
+    /// zero.
+    #[test]
+    fn concurrent_set_fires_no_duplicate_adjacent_events() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Barrier, Mutex};
+
+        const WRITERS: usize = 4;
+        const ITERS: usize = 300; // 1200 events ≪ 4096 capacity → never lags
+
+        for _trial in 0..40 {
+            let sm = StateMachine::new();
+            let eid = id("light.race");
+            sm.set(eid.clone(), "A", serde_json::json!({}), Context::new());
+
+            let mut rx = sm.subscribe();
+            let done = Arc::new(AtomicBool::new(false));
+            // Event log: new_state value in delivery order.
+            let log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
+            let drainer = {
+                let done = Arc::clone(&done);
+                let log = Arc::clone(&log);
+                std::thread::spawn(move || loop {
+                    match rx.try_recv() {
+                        Ok(evt) => {
+                            if let Some(ns) = &evt.new_state {
+                                log.lock().unwrap().push(ns.state.clone());
+                            }
+                        }
+                        Err(broadcast::error::TryRecvError::Empty) => {
+                            if done.load(Ordering::Acquire) {
+                                while let Ok(evt) = rx.try_recv() {
+                                    if let Some(ns) = &evt.new_state {
+                                        log.lock().unwrap().push(ns.state.clone());
+                                    }
+                                }
+                                break;
+                            }
+                            std::thread::yield_now();
+                        }
+                        Err(broadcast::error::TryRecvError::Lagged(_)) => {
+                            panic!("channel lagged — test artefact, raise capacity");
+                        }
+                        Err(broadcast::error::TryRecvError::Closed) => break,
+                    }
+                })
+            };
+
+            let barrier = Arc::new(Barrier::new(WRITERS));
+            let handles: Vec<_> = (0..WRITERS)
+                .map(|w| {
+                    let sm = sm.clone();
+                    let eid = eid.clone();
+                    let barrier = Arc::clone(&barrier);
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        for i in 0..ITERS {
+                            // Toggle between two values → maximises the
+                            // stale-`old` no-op collision window.
+                            let val = if (w + i) % 2 == 0 { "A" } else { "B" };
+                            sm.set(eid.clone(), val, serde_json::json!({}), Context::new());
+                        }
+                    })
+                })
+                .collect();
+
+            for h in handles {
+                h.join().unwrap();
+            }
+            done.store(true, Ordering::Release);
+            drainer.join().unwrap();
+
+            let log = log.lock().unwrap();
+            let dup = log
+                .windows(2)
+                .filter(|w| w[0] == w[1])
+                .count();
+            assert_eq!(
+                dup, 0,
+                "{dup} consecutive fired state_changed events carried an \
+                 identical new_state — impossible under correct \
+                 serialisation; proves set()'s read→decide→insert→send \
+                 TOCTOU dropped/reordered real transitions (missed & \
+                 spurious automation triggers)",
+            );
+        }
     }
 }

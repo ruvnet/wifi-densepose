@@ -1015,6 +1015,7 @@ dependencies = [
  "candle-core 0.9.2",
  "candle-nn 0.9.2",
  "clap",
+ "criterion",
  "safetensors 0.4.5",
  "serde",
  "serde_json",
@@ -1034,6 +1035,7 @@ dependencies = [
  "candle-core 0.9.2",
  "candle-nn 0.9.2",
  "clap",
+ "criterion",
  "hex",
  "safetensors 0.4.5",
  "serde",
@@ -1405,6 +1407,12 @@ checksum = "5eb8a2a1cd12ab0d987a5d5e825195d372001a4094a0376319d5a0ad71c1ba0d"
 dependencies = [
  "crc-catalog",
 ]
+
+[[package]]
+name = "crc-any"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a62ec9ff5f7965e4d7280bd5482acd20aadb50d632cf6c1d74493856b011fa73"
 
 [[package]]
 name = "crc-catalog"
@@ -3209,6 +3217,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "h2"
+version = "0.4.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "171fefbc92fe4a4de27e0698d6a5b392d6a0e333506bc49133760b3bcf948733"
+dependencies = [
+ "atomic-waker",
+ "bytes",
+ "fnv",
+ "futures-core",
+ "futures-sink",
+ "http 1.4.0",
+ "indexmap 2.13.0",
+ "slab",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3447,6 +3474,7 @@ dependencies = [
  "axum",
  "chrono",
  "dashmap",
+ "futures-util",
  "homecore",
  "http-body-util",
  "hyper 1.8.1",
@@ -3454,6 +3482,7 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-tungstenite",
  "tower 0.5.3",
  "tower-http",
  "tracing",
@@ -3527,9 +3556,13 @@ name = "homecore-plugins"
 version = "0.1.0-alpha.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
+ "ed25519-dalek",
+ "hex",
  "homecore",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 1.0.69",
  "tokio",
  "uuid",
@@ -3562,6 +3595,7 @@ dependencies = [
  "anyhow",
  "axum",
  "clap",
+ "futures",
  "homecore",
  "homecore-api",
  "homecore-assist",
@@ -3569,8 +3603,13 @@ dependencies = [
  "homecore-hap",
  "homecore-plugins",
  "homecore-recorder",
+ "http-body-util",
+ "reqwest 0.12.28",
+ "serde",
  "serde_json",
  "tokio",
+ "tower 0.5.3",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
 ]
@@ -3670,7 +3709,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
- "h2",
+ "h2 0.3.27",
  "http 0.2.12",
  "http-body 0.4.6",
  "httparse",
@@ -3694,6 +3733,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-core",
+ "h2 0.4.14",
  "http 1.4.0",
  "http-body 1.0.1",
  "httparse",
@@ -3718,6 +3758,22 @@ dependencies = [
  "rustls 0.21.12",
  "tokio",
  "tokio-rustls 0.24.1",
+]
+
+[[package]]
+name = "hyper-rustls"
+version = "0.27.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33ca68d021ef39cf6463ab54c1d0f5daf03377b70561305bb89a8f83aab66e0f"
+dependencies = [
+ "http 1.4.0",
+ "hyper 1.8.1",
+ "hyper-util",
+ "rustls 0.23.37",
+ "tokio",
+ "tokio-rustls 0.26.4",
+ "tower-service",
+ "webpki-roots 1.0.7",
 ]
 
 [[package]]
@@ -3754,9 +3810,11 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "socket2 0.6.2",
+ "system-configuration 0.7.0",
  "tokio",
  "tower-service",
  "tracing",
+ "windows-registry",
 ]
 
 [[package]]
@@ -3993,6 +4051,15 @@ checksum = "617ee6cf8e3f66f3b4ea67a4058564628cde41901316e19f559e14c7c72c5e7b"
 dependencies = [
  "core-foundation-sys",
  "mach2",
+]
+
+[[package]]
+name = "ioctl-rs"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7970510895cee30b3e9128319f2cefd4bde883a39f38baa279567ba3a7eb97d"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -4509,6 +4576,48 @@ checksum = "a06de3016e9fae57a36fd14dba131fccf49f74b40b7fbdb472f96e361ec71a08"
 dependencies = [
  "autocfg",
  "rawpointer",
+]
+
+[[package]]
+name = "mavlink"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94356eb6ed56a834d6dca79a8c33c650d3d03d3ea79ae762ec1c9182b6fdc1e2"
+dependencies = [
+ "bitflags 1.3.2",
+ "mavlink-bindgen",
+ "mavlink-core",
+ "num-derive",
+ "num-traits",
+ "serde",
+ "serde_arrays",
+]
+
+[[package]]
+name = "mavlink-bindgen"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6c28f3eafc35544c7b4aee7cf9ec35b96c79a05de4bad3fe145bdac23570b04"
+dependencies = [
+ "crc-any",
+ "lazy_static",
+ "proc-macro2",
+ "quick-xml 0.36.2",
+ "quote",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "mavlink-core"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e64d975ca3cf0ad8a7c278553f91d77de15fcde9b79bf6bc542e209dd0c7dee"
+dependencies = [
+ "byteorder",
+ "crc-any",
+ "serde",
+ "serde_arrays",
+ "serial",
 ]
 
 [[package]]
@@ -5068,6 +5177,17 @@ name = "num-conv"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf97ec579c3c42f953ef76dbf8d55ac91fb219dde70e49aa4a6b7d74e9919050"
+
+[[package]]
+name = "num-derive"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "876a53fff98e03a936a674b29568b0e605f06b29372c2489ff4de23f1949743d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
 
 [[package]]
 name = "num-integer"
@@ -5867,7 +5987,7 @@ checksum = "740ebea15c5d1428f910cd1a5f52cebf8d25006245ed8ade92702f4943d91e07"
 dependencies = [
  "base64 0.22.1",
  "indexmap 2.13.0",
- "quick-xml",
+ "quick-xml 0.38.4",
  "serde",
  "time",
 ]
@@ -6253,6 +6373,15 @@ name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
+
+[[package]]
+name = "quick-xml"
+version = "0.36.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7649a7b4df05aed9ea7ec6f628c67c9953a43869b8bc50929569b2999d443fe"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "quick-xml"
@@ -6692,11 +6821,11 @@ dependencies = [
  "encoding_rs",
  "futures-core",
  "futures-util",
- "h2",
+ "h2 0.3.27",
  "http 0.2.12",
  "http-body 0.4.6",
  "hyper 0.14.32",
- "hyper-rustls",
+ "hyper-rustls 0.24.2",
  "ipnet",
  "js-sys",
  "log",
@@ -6710,7 +6839,7 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "sync_wrapper 0.1.2",
- "system-configuration",
+ "system-configuration 0.5.1",
  "tokio",
  "tokio-rustls 0.24.1",
  "tower-service",
@@ -6730,20 +6859,26 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "encoding_rs",
  "futures-core",
  "futures-util",
+ "h2 0.4.14",
  "http 1.4.0",
  "http-body 1.0.1",
  "http-body-util",
  "hyper 1.8.1",
+ "hyper-rustls 0.27.9",
  "hyper-tls",
  "hyper-util",
  "js-sys",
  "log",
+ "mime",
  "mime_guess",
  "native-tls",
  "percent-encoding",
  "pin-project-lite",
+ "quinn",
+ "rustls 0.23.37",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -6751,6 +6886,7 @@ dependencies = [
  "sync_wrapper 1.0.2",
  "tokio",
  "tokio-native-tls",
+ "tokio-rustls 0.26.4",
  "tower 0.5.3",
  "tower-http",
  "tower-service",
@@ -6758,6 +6894,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "webpki-roots 1.0.7",
 ]
 
 [[package]]
@@ -6957,6 +7094,42 @@ dependencies = [
  "num-traits",
  "serde",
  "smallvec",
+]
+
+[[package]]
+name = "rufield-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rufield-fusion"
+version = "0.1.0"
+dependencies = [
+ "rufield-core",
+ "rufield-provenance",
+ "serde",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "rufield-privacy"
+version = "0.1.0"
+dependencies = [
+ "rufield-core",
+]
+
+[[package]]
+name = "rufield-provenance"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "rufield-core",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -7210,9 +7383,9 @@ dependencies = [
 
 [[package]]
 name = "ruvector-attention"
-version = "2.0.4"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4233c1cecd0ea826d95b787065b398489328885042247ff5ffcbb774e864ff"
+checksum = "a92e8e456458188d04aee946579aa7cf96d7b8f276cbf6094532b2c3f6d8cc0b"
 dependencies = [
  "rand 0.8.5",
  "rayon",
@@ -7277,14 +7450,14 @@ dependencies = [
 
 [[package]]
 name = "ruvector-gnn"
-version = "2.0.5"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e17c1cf1ff3380026b299ff3c1ba3a5685c3d8d54700e6ab0b585b6cec21d7b"
+checksum = "a251f9ced8d3231395d922369edc803ef0fc513c7776128f7b4ef21f20dd1f4b"
 dependencies = [
  "anyhow",
  "dashmap",
  "libc",
- "ndarray 0.16.1",
+ "ndarray 0.17.2",
  "parking_lot",
  "rand 0.8.5",
  "rand_distr 0.4.3",
@@ -7297,9 +7470,9 @@ dependencies = [
 
 [[package]]
 name = "ruvector-mincut"
-version = "2.0.4"
+version = "2.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d62e10cbb7d80b1e2b72d55c1e3eb7f0c4c5e3f31984bc3baa9b7a02700741e"
+checksum = "d60947433f740d0f589a2911d7b72a02e07a916e7257e478b14386f0ff068fb7"
 dependencies = [
  "anyhow",
  "crossbeam",
@@ -7319,9 +7492,9 @@ dependencies = [
 
 [[package]]
 name = "ruvector-solver"
-version = "2.0.4"
+version = "2.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce69cbde4ee5747281edb1d987a8292940397723924262b6218fc19022cbf687"
+checksum = "9be7c4f61940ae8b451f88b9a629a08ee8ee5c8e6b00ab96ca10ecf59e70f558"
 dependencies = [
  "dashmap",
  "getrandom 0.2.17",
@@ -7337,6 +7510,30 @@ name = "ruvector-temporal-tensor"
 version = "2.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "753a07254fa68db183949ec6c7575d890da4d42404afabc11d610a720fcf570c"
+
+[[package]]
+name = "ruview-swarm"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "candle-core 0.9.2",
+ "candle-nn 0.9.2",
+ "criterion",
+ "hmac",
+ "mavlink",
+ "nalgebra",
+ "ort",
+ "rand 0.8.5",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-test",
+ "toml 0.8.23",
+ "tracing",
+]
 
 [[package]]
 name = "ryu"
@@ -7573,6 +7770,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_arrays"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38636132857f68ec3d5f3eb121166d2af33cb55174c4d5ff645db6165cbef0fd"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "serde_core"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7710,6 +7916,48 @@ dependencies = [
  "ryu",
  "serde",
  "unsafe-libyaml",
+]
+
+[[package]]
+name = "serial"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1237a96570fc377c13baa1b88c7589ab66edced652e43ffb17088f003db3e86"
+dependencies = [
+ "serial-core",
+ "serial-unix",
+ "serial-windows",
+]
+
+[[package]]
+name = "serial-core"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f46209b345401737ae2125fe5b19a77acce90cd53e1658cda928e4fe9a64581"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "serial-unix"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f03fbca4c9d866e24a459cbca71283f545a37f8e3e002ad8c70593871453cab7"
+dependencies = [
+ "ioctl-rs",
+ "libc",
+ "serial-core",
+ "termios",
+]
+
+[[package]]
+name = "serial-windows"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15c6d3b776267a75d31bbdfd5d36c0ca051251caafc285827052bc53bcdc8162"
+dependencies = [
+ "libc",
+ "serial-core",
 ]
 
 [[package]]
@@ -8411,7 +8659,18 @@ checksum = "ba3a3adc5c275d719af8cb4272ea1c4a6d668a777f37e115f6d11ddbc1c8e0e7"
 dependencies = [
  "bitflags 1.3.2",
  "core-foundation 0.9.4",
- "system-configuration-sys",
+ "system-configuration-sys 0.5.0",
+]
+
+[[package]]
+name = "system-configuration"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a13f3d0daba03132c0aa9767f98351b3488edc2c100cda2d2ec2b04f3d8d3c8b"
+dependencies = [
+ "bitflags 2.11.0",
+ "core-foundation 0.9.4",
+ "system-configuration-sys 0.6.0",
 ]
 
 [[package]]
@@ -8419,6 +8678,16 @@ name = "system-configuration-sys"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a75fb188eb626b924683e3b95e3a48e63551fcfb51949de2f06a9d91dbee93c9"
+dependencies = [
+ "core-foundation-sys",
+ "libc",
+]
+
+[[package]]
+name = "system-configuration-sys"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e1d1b10ced5ca923a1fcb8d03e96b8d3268065d724548c0211415ff6ac6bac4"
 dependencies = [
  "core-foundation-sys",
  "libc",
@@ -8880,6 +9149,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "termios"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5d9cf598a6d7ce700a4e6a9199da127e6819a61e64b68609683cc9a01b5683a"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "termtree"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9066,6 +9344,16 @@ checksum = "775e0c0f0adb3a2f22a00c4745d728b479985fc15ee7ca6a2608388c5569860f"
 dependencies = [
  "rustls 0.22.4",
  "rustls-pki-types",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-rustls"
+version = "0.26.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
+dependencies = [
+ "rustls 0.23.37",
  "tokio",
 ]
 
@@ -10565,7 +10853,7 @@ checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
 
 [[package]]
 name = "wifi-densepose-bfld"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "blake3",
  "crc",
@@ -10578,17 +10866,34 @@ dependencies = [
 ]
 
 [[package]]
-name = "wifi-densepose-cli"
+name = "wifi-densepose-calibration"
 version = "0.3.0"
+dependencies = [
+ "ndarray 0.17.2",
+ "num-complex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+ "wifi-densepose-core",
+ "wifi-densepose-signal",
+]
+
+[[package]]
+name = "wifi-densepose-cli"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "axum",
  "chrono",
  "clap",
  "colored",
  "console 0.16.3",
  "csv",
  "indicatif",
+ "ndarray 0.17.2",
+ "num-complex",
  "predicates",
  "serde",
  "serde_json",
@@ -10596,17 +10901,23 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tower 0.4.13",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "wifi-densepose-calibration",
+ "wifi-densepose-core",
  "wifi-densepose-mat",
+ "wifi-densepose-signal",
 ]
 
 [[package]]
 name = "wifi-densepose-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
+ "blake3",
  "chrono",
  "ndarray 0.17.2",
  "num-complex",
@@ -10648,6 +10959,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "wifi-densepose-engine"
+version = "0.3.1"
+dependencies = [
+ "blake3",
+ "criterion",
+ "ruvector-mincut",
+ "wifi-densepose-bfld",
+ "wifi-densepose-core",
+ "wifi-densepose-geo",
+ "wifi-densepose-ruvector",
+ "wifi-densepose-signal",
+ "wifi-densepose-worldgraph",
+]
+
+[[package]]
 name = "wifi-densepose-geo"
 version = "0.1.0"
 dependencies = [
@@ -10661,7 +10987,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-hardware"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "approx",
  "byteorder",
@@ -10681,7 +11007,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-mat"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "approx",
@@ -10700,6 +11026,7 @@ dependencies = [
  "ruvector-temporal-tensor",
  "serde",
  "serde_json",
+ "serialport",
  "thiserror 2.0.18",
  "tokio",
  "tokio-test",
@@ -10712,7 +11039,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-nn"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "candle-core 0.4.1",
@@ -10734,6 +11061,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "wifi-densepose-occworld-candle"
+version = "0.3.0"
+dependencies = [
+ "approx",
+ "candle-core 0.9.2",
+ "candle-nn 0.9.2",
+ "safetensors 0.4.5",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "wifi-densepose-pointcloud"
 version = "0.1.0"
 dependencies = [
@@ -10741,6 +11082,7 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
+ "criterion",
  "dirs 5.0.1",
  "reqwest 0.12.28",
  "serde",
@@ -10750,12 +11092,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "wifi-densepose-ruvector"
+name = "wifi-densepose-rufield"
 version = "0.3.0"
+dependencies = [
+ "rufield-core",
+ "rufield-fusion",
+ "rufield-privacy",
+ "rufield-provenance",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "wifi-densepose-ruvector"
+version = "0.3.2"
 dependencies = [
  "approx",
  "criterion",
- "ruvector-attention 2.0.4",
+ "ruvector-attention 2.1.0",
  "ruvector-attn-mincut",
  "ruvector-core",
  "ruvector-crv",
@@ -10771,7 +11125,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-sensing-server"
-version = "0.3.1"
+version = "0.3.4"
 dependencies = [
  "axum",
  "chrono",
@@ -10794,14 +11148,19 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ureq 2.12.1",
+ "wifi-densepose-bfld",
+ "wifi-densepose-engine",
+ "wifi-densepose-geo",
  "wifi-densepose-hardware",
+ "wifi-densepose-rufield",
  "wifi-densepose-signal",
  "wifi-densepose-wifiscan",
+ "wifi-densepose-worldgraph",
 ]
 
 [[package]]
 name = "wifi-densepose-signal"
-version = "0.3.1"
+version = "0.3.5"
 dependencies = [
  "chrono",
  "criterion",
@@ -10813,7 +11172,7 @@ dependencies = [
  "num-traits",
  "proptest",
  "rustfft",
- "ruvector-attention 2.0.4",
+ "ruvector-attention 2.1.0",
  "ruvector-attn-mincut",
  "ruvector-mincut",
  "ruvector-solver",
@@ -10821,13 +11180,14 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror 2.0.18",
+ "uuid",
  "wifi-densepose-core",
  "wifi-densepose-ruvector",
 ]
 
 [[package]]
 name = "wifi-densepose-train"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "approx",
@@ -10843,7 +11203,7 @@ dependencies = [
  "num-traits",
  "petgraph",
  "proptest",
- "ruvector-attention 2.0.4",
+ "ruvector-attention 2.1.0",
  "ruvector-attn-mincut",
  "ruvector-mincut",
  "ruvector-solver",
@@ -10865,8 +11225,9 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-vitals"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
+ "criterion",
  "serde",
  "serde_json",
  "tracing",
@@ -10896,11 +11257,23 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-wifiscan"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "tokio",
  "tracing",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "wifi-densepose-worldgraph"
+version = "0.3.2"
+dependencies = [
+ "petgraph",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "wifi-densepose-geo",
 ]
 
 [[package]]
@@ -11122,6 +11495,17 @@ checksum = "9150af68066c4c5c07ddc0ce30421554771e528bde427614c61038bc2c92c2b1"
 dependencies = [
  "windows-core 0.61.2",
  "windows-link 0.1.3",
+]
+
+[[package]]
+name = "windows-registry"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02752bf7fbdcce7f2a27a742f798510f3e5ad88dbe84871e5168e2120c3d5720"
+dependencies = [
+ "windows-link 0.2.1",
+ "windows-result 0.4.1",
+ "windows-strings 0.5.1",
 ]
 
 [[package]]

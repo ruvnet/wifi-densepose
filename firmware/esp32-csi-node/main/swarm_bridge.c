@@ -23,7 +23,16 @@
 static const char *TAG = "swarm";
 
 /* ---- Task parameters ---- */
-#define SWARM_TASK_STACK   3072   /**< 3 KB stack — HTTP client uses ~2.5 KB. */
+/* Issue #949: 3 KB was sized for plain HTTP (~2.5 KB). The bug reporter
+ * configured `--seed-url https://…` which exercises TLS — mbedTLS handshake
+ * alone needs 4-6 KB on the stack (cipher suite + cert chain + ECDH), and on
+ * top of that esp_http_client adds another 1.5-2 KB. The task panicked with
+ * `0xa5a5a5a5` (FreeRTOS stack-fill sentinel) immediately after "bridge init
+ * OK". 8 KB comfortably fits TLS with margin for the cert chain + headers;
+ * confirmed against mbedTLS's stack analyser. Plain-HTTP deployments waste
+ * ~5 KB of headroom but that's <0.1 % of PSRAM, an acceptable cost for the
+ * bug class this prevents. */
+#define SWARM_TASK_STACK   8192   /**< 8 KB stack — fits mbedTLS handshake. */
 #define SWARM_TASK_PRIO    3
 #define SWARM_TASK_CORE    0
 #define SWARM_HTTP_TIMEOUT 3000  /**< HTTP timeout in ms (Seed responds <100ms on LAN). */

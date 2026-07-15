@@ -184,7 +184,9 @@ function loadGroundTruth(filePath) {
   const raw = loadJsonl(filePath);
   const frames = [];
   for (const r of raw) {
-    if (r.ts_ns == null || !r.keypoints) continue;
+    // Skip non-detection frames (empty keypoints []) — they must not dilute window
+    // confidence; confidence stats are over actual detections only (#1007 Bug 2).
+    if (r.ts_ns == null || !r.keypoints || r.keypoints.length === 0) continue;
     frames.push({
       tsMs: cameraTsToMs(r.ts_ns),
       keypoints: r.keypoints,
@@ -266,7 +268,29 @@ function loadCsi(filePath) {
   // Sort by timestamp
   rawCsi.sort((a, b) => a.tsMs - b.tsMs);
   features.sort((a, b) => a.tsMs - b.tsMs);
-  return { rawCsi, features };
+
+  // Bug 3 (#1007): keep only frames at the session's MODAL subcarrier count so windows
+  // are homogeneous; never silently zero-pad/truncate the off-format frames the ESP32
+  // emits (HT20/HT40/fragments). extractCsiMatrix then sees uniform-width frames.
+  return { rawCsi: filterToModalSubcarriers(rawCsi), features };
+}
+
+/**
+ * Keep only frames whose subcarrier count equals the session's modal (most common)
+ * count. Off-format frames are dropped (logged), not padded — prevents the silent
+ * zero-padding that corrupted windows in #1007.
+ */
+function filterToModalSubcarriers(frames) {
+  if (frames.length === 0) return frames;
+  const counts = new Map();
+  for (const f of frames) counts.set(f.subcarriers, (counts.get(f.subcarriers) || 0) + 1);
+  let modal = frames[0].subcarriers, best = 0;
+  for (const [sc, n] of counts) if (n > best) { best = n; modal = sc; }
+  const kept = frames.filter((f) => f.subcarriers === modal);
+  if (kept.length !== frames.length) {
+    console.error(`[align] #1007: kept ${kept.length}/${frames.length} CSI frames at modal subcarrier count ${modal} (dropped ${frames.length - kept.length} off-format; no silent padding)`);
+  }
+  return kept;
 }
 
 // ---------------------------------------------------------------------------
@@ -343,7 +367,8 @@ function averageKeypoints(cameraFrames) {
 
 /**
  * Extract CSI amplitude matrix from raw_csi window.
- * Returns { data: flat Float32Array, shape: [subcarriers, windowFrames] }.
+ * Fill is frame-major (matrix[f*nSc + s]), so shape is [windowFrames, subcarriers]
+ * (#1007 Bug 4 — was mislabeled [subcarriers, windowFrames], transposing consumers).
  */
 function extractCsiMatrix(window) {
   const nFrames = window.length;
@@ -363,12 +388,13 @@ function extractCsiMatrix(window) {
     }
   }
 
-  return { data: Array.from(matrix), shape: [nSc, nFrames] };
+  return { data: Array.from(matrix), shape: [nFrames, nSc] };
 }
 
 /**
  * Extract feature matrix from feature-type window.
- * Returns { data: flat array, shape: [featureDim, windowFrames] }.
+ * Fill is frame-major (matrix[f*dim + d]), so shape is [windowFrames, featureDim]
+ * (#1007 Bug 4 — was mislabeled [featureDim, windowFrames]).
  */
 function extractFeatureMatrix(window) {
   const nFrames = window.length;
@@ -382,7 +408,7 @@ function extractFeatureMatrix(window) {
     }
   }
 
-  return { data: Array.from(matrix), shape: [dim, nFrames] };
+  return { data: Array.from(matrix), shape: [nFrames, dim] };
 }
 
 // ---------------------------------------------------------------------------

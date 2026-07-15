@@ -362,6 +362,49 @@ mod tests {
         );
     }
 
+    /// REGRESSION (ADR-080 #1 — X-Forwarded-For / X-Forwarded-Host spoofing).
+    ///
+    /// The DNS-rebinding allowlist must decide purely on the real `Host` header
+    /// and ignore any client-supplied forwarding headers. Otherwise an attacker
+    /// could spoof `X-Forwarded-Host: localhost` (or `X-Forwarded-For`) to slip a
+    /// foreign `Host` past the allowlist. This test sends a rejected `Host:
+    /// evil.com` *with* allowlisted forwarding headers and asserts the request is
+    /// still `421` — the forwarded headers must not bypass the control. It also
+    /// confirms an allowed `Host` stays `200` regardless of a hostile XFF.
+    #[tokio::test]
+    async fn forwarded_headers_never_bypass_host_allowlist() {
+        let r = router(HostAllowlist::loopback_only());
+        async fn with_forwarded(
+            router: Router,
+            host: &str,
+            xff: &str,
+            xfh: &str,
+        ) -> StatusCode {
+            let req = Request::builder()
+                .method("GET")
+                .uri("/api/v1/pose/current")
+                .header(HOST, host)
+                .header("X-Forwarded-For", xff)
+                .header("X-Forwarded-Host", xfh)
+                .body(Body::empty())
+                .unwrap();
+            router.oneshot(req).await.unwrap().status()
+        }
+        // Foreign Host + spoofed allowlisted forwarding headers ⇒ still rejected.
+        assert_eq!(
+            with_forwarded(r.clone(), "evil.com", "127.0.0.1", "localhost").await,
+            StatusCode::MISDIRECTED_REQUEST,
+            "X-Forwarded-* must not let a foreign Host bypass the allowlist"
+        );
+        // Allowed Host + hostile forwarding headers ⇒ still allowed (forwarded
+        // headers are simply not consulted).
+        assert_eq!(
+            with_forwarded(r, "127.0.0.1:8080", "evil.com", "evil.com").await,
+            StatusCode::OK,
+            "the real Host header is the only signal; XFF/XFH are ignored"
+        );
+    }
+
     #[tokio::test]
     async fn disabled_allowlist_is_no_op() {
         let r = router(HostAllowlist::disabled());

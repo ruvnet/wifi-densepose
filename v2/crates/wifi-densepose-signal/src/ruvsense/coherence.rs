@@ -79,7 +79,7 @@ impl CoherenceState {
         Self {
             reference: vec![0.0; n_subcarriers],
             variance: vec![1.0; n_subcarriers],
-            decay: 0.95,
+            decay: DEFAULT_EMA_DECAY,
             current_score: 1.0,
             stale_count: 0,
             drift_profile: DriftProfile::Stable,
@@ -200,8 +200,8 @@ impl CoherenceState {
             let diff = obs - old_ref;
             *v = self.decay * *v + alpha * diff * diff;
             // Ensure variance does not collapse to zero
-            if *v < 1e-6 {
-                *v = 1e-6;
+            if *v < VARIANCE_FLOOR {
+                *v = VARIANCE_FLOOR;
             }
         }
     }
@@ -229,7 +229,7 @@ pub fn coherence_score(current: &[f32], reference: &[f32], variance: &[f32]) -> 
         return 0.0;
     }
 
-    let epsilon = 1e-6_f32;
+    let epsilon = VARIANCE_FLOOR;
     let mut weighted_sum = 0.0_f32;
     let mut weight_sum = 0.0_f32;
 
@@ -249,11 +249,34 @@ pub fn coherence_score(current: &[f32], reference: &[f32], variance: &[f32]) -> 
     (weighted_sum / weight_sum).clamp(0.0, 1.0)
 }
 
+/// Coherence score at/above which the environment is classified `Stable`
+/// (ADR-154 §7.4 #9 — DATA-GATED). EMPIRICAL DEFAULT, not a calibrated cutoff:
+/// a defensible value needs labelled stable/drifting environment traces. Pinned
+/// by `classify_drift_*_boundary` so a future retune is a visible, tested change.
+const DRIFT_STABLE_SCORE: f32 = 0.85;
+
+/// Stale-frame count below which a coherence loss is treated as a transient
+/// `StepChange` rather than a sustained `Linear` drift (ADR-154 §7.4 #9 —
+/// DATA-GATED). EMPIRICAL DEFAULT pending labelled calibration.
+const DRIFT_STEP_CHANGE_MAX_STALE: u64 = 10;
+
+/// Variance floor (ADR-154 §7.4 — de-magicked): the online variance estimate
+/// is never allowed to collapse below this, which keeps the inverse-variance
+/// weight and the z-score divisor finite. Used as both the floor in
+/// `update_reference` and the epsilon in `coherence_score` /
+/// `per_subcarrier_zscores`. Value unchanged from the prior `1e-6` literals.
+const VARIANCE_FLOOR: f32 = 1e-6;
+
+/// Default EMA decay rate for the reference/variance update (ADR-154 §7.4 —
+/// de-magicked from the inline `0.95` in `CoherenceState::new`). EMPIRICAL
+/// DEFAULT; override via [`CoherenceState::with_decay`].
+const DEFAULT_EMA_DECAY: f32 = 0.95;
+
 /// Classify drift profile based on coherence history.
 fn classify_drift(score: f32, stale_count: u64) -> DriftProfile {
-    if score >= 0.85 {
+    if score >= DRIFT_STABLE_SCORE {
         DriftProfile::Stable
-    } else if stale_count < 10 {
+    } else if stale_count < DRIFT_STEP_CHANGE_MAX_STALE {
         // Brief coherence loss -> likely step change
         DriftProfile::StepChange
     } else {
@@ -269,7 +292,7 @@ pub fn per_subcarrier_zscores(current: &[f32], reference: &[f32], variance: &[f3
     let n = current.len().min(reference.len()).min(variance.len());
     (0..n)
         .map(|i| {
-            let var = variance[i].max(1e-6);
+            let var = variance[i].max(VARIANCE_FLOOR);
             (current[i] - reference[i]).abs() / var.sqrt()
         })
         .collect()
@@ -416,6 +439,55 @@ mod tests {
     #[test]
     fn drift_classification_linear() {
         assert_eq!(classify_drift(0.3, 20), DriftProfile::Linear);
+    }
+
+    // ── ADR-154 §7.4 #9: drift-threshold characterization (DATA-GATED) ──────
+    // Pin the CURRENT empirical thresholds so a future labelled-data retune is a
+    // visible, tested change. These assert the decision boundaries, not that the
+    // values are "correct".
+
+    /// The named consts must equal the original bare literals (no value drift).
+    #[test]
+    fn drift_consts_unchanged_from_literals() {
+        assert_eq!(DRIFT_STABLE_SCORE, 0.85);
+        assert_eq!(DRIFT_STEP_CHANGE_MAX_STALE, 10);
+        // ADR-154 §7.4 M3: variance-floor + default-decay de-magic.
+        assert_eq!(VARIANCE_FLOOR, 1e-6_f32);
+        assert_eq!(DEFAULT_EMA_DECAY, 0.95_f32);
+    }
+
+    /// `coherence_score` stays finite and in [0,1] when a subcarrier reports
+    /// zero variance — the [`VARIANCE_FLOOR`] keeps the z-score divisor and the
+    /// inverse-variance weight finite. Pins the floor's effect.
+    #[test]
+    fn coherence_score_finite_with_zero_variance() {
+        let current = [1.0_f32, 2.0, 3.0];
+        let reference = [1.0_f32, 2.0, 3.0];
+        let zero_var = [0.0_f32, 0.0, 0.0];
+        let s = coherence_score(&current, &reference, &zero_var);
+        assert!(s.is_finite() && (0.0..=1.0).contains(&s));
+        // Perfect agreement with floored variance -> ~1.0.
+        assert!((s - 1.0).abs() < 1e-3);
+    }
+
+    /// Stable score boundary: `>= 0.85` is Stable; just below flips to a
+    /// non-stable profile.
+    #[test]
+    fn classify_drift_stable_score_boundary() {
+        // exactly at threshold → Stable
+        assert_eq!(classify_drift(0.85, 0), DriftProfile::Stable);
+        // just below → not Stable (StepChange, since stale_count < 10)
+        assert_eq!(classify_drift(0.849, 0), DriftProfile::StepChange);
+    }
+
+    /// Stale-count boundary: `< 10` is StepChange, `>= 10` is Linear (when the
+    /// score is below the Stable cutoff).
+    #[test]
+    fn classify_drift_stale_count_boundary() {
+        // just below 10 → StepChange
+        assert_eq!(classify_drift(0.3, 9), DriftProfile::StepChange);
+        // exactly 10 → Linear
+        assert_eq!(classify_drift(0.3, 10), DriftProfile::Linear);
     }
 
     #[test]

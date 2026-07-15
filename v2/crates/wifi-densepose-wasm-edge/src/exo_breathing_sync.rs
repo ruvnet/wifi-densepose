@@ -151,6 +151,8 @@ impl PairState {
 /// group assignment, then computes pairwise cross-correlation to detect
 /// phase-locked breathing.
 pub struct BreathingSyncDetector {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
     /// Per-person breathing channels (max 4).
     channels: [BreathingChannel; MAX_PERSONS],
     /// Pairwise synchronization states (max 6).
@@ -170,6 +172,7 @@ pub struct BreathingSyncDetector {
 impl BreathingSyncDetector {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 4],
             channels: [
                 BreathingChannel::new(), BreathingChannel::new(),
                 BreathingChannel::new(), BreathingChannel::new(),
@@ -201,7 +204,6 @@ impl BreathingSyncDetector {
         _breathing_bpm: f32,
         n_persons: i32,
     ) -> &[(i32, f32)] {
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n_ev = 0usize;
 
         self.frame_count += 1;
@@ -214,14 +216,12 @@ impl BreathingSyncDetector {
         if n_pers < 2 {
             // Reset pair states when fewer than 2 persons.
             if self.any_synced {
-                unsafe {
-                    EVENTS[n_ev] = (EVENT_SYNC_LOST, 1.0);
-                }
+                self.events[n_ev] = (EVENT_SYNC_LOST, 1.0);
                 n_ev += 1;
                 self.any_synced = false;
                 self.prev_sync_count = 0;
             }
-            return unsafe { &EVENTS[..n_ev] };
+            return &self.events[..n_ev];
         }
 
         let n_sc = core::cmp::min(phases.len(), MAX_SC);
@@ -331,36 +331,28 @@ impl BreathingSyncDetector {
 
         // Emit events.
         if self.any_synced && !was_any_synced {
-            unsafe {
-                EVENTS[n_ev] = (EVENT_SYNC_DETECTED, 1.0);
-            }
+            self.events[n_ev] = (EVENT_SYNC_DETECTED, 1.0);
             n_ev += 1;
         }
 
         if was_any_synced && !self.any_synced {
-            unsafe {
-                EVENTS[n_ev] = (EVENT_SYNC_LOST, 1.0);
-            }
+            self.events[n_ev] = (EVENT_SYNC_LOST, 1.0);
             n_ev += 1;
         }
 
         if sync_count != self.prev_sync_count && sync_count > 0 {
-            unsafe {
-                EVENTS[n_ev] = (EVENT_SYNC_PAIR_COUNT, sync_count as f32);
-            }
+            self.events[n_ev] = (EVENT_SYNC_PAIR_COUNT, sync_count as f32);
             n_ev += 1;
         }
         self.prev_sync_count = sync_count;
 
         // Emit coherence periodically (every 10 frames).
         if self.frame_count % 10 == 0 {
-            unsafe {
-                EVENTS[n_ev] = (EVENT_GROUP_COHERENCE, self.group_coherence);
-            }
+            self.events[n_ev] = (EVENT_GROUP_COHERENCE, self.group_coherence);
             n_ev += 1;
         }
 
-        unsafe { &EVENTS[..n_ev] }
+        &self.events[..n_ev]
     }
 
     /// Compute normalized cross-correlation between two person channels

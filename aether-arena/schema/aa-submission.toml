@@ -1,0 +1,41 @@
+# AetherArena submission manifest (ADR-149 §2.2).
+# Accompanies a model artifact pushed to the AA Hugging Face Space.
+# This file is the contract the Space validates before quarantine + scoring.
+
+[submission]
+# Free-form display name shown on the leaderboard.
+name = "my-spatial-model"
+# Hugging Face repo or URL of the model artifact (.safetensors / .rvf / LoRA adapter).
+model_ref = "hf://your-org/your-model"
+# Submitter handle (HF username / org). Used to sign the ledger row.
+submitter = "your-hf-username"
+# SPDX license of the submitted model.
+license = "Apache-2.0"
+
+[category]
+# One of: pose | presence | tracking | vitals | multi-task
+# v0 ranks: pose, presence (tracking/vitals activate when ground truth lands).
+primary = "pose"
+
+[input]
+# Which ADR-145 FeatureSet the model consumes. v0 input is RF/WiFi CSI.
+#   F0 = CSI amplitude/phase   F1 = +CIR   F2 = +Doppler   F3 = +BFLD
+feature_set = "F0"
+# Tensor I/O contract so the scorer can feed the model correctly.
+input_shape = [114, 2]      # subcarriers × {amp, phase}  (example)
+output_shape = [17, 2]      # 17 keypoints × {x, y} normalised [0,1]
+# Normalisation expected on the input ("none" | "zscore" | "minmax").
+normalization = "zscore"
+
+[runtime]
+# Inference entrypoint inside the artifact (framework-specific).
+framework = "candle"        # candle | onnx | torch
+# Optional: target the edge-latency category with a declared device class.
+device_class = "cpu"        # cpu | pi5 | gpu
+
+# Notes:
+# - You submit a MODEL, never predictions on data you hold.
+# - Scoring runs against a PRIVATE MM-Fi held-out split in a no-network,
+#   read-only sandbox. You cannot see the eval data.
+# - The resulting score is a signed, append-only ledger row carrying a
+#   determinism proof hash and the pinned harness_version.
