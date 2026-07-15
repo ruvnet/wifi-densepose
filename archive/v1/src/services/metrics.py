@@ -180,21 +180,24 @@ class MetricsService:
     async def _collect_system_metrics(self):
         """Collect system-level metrics."""
         try:
-            # CPU usage
-            cpu_percent = psutil.cpu_percent(interval=1)
+            # Query OS metrics in a background thread to prevent blocking the event loop
+            def gather_metrics():
+                return (
+                    psutil.cpu_percent(interval=None),
+                    psutil.virtual_memory().percent,
+                    psutil.disk_usage('/'),
+                    psutil.net_io_counters()
+                )
+            
+            cpu_percent, mem_percent, disk, network = await asyncio.to_thread(gather_metrics)
+            
+            # Record metrics on the main loop
             self._metrics["system_cpu_usage"].add_point(cpu_percent)
+            self._metrics["system_memory_usage"].add_point(mem_percent)
             
-            # Memory usage
-            memory = psutil.virtual_memory()
-            self._metrics["system_memory_usage"].add_point(memory.percent)
-            
-            # Disk usage
-            disk = psutil.disk_usage('/')
             disk_percent = (disk.used / disk.total) * 100
             self._metrics["system_disk_usage"].add_point(disk_percent)
             
-            # Network I/O
-            network = psutil.net_io_counters()
             self._metrics["system_network_bytes_sent"].add_point(network.bytes_sent)
             self._metrics["system_network_bytes_recv"].add_point(network.bytes_recv)
             
