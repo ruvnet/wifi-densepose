@@ -88,7 +88,11 @@ jobs:
           docker run --rm "$IMAGE" sh -c \
             'ls /app/ui/index.html /app/ui/observatory.html /app/ui/pose-fusion.html >/dev/null'
           # Boots and answers /health + /api/v1/info in LAN (no-auth) mode.
-          docker run -d --name sm -p 3000:3000 -e CSI_SOURCE=simulated "$IMAGE"
+          # RUVIEW_ALLOW_UNAUTHENTICATED=1 is required or the entrypoint refuses
+          # to start on 0.0.0.0 without a token (#864) — same posture the QNAP
+          # deploy uses on the trusted LAN.
+          docker run -d --name sm -p 3000:3000 \
+            -e CSI_SOURCE=simulated -e RUVIEW_ALLOW_UNAUTHENTICATED=1 "$IMAGE"
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:3000/health >/dev/null 2>&1; then break; fi
             sleep 1
