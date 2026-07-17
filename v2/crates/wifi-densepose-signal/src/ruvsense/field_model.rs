@@ -449,6 +449,11 @@ impl FieldModel {
             .map_or(0, |ls| ls.observation_count())
     }
 
+    /// Minimum frames required before `finalize_calibration` will succeed.
+    pub fn min_calibration_frames(&self) -> usize {
+        self.config.min_calibration_frames
+    }
+
     /// Feed a calibration frame (one CSI observation per link during empty room).
     ///
     /// `observations` is `[n_links][n_subcarriers]` amplitude data.

@@ -99,10 +99,17 @@ pub fn occupancy_or_fallback(
 
 /// Feed the latest frame to the FieldModel during calibration collection.
 ///
-/// Only acts when the model status is `Collecting`. Wraps the latest frame
-/// as a single-link observation (n_links=1) and feeds it.
+/// Acts while the model is `Uncalibrated` or `Collecting`. The first fed frame
+/// flips a freshly-started (`Uncalibrated`) model to `Collecting` inside
+/// `feed_calibration`; without accepting the `Uncalibrated` state here the two
+/// gates deadlock and the frame count never leaves 0 (calibration/start yields
+/// an `Uncalibrated` model that nothing would ever advance). Wraps the latest
+/// frame as a single-link observation (n_links=1) and feeds it.
 pub fn maybe_feed_calibration(field: &mut FieldModel, frame_history: &VecDeque<Vec<f64>>) {
-    if field.status() != CalibrationStatus::Collecting {
+    if !matches!(
+        field.status(),
+        CalibrationStatus::Uncalibrated | CalibrationStatus::Collecting
+    ) {
         return;
     }
     if let Some(latest) = frame_history.back() {
@@ -179,5 +186,38 @@ mod tests {
         let positions = parse_node_positions("1,2;3,4,5");
         assert_eq!(positions.len(), 1);
         assert_eq!(positions[0], [3.0, 4.0, 5.0]);
+    }
+
+    /// Regression: a freshly-started (`Uncalibrated`) field model must begin
+    /// collecting once frames arrive. Before the fix, `maybe_feed_calibration`
+    /// only fed while already `Collecting`, but only `feed_calibration` sets
+    /// `Collecting` — so the first frame was never fed and the count stayed 0.
+    #[test]
+    fn maybe_feed_calibration_advances_uncalibrated_to_collecting() {
+        let mut field = FieldModel::new(single_link_config()).expect("field model");
+        assert_eq!(field.status(), CalibrationStatus::Uncalibrated);
+        assert_eq!(field.calibration_frame_count(), 0);
+
+        // n_subcarriers defaults to 56; one single-link frame of that width.
+        let frame = vec![0.5_f64; 56];
+        let mut history: VecDeque<Vec<f64>> = VecDeque::new();
+        history.push_back(frame);
+
+        maybe_feed_calibration(&mut field, &history);
+
+        assert_eq!(
+            field.status(),
+            CalibrationStatus::Collecting,
+            "first frame must flip Uncalibrated -> Collecting"
+        );
+        assert_eq!(
+            field.calibration_frame_count(),
+            1,
+            "frame count must advance past 0"
+        );
+
+        // Subsequent frames keep accumulating while Collecting.
+        maybe_feed_calibration(&mut field, &history);
+        assert_eq!(field.calibration_frame_count(), 2);
     }
 }

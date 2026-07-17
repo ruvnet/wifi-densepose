@@ -4991,6 +4991,20 @@ async fn calibration_start(State(state): State<SharedState>) -> Json<serde_json:
 async fn calibration_stop(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let mut s = state.write().await;
     if let Some(ref mut fm) = s.field_model {
+        // Guard: finalizing before enough empty-room frames have accumulated
+        // is a client-side sequencing error, not a server fault. Return a
+        // clear, structured message (with progress) instead of a 500 so the
+        // caller knows to keep the room empty and poll /calibration/status.
+        let have = fm.calibration_frame_count();
+        let need = fm.min_calibration_frames() as u64;
+        if have < need {
+            return Json(serde_json::json!({
+                "success": false,
+                "error": "Not enough calibration frames yet — keep the room empty and poll /calibration/status until frame_count reaches the target.",
+                "frame_count": have,
+                "frames_needed": need,
+            }));
+        }
         let ts = chrono::Utc::now().timestamp_micros() as u64;
         match fm.finalize_calibration(ts, 0) {
             Ok(modes) => {
