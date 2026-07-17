@@ -64,6 +64,12 @@ pub const MOTION_EMA_ALPHA: f64 = 0.15;
 pub const BASELINE_EMA_ALPHA: f64 = 0.003;
 /// Number of warm-up frames before baseline subtraction kicks in.
 pub const BASELINE_WARMUP: u64 = 50;
+/// Fraction of the learned empty-room motion baseline subtracted from the raw
+/// motion score. 1.0 = full subtraction, so presence reflects motion *above*
+/// the room's static ambient. Was 0.7, which left 30% of the ambient baseline
+/// unsubtracted and produced permanent false-positive presence in high-multipath
+/// rooms (strong RSSI → large static variance/MBP that saturate the raw score).
+pub const BASELINE_SUBTRACT_FACTOR: f64 = 1.0;
 
 /// Size of the median filter window for vital signs outlier rejection.
 pub const VITAL_MEDIAN_WINDOW: usize = 21;

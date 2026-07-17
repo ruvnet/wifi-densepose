@@ -523,7 +523,7 @@ pub fn smooth_and_classify(
         state.baseline_motion =
             state.baseline_motion * (1.0 - BASELINE_EMA_ALPHA) + raw_motion * BASELINE_EMA_ALPHA;
     }
-    let adjusted = (raw_motion - state.baseline_motion * 0.7).max(0.0);
+    let adjusted = (raw_motion - state.baseline_motion * BASELINE_SUBTRACT_FACTOR).max(0.0);
     state.smoothed_motion =
         state.smoothed_motion * (1.0 - MOTION_EMA_ALPHA) + adjusted * MOTION_EMA_ALPHA;
     let sm = state.smoothed_motion;
@@ -554,7 +554,7 @@ pub fn smooth_and_classify_node(ns: &mut NodeState, raw: &mut ClassificationInfo
         ns.baseline_motion =
             ns.baseline_motion * (1.0 - BASELINE_EMA_ALPHA) + raw_motion * BASELINE_EMA_ALPHA;
     }
-    let adjusted = (raw_motion - ns.baseline_motion * 0.7).max(0.0);
+    let adjusted = (raw_motion - ns.baseline_motion * BASELINE_SUBTRACT_FACTOR).max(0.0);
     ns.smoothed_motion =
         ns.smoothed_motion * (1.0 - MOTION_EMA_ALPHA) + adjusted * MOTION_EMA_ALPHA;
     let sm = ns.smoothed_motion;
@@ -1069,5 +1069,31 @@ mod adr110_tests {
 
         // Steady-state HE frames keep flowing.
         assert!(ns.accept_grid(he.grid()));
+    }
+
+    /// A stable, high-ambient raw motion score (a strong-RSSI empty room whose
+    /// static variance/MBP saturate the raw score) must settle to `absent` once
+    /// the baseline learns the ambient and full subtraction (factor 1.0) applies.
+    /// With the previous 0.7 factor this stayed `present_moving` forever.
+    #[test]
+    fn sustained_ambient_settles_to_absent_after_warmup() {
+        let mut ns = NodeState::new();
+        // ~0.47 is the measured empty-room raw motion score on the live node.
+        let ambient = 0.47_f64;
+        let mut raw = ClassificationInfo {
+            motion_level: String::new(),
+            presence: true,
+            confidence: 1.0,
+        };
+        // Run well past BASELINE_WARMUP so the baseline converges and smoothing
+        // decays; DEBOUNCE_FRAMES then lets the level transition to absent.
+        for _ in 0..600 {
+            smooth_and_classify_node(&mut ns, &mut raw, ambient);
+        }
+        assert!(
+            !raw.presence,
+            "stable ambient must read absent after the baseline learns it (smoothed still above 0.03)"
+        );
+        assert_eq!(raw.motion_level, "absent");
     }
 }
