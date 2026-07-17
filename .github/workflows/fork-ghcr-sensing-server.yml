@@ -1,0 +1,117 @@
+name: (fork) sensing-server → ghcr.io/rjperry36
+
+# Fork-local image build for the QNAP redeploy path (Option A).
+#
+# The upstream `sensing-server-docker.yml` pushes `ruvnet/wifi-densepose:latest`
+# to ruvnet's Docker Hub + ghcr and needs upstream secrets — a fork can't run it.
+# This workflow instead builds the sensing-server image on GitHub's runners and
+# pushes it to THIS fork's own ghcr namespace (`ghcr.io/<owner>/wifi-densepose`)
+# using only the built-in GITHUB_TOKEN. The QNAP (Intel/amd64, Container Station)
+# then pulls it directly:
+#
+#   IMAGE=ghcr.io/rjperry36/wifi-densepose:calfix ./scripts/deploy-qnap.sh
+#
+# amd64-only on purpose: the QNAP TS-853A is x86_64, so there's no reason to pay
+# for the emulated arm64 layer (and no QEMU setup needed).
+
+on:
+  push:
+    branches:
+      - fix/calibration-feed-deadlock
+      - main
+    paths:
+      - 'docker/Dockerfile.rust'
+      - 'docker/docker-entrypoint.sh'
+      - 'v2/crates/**'
+      - 'v2/Cargo.toml'
+      - 'v2/Cargo.lock'
+      - 'ui/**'
+      - '.github/workflows/fork-ghcr-sensing-server.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: fork-ghcr-sensing-server-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-publish:
+    name: build · push · smoke-test (amd64 → ghcr)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/wifi-densepose
+          # `calfix` is a stable, easy-to-pull tag for the QNAP redeploy;
+          # the sha tag pins the exact commit for reproducibility.
+          tags: |
+            type=raw,value=calfix
+            type=sha,format=short
+            type=ref,event=branch
+
+      - name: Build + push (linux/amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.rust
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test the pushed image (boots + serves in simulated mode)
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/${{ github.repository_owner }}/wifi-densepose:sha-${GITHUB_SHA::7}"
+          docker pull "$IMAGE"
+          # UI assets present (same guard the upstream build enforces).
+          docker run --rm "$IMAGE" sh -c \
+            'ls /app/ui/index.html /app/ui/observatory.html /app/ui/pose-fusion.html >/dev/null'
+          # Boots and answers /health + /api/v1/info in LAN (no-auth) mode.
+          docker run -d --name sm -p 3000:3000 -e CSI_SOURCE=simulated "$IMAGE"
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/health >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:3000/health
+          curl -fsS http://127.0.0.1:3000/api/v1/info >/dev/null
+          docker stop sm
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## sensing-server image published to your fork's ghcr"
+            echo
+            echo "Pull + redeploy on the QNAP:"
+            echo '```'
+            echo "IMAGE=ghcr.io/${{ github.repository_owner }}/wifi-densepose:calfix CSI_SOURCE=esp32 ./scripts/deploy-qnap.sh"
+            echo '```'
+            echo
+            echo "Tags built:"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo
+            echo "> If the QNAP can't pull, make the ghcr package public (GitHub → your profile → Packages → wifi-densepose → Package settings → Change visibility), or 'docker login ghcr.io' on the NAS with a PAT (read:packages)."
+          } >> "$GITHUB_STEP_SUMMARY"
