@@ -42,7 +42,7 @@ sent by `memcpy`; firmware serializes each field explicitly.
 | 36 | 2 | bandwidth_mhz | 20, 40, or 70 |
 | 38 | 2 | flags | calibration/interference/saturation/time-sync flags |
 | 40 | 2 | element_count | complex samples or range bins |
-| 42 | 1 | element_format | 1 complex-i16, 2 complex-f32, 3 power-u16, 4 power-f32 |
+| 42 | 1 | element_format | 0 bytes/TLV, 1 complex-i16, 2 complex-f32, 3 power-u16, 4 power-f32 |
 | 43 | 1 | antenna_count | expected to be 1 for the deck's 1T1R configuration |
 | 44 | 4 | scale | quantized-to-physical multiplier; `1.0` for float payloads |
 | 48 | 4 | bin_spacing | Hz for CFR, metres for Range-FFT |
@@ -122,6 +122,14 @@ No vendor-provided presence probability bypasses RuView privacy, provenance, or 
 5. Once SDK access exists, implement the embedded serializer and verify captured frames against the
    host golden decoder.
 6. Revise this proposed ADR with measured element counts, rates, and API names before acceptance.
+
+Host-side steps 1–3 are implemented in `wifi-densepose-hardware::rtl8720f`: typed report and
+element enums, semantic type/format validation, bounded length arithmetic, CRC verification,
+finite-float checks, encode/decode round trips, corruption/truncation tests, and deterministic
+arbitrary-input panic checks. Cross-language vectors remain blocked on the vendor SDK callback ABI.
+Bit 15 of `flags` is reserved by RuView as `SYNTHETIC`; the Rust simulator always sets it and real
+firmware must never set it. The simulator is deterministic by seed and exercises the production
+encoder/parser rather than a parallel mock representation.
 
 ## Acceptance criteria
 

@@ -31,10 +31,14 @@ This is not a drop-in replacement for ESP32 CSI:
   function signatures, callback ABI, binary layouts, toolchain version, licensing terms, or public
   RTL8720F board package.
 
-Realtek's public Ameba RTOS repository is a plausible base and its public release history includes
-CSI and EDCCA APIs, but the reviewed public material does not establish that the RTL8720F radar
-API or firmware blobs are publicly available. Therefore an honest integration must be split at a
-vendor boundary.
+Realtek's public Ameba RTOS repository is the base. Release v1.2.1 includes the CSI API and fixes a
+CSI application-buffer semaphore issue, but does not expose the radar application surface. Open
+upstream PR #1336 (2026-07-18 snapshot) adds RTL8720F project artifacts, `AT+RAD`, `AT+RADDBG`, and
+the public configuration call `wifi_radar_config(struct rtw_radar_action_parm *)`. Its public
+parameter struct confirms mode, channel, 70/40/20 MHz bandwidth selector, trigger period, and
+enable/config actions. Report reception still crosses non-public/placeholder HAL symbols such as
+`wifi_hal_radar_recv_data(frame_num, frame_type, data)`, so the report layout and buffer lifetime
+remain vendor-gated. Therefore the integration stays split at that boundary.
 
 ## Decision
 
@@ -69,7 +73,7 @@ claim millimetre-wave provenance.
 
 ### P0 — Vendor enablement
 
-Obtain a redistributable RTL8720F SDK package, radar API headers/libraries, a supported evaluation
+Obtain the PR #1336-or-newer RTL8720F SDK package, radar API headers/libraries, a supported evaluation
 board, flashing/debug instructions, report definitions, and written redistribution terms.
 
 **Gate:** compile and run Realtek's unmodified radar example and capture CFR plus near/far
@@ -78,7 +82,10 @@ Range-FFT output. Until this passes, device firmware is `VENDOR_BLOCKED`, not im
 ### P1 — Host-first contract
 
 Implement ADR-264 types, parsers, fixtures, fuzz tests, and replay support without linking vendor
-code. Generate deterministic synthetic fixtures whose provenance is explicitly synthetic.
+code. Use the Rust `Rtl8720fSimulator` as the only pre-hardware live source. It emits deterministic
+CFR, near/far Range-FFT, interference, and capabilities frames through the same ADR-264 encoder and
+parser used by hardware. Every simulated frame sets `RadarFlags::SYNTHETIC`; simulation results are
+never reported as device measurements.
 
 **Gate:** malformed inputs never panic; encode/decode round trips; unknown versions and report
 types fail closed.
@@ -156,6 +163,9 @@ alone. If it does not, ship it only as an independent presence/range sensor.
 - Realtek Semiconductor, `RTL8720F-2.4G-Radar-Advantages_EN.pptx`, slides 3 and 10–19,
   supplied 2026-07-18. This is product material, not measured RuView validation.
 - [Ameba-AIoT/ameba-rtos releases](https://github.com/Ameba-AIoT/ameba-rtos/releases), reviewed
-  2026-07-18; public release notes mention CSI and EDCCA APIs but do not document the deck's radar ABI.
+  2026-07-18; v1.2.1 is the current QC release and includes a CSI buffer-semaphore fix.
+- [Ameba-AIoT/ameba-rtos PR #1336](https://github.com/Ameba-AIoT/ameba-rtos/pull/1336), reviewed
+  2026-07-18; exposes RTL8720F build assets, `wifi_radar_config`, and radar AT commands while report
+  internals remain in binary/private layers.
 - ADR-063 (mmWave sensor fusion), ADR-095/097 (source normalization), and ADR-260/262 (RuField
   multimodal event model and live bridge).

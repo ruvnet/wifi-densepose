@@ -53,6 +53,9 @@ pub mod sync_packet;
 // coordinator-node Rust code drive the controller stack without
 // touching any downstream signal/ruvector/train/mat crate.
 pub mod radio_ops;
+/// ADR-264 host-side framing for Realtek RTL8720F CFR and FMCW radar reports.
+/// This module has no dependency on the vendor SDK.
+pub mod rtl8720f;
 
 pub use bridge::CsiData;
 pub use csi_frame::{
@@ -64,12 +67,18 @@ pub use esp32_parser::{
     RUVIEW_FEATURE_MAGIC, RUVIEW_FEATURE_STATE_MAGIC, RUVIEW_FUSED_VITALS_MAGIC,
     RUVIEW_TEMPORAL_MAGIC, RUVIEW_VITALS_MAGIC,
 };
-pub use sync_packet::{
-    SyncPacket, SyncPacketFlags, SYNC_PACKET_MAGIC, SYNC_PACKET_SIZE, SYNC_PACKET_PROTO_VER,
-};
 pub use radio_ops::{
     crc32_ieee, decode_anomaly_alert, decode_mesh, decode_node_status, encode_health, AnomalyAlert,
     AuthClass, CaptureProfile, MeshError, MeshHeader, MeshMsgType, MeshRole, MockRadio, NodeStatus,
     RadioError, RadioHealth, RadioMode, RadioOps, MESH_HEADER_SIZE, MESH_MAGIC, MESH_MAX_PAYLOAD,
     MESH_VERSION,
+};
+pub use rtl8720f::{
+    ElementFormat as Rtl8720fElementFormat, RadarFlags as Rtl8720fRadarFlags,
+    RadarFrame as Rtl8720fRadarFrame, RadarParseError as Rtl8720fRadarParseError,
+    RadarPayload as Rtl8720fRadarPayload, ReportType as Rtl8720fReportType,
+    RTL8720F_RADAR_HEADER_LEN, RTL8720F_RADAR_MAGIC, RTL8720F_RADAR_VERSION,
+};
+pub use sync_packet::{
+    SyncPacket, SyncPacketFlags, SYNC_PACKET_MAGIC, SYNC_PACKET_PROTO_VER, SYNC_PACKET_SIZE,
 };
