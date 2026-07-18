@@ -1,5 +1,10 @@
 # Architecture Decision Records
 
+Latest proposed decisions:
+
+- [ADR-264: Versioned wire protocol for RTL8720F CFR and Range-FFT reports](ADR-264-rtl8720f-radar-wire-protocol.md)
+- [ADR-263: Adopt RTL8720F 2.4 GHz FMCW radar as an optional RuView sensing platform](ADR-263-rtl8720f-2-4ghz-fmcw-radar-platform.md)
+
 This folder contains 182 Architecture Decision Records (ADRs) that document every significant technical choice in the RuView / WiFi-DensePose project. (The index tables below list a curated subset per domain; see the directory listing for the full set.)
 
 ## Why ADRs?
