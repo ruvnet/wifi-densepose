@@ -17,6 +17,7 @@ mod field_bridge;
 mod field_localize;
 mod model_format;
 mod multistatic_bridge;
+mod realtek_radar;
 pub mod pose;
 mod rvf_container;
 mod rvf_pipeline;
@@ -1028,6 +1029,10 @@ struct AppStateInner {
     source: String,
     /// Instant of the last ESP32 UDP frame received (for offline detection).
     last_esp32_frame: Option<std::time::Instant>,
+    /// Latest validated RTL8720F summary; raw radar samples are not retained here.
+    latest_realtek_radar: Option<realtek_radar::RealtekRadarSnapshot>,
+    /// Instant of the last validated RTL8720F UDP frame.
+    last_realtek_frame: Option<std::time::Instant>,
     tx: broadcast::Sender<String>,
     // ADR-099 D2/D3/D4: real-time CSI introspection tap. Per-frame state +
     // a parallel broadcast topic (`/ws/introspection`) running alongside
@@ -1196,6 +1201,13 @@ impl AppStateInner {
             if let Some(last) = self.last_esp32_frame {
                 if last.elapsed() > ESP32_OFFLINE_TIMEOUT {
                     return "esp32:offline".to_string();
+                }
+            }
+        }
+        if self.source.starts_with("realtek") {
+            if let Some(last) = self.last_realtek_frame {
+                if last.elapsed() > ESP32_OFFLINE_TIMEOUT {
+                    return format!("{}:offline", self.source);
                 }
             }
         }
@@ -3351,6 +3363,14 @@ async fn latest(State(state): State<SharedState>) -> Json<serde_json::Value> {
     }
 }
 
+async fn latest_realtek_radar(State(state): State<SharedState>) -> Json<serde_json::Value> {
+    let s = state.read().await;
+    match &s.latest_realtek_radar {
+        Some(snapshot) => Json(serde_json::to_value(snapshot).unwrap_or_default()),
+        None => Json(serde_json::json!({"status": "no Realtek radar data yet"})),
+    }
+}
+
 /// Generate WiFi-derived pose keypoints from sensing data.
 ///
 /// Keypoint positions are modulated by real signal features rather than a pure
@@ -5445,7 +5465,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
     let addr = format!("0.0.0.0:{udp_port}");
     let socket = match UdpSocket::bind(&addr).await {
         Ok(s) => {
-            info!("UDP listening on {addr} for ESP32 CSI frames");
+            info!("UDP listening on {addr} for ESP32 CSI and RTL8720F radar frames");
             s
         }
         Err(e) => {
@@ -5454,10 +5474,32 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
         }
     };
 
-    let mut buf = [0u8; 2048];
+    let mut buf = vec![0u8; wifi_densepose_hardware::rtl8720f::RTL8720F_RADAR_MAX_FRAME_LEN];
     loop {
         match socket.recv_from(&mut buf).await {
             Ok((len, src)) => {
+                if len >= 4
+                    && u32::from_le_bytes(buf[..4].try_into().expect("four-byte slice"))
+                        == wifi_densepose_hardware::rtl8720f::RTL8720F_RADAR_MAGIC
+                {
+                    match wifi_densepose_hardware::rtl8720f::RadarFrame::from_bytes(&buf[..len]) {
+                        Ok((frame, consumed)) if consumed == len => {
+                            let snapshot = realtek_radar::RealtekRadarSnapshot::from_frame(&frame);
+                            debug!("RTL8720F radar from {src}: type={} seq={} elements={}", snapshot.report_type, snapshot.sequence, snapshot.element_count);
+                            let json = serde_json::to_string(&snapshot).ok();
+                            let mut s = state.write().await;
+                            s.source = snapshot.source.to_string();
+                            s.last_realtek_frame = Some(std::time::Instant::now());
+                            s.latest_realtek_radar = Some(snapshot);
+                            if let Some(json) = json {
+                                let _ = s.tx.send(json);
+                            }
+                        }
+                        Ok((_, consumed)) => warn!("RTL8720F radar datagram from {src} has trailing bytes: consumed={consumed} received={len}"),
+                        Err(error) => warn!("Rejected RTL8720F radar datagram from {src}: {error}"),
+                    }
+                    continue;
+                }
                 // ADR-039: Try edge vitals packet first (magic 0xC511_0002).
                 if let Some(vitals) = parse_esp32_vitals(&buf[..len]) {
                     debug!(
@@ -7552,6 +7594,8 @@ async fn main() {
         tick: 0,
         source: source.into(),
         last_esp32_frame: None,
+        latest_realtek_radar: None,
+        last_realtek_frame: None,
         tx,
         intro: wifi_densepose_sensing_server::introspection::IntrospectionState::new(),
         intro_tx,
@@ -7768,6 +7812,7 @@ async fn main() {
         .route("/api/v1/metrics", get(health_metrics))
         // Sensing endpoints
         .route("/api/v1/sensing/latest", get(latest))
+        .route("/api/v1/radar/latest", get(latest_realtek_radar))
         // Per-node health endpoint
         .route("/api/v1/nodes", get(nodes_endpoint))
         // ADR-110 iter 29 — per-node mesh sync state for HTTP clients.

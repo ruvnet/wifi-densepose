@@ -15,7 +15,8 @@ pub const RTL8720F_RADAR_MAGIC: u32 = 0x3152_5452; // "RTR1" in little endian
 pub const RTL8720F_RADAR_VERSION: u8 = 1;
 pub const RTL8720F_RADAR_HEADER_LEN: usize = 56;
 pub const RTL8720F_RADAR_CRC_LEN: usize = 4;
-pub const RTL8720F_RADAR_MAX_FRAME_LEN: usize = 64 * 1024;
+/// Largest payload that can be carried in one IPv4 UDP datagram.
+pub const RTL8720F_RADAR_MAX_FRAME_LEN: usize = 65_507;
 pub const RTL8720F_RADAR_MAX_ELEMENTS: usize = 16_384;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
