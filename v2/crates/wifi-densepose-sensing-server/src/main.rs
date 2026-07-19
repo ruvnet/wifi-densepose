@@ -18,6 +18,7 @@ mod field_localize;
 mod model_format;
 mod multistatic_bridge;
 mod mediatek_csi;
+mod qualcomm_csi;
 mod realtek_radar;
 pub mod pose;
 mod rvf_container;
@@ -1038,6 +1039,10 @@ struct AppStateInner {
     latest_mediatek_csi: Option<mediatek_csi::MediatekCsiSnapshot>,
     /// Instant of the last validated MediaTek CSI UDP frame.
     last_mediatek_frame: Option<std::time::Instant>,
+    /// Latest validated Qualcomm CSI summary; raw matrices are not retained here.
+    latest_qualcomm_csi: Option<qualcomm_csi::QualcommCsiSnapshot>,
+    /// Instant of the last validated Qualcomm CSI UDP frame.
+    last_qualcomm_frame: Option<std::time::Instant>,
     tx: broadcast::Sender<String>,
     // ADR-099 D2/D3/D4: real-time CSI introspection tap. Per-frame state +
     // a parallel broadcast topic (`/ws/introspection`) running alongside
@@ -1218,6 +1223,13 @@ impl AppStateInner {
         }
         if self.source.starts_with("mediatek") {
             if let Some(last) = self.last_mediatek_frame {
+                if last.elapsed() > ESP32_OFFLINE_TIMEOUT {
+                    return format!("{}:offline", self.source);
+                }
+            }
+        }
+        if self.source.starts_with("qualcomm") {
+            if let Some(last) = self.last_qualcomm_frame {
                 if last.elapsed() > ESP32_OFFLINE_TIMEOUT {
                     return format!("{}:offline", self.source);
                 }
@@ -3391,6 +3403,14 @@ async fn latest_mediatek_csi(State(state): State<SharedState>) -> Json<serde_jso
     }
 }
 
+async fn latest_qualcomm_csi(State(state): State<SharedState>) -> Json<serde_json::Value> {
+    let s = state.read().await;
+    match &s.latest_qualcomm_csi {
+        Some(snapshot) => Json(serde_json::to_value(snapshot).unwrap_or_default()),
+        None => Json(serde_json::json!({"status": "no Qualcomm CSI data yet"})),
+    }
+}
+
 /// Generate WiFi-derived pose keypoints from sensing data.
 ///
 /// Keypoint positions are modulated by real signal features rather than a pure
@@ -5485,7 +5505,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
     let addr = format!("0.0.0.0:{udp_port}");
     let socket = match UdpSocket::bind(&addr).await {
         Ok(s) => {
-            info!("UDP listening on {addr} for ESP32 CSI, MediaTek CSI, and RTL8720F radar frames");
+            info!("UDP listening on {addr} for ESP32, MediaTek, Qualcomm CSI, and RTL8720F radar frames");
             s
         }
         Err(e) => {
@@ -5498,6 +5518,26 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
     loop {
         match socket.recv_from(&mut buf).await {
             Ok((len, src)) => {
+                if len >= 4
+                    && u32::from_le_bytes(buf[..4].try_into().expect("four-byte slice"))
+                        == wifi_densepose_hardware::qualcomm_csi::QUALCOMM_CSI_MAGIC
+                {
+                    match wifi_densepose_hardware::qualcomm_csi::CsiFrame::from_bytes(&buf[..len]) {
+                        Ok((frame, consumed)) if consumed == len => {
+                            let snapshot = qualcomm_csi::QualcommCsiSnapshot::from_frame(&frame);
+                            debug!("Qualcomm CSI from {src}: profile={} seq={} dimensions={}x{}x{}", snapshot.chipset, snapshot.sequence, snapshot.tx_count, snapshot.rx_count, snapshot.subcarrier_count);
+                            let json = serde_json::to_string(&snapshot).ok();
+                            let mut s = state.write().await;
+                            s.source = snapshot.source.to_string();
+                            s.last_qualcomm_frame = Some(std::time::Instant::now());
+                            s.latest_qualcomm_csi = Some(snapshot);
+                            if let Some(json) = json { let _ = s.tx.send(json); }
+                        }
+                        Ok((_, consumed)) => warn!("Qualcomm CSI datagram from {src} has trailing bytes: consumed={consumed} received={len}"),
+                        Err(error) => warn!("Rejected Qualcomm CSI datagram from {src}: {error}"),
+                    }
+                    continue;
+                }
                 if len >= 4
                     && u32::from_le_bytes(buf[..4].try_into().expect("four-byte slice"))
                         == wifi_densepose_hardware::mediatek_csi::MEDIATEK_CSI_MAGIC
@@ -7638,6 +7678,8 @@ async fn main() {
         last_realtek_frame: None,
         latest_mediatek_csi: None,
         last_mediatek_frame: None,
+        latest_qualcomm_csi: None,
+        last_qualcomm_frame: None,
         tx,
         intro: wifi_densepose_sensing_server::introspection::IntrospectionState::new(),
         intro_tx,
@@ -7856,6 +7898,7 @@ async fn main() {
         .route("/api/v1/sensing/latest", get(latest))
         .route("/api/v1/radar/latest", get(latest_realtek_radar))
         .route("/api/v1/csi/mediatek/latest", get(latest_mediatek_csi))
+        .route("/api/v1/csi/qualcomm/latest", get(latest_qualcomm_csi))
         // Per-node health endpoint
         .route("/api/v1/nodes", get(nodes_endpoint))
         // ADR-110 iter 29 — per-node mesh sync state for HTTP clients.

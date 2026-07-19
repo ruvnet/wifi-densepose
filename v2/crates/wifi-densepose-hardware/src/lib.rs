@@ -55,6 +55,8 @@ pub mod sync_packet;
 pub mod radio_ops;
 /// ADR-267 vendor-neutral MediaTek Filogic MIMO CSI framing and simulator.
 pub mod mediatek_csi;
+/// ADR-269 vendor-neutral Qualcomm Atheros CSI framing and simulator.
+pub mod qualcomm_csi;
 /// ADR-264 host-side framing for Realtek RTL8720F CFR and FMCW radar reports.
 /// This module has no dependency on the vendor SDK.
 pub mod rtl8720f;
@@ -81,6 +83,13 @@ pub use mediatek_csi::{
     CsiPayload as MediatekCsiPayload, ElementFormat as MediatekElementFormat,
     PpduType as MediatekPpduType, ReportKind as MediatekReportKind,
     MEDIATEK_CSI_HEADER_LEN, MEDIATEK_CSI_MAGIC, MEDIATEK_CSI_VERSION,
+};
+pub use qualcomm_csi::{
+    ChipsetProfile as QualcommChipsetProfile, CsiFlags as QualcommCsiFlags,
+    CsiFrame as QualcommCsiFrame, CsiParseError as QualcommCsiParseError,
+    CsiPayload as QualcommCsiPayload, ElementFormat as QualcommElementFormat,
+    PpduType as QualcommPpduType, ReportKind as QualcommReportKind,
+    QUALCOMM_CSI_HEADER_LEN, QUALCOMM_CSI_MAGIC, QUALCOMM_CSI_VERSION,
 };
 pub use rtl8720f::{
     ElementFormat as Rtl8720fElementFormat, RadarFlags as Rtl8720fRadarFlags,
