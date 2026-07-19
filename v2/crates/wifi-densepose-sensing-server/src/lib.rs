@@ -34,3 +34,11 @@ pub mod sparse_inference;
 #[allow(dead_code)]
 pub mod trainer;
 pub mod vital_signs;
+/// ADR-270 Mist and NETGEAR telemetry providers.
+pub mod vendor_mist_netgear;
+/// ADR-270 Origin AI and Plume/OpenSync providers.
+pub mod vendor_origin_plume;
+/// ADR-270 scalar, network-only, and fail-closed vendor providers.
+pub mod vendor_remaining;
+/// ADR-270 provider registry and canonical event helpers.
+pub mod vendor_rf;

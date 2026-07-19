@@ -33,13 +33,14 @@ use wifi_densepose_sensing_server::{
 };
 
 use ruvector_mincut::{DynamicMinCut, MinCutBuilder};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{
+    body::Bytes,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Path, Query, State,
@@ -1043,6 +1044,8 @@ struct AppStateInner {
     latest_qualcomm_csi: Option<qualcomm_csi::QualcommCsiSnapshot>,
     /// Instant of the last validated Qualcomm CSI UDP frame.
     last_qualcomm_frame: Option<std::time::Instant>,
+    /// Latest bounded ADR-270 event per vendor. Complex CSI uses dedicated transports.
+    latest_vendor_rf: BTreeMap<String, wifi_densepose_sensing_server::vendor_rf::VendorEventSnapshot>,
     tx: broadcast::Sender<String>,
     // ADR-099 D2/D3/D4: real-time CSI introspection tap. Per-frame state +
     // a parallel broadcast topic (`/ws/introspection`) running alongside
@@ -3411,6 +3414,89 @@ async fn latest_qualcomm_csi(State(state): State<SharedState>) -> Json<serde_jso
     }
 }
 
+async fn vendor_descriptors() -> Json<serde_json::Value> {
+    Json(
+        serde_json::to_value(wifi_densepose_sensing_server::vendor_rf::descriptors())
+            .unwrap_or_default(),
+    )
+}
+
+async fn latest_vendor_events(State(state): State<SharedState>) -> Json<serde_json::Value> {
+    let state = state.read().await;
+    Json(serde_json::to_value(&state.latest_vendor_rf).unwrap_or_default())
+}
+
+async fn latest_vendor_event(
+    State(state): State<SharedState>,
+    Path(vendor): Path<String>,
+) -> impl IntoResponse {
+    let Some(vendor_id) = wifi_densepose_sensing_server::vendor_rf::vendor_from_str(&vendor) else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "unknown vendor"})));
+    };
+    let state = state.read().await;
+    let canonical_vendor = vendor_id.as_str();
+    match state.latest_vendor_rf.get(canonical_vendor) {
+        Some(snapshot) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(snapshot).unwrap_or_default()),
+        ),
+        None => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "status": "no vendor RF data yet",
+                "vendor": canonical_vendor
+            })),
+        ),
+    }
+}
+
+async fn ingest_vendor_events(
+    State(state): State<SharedState>,
+    Path(vendor): Path<String>,
+    payload: Bytes,
+) -> impl IntoResponse {
+    let Some(vendor_id) = wifi_densepose_sensing_server::vendor_rf::vendor_from_str(&vendor) else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "unknown vendor"})));
+    };
+    let events = match wifi_densepose_sensing_server::vendor_rf::decode_provider(vendor_id, &payload) {
+        Ok(events) => events,
+        Err(error) => {
+            let status = match error {
+                wifi_densepose_hardware::vendor_rf::VendorEventError::Unsupported => StatusCode::NOT_IMPLEMENTED,
+                wifi_densepose_hardware::vendor_rf::VendorEventError::ContractRequired
+                | wifi_densepose_hardware::vendor_rf::VendorEventError::CredentialsRequired => StatusCode::FORBIDDEN,
+                _ => StatusCode::BAD_REQUEST,
+            };
+            return (status, Json(serde_json::json!({"error": error.to_string(), "vendor": vendor})));
+        }
+    };
+    let mut accepted = 0usize;
+    let mut state = state.write().await;
+    let canonical_vendor = vendor_id.as_str().to_string();
+    for event in events {
+        match wifi_densepose_sensing_server::vendor_rf::VendorEventSnapshot::from_event(event) {
+            Ok(snapshot) => {
+                let json = serde_json::to_string(&snapshot).ok();
+                state.source = snapshot.source.clone();
+                state
+                    .latest_vendor_rf
+                    .insert(canonical_vendor.clone(), snapshot);
+                if let Some(json) = json {
+                    let _ = state.tx.send(json);
+                }
+                accepted += 1;
+            }
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": error.to_string(), "vendor": canonical_vendor})),
+                )
+            }
+        }
+    }
+    (StatusCode::ACCEPTED, Json(serde_json::json!({"vendor": vendor, "accepted": accepted})))
+}
+
 /// Generate WiFi-derived pose keypoints from sensing data.
 ///
 /// Keypoint positions are modulated by real signal features rather than a pure
@@ -5518,6 +5604,24 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
     loop {
         match socket.recv_from(&mut buf).await {
             Ok((len, src)) => {
+                if len > 0 && buf[0] == b'{' {
+                    match serde_json::from_slice::<wifi_densepose_hardware::vendor_rf::VendorRfEvent>(&buf[..len])
+                        .map_err(|error| error.to_string())
+                        .and_then(|event| wifi_densepose_sensing_server::vendor_rf::VendorEventSnapshot::from_event(event).map_err(|error| error.to_string()))
+                    {
+                        Ok(snapshot) if snapshot.event.synthetic => {
+                            debug!("Vendor RF event from {src}: vendor={} capability={:?} seq={}", snapshot.event.vendor.as_str(), snapshot.event.capability, snapshot.event.sequence);
+                            let json = serde_json::to_string(&snapshot).ok();
+                            let mut state = state.write().await;
+                            state.source = snapshot.source.clone();
+                            state.latest_vendor_rf.insert(snapshot.event.vendor.as_str().to_string(), snapshot);
+                            if let Some(json) = json { let _ = state.tx.send(json); }
+                        }
+                        Ok(_) => warn!("Rejected non-synthetic canonical vendor event from {src}; live payloads must use the provider decoder HTTP route"),
+                        Err(error) => warn!("Rejected ADR-270 vendor event from {src}: {error}"),
+                    }
+                    continue;
+                }
                 if len >= 4
                     && u32::from_le_bytes(buf[..4].try_into().expect("four-byte slice"))
                         == wifi_densepose_hardware::qualcomm_csi::QUALCOMM_CSI_MAGIC
@@ -7680,6 +7784,7 @@ async fn main() {
         last_mediatek_frame: None,
         latest_qualcomm_csi: None,
         last_qualcomm_frame: None,
+        latest_vendor_rf: BTreeMap::new(),
         tx,
         intro: wifi_densepose_sensing_server::introspection::IntrospectionState::new(),
         intro_tx,
@@ -7899,6 +8004,10 @@ async fn main() {
         .route("/api/v1/radar/latest", get(latest_realtek_radar))
         .route("/api/v1/csi/mediatek/latest", get(latest_mediatek_csi))
         .route("/api/v1/csi/qualcomm/latest", get(latest_qualcomm_csi))
+        .route("/api/v1/rf/vendors", get(vendor_descriptors))
+        .route("/api/v1/rf/vendors/latest", get(latest_vendor_events))
+        .route("/api/v1/rf/vendors/:vendor/latest", get(latest_vendor_event))
+        .route("/api/v1/rf/vendors/:vendor/events", post(ingest_vendor_events))
         // Per-node health endpoint
         .route("/api/v1/nodes", get(nodes_endpoint))
         // ADR-110 iter 29 — per-node mesh sync state for HTTP clients.

@@ -47,6 +47,8 @@ mod esp32_parser;
 // standardized report path until an OTA binding exists.
 pub mod ieee80211bf;
 pub mod sync_packet;
+/// ADR-270 capability-safe vendor RF provider contract.
+pub mod vendor_rf;
 
 // ADR-081: Rust mirror of the firmware radio abstraction layer (L1) and
 // mesh sensing plane (L3). Lets host tests, simulators, and future
@@ -99,4 +101,8 @@ pub use rtl8720f::{
 };
 pub use sync_packet::{
     SyncPacket, SyncPacketFlags, SYNC_PACKET_MAGIC, SYNC_PACKET_PROTO_VER, SYNC_PACKET_SIZE,
+};
+pub use vendor_rf::{
+    ProviderAvailability, ProviderDescriptor, RfCapability, VendorEventError, VendorId,
+    VendorRfEvent, VendorRfProvider,
 };

@@ -82,6 +82,30 @@ feature-gated FFI or sidecar boundary and are never redistributed without rights
 - A no-go or telemetry-only ADR is a completed research outcome, not a failed port.
 - Vendor status and APIs must be rechecked before each implementation begins.
 
+## Implementation Status
+
+The ADR-270 provider contract is implemented in Rust. Each portfolio entry has
+a descriptor, bounded decoder or explicit fail-closed access state, deterministic
+contract fixtures where lawful, registry coverage, and API exposure:
+
+- Origin AI: contract-configured derived-sensing decoder and request plan.
+- Plume/OpenSync: read-only OVSDB request plan and RF telemetry decoder.
+- Mist/Juniper: regional request configuration, paginated RF/location decoder.
+- NETGEAR Insight: regional partner request configuration and telemetry decoder.
+- Electric Imp and RF Solutions: bounded scalar telemetry bridges.
+- Luma: explicitly experimental generic OpenWrt telemetry bridge.
+- Google Nest: network-only contract events; never represented as CSI.
+- Linksys: `Unsupported` decoder because Linksys Aware is end-of-support.
+- Wifigarden: `ContractRequired` decoder pending a disclosed SDK/schema.
+
+`vendor-rf-sim` generates deterministic, provenance-labelled events for the
+eight providers with a defined event contract and refuses to fabricate Linksys
+or Wifigarden events. The sensing server exposes provider descriptors and latest
+events under `/api/v1/rf/vendors` and accepts validated canonical simulator
+events over its existing UDP port. Physical/vendor-cloud validation remains
+separate from implementation completeness and is reflected by
+`hardware_validated: false` until performed.
+
 ## Evidence and Links
 
 - [ADR-268: Qualcomm strategy](ADR-268-qualcomm-atheros-csi-platform.md)
