@@ -88,8 +88,6 @@ jobs:
       # ADR-262 P1: `wifi-densepose-rufield` path-deps the `vendor/rufield`
       # submodule. Without a recursive checkout the workspace build fails to
       # resolve those path deps in CI even though it passes locally.
-      with:
-        submodules: recursive
 
     # `wifi-densepose-desktop` is a Tauri v2 app — `glib-sys`, `gtk-sys`,
     # `webkit2gtk-sys`, etc. need the Linux dev libraries via pkg-config or the
@@ -146,7 +144,10 @@ jobs:
       env:
         CARGO_PROFILE_DEV_DEBUG: "0"
         CARGO_PROFILE_TEST_DEBUG: "0"
-      run: cargo test -p wifi-densepose-worldmodel --no-default-features
+      run: >-
+        cargo test
+        --manifest-path crates/worldgraph/wifi-densepose-worldmodel/Cargo.toml
+        --no-default-features
 
     # ADR-134 CIR tests are behind the `cir` feature so the bench dependency
     # (Criterion) only pulls when actually exercised. Run them as a separate
@@ -249,7 +250,7 @@ jobs:
       continue-on-error: true
       uses: codecov/codecov-action@v6
       with:
-        file: ./coverage.xml
+        files: ./coverage.xml
         flags: unittests
         name: codecov-umbrella
 

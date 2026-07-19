@@ -115,7 +115,7 @@ jobs:
       #      RUN guard catches missing ones at build time, this re-checks the
       #      pushed artifact post-hoc as belt-and-braces).
       #   2. /health is up.
-      #   3. /api/v1/info returns 200 with no auth (LAN-mode default).
+      #   3. /api/v1/info returns 200 with the explicit trusted-LAN opt-in.
       #   4. With RUVIEW_API_TOKEN set, /api/v1/info returns 401 without a
       #      Bearer header, 200 with the correct one (the #443 auth middleware).
       # ---------------------------------------------------------------------
@@ -128,7 +128,10 @@ jobs:
             'ls /app/ui/observatory.html /app/ui/pose-fusion.html /app/ui/index.html /app/ui/viz.html >/dev/null'
           docker run --rm "$IMAGE" sh -c 'ls -d /app/ui/observatory /app/ui/pose-fusion >/dev/null'
 
-          docker run -d --name sm -p 3000:3000 -e CSI_SOURCE=simulated "$IMAGE"
+          docker run -d --name sm -p 3000:3000 \
+            -e CSI_SOURCE=simulated \
+            -e RUVIEW_ALLOW_UNAUTHENTICATED=1 \
+            "$IMAGE"
           # Wait up to 30 s for /health.
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:3000/health >/dev/null 2>&1; then break; fi
