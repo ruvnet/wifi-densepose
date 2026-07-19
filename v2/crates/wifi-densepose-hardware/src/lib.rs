@@ -53,6 +53,8 @@ pub mod sync_packet;
 // coordinator-node Rust code drive the controller stack without
 // touching any downstream signal/ruvector/train/mat crate.
 pub mod radio_ops;
+/// ADR-267 vendor-neutral MediaTek Filogic MIMO CSI framing and simulator.
+pub mod mediatek_csi;
 /// ADR-264 host-side framing for Realtek RTL8720F CFR and FMCW radar reports.
 /// This module has no dependency on the vendor SDK.
 pub mod rtl8720f;
@@ -72,6 +74,13 @@ pub use radio_ops::{
     AuthClass, CaptureProfile, MeshError, MeshHeader, MeshMsgType, MeshRole, MockRadio, NodeStatus,
     RadioError, RadioHealth, RadioMode, RadioOps, MESH_HEADER_SIZE, MESH_MAGIC, MESH_MAX_PAYLOAD,
     MESH_VERSION,
+};
+pub use mediatek_csi::{
+    ChipsetProfile as MediatekChipsetProfile, CsiFlags as MediatekCsiFlags,
+    CsiFrame as MediatekCsiFrame, CsiParseError as MediatekCsiParseError,
+    CsiPayload as MediatekCsiPayload, ElementFormat as MediatekElementFormat,
+    PpduType as MediatekPpduType, ReportKind as MediatekReportKind,
+    MEDIATEK_CSI_HEADER_LEN, MEDIATEK_CSI_MAGIC, MEDIATEK_CSI_VERSION,
 };
 pub use rtl8720f::{
     ElementFormat as Rtl8720fElementFormat, RadarFlags as Rtl8720fRadarFlags,

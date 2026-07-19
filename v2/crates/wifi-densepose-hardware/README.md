@@ -28,6 +28,21 @@ cargo run -p wifi-densepose-hardware --bin rtl8720f-sim -- `
 Add `--udp 127.0.0.1:5005 --realtime` to stream one ADR-264 frame per UDP datagram. Replay files
 contain a little-endian `u32` frame length followed by the encoded frame.
 
+## MediaTek Filogic CSI simulator (ADR-266/267)
+
+The Rust-only simulator models bounded MIMO CSI for MT7981/MT7976,
+MT7986/MT7975, and MT7988/MT7996 profiles without claiming an undocumented
+MediaTek firmware ABI. Every frame is marked `SYNTHETIC`.
+
+```powershell
+cargo run -p wifi-densepose-hardware --bin mediatek-csi-sim -- `
+  --profile mt7981 --frames 100 --output mediatek-synthetic.mtc
+```
+
+Add `--udp 127.0.0.1:5005 --realtime` to stream one CRC-protected ADR-267
+frame per UDP datagram. Physical support remains gated on a documented `mt76`
+or MediaTek firmware channel-estimate export.
+
 ## Features
 
 - **ESP32 binary parser** -- Parses ADR-018 binary CSI frames streamed over UDP from ESP32 and
