@@ -124,9 +124,9 @@ jobs:
           set -euo pipefail
           IMAGE="ghcr.io/ruvnet/wifi-densepose:sha-${GITHUB_SHA::7}"
           docker pull "$IMAGE"
-          docker run --rm "$IMAGE" sh -c \
+          docker run --rm --entrypoint sh "$IMAGE" -c \
             'ls /app/ui/observatory.html /app/ui/pose-fusion.html /app/ui/index.html /app/ui/viz.html >/dev/null'
-          docker run --rm "$IMAGE" sh -c 'ls -d /app/ui/observatory /app/ui/pose-fusion >/dev/null'
+          docker run --rm --entrypoint sh "$IMAGE" -c 'ls -d /app/ui/observatory /app/ui/pose-fusion >/dev/null'
 
           docker run -d --name sm -p 3000:3000 \
             -e CSI_SOURCE=simulated \
