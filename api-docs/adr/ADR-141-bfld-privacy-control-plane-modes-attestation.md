@@ -599,3 +599,53 @@ Per ADR-028/ADR-010, three rows are added to the witness log:
 **Integration glue -- not yet on the live path:** wiring the registry into `PrivacyGate` class transitions, the MQTT discovery payload, and a read-only Home Assistant diagnostic entity exposing the active mode + proof hash.
 
 **Trust contribution:** the *policy spine* -- privacy posture is a tamper-evident, auditable chain rather than a checkbox; an operator's mode choice actively governs whether identity data may even exist.
+
+---
+
+## Privacy Monotonicity Review (2026-06-14) — confirmed clean
+
+A beyond-SOTA security review of the governed-trust cycle
+(`wifi-densepose-engine::StreamingEngine::process_cycle_calibrated`) examined
+the privacy-demotion path this ADR governs. **The monotonicity invariant holds:
+demotion only ever makes the emitted class more restrictive, never less.**
+
+Verification (no behaviour change, the result is a clean bill with evidence):
+
+- Each cycle computes `effective_class` fresh from the active mode's
+  `target_class()` (the floor) and applies at most a **single-step** demotion
+  (`demote_one`, clamped at `Restricted`). There is no cross-cycle state that
+  could let a permissive class overwrite a restrictive one.
+- A forced contradiction (calibration mismatch / array-geometry insufficiency /
+  mesh partition risk, ADR-032) raises the class byte; a clean cycle emits
+  exactly the base class.
+- Pinned by `forced_contradiction_never_relaxes_class`, a property test over
+  **all five** `PrivacyMode`s asserting `effective_class.as_u8() >=
+  base_class.as_u8()` (strictly greater unless already clamped at `Restricted`)
+  under a forced contradiction, and `== base` on a clean cycle.
+
+Fail-closed boundaries were also pinned: an empty cycle errors (no degenerate
+over-permissive output, `empty_cycle_fails_closed`) and the single-node boundary
+is characterized as a valid non-demoting mode (`single_node_cycle_is_well_formed`).
+
+The related witness domain-separation fix from the same review is recorded in
+ADR-137 (the witness folds `effective_class`, so the demotion is auditable).
+## Security & Privacy Review (2026-06-14)
+
+Beyond-SOTA privacy+security review of `wifi-densepose-bfld` (the crate was not in the ADR-154–159 sweep). Two real bugs fixed (each pinned by a fails-on-old test), several dimensions confirmed clean.
+
+### Findings
+
+| # | Severity | Site | Issue | Fix | Pinned by |
+|---|----------|------|-------|-----|-----------|
+| 1 | **privacy-bypass (HIGH)** | `pipeline.rs::process_to_frame` | The documented wire-bytes production path stamped the frame header with the active `PrivacyClass` but serialized the caller's `BfldPayload` **unchanged** via `BfldFrame::from_payload` — never routing through `PrivacyGate::demote`. A frame labeled `Anonymous`(2)/`Restricted`(3) carried the full `compressed_angle_matrix` (identity surface) + amplitude/phase + `csi_delta`. A `NetworkSink` accepts class ≥ `Derived`(1), so the identity surface could cross the node boundary despite the restrictive class byte — the byte lied about content. | Apply `PrivacyGate::demote(frame, active_class)` after construction: a same-class transition that strips the sections the class forbids; `Raw`/`Derived` keep the full payload. | `tests/pipeline_to_frame.rs::process_to_frame_at_anonymous_strips_identity_leaky_sections`, `…_in_privacy_mode_strips_amplitude_and_phase` (both FAILED pre-fix); `…_at_derived_preserves_full_payload` (over-strip guard) |
+| 2 | **PII/injection (MEDIUM)** | `mqtt_topics.rs::render_events` | `zone_activity` payload built as `format!("\"{zone}\"")` with no JSON escaping (while `ha_discovery.rs` already escapes). A zone name with `"`/`\` produced malformed/injectable JSON on the HA state topic. | `json_string_literal()` escaper mirroring `ha_discovery::push_str_field`. Value-identical for normal zone names. | `tests/mqtt_topic_routing.rs::zone_payload_escapes_json_metacharacters` (FAILED pre-fix) |
+
+### Dimensions confirmed clean (with evidence)
+
+- **Event-field privacy gating** — `BfldEvent::apply_privacy_gating` nulls `identity_risk_score` + `rf_signature_hash` at `Restricted`, and `serde(skip_serializing_if = "Option::is_none")` omits them entirely. `render_events`/`render_discovery_payloads` refuse class < `Anonymous` (stricter than the `sink.rs` `NetworkKind` `MIN_CLASS = Derived` — defense in depth toward less leakage). Covered by `event_privacy_gating.rs`, `mqtt_topic_routing.rs`, `ha_discovery.rs`.
+- **Witness/hash framing (the engine `witness_of` bug class)** — CLEAN. `SignatureHasher::compute` prefixes a **fixed 4-byte** `day_epoch` then a **fixed-width canonical-f32** feature block (`IdentityFeatures`: Embedding = `EMBEDDING_DIM*4`, RiskFactors = 16 B). `PrivacyAttestationProof::compute` hashes a fixed 32-byte `prev_hash` + three fixed 1-byte values. No variable-length operator-influenceable string is concatenated into any digest — no length-prefix-framing collision is possible.
+- **Fail-closed** — `payload.rs::from_bytes` rejects truncated/overflowing/trailing-byte sections (`checked_add`, bounds checks); `frame.rs::from_bytes` validates magic/version/length/CRC; `PrivacyClass::try_from` rejects unknown bytes; `identity_risk::score` maps NaN/degenerate factors → 0.0 (privacy-conservative). The `from_score(NaN) → Accept` choice is a documented, deliberate publish-aggregate-only fallback (NaN never reaches it from `score()`); risk-driven NaN cannot leak identity because identity gating is class-byte-driven, not risk-driven.
+
+### Observation (not a bug)
+
+The ADR-141 control plane (`PrivacyMode`/`PrivacyModeRegistry`) is **not yet wired into the emit path** — the emitter/pipeline enforce the raw `PrivacyClass` directly; the registry is exported + unit-tested but advisory. This matches the "Integration glue — not yet on the live path" status above. The class-byte enforcement (emitter + event + renderers + the now-fixed `process_to_frame`) is the live guarantee. Wiring the registry is the documented next step.

@@ -104,6 +104,57 @@ Ranked by build cost × user impact:
 | **P9** | HACS integration repo (`hass-wifi-densepose`) for HA-side install path | pending |
 | **P10** | Witness bundle + CSA-style spec compliance check | pending |
 
+## 4.1 Crypto/security review notes (§2.2 witness chain — ADR-262 P2 prerequisite)
+
+Beyond-SOTA crypto+security review of the SHA-256 + Ed25519 witness chain
+(`witness.rs` / `witness_signing.rs`) and the manifest signature surface
+(`manifest.rs`), because ADR-262 P2 proposes to **reuse this exact signing
+chain**. Top priority was the sibling `wifi-densepose-engine` bug class —
+unframed boundary-to-boundary concatenation of operator-influenceable strings
+into a signed/hashed digest.
+
+- **Engine bug class ABSENT (good result, reported with byte evidence).**
+  `canonical_bytes` is `DOMAIN_TAG ‖ prev_hash[32] ‖ seq:u64-be ‖ ts:u64-be ‖
+  kind_len:u32-be ‖ kind ‖ payload_len:u32-be ‖ payload`. The two
+  variable-length operator-influenceable fields (`kind`, `payload`) are
+  **length-prefixed**; the fixed-width fields are self-delimiting → the
+  encoding is injective (no two distinct event tuples share a preimage). The
+  Ed25519 signature signs the **identical** bytes the SHA-256 chain commits to.
+  No separate unframed concatenation exists; the manifest `binary_signature`
+  is signed at build time (Makefile) over a single fixed-length `binary_sha256`
+  hex value, not in-crate.
+
+- **CHM-WIT-01 (FIXED) — domain-separation tag added.** The engine fix
+  prescribed *domain-tag + length-prefix*; length-prefix was present, the
+  domain tag was not. Added a versioned, NUL-terminated
+  `WITNESS_DOMAIN_TAG = b"cog-ha-matter/witness-event/v1\x00"` prefix so the
+  witness message can never be replayed as a message for another Ed25519
+  context that shares key infrastructure (notably the manifest signature).
+  **Witness bytes change by design** (prior on-disk hashes/signatures
+  invalidated, as with the engine fix); verified safe because no in-repo crate
+  consumes cog-ha-matter witness bytes programmatically (doc-mentions only).
+
+- **CHM-WIT-02 (HARDENED) — `verify_signature` now uses `verify_strict`.** For
+  an audit chain the signature is the attestation, so non-canonical encodings
+  and small-order keys are rejected (RFC 8032 strict), giving the "one
+  canonical signature per event" property. Not a forgery fix — the verifying
+  key is caller-pinned, never read from the event.
+
+- **Confirmed clean (with evidence):** verify-before-trust + key-pinning
+  (`verify_signature` takes the verifying key as a parameter; `read_jsonl`
+  re-derives every hash and chain-verifies); key handling (the crate never
+  generates/stores/logs/serializes a signing key — only a documented test-only
+  fixed seed; production keys come from the Seed secure store, out of scope);
+  determinism (positional bytes, deterministic Ed25519, alphabetically-locked
+  JSONL field order, sorted TXT records — no HashMap/float nondeterminism feeds
+  any digest); fail-closed parsing (structured errors, no panics; `main.rs`
+  reads no untrusted files/paths).
+
+Tests: `cog-ha-matter --no-default-features` 64 → **68**, 0 failed (CHM-WIT-01
+pinned by 4 fails-on-old tests across `witness.rs`/`witness_signing.rs`;
+CHM-WIT-02 guarded by a key-pinning test). Python deterministic proof
+unchanged (cog-ha-matter is off the signal proof path).
+
 ## 5. References
 
 - ADR-101 — `cog-pose-estimation` packaging precedent (signed binaries on GCS, .cog manifest)

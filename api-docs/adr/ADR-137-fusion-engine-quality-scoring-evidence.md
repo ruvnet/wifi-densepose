@@ -495,3 +495,34 @@ Rejected. `ViewpointFusionEvent` (viewpoint/fusion.rs lines 183–219) is an int
 **Integration glue -- not yet on the live path:** emission of `CalibrationIdMismatch` / `DriftProfileConflict` / `PhaseAlignmentFailed` once `calibration_id` propagation and the phase-align convergence signal are threaded onto frames; the BFLD witness record emitted on privacy demotion.
 
 **Trust contribution:** sensor *agreement made explicit* -- fusion records the evidence it relied on, and any disagreement automatically tightens the downstream privacy class.
+
+---
+
+## Witness Integrity Review (2026-06-14) — domain-separation fix
+
+A beyond-SOTA security review of `wifi-densepose-engine` (the composition root
+that builds the §2.7 trust witness in `witness_of`) found a real **witness
+domain-separation gap**, now fixed.
+
+**Finding (witness-gap, HIGH).** `witness_of` concatenated `model_version`,
+`calibration_version`, and `privacy_decision` boundary-to-boundary, and the
+variable-length `evidence` list carried no explicit count. A string straddling a
+field boundary therefore collided with a *different* trust decision —
+e.g. a per-room adapter id (ADR-150 §3.4, operator-influenceable) that absorbs
+the leading bytes of the calibration epoch (`model="…cal:00a"`, `cal="b"`)
+produces the **same** witness as `model="…"`, `cal="cal:00ab"`. Two distinct
+privacy-relevant input tuples → one witness defeats the "any privacy-relevant
+delta → different witness" guarantee this ADR's §2.7 witness exists to provide.
+
+**Fix.** The witness now (a) prepends a domain tag `ruview.engine.witness.v1`,
+(b) writes an explicit 8-byte evidence count, and (c) **length-prefixes every
+field** (8-byte LE length ‖ bytes), so field framing is unambiguous regardless
+of contents. This is a witness-layout change (all prior witness bytes are
+invalidated by design); downstream consumers only assert witness *relationships*
+(`assert_ne`/`assert_eq` across runs), not absolute bytes, so nothing breaks.
+
+Pinned by `witness_distinguishes_model_calibration_boundary` and
+`witness_distinguishes_evidence_model_boundary` (both fail on the old
+concatenation). Witness **determinism** was reviewed and confirmed clean: no
+HashMap iteration and no float formatting feed the hash (floats appear only in
+the `SemanticState` statement, which is outside the witness).

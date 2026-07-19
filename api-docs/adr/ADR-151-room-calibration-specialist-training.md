@@ -253,6 +253,54 @@ Validation per CLAUDE.md: `cargo test --workspace --no-default-features` green; 
 
 ---
 
+## 6. Review notes
+
+### 6.1 Correctness + security review (2026-06-14)
+
+Beyond-SOTA correctness+security review of `wifi-densepose-calibration` (this
+ADR's pipeline), un-covered by the ADR-154–159 sweep.
+
+**Finding (FIXED) — NaN-poisoning of the feature path (numerical / fail-closed).**
+`Features::from_series` — the carrier for both live inference and training-anchor
+extraction — computed `mean`/`variance`/`motion` over the raw scalar series with
+no non-finite guard. A single `NaN`/`±inf` sample (corrupt CSI frame) yielded
+`mean=NaN, variance=NaN` and an all-`NaN` prototype embedding. Persisted into a
+`PresenceSpecialist::threshold`/`empty_mean` at train time, the `NaN` **silently
+disabled presence detection** for the bank's lifetime (every `>` / `|·|`
+comparison against `NaN` is false → always reads *absent*, confidence 0), with no
+error — and an asymmetry against the rigorously NaN-guarded `geometry_embedding`.
+Fixed at the production boundary: non-finite samples are dropped (a corrupt frame
+counts as no frame), an all-non-finite series degrades to `Features::ZERO` like
+the empty series. Value-identical for all-finite input (full-loop + extract tests
+unchanged); pinned by `non_finite_samples_do_not_poison_features` and
+`all_non_finite_series_is_zero` (both fail on the old code).
+
+**Clean dimensions (evidence, no invented issues).**
+- *File/path handling:* the crate performs **zero** file/path I/O (no
+  `std::fs`/`Path`/`File`/`read`/`write` in `src/`; only in-memory `serde_json`).
+  Path-traversal / unbounded-read / artifact-path handling live entirely in the
+  `wifi-densepose-cli` consumer (`room.rs`), outside this crate's boundary.
+- *Untrusted-load:* `SpecialistBank::from_json` shape-validates via serde
+  (malformed → `CalibrationError::Serde`); banks are local-first (invariant B),
+  never network-received. A well-formed bank with adversarial numerics is trusted
+  as-is — acceptable under the local-first threat model; a validate-on-load
+  defense-in-depth pass is a possible future hardening, not a present bug.
+- *Receipt/hash integrity:* the crate emits no hash/receipt/witness/signature, so
+  the unframed-concatenation bug class (cf. the engine `witness_of` fix) is
+  structurally absent.
+- *Other numerical paths:* `geometry_embedding` sanitizes every input and sweeps
+  to finite; presence/restlessness/anomaly divisions are `.max(1e-3)`-guarded;
+  `autocorr_dominant` guards `r0`, short signals, and empty bands; `train` rejects
+  empty anchors; anomaly requires ≥2 anchors.
+
+De-magicked the bare specialist threshold literals (breathing/heartbeat default
+min-scores, anomaly outlier-spread multiple + label cutoff) into named documented
+consts, value-identical, pinned by const-equality tests. Tests
+**58→62 unit + 1 integration, 0 failed**; Python deterministic proof unchanged
+(off the signal proof path).
+
+---
+
 ## 5. Summary
 
 > Big models understand the world. Small ruVector models understand *your room*.
