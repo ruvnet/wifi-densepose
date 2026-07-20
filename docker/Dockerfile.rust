@@ -71,6 +71,10 @@ EXPOSE 3000
 EXPOSE 3001
 # ESP32 UDP
 EXPOSE 5005/udp
+# USRP / SDR feature bridge UDP
+EXPOSE 5010/udp
+# RF-direct USRP/X310 native feature UDP
+EXPOSE 5020/udp
 # MQTT broker (cog-ha-matter embedded broker — Home Assistant + Matter)
 EXPOSE 1883
 # HOMECORE HA-compatible REST + WebSocket (homecore-server)
@@ -84,12 +88,23 @@ ENV RUST_LOG=info
 # wifi      — use host Wi-Fi RSSI/scan data (Windows netsh; not available in containers)
 # simulated — generate synthetic CSI frames (no hardware required)
 # Override at runtime:  docker run -e CSI_SOURCE=esp32 ...
+# Additional sources: usrp (legacy UDP 5010 CSI-like SDR features) and
+# rf-direct (loopback-only UDP 5020 versioned OpenISAC observations).
 ENV CSI_SOURCE=auto
 
 # MODELS_DIR controls where the server scans for .rvf model files.
 # Mount a host directory here to make models visible to the API:
 #   docker run -v /path/to/models:/app/models -e MODELS_DIR=/app/models ...
 ENV MODELS_DIR=data/models
+
+# USRP_UDP_PORT is used when CSI_SOURCE=usrp. A UHD/GNU Radio bridge should
+# send JSON datagrams containing CSI-like amplitude/phase vectors to this port.
+ENV USRP_UDP_PORT=5010
+
+# RF_UDP_PORT is used when CSI_SOURCE=rf-direct. Only a co-located OpenISAC
+# bridge may send versioned, paired observations to the loopback receiver.
+ENV RF_UDP_PORT=5020
+ENV RF_BIND_ADDR=127.0.0.1
 
 COPY docker/docker-entrypoint.sh /app/docker-entrypoint.sh
 

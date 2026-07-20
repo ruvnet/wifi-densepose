@@ -26,7 +26,7 @@ use wifi_densepose_sensing_server::{dataset, embedding, graph_transformer, train
 
 use ruvector_mincut::{DynamicMinCut, MinCutBuilder};
 use std::collections::{HashMap, VecDeque};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -81,6 +81,19 @@ struct Args {
     #[arg(long, default_value = "5005")]
     udp_port: u16,
 
+    /// UDP port for USRP/SDR feature frames (JSON datagrams)
+    #[arg(long, default_value = "5010", env = "USRP_UDP_PORT")]
+    usrp_udp_port: u16,
+
+    /// UDP port for RF-native feature frames (JSON datagrams)
+    #[arg(long, default_value = "5020", env = "RF_UDP_PORT")]
+    rf_udp_port: u16,
+
+    /// Loopback address for RF observation ingestion. Remote unauthenticated
+    /// UDP is intentionally unsupported.
+    #[arg(long, default_value = "127.0.0.1", env = "RF_BIND_ADDR")]
+    rf_bind_addr: String,
+
     /// Path to UI static files (repo `ui/`; from `v2/` use `../ui` or rely on auto-detect)
     #[arg(long, default_value = "../ui")]
     ui_path: PathBuf,
@@ -115,7 +128,7 @@ struct Args {
     #[command(flatten)]
     mqtt_opts: wifi_densepose_sensing_server::cli::MqttArgs,
 
-    /// Data source: auto, wifi, esp32, simulate
+    /// Data source: auto, wifi, esp32, usrp, rf-direct, simulate
     #[arg(long, default_value = "auto")]
     source: String,
 
@@ -235,6 +248,263 @@ struct Esp32Frame {
     phases: Vec<f64>,
 }
 
+/// UDP JSON feature frame produced by a USRP/UHD/GNU Radio bridge.
+///
+/// This is intentionally a feature-frame contract, not a UHD binding. USRP
+/// hardware can expose raw IQ for many waveforms, while RuView's current
+/// sensing path expects CSI-like amplitude/phase vectors. A small external
+/// bridge owns waveform-specific demodulation or subcarrier extraction and
+/// sends either `amplitudes` + optional `phases`, or raw complex `iq_pairs`.
+#[derive(Debug, Deserialize)]
+struct UsrpFeatureFrame {
+    #[serde(default)]
+    node_id: Option<u8>,
+    #[serde(default)]
+    sequence: Option<u32>,
+    #[serde(default)]
+    freq_mhz: Option<u16>,
+    #[serde(default)]
+    rssi_dbm: Option<f64>,
+    #[serde(default)]
+    noise_floor_dbm: Option<f64>,
+    #[serde(default)]
+    sample_rate_hz: Option<f64>,
+    #[serde(default)]
+    amplitudes: Option<Vec<f64>>,
+    #[serde(default)]
+    phases: Option<Vec<f64>>,
+    #[serde(default)]
+    iq_pairs: Option<Vec<[f64; 2]>>,
+}
+
+const MAX_RF_RANGE_BINS: usize = 16_384;
+const MAX_RF_DIAGNOSTIC_PEAKS: usize = 64;
+const MAX_RF_CFAR_CLUSTERS: usize = 1_024;
+
+/// Versioned observation-only contract emitted by the OpenISAC bridge.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RfObservation {
+    schema: String,
+    protocol_version: u16,
+    source: String,
+    frame_id: u64,
+    sequence: u64,
+    source_timestamp_ns: Option<u64>,
+    received_at_ns: u64,
+    config_hash: String,
+    freshness: String,
+    center_freq_hz: Option<f64>,
+    sample_rate_hz: Option<f64>,
+    feature_rate_hz: Option<f64>,
+    observation: RfObservationPayload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RfObservationPayload {
+    range_doppler: RfRangeDopplerObservation,
+    cfar: RfCfarObservation,
+    micro_doppler: Option<serde_json::Value>,
+    #[serde(default)]
+    openisac: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RfRangeDopplerObservation {
+    amplitude: f64,
+    snr_db: f64,
+    range_profile: Vec<f64>,
+    peaks: Vec<RfDiagnosticPeak>,
+    frame_format: u32,
+    range_fft_size: usize,
+    doppler_fft_size: usize,
+    rd_shape: [usize; 2],
+    mean_amplitude: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RfDiagnosticPeak {
+    kind: String,
+    range_bin: usize,
+    doppler_bin: usize,
+    strength_db: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RfCfarObservation {
+    hits: u32,
+    shown_hits: u32,
+    stats: serde_json::Value,
+    candidate_clusters: Vec<RfCandidateCluster>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RfCandidateCluster {
+    range_bin: usize,
+    doppler_bin: usize,
+    strength_db: f64,
+    cluster_size: u32,
+    centroid_range_bin: f64,
+    centroid_doppler_bin: f64,
+}
+
+impl RfObservation {
+    fn validate(&self) -> Result<(), String> {
+        if self.schema != "ruview.rf_observation" || self.protocol_version != 1 {
+            return Err("unsupported RF observation schema or protocol version".into());
+        }
+        if self.frame_id != self.sequence {
+            return Err("RF observation frame_id and sequence must match".into());
+        }
+        if self.source.is_empty() || self.source.len() > 128 || self.received_at_ns == 0 {
+            return Err("RF observation source or receive timestamp is invalid".into());
+        }
+        let hash = self.config_hash.strip_prefix("sha256:").unwrap_or("");
+        if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("RF observation config_hash must be sha256:<64 hex>".into());
+        }
+        if self.freshness != "fresh" {
+            return Err("only fresh RF observations may enter the ingest boundary".into());
+        }
+        for value in [
+            self.center_freq_hz,
+            self.sample_rate_hz,
+            self.feature_rate_hz,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !value.is_finite() || value <= 0.0 {
+                return Err("RF observation frequency/rate fields must be positive".into());
+            }
+        }
+        let rd = &self.observation.range_doppler;
+        if !rd.amplitude.is_finite()
+            || !rd.snr_db.is_finite()
+            || !rd.mean_amplitude.is_finite()
+            || rd.range_profile.is_empty()
+            || rd.range_profile.len() > MAX_RF_RANGE_BINS
+            || rd.range_profile.iter().any(|value| !value.is_finite())
+            || rd.peaks.len() > MAX_RF_DIAGNOSTIC_PEAKS
+        {
+            return Err("RF range-Doppler diagnostics are invalid or oversized".into());
+        }
+        if rd.peaks.iter().any(|peak| {
+            peak.kind != "unclassified_peak"
+                || !peak.strength_db.is_finite()
+                || peak.range_bin >= rd.rd_shape[1]
+                || peak.doppler_bin >= rd.rd_shape[0]
+        }) {
+            return Err("RF diagnostic peak is invalid".into());
+        }
+        let clusters = &self.observation.cfar.candidate_clusters;
+        if clusters.len() > MAX_RF_CFAR_CLUSTERS
+            || clusters.iter().any(|cluster| {
+                !cluster.strength_db.is_finite()
+                    || !cluster.centroid_range_bin.is_finite()
+                    || !cluster.centroid_doppler_bin.is_finite()
+            })
+        {
+            return Err("RF CFAR candidate clusters are invalid or oversized".into());
+        }
+        Ok(())
+    }
+
+    fn mark_stale(&mut self) {
+        self.freshness = "stale".into();
+        self.observation.cfar.candidate_clusters.clear();
+        self.observation.cfar.hits = 0;
+        self.observation.cfar.shown_hits = 0;
+    }
+}
+
+fn parse_rf_observation(buf: &[u8]) -> Result<RfObservation, String> {
+    let observation: RfObservation = serde_json::from_slice(buf)
+        .map_err(|error| format!("invalid RF observation JSON: {error}"))?;
+    observation.validate()?;
+    Ok(observation)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RfSequenceDisposition {
+    Accept,
+    Duplicate,
+    OutOfOrder,
+}
+
+fn classify_rf_sequence(previous: Option<u64>, incoming: u64) -> RfSequenceDisposition {
+    match previous {
+        None => RfSequenceDisposition::Accept,
+        Some(value) if incoming > value => RfSequenceDisposition::Accept,
+        Some(value) if incoming == value => RfSequenceDisposition::Duplicate,
+        Some(_) => RfSequenceDisposition::OutOfOrder,
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+struct RfIngestStats {
+    accepted: u64,
+    invalid: u64,
+    duplicate: u64,
+    out_of_order: u64,
+    unauthorized_sender: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SourceCapabilities {
+    transport: bool,
+    rf_observation: bool,
+    motion: bool,
+    presence: bool,
+    person_count: bool,
+    pose: bool,
+    vitals: bool,
+    simulated: bool,
+}
+
+fn source_capabilities(source: &str, model_loaded: bool) -> SourceCapabilities {
+    let base = source.split(':').next().unwrap_or(source);
+    if matches!(base, "rf-direct" | "rf") {
+        return SourceCapabilities {
+            transport: true,
+            rf_observation: true,
+            motion: false,
+            presence: false,
+            person_count: false,
+            pose: false,
+            vitals: false,
+            simulated: false,
+        };
+    }
+    SourceCapabilities {
+        transport: true,
+        rf_observation: false,
+        motion: true,
+        presence: true,
+        person_count: true,
+        pose: model_loaded,
+        vitals: true,
+        simulated: base == "simulated",
+    }
+}
+
+fn canonical_source_arg(source: &str) -> Option<&'static str> {
+    match source {
+        "auto" => Some("auto"),
+        "wifi" => Some("wifi"),
+        "esp32" => Some("esp32"),
+        "usrp" => Some("usrp"),
+        "rf-direct" | "rf" => Some("rf-direct"),
+        "simulated" | "simulate" => Some("simulated"),
+        _ => None,
+    }
+}
+
 /// Sensing update broadcast to WebSocket clients
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SensingUpdate {
@@ -286,6 +556,10 @@ struct SensingUpdate {
     /// Per-node feature breakdown for multi-node deployments.
     #[serde(skip_serializing_if = "Option::is_none")]
     node_features: Option<Vec<PerNodeFeatureInfo>>,
+    /// Versioned RF observation. Its presence explicitly disables generic
+    /// human-sensing inference for this update.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rf_observation: Option<RfObservation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -895,6 +1169,12 @@ struct AppStateInner {
     source: String,
     /// Instant of the last ESP32 UDP frame received (for offline detection).
     last_esp32_frame: Option<std::time::Instant>,
+    /// Instant of the last accepted RF observation.
+    last_rf_frame: Option<std::time::Instant>,
+    /// Monotonic RF sequence high-water used to reject replay/reordering.
+    last_rf_sequence: Option<u64>,
+    /// Observable RF boundary counters.
+    rf_ingest_stats: RfIngestStats,
     tx: broadcast::Sender<String>,
     // ADR-099 D2/D3/D4: real-time CSI introspection tap. Per-frame state +
     // a parallel broadcast topic (`/ws/introspection`) running alongside
@@ -1009,6 +1289,17 @@ struct AppStateInner {
 
 /// If no ESP32 frame arrives within this duration, source reverts to offline.
 const ESP32_OFFLINE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const RF_OFFLINE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn source_is_offline(source: &str, elapsed: Option<Duration>) -> bool {
+    let base = source.split(':').next().unwrap_or(source);
+    let timeout = match base {
+        "esp32" => ESP32_OFFLINE_TIMEOUT,
+        "rf-direct" | "rf" => RF_OFFLINE_TIMEOUT,
+        _ => return false,
+    };
+    elapsed.is_none_or(|age| age > timeout)
+}
 
 impl AppStateInner {
     /// Return the effective data source, accounting for ESP32 frame timeout.
@@ -1044,12 +1335,13 @@ impl AppStateInner {
     }
 
     fn effective_source(&self) -> String {
-        if self.source == "esp32" {
-            if let Some(last) = self.last_esp32_frame {
-                if last.elapsed() > ESP32_OFFLINE_TIMEOUT {
-                    return "esp32:offline".to_string();
-                }
-            }
+        let elapsed = match self.source.as_str() {
+            "esp32" => self.last_esp32_frame.map(|last| last.elapsed()),
+            "rf-direct" | "rf" => self.last_rf_frame.map(|last| last.elapsed()),
+            _ => None,
+        };
+        if source_is_offline(&self.source, elapsed) {
+            return format!("{}:offline", self.source);
         }
         self.source.clone()
     }
@@ -1060,6 +1352,25 @@ impl AppStateInner {
 const FRAME_HISTORY_CAPACITY: usize = 100;
 
 type SharedState = Arc<RwLock<AppStateInner>>;
+
+fn tag_update_for_source(update: &SensingUpdate, effective_source: &str) -> SensingUpdate {
+    let mut tagged = update.clone();
+    tagged.source = effective_source.to_string();
+    if effective_source.ends_with(":offline") {
+        if let Some(observation) = tagged.rf_observation.as_mut() {
+            observation.mark_stale();
+        }
+        tagged.classification = ClassificationInfo {
+            motion_level: "unverified".into(),
+            presence: false,
+            confidence: 0.0,
+        };
+        tagged.persons = None;
+        tagged.estimated_persons = None;
+        tagged.vital_signs = None;
+    }
+    tagged
+}
 
 // ── ESP32 Edge Vitals Packet (ADR-039, magic 0xC511_0002) ────────────────────
 
@@ -1421,6 +1732,79 @@ fn parse_esp32_frame(buf: &[u8]) -> Option<Esp32Frame> {
 }
 
 // ── Signal field generation ──────────────────────────────────────────────────
+
+/// Parse a USRP feature JSON datagram into the existing CSI-like frame path.
+fn parse_usrp_feature_frame(buf: &[u8]) -> Option<(Esp32Frame, f64)> {
+    let input: UsrpFeatureFrame = serde_json::from_slice(buf).ok()?;
+
+    let (amplitudes, phases) = match (input.amplitudes, input.phases, input.iq_pairs) {
+        (Some(amplitudes), phases, _) => {
+            if amplitudes.is_empty() || amplitudes.iter().any(|v| !v.is_finite()) {
+                return None;
+            }
+            let phases = phases
+                .filter(|p| p.len() == amplitudes.len() && p.iter().all(|v| v.is_finite()))
+                .unwrap_or_else(|| vec![0.0; amplitudes.len()]);
+            (amplitudes, phases)
+        }
+        (None, _, Some(iq_pairs)) => {
+            if iq_pairs.is_empty() {
+                return None;
+            }
+            let mut amplitudes = Vec::with_capacity(iq_pairs.len());
+            let mut phases = Vec::with_capacity(iq_pairs.len());
+            for [i_val, q_val] in iq_pairs {
+                if !i_val.is_finite() || !q_val.is_finite() {
+                    return None;
+                }
+                amplitudes.push((i_val * i_val + q_val * q_val).sqrt());
+                phases.push(q_val.atan2(i_val));
+            }
+            (amplitudes, phases)
+        }
+        _ => return None,
+    };
+
+    let n_subcarriers = amplitudes.len().min(u8::MAX as usize) as u8;
+    if n_subcarriers == 0 {
+        return None;
+    }
+
+    let rssi = input
+        .rssi_dbm
+        .filter(|v| v.is_finite())
+        .unwrap_or_else(|| {
+            let mean_amp = amplitudes.iter().sum::<f64>() / amplitudes.len() as f64;
+            20.0 * mean_amp.max(1e-9).log10() - 90.0
+        })
+        .clamp(i8::MIN as f64, i8::MAX as f64)
+        .round() as i8;
+
+    let noise_floor = input
+        .noise_floor_dbm
+        .filter(|v| v.is_finite())
+        .unwrap_or(-95.0)
+        .clamp(i8::MIN as f64, i8::MAX as f64)
+        .round() as i8;
+
+    let frame = Esp32Frame {
+        magic: 0xC511_0101,
+        node_id: input.node_id.unwrap_or(1),
+        n_antennas: 1,
+        n_subcarriers,
+        freq_mhz: input.freq_mhz.unwrap_or(2400),
+        sequence: input.sequence.unwrap_or(0),
+        rssi,
+        noise_floor,
+        amplitudes,
+        phases,
+    };
+
+    Some((
+        frame,
+        input.sample_rate_hz.filter(|v| *v > 0.0).unwrap_or(20.0),
+    ))
+}
 
 /// Generate a signal field that reflects where motion and signal changes are occurring.
 ///
@@ -2422,6 +2806,7 @@ async fn windows_wifi_task(state: SharedState, tick_ms: u64) {
                 None
             },
             node_features: None,
+            rf_observation: None,
         };
 
         // Populate persons from the sensing update (Kalman-smoothed via tracker).
@@ -2578,6 +2963,7 @@ async fn windows_wifi_fallback_tick(state: &SharedState, seq: u32) {
             None
         },
         node_features: None,
+        rf_observation: None,
     };
 
     let raw_persons = derive_pose_from_sensing(&update);
@@ -2802,13 +3188,18 @@ async fn handle_ws_pose_client(mut socket: WebSocket, state: SharedState) {
                                     let s = state.read().await;
                                     s.model_loaded
                                 };
-                                let pose_source = if model_loaded {
+                                let is_rf_observation = sensing.rf_observation.is_some();
+                                let pose_source = if is_rf_observation {
+                                    "unavailable"
+                                } else if model_loaded {
                                     "model_inference"
                                 } else {
-                                    "signal_derived"
+                                    "procedural_unverified"
                                 };
 
-                                let persons = if model_loaded {
+                                let persons = if is_rf_observation {
+                                    vec![]
+                                } else if model_loaded {
                                     // When a trained model is loaded, prefer its keypoints if present.
                                     sensing.pose_keypoints.as_ref().map(|kps| {
                                         let kp_names = [
@@ -2848,7 +3239,7 @@ async fn handle_ws_pose_client(mut socket: WebSocket, state: SharedState) {
                                         "pose": {
                                             "persons": persons,
                                         },
-                                        "confidence": if sensing.classification.presence { sensing.classification.confidence } else { 0.0 },
+                                        "confidence": if is_rf_observation { 0.0 } else if sensing.classification.presence { sensing.classification.confidence } else { 0.0 },
                                         "activity": sensing.classification.motion_level,
                                         // pose_source tells the UI which estimation mode is active.
                                         "pose_source": pose_source,
@@ -2915,7 +3306,10 @@ async fn health(State(state): State<SharedState>) -> Json<serde_json::Value> {
 async fn latest(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
     match &s.latest_update {
-        Some(update) => Json(serde_json::to_value(update).unwrap_or_default()),
+        Some(update) => {
+            let tagged = tag_update_for_source(update, &s.effective_source());
+            Json(serde_json::to_value(tagged).unwrap_or_default())
+        }
         None => Json(serde_json::json!({"status": "no data yet"})),
     }
 }
@@ -3736,33 +4130,42 @@ async fn health_live(State(state): State<SharedState>) -> Json<serde_json::Value
 
 async fn health_ready(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
+    let source = s.effective_source();
     Json(serde_json::json!({
-        "status": "ready",
-        "source": s.effective_source(),
+        "status": if source.ends_with(":offline") { "not_ready" } else { "ready" },
+        "source": source,
     }))
 }
 
 async fn health_system(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
     let uptime = s.start_time.elapsed().as_secs();
+    let source = s.effective_source();
+    let capabilities = source_capabilities(&source, s.model_loaded);
+    let degraded = source.ends_with(":offline");
     Json(serde_json::json!({
-        "status": "healthy",
+        "status": if degraded { "degraded" } else { "healthy" },
         "components": {
             "api": { "status": "healthy", "message": "Rust Axum server" },
             "hardware": {
-                "status": if s.effective_source().ends_with(":offline") { "degraded" } else { "healthy" },
-                "message": format!("Source: {}", s.effective_source())
+                "status": if degraded { "degraded" } else { "healthy" },
+                "message": format!("Source: {source}")
             },
-            "pose": { "status": "healthy", "message": "WiFi-derived pose estimation" },
+            "pose": {
+                "status": if capabilities.pose { "available" } else { "unavailable" },
+                "message": if capabilities.pose { "trained model loaded" } else { "no verified pose capability" }
+            },
             "stream": { "status": if s.tx.receiver_count() > 0 { "healthy" } else { "idle" },
                         "message": format!("{} client(s)", s.tx.receiver_count()) },
         },
         "metrics": {
-            "cpu_percent": 2.5,
-            "memory_percent": 1.8,
-            "disk_percent": 15.0,
+            "cpu_percent": serde_json::Value::Null,
+            "memory_percent": serde_json::Value::Null,
+            "disk_percent": serde_json::Value::Null,
+            "measurement_status": "unavailable",
             "uptime_seconds": uptime,
-        }
+        },
+        "rf_ingest": s.rf_ingest_stats,
     }))
 }
 
@@ -3778,25 +4181,31 @@ async fn health_metrics(State(state): State<SharedState>) -> Json<serde_json::Va
     let s = state.read().await;
     Json(serde_json::json!({
         "system_metrics": {
-            "cpu": { "percent": 2.5 },
-            "memory": { "percent": 1.8, "used_mb": 5 },
-            "disk": { "percent": 15.0 },
+            "cpu": { "percent": serde_json::Value::Null },
+            "memory": { "percent": serde_json::Value::Null, "used_mb": serde_json::Value::Null },
+            "disk": { "percent": serde_json::Value::Null },
+            "measurement_status": "unavailable",
         },
         "tick": s.tick,
+        "rf_ingest": s.rf_ingest_stats,
     }))
 }
 
 async fn api_info(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
+    let source = s.effective_source();
+    let capabilities = source_capabilities(&source, s.model_loaded);
     Json(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "environment": "production",
         "backend": "rust",
-        "source": s.effective_source(),
+        "source": source,
+        "capabilities": capabilities,
         "features": {
-            "wifi_sensing": true,
-            "pose_estimation": true,
-            "signal_processing": true,
+            "wifi_sensing": !capabilities.rf_observation,
+            "rf_observation": capabilities.rf_observation,
+            "pose_estimation": capabilities.pose,
+            "signal_processing": !capabilities.rf_observation,
             "ruvector": true,
             "streaming": true,
         }
@@ -3805,26 +4214,40 @@ async fn api_info(State(state): State<SharedState>) -> Json<serde_json::Value> {
 
 async fn pose_current(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
-    let persons = match &s.latest_update {
-        Some(update) => update
-            .persons
-            .clone()
-            .unwrap_or_else(|| derive_pose_from_sensing(update)),
-        None => vec![],
+    let source = s.effective_source();
+    let capabilities = source_capabilities(&source, s.model_loaded);
+    let persons = if capabilities.pose {
+        s.latest_update
+            .as_ref()
+            .and_then(|update| update.persons.clone())
+            .unwrap_or_default()
+    } else {
+        vec![]
     };
     Json(serde_json::json!({
         "timestamp": chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
         "persons": persons,
         "total_persons": persons.len(),
-        "source": s.effective_source(),
+        "source": source,
+        "pose_provenance": if capabilities.pose { "model" } else { "unavailable" },
     }))
 }
 
 async fn pose_stats(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
+    let confidences: Vec<f64> = s
+        .latest_update
+        .as_ref()
+        .and_then(|update| update.persons.as_ref())
+        .into_iter()
+        .flatten()
+        .map(|person| person.confidence)
+        .collect();
+    let average_confidence = (!confidences.is_empty())
+        .then(|| confidences.iter().sum::<f64>() / confidences.len() as f64);
     Json(serde_json::json!({
         "total_detections": s.total_detections,
-        "average_confidence": 0.87,
+        "average_confidence": average_confidence,
         "frames_processed": s.tick,
         "source": s.effective_source(),
     }))
@@ -3849,11 +4272,15 @@ async fn pose_zones_summary(State(state): State<SharedState>) -> Json<serde_json
 
 async fn stream_status(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
+    let source = s.effective_source();
+    let uptime = s.start_time.elapsed().as_secs_f64();
+    let measured_fps = (uptime > 0.0 && s.tick > 0).then(|| s.tick as f64 / uptime);
     Json(serde_json::json!({
-        "active": true,
+        "active": s.latest_update.is_some() && !source.ends_with(":offline"),
         "clients": s.tx.receiver_count(),
-        "fps": if s.tick > 1 { 10u64 } else { 0u64 },
-        "source": s.effective_source(),
+        "fps": measured_fps,
+        "fps_basis": "lifetime_average_accepted_frames",
+        "source": source,
     }))
 }
 
@@ -5108,6 +5535,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         // can implement model-wake gating without round-
                         // tripping back to the server.
                         node_features: build_node_features(&s.node_states, now),
+                        rf_observation: None,
                     };
 
                     let raw_persons = derive_pose_from_sensing(&update);
@@ -5480,6 +5908,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         // can implement model-wake gating without round-
                         // tripping back to the server.
                         node_features: build_node_features(&s.node_states, now),
+                        rf_observation: None,
                     };
 
                     let raw_persons = derive_pose_from_sensing(&update);
@@ -5527,6 +5956,283 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
 }
 
 // ── Simulated data task ──────────────────────────────────────────────────────
+
+async fn usrp_udp_receiver_task(state: SharedState, udp_port: u16) {
+    let addr = format!("0.0.0.0:{udp_port}");
+    let socket = match UdpSocket::bind(&addr).await {
+        Ok(s) => {
+            info!("UDP listening on {addr} for USRP/SDR feature JSON frames");
+            s
+        }
+        Err(e) => {
+            error!("Failed to bind USRP UDP {addr}: {e}");
+            return;
+        }
+    };
+
+    let mut buf = [0u8; 65535];
+    loop {
+        match socket.recv_from(&mut buf).await {
+            Ok((len, src)) => {
+                let Some((frame, sample_rate_hz)) = parse_usrp_feature_frame(&buf[..len]) else {
+                    debug!("Ignoring malformed USRP feature frame from {src} ({len} bytes)");
+                    continue;
+                };
+
+                debug!(
+                    "USRP feature frame from {src}: node={}, bins={}, seq={}, fs={:.1}Hz",
+                    frame.node_id, frame.n_subcarriers, frame.sequence, sample_rate_hz
+                );
+
+                let mut s = state.write().await;
+                s.source = "usrp".to_string();
+                s.tick += 1;
+                let tick = s.tick;
+
+                s.frame_history.push_back(frame.amplitudes.clone());
+                if s.frame_history.len() > FRAME_HISTORY_CAPACITY {
+                    s.frame_history.pop_front();
+                }
+
+                let (features, mut classification, breathing_rate_hz, sub_variances, raw_motion) =
+                    extract_features_from_frame(&frame, &s.frame_history, sample_rate_hz);
+                smooth_and_classify(&mut s, &mut classification, raw_motion);
+                adaptive_override(&s, &features, &mut classification);
+
+                s.rssi_history.push_back(features.mean_rssi);
+                if s.rssi_history.len() > 60 {
+                    s.rssi_history.pop_front();
+                }
+
+                let raw_vitals = s
+                    .vital_detector
+                    .process_frame(&frame.amplitudes, &frame.phases);
+                let vitals = smooth_vitals(&mut s, &raw_vitals);
+                s.latest_vitals = vitals.clone();
+
+                s.p95_variance.push(features.variance);
+                s.p95_motion_band_power.push(features.motion_band_power);
+                s.p95_spectral_power.push(features.spectral_power);
+
+                let raw_score = compute_person_score(&s, &features);
+                s.smoothed_person_score = s.smoothed_person_score * 0.90 + raw_score * 0.10;
+                let est_persons = if classification.presence {
+                    let count = s.person_count();
+                    s.prev_person_count = count;
+                    count
+                } else {
+                    s.prev_person_count = 0;
+                    0
+                };
+
+                let motion_score = if classification.motion_level == "active" {
+                    0.8
+                } else if classification.motion_level == "present_still" {
+                    0.3
+                } else {
+                    0.05
+                };
+
+                let frame_amplitudes = frame.amplitudes.clone();
+                let frame_n_sub = frame.n_subcarriers;
+                let node_id = frame.node_id;
+
+                let mut update = SensingUpdate {
+                    msg_type: "sensing_update".to_string(),
+                    timestamp: chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
+                    source: "usrp".to_string(),
+                    tick,
+                    nodes: vec![NodeInfo {
+                        node_id,
+                        rssi_dbm: features.mean_rssi,
+                        position: [2.0, 0.0, 1.5],
+                        amplitude: frame_amplitudes,
+                        subcarrier_count: frame_n_sub as usize,
+                        sync: None,
+                    }],
+                    features: features.clone(),
+                    classification,
+                    signal_field: generate_signal_field(
+                        features.mean_rssi,
+                        motion_score,
+                        breathing_rate_hz,
+                        features.variance.min(1.0),
+                        &sub_variances,
+                    ),
+                    vital_signs: Some(vitals),
+                    enhanced_motion: Some(serde_json::json!({
+                        "source": "usrp",
+                        "sample_rate_hz": sample_rate_hz,
+                        "freq_mhz": frame.freq_mhz,
+                    })),
+                    enhanced_breathing: None,
+                    posture: None,
+                    signal_quality_score: None,
+                    quality_verdict: None,
+                    bssid_count: None,
+                    pose_keypoints: None,
+                    model_status: if s.model_loaded {
+                        Some(serde_json::json!({
+                            "loaded": true,
+                            "source": "usrp-feature-bridge",
+                            "layers": s.progressive_loader.as_ref()
+                                .map(|l| { let (a,b,c) = l.layer_status(); a as u8 + b as u8 + c as u8 })
+                                .unwrap_or(0),
+                            "sona_profile": s.active_sona_profile.as_deref().unwrap_or("default"),
+                        }))
+                    } else {
+                        None
+                    },
+                    persons: None,
+                    estimated_persons: if est_persons > 0 {
+                        Some(est_persons)
+                    } else {
+                        None
+                    },
+                    node_features: None,
+                    rf_observation: None,
+                };
+
+                let raw_persons = derive_pose_from_sensing(&update);
+                let mut last_tracker_instant = s.last_tracker_instant.take();
+                let tracked = tracker_bridge::tracker_update(
+                    &mut s.pose_tracker,
+                    &mut last_tracker_instant,
+                    raw_persons,
+                );
+                s.last_tracker_instant = last_tracker_instant;
+                if !tracked.is_empty() {
+                    update.persons = Some(tracked);
+                }
+
+                if update.classification.presence {
+                    s.total_detections += 1;
+                }
+                if let Ok(json) = serde_json::to_string(&update) {
+                    let _ = s.tx.send(json);
+                }
+                s.latest_update = Some(update);
+            }
+            Err(e) => {
+                warn!("USRP UDP recv error: {e}");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+}
+
+fn rf_observation_to_sensing_update(frame: RfObservation, tick: u64) -> SensingUpdate {
+    let range_profile = frame.observation.range_doppler.range_profile.clone();
+    SensingUpdate {
+        msg_type: "sensing_update".to_string(),
+        timestamp: chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
+        source: "rf-direct".to_string(),
+        tick,
+        nodes: vec![NodeInfo {
+            node_id: 1,
+            rssi_dbm: 0.0,
+            position: [2.0, 0.0, 1.5],
+            amplitude: range_profile.clone(),
+            subcarrier_count: range_profile.len(),
+            sync: None,
+        }],
+        features: FeatureInfo {
+            mean_rssi: 0.0,
+            variance: 0.0,
+            motion_band_power: 0.0,
+            breathing_band_power: 0.0,
+            dominant_freq_hz: 0.0,
+            change_points: 0,
+            spectral_power: 0.0,
+        },
+        classification: ClassificationInfo {
+            motion_level: "unverified".into(),
+            presence: false,
+            confidence: 0.0,
+        },
+        signal_field: generate_signal_field(0.0, 0.0, 0.0, 0.0, &range_profile),
+        vital_signs: None,
+        enhanced_motion: None,
+        enhanced_breathing: None,
+        posture: None,
+        signal_quality_score: None,
+        quality_verdict: None,
+        bssid_count: None,
+        pose_keypoints: None,
+        model_status: None,
+        persons: None,
+        estimated_persons: None,
+        node_features: None,
+        rf_observation: Some(frame),
+    }
+}
+
+async fn rf_direct_udp_receiver_task(state: SharedState, bind_ip: IpAddr, udp_port: u16) {
+    let addr = SocketAddr::new(bind_ip, udp_port);
+    let socket = match UdpSocket::bind(&addr).await {
+        Ok(s) => {
+            info!("UDP listening on {addr} for versioned RF observations");
+            s
+        }
+        Err(e) => {
+            error!("Failed to bind RF-direct UDP {addr}: {e}");
+            return;
+        }
+    };
+
+    let mut buf = [0u8; 65535];
+    loop {
+        match socket.recv_from(&mut buf).await {
+            Ok((len, src)) => {
+                if !src.ip().is_loopback() {
+                    let mut s = state.write().await;
+                    s.rf_ingest_stats.unauthorized_sender += 1;
+                    warn!("Rejecting non-loopback RF observation sender {src}");
+                    continue;
+                }
+
+                let frame = match parse_rf_observation(&buf[..len]) {
+                    Ok(frame) => frame,
+                    Err(reason) => {
+                        let mut s = state.write().await;
+                        s.rf_ingest_stats.invalid += 1;
+                        debug!("Rejecting invalid RF observation from {src}: {reason}");
+                        continue;
+                    }
+                };
+
+                let mut s = state.write().await;
+                match classify_rf_sequence(s.last_rf_sequence, frame.sequence) {
+                    RfSequenceDisposition::Accept => {}
+                    RfSequenceDisposition::Duplicate => {
+                        s.rf_ingest_stats.duplicate += 1;
+                        continue;
+                    }
+                    RfSequenceDisposition::OutOfOrder => {
+                        s.rf_ingest_stats.out_of_order += 1;
+                        continue;
+                    }
+                }
+                s.source = "rf-direct".to_string();
+                s.last_rf_frame = Some(std::time::Instant::now());
+                s.last_rf_sequence = Some(frame.sequence);
+                s.rf_ingest_stats.accepted += 1;
+                s.tick += 1;
+                let tick = s.tick;
+                let update = rf_observation_to_sensing_update(frame, tick);
+
+                if let Ok(json) = serde_json::to_string(&update) {
+                    let _ = s.tx.send(json);
+                }
+                s.latest_update = Some(update);
+            }
+            Err(e) => {
+                warn!("RF-direct UDP recv error: {e}");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+}
 
 async fn simulated_data_task(state: SharedState, tick_ms: u64) {
     let mut interval = tokio::time::interval(Duration::from_millis(tick_ms));
@@ -5640,6 +6346,7 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
                 None
             },
             node_features: None,
+            rf_observation: None,
         };
 
         // Populate persons from the sensing update (Kalman-smoothed via tracker).
@@ -5686,8 +6393,7 @@ async fn broadcast_tick_task(state: SharedState, tick_ms: u64) {
                 // this fix the WS path was the only consumer that didn't,
                 // so the UI's "LIVE — ESP32 HARDWARE Connected" banner
                 // stayed green long after the hardware went away.
-                let mut tagged = update.clone();
-                tagged.source = s.effective_source();
+                let tagged = tag_update_for_source(update, &s.effective_source());
                 if let Ok(json) = serde_json::to_string(&tagged) {
                     let _ = s.tx.send(json);
                 }
@@ -5714,6 +6420,14 @@ fn vitals_snapshots_from_sensing_json(
     base_id: &str,
 ) -> Vec<wifi_densepose_sensing_server::mqtt::state::VitalsSnapshot> {
     use wifi_densepose_sensing_server::mqtt::state::VitalsSnapshot;
+
+    if v.get("rf_observation").is_some()
+        || v.get("source")
+            .and_then(|value| value.as_str())
+            .is_some_and(|source| source.starts_with("rf-direct") || source == "rf")
+    {
+        return Vec::new();
+    }
 
     // motion_level string -> motion scalar. "absent"/"none"/"still"/"idle"/""
     // are non-moving; anything else (walking, …) is motion. `fallback` is used
@@ -6418,6 +7132,14 @@ async fn main() {
     info!("  HTTP:      http://localhost:{}", args.http_port);
     info!("  WebSocket: ws://localhost:{}/ws/sensing", args.ws_port);
     info!("  UDP:       0.0.0.0:{} (ESP32 CSI)", args.udp_port);
+    info!(
+        "  USRP UDP:  0.0.0.0:{} (JSON feature frames)",
+        args.usrp_udp_port
+    );
+    info!(
+        "  RF UDP:    {}:{} (versioned RF observations)",
+        args.rf_bind_addr, args.rf_udp_port
+    );
     info!("  UI path:   {}", args.ui_path.display());
     info!("  Source:    {}", args.source);
 
@@ -6432,7 +7154,14 @@ async fn main() {
     // cited as the most damaging evidence of the project misrepresenting its
     // posture. Synthetic-data is now opt-in only — operators who want demo
     // mode must explicitly set `--source simulated` or `CSI_SOURCE=simulated`.
-    let source = match args.source.as_str() {
+    let Some(source_arg) = canonical_source_arg(&args.source) else {
+        error!(
+            "Unknown --source {:?}. Expected one of: auto, wifi, esp32, usrp, rf-direct, simulated",
+            args.source
+        );
+        std::process::exit(78);
+    };
+    let source = match source_arg {
         "auto" => {
             info!("Auto-detecting data source...");
             if probe_esp32(args.udp_port).await {
@@ -6456,10 +7185,21 @@ async fn main() {
                 std::process::exit(78); // EX_CONFIG
             }
         }
-        // "simulate" is a synonym for "simulated" (back-compat alias kept so
-        // existing operators who already opted in don't get broken by this fix).
-        "simulate" => "simulated",
         other => other,
+    };
+
+    let rf_bind_ip: IpAddr = match args.rf_bind_addr.parse::<IpAddr>() {
+        Ok(ip) if ip.is_loopback() => ip,
+        Ok(ip) => {
+            error!(
+                "RF observation UDP must bind to loopback; {ip} is rejected until authenticated transport is implemented"
+            );
+            std::process::exit(78);
+        }
+        Err(error) => {
+            error!("Invalid --rf-bind-addr {:?}: {error}", args.rf_bind_addr);
+            std::process::exit(78);
+        }
     };
 
     info!("Data source: {source}");
@@ -6650,6 +7390,9 @@ async fn main() {
         tick: 0,
         source: source.into(),
         last_esp32_frame: None,
+        last_rf_frame: None,
+        last_rf_sequence: None,
+        rf_ingest_stats: RfIngestStats::default(),
         tx,
         intro: wifi_densepose_sensing_server::introspection::IntrospectionState::new(),
         intro_tx,
@@ -6742,12 +7485,25 @@ async fn main() {
             tokio::spawn(udp_receiver_task(state.clone(), args.udp_port));
             tokio::spawn(broadcast_tick_task(state.clone(), args.tick_ms));
         }
+        "usrp" => {
+            tokio::spawn(usrp_udp_receiver_task(state.clone(), args.usrp_udp_port));
+            tokio::spawn(broadcast_tick_task(state.clone(), args.tick_ms));
+        }
+        "rf-direct" | "rf" => {
+            tokio::spawn(rf_direct_udp_receiver_task(
+                state.clone(),
+                rf_bind_ip,
+                args.rf_udp_port,
+            ));
+            tokio::spawn(broadcast_tick_task(state.clone(), args.tick_ms));
+        }
         "wifi" => {
             tokio::spawn(windows_wifi_task(state.clone(), args.tick_ms));
         }
-        _ => {
+        "simulated" => {
             tokio::spawn(simulated_data_task(state.clone(), args.tick_ms));
         }
+        _ => unreachable!("source was canonicalized before task startup"),
     }
 
     // ADR-050: Parse bind address once, use for all listeners
@@ -7609,5 +8365,177 @@ mod export_rvf_mode_tests {
     fn no_export_flag_never_emits() {
         assert!(!export_emits_placeholder_demo(false, false, false));
         assert!(!export_emits_placeholder_demo(false, true, false));
+    }
+}
+
+#[cfg(test)]
+mod rf_observation_contract_tests {
+    use super::*;
+
+    fn valid_observation_json(sequence: u64) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "schema": "ruview.rf_observation",
+            "protocol_version": 1,
+            "source": "openisac-rd",
+            "frame_id": sequence,
+            "sequence": sequence,
+            "source_timestamp_ns": null,
+            "received_at_ns": 1000,
+            "config_hash": format!("sha256:{}", "a".repeat(64)),
+            "freshness": "fresh",
+            "center_freq_hz": 3.1e9,
+            "sample_rate_hz": 50e6,
+            "feature_rate_hz": 10.0,
+            "observation": {
+                "range_doppler": {
+                    "amplitude": 4.0,
+                    "snr_db": 12.0,
+                    "range_profile": [0.0, 1.0],
+                    "peaks": [{
+                        "kind": "unclassified_peak",
+                        "range_bin": 7,
+                        "doppler_bin": 6,
+                        "strength_db": 12.0
+                    }],
+                    "frame_format": 2,
+                    "range_fft_size": 12,
+                    "doppler_fft_size": 8,
+                    "rd_shape": [8, 12],
+                    "mean_amplitude": 0.5
+                },
+                "cfar": {
+                    "hits": 1,
+                    "shown_hits": 1,
+                    "stats": {},
+                    "candidate_clusters": [{
+                        "range_bin": 7,
+                        "doppler_bin": 6,
+                        "strength_db": 12.0,
+                        "cluster_size": 2,
+                        "centroid_range_bin": 7.25,
+                        "centroid_doppler_bin": 5.75
+                    }]
+                },
+                "micro_doppler": null
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn rf_observation_v1_parses_as_observation_not_inference() {
+        let observation = parse_rf_observation(&valid_observation_json(42)).unwrap();
+
+        assert_eq!(observation.schema, "ruview.rf_observation");
+        assert_eq!(observation.protocol_version, 1);
+        assert_eq!(observation.sequence, 42);
+        assert_eq!(observation.observation.cfar.candidate_clusters.len(), 1);
+    }
+
+    #[test]
+    fn rf_observation_rejects_wrong_version_or_mismatched_frame_id() {
+        let mut wrong_version: serde_json::Value =
+            serde_json::from_slice(&valid_observation_json(42)).unwrap();
+        wrong_version["protocol_version"] = serde_json::json!(2);
+        assert!(parse_rf_observation(&serde_json::to_vec(&wrong_version).unwrap()).is_err());
+
+        let mut mismatched: serde_json::Value =
+            serde_json::from_slice(&valid_observation_json(42)).unwrap();
+        mismatched["frame_id"] = serde_json::json!(41);
+        assert!(parse_rf_observation(&serde_json::to_vec(&mismatched).unwrap()).is_err());
+    }
+
+    #[test]
+    fn rf_observation_rejects_unbounded_diagnostics() {
+        let mut oversized: serde_json::Value =
+            serde_json::from_slice(&valid_observation_json(42)).unwrap();
+        oversized["observation"]["range_doppler"]["range_profile"] =
+            serde_json::json!(vec![0.0; MAX_RF_RANGE_BINS + 1]);
+
+        assert!(parse_rf_observation(&serde_json::to_vec(&oversized).unwrap()).is_err());
+    }
+
+    #[test]
+    fn rf_sequence_gate_rejects_duplicate_and_out_of_order_frames() {
+        assert_eq!(
+            classify_rf_sequence(None, 10),
+            RfSequenceDisposition::Accept
+        );
+        assert_eq!(
+            classify_rf_sequence(Some(10), 11),
+            RfSequenceDisposition::Accept
+        );
+        assert_eq!(
+            classify_rf_sequence(Some(10), 10),
+            RfSequenceDisposition::Duplicate
+        );
+        assert_eq!(
+            classify_rf_sequence(Some(10), 9),
+            RfSequenceDisposition::OutOfOrder
+        );
+    }
+
+    #[test]
+    fn rf_direct_capabilities_disable_human_inference() {
+        let capabilities = source_capabilities("rf-direct", true);
+
+        assert!(capabilities.rf_observation);
+        assert!(!capabilities.motion);
+        assert!(!capabilities.presence);
+        assert!(!capabilities.person_count);
+        assert!(!capabilities.pose);
+        assert!(!capabilities.vitals);
+    }
+
+    #[test]
+    fn source_typos_are_rejected_instead_of_becoming_simulation() {
+        assert_eq!(canonical_source_arg("rf"), Some("rf-direct"));
+        assert_eq!(canonical_source_arg("simulate"), Some("simulated"));
+        assert_eq!(canonical_source_arg("rf-direc"), None);
+        assert_eq!(canonical_source_arg(""), None);
+    }
+
+    #[test]
+    fn rf_direct_becomes_offline_after_freshness_timeout() {
+        assert!(!source_is_offline(
+            "rf-direct",
+            Some(Duration::from_secs(1))
+        ));
+        assert!(source_is_offline(
+            "rf-direct",
+            Some(RF_OFFLINE_TIMEOUT + Duration::from_millis(1))
+        ));
+    }
+
+    #[test]
+    fn rf_observation_update_contains_no_human_inference() {
+        let observation = parse_rf_observation(&valid_observation_json(42)).unwrap();
+
+        let update = rf_observation_to_sensing_update(observation, 7);
+
+        assert_eq!(update.classification.motion_level, "unverified");
+        assert!(!update.classification.presence);
+        assert_eq!(update.classification.confidence, 0.0);
+        assert!(update.vital_signs.is_none());
+        assert!(update.persons.is_none());
+        assert!(update.estimated_persons.is_none());
+        assert!(update.enhanced_motion.is_none());
+        assert!(update.rf_observation.is_some());
+    }
+
+    #[test]
+    fn stale_rf_update_clears_candidates_and_inference_fields() {
+        let observation = parse_rf_observation(&valid_observation_json(42)).unwrap();
+        let update = rf_observation_to_sensing_update(observation, 7);
+
+        let stale = tag_update_for_source(&update, "rf-direct:offline");
+
+        let rf = stale.rf_observation.unwrap();
+        assert_eq!(rf.freshness, "stale");
+        assert_eq!(rf.observation.cfar.hits, 0);
+        assert!(rf.observation.cfar.candidate_clusters.is_empty());
+        assert!(!stale.classification.presence);
+        assert!(stale.persons.is_none());
+        assert!(stale.vital_signs.is_none());
     }
 }

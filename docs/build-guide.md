@@ -13,6 +13,8 @@ Covers every way to build, run, and deploy the system -- from a zero-hardware ve
 5. [Docker Deployment](#5-docker-deployment)
 6. [ESP32 Hardware Setup](#6-esp32-hardware-setup)
 7. [Environment-Specific Builds](#7-environment-specific-builds)
+8. [USRP / SDR Feature Bridge](integrations/usrp-sdr.md)
+9. [USRP X310 RF-Direct Integration](integrations/x310-rf-direct.md)
 
 ---
 

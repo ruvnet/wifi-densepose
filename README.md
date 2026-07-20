@@ -117,6 +117,14 @@ pip install "ruview[client]"              # or: pip install "wifi-densepose[clie
 # from ruview import BreathingExtractor, HeartRateExtractor   # equivalent to:
 # from wifi_densepose import BreathingExtractor, HeartRateExtractor
 # from ruview.client import SensingClient, RuViewMqttClient
+
+# Option 5: OpenISAC / X310 observation bridge (no ESP32 required)
+# RF UDP is loopback-only and carries versioned, paired observations—not presence/pose/vitals.
+cd v2
+cargo run -p wifi-densepose-sensing-server -- --source rf-direct --rf-bind-addr 127.0.0.1 --rf-udp-port 5020 --http-port 3000 --ui-path ../ui
+python ../scripts/openisac_to_ruview_bridge.py --demo --ruview-host 127.0.0.1 --ruview-port 5020
+# Live mode requires raw + metadata sidecars with the same OpenISAC frame ID.
+# See docs/integrations/x310-rf-direct.md.
 ```
 
 [![PyPI ruview](https://img.shields.io/pypi/v/ruview?label=ruview)](https://pypi.org/project/ruview/) [![PyPI wifi-densepose](https://img.shields.io/pypi/v/wifi-densepose?label=wifi-densepose)](https://pypi.org/project/wifi-densepose/)

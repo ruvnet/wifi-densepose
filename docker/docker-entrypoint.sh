@@ -17,6 +17,10 @@
 #                                 the server no longer silently falls back to
 #                                 synthetic data — that's now opt-in only).
 #                    esp32      — listen for UDP CSI on the configured port.
+#                    usrp       — listen for USRP/SDR JSON feature frames on
+#                                 USRP_UDP_PORT (default 5010).
+#                    rf-direct  - listen on loopback for versioned, paired
+#                                 OpenISAC observations (RF_UDP_PORT, default 5020).
 #                    wifi       — Windows-native WiFi capture.
 #                    simulated  — explicit demo mode with synthetic CSI.
 #                  Default is `auto`. Set CSI_SOURCE=simulated when you want
@@ -103,6 +107,9 @@ if [ "${1#-}" != "$1" ] || [ -z "$1" ]; then
         --ui-path /app/ui \
         --http-port 3000 \
         --ws-port 3001 \
+        --usrp-udp-port "${USRP_UDP_PORT:-5010}" \
+        --rf-udp-port "${RF_UDP_PORT:-5020}" \
+        --rf-bind-addr "${RF_BIND_ADDR:-127.0.0.1}" \
         --bind-addr "${RUVIEW_BIND_ADDR:-0.0.0.0}" \
         "$@"
 fi
