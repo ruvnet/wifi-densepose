@@ -88,12 +88,24 @@ pub struct TrainingConfig {
     pub lora_profile: Option<String>,
 }
 
-fn default_epochs() -> u32 { 100 }
-fn default_batch_size() -> u32 { 8 }
-fn default_learning_rate() -> f64 { 0.001 }
-fn default_weight_decay() -> f64 { 1e-4 }
-fn default_early_stopping_patience() -> u32 { 20 }
-fn default_warmup_epochs() -> u32 { 5 }
+fn default_epochs() -> u32 {
+    100
+}
+fn default_batch_size() -> u32 {
+    8
+}
+fn default_learning_rate() -> f64 {
+    0.001
+}
+fn default_weight_decay() -> f64 {
+    1e-4
+}
+fn default_early_stopping_patience() -> u32 {
+    20
+}
+fn default_warmup_epochs() -> u32 {
+    5
+}
 
 impl Default for TrainingConfig {
     fn default() -> Self {
@@ -127,7 +139,9 @@ pub struct PretrainRequest {
     pub lr: f64,
 }
 
-fn default_pretrain_epochs() -> u32 { 50 }
+fn default_pretrain_epochs() -> u32 {
+    50
+}
 
 /// Request body for `POST /api/v1/train/lora`.
 #[derive(Debug, Deserialize)]
@@ -141,19 +155,34 @@ pub struct LoraTrainRequest {
     pub epochs: u32,
 }
 
-fn default_lora_rank() -> u8 { 8 }
-fn default_lora_epochs() -> u32 { 30 }
+fn default_lora_rank() -> u8 {
+    8
+}
+fn default_lora_epochs() -> u32 {
+    30
+}
 
 /// Current training status (returned by `GET /api/v1/train/status`).
+///
+/// NOTE (ADR-155 §2.1): `val_pck` / `best_pck` carry the **torso-HEIGHT** PCK
+/// proxy from [`compute_pck_torso_height`] (pixel-space, nose→hip-midpoint),
+/// which is **deliberately distinct** from the canonical hip↔hip
+/// `wifi_densepose_train::pck_canonical`. The wire field names are kept for
+/// API/UI back-compat, but these are torso-height progress proxies, NOT the
+/// canonical reported-accuracy PCK@0.2 and must not be conflated with it.
+/// `val_oks` is a rough `0.88 × pck` proxy, not a COCO OKS.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrainingStatus {
     pub active: bool,
     pub epoch: u32,
     pub total_epochs: u32,
     pub train_loss: f64,
+    /// Torso-HEIGHT PCK@0.2 proxy (NOT canonical hip↔hip PCK — see struct doc).
     pub val_pck: f64,
+    /// Rough OKS proxy (`0.88 × val_pck`), NOT a COCO OKS.
     pub val_oks: f64,
     pub lr: f64,
+    /// Best torso-HEIGHT PCK@0.2 proxy seen so far (NOT canonical PCK).
     pub best_pck: f64,
     pub best_epoch: u32,
     pub patience_remaining: u32,
@@ -181,13 +210,19 @@ impl Default for TrainingStatus {
 }
 
 /// Progress update sent over WebSocket.
+///
+/// NOTE (ADR-155 §2.1): `val_pck`/`val_oks` are the torso-HEIGHT PCK proxy and
+/// its `0.88×` OKS proxy — NOT the canonical hip↔hip `pck_canonical`/COCO OKS.
+/// See [`TrainingStatus`] and [`compute_pck_torso_height`].
 #[derive(Debug, Clone, Serialize)]
 pub struct TrainingProgress {
     pub epoch: u32,
     pub batch: u32,
     pub total_batches: u32,
     pub train_loss: f64,
+    /// Torso-HEIGHT PCK@0.2 proxy (NOT canonical hip↔hip PCK).
     pub val_pck: f64,
+    /// Rough OKS proxy (`0.88 × val_pck`), NOT a COCO OKS.
     pub val_oks: f64,
     pub lr: f64,
     pub phase: String,
@@ -360,7 +395,11 @@ fn extract_features_for_frame(
         let mut sum = 0.0f64;
         let mut sq_sum = 0.0f64;
         for w in window {
-            let a = if k < w.subcarriers.len() { w.subcarriers[k] } else { 0.0 };
+            let a = if k < w.subcarriers.len() {
+                w.subcarriers[k]
+            } else {
+                0.0
+            };
             sum += a;
             sq_sum += a * a;
         }
@@ -373,8 +412,16 @@ fn extract_features_for_frame(
     for k in 0..n_sub {
         let grad = match prev_frame {
             Some(prev) => {
-                let cur = if k < frame.subcarriers.len() { frame.subcarriers[k] } else { 0.0 };
-                let prv = if k < prev.subcarriers.len() { prev.subcarriers[k] } else { 0.0 };
+                let cur = if k < frame.subcarriers.len() {
+                    frame.subcarriers[k]
+                } else {
+                    0.0
+                };
+                let prv = if k < prev.subcarriers.len() {
+                    prev.subcarriers[k]
+                } else {
+                    0.0
+                };
                 (cur - prv).abs()
             }
             None => 0.0,
@@ -426,8 +473,16 @@ fn extract_features_for_frame(
             if n_cmp > 0 {
                 let diff: f64 = (0..n_cmp)
                     .map(|k| {
-                        let c = if k < frame.subcarriers.len() { frame.subcarriers[k] } else { 0.0 };
-                        let p = if k < prev.subcarriers.len() { prev.subcarriers[k] } else { 0.0 };
+                        let c = if k < frame.subcarriers.len() {
+                            frame.subcarriers[k]
+                        } else {
+                            0.0
+                        };
+                        let p = if k < prev.subcarriers.len() {
+                            prev.subcarriers[k]
+                        } else {
+                            0.0
+                        };
                         (c - p).powi(2)
                     })
                     .sum::<f64>()
@@ -492,8 +547,16 @@ fn compute_teacher_targets(frame: &RecordedFrame, prev_frame: Option<&RecordedFr
             if n_cmp > 0 {
                 let diff: f64 = (0..n_cmp)
                     .map(|k| {
-                        let c = if k < frame.subcarriers.len() { frame.subcarriers[k] } else { 0.0 };
-                        let p = if k < prev.subcarriers.len() { prev.subcarriers[k] } else { 0.0 };
+                        let c = if k < frame.subcarriers.len() {
+                            frame.subcarriers[k]
+                        } else {
+                            0.0
+                        };
+                        let p = if k < prev.subcarriers.len() {
+                            prev.subcarriers[k]
+                        } else {
+                            0.0
+                        };
                         (c - p).powi(2)
                     })
                     .sum::<f64>()
@@ -503,7 +566,9 @@ fn compute_teacher_targets(frame: &RecordedFrame, prev_frame: Option<&RecordedFr
                 0.0
             }
         }
-        None => (variance / (mean_amp * mean_amp + 1e-9)).sqrt().clamp(0.0, 1.0),
+        None => (variance / (mean_amp * mean_amp + 1e-9))
+            .sqrt()
+            .clamp(0.0, 1.0),
     };
 
     let is_walking = motion_score > 0.55;
@@ -552,23 +617,23 @@ fn compute_teacher_targets(frame: &RecordedFrame, prev_frame: Option<&RecordedFr
 
     // COCO 17-keypoint offsets from hip center.
     let kp_offsets: [(f64, f64); 17] = [
-        (  0.0,  -80.0), // 0  nose
-        ( -8.0,  -88.0), // 1  left_eye
-        (  8.0,  -88.0), // 2  right_eye
-        (-16.0,  -82.0), // 3  left_ear
-        ( 16.0,  -82.0), // 4  right_ear
-        (-30.0,  -50.0), // 5  left_shoulder
-        ( 30.0,  -50.0), // 6  right_shoulder
-        (-45.0,  -15.0), // 7  left_elbow
-        ( 45.0,  -15.0), // 8  right_elbow
-        (-50.0,   20.0), // 9  left_wrist
-        ( 50.0,   20.0), // 10 right_wrist
-        (-20.0,   20.0), // 11 left_hip
-        ( 20.0,   20.0), // 12 right_hip
-        (-22.0,   70.0), // 13 left_knee
-        ( 22.0,   70.0), // 14 right_knee
-        (-24.0,  120.0), // 15 left_ankle
-        ( 24.0,  120.0), // 16 right_ankle
+        (0.0, -80.0),   // 0  nose
+        (-8.0, -88.0),  // 1  left_eye
+        (8.0, -88.0),   // 2  right_eye
+        (-16.0, -82.0), // 3  left_ear
+        (16.0, -82.0),  // 4  right_ear
+        (-30.0, -50.0), // 5  left_shoulder
+        (30.0, -50.0),  // 6  right_shoulder
+        (-45.0, -15.0), // 7  left_elbow
+        (45.0, -15.0),  // 8  right_elbow
+        (-50.0, 20.0),  // 9  left_wrist
+        (50.0, 20.0),   // 10 right_wrist
+        (-20.0, 20.0),  // 11 left_hip
+        (20.0, 20.0),   // 12 right_hip
+        (-22.0, 70.0),  // 13 left_knee
+        (22.0, 70.0),   // 14 right_knee
+        (-24.0, 120.0), // 15 left_ankle
+        (24.0, 120.0),  // 16 right_ankle
     ];
 
     const TORSO_KP: [usize; 4] = [5, 6, 11, 12];
@@ -654,7 +719,11 @@ fn extract_features_and_targets(
 
     for (i, frame) in frames.iter().enumerate() {
         // Build sliding window of up to VARIANCE_WINDOW preceding frames.
-        let start = if i >= VARIANCE_WINDOW { i - VARIANCE_WINDOW } else { 0 };
+        let start = if i >= VARIANCE_WINDOW {
+            i - VARIANCE_WINDOW
+        } else {
+            0
+        };
         let window: Vec<&RecordedFrame> = frames[start..i].iter().collect();
         let prev = if i > 0 { Some(&frames[i - 1]) } else { None };
 
@@ -689,7 +758,11 @@ fn extract_features_and_targets(
         .map(|j| {
             let var = (sq_mean[j] - mean[j] * mean[j]).max(0.0);
             let s = var.sqrt();
-            if s < 1e-9 { 1.0 } else { s } // avoid division by zero
+            if s < 1e-9 {
+                1.0
+            } else {
+                s
+            } // avoid division by zero
         })
         .collect();
 
@@ -733,11 +806,39 @@ fn compute_mse(predictions: &[Vec<f64>], targets: &[Vec<f64>]) -> f64 {
     total / (n * predictions[0].len().max(1) as f64)
 }
 
-/// Compute PCK@0.2 (Percentage of Correct Keypoints at threshold 0.2 of torso height).
+/// Compute **PCK_torso-height@`threshold`** — a metric DELIBERATELY DISTINCT
+/// from the canonical hip↔hip PCK (`wifi_densepose_train::pck_canonical`).
 ///
-/// Torso height is estimated as the distance between nose (kp 0) and the midpoint
-/// of the two hips (kps 11, 12).
-fn compute_pck(predictions: &[Vec<f64>], targets: &[Vec<f64>], threshold_ratio: f64) -> f64 {
+/// # Why this is `_torso_height`, not the canonical PCK (ADR-155 §2.1 / §8 — RESOLVED)
+///
+/// ADR-155 unified the workspace's reported-accuracy PCK to ONE definition:
+/// **hip↔hip torso WIDTH**, on `[0,1]`-normalized `[17,2]` keypoints. This
+/// live-server function is **not** that metric and must never be conflated
+/// with it. It is genuinely different on three load-bearing axes:
+///
+/// 1. **Coordinate space.** It operates on **pixel-space** teacher targets on a
+///    640×480 canvas (`compute_teacher_targets`), not `[0,1]` MM-Fi coords —
+///    hence the `.max(50.0)` *pixel* torso floor below.
+/// 2. **Normalization axis.** It normalizes by torso **HEIGHT** (vertical
+///    nose→hip-midpoint distance), not canonical torso **WIDTH** (hip↔hip).
+///    Routing through `pck_canonical` would silently change which body axis
+///    sets the scale, altering every live number this drives.
+/// 3. **Layout.** It consumes `[17×3]`-flattened `Vec<Vec<f64>>` (x,y,z), not
+///    `ndarray::Array2<f32>`; `wifi-densepose-sensing-server` does not depend on
+///    `wifi-densepose-train` or `ndarray`.
+///
+/// Because the math is load-bearing (a running training service's progress
+/// display), ADR-155 Milestone-1 resolves the label collision by **relabelling**
+/// rather than forcing a false identity: the function and the metric it produces
+/// are named `_torso_height` everywhere they surface (this fn, the log line),
+/// and the `val_pck`/`best_pck` API fields document the divergence. The reported
+/// in-loop value is a torso-HEIGHT PCK proxy on heuristic teacher targets — it is
+/// NOT a claim-grade accuracy number and is NOT the canonical hip↔hip PCK@0.2.
+fn compute_pck_torso_height(
+    predictions: &[Vec<f64>],
+    targets: &[Vec<f64>],
+    threshold_ratio: f64,
+) -> f64 {
     if predictions.is_empty() {
         return 0.0;
     }
@@ -814,9 +915,13 @@ fn deterministic_shuffle(n: usize, seed: u64) -> Vec<usize> {
         return indices;
     }
     // Fisher-Yates with LCG.
-    let mut rng = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    let mut rng = seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     for i in (1..n).rev() {
-        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        rng = rng
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let j = (rng >> 33) as usize % (i + 1);
         indices.swap(i, j);
     }
@@ -856,8 +961,13 @@ async fn real_training_loop(
 
     {
         let progress = TrainingProgress {
-            epoch: 0, batch: 0, total_batches: 0,
-            train_loss: 0.0, val_pck: 0.0, val_oks: 0.0, lr: 0.0,
+            epoch: 0,
+            batch: 0,
+            total_batches: 0,
+            train_loss: 0.0,
+            val_pck: 0.0,
+            val_oks: 0.0,
+            lr: 0.0,
             phase: "loading_data".to_string(),
         };
         if let Ok(json) = serde_json::to_string(&progress) {
@@ -877,8 +987,13 @@ async fn real_training_loop(
             frames.len()
         );
         let fail = TrainingProgress {
-            epoch: 0, batch: 0, total_batches: 0,
-            train_loss: 0.0, val_pck: 0.0, val_oks: 0.0, lr: 0.0,
+            epoch: 0,
+            batch: 0,
+            total_batches: 0,
+            train_loss: 0.0,
+            val_pck: 0.0,
+            val_oks: 0.0,
+            lr: 0.0,
             phase: "failed_insufficient_data".to_string(),
         };
         if let Ok(json) = serde_json::to_string(&fail) {
@@ -897,8 +1012,13 @@ async fn real_training_loop(
 
     {
         let progress = TrainingProgress {
-            epoch: 0, batch: 0, total_batches: 0,
-            train_loss: 0.0, val_pck: 0.0, val_oks: 0.0, lr: 0.0,
+            epoch: 0,
+            batch: 0,
+            total_batches: 0,
+            train_loss: 0.0,
+            val_pck: 0.0,
+            val_oks: 0.0,
+            lr: 0.0,
             phase: "extracting_features".to_string(),
         };
         if let Ok(json) = serde_json::to_string(&progress) {
@@ -1083,8 +1203,11 @@ async fn real_training_loop(
 
         let val_preds = forward(val_x, &weights, &bias, n_feat, N_TARGETS);
         let val_mse = compute_mse(&val_preds, val_y);
-        let val_pck = compute_pck(&val_preds, val_y, 0.2);
-        let val_oks = val_pck * 0.88; // approximate OKS from PCK
+        // torso-HEIGHT PCK proxy (NOT canonical hip↔hip PCK@0.2 — see
+        // compute_pck_torso_height / ADR-155 §2.1). Surfaced as `val_pck` for
+        // wire-format back-compat but is a torso-height proxy, not a claim.
+        let val_pck = compute_pck_torso_height(&val_preds, val_y, 0.2);
+        let val_oks = val_pck * 0.88; // rough OKS proxy from torso-height PCK (NOT canonical OKS)
 
         let val_progress = TrainingProgress {
             epoch,
@@ -1141,16 +1264,17 @@ async fn real_training_loop(
             };
         }
 
+        // Logs label this `pck_torso_h@0.2` so it is never read as the canonical
+        // hip↔hip PCK@0.2 (ADR-155 §2.1). It is a torso-HEIGHT proxy on heuristic
+        // teacher targets, not a claim-grade accuracy number.
         info!(
-            "Epoch {epoch}/{total_epochs}: loss={train_loss:.6}, val_pck={val_pck:.4}, \
-             val_mse={val_mse:.4}, best_pck={best_pck:.4}@{best_epoch}, patience={patience_remaining}"
+            "Epoch {epoch}/{total_epochs}: loss={train_loss:.6}, pck_torso_h@0.2={val_pck:.4}, \
+             val_mse={val_mse:.4}, best_pck_torso_h={best_pck:.4}@{best_epoch}, patience={patience_remaining}"
         );
 
         // Early stopping.
         if patience_remaining == 0 {
-            info!(
-                "Early stopping at epoch {epoch} (best={best_epoch}, PCK={best_pck:.4})"
-            );
+            info!("Early stopping at epoch {epoch} (best={best_epoch}, pck_torso_h@0.2={best_pck:.4})");
             let stop_progress = TrainingProgress {
                 epoch,
                 batch: total_batches,
@@ -1287,7 +1411,7 @@ async fn real_training_loop(
                 error!("Failed to write trained model RVF: {e}");
             } else {
                 info!(
-                    "Trained model saved: {} ({} params, PCK={:.4})",
+                    "Trained model saved: {} ({} params, pck_torso_h@0.2={:.4})",
                     rvf_path.display(),
                     total_params,
                     best_pck
@@ -1420,8 +1544,8 @@ pub fn infer_pose_from_model(
         }
 
         // Confidence based on feature quality: mean absolute value of normalized features.
-        let feat_magnitude: f64 = features.iter().map(|v| v.abs()).sum::<f64>()
-            / features.len().max(1) as f64;
+        let feat_magnitude: f64 =
+            features.iter().map(|v| v.abs()).sum::<f64>() / features.len().max(1) as f64;
         coords[3] = (1.0 / (1.0 + (-feat_magnitude + 1.0).exp())).clamp(0.1, 0.99);
 
         keypoints.push(coords);
@@ -1484,8 +1608,7 @@ async fn start_training(
 
     let state_clone = state.clone();
     let handle = tokio::spawn(async move {
-        real_training_loop(state_clone, progress_tx, config, dataset_ids, "supervised")
-            .await;
+        real_training_loop(state_clone, progress_tx, config, dataset_ids, "supervised").await;
     });
 
     {
@@ -1571,8 +1694,7 @@ async fn start_pretrain(
     let state_clone = state.clone();
     let dataset_ids = body.dataset_ids.clone();
     let handle = tokio::spawn(async move {
-        real_training_loop(state_clone, progress_tx, config, dataset_ids, "pretrain")
-            .await;
+        real_training_loop(state_clone, progress_tx, config, dataset_ids, "pretrain").await;
     });
 
     {
@@ -1632,8 +1754,7 @@ async fn start_lora_training(
     let state_clone = state.clone();
     let dataset_ids = body.dataset_ids.clone();
     let handle = tokio::spawn(async move {
-        real_training_loop(state_clone, progress_tx, config, dataset_ids, "lora")
-            .await;
+        real_training_loop(state_clone, progress_tx, config, dataset_ids, "lora").await;
     });
 
     {
@@ -1677,9 +1798,7 @@ async fn handle_train_ws_client(mut socket: WebSocket, state: AppState) {
                 "type": "status",
                 "data": serde_json::from_str::<serde_json::Value>(&json).unwrap_or_default(),
             });
-            let _ = socket
-                .send(Message::Text(msg.to_string().into()))
-                .await;
+            let _ = socket.send(Message::Text(msg.to_string().into())).await;
         }
     }
 
@@ -1888,13 +2007,72 @@ mod tests {
     fn pck_perfect_prediction() {
         // Build targets where torso height is large so threshold is generous.
         let mut tgt = vec![0.0; N_TARGETS];
-        tgt[1] = 0.0;   // nose y
+        tgt[1] = 0.0; // nose y
         tgt[34] = 100.0; // left hip y
         tgt[37] = 100.0; // right hip y
         let preds = vec![tgt.clone()];
         let targets = vec![tgt];
-        let pck = compute_pck(&preds, &targets, 0.2);
-        assert!((pck - 1.0).abs() < 1e-9, "Perfect prediction should give PCK=1.0");
+        let pck = compute_pck_torso_height(&preds, &targets, 0.2);
+        assert!(
+            (pck - 1.0).abs() < 1e-9,
+            "Perfect prediction should give PCK=1.0"
+        );
+    }
+
+    /// ADR-155 §2.1 / §8 (RESOLVED): the live-server PCK is torso-HEIGHT
+    /// normalized and is **labelled distinctly** from the canonical hip↔hip
+    /// PCK. This test pins the *divergence*: the same prediction error gives a
+    /// different verdict under torso-HEIGHT (nose→hip, vertical) than under an
+    /// independent hip↔hip-WIDTH (horizontal) computation — proving the two are
+    /// genuinely different metrics, so relabelling (not unifying) is correct.
+    ///
+    /// Construction (pixel-space, one keypoint of interest = left_shoulder kp5):
+    /// * nose(0).y = 0,  hips(11,12).y = 100  ⇒ torso HEIGHT = 100.
+    ///   ⇒ torso-height threshold @0.2 = 20 px.
+    /// * hips x: left(11).x = 0, right(12).x = 10 ⇒ torso WIDTH = 10.
+    ///   ⇒ a hip↔hip-WIDTH threshold @0.2 = 2 px.
+    /// * Predicted kp5 is 5 px off in x from its target.
+    ///   - torso-HEIGHT verdict: 5 ≤ 20 ⇒ CORRECT.
+    ///   - hip↔hip-WIDTH verdict: 5 > 2  ⇒ WRONG.
+    /// The two normalizers must disagree on this exact sample.
+    #[test]
+    fn torso_pck_is_labelled_distinctly_from_canonical() {
+        // Targets: hips define both axes; kp5 is the joint under test.
+        let mut tgt = vec![0.0; N_TARGETS];
+        tgt[0 * 3] = 0.0; // nose x
+        tgt[0 * 3 + 1] = 0.0; // nose y
+        tgt[5 * 3] = 0.0; // l_shoulder x (target)
+        tgt[5 * 3 + 1] = 50.0; // l_shoulder y
+        tgt[11 * 3] = 0.0; // l_hip x
+        tgt[11 * 3 + 1] = 100.0; // l_hip y
+        tgt[12 * 3] = 10.0; // r_hip x  ⇒ hip↔hip WIDTH = 10
+        tgt[12 * 3 + 1] = 100.0; // r_hip y ⇒ torso HEIGHT (nose→hip) = 100
+
+        // Prediction: identical except kp5 x is +5 px off.
+        let mut pred = tgt.clone();
+        pred[5 * 3] = 5.0; // 5 px error in x on kp5
+
+        // Live-server torso-HEIGHT PCK: error 5 ≤ 0.2×100 = 20 ⇒ kp5 counts
+        // correct, so ALL 17 joints correct ⇒ PCK = 1.0.
+        let pck_height = compute_pck_torso_height(&[pred.clone()], &[tgt.clone()], 0.2);
+        assert!(
+            (pck_height - 1.0).abs() < 1e-9,
+            "torso-HEIGHT PCK should pass kp5 (5px ≤ 20px), got {pck_height}"
+        );
+
+        // Independent hip↔hip-WIDTH verdict on kp5: error 5 > 0.2×10 = 2 ⇒ kp5
+        // is WRONG. This is the canonical normalization axis (width, not height).
+        let hip_width = (tgt[12 * 3] - tgt[11 * 3]).abs(); // = 10
+        let kp5_err = (pred[5 * 3] - tgt[5 * 3]).abs(); // = 5
+        let width_threshold = 0.2 * hip_width; // = 2
+        assert!(
+            kp5_err > width_threshold,
+            "hip↔hip-WIDTH should REJECT kp5 (5px > 2px) — the two metrics must disagree"
+        );
+
+        // Therefore torso-HEIGHT PCK (1.0) ≠ the hip↔hip-WIDTH verdict on this
+        // sample: the live `val_pck` is genuinely a different metric and is
+        // correctly labelled `pck_torso_h`, never conflated with canonical PCK.
     }
 
     #[test]

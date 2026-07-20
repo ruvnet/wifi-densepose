@@ -115,7 +115,12 @@ export interface TrainJobResult {
 /** Output of ruview_job_status. */
 export interface JobStatusResult {
   job_id: string;
-  status: "queued" | "running" | "done" | "failed";
+  /**
+   * 'unknown' is only ever produced by post-restart reconciliation: a record
+   * frozen at 'running' whose owning process is gone and whose log carries no
+   * exit-code marker (see reason).
+   */
+  status: "queued" | "running" | "done" | "failed" | "unknown";
   progress_pct?: number | undefined;
   /** Most recent log lines (last 20). */
   recent_log: string[];
@@ -124,6 +129,8 @@ export interface JobStatusResult {
   epochs_done?: number | undefined;
   /** Total epochs scheduled. */
   epochs_total?: number | undefined;
+  /** Explanation attached when status was reconciled to 'unknown'. */
+  reason?: string | undefined;
 }
 
 // ── Vitals (ADR-124 §6 Python surface parity: ws.py:74-88) ───────────────

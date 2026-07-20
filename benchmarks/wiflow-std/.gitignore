@@ -1,0 +1,26 @@
+# Upstream clone (WiFlow-STD, DY2434) -- never commit third-party code/weights
+upstream/
+
+# Local python env
+.venv/
+
+# Downloaded data / artifacts
+data/
+downloads/
+*.pth
+*.pt
+*.npy
+*.npz
+*.zip
+*.mat
+*.safetensors
+results/parity_fixture.json
+__pycache__/
+*.onnx
+
+# Committed ground truth: corruption masks for the pristine Kaggle download.
+# remote/clean_v2.py zeroes the corrupted source windows IN PLACE, so these
+# masks CANNOT be regenerated from a cleaned copy (generate_corruption_masks.py
+# documents the criteria and reproduces them only from a fresh download).
+!results/nan_windows_mask.npy
+!results/big_windows_mask.npy

@@ -22,8 +22,16 @@
 //! - Host ABI wiring: `hc_state_get`, `hc_state_set`, `hc_event_fire`, etc.
 //!   (P2 — requires ADR-127 state machine API freeze first).
 //! - Config entry lifecycle + hot-load (P3).
-//! - Cog registry distribution + Ed25519 signature verification (P4).
-//! - Permission enforcement (P5).
+//!
+//! ## Now enforced (ADR-162)
+//!
+//! - **Ed25519 signature + SHA-256 integrity verification (P4)** — see
+//!   [`verify`]: the plugin load path hashes the real `.wasm` bytes, checks
+//!   the manifest `wasm_module_hash`, verifies `wasm_module_sig` against
+//!   `publisher_key`, and enforces a [`verify::PluginPolicy`] allowlist.
+//! - **Permission / authority isolation (P5)** — see [`permissions`]: a
+//!   plugin's `hc_state_set` writes are gated against the entity domains/
+//!   globs it declared in `homecore_permissions`.
 //!
 //! ## Feature flags
 //!
@@ -35,9 +43,11 @@
 pub mod error;
 pub mod host_abi;
 pub mod manifest;
+pub mod permissions;
 pub mod plugin;
 pub mod registry;
 pub mod runtime;
+pub mod verify;
 
 #[cfg(feature = "wasmtime")]
 pub mod wasmtime_runtime;
@@ -45,9 +55,11 @@ pub mod wasmtime_runtime;
 pub use error::PluginError;
 pub use host_abi::{ConfigEntryJson, StateChangedEventJson};
 pub use manifest::{IotClass, IntegrationType, PluginManifest};
+pub use permissions::PermissionSet;
 pub use plugin::{HomeCorePlugin, PluginId};
 pub use registry::PluginRegistry;
 pub use runtime::{InProcessRuntime, LoadedPlugin, PluginRuntime};
+pub use verify::{verify_module, PluginPolicy};
 
 #[cfg(feature = "wasmtime")]
 pub use wasmtime_runtime::{WasmPlugin, WasmtimeRuntime};

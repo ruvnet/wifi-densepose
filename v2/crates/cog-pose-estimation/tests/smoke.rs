@@ -172,3 +172,56 @@ fn manifest_roundtrips() {
     assert_eq!(back.id, "pose-estimation");
     assert_eq!(back.version, "0.0.1");
 }
+
+/// ADR-159 §A1 — the default-config min_confidence threshold must not silently
+/// suppress every `pose.frame`. With the old `default_min_confidence()=0.3` and
+/// the model's per-frame confidence pinned at 0.185, the runtime gate
+/// (`out.confidence >= cfg.min_confidence`) never fired, so a default install
+/// emitted ZERO frames while health reported healthy. This asserts the default
+/// install actually clears its own gate.
+#[test]
+fn default_config_emits_frames_with_real_model() {
+    use cog_pose_estimation::config::CogConfig;
+
+    // A minimal config (only the required model_path) exercises every
+    // `#[serde(default)]` path — i.e. the *default* install threshold.
+    let cfg: CogConfig =
+        serde_json::from_value(serde_json::json!({ "model_path": "pose_v1.safetensors" }))
+            .expect("default config parse");
+
+    // Real model when present; stub otherwise. Either way the per-frame
+    // confidence the runtime gates on must clear the default threshold,
+    // OR (stub case) the gate must still let the model's typical confidence
+    // through. We assert against the same value the runtime emits.
+    let weights = std::path::Path::new("cog/artifacts/pose_v1.safetensors");
+    let engine = if weights.exists() {
+        InferenceEngine::with_weights(Some(weights)).expect("load real weights")
+    } else {
+        InferenceEngine::new().expect("engine init")
+    };
+
+    // Core regression assertion (fails on the old `default_min_confidence()=0.3`):
+    // the default threshold must not exceed the model's published per-frame
+    // confidence (0.185), which is the exact value `infer()` emits for the real
+    // model. With 0.3 the runtime gate `out.confidence >= min_confidence` never
+    // fired → zero pose.frame events on a default install.
+    assert!(
+        cfg.min_confidence <= cog_pose_estimation::inference::MODEL_TYPICAL_CONFIDENCE,
+        "default min_confidence {} exceeds model typical confidence {} — \
+         a default install would emit zero pose.frame events",
+        cfg.min_confidence,
+        cog_pose_estimation::inference::MODEL_TYPICAL_CONFIDENCE
+    );
+
+    // End-to-end: when the real model is loaded, the value it actually emits
+    // must clear the default gate (i.e. the runtime would emit this frame).
+    if engine.backend().starts_with("candle-") {
+        let out = engine.infer(&SyntheticInput.as_window()).expect("infer");
+        assert!(
+            out.confidence >= cfg.min_confidence,
+            "default install must emit: infer confidence {} < default min_confidence {}",
+            out.confidence,
+            cfg.min_confidence
+        );
+    }
+}

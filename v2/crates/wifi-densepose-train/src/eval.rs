@@ -5,6 +5,12 @@
 
 use std::collections::HashMap;
 
+/// Smallest in-domain / few-shot MPJPE treated as positive before it divides a
+/// ratio. Below this the denominator is considered ≈0 and the ratio falls back
+/// to a sentinel (`1.0` or `INFINITY`) rather than dividing by ≈0 (ADR-155 M2
+/// §8: de-magicked from a bare `1e-10`; value unchanged, no behaviour change).
+const MIN_POSITIVE_MPJPE: f32 = 1e-10;
+
 /// Aggregated cross-domain evaluation metrics.
 #[derive(Debug, Clone)]
 pub struct CrossDomainMetrics {
@@ -79,14 +85,14 @@ impl CrossDomainEvaluator {
         } else {
             cross_dom
         };
-        let gap = if in_dom > 1e-10 {
+        let gap = if in_dom > MIN_POSITIVE_MPJPE {
             cross_dom / in_dom
-        } else if cross_dom > 1e-10 {
+        } else if cross_dom > MIN_POSITIVE_MPJPE {
             f32::INFINITY
         } else {
             1.0
         };
-        let speedup = if few_shot > 1e-10 {
+        let speedup = if few_shot > MIN_POSITIVE_MPJPE {
             cross_dom / few_shot
         } else {
             1.0
@@ -131,6 +137,43 @@ fn mean_of(v: Option<&Vec<f32>>) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR-155 M2 §8: the de-magicked division-guard floor must equal the prior
+    /// inline `1e-10` literal exactly (operating-value guard).
+    #[test]
+    fn eval_min_positive_mpjpe_unchanged_from_literal() {
+        assert_eq!(MIN_POSITIVE_MPJPE, 1e-10_f32);
+    }
+
+    /// Characterize the `in_dom ≈ 0` boundary: a perfect in-domain fit but
+    /// nonzero cross-domain error yields the `INFINITY` gap sentinel (the
+    /// middle branch), not a divide-by-≈0 NaN.
+    #[test]
+    fn domain_gap_infinite_when_in_domain_perfect_but_cross_nonzero() {
+        let ev = CrossDomainEvaluator::new(1);
+        let preds = vec![
+            (vec![1.0, 2.0, 3.0], vec![1.0, 2.0, 3.0]), // dom 0: err 0
+            (vec![0.0, 0.0, 0.0], vec![2.0, 0.0, 0.0]), // dom 1: err 2
+        ];
+        let m = ev.evaluate(&preds, &[0, 1]);
+        assert!((m.in_domain_mpjpe).abs() < MIN_POSITIVE_MPJPE);
+        assert!(m.domain_gap_ratio.is_infinite());
+    }
+
+    /// Characterize the all-perfect boundary: in-domain AND cross-domain both ≈0
+    /// ⇒ gap falls back to the `1.0` sentinel (the final else branch), never NaN.
+    #[test]
+    fn domain_gap_unity_when_everything_perfect() {
+        let ev = CrossDomainEvaluator::new(1);
+        let preds = vec![
+            (vec![1.0, 2.0, 3.0], vec![1.0, 2.0, 3.0]),
+            (vec![4.0, 5.0, 6.0], vec![4.0, 5.0, 6.0]),
+        ];
+        let m = ev.evaluate(&preds, &[0, 1]);
+        assert!((m.domain_gap_ratio - 1.0).abs() < 1e-6);
+        // few_shot derived = (0+0)/2 = 0 ⇒ speedup also falls back to 1.0.
+        assert!((m.adaptation_speedup - 1.0).abs() < 1e-6);
+    }
 
     #[test]
     fn mpjpe_known_value() {

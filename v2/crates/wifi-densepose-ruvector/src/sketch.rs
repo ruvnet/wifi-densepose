@@ -40,8 +40,8 @@
 //! All sites take a `&Sketch` instead of an `&[f32]`; the bridge to dense
 //! embeddings is `Sketch::from_embedding`.
 
+use crate::rotation::Rotation;
 use ruvector_core::quantization::{BinaryQuantized, QuantizedVector};
-use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
 /// Errors raised by the sketch API.
@@ -149,6 +149,42 @@ impl Sketch {
             });
         }
         Ok(Self::from_embedding(embedding, sketch_version))
+    }
+
+    /// Construct a sketch from a dense f32 embedding **with RaBitQ Pass 2
+    /// rotation** ([ADR-156 §8](../../../../../docs/adr/ADR-156-ruvector-fusion-beyond-sota.md)).
+    ///
+    /// Applies the deterministic randomized orthogonal rotation `R = H·D`
+    /// (Fast Hadamard Transform + seeded ±1 sign flips, see [`Rotation`]) to
+    /// the embedding *before* sign-quantization. The rotation decorrelates
+    /// coordinates so each sign bit carries more independent information,
+    /// improving top-K recall on anisotropic / correlated embedding
+    /// distributions — the published RaBitQ construction.
+    ///
+    /// The resulting sketch has the **same `embedding_dim`, packed-byte
+    /// length, and `sketch_version`** as a Pass-1 sketch of the same input, so
+    /// it is fully interchangeable in [`SketchBank`] and [`WireSketch`]. The
+    /// *only* requirement is that the index and the query use the **same
+    /// [`Rotation`]** (same seed + dim) — otherwise their sign bits live in
+    /// different rotated frames and the hamming distance is meaningless.
+    ///
+    /// Pass-1 (`from_embedding`) and Pass-2 sketches must **not** be mixed in
+    /// one bank. Use [`SketchBank::with_rotation`] to make a bank that rotates
+    /// every insert and query consistently.
+    pub fn from_embedding_rotated(
+        embedding: &[f32],
+        sketch_version: u16,
+        rotation: &Rotation,
+    ) -> Self {
+        let rotated = rotation.apply(embedding);
+        // Preserve the *source* embedding_dim semantics of Pass 1 (saturating
+        // to u16::MAX) so banks/wire framing are byte-identical to Pass 1.
+        let embedding_dim = embedding.len().min(u16::MAX as usize) as u16;
+        Self {
+            inner: BinaryQuantized::quantize(&rotated),
+            embedding_dim,
+            sketch_version,
+        }
     }
 
     /// Hamming distance to another sketch in `[0, embedding_dim]`.
@@ -417,27 +453,111 @@ pub struct SketchBank {
     embedding_dim: Option<u16>,
     /// Locked at first insertion; all subsequent inserts must match.
     sketch_version: Option<u16>,
+    /// Optional RaBitQ Pass-2 rotation ([ADR-156 §8]). When `Some`, the
+    /// embedding-taking helpers ([`SketchBank::insert_embedding`],
+    /// [`SketchBank::topk_embedding`], [`SketchBank::novelty_embedding`])
+    /// rotate every embedding through this exact rotation before sketching, so
+    /// index-time and query-time sketches always share one rotated frame. The
+    /// raw [`SketchBank::insert`] / [`SketchBank::topk`] paths are unchanged —
+    /// callers using pre-built sketches are responsible for having rotated them
+    /// with the same `Rotation`.
+    rotation: Option<Rotation>,
 }
 
 impl SketchBank {
     /// Create an empty bank. Dimension and version are locked at the first
-    /// `insert` call.
+    /// `insert` call. No Pass-2 rotation (pure Pass-1, default behaviour).
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
             embedding_dim: None,
             sketch_version: None,
+            rotation: None,
         }
     }
 
     /// Create a bank with a pre-locked `embedding_dim` and `sketch_version`.
     /// Use when the bank's expected schema is known at construction.
+    /// No Pass-2 rotation (pure Pass-1).
     pub fn with_schema(embedding_dim: u16, sketch_version: u16) -> Self {
         Self {
             entries: Vec::new(),
             embedding_dim: Some(embedding_dim),
             sketch_version: Some(sketch_version),
+            rotation: None,
         }
+    }
+
+    /// Create a **RaBitQ Pass-2** bank that rotates every embedding through
+    /// `rotation` before sketching ([ADR-156 §8]).
+    ///
+    /// Use the embedding-taking helpers ([`SketchBank::insert_embedding`],
+    /// [`SketchBank::topk_embedding`], [`SketchBank::novelty_embedding`]) with
+    /// this bank so the index and queries share the same rotated frame. The
+    /// `embedding_dim` / `sketch_version` schema is still locked at first
+    /// insert exactly as for a Pass-1 bank — a Pass-2 sketch is byte-identical
+    /// in shape to a Pass-1 sketch, only its bits differ.
+    pub fn with_rotation(rotation: Rotation) -> Self {
+        Self {
+            entries: Vec::new(),
+            embedding_dim: None,
+            sketch_version: None,
+            rotation: Some(rotation),
+        }
+    }
+
+    /// The Pass-2 rotation this bank applies to embeddings, if any.
+    #[inline]
+    pub fn rotation(&self) -> Option<&Rotation> {
+        self.rotation.as_ref()
+    }
+
+    /// Sketch a raw embedding using this bank's rotation policy: Pass-2
+    /// (`from_embedding_rotated`) if the bank has a rotation, else Pass-1
+    /// (`from_embedding`). The single place index-time and query-time sketching
+    /// agree on the rotated frame.
+    fn sketch_embedding(&self, embedding: &[f32], sketch_version: u16) -> Sketch {
+        match &self.rotation {
+            Some(r) => Sketch::from_embedding_rotated(embedding, sketch_version, r),
+            None => Sketch::from_embedding(embedding, sketch_version),
+        }
+    }
+
+    /// Insert a raw embedding, sketching it through the bank's rotation policy.
+    /// Convenience wrapper over [`SketchBank::insert`] that guarantees the
+    /// stored sketch used the same (Pass-1 or Pass-2) frame the queries will.
+    pub fn insert_embedding(
+        &mut self,
+        id: u32,
+        embedding: &[f32],
+        sketch_version: u16,
+    ) -> Result<(), SketchError> {
+        let sketch = self.sketch_embedding(embedding, sketch_version);
+        self.insert(id, sketch)
+    }
+
+    /// Top-K over a raw query embedding, sketched through the bank's rotation
+    /// policy. Equivalent to `bank.topk(&bank.sketch(query), k)` but cannot get
+    /// the rotation frame wrong.
+    pub fn topk_embedding(
+        &self,
+        query: &[f32],
+        sketch_version: u16,
+        k: usize,
+    ) -> Result<Vec<(u32, u32)>, SketchError> {
+        let q = self.sketch_embedding(query, sketch_version);
+        self.topk(&q, k)
+    }
+
+    /// Novelty of a raw query embedding, sketched through the bank's rotation
+    /// policy. See [`SketchBank::novelty`].
+    pub fn novelty_embedding(
+        &self,
+        query: &[f32],
+        sketch_version: u16,
+    ) -> Result<f32, SketchError> {
+        let q = self.sketch_embedding(query, sketch_version);
+        self.novelty(&q)
     }
 
     /// Number of sketches in the bank.
@@ -523,12 +643,22 @@ impl SketchBank {
                 });
             }
         }
-        // Pass-1.5 optimisation: O(n log k) partial sort via a fixed-size
-        // max-heap of `Reverse((distance, id))`. The heap's `peek()`
-        // returns the *largest* of the current best-k. Each candidate is
-        // compared against the heap top in O(1); only better candidates
-        // trigger an O(log k) push/pop. Avoids touching the long tail of
-        // large-distance entries that the truncate would have discarded.
+        // Partial top-K via a fixed-size **max-heap** of `(distance, id)`.
+        // `BinaryHeap` is a max-heap, so `peek()` is the *largest* distance
+        // currently held — the worst of the running best-k. Each candidate is
+        // O(1)-compared against that worst; only a *smaller* distance triggers
+        // an O(log k) pop+push, evicting the current worst. The heap therefore
+        // retains the k *smallest* distances. Total O(n log k), touching the
+        // long tail only with a single comparison each.
+        //
+        // BUG FIX (ADR-156 §8 Pass-2 work): this loop previously used
+        // `BinaryHeap<Reverse<(d, id)>>` and called the peek "the largest".
+        // `Reverse` turns the max-heap into a **min-heap**, so `peek()` was the
+        // *smallest* distance; evicting on `d < worst` then kept the k
+        // *farthest* neighbours and returned them as "nearest". The pre-existing
+        // unit tests only exercised the `n <= k` fast path (≤ 3 entries), so the
+        // inversion went unnoticed until the Pass-2 coverage harness measured
+        // near-random top-K on n > k. Pinned by `topk_heap_path_returns_nearest`.
         //
         // Fast path: when n ≤ k there is nothing to discard, so a plain
         // collect + sort is faster than building a heap.
@@ -543,28 +673,25 @@ impl SketchBank {
             return Ok(scored);
         }
 
-        let mut heap: BinaryHeap<Reverse<(u32, u32)>> = BinaryHeap::with_capacity(k + 1);
+        let mut heap: BinaryHeap<(u32, u32)> = BinaryHeap::with_capacity(k + 1);
         for (id, sk) in &self.entries {
             let d = sk.distance_unchecked(query);
             if heap.len() < k {
-                heap.push(Reverse((d, *id)));
-            } else if let Some(&Reverse((worst, _))) = heap.peek() {
-                // L1 hardening (PR #435 review): structural `if let` rather
-                // than `.expect("heap len == k > 0")`. The branch is
-                // mathematically unreachable when `heap.len() >= k > 0`,
-                // but a defensive pattern makes the impossibility a type
-                // property rather than a runtime invariant. Same hot-path
-                // cost (one bounds check); zero panic risk.
+                heap.push((d, *id));
+            } else if let Some(&(worst, _)) = heap.peek() {
+                // `peek()` is the largest distance in the best-k (max-heap).
+                // The `if let` is defensive: when `heap.len() == k > 0` the
+                // heap is non-empty, so this never takes the `else`. Same
+                // hot-path cost (one bounds check), zero panic risk.
                 if d < worst {
                     heap.pop();
-                    heap.push(Reverse((d, *id)));
+                    heap.push((d, *id));
                 }
             }
         }
-        // Drain heap into a Vec — already in (Reverse) descending order;
-        // sort to expose ascending-by-distance per the public contract.
-        let mut scored: Vec<(u32, u32)> =
-            heap.into_iter().map(|Reverse((d, id))| (id, d)).collect();
+        // Drain the max-heap and sort ascending-by-distance per the public
+        // contract (heap drain order is unspecified beyond the root).
+        let mut scored: Vec<(u32, u32)> = heap.into_iter().map(|(d, id)| (id, d)).collect();
         scored.sort_by_key(|&(_, d)| d);
         Ok(scored)
     }
@@ -651,6 +778,45 @@ mod tests {
         assert_eq!(topk[2].0, 30); // 2 distance
         assert!(topk[0].1 <= topk[1].1);
         assert!(topk[1].1 <= topk[2].1);
+    }
+
+    #[test]
+    fn topk_heap_path_returns_nearest() {
+        // Regression for the heap-inversion bug found during ADR-156 §8 Pass-2
+        // work: with n > k the topk used a min-heap (`Reverse`) but treated its
+        // peek as the max, so it returned the k *farthest* sketches. Build a
+        // bank where the answer is unambiguous and assert the genuine nearest
+        // come back. The OLD code returns the farthest here and fails.
+        let dim = 64;
+        let k = 4;
+        // Query is all-positive (every bit 1).
+        let query = Sketch::from_embedding(&vec![1.0f32; dim], 1);
+        let mut bank = SketchBank::new();
+        // id j has its first `j` dims flipped negative → hamming j to the
+        // all-positive query. So nearest-4 are ids 0,1,2,3 (hamming 0,1,2,3);
+        // farthest are 5..8. n = 9 > k = 4 → exercises the heap path.
+        //
+        // CRITICAL ordering: insert FARTHEST-FIRST (id 8 down to 0). This fills
+        // the heap's first k slots with far entries, so the nearest entries
+        // arrive only after the heap is full and MUST trigger eviction of the
+        // current worst. The old `Reverse` (min-heap-as-max) bug peeked the
+        // smallest distance and never evicted, so it kept the first-seen
+        // (farthest) k and this assertion fails on the old code. Inserting
+        // nearest-first would mask the bug (the heap fills with the right
+        // answer by luck), so the order here is load-bearing.
+        for j in (0..=8u32).rev() {
+            let mut v = vec![1.0f32; dim];
+            for d in v.iter_mut().take(j as usize) {
+                *d = -1.0;
+            }
+            bank.insert(j, Sketch::from_embedding(&v, 1)).unwrap();
+        }
+        let top = bank.topk(&query, k).unwrap();
+        assert_eq!(top.len(), k);
+        let ids: Vec<u32> = top.iter().map(|&(id, _)| id).collect();
+        let dists: Vec<u32> = top.iter().map(|&(_, d)| d).collect();
+        assert_eq!(ids, vec![0, 1, 2, 3], "topk must return the NEAREST k, got {ids:?}");
+        assert_eq!(dists, vec![0, 1, 2, 3], "distances must be the smallest k");
     }
 
     #[test]
@@ -851,5 +1017,123 @@ mod tests {
             bank.topk(&bad_ver, 1).unwrap_err(),
             SketchError::SketchVersionMismatch { .. }
         ));
+    }
+
+    // ─── ADR-156 §8 / ADR-084 Pass 2 — randomized rotation ───────────────────
+
+    #[test]
+    fn rotated_sketch_has_same_shape_as_pass1() {
+        // A Pass-2 sketch must be byte-shape-identical to a Pass-1 sketch of
+        // the same input: same embedding_dim, same packed-byte length, same
+        // sketch_version. Only the bits differ. This is what lets Pass-2
+        // sketches travel through the unchanged WireSketch / SketchBank schema.
+        let v: Vec<f32> = (0..128).map(|i| (i as f32 * 0.21).sin()).collect();
+        let rot = Rotation::new(0xA5A5_A5A5, 128);
+        let p1 = Sketch::from_embedding(&v, 3);
+        let p2 = Sketch::from_embedding_rotated(&v, 3, &rot);
+        assert_eq!(p1.embedding_dim(), p2.embedding_dim());
+        assert_eq!(p1.sketch_version(), p2.sketch_version());
+        assert_eq!(p1.packed_bytes().len(), p2.packed_bytes().len());
+        // The rotation actually changed the bits (else it would be a no-op on
+        // this correlated input).
+        assert_ne!(
+            p1.packed_bytes(),
+            p2.packed_bytes(),
+            "rotation should change the sign bits on correlated input"
+        );
+    }
+
+    #[test]
+    fn rotated_sketch_is_deterministic_for_seed() {
+        // Same (seed, dim) rotation → identical sketch bits across constructions
+        // (the index-time == query-time contract, at the sketch layer).
+        let v: Vec<f32> = (0..96).map(|i| ((i * 5 % 11) as f32 - 5.0) * 0.3).collect();
+        let s1 = Sketch::from_embedding_rotated(&v, 1, &Rotation::new(7, 96));
+        let s2 = Sketch::from_embedding_rotated(&v, 1, &Rotation::new(7, 96));
+        assert_eq!(s1.distance_unchecked(&s2), 0, "same seed must agree exactly");
+    }
+
+    #[test]
+    fn rotated_bank_self_match_is_zero_distance() {
+        // A rotated bank queried with the same embedding it stored must return
+        // that id at distance 0 — proves the bank rotates index and query in
+        // the same frame.
+        let rot = Rotation::new(0xBEEF, 64);
+        let mut bank = SketchBank::with_rotation(rot);
+        let v: Vec<f32> = (0..64).map(|i| (i as f32 * 0.37).cos()).collect();
+        bank.insert_embedding(42, &v, 1).unwrap();
+        let top = bank.topk_embedding(&v, 1, 1).unwrap();
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].0, 42);
+        assert_eq!(top[0].1, 0, "self-query in a rotated bank must be distance 0");
+    }
+
+    #[test]
+    fn pass2_coverage_not_worse_than_pass1() {
+        // The core regression: on a small fixed anisotropic fixture, Pass-2
+        // (rotation) coverage must be >= Pass-1 coverage. Rotation must not
+        // *hurt* recall. (We do not assert a hard >= 90% here — that is the
+        // measurement reported in the ADR, not a unit-test invariant — but we
+        // do pin that rotation is not a regression.)
+        use crate::coverage::{measure_pass1, measure_pass2, CoverageParams};
+        let p = CoverageParams {
+            n: 512,
+            n_queries: 32,
+            n_clusters: 32,
+            ..CoverageParams::aether_default(0x00C0_FFEE)
+        };
+        let c1 = measure_pass1(p).coverage;
+        let c2 = measure_pass2(p, 0x1234_5678_9ABC_DEF0).coverage;
+        assert!(
+            c2 + 1e-9 >= c1,
+            "Pass-2 coverage {c2:.4} regressed below Pass-1 {c1:.4}"
+        );
+    }
+
+    /// Deterministic, test-runnable coverage measurement that PRINTS the
+    /// numbers quoted in ADR-084 / ADR-156 §8. Run with `--nocapture` to see:
+    ///   cargo test -p wifi-densepose-ruvector --no-default-features \
+    ///     pass2_coverage_report -- --nocapture
+    #[test]
+    fn pass2_coverage_report() {
+        use crate::coverage::{measure_pass1, measure_pass2, CoverageParams};
+        let base = CoverageParams::aether_default(0xAD00_0084);
+        let rot_seed = 0x5EED_C0DE_1234_5678u64;
+        println!(
+            "\n=== ADR-156 §8 RaBitQ Pass-2 coverage report (anisotropic synthetic) ==="
+        );
+        println!(
+            "dim={} N={} K={} queries={} master_seed=0x{:X} rotation_seed=0x{:X}",
+            base.dim, base.n, base.k, base.n_queries, base.seed, rot_seed
+        );
+        // Strict bar: candidate_k == K.
+        let p1 = measure_pass1(base).coverage;
+        let p2 = measure_pass2(base, rot_seed).coverage;
+        println!(
+            "candidate_k=K={:<2}  Pass1={:6.2}%  Pass2={:6.2}%  bar=90%  {}",
+            base.k,
+            p1 * 100.0,
+            p2 * 100.0,
+            if p2 >= 0.90 { "PASS" } else { "BELOW-BAR" }
+        );
+        // Over-fetch curve (models fetch C >= K candidates, refine to K).
+        for &c in &[16usize, 24, 32, 64] {
+            let pc = CoverageParams {
+                candidate_k: c,
+                ..base
+            };
+            let cp1 = measure_pass1(pc).coverage;
+            let cp2 = measure_pass2(pc, rot_seed).coverage;
+            println!(
+                "candidate_k={:<3}     Pass1={:6.2}%  Pass2={:6.2}%",
+                c,
+                cp1 * 100.0,
+                cp2 * 100.0
+            );
+        }
+        println!("========================================================================\n");
+        // Always-true sanity so the test asserts something.
+        assert!((0.0..=1.0).contains(&p1));
+        assert!((0.0..=1.0).contains(&p2));
     }
 }

@@ -59,6 +59,8 @@ pub enum DoorState {
 
 /// Elevator occupancy counter.
 pub struct ElevatorCounter {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
     /// Baseline amplitude per subcarrier (empty cabin).
     baseline_amp: [f32; MAX_SC],
     /// Baseline variance per subcarrier.
@@ -93,6 +95,7 @@ pub struct ElevatorCounter {
 impl ElevatorCounter {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 4],
             baseline_amp: [0.0; MAX_SC],
             baseline_var: [0.0; MAX_SC],
             prev_amp: [0.0; MAX_SC],
@@ -268,15 +271,12 @@ impl ElevatorCounter {
         }
 
         // ── Build events ────────────────────────────────────────────────
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n_events = 0usize;
 
         // Door events (immediate).
         if let Some(evt) = door_event {
             if n_events < 4 {
-                unsafe {
-                    EVENTS[n_events] = (evt, self.count as f32);
-                }
+                self.events[n_events] = (evt, self.count as f32);
                 n_events += 1;
             }
         }
@@ -284,22 +284,18 @@ impl ElevatorCounter {
         // Periodic count and overload.
         if self.frame_count % EMIT_INTERVAL == 0 {
             if n_events < 4 {
-                unsafe {
-                    EVENTS[n_events] = (EVENT_ELEVATOR_COUNT, self.count as f32);
-                }
+                self.events[n_events] = (EVENT_ELEVATOR_COUNT, self.count as f32);
                 n_events += 1;
             }
 
             // Overload warning.
             if self.count >= self.overload_thresh && n_events < 4 {
-                unsafe {
-                    EVENTS[n_events] = (EVENT_OVERLOAD_WARNING, self.count as f32);
-                }
+                self.events[n_events] = (EVENT_OVERLOAD_WARNING, self.count as f32);
                 n_events += 1;
             }
         }
 
-        unsafe { &EVENTS[..n_events] }
+        &self.events[..n_events]
     }
 
     /// Get current occupant count estimate.

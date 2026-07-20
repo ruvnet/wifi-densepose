@@ -1,12 +1,21 @@
-//! Happiness score from WiFi CSI physiological proxies -- ADR-041 exotic module.
+//! Gait-energy / affect-proxy scoring from WiFi CSI -- ADR-041 exotic module.
+//!
+//! ⚠️ SPECULATIVE, UNVALIDATED AFFECT HEURISTIC. The outputs of this module are
+//! ⚠️ NOT measurements of emotion. `HAPPINESS_SCORE` is a gait-energy / movement
+//! ⚠️ proxy, not a validated affect measure; it has never been correlated
+//! ⚠️ against self-report, facial-affect, or any reference standard, and its
+//! ⚠️ relationship to actual mood is unproven (see ADR-160 §A2). Do NOT use for
+//! ⚠️ affect inference, screening, or any decision about a person's emotional
+//! ⚠️ state. The DSP (rolling statistics + weighted scoring) is real; the affect
+//! ⚠️ interpretation of its output is not.
 //!
 //! # Algorithm
 //!
-//! Combines six physiological proxies extracted from CSI into a composite
-//! happiness score [0, 1]:
+//! Combines six movement/physiology proxies extracted from CSI into a composite
+//! gait-energy score [0, 1] (labelled `HAPPINESS_SCORE` for the event registry,
+//! but it is a proxy, not an affect measurement):
 //!
-//! 1. **Gait speed** -- Doppler proxy from phase rate-of-change.  Happy people
-//!    walk approximately 12% faster than neutral baseline.
+//! 1. **Gait speed** -- Doppler proxy from phase rate-of-change.
 //!
 //! 2. **Stride regularity** -- Variance of step intervals from successive phase
 //!    differences.  Regular strides correlate with confidence and positive affect.
@@ -31,7 +40,9 @@
 //!
 //! # Events (690-694: Exotic / Research)
 //!
-//! - `HAPPINESS_SCORE` (690): Composite happiness [0.0 = sad, 0.5 = neutral, 1.0 = happy].
+//! - `HAPPINESS_SCORE` (690): Composite **gait-energy proxy** [0, 1], NOT a
+//!   validated affect measure. Higher = more energetic/fluid movement, which is
+//!   only speculatively (unvalidated) associated with positive affect.
 //! - `GAIT_ENERGY` (691): Normalized gait speed/stride score [0, 1].
 //! - `AFFECT_VALENCE` (692): Emotional valence from breathing + motion [0, 1].
 //! - `SOCIAL_ENERGY` (693): Group animation/interaction level [0, 1].
@@ -97,7 +108,7 @@ const MAX_SC: usize = 32;
 const EVENT_DECIMATION: u32 = 4;
 
 /// Baseline gait speed (phase rate-of-change, arbitrary units).
-/// Happy gait is ~12% above this.
+/// Used only as a normalization reference for the gait-energy proxy.
 const BASELINE_GAIT_SPEED: f32 = 0.5;
 
 /// Maximum expected gait speed for normalization.
@@ -184,6 +195,9 @@ pub struct HappinessScoreDetector {
 
     /// Total frames processed.
     frame_count: u32,
+
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 5],
 }
 
 impl HappinessScoreDetector {
@@ -209,6 +223,7 @@ impl HappinessScoreDetector {
             happiness_vector: [0.0; HAPPINESS_VECTOR_DIM],
 
             frame_count: 0,
+            events: [(0, 0.0); 5],
         }
     }
 
@@ -234,7 +249,6 @@ impl HappinessScoreDetector {
         breathing_bpm: f32,
         heart_rate_bpm: f32,
     ) -> &[(i32, f32)] {
-        static mut EVENTS: [(i32, f32); 5] = [(0, 0.0); 5];
         let mut n_ev = 0usize;
 
         self.frame_count += 1;
@@ -341,34 +355,24 @@ impl HappinessScoreDetector {
 
         // ── Emit events (decimated for ESP32 bandwidth) ──
         // Always emit happiness score; other events only every Nth frame.
-        unsafe {
-            EVENTS[n_ev] = (EVENT_HAPPINESS_SCORE, self.happiness);
-        }
+        self.events[n_ev] = (EVENT_HAPPINESS_SCORE, self.happiness);
         n_ev += 1;
 
         if self.frame_count % EVENT_DECIMATION == 0 {
-            unsafe {
-                EVENTS[n_ev] = (EVENT_GAIT_ENERGY, gait_energy);
-            }
+            self.events[n_ev] = (EVENT_GAIT_ENERGY, gait_energy);
             n_ev += 1;
 
-            unsafe {
-                EVENTS[n_ev] = (EVENT_AFFECT_VALENCE, affect_valence);
-            }
+            self.events[n_ev] = (EVENT_AFFECT_VALENCE, affect_valence);
             n_ev += 1;
 
-            unsafe {
-                EVENTS[n_ev] = (EVENT_SOCIAL_ENERGY, social_energy);
-            }
+            self.events[n_ev] = (EVENT_SOCIAL_ENERGY, social_energy);
             n_ev += 1;
 
-            unsafe {
-                EVENTS[n_ev] = (EVENT_TRANSIT_DIRECTION, transit);
-            }
+            self.events[n_ev] = (EVENT_TRANSIT_DIRECTION, transit);
             n_ev += 1;
         }
 
-        unsafe { &EVENTS[..n_ev] }
+        &self.events[..n_ev]
     }
 
     /// Average phase rate-of-change over the rolling window.

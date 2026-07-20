@@ -1,4 +1,13 @@
-//! Affect computing from physiological CSI signatures — ADR-041 exotic module.
+//! Affect-proxy heuristic from physiological CSI signatures — ADR-041 exotic module.
+//!
+//! ⚠️ SPECULATIVE, UNVALIDATED AFFECT HEURISTIC. The outputs of this module
+//! ⚠️ (`AROUSAL_LEVEL`, `STRESS_INDEX`, `CALM_DETECTED`, `AGITATION_DETECTED`)
+//! ⚠️ are NOT measurements of emotion. They are threshold-based proxies over
+//! ⚠️ breathing/motion/heart-rate estimates that have never been correlated
+//! ⚠️ against self-report, physiological ground truth, or any reference standard
+//! ⚠️ (see ADR-160 §A2). Do NOT use for affect inference, stress screening, or
+//! ⚠️ any decision about a person's emotional state. The DSP (rolling statistics
+//! ⚠️ + weighted scoring) is real; the affect interpretation of its output is not.
 //!
 //! # Algorithm
 //!
@@ -153,6 +162,8 @@ pub struct EmotionDetector {
     agitation_detected: bool,
     /// Total frames processed.
     frame_count: u32,
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
 }
 
 impl EmotionDetector {
@@ -171,6 +182,7 @@ impl EmotionDetector {
             calm_detected: false,
             agitation_detected: false,
             frame_count: 0,
+            events: [(0, 0.0); 4],
         }
     }
 
@@ -192,7 +204,6 @@ impl EmotionDetector {
         _phase: f32,
         variance: f32,
     ) -> &[(i32, f32)] {
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n_ev = 0usize;
 
         self.frame_count += 1;
@@ -251,31 +262,23 @@ impl EmotionDetector {
                 || breath_cv > STRESS_BREATH_CV_THRESH);
 
         // ── Emit events ──
-        unsafe {
-            EVENTS[n_ev] = (EVENT_AROUSAL_LEVEL, self.arousal);
-        }
+        self.events[n_ev] = (EVENT_AROUSAL_LEVEL, self.arousal);
         n_ev += 1;
 
-        unsafe {
-            EVENTS[n_ev] = (EVENT_STRESS_INDEX, self.stress_index);
-        }
+        self.events[n_ev] = (EVENT_STRESS_INDEX, self.stress_index);
         n_ev += 1;
 
         if self.calm_detected {
-            unsafe {
-                EVENTS[n_ev] = (EVENT_CALM_DETECTED, 1.0);
-            }
+            self.events[n_ev] = (EVENT_CALM_DETECTED, 1.0);
             n_ev += 1;
         }
 
         if self.agitation_detected {
-            unsafe {
-                EVENTS[n_ev] = (EVENT_AGITATION_DETECTED, 1.0);
-            }
+            self.events[n_ev] = (EVENT_AGITATION_DETECTED, 1.0);
             n_ev += 1;
         }
 
-        unsafe { &EVENTS[..n_ev] }
+        &self.events[..n_ev]
     }
 
     /// Compute breathing rate score [0, 1].

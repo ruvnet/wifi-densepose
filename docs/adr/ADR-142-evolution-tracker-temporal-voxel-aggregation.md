@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Proposed |
+| **Status** | Accepted — partial (built + tested building block; integration glue pending — see Implementation Status, commit `1f8e180d6`) |
 | **Date** | 2026-05-28 |
 | **Deciders** | ruv |
 | **Codebase target** | `wifi-densepose-signal` (`ruvsense/longitudinal.rs`, `ruvsense/attractor_drift.rs`, `ruvsense/calibration.rs`, `ruvsense/field_model.rs`, `ruvsense/tomography.rs`); `wifi-densepose-bfld` (`privacy_gate.rs`) |

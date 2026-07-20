@@ -151,9 +151,13 @@ static void on_recv(const uint8_t *src_mac, const uint8_t *data, int len)
  *   void (*)(const esp_now_send_info_t *tx_info, esp_now_send_status_t status)
  * Both signatures ignore the address-side argument here — we only inspect
  * `status` to bump the TX-fail counter — so the body is identical; only the
- * function-pointer type differs. ESP_IDF_VERSION_MAJOR is the canonical guard.
+ * function-pointer type differs.
+ *
+ * Issue #1005: Espressif backported the new signature to v5.5
+ * (`esp_now_send_info_t` = typedef of `wifi_tx_info_t` there), so the guard
+ * must be the full version triple, not ESP_IDF_VERSION_MAJOR.
  */
-#if ESP_IDF_VERSION_MAJOR >= 6
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 0)
 static void on_send(const esp_now_send_info_t *tx_info, esp_now_send_status_t status)
 {
     (void)tx_info;

@@ -30,16 +30,27 @@ use wasmtime::{Engine, Linker, Module, Store};
 
 use crate::error::PluginError;
 use crate::host_abi::{LogLevel, StateChangedEventJson, MAX_ABI_BUFFER_BYTES};
+use crate::manifest::PluginManifest;
+use crate::permissions::PermissionSet;
+use crate::verify::{verify_module, PluginPolicy};
 
 // ── Store data ─────────────────────────────────────────────────────────────
 
 /// Per-plugin state stored inside the Wasmtime [`Store`].
 ///
 /// Wasmtime's `Store<T>` exposes `T` to host functions via `caller.data()`.
-/// We store the `HomeCore` handle and a list of subscribed entity IDs here.
+/// We store the `HomeCore` handle, a list of subscribed entity IDs, and the
+/// plugin's write-permission set (ADR-162 P5 authority isolation).
 pub struct PluginStoreData {
     pub hc: HomeCore,
     pub subscriptions: Vec<String>,
+    /// Entity-write authority distilled from the manifest's
+    /// `homecore_permissions`. Consulted by `hc_state_set`. The
+    /// permission-free [`WasmtimeRuntime::load_wasm`] path installs an
+    /// all-allowing set for backward compatibility; the
+    /// [`WasmtimeRuntime::load_plugin`] path installs the manifest's
+    /// declared set.
+    pub permissions: PermissionSet,
 }
 
 // ── WasmtimeRuntime ────────────────────────────────────────────────────────
@@ -59,14 +70,53 @@ impl WasmtimeRuntime {
         Ok(Self { engine })
     }
 
-    /// Compile and instantiate a WASM plugin from raw bytes.
+    /// Compile and instantiate a WASM plugin from raw bytes, **without**
+    /// signature verification or permission gating (the plugin gets
+    /// all-write authority).
     ///
-    /// Returns a [`WasmPlugin`] handle that owns the `Store` and the
-    /// `Instance`. The handle can be used to call into the WASM module.
+    /// Retained for the legacy/test path and first-party trusted modules.
+    /// Production plugin loading should go through [`Self::load_plugin`],
+    /// which verifies the module (ADR-162 P4) and scopes its write
+    /// authority to the manifest (P5).
     pub fn load_wasm(
         &self,
         wasm_bytes: &[u8],
         hc: HomeCore,
+    ) -> Result<WasmPlugin, PluginError> {
+        self.instantiate(wasm_bytes, hc, PermissionSet::allow_all())
+    }
+
+    /// Verify and instantiate a WASM plugin from its manifest + raw bytes.
+    ///
+    /// This is the secure load path (ADR-162):
+    ///   1. **P4** — [`verify_module`] checks the SHA-256 module hash and
+    ///      Ed25519 signature against the manifest under `policy`. A
+    ///      tampered module, bad/forged signature, untrusted publisher, or
+    ///      (under the secure default) an unsigned module is rejected
+    ///      **before** any guest code runs.
+    ///   2. **P5** — the plugin's `homecore_permissions` are distilled into
+    ///      a [`PermissionSet`] installed in the store, so `hc_state_set`
+    ///      can only write entities the plugin declared.
+    pub fn load_plugin(
+        &self,
+        manifest: &PluginManifest,
+        wasm_bytes: &[u8],
+        hc: HomeCore,
+        policy: &PluginPolicy,
+    ) -> Result<WasmPlugin, PluginError> {
+        // P4: verify before instantiation.
+        verify_module(manifest, wasm_bytes, policy)?;
+        // P5: scope write authority to the manifest's declared permissions.
+        let permissions = PermissionSet::from_manifest(manifest);
+        self.instantiate(wasm_bytes, hc, permissions)
+    }
+
+    /// Shared compile + instantiate, installing the given permission set.
+    fn instantiate(
+        &self,
+        wasm_bytes: &[u8],
+        hc: HomeCore,
+        permissions: PermissionSet,
     ) -> Result<WasmPlugin, PluginError> {
         let module = Module::new(&self.engine, wasm_bytes)
             .map_err(|e| PluginError::RuntimeError(format!("WASM compile: {e}")))?;
@@ -77,6 +127,7 @@ impl WasmtimeRuntime {
         let store_data = PluginStoreData {
             hc,
             subscriptions: Vec::new(),
+            permissions,
         };
         let mut store = Store::new(&self.engine, store_data);
 
@@ -183,7 +234,9 @@ fn register_hc_state_get(
 /// Sets the state for the entity whose UTF-8 ID is at `[eid_ptr,eid_ptr+eid_len)`.
 /// The new state string is at `[state_ptr,state_ptr+state_len)`.
 /// The attributes JSON is at `[attrs_ptr,attrs_ptr+attrs_len)`.
-/// Returns 0 on success, negative on error.
+/// Returns 0 on success, negative on error: -1 (bad memory/args), -2
+/// (invalid entity id), -3 (permission denied — entity not in the
+/// plugin's declared `homecore_permissions`, ADR-162 P5).
 fn register_hc_state_set(
     linker: &mut Linker<PluginStoreData>,
 ) -> Result<(), PluginError> {
@@ -224,6 +277,20 @@ fn register_hc_state_set(
                     Ok(id) => id,
                     Err(_) => return -2,
                 };
+
+                // ── P5 authority isolation (ADR-162) ──────────────────────
+                // Reject a write to an entity the plugin did not declare in
+                // `homecore_permissions`. Return a typed error code to the
+                // guest (-3); do NOT panic the host.
+                if !caller.data().permissions.may_write(entity_id.as_str()) {
+                    eprintln!(
+                        "[PLUGIN WARN] denied hc_state_set on `{}` — not in plugin's declared \
+                         homecore_permissions (P5 authority isolation)",
+                        entity_id.as_str()
+                    );
+                    return -3;
+                }
+
                 let attrs: serde_json::Value =
                     serde_json::from_str(&attrs_str).unwrap_or(serde_json::json!({}));
 

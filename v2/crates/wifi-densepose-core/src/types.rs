@@ -563,6 +563,12 @@ impl crate::traits::CanonicalFrame for CsiFrame {
     /// (each fixed-width LE; `device_id` length-prefixed; `calibration_id` as
     /// 16 UUID bytes or 16 zero bytes for `None`) ‖ `(nrows, ncols)` as u32 LE
     /// ‖ complex payload as `ComplexSample::to_le_bytes()` in stream-major order.
+    ///
+    /// # Panics
+    /// If `calibration_id` is `Some(Uuid::nil())`: the nil UUID is the wire
+    /// sentinel for `None`, so encoding it would alias two distinct frames to
+    /// the same bytes (and the same witness hash) — a non-injective encoding
+    /// is refused rather than silently produced.
     fn to_canonical_bytes(&self) -> Vec<u8> {
         let m = &self.metadata;
         // 16 (id) + ~48 (meta) + 8 (shape) + 16 * n_samples
@@ -600,7 +606,17 @@ impl crate::traits::CanonicalFrame for CsiFrame {
         b.extend_from_slice(&m.noise_floor_dbm.to_le_bytes());
         b.extend_from_slice(&m.sequence_number.to_le_bytes());
         match m.calibration_id {
-            Some(id) => b.extend_from_slice(id.as_bytes()),
+            Some(id) => {
+                // Some(nil) would alias the None sentinel on the wire: the
+                // bytes would decode to a *different* frame (calibration_id
+                // None) with the same witness. Refuse the non-injective
+                // encoding (see the trait-impl `# Panics` doc).
+                assert!(
+                    id != Uuid::nil(),
+                    "calibration_id Some(Uuid::nil()) is unencodable: nil is the None sentinel"
+                );
+                b.extend_from_slice(id.as_bytes());
+            }
             None => b.extend_from_slice(&[0u8; 16]),
         }
         b.extend_from_slice(&m.model_id.to_le_bytes());
@@ -613,6 +629,205 @@ impl crate::traits::CanonicalFrame for CsiFrame {
             b.extend_from_slice(&sample.to_le_bytes());
         }
         b
+    }
+}
+
+/// Errors decoding a frame from its canonical bytes.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum CanonicalDecodeError {
+    /// The buffer ended before the layout was fully read.
+    #[error("canonical buffer truncated at byte {at} (need {need} more)")]
+    Truncated {
+        /// Byte offset where reading failed.
+        at: usize,
+        /// How many more bytes were needed.
+        need: usize,
+    },
+    /// A discriminant byte held an unknown value.
+    #[error("invalid {field} discriminant {value}")]
+    BadDiscriminant {
+        /// Which field failed.
+        field: &'static str,
+        /// The offending byte.
+        value: u8,
+    },
+    /// The device-id bytes were not UTF-8.
+    #[error("device id is not valid UTF-8")]
+    BadDeviceId,
+    /// Shape (nrows × ncols) disagrees with the remaining payload length.
+    #[error("payload length mismatch: shape {rows}x{cols} needs {expect} bytes, found {found}")]
+    PayloadMismatch {
+        /// Declared rows.
+        rows: usize,
+        /// Declared cols.
+        cols: usize,
+        /// Bytes the shape implies.
+        expect: usize,
+        /// Bytes actually present.
+        found: usize,
+    },
+    /// Trailing bytes after the declared payload.
+    #[error("{0} trailing bytes after payload")]
+    TrailingBytes(usize),
+    /// A reserved region that must be all-zero held nonzero bytes. Accepting
+    /// them would let two distinct byte strings decode to the same frame
+    /// (re-encoding could not reproduce the original — forged bytes would be
+    /// indistinguishable after a replay round-trip).
+    #[error("reserved bytes for {field} must be zero")]
+    ReservedNotZero {
+        /// Which field's reserved region was nonzero.
+        field: &'static str,
+    },
+}
+
+/// Byte cursor for the canonical layout.
+struct Cursor<'a> {
+    b: &'a [u8],
+    at: usize,
+}
+
+impl<'a> Cursor<'a> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8], CanonicalDecodeError> {
+        if self.b.len() - self.at < n {
+            return Err(CanonicalDecodeError::Truncated {
+                at: self.at,
+                need: n - (self.b.len() - self.at),
+            });
+        }
+        let s = &self.b[self.at..self.at + n];
+        self.at += n;
+        Ok(s)
+    }
+    fn u8(&mut self) -> Result<u8, CanonicalDecodeError> {
+        Ok(self.take(1)?[0])
+    }
+    fn u16(&mut self) -> Result<u16, CanonicalDecodeError> {
+        Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
+    }
+    fn u32(&mut self) -> Result<u32, CanonicalDecodeError> {
+        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
+    fn i64(&mut self) -> Result<i64, CanonicalDecodeError> {
+        Ok(i64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+    }
+    fn f32(&mut self) -> Result<f32, CanonicalDecodeError> {
+        Ok(f32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
+    fn i8(&mut self) -> Result<i8, CanonicalDecodeError> {
+        Ok(self.take(1)?[0] as i8)
+    }
+    fn uuid(&mut self) -> Result<Uuid, CanonicalDecodeError> {
+        Ok(Uuid::from_bytes(self.take(16)?.try_into().unwrap()))
+    }
+}
+
+impl CsiFrame {
+    /// Reconstruct a frame from its [`to_canonical_bytes`] encoding — the
+    /// replay half of the ADR-136 contract. Round-trip law (tested):
+    /// `from_canonical_bytes(f.to_canonical_bytes())` yields a frame with the
+    /// **same id, metadata, payload, and witness hash** as `f`.
+    ///
+    /// Amplitude/phase are recomputed from the complex payload (they are
+    /// projections, not independent state).
+    ///
+    /// [`to_canonical_bytes`]: crate::traits::CanonicalFrame::to_canonical_bytes
+    ///
+    /// # Errors
+    /// [`CanonicalDecodeError`] on truncation, bad discriminants, non-UTF-8
+    /// device id, nonzero reserved bytes, shape/payload disagreement, or
+    /// trailing bytes — every malformed input fails closed. Strictness
+    /// guarantees injectivity on the accepted domain: any accepted byte
+    /// string re-encodes to exactly itself.
+    pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, CanonicalDecodeError> {
+        let mut c = Cursor { b: bytes, at: 0 };
+
+        let id = FrameId::from_uuid(c.uuid()?);
+
+        let seconds = c.i64()?;
+        let nanos = c.u32()?;
+        let dev_len = c.u32()? as usize;
+        let device_id = core::str::from_utf8(c.take(dev_len)?)
+            .map_err(|_| CanonicalDecodeError::BadDeviceId)?
+            .to_string();
+        let frequency_band = match c.u8()? {
+            0 => FrequencyBand::Band2_4GHz,
+            1 => FrequencyBand::Band5GHz,
+            2 => FrequencyBand::Band6GHz,
+            v => {
+                return Err(CanonicalDecodeError::BadDiscriminant {
+                    field: "frequency_band",
+                    value: v,
+                })
+            }
+        };
+        let channel = c.u8()?;
+        let bandwidth_mhz = c.u16()?;
+        let tx_antennas = c.u8()?;
+        let rx_antennas = c.u8()?;
+        let spacing_mm = match c.u8()? {
+            1 => Some(c.f32()?),
+            0 => {
+                // Reserved padding must be zero (decoder strictness =
+                // injectivity on the accepted domain): otherwise forged
+                // nonzero padding would decode to the same frame as the
+                // canonical encoding and re-encode differently.
+                if c.take(4)? != [0u8; 4] {
+                    return Err(CanonicalDecodeError::ReservedNotZero { field: "spacing_mm" });
+                }
+                None
+            }
+            v => {
+                return Err(CanonicalDecodeError::BadDiscriminant {
+                    field: "spacing_mm",
+                    value: v,
+                })
+            }
+        };
+        let rssi_dbm = c.i8()?;
+        let noise_floor_dbm = c.i8()?;
+        let sequence_number = c.u32()?;
+        let cal = c.uuid()?;
+        let calibration_id = if cal == Uuid::nil() { None } else { Some(cal) };
+        let model_id = c.u16()?;
+        let model_version = c.u16()?;
+
+        let rows = c.u32()? as usize;
+        let cols = c.u32()? as usize;
+        let expect = rows.saturating_mul(cols).saturating_mul(16);
+        let found = bytes.len() - c.at;
+        if found < expect {
+            return Err(CanonicalDecodeError::PayloadMismatch { rows, cols, expect, found });
+        }
+        let mut samples = Vec::with_capacity(rows * cols);
+        for _ in 0..rows * cols {
+            let raw: [u8; 16] = c.take(16)?.try_into().unwrap();
+            samples.push(ComplexSample::from_le_bytes(raw).0);
+        }
+        if c.at != bytes.len() {
+            return Err(CanonicalDecodeError::TrailingBytes(bytes.len() - c.at));
+        }
+        let data = Array2::from_shape_vec((rows, cols), samples).map_err(|_| {
+            CanonicalDecodeError::PayloadMismatch { rows, cols, expect, found }
+        })?;
+
+        let metadata = CsiMetadata {
+            timestamp: Timestamp { seconds, nanos },
+            device_id: DeviceId::new(device_id),
+            frequency_band,
+            channel,
+            bandwidth_mhz,
+            antenna_config: AntennaConfig { tx_antennas, rx_antennas, spacing_mm },
+            rssi_dbm,
+            noise_floor_dbm,
+            sequence_number,
+            calibration_id,
+            model_id,
+            model_version,
+        };
+
+        let amplitude = data.mapv(num_complex::Complex::norm);
+        let phase = data.mapv(num_complex::Complex::arg);
+        Ok(Self { id, metadata, data, amplitude, phase })
     }
 }
 
@@ -1305,6 +1520,194 @@ mod tests {
         let mut frame2 = frame.clone();
         frame2.metadata.set_model(1, 1);
         assert_ne!(frame.witness_hash(), frame2.witness_hash());
+    }
+
+    /// AC7 — replay: `from_canonical_bytes` is the exact inverse of
+    /// `to_canonical_bytes` — same id, metadata, payload, and witness hash.
+    /// This is the capture-to-claim law: a stored canonical capture replays to
+    /// a frame the pipeline cannot distinguish from the original.
+    #[test]
+    fn ac7_canonical_round_trip_replays_identically() {
+        use ndarray::Array2;
+        let mut meta = CsiMetadata::new(DeviceId::new("node-α"), FrequencyBand::Band6GHz, 37);
+        meta.set_calibration(uuid::Uuid::new_v4());
+        meta.set_model(9, 0x0203);
+        meta.antenna_config.spacing_mm = Some(62.5);
+        meta.rssi_dbm = -41;
+        meta.sequence_number = 123_456;
+        let data = Array2::from_shape_fn((2, 56), |(r, c)| {
+            Complex64::new((r as f64 + 1.0) * (c as f64).cos(), (c as f64 * 0.1).tan())
+        });
+        let frame = CsiFrame::new(meta, data);
+
+        let bytes = frame.to_canonical_bytes();
+        let replayed = CsiFrame::from_canonical_bytes(&bytes).expect("decodes");
+
+        assert_eq!(replayed.id, frame.id);
+        // Field-wise metadata equality (CsiMetadata has no PartialEq; the
+        // byte-identical re-encoding below covers every field regardless).
+        assert_eq!(replayed.metadata.device_id, frame.metadata.device_id);
+        assert_eq!(replayed.metadata.calibration_id, frame.metadata.calibration_id);
+        assert_eq!(replayed.metadata.model_version, frame.metadata.model_version);
+        assert_eq!(replayed.metadata.antenna_config.spacing_mm, Some(62.5));
+        assert_eq!(replayed.data, frame.data);
+        // Witness equality — the strongest statement of equivalence.
+        assert_eq!(replayed.witness_hash(), frame.witness_hash());
+        // Re-encoding is byte-identical.
+        assert_eq!(replayed.to_canonical_bytes(), bytes);
+        // Projections recomputed consistently.
+        assert_eq!(replayed.amplitude, frame.amplitude);
+    }
+
+    /// AC8 — the decoder fails closed on every malformed-input class.
+    #[test]
+    fn ac8_canonical_decode_fails_closed() {
+        use ndarray::Array2;
+        let meta = CsiMetadata::new(DeviceId::new("n"), FrequencyBand::Band2_4GHz, 1);
+        let data = Array2::from_shape_fn((1, 4), |(_, c)| Complex64::new(c as f64, 0.0));
+        let frame = CsiFrame::new(meta, data);
+        let bytes = frame.to_canonical_bytes();
+
+        // Truncation anywhere fails: in the payload it is caught by the
+        // shape-vs-length check (PayloadMismatch); in the header by Truncated.
+        assert!(matches!(
+            CsiFrame::from_canonical_bytes(&bytes[..bytes.len() - 1]),
+            Err(CanonicalDecodeError::PayloadMismatch { .. })
+        ));
+        assert!(matches!(
+            CsiFrame::from_canonical_bytes(&bytes[..10]),
+            Err(CanonicalDecodeError::Truncated { .. })
+        ));
+
+        // Trailing junk fails.
+        let mut padded = bytes.clone();
+        padded.extend_from_slice(&[0u8; 3]);
+        assert!(matches!(
+            CsiFrame::from_canonical_bytes(&padded),
+            Err(CanonicalDecodeError::TrailingBytes(3))
+        ));
+
+        // Bad frequency-band discriminant fails. Band byte sits right after
+        // id(16) + seconds(8) + nanos(4) + dev_len(4) + dev("n" = 1).
+        let mut bad = bytes.clone();
+        bad[16 + 8 + 4 + 4 + 1] = 9;
+        assert!(matches!(
+            CsiFrame::from_canonical_bytes(&bad),
+            Err(CanonicalDecodeError::BadDiscriminant { field: "frequency_band", value: 9 })
+        ));
+
+        // A nil calibration uuid decodes as None (the documented encoding).
+        let replayed = CsiFrame::from_canonical_bytes(&bytes).unwrap();
+        assert_eq!(replayed.metadata.calibration_id, None);
+    }
+
+    /// AC8b (review finding 7) — decoder strictness = injectivity on the
+    /// accepted domain: forged nonzero bytes in the `spacing_mm` reserved
+    /// region are rejected, so for accepted inputs `re-encode != original`
+    /// is impossible.
+    #[test]
+    fn ac8b_forged_reserved_spacing_bytes_rejected() {
+        use ndarray::Array2;
+        let meta = CsiMetadata::new(DeviceId::new("n"), FrequencyBand::Band2_4GHz, 1);
+        let data = Array2::from_shape_fn((1, 4), |(_, c)| Complex64::new(c as f64, 0.0));
+        let frame = CsiFrame::new(meta, data);
+        let bytes = frame.to_canonical_bytes();
+
+        // Spacing tag sits after id(16)+secs(8)+nanos(4)+dev_len(4)+dev("n"=1)
+        // + band(1)+channel(1)+bw(2)+tx(1)+rx(1); the 4 reserved bytes follow.
+        let tag_off = 16 + 8 + 4 + 4 + 1 + 1 + 1 + 2 + 1 + 1;
+        assert_eq!(bytes[tag_off], 0, "fixture must encode spacing_mm = None");
+        assert_eq!(&bytes[tag_off + 1..tag_off + 5], &[0u8; 4]);
+
+        // Sanity: the canonical bytes decode and re-encode byte-identically.
+        let ok = CsiFrame::from_canonical_bytes(&bytes).unwrap();
+        assert_eq!(ok.to_canonical_bytes(), bytes);
+
+        // Forge each reserved byte: the decoder must fail closed (before the
+        // fix it decoded to the same frame, whose re-encoding differed from
+        // the forged original — a witness-replay ambiguity).
+        for i in 1..=4 {
+            let mut forged = bytes.clone();
+            forged[tag_off + i] = 0xAB;
+            assert!(matches!(
+                CsiFrame::from_canonical_bytes(&forged),
+                Err(CanonicalDecodeError::ReservedNotZero { field: "spacing_mm" })
+            ));
+        }
+    }
+
+    /// Security pin (review 2026-06, ADR-127) — `from_canonical_bytes` is a
+    /// deserialisation boundary for replayed/forwarded captures. A forged header
+    /// advertising an enormous `rows × cols` must be rejected by the
+    /// shape-vs-length check (`expect` uses saturating multiplies) BEFORE the
+    /// `Vec::with_capacity(rows * cols)` allocation — otherwise an attacker could
+    /// drive a multi-GB allocation from a few header bytes (unbounded-memory
+    /// DoS). The check guarantees `rows*cols*16 <= bytes.len()`, so the capacity
+    /// is bounded by the input the caller already holds. This must not OOM.
+    #[test]
+    fn canonical_decode_oversized_shape_is_bounded_not_allocated() {
+        use ndarray::Array2;
+        let meta = CsiMetadata::new(DeviceId::new("n"), FrequencyBand::Band2_4GHz, 1);
+        let data = Array2::from_shape_fn((1, 2), |(_, c)| Complex64::new(c as f64, 0.0));
+        let mut bytes = CsiFrame::new(meta, data).to_canonical_bytes();
+
+        // The (rows, cols) u32 pair is the last 8 bytes before the payload.
+        // Overwrite with a maximal claim (u32::MAX × u32::MAX) and lop off the
+        // payload so the buffer is tiny but the header lies enormously.
+        let shape_off = bytes.len() - 8 - 2 * 16; // 2 samples × 16 bytes payload
+        bytes[shape_off..shape_off + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        bytes[shape_off + 4..shape_off + 8].copy_from_slice(&u32::MAX.to_le_bytes());
+        bytes.truncate(shape_off + 8); // drop the real payload
+
+        // expect = MAX*MAX*16 (saturated) > found → PayloadMismatch, no alloc.
+        assert!(matches!(
+            CsiFrame::from_canonical_bytes(&bytes),
+            Err(CanonicalDecodeError::PayloadMismatch { .. })
+        ));
+    }
+
+    /// Security pin (review 2026-06) — the decoder must never panic on arbitrary
+    /// bytes: every malformed input is a typed `CanonicalDecodeError`, never an
+    /// unwinding panic (panic-on-adversarial-input = 0). Sweep truncations and a
+    /// deterministic fuzz spread.
+    #[test]
+    fn canonical_decode_never_panics_on_arbitrary_bytes() {
+        use ndarray::Array2;
+        let mut meta = CsiMetadata::new(DeviceId::new("node"), FrequencyBand::Band5GHz, 36);
+        meta.antenna_config.spacing_mm = Some(50.0);
+        let data = Array2::from_shape_fn((2, 8), |(r, c)| Complex64::new(r as f64, c as f64));
+        let good = CsiFrame::new(meta, data).to_canonical_bytes();
+
+        // Every prefix of a valid encoding must decode without panicking.
+        for n in 0..good.len() {
+            let _ = CsiFrame::from_canonical_bytes(&good[..n]);
+        }
+        // Deterministic LCG fuzz over varied lengths.
+        let mut st = 0xDEAD_BEEFu64;
+        for len in 0..400usize {
+            let buf: Vec<u8> = (0..len)
+                .map(|_| {
+                    st = st
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1_442_695_040_888_963_407);
+                    (st >> 33) as u8
+                })
+                .collect();
+            let _ = CsiFrame::from_canonical_bytes(&buf);
+        }
+    }
+
+    /// AC8c (review finding 7) — `Some(Uuid::nil())` calibration is an
+    /// encoding error: nil is the wire sentinel for `None`, so encoding it
+    /// would alias two distinct frames to one byte string (and one witness).
+    #[test]
+    #[should_panic(expected = "nil is the None sentinel")]
+    fn ac8c_nil_calibration_id_is_an_encoding_error() {
+        use ndarray::Array2;
+        let mut meta = CsiMetadata::new(DeviceId::new("n"), FrequencyBand::Band2_4GHz, 1);
+        meta.calibration_id = Some(uuid::Uuid::nil());
+        let data = Array2::from_shape_fn((1, 2), |(_, c)| Complex64::new(c as f64, 0.0));
+        let _ = CsiFrame::new(meta, data).to_canonical_bytes();
     }
 
     /// AC3 — `serde(default)` forward-read of pre-ADR-136 metadata JSON.

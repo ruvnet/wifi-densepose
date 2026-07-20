@@ -48,6 +48,8 @@ pub struct PromptShield {
     cd_replay: u16,
     cd_inject: u16,
     cd_jam: u16,
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
 }
 
 impl PromptShield {
@@ -58,6 +60,7 @@ impl PromptShield {
             baseline_snr: 0.0, cal_amp: 0.0, cal_var: 0.0, cal_n: 0,
             calibrated: false, low_snr_run: 0, frame_count: 0,
             cd_replay: 0, cd_inject: 0, cd_jam: 0,
+            events: [(0, 0.0); 4],
         }
     }
 
@@ -70,7 +73,6 @@ impl PromptShield {
         self.cd_inject = self.cd_inject.saturating_sub(1);
         self.cd_jam = self.cd_jam.saturating_sub(1);
 
-        static mut EV: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut ne = 0usize;
 
         // Frame features: mean phase, mean amp, amp variance.
@@ -98,7 +100,7 @@ impl PromptShield {
             }
             let h = self.fnv1a(m_ph, m_a, a_var);
             self.push_hash(h);
-            return unsafe { &EV[..0] };
+            return &self.events[..0];
         }
 
         // ── 1. Replay ───────────────────────────────────────────────────
@@ -106,7 +108,7 @@ impl PromptShield {
         let replay = self.has_hash(h);
         self.push_hash(h);
         if replay && self.cd_replay == 0 {
-            unsafe { EV[ne] = (EVENT_REPLAY_ATTACK, 1.0); }
+            self.events[ne] = (EVENT_REPLAY_ATTACK, 1.0);
             ne += 1; self.cd_replay = COOLDOWN;
         }
 
@@ -121,7 +123,7 @@ impl PromptShield {
             jc as f32 / n as f32
         } else { 0.0 };
         if inj_f >= INJECTION_FRAC && self.cd_inject == 0 && ne < 4 {
-            unsafe { EV[ne] = (EVENT_INJECTION_DETECTED, inj_f); }
+            self.events[ne] = (EVENT_INJECTION_DETECTED, inj_f);
             ne += 1; self.cd_inject = COOLDOWN;
         }
 
@@ -133,7 +135,7 @@ impl PromptShield {
         } else { self.low_snr_run = 0; }
         if self.low_snr_run >= JAMMING_CONSEC && self.cd_jam == 0 && ne < 4 {
             let r = if cur_snr > 0.0001 { self.baseline_snr / cur_snr } else { 1000.0 };
-            unsafe { EV[ne] = (EVENT_JAMMING_DETECTED, 10.0 * log10f(r)); }
+            self.events[ne] = (EVENT_JAMMING_DETECTED, 10.0 * log10f(r));
             ne += 1; self.cd_jam = COOLDOWN;
         }
 
@@ -146,12 +148,12 @@ impl PromptShield {
                 let r = cur_snr / self.baseline_snr;
                 if r < 0.5 { s -= (1.0 - r * 2.0).min(0.3); }
             }
-            unsafe { EV[ne] = (EVENT_SIGNAL_INTEGRITY, if s < 0.0 { 0.0 } else { s }); }
+            self.events[ne] = (EVENT_SIGNAL_INTEGRITY, if s < 0.0 { 0.0 } else { s });
             ne += 1;
         }
 
         for i in 0..n { self.prev_amps[i] = amps[i]; }
-        unsafe { &EV[..ne] }
+        &self.events[..ne]
     }
 
     fn fnv1a(&self, ph: f32, amp: f32, var: f32) -> u32 {

@@ -265,6 +265,12 @@ pub struct SensorPosition {
     pub sensor_type: SensorType,
     /// Whether sensor is operational
     pub is_operational: bool,
+    /// Most recent measured RSSI (dBm) from this sensor toward the current
+    /// detection, when available from real hardware. `None` means no live
+    /// signal-strength reading is plumbed for this sensor (e.g. single-node
+    /// deployment or simulated zone) — localization will not fabricate one.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub last_rssi: Option<f64>,
 }
 
 /// Types of sensors
@@ -482,6 +488,7 @@ mod tests {
                 z: 1.5,
                 sensor_type: SensorType::Transceiver,
                 is_operational: true,
+                last_rssi: None,
             });
         }
 

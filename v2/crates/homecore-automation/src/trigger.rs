@@ -150,7 +150,12 @@ impl Trigger {
                 true
             }
             Trigger::Time { .. } => {
-                // Time triggers are evaluated by the engine's timer task, not here.
+                // Time triggers are wall-clock based and have no state-change
+                // context to match here. They are evaluated by the engine's
+                // 1 Hz timer task (`AutomationEngine::start_timer`, HC-WS-04 /
+                // ADR-161), which compares the trigger's `at` against the local
+                // wall-clock second. `matches_sync` therefore returns false for
+                // `Time` on the state-change path by design.
                 false
             }
             Trigger::Event { event_type } => {

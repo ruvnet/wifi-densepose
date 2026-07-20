@@ -13,6 +13,27 @@
 
 use crate::ruvsense::field_model::WelfordStats;
 
+/// Nanoseconds per day, for migration-rate (m/day) conversion (ADR-154 §7.4 —
+/// de-magicked from the inline `86_400_000_000_000.0` literal). 24·60·60·1e9.
+const NS_PER_DAY: f64 = 86_400_000_000_000.0;
+
+/// Minimum observed span (in days) below which migration rate is reported as
+/// 0.0 — guards `cumulative_drift_m / span_days` against a near-zero span.
+const MIGRATION_MIN_SPAN_DAYS: f64 = 1e-9;
+
+// ADR-154 §7.4: the v1 fixed-map defaults below were bare literals in
+// `fixed_map()`. They are EMPIRICAL DEFAULTS (ADR-143), unchanged.
+
+/// Default association radius (m): a sighting within this of a reflector's
+/// running mean is folded into it; otherwise it seeds a new reflector.
+const FIXED_MAP_ASSOC_RADIUS_M: f64 = 0.5;
+
+/// Default minimum sightings before a reflector counts as "persistent".
+const FIXED_MAP_MIN_SIGHTINGS: u64 = 20;
+
+/// Default minimum tap coherence for a sighting to be admitted.
+const FIXED_MAP_MIN_COHERENCE: f32 = 0.6;
+
 /// Classification of a discovered persistent reflector (mirrors ADR-139
 /// `AnchorKind`; kept local to avoid a crate dependency on the WorldGraph).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,8 +123,8 @@ impl PersistentReflector {
         if span_ns == 0 {
             return 0.0;
         }
-        let span_days = span_ns as f64 / 86_400_000_000_000.0; // ns → days
-        if span_days < 1e-9 {
+        let span_days = span_ns as f64 / NS_PER_DAY; // ns → days
+        if span_days < MIGRATION_MIN_SPAN_DAYS {
             return 0.0;
         }
         self.cumulative_drift_m / span_days
@@ -145,9 +166,9 @@ impl RfSlam {
     pub fn fixed_map() -> Self {
         Self {
             reflectors: Vec::new(),
-            assoc_radius_m: 0.5,
-            min_sightings: 20,
-            min_coherence: 0.6,
+            assoc_radius_m: FIXED_MAP_ASSOC_RADIUS_M,
+            min_sightings: FIXED_MAP_MIN_SIGHTINGS,
+            min_coherence: FIXED_MAP_MIN_COHERENCE,
             discovery_enabled: false,
         }
     }
@@ -297,5 +318,30 @@ mod tests {
         let anchors = slam.static_anchors(0.05, 1.0);
         assert_eq!(anchors.len(), 1);
         assert_eq!(anchors[0].1, ReflectorClass::Wall);
+    }
+
+    // -- ADR-154 §7.4: de-magic-constant + boundary characterization tests.
+
+    /// De-magicked constants must equal the prior inline literals.
+    #[test]
+    fn migration_consts_unchanged_from_literals() {
+        assert_eq!(NS_PER_DAY, 86_400_000_000_000.0);
+        assert_eq!(NS_PER_DAY, 24.0 * 60.0 * 60.0 * 1e9);
+        assert_eq!(MIGRATION_MIN_SPAN_DAYS, 1e-9);
+        assert_eq!(FIXED_MAP_ASSOC_RADIUS_M, 0.5);
+        assert_eq!(FIXED_MAP_MIN_SIGHTINGS, 20);
+        assert_eq!(FIXED_MAP_MIN_COHERENCE, 0.6_f32);
+    }
+
+    /// A single sighting has first_ns == last_ns ⇒ zero span ⇒ migration rate
+    /// 0.0 (pins the `span_ns == 0` / `span_days < MIGRATION_MIN_SPAN_DAYS`
+    /// guard, and that such a reflector classifies as a Wall).
+    #[test]
+    fn migration_zero_span_is_zero_rate() {
+        let mut slam = RfSlam::with_discovery(0.5, 1, 0.6);
+        slam.observe(&obs([1.0, 2.0, 0.0], 12_345));
+        let r = slam.persistent()[0];
+        assert_eq!(r.migration_m_per_day(), 0.0);
+        assert_eq!(r.classify(0.05, 1.0), ReflectorClass::Wall);
     }
 }

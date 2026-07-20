@@ -411,6 +411,23 @@ include a conformance layer if regulatory certification is sought.
 
 ### 3.6 Matching Algorithm
 
+> **Implementation status (§3.6 only):** The matching algorithm described below
+> is **implemented and tested** in
+> `v2/crates/wifi-densepose-bfld/src/soul_match.rs` (+ `soul_channels.rs`),
+> with tests in `v2/crates/wifi-densepose-bfld/tests/soul_match.rs`. The
+> implementation is the **first running** version of this formula in the repo:
+> it computes calibrated per-channel scores and exposes a real
+> `SoulMatchOracle` (`EnrolledMatcher`). **Caveats that remain true:** the
+> weights below are unvalidated design intent; named-identity locking is
+> **data-gated** — it requires the decisive high-weight channels (a real AETHER
+> enrollment embedding + body-resonance) to be fed real measured data, which has
+> NOT been done. Measured on synthetic data, the cardiac (0.15) + respiratory
+> (0.10) channels **alone** produce a same-vs-cross-person score gap of ~0.0005
+> (test `cardiac_alone_cannot_separate_identity_matches_audit`) — i.e. identity
+> is NOT separable on those channels, exactly as expected. This status note
+> applies to §3.6 ONLY; the broader Soul Signature system remains
+> Pre-Implementation.
+
 Given a stored profile `P` and a query embedding `Q` derived from a live sensing
 window, the match score is computed as a weighted sum of per-channel cosine
 similarities:

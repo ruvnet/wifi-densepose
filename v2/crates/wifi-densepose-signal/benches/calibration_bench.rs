@@ -1,7 +1,7 @@
 //! Criterion benchmarks for the empty-room baseline calibration module (ADR-135).
 //!
 //! Measures per-call throughput of CalibrationRecorder and BaselineCalibration
-//! across HT20 (K=52), HT40 (K=114), HE20 (K=242), and HE40 (K=484).
+//! across HT20 (K=52), HT40 (K=114), HE20 (K=256, all bins; #1009), and HE40 (K=484).
 //!
 //! Run (compile-only — no execution):
 //!   cargo bench -p wifi-densepose-signal --no-default-features --bench calibration_bench --no-run
@@ -63,7 +63,8 @@ fn tiers() -> Vec<TierSpec> {
     vec![
         TierSpec { label: "ht20", n_active: 52,  bandwidth_mhz: 20, config: CalibrationConfig::ht20() },
         TierSpec { label: "ht40", n_active: 114, bandwidth_mhz: 40, config: CalibrationConfig::ht40() },
-        TierSpec { label: "he20", n_active: 242, bandwidth_mhz: 20, config: CalibrationConfig::he20() },
+        // Issue #1009 §1b: HE20 records all 256 delivered bins (he20().num_active == 256).
+        TierSpec { label: "he20", n_active: 256, bandwidth_mhz: 20, config: CalibrationConfig::he20() },
         TierSpec { label: "he40", n_active: 484, bandwidth_mhz: 40, config: CalibrationConfig::he40() },
     ]
 }

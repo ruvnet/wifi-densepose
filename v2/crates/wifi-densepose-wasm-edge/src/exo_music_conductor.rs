@@ -99,6 +99,8 @@ pub const EVENT_GESTURE_FERMATA: i32 = 634;
 /// Extracts tempo, beat position, dynamics, and special gestures from
 /// WiFi CSI motion patterns.
 pub struct MusicConductorDetector {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 5],
     /// Circular buffer of motion energy samples.
     motion_buf: CircularBuffer<BUF_LEN>,
     /// Autocorrelation values at lags MIN_LAG..MAX_LAG.
@@ -132,6 +134,7 @@ pub struct MusicConductorDetector {
 impl MusicConductorDetector {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 5],
             motion_buf: CircularBuffer::new(),
             autocorr: [0.0; MAX_LAG],
             tempo_ema: Ema::new(TEMPO_ALPHA),
@@ -165,7 +168,6 @@ impl MusicConductorDetector {
         motion_energy: f32,
         _variance: f32,
     ) -> &[(i32, f32)] {
-        static mut EVENTS: [(i32, f32); 5] = [(0, 0.0); 5];
         let mut n_ev = 0usize;
 
         self.frame_count += 1;
@@ -277,37 +279,27 @@ impl MusicConductorDetector {
 
         // ── Emit events ──
         if self.tempo_ema.is_initialized() {
-            unsafe {
-                EVENTS[n_ev] = (EVENT_CONDUCTOR_BPM, self.tempo_ema.value);
-            }
+            self.events[n_ev] = (EVENT_CONDUCTOR_BPM, self.tempo_ema.value);
             n_ev += 1;
 
-            unsafe {
-                EVENTS[n_ev] = (EVENT_BEAT_POSITION, beat_position as f32);
-            }
+            self.events[n_ev] = (EVENT_BEAT_POSITION, beat_position as f32);
             n_ev += 1;
         }
 
-        unsafe {
-            EVENTS[n_ev] = (EVENT_DYNAMIC_LEVEL, dynamic_level);
-        }
+        self.events[n_ev] = (EVENT_DYNAMIC_LEVEL, dynamic_level);
         n_ev += 1;
 
         if self.cutoff_detected {
-            unsafe {
-                EVENTS[n_ev] = (EVENT_GESTURE_CUTOFF, 1.0);
-            }
+            self.events[n_ev] = (EVENT_GESTURE_CUTOFF, 1.0);
             n_ev += 1;
         }
 
         if self.fermata_active {
-            unsafe {
-                EVENTS[n_ev] = (EVENT_GESTURE_FERMATA, 1.0);
-            }
+            self.events[n_ev] = (EVENT_GESTURE_FERMATA, 1.0);
             n_ev += 1;
         }
 
-        unsafe { &EVENTS[..n_ev] }
+        &self.events[..n_ev]
     }
 
     /// Compute buffer mean and variance (single-pass).

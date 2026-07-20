@@ -43,17 +43,28 @@
 // All *this* crate's code is written without unsafe blocks.
 #![warn(missing_docs)]
 
+/// Metric-locked pose-accuracy harness (ADR-155 §Tier-1.2; needs ADR slot 173)
+/// — selectable `PckNormalization` (torso / bbox-diagonal / absolute), `mpjpe`,
+/// and a self-describing `PoseAccuracy` result so a reported PCK number always
+/// carries the definition it was computed under.
+pub mod accuracy;
 pub mod config;
 pub mod dataset;
 pub mod domain;
 pub mod error;
 pub mod eval;
 pub mod geometry;
+pub mod mae;
+/// Canonical pose-metric core (ADR-155 §Tier-1.1) — `pck_canonical` /
+/// `oks_canonical`, available **without** the `tch-backend` feature so the
+/// single metric definition is reachable from the workspace test gate.
+pub mod metrics_core;
 pub mod rapid_adapt;
 pub mod ruview_metrics;
 pub mod signal_features;
 pub mod subcarrier;
 pub mod virtual_aug;
+pub mod wiflow_std;
 
 // The following modules use `tch` (PyTorch Rust bindings) for GPU-accelerated
 // training and are only compiled when the `tch-backend` feature is enabled.
@@ -70,21 +81,43 @@ pub mod proof;
 
 /// ADR-145 — ablation evaluation harness (feature matrix + privacy/latency metrics).
 pub mod ablation;
+/// Falsifiable occupancy/presence benchmark (real-CSI gate: provenance,
+/// leak-free split, bootstrap-CI thresholds; refuses claims on synthetic/mock).
+pub mod occupancy_bench;
 #[cfg(feature = "tch-backend")]
 pub mod trainer;
 
 // Convenient re-exports at the crate root.
+// Canonical metric (ADR-155 §Tier-1.1) — re-exported un-gated so the single
+// source of truth is reachable with or without `tch-backend`.
+pub use metrics_core::{
+    canonical_torso_size, oks_canonical, pck_canonical, CANON_LEFT_HIP, CANON_RIGHT_HIP,
+    COCO_KP_SIGMAS,
+};
+// ADR-155 §Tier-1.2 — metric-locked accuracy harness (selectable PCK
+// normalization + MPJPE + self-describing result).
+pub use accuracy::{
+    accuracy_report, mpjpe as pck_mpjpe, pck_at, PckNormalization, PoseAccuracy, PoseFrame,
+};
 pub use config::TrainingConfig;
 pub use dataset::{
     CsiDataset, CsiSample, DataLoader, MmFiDataset, SyntheticConfig, SyntheticCsiDataset,
 };
-pub use error::{ConfigError, DatasetError, SubcarrierError, TrainError};
+pub use error::{ConfigError, DatasetError, MaeError, SubcarrierError, TrainError};
 // TrainResult<T> is the generic Result alias from error.rs; the concrete
 // TrainResult struct from trainer.rs is accessed via trainer::TrainResult.
 pub use error::TrainResult as TrainResultAlias;
 pub use subcarrier::{
     compute_interp_weights, interpolate_subcarriers, select_subcarriers_by_variance,
 };
+
+// ADR-152 §2.3 — UNSW MAE pretraining recipe re-exports.
+pub use mae::{patchify, random_mask, unpatchify, MaePretrainConfig, MaskIndices, PatchGrid};
+
+// ADR-152 §2.2 — WiFlow-STD (DY2434) spatio-temporal-decoupled pose model.
+pub use wiflow_std::WiFlowStdConfig;
+#[cfg(feature = "tch-backend")]
+pub use wiflow_std::WiFlowStdModel;
 
 // MERIDIAN (ADR-027) re-exports.
 pub use domain::{AdversarialSchedule, DomainClassifier, DomainFactorizer, GradientReversalLayer};

@@ -55,6 +55,8 @@ pub enum WorkerState {
 
 /// Confined space monitor.
 pub struct ConfinedSpaceMonitor {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
     /// Current worker state.
     state: WorkerState,
     /// Presence debounce counters.
@@ -79,6 +81,7 @@ pub struct ConfinedSpaceMonitor {
 impl ConfinedSpaceMonitor {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 4],
             state: WorkerState::Empty,
             present_count: 0,
             absent_count: 0,
@@ -110,7 +113,6 @@ impl ConfinedSpaceMonitor {
     ) -> &[(i32, f32)] {
         self.frame_count += 1;
 
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n_events = 0usize;
 
         // --- Step 1: Debounced presence detection ---
@@ -141,7 +143,7 @@ impl ConfinedSpaceMonitor {
             self.extraction_alerted = false;
             self.immobile_alerted = false;
             if n_events < 4 {
-                unsafe { EVENTS[n_events] = (EVENT_WORKER_ENTRY, 1.0); }
+                self.events[n_events] = (EVENT_WORKER_ENTRY, 1.0);
                 n_events += 1;
             }
         }
@@ -150,7 +152,7 @@ impl ConfinedSpaceMonitor {
         if !self.worker_inside && was_inside {
             self.state = WorkerState::Empty;
             if n_events < 4 {
-                unsafe { EVENTS[n_events] = (EVENT_WORKER_EXIT, 1.0); }
+                self.events[n_events] = (EVENT_WORKER_EXIT, 1.0);
                 n_events += 1;
             }
         }
@@ -169,7 +171,7 @@ impl ConfinedSpaceMonitor {
 
                 // Periodic breathing confirmation.
                 if self.frame_count % BREATHING_REPORT_INTERVAL == 0 && n_events < 4 {
-                    unsafe { EVENTS[n_events] = (EVENT_BREATHING_OK, breathing_bpm); }
+                    self.events[n_events] = (EVENT_BREATHING_OK, breathing_bpm);
                     n_events += 1;
                 }
             } else {
@@ -197,7 +199,7 @@ impl ConfinedSpaceMonitor {
                 self.state = WorkerState::BreathingCeased;
                 self.extraction_alerted = true;
                 let seconds = self.no_breathing_frames as f32 / 20.0;
-                unsafe { EVENTS[n_events] = (EVENT_EXTRACTION_ALERT, seconds); }
+                self.events[n_events] = (EVENT_EXTRACTION_ALERT, seconds);
                 n_events += 1;
             }
 
@@ -209,12 +211,12 @@ impl ConfinedSpaceMonitor {
                 self.state = WorkerState::Immobile;
                 self.immobile_alerted = true;
                 let seconds = self.no_motion_frames as f32 / 20.0;
-                unsafe { EVENTS[n_events] = (EVENT_IMMOBILE_ALERT, seconds); }
+                self.events[n_events] = (EVENT_IMMOBILE_ALERT, seconds);
                 n_events += 1;
             }
         }
 
-        unsafe { &EVENTS[..n_events] }
+        &self.events[..n_events]
     }
 
     /// Current worker state.

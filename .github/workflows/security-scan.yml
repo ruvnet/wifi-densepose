@@ -28,6 +28,7 @@ jobs:
       continue-on-error: true
       uses: actions/checkout@v4
       with:
+        submodules: recursive
         fetch-depth: 0
 
     - name: Set up Python
@@ -97,6 +98,8 @@ jobs:
     - name: Checkout code
       continue-on-error: true
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Set up Python
       continue-on-error: true
@@ -164,6 +167,8 @@ jobs:
     - name: Checkout code
       continue-on-error: true
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Set up Docker Buildx
       continue-on-error: true
@@ -245,6 +250,8 @@ jobs:
     - name: Checkout code
       continue-on-error: true
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Run Checkov IaC scan
       continue-on-error: true
@@ -307,6 +314,7 @@ jobs:
       continue-on-error: true
       uses: actions/checkout@v4
       with:
+        submodules: recursive
         fetch-depth: 0
 
     - name: Run TruffleHog secret scan
@@ -341,6 +349,8 @@ jobs:
     - name: Checkout code
       continue-on-error: true
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Set up Python
       continue-on-error: true
@@ -378,6 +388,8 @@ jobs:
     - name: Checkout code
       continue-on-error: true
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Check security policy files
       continue-on-error: true

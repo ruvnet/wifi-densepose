@@ -53,13 +53,24 @@ impl FeatureSet {
 }
 
 /// `(p50, p95)` percentiles of a latency sample set (ms), nearest-rank.
+///
+/// Non-finite samples (NaN / ±inf) are discarded before ranking. Sorting uses
+/// [`f64::total_cmp`] so a stray NaN can never trigger a `partial_cmp().unwrap()`
+/// panic (ADR-155 §Tier-2). If every sample is non-finite (or the slice is
+/// empty), returns `(0.0, 0.0)`.
 #[must_use]
 pub fn latency_percentiles_ms(samples_ms: &[f64]) -> (f64, f64) {
-    if samples_ms.is_empty() {
+    // Drop non-finite values: a NaN latency is meaningless and must not poison
+    // the ranking or panic the sort.
+    let mut s: Vec<f64> = samples_ms
+        .iter()
+        .copied()
+        .filter(|v| v.is_finite())
+        .collect();
+    if s.is_empty() {
         return (0.0, 0.0);
     }
-    let mut s = samples_ms.to_vec();
-    s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    s.sort_by(f64::total_cmp);
     let pick = |q: f64| {
         // Nearest-rank: ceil(q * n) - 1, clamped.
         let rank = ((q * s.len() as f64).ceil() as usize).clamp(1, s.len()) - 1;
@@ -71,8 +82,16 @@ pub fn latency_percentiles_ms(samples_ms: &[f64]) -> (f64, f64) {
 /// False-positive and false-negative rates from a confusion count.
 #[must_use]
 pub fn confusion_rates(tp: u64, fp: u64, tn: u64, fn_: u64) -> (f64, f64) {
-    let fp_rate = if fp + tn == 0 { 0.0 } else { fp as f64 / (fp + tn) as f64 };
-    let fn_rate = if fn_ + tp == 0 { 0.0 } else { fn_ as f64 / (fn_ + tp) as f64 };
+    let fp_rate = if fp + tn == 0 {
+        0.0
+    } else {
+        fp as f64 / (fp + tn) as f64
+    };
+    let fn_rate = if fn_ + tp == 0 {
+        0.0
+    } else {
+        fn_ as f64 / (fn_ + tp) as f64
+    };
     (fp_rate, fn_rate)
 }
 
@@ -164,7 +183,10 @@ impl AblationMetrics {
             fn_rate,
             latency_p50_ms: p50,
             latency_p95_ms: p95,
-            privacy_leakage: membership_inference_leakage(&run.member_scores, &run.nonmember_scores),
+            privacy_leakage: membership_inference_leakage(
+                &run.member_scores,
+                &run.nonmember_scores,
+            ),
             cross_room_degradation: (run.room_a_accuracy - run.room_b_accuracy).max(0.0),
         }
     }
@@ -181,7 +203,9 @@ impl AblationReport {
     /// Build from a set of variant runs.
     #[must_use]
     pub fn from_runs(runs: &[VariantRun]) -> Self {
-        Self { rows: runs.iter().map(AblationMetrics::from_run).collect() }
+        Self {
+            rows: runs.iter().map(AblationMetrics::from_run).collect(),
+        }
     }
 
     /// Look up a variant's metrics.
@@ -194,7 +218,8 @@ impl AblationReport {
     /// least `min_wins` of {presence accuracy ↑, localisation error ↓, p95 latency ↓}?
     #[must_use]
     pub fn csi_cir_beats_csi_only(&self, min_wins: usize) -> bool {
-        let (Some(a), Some(b)) = (self.get(FeatureSet::CsiOnly), self.get(FeatureSet::CsiCir)) else {
+        let (Some(a), Some(b)) = (self.get(FeatureSet::CsiOnly), self.get(FeatureSet::CsiCir))
+        else {
             return false;
         };
         let wins = [
@@ -247,6 +272,30 @@ mod tests {
         assert!((p50 - 50.0).abs() < 1e-9);
         assert!((p95 - 95.0).abs() < 1e-9);
         assert_eq!(latency_percentiles_ms(&[]), (0.0, 0.0));
+    }
+
+    // ADR-155 §Tier-2: a NaN in the latency samples must NOT panic the sort
+    // (the old `partial_cmp().unwrap()` did) and must yield a sane percentile
+    // computed over the finite values only.
+    #[test]
+    fn latency_percentiles_with_nan_does_not_panic() {
+        let s = vec![
+            10.0,
+            f64::NAN,
+            20.0,
+            30.0,
+            f64::INFINITY,
+            40.0,
+            f64::NEG_INFINITY,
+            50.0,
+        ];
+        let (p50, p95) = latency_percentiles_ms(&s);
+        // Finite set is [10,20,30,40,50]; nearest-rank p50=30, p95=50.
+        assert!(p50.is_finite() && p95.is_finite());
+        assert!((p50 - 30.0).abs() < 1e-9);
+        assert!((p95 - 50.0).abs() < 1e-9);
+        // All-NaN input degrades gracefully to (0, 0).
+        assert_eq!(latency_percentiles_ms(&[f64::NAN, f64::NAN]), (0.0, 0.0));
     }
 
     #[test]

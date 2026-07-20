@@ -60,6 +60,11 @@ impl Triangulator {
         Self::new(TriangulationConfig::default())
     }
 
+    /// Access the triangulation configuration.
+    pub fn config(&self) -> &TriangulationConfig {
+        &self.config
+    }
+
     /// Estimate position from RSSI measurements
     pub fn estimate_position(
         &self,
@@ -234,8 +239,13 @@ impl Triangulator {
 
         let rmse = (sum_sq_error / distances.len() as f64).sqrt();
 
-        // GDOP (Geometric Dilution of Precision) approximation
-        let gdop = self.estimate_gdop(position, distances);
+        // Real, dimensionless GDOP (Geometric Dilution of Precision). Falls back
+        // to a unit factor for a degenerate (collinear) geometry where (HᵀH) is
+        // singular — that geometry already produces a large residual RMSE.
+        let gdop = self
+            .compute_gdop(position, distances)
+            .unwrap_or(1.0)
+            .max(1.0);
 
         LocationUncertainty {
             horizontal_error: rmse * gdop,
@@ -244,45 +254,59 @@ impl Triangulator {
         }
     }
 
-    /// Estimate Geometric Dilution of Precision
-    fn estimate_gdop(&self, position: &[f64], distances: &[(SensorPosition, f64)]) -> f64 {
-        // Simplified GDOP based on sensor geometry
-        let mut sum_angle = 0.0;
-        let n = distances.len();
+    /// Compute the real Geometric Dilution of Precision (GDOP).
+    ///
+    /// GDOP is the dimensionless factor by which measurement (range) noise is
+    /// amplified into position error by the sensor geometry. For range-based 2D
+    /// positioning the measurement Jacobian `H` has one row per sensor equal to
+    /// the unit bearing vector from the target to that sensor,
+    /// `[ (xₛ-xₜ)/d , (yₛ-yₜ)/d ]`. The position covariance (per unit measurement
+    /// variance) is `(HᵀH)⁻¹`, and
+    ///
+    /// ```text
+    /// GDOP = sqrt( trace( (HᵀH)⁻¹ ) )
+    /// ```
+    ///
+    /// This is the same quantity ADR-156 §2.3 corrected elsewhere — a genuine
+    /// dimensionless dilution, not the previous ad-hoc average-angle factor that
+    /// was merely *labelled* GDOP. Returns `None` when `HᵀH` is singular
+    /// (collinear / coincident geometry), which the caller treats as no
+    /// dilution information (factor 1.0).
+    fn compute_gdop(&self, position: &[f64], distances: &[(SensorPosition, f64)]) -> Option<f64> {
+        let (tx, ty) = (position[0], position[1]);
 
-        for i in 0..n {
-            for j in (i + 1)..n {
-                let dx1 = distances[i].0.x - position[0];
-                let dy1 = distances[i].0.y - position[1];
-                let dx2 = distances[j].0.x - position[0];
-                let dy2 = distances[j].0.y - position[1];
-
-                let dot = dx1 * dx2 + dy1 * dy2;
-                let mag1 = (dx1 * dx1 + dy1 * dy1).sqrt();
-                let mag2 = (dx2 * dx2 + dy2 * dy2).sqrt();
-
-                if mag1 > 0.0 && mag2 > 0.0 {
-                    let cos_angle = (dot / (mag1 * mag2)).clamp(-1.0, 1.0);
-                    let angle = cos_angle.acos();
-                    sum_angle += angle;
-                }
+        // Accumulate HᵀH (2×2, symmetric) from unit bearing vectors.
+        let (mut hxx, mut hxy, mut hyy) = (0.0_f64, 0.0_f64, 0.0_f64);
+        let mut rows = 0usize;
+        for (sensor, _dist) in distances {
+            let dx = sensor.x - tx;
+            let dy = sensor.y - ty;
+            let d = (dx * dx + dy * dy).sqrt();
+            if d <= f64::EPSILON {
+                continue; // target coincident with sensor: undefined bearing
             }
+            let ux = dx / d;
+            let uy = dy / d;
+            hxx += ux * ux;
+            hxy += ux * uy;
+            hyy += uy * uy;
+            rows += 1;
         }
 
-        // Average angle between sensor pairs
-        let num_pairs = (n * (n - 1)) as f64 / 2.0;
-        let avg_angle = if num_pairs > 0.0 {
-            sum_angle / num_pairs
-        } else {
-            std::f64::consts::PI / 4.0
-        };
+        if rows < 2 {
+            return None;
+        }
 
-        // GDOP is better when sensors are spread out (angle closer to 90 degrees)
-        // GDOP gets worse as sensors are collinear
-        let optimal_angle = std::f64::consts::PI / 2.0;
-        let angle_factor = (avg_angle / optimal_angle - 1.0).abs() + 1.0;
-
-        angle_factor.max(1.0)
+        // Invert the 2×2 HᵀH. trace((HᵀH)⁻¹) = (hxx + hyy) / det.
+        let det = hxx * hyy - hxy * hxy;
+        if det.abs() < 1e-12 {
+            return None; // singular: collinear geometry
+        }
+        let trace_inv = (hxx + hyy) / det;
+        if trace_inv <= 0.0 {
+            return None;
+        }
+        Some(trace_inv.sqrt())
     }
 }
 
@@ -300,6 +324,7 @@ mod tests {
                 z: 1.5,
                 sensor_type: SensorType::Transceiver,
                 is_operational: true,
+                last_rssi: None,
             },
             SensorPosition {
                 id: "s2".to_string(),
@@ -308,6 +333,7 @@ mod tests {
                 z: 1.5,
                 sensor_type: SensorType::Transceiver,
                 is_operational: true,
+                last_rssi: None,
             },
             SensorPosition {
                 id: "s3".to_string(),
@@ -316,6 +342,7 @@ mod tests {
                 z: 1.5,
                 sensor_type: SensorType::Transceiver,
                 is_operational: true,
+                last_rssi: None,
             },
         ]
     }
@@ -381,6 +408,83 @@ mod tests {
 
         let result = triangulator.estimate_position(&sensors, &rssi_values);
         assert!(result.is_none());
+    }
+
+    fn sensor_at(id: &str, x: f64, y: f64) -> SensorPosition {
+        SensorPosition {
+            id: id.to_string(),
+            x,
+            y,
+            z: 1.5,
+            sensor_type: SensorType::Transceiver,
+            is_operational: true,
+            last_rssi: None,
+        }
+    }
+
+    /// Real GDOP: dimensionless, geometry-dependent, and matches the closed-form
+    /// sqrt(trace((HᵀH)⁻¹)). A well-spread (near-orthogonal) array must give a
+    /// LOWER GDOP than a near-collinear one. (The old ad-hoc angle factor was not
+    /// a true dilution and is replaced.)
+    #[test]
+    fn test_gdop_is_real_dilution() {
+        let t = Triangulator::with_defaults();
+        let target = [5.0_f64, 5.0_f64];
+
+        // Well-distributed: an equilateral-ish triangle around the target.
+        let good = vec![
+            (sensor_at("a", 5.0, 15.0), 10.0),
+            (sensor_at("b", -3.66, 0.0), 10.0),
+            (sensor_at("c", 13.66, 0.0), 10.0),
+        ];
+        let gdop_good = t.compute_gdop(&target, &good).expect("good geometry");
+
+        // Near-collinear: bearings nearly all along ±y with a tiny x-spread, so
+        // HᵀH is ill-conditioned (invertible but with a small eigenvalue) and the
+        // GDOP is large but finite.
+        let bad = vec![
+            (sensor_at("a", 5.3, 15.0), 10.0),
+            (sensor_at("b", 4.7, 15.0), 10.0),
+            (sensor_at("c", 5.1, -5.0), 10.0),
+        ];
+        let gdop_bad = t.compute_gdop(&target, &bad).expect("bad geometry");
+
+        assert!(gdop_good >= 1.0, "GDOP must be >= 1 (dilution, dimensionless)");
+        assert!(
+            gdop_good < gdop_bad,
+            "well-spread GDOP {gdop_good} must be < near-collinear GDOP {gdop_bad}"
+        );
+
+        // Closed-form cross-check for the well-spread case: each unit bearing
+        // vector contributes to HᵀH; verify trace((HᵀH)⁻¹) explicitly.
+        let (mut hxx, mut hxy, mut hyy) = (0.0, 0.0, 0.0);
+        for (s, _d) in &good {
+            let dx = s.x - target[0];
+            let dy = s.y - target[1];
+            let d = (dx * dx + dy * dy).sqrt();
+            let (ux, uy) = (dx / d, dy / d);
+            hxx += ux * ux;
+            hxy += ux * uy;
+            hyy += uy * uy;
+        }
+        let det = hxx * hyy - hxy * hxy;
+        let expected = ((hxx + hyy) / det).sqrt();
+        assert!((gdop_good - expected).abs() < 1e-9);
+    }
+
+    /// Collinear geometry makes HᵀH singular -> compute_gdop returns None,
+    /// and the uncertainty path falls back to a unit factor (no fabrication).
+    #[test]
+    fn test_gdop_singular_collinear_is_none() {
+        let t = Triangulator::with_defaults();
+        let target = [0.0_f64, 0.0_f64];
+        // All sensors on the +x axis through the target: bearings all ±x -> rank 1.
+        let collinear = vec![
+            (sensor_at("a", 1.0, 0.0), 1.0),
+            (sensor_at("b", 2.0, 0.0), 2.0),
+            (sensor_at("c", 3.0, 0.0), 3.0),
+        ];
+        assert!(t.compute_gdop(&target, &collinear).is_none());
     }
 }
 

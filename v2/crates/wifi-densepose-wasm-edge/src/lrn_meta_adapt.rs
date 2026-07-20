@@ -85,6 +85,8 @@ enum OptPhase {
 
 /// Meta-learning parameter optimizer.
 pub struct MetaAdapter {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
     /// Tunable parameters.
     params: [TunableParam; NUM_PARAMS],
 
@@ -140,6 +142,7 @@ impl MetaAdapter {
     ///   7: intrusion_sensitivity   (0.30,  range 0.05-0.9)
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 4],
             params: [
                 TunableParam::new(0.05, 0.01, 0.50, 0.01),
                 TunableParam::new(0.10, 0.02, 1.00, 0.02),
@@ -198,7 +201,6 @@ impl MetaAdapter {
     ///
     /// Returns events as `(event_id, value)` pairs.
     pub fn on_timer(&mut self) -> &[(i32, f32)] {
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n_ev = 0usize;
 
         self.eval_ticks += 1;
@@ -228,16 +230,14 @@ impl MetaAdapter {
                         self.consecutive_failures = 0;
                         self.success_count += 1;
 
-                        unsafe {
-                            EVENTS[n_ev] = (
-                                EVENT_PARAM_ADJUSTED,
-                                self.current_param as f32
-                                    + self.params[self.current_param].value / 1000.0,
-                            );
-                            n_ev += 1;
-                            EVENTS[n_ev] = (EVENT_ADAPTATION_SCORE, score);
-                            n_ev += 1;
-                        }
+                        self.events[n_ev] = (
+                            EVENT_PARAM_ADJUSTED,
+                            self.current_param as f32
+                                + self.params[self.current_param].value / 1000.0,
+                        );
+                        n_ev += 1;
+                        self.events[n_ev] = (EVENT_ADAPTATION_SCORE, score);
+                        n_ev += 1;
                     } else {
                         // Revert the perturbation.
                         self.params[self.current_param].value =
@@ -248,10 +248,8 @@ impl MetaAdapter {
                     // ── Safety rollback ──────────────────────────────────
                     if self.consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
                         self.safety_rollback();
-                        unsafe {
-                            EVENTS[n_ev] = (EVENT_ROLLBACK_TRIGGERED, self.meta_level as f32);
-                            n_ev += 1;
-                        }
+                        self.events[n_ev] = (EVENT_ROLLBACK_TRIGGERED, self.meta_level as f32);
+                        n_ev += 1;
                     }
 
                     // ── Advance to next parameter ────────────────────────
@@ -261,16 +259,14 @@ impl MetaAdapter {
 
                     // ── Emit meta level periodically ─────────────────────
                     if self.sweep_idx == 0 && n_ev < 4 {
-                        unsafe {
-                            EVENTS[n_ev] = (EVENT_META_LEVEL, self.meta_level as f32);
-                            n_ev += 1;
-                        }
+                        self.events[n_ev] = (EVENT_META_LEVEL, self.meta_level as f32);
+                        n_ev += 1;
                     }
                 }
             }
         }
 
-        unsafe { &EVENTS[..n_ev] }
+        &self.events[..n_ev]
     }
 
     /// Compute the performance score from accumulated feedback.

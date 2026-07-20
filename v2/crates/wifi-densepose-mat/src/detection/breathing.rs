@@ -240,8 +240,36 @@ impl BreathingDetector {
             return None;
         }
 
-        // Interpolate for better frequency estimate
-        let freq = max_bin_idx as f64 * freq_resolution;
+        // 3-point parabolic (quadratic) peak interpolation.
+        //
+        // The true spectral peak rarely lands exactly on a bin center; returning
+        // the bin center alone caps frequency (hence breathing-rate) resolution at
+        // ±half a bin. Fitting a parabola through the peak bin and its two
+        // neighbours recovers the sub-bin location:
+        //
+        //   δ = 0.5 * (yₗ - yᵣ) / (yₗ - 2y₀ + yᵣ),  δ ∈ [-0.5, 0.5]
+        //
+        // where y₀ is the peak magnitude and yₗ/yᵣ its neighbours. true_bin = k+δ.
+        let interpolated_bin = if max_bin_idx > 0 && max_bin_idx + 1 < spectrum.len() {
+            let y_left = spectrum[max_bin_idx - 1];
+            let y_center = spectrum[max_bin_idx];
+            let y_right = spectrum[max_bin_idx + 1];
+
+            let denom = y_left - 2.0 * y_center + y_right;
+            if denom.abs() > f64::EPSILON {
+                // Concave-down peak: denom < 0. δ is well-defined; clamp to the
+                // bin's own interval to stay robust against noisy shoulders.
+                let delta = (0.5 * (y_left - y_right) / denom).clamp(-0.5, 0.5);
+                max_bin_idx as f64 + delta
+            } else {
+                max_bin_idx as f64
+            }
+        } else {
+            // Peak at spectrum edge: no neighbour pair, fall back to bin center.
+            max_bin_idx as f64
+        };
+
+        let freq = interpolated_bin * freq_resolution;
 
         Some((freq, max_amplitude))
     }
@@ -382,6 +410,54 @@ mod tests {
         let pattern = result.unwrap();
         assert!(pattern.rate_bpm > 30.0);
         assert!(matches!(pattern.pattern_type, BreathingType::Labored));
+    }
+
+    /// Parabolic interpolation regression (FAILS on the old bin-center code).
+    ///
+    /// Build a spectrum whose true peak sits at a known non-integer bin (10.4),
+    /// shaped as a downward parabola so quadratic interpolation is exact. The
+    /// returned frequency must land within half a bin of the true frequency, and
+    /// strictly closer than the bin-center estimate (10.0) the old code returned.
+    #[test]
+    fn test_find_dominant_frequency_parabolic_interpolation() {
+        let detector = BreathingDetector::with_defaults();
+
+        // Spectrum of length L so the "original FFT size" n = 2L. Choose values
+        // so freq_resolution is convenient. With sample_rate = 64, n = 128 -> the
+        // breathing band (4..40 bpm = 0.0667..0.667 Hz) covers bins ~0.13..1.33,
+        // which is too coarse, so use a higher sample_rate to spread the band.
+        let spectrum_len = 64usize; // n = 128
+        let sample_rate = 12.8_f64; // freq_resolution = 12.8/128 = 0.1 Hz/bin
+        let true_bin = 10.4_f64;
+
+        // Downward parabola peaked at true_bin (positive magnitudes via offset).
+        let mut spectrum = vec![0.0_f64; spectrum_len];
+        for (i, s) in spectrum.iter_mut().enumerate() {
+            let d = i as f64 - true_bin;
+            *s = (5.0 - d * d).max(0.0);
+        }
+
+        // Band wide enough to contain bin 10 (0.0..2.0 Hz).
+        let result = detector.find_dominant_frequency(&spectrum, sample_rate, 0.0, 2.0);
+        let (freq, _amp) = result.expect("peak should be found");
+
+        let freq_resolution = sample_rate / (spectrum_len * 2) as f64; // 0.1 Hz
+        let true_freq = true_bin * freq_resolution;
+        let bin_center_freq = 10.0 * freq_resolution;
+
+        let err_interp = (freq - true_freq).abs();
+        let err_bin_center = (bin_center_freq - true_freq).abs();
+
+        // Within half a bin of truth.
+        assert!(
+            err_interp < 0.5 * freq_resolution,
+            "interpolated freq {freq} not within half a bin of true {true_freq} (err {err_interp})"
+        );
+        // And strictly better than the old bin-center answer.
+        assert!(
+            err_interp < err_bin_center,
+            "interpolation ({err_interp}) must beat bin-center ({err_bin_center})"
+        );
     }
 
     #[test]

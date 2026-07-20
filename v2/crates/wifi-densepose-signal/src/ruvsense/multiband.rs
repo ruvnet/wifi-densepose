@@ -198,7 +198,15 @@ fn compute_cross_channel_coherence(frames: &[CanonicalCsiFrame]) -> f32 {
     ((mean_corr + 1.0) / 2.0).clamp(0.0, 1.0) as f32
 }
 
+/// Denominator guard for the Pearson correlation (ADR-154 §7.4 — de-magicked):
+/// a product of standard deviations below this is treated as a zero-variance
+/// (constant) input ⇒ correlation 0.0.
+const PEARSON_DENOMINATOR_EPSILON: f32 = 1e-12;
+
 /// Pearson correlation coefficient between two f32 slices.
+///
+/// Returns `0.0` for empty inputs or when either slice has (near-)zero
+/// variance (the denominator falls below [`PEARSON_DENOMINATOR_EPSILON`]).
 fn pearson_correlation_f32(a: &[f32], b: &[f32]) -> f32 {
     let n = a.len().min(b.len());
     if n == 0 {
@@ -222,7 +230,7 @@ fn pearson_correlation_f32(a: &[f32], b: &[f32]) -> f32 {
     }
 
     let denom = (var_a * var_b).sqrt();
-    if denom < 1e-12 {
+    if denom < PEARSON_DENOMINATOR_EPSILON {
         return 0.0;
     }
 
@@ -438,5 +446,25 @@ mod tests {
         assert_eq!(cfg.expected_channels, 3);
         assert_eq!(cfg.window_us, 200_000);
         assert!((cfg.min_coherence - 0.3).abs() < f32::EPSILON);
+    }
+
+    // -- ADR-154 §7.4: de-magic-constant + boundary characterization tests.
+
+    /// De-magicked denominator epsilon must equal the prior literal.
+    #[test]
+    fn pearson_epsilon_unchanged_from_literal() {
+        assert_eq!(PEARSON_DENOMINATOR_EPSILON, 1e-12_f32);
+    }
+
+    /// A constant (zero-variance) input makes the denominator fall below the
+    /// epsilon ⇒ correlation 0.0. Previously untested (existing tests use
+    /// non-constant inputs).
+    #[test]
+    fn pearson_correlation_zero_variance() {
+        let constant = vec![3.0_f32; 5];
+        let varying = vec![1.0_f32, 2.0, 3.0, 4.0, 5.0];
+        assert_eq!(pearson_correlation_f32(&constant, &varying), 0.0);
+        assert_eq!(pearson_correlation_f32(&varying, &constant), 0.0);
+        assert_eq!(pearson_correlation_f32(&constant, &constant), 0.0);
     }
 }

@@ -19,3 +19,10 @@ clap = { version = "4", features = ["derive"] }
 chrono = "0.4"
 dirs = "5"
 reqwest = { version = "0.12", features = ["json"], default-features = false }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "splats_bench"
+harness = false

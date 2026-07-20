@@ -15,6 +15,7 @@ import os
 import socket
 import struct
 import time
+from datetime import datetime, timezone
 
 
 def parse_csi_packet(data):
@@ -41,7 +42,8 @@ def parse_csi_packet(data):
 
     return {
         "type": "raw_csi",
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.") + f"{int(time.time() * 1000) % 1000:03d}Z",
+        # true UTC, not local-time-labeled-Z (#1007 Bug 1) — e.g. "2026-06-17T01:23:45.678Z"
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
         "ts_ns": time.time_ns(),
         "node_id": node_id,
         "rssi": rssi,

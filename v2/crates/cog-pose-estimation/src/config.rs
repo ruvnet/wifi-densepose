@@ -23,6 +23,13 @@ pub struct CogConfig {
     pub poll_ms: u64,
 
     /// Confidence threshold below which a frame's keypoints are not emitted.
+    ///
+    /// Defaults to [`crate::inference::MODEL_TYPICAL_CONFIDENCE`] (0.185) — the
+    /// model's published per-frame confidence. `pose_v1` has no confidence head,
+    /// so every frame carries this same value; a default above it would silently
+    /// suppress *all* `pose.frame` events while health still reports healthy.
+    /// The runtime warns at `run.started` if this is raised above the model's
+    /// typical confidence rather than dropping frames quietly.
     #[serde(default = "default_min_confidence")]
     pub min_confidence: f32,
 }
@@ -36,7 +43,9 @@ fn default_poll_ms() -> u64 {
 }
 
 fn default_min_confidence() -> f32 {
-    0.3
+    // Pinned to the model's typical/published confidence so a default install
+    // actually emits frames. See `min_confidence` doc and ADR-159 §A1.
+    crate::inference::MODEL_TYPICAL_CONFIDENCE
 }
 
 impl CogConfig {

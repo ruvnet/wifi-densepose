@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Proposed |
+| **Status** | Accepted — partial (built + tested building block; integration glue pending — see Implementation Status, commit `fc7674bde`) |
 | **Date** | 2026-05-28 |
 | **Deciders** | ruv |
 | **Codebase target** | `wifi-densepose-signal` (`ruvsense/multiband.rs`, `ruvsense/multistatic.rs`); `wifi-densepose-ruvector` (`viewpoint/geometry.rs`, `viewpoint/coherence.rs`, `viewpoint/attention.rs`, `viewpoint/fusion.rs`) |

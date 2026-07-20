@@ -72,6 +72,8 @@ const MAX_EVENTS: usize = 4;
 
 /// Tracks directional foot traffic using phase gradient analysis.
 pub struct CustomerFlowTracker {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); MAX_EVENTS],
     /// Previous phase values per subcarrier.
     prev_phases: [f32; MAX_SC],
     /// Previous amplitude values per subcarrier.
@@ -101,6 +103,7 @@ pub struct CustomerFlowTracker {
 impl CustomerFlowTracker {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); MAX_EVENTS],
             prev_phases: [0.0; MAX_SC],
             prev_amplitudes: [0.0; MAX_SC],
             gradient_ema: Ema::new(GRADIENT_EMA_ALPHA),
@@ -200,7 +203,6 @@ impl CustomerFlowTracker {
         }
 
         // Build events.
-        static mut EVENTS: [(i32, f32); MAX_EVENTS] = [(0, 0.0); MAX_EVENTS];
         let mut ne = 0usize;
 
         // Crossing detection: look for gradient peak + motion + amplitude spike.
@@ -218,9 +220,7 @@ impl CustomerFlowTracker {
                 self.ingress_count += 1;
                 self.hourly_ingress += 1;
                 if ne < MAX_EVENTS {
-                    unsafe {
-                        EVENTS[ne] = (EVENT_INGRESS, self.ingress_count as f32);
-                    }
+                    self.events[ne] = (EVENT_INGRESS, self.ingress_count as f32);
                     ne += 1;
                 }
             } else {
@@ -228,9 +228,7 @@ impl CustomerFlowTracker {
                 self.egress_count += 1;
                 self.hourly_egress += 1;
                 if ne < MAX_EVENTS {
-                    unsafe {
-                        EVENTS[ne] = (EVENT_EGRESS, self.egress_count as f32);
-                    }
+                    self.events[ne] = (EVENT_EGRESS, self.egress_count as f32);
                     ne += 1;
                 }
             }
@@ -238,9 +236,7 @@ impl CustomerFlowTracker {
             // Emit net occupancy on each crossing.
             let net = self.net_occupancy();
             if ne < MAX_EVENTS {
-                unsafe {
-                    EVENTS[ne] = (EVENT_NET_OCCUPANCY, net as f32);
-                }
+                self.events[ne] = (EVENT_NET_OCCUPANCY, net as f32);
                 ne += 1;
             }
         }
@@ -248,9 +244,7 @@ impl CustomerFlowTracker {
         // Periodic net occupancy report.
         if self.frame_count % OCCUPANCY_REPORT_INTERVAL == 0 && ne < MAX_EVENTS {
             let net = self.net_occupancy();
-            unsafe {
-                EVENTS[ne] = (EVENT_NET_OCCUPANCY, net as f32);
-            }
+            self.events[ne] = (EVENT_NET_OCCUPANCY, net as f32);
             ne += 1;
         }
 
@@ -259,16 +253,14 @@ impl CustomerFlowTracker {
             // Encode: ingress * 1000 + egress.
             let summary = self.hourly_ingress as f32 * 1000.0 + self.hourly_egress as f32;
             if ne < MAX_EVENTS {
-                unsafe {
-                    EVENTS[ne] = (EVENT_HOURLY_TRAFFIC, summary);
-                }
+                self.events[ne] = (EVENT_HOURLY_TRAFFIC, summary);
                 ne += 1;
             }
             self.hourly_ingress = 0;
             self.hourly_egress = 0;
         }
 
-        unsafe { &EVENTS[..ne] }
+        &self.events[..ne]
     }
 
     /// Get net occupancy (ingress - egress), clamped to 0.

@@ -522,6 +522,25 @@ Base URL: `http://localhost:3000` (Docker) or `http://localhost:8080` (binary de
 | `GET` | `/api/v1/mesh` | ADR-110 fleet-wide mesh sync map ([iter 29](adr/ADR-110-esp32-c6-firmware-extension.md)) | `{"nodes":{"9":{...},"12":{...}},"total":2}` |
 | `GET` | `/api/v1/nodes/:id/sync` | Single-node mesh sync snapshot (or 404) | `{"offset_us":1163565,"is_leader":false,...}` |
 | `GET` | `/api/v1/mesh/metrics` | ADR-110 mesh state in Prometheus exposition format ([iter 36](adr/ADR-110-esp32-c6-firmware-extension.md)) | `wifi_densepose_mesh_offset_us{node="9"} 1163565\n…` |
+| `GET` | `/api/field` | ADR-262 P3 — latest **signed RuField `FieldEvent`s** from the live sensing cycle, plus the signer pubkey + a `dev_signing_key` flag. Only egress-safe (P1/P2) events are surfaced; identity/biometric (P4/P5) and raw (P0) are held edge-local | `{"spec":"rufield","signer_pubkey_hex":"…","dev_signing_key":true,"events":[…]}` |
+
+### RuField surface (ADR-262 P3)
+
+RuView's live WiFi-CSI sensing now also speaks the standalone **RuField MFS** wire format. Each governed sensing cycle is converted (via the `wifi-densepose-rufield` anti-corruption bridge) into a **signed** `FieldEvent` (`Modality::WifiCsi`, ed25519 `ProvenanceRef`) and surfaced on two additive endpoints:
+
+- `GET /api/field` — the most recent signed events (JSON).
+- `GET /ws/field` — a WebSocket that streams each cycle's signed event (mirrors `/ws/sensing`).
+
+```bash
+curl -s http://localhost:3000/api/field | python -m json.tool          # latest signed FieldEvents
+python -c "import asyncio,websockets; asyncio.run((lambda: websockets.connect('ws://localhost:8765/ws/field'))())"  # stream
+```
+
+Privacy is fail-closed: only egress-safe **P1/P2** events leave the box — raw (P0) and identity/biometric/aggregate (P3–P5) cycles are held **edge-local** and never appear on these endpoints; a no-presence cycle emits **no event**.
+
+**Signing key:** the surface signs with a **dedicated dev/sensing key**, seeded from `WDP_RUFIELD_SIGNING_SEED` (a 64-char hex string or a ≥32-byte value); when unset it falls back to a deterministic dev default and logs a `WARN` (the `dev_signing_key` flag in `/api/field` reflects this). This is a standalone key pending the ADR-262 §8 Q1 key-ownership decision — set `WDP_RUFIELD_SIGNING_SEED` for any real deployment.
+
+> **Honesty (ADR-262 §0/§6):** this is real plumbing on a live endpoint, **not an accuracy claim.** It is the single-link CSI sensing with its existing caveats (no validated room-coordinate accuracy — positions are the "strongest field peak", not calibrated triangulation).
 
 ### Example: Get fleet mesh state (ADR-110)
 
@@ -1113,7 +1132,7 @@ The Observatory is an immersive Three.js visualization that renders WiFi sensing
 
 A pretrained CSI encoder + presence-detection head is published on Hugging Face at [`ruvnet/wifi-densepose-pretrained`](https://huggingface.co/ruvnet/wifi-densepose-pretrained). It was trained on 60,630 frames / 610,615 contrastive triplets (12.2M steps, final loss 0.065) and reports **82.3% held-out temporal-triplet accuracy** (the older "100% presence" figure was measured on a single-class recording and has been retracted) and ~164k embeddings/sec on an Apple M4 Pro.
 
-> **Results & proof.** The SOTA 17-keypoint pose model is published separately at [`ruvnet/wifi-densepose-mmfi-pose`](https://huggingface.co/ruvnet/wifi-densepose-mmfi-pose) — **82.69% torso-PCK@20** on MM-Fi (83.59% ensemble + TTA), beating MultiFormer (72.25%) and CSI2Pose (68.41%). Browse the auditable [AetherArena leaderboard Space](https://huggingface.co/spaces/ruvnet/aether-arena), the full [MM-Fi study](benchmarks/mmfi-wifi-sensing-study.md), and the [efficiency frontier](benchmarks/wifi-pose-efficiency-frontier.md). Reproduce the deterministic pipeline proof with `python archive/v1/data/proof/verify.py` (must print `VERDICT: PASS`; see [ADR-147 benchmark proof](adr/ADR-147-benchmark-proof.md) and [WITNESS-LOG-028](WITNESS-LOG-028.md)).
+> **Results & proof.** The SOTA 17-keypoint pose model is published separately at [`ruvnet/wifi-densepose-mmfi-pose`](https://huggingface.co/ruvnet/wifi-densepose-mmfi-pose) — **82.69% torso-PCK@20** on MM-Fi (83.59% ensemble + TTA), beating MultiFormer (72.25%) and CSI2Pose (68.41%). Browse the auditable [AetherArena leaderboard Space](https://huggingface.co/spaces/ruvnet/aether-arena), the full [MM-Fi study](benchmarks/mmfi-wifi-sensing-study.md), and the [efficiency frontier](benchmarks/wifi-pose-efficiency-frontier.md). Reproduce the deterministic pipeline proof with `python archive/v1/data/proof/verify.py` (must print `VERDICT: PASS`; see [ADR-168 benchmark proof](adr/ADR-168-benchmark-proof.md) and [WITNESS-LOG-028](WITNESS-LOG-028.md)).
 
 What it ships (and what it does not):
 
@@ -1289,7 +1308,7 @@ Once trained, the adaptive model runs automatically:
 RuView integrates [OccWorld](https://github.com/wzzheng/OccWorld) (ECCV 2024) to predict
 future 3D occupancy from WiFi CSI — extending the Kalman tracker's 5-frame horizon to
 15 predicted frames (~7 s). See [ADR-147](adr/ADR-147-nvidia-cosmos-world-foundation-model-integration.md)
-and the [benchmark proof](adr/ADR-147-benchmark-proof.md) for full details.
+and the [benchmark proof](adr/ADR-168-benchmark-proof.md) for full details.
 
 **Hardware requirement:** NVIDIA GPU with ≥4 GB VRAM (validated: RTX 5080 at 209 ms / 3.4 GB).
 
@@ -1747,7 +1766,14 @@ See [ADR-071](adr/ADR-071-ruvllm-training-pipeline.md) and the [pretraining tuto
 
 For significantly higher accuracy, use a webcam as a **temporary teacher** during training. The camera captures real 17-keypoint poses via MediaPipe, paired with simultaneous ESP32 CSI data. After training, the camera is no longer needed — the model runs on CSI only.
 
-**Result: 92.9% PCK@20** from a 5-minute collection session.
+> **Accuracy note (2026-06-10):** the previously cited "92.9% PCK@20" figure is
+> retracted — a forensic recheck of the surviving eval holdout showed it came
+> from a constant-output model scored with an absolute (non-torso-normalized)
+> threshold on 69 nearly-static frames, a protocol under which a trivial
+> mean-pose predictor scores 100%. No measured camera-supervised PCK@20 is
+> currently published (see CHANGELOG, PR #535). Treat this workflow as a data
+> collection mechanism; accuracy claims will follow a ≥35-minute multi-pose
+> collection session evaluated with torso-normalized PCK.
 
 ### Requirements
 
@@ -1755,50 +1781,120 @@ For significantly higher accuracy, use a webcam as a **temporary teacher** durin
 - ESP32-S3 node streaming CSI over UDP (port 5005)
 - A webcam (laptop, USB, or Mac camera via Tailscale)
 
-### Step 1: Capture Camera + CSI Simultaneously
+### Step 0: Check your CSI rate and plan the session length
+
+Window yield is `csi_frames / 20` — **your CSI packet rate sets how long you
+must record.** Check it first (10-second probe):
+
+```bash
+python - <<'EOF'
+import socket, time
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('0.0.0.0', 5005)); s.settimeout(2)
+n, t0 = 0, time.time()
+while time.time() - t0 < 10:
+    try: s.recvfrom(4096); n += 1
+    except socket.timeout: pass
+print(f"{n/10:.1f} Hz -> {n/10*60/20:.0f} windows/min")
+EOF
+```
+
+| CSI rate | Windows/min | Minutes for 2,000 windows (minimum trainable) |
+|---|---|---|
+| ~13 Hz (idle network) | ~39 | ~52 min |
+| ~53 Hz (active self-ping, #985 firmware) | ~160 | ~13 min — record 35–40 min anyway for pose variety |
+
+A 5-minute session is **not enough to train on** — it produces a few hundred
+windows of one pose context, and models trained on it memorize rather than
+generalize (this is what invalidated the earlier accuracy figure).
+
+### Step 1: (Recommended) calibrate camera ↔ room
+
+The two-checkerboard calibration (ADR-152 §2.1.3) puts labels in a shared 3D
+room frame instead of raw camera coordinates, which is the published defense
+against layout-brittle "coordinate overfitting" (PerceptAlign, MobiCom'26):
+
+```bash
+python scripts/calibrate-camera-room.py   # < 5 min, two checkerboards + a few photos
+```
+
+Without it, collection still works but labels are camera-frame only and the
+trained model will not survive camera/node relocation.
+
+### Step 2: Capture Camera + CSI Simultaneously
 
 Run both scripts at the same time (in separate terminals):
 
 ```bash
-# Terminal 1: Record ESP32 CSI
-python scripts/record-csi-udp.py --duration 300
+# Terminal 1: Record ESP32 CSI (2400 s = 40 min)
+python scripts/record-csi-udp.py --duration 2400
 
 # Terminal 2: Capture camera keypoints
-python scripts/collect-ground-truth.py --duration 300 --preview
+python scripts/collect-ground-truth.py --duration 2400 --preview \
+  --calibration data/calibration/camera-room.json   # omit if you skipped Step 1
 ```
 
-Move around naturally in front of the camera for 5 minutes. The `--preview` flag shows a live skeleton overlay.
+During capture: keep your **full body in frame** with good lighting (MediaPipe
+confidence must stay above 0.5 — low-confidence frames are dropped at
+alignment), and **change activity every 1–2 minutes**: walk, raise hands,
+squat, hands up, kick, wave, turn, jump, sit, stand still. Pose variety is
+what the model learns from; 40 minutes of sitting produces a constant-pose
+predictor.
 
-### Step 2: Align and Train
+### Step 3: Align and Train
 
 ```bash
-# Align camera keypoints with CSI windows
+# Align camera keypoints with CSI windows (prints kept/dropped window counts —
+# expect roughly csi_frames/20 kept; investigate if far below)
 node scripts/align-ground-truth.js \
   --gt data/ground-truth/*.jsonl \
   --csi data/recordings/csi-*.csi.jsonl
 
-# Train (start with lite, scale up as you collect more data)
+# Train (pick the preset matching your window count)
 node scripts/train-wiflow-supervised.js \
   --data data/paired/*.jsonl \
-  --scale lite \
+  --scale small \
   --epochs 50
 
-# Evaluate
+# Evaluate — torso-normalized PCK on a TEMPORAL split
 node scripts/eval-wiflow.js \
   --model models/wiflow-supervised/wiflow-v1.json \
   --data data/paired/*.jsonl
 ```
 
+> **Model format boundary:** `train-wiflow-supervised.js` produces the
+> JavaScript WiFlow model `wiflow-v1.json`. There is currently no supported
+> command that converts that JSON model into the sensing server's binary RVF
+> container, and renaming the file to `.rvf` does not convert it. Use the JSON
+> model with the JavaScript evaluation/inference tools. To train a model that
+> the Rust sensing server can load, use its native training path, which writes
+> RVF directly:
+>
+> ```bash
+> cargo run -p wifi-densepose-sensing-server --release -- \
+>   --train --dataset data/mmfi --dataset-type mmfi \
+>   --epochs 100 --save-rvf models/room-model.rvf
+> ```
+>
+> The camera+CSI paired JSONL workflow and the native RVF trainer are separate
+> pipelines today. A JSON-to-RVF exporter is future work.
+
+**Evaluation protocol matters.** Use `eval-wiflow.js` (torso-normalized
+PCK@20, the metric comparable to published WiFi-pose results) on a temporal
+hold-out, and sanity-check that predictions actually vary across frames
+(`pred std > 0`) — a constant-pose model can score deceptively well on
+near-static data under weaker protocols. See
+`benchmarks/wiflow-std/RESULTS.md` for the forensic case study.
+
 ### Scale Presets
 
 | Preset | Params | Training Time | Best For |
 |--------|--------|---------------|----------|
-| `--scale lite` | 189K | ~19 min | < 1,000 samples (5 min capture) |
-| `--scale small` | 474K | ~1 hr | 1K-10K samples |
-| `--scale medium` | 800K | ~2 hrs | 10K-50K samples |
-| `--scale full` | 7.7M | ~8 hrs | 50K+ samples (GPU recommended) |
+| `--scale lite` | 189K | ~19 min | sanity runs only (< 2K windows trains poorly) |
+| `--scale small` | 474K | ~1 hr | 2K-10K windows (one 40-min session) |
+| `--scale medium` | 800K | ~2 hrs | 10K-50K windows (multiple sessions/rooms) |
+| `--scale full` | 7.7M | ~8 hrs | 50K+ windows (GPU recommended) |
 
-See [ADR-079](adr/ADR-079-camera-ground-truth-training.md) for the full design and optimization details.
+See [ADR-079](adr/ADR-079-camera-ground-truth-training.md) for the full design and optimization details, and ADR-152 §2.2 for the external WiFlow-STD benchmark these numbers should be read against.
 
 ---
 
@@ -1809,7 +1905,7 @@ Pre-trained models are available on HuggingFace:
 - **SOTA MM-Fi pose model** (82.69% torso-PCK@20) — https://huggingface.co/ruvnet/wifi-densepose-mmfi-pose
 - **AetherArena leaderboard Space** — https://huggingface.co/spaces/ruvnet/aether-arena
 
-Download and start sensing immediately — no datasets, no GPU, no training needed. Results are reproducible via `python archive/v1/data/proof/verify.py` (deterministic SHA-256 proof) — see [ADR-147](adr/ADR-147-benchmark-proof.md).
+Download and start sensing immediately — no datasets, no GPU, no training needed. Results are reproducible via `python archive/v1/data/proof/verify.py` (deterministic SHA-256 proof) — see [ADR-168](adr/ADR-168-benchmark-proof.md).
 
 ### Quick Start with Pre-Trained Models
 

@@ -19,6 +19,7 @@ pub mod condition;
 pub mod action;
 pub mod template;
 pub mod engine;
+pub mod runmode;
 pub mod error;
 
 pub use automation::{Automation, RunMode};

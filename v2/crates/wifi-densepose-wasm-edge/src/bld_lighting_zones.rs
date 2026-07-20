@@ -76,6 +76,8 @@ struct ZoneLight {
 
 /// Lighting zone controller.
 pub struct LightingZoneController {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 8],
     zones: [ZoneLight; MAX_ZONES],
     n_zones: usize,
     /// Calibration accumulators.
@@ -99,6 +101,7 @@ impl LightingZoneController {
             vacant_frames: 0,
         };
         Self {
+            events: [(0, 0.0); 8],
             zones: [ZONE_INIT; MAX_ZONES],
             n_zones: 0,
             calib_sum: [0.0; MAX_ZONES],
@@ -230,7 +233,6 @@ impl LightingZoneController {
         }
 
         // Build output events.
-        static mut EVENTS: [(i32, f32); 8] = [(0, 0.0); 8];
         let mut n_events = 0usize;
 
         // Emit transitions immediately.
@@ -241,9 +243,7 @@ impl LightingZoneController {
                     LightState::Dim => EVENT_LIGHT_DIM,
                     LightState::Off => EVENT_LIGHT_OFF,
                 };
-                unsafe {
-                    EVENTS[n_events] = (event_id, z as f32);
-                }
+                self.events[n_events] = (event_id, z as f32);
                 n_events += 1;
             }
         }
@@ -259,15 +259,13 @@ impl LightingZoneController {
                     };
                     // Encode zone_id + confidence in value.
                     let val = z as f32 + self.zones[z].score.min(0.99);
-                    unsafe {
-                        EVENTS[n_events] = (event_id, val);
-                    }
+                    self.events[n_events] = (event_id, val);
                     n_events += 1;
                 }
             }
         }
 
-        unsafe { &EVENTS[..n_events] }
+        &self.events[..n_events]
     }
 
     /// Get the lighting state of a specific zone.

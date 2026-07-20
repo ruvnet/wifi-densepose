@@ -113,6 +113,18 @@ fn cmd_run(
     let cfg = CogConfig::load(&config_path)?;
     emit_event(&Event::run_started(COG_ID, &cfg));
 
+    // Disclosure: pose_v1 has no confidence head, so every frame carries the
+    // same `MODEL_TYPICAL_CONFIDENCE`. A `min_confidence` above that silently
+    // suppresses *all* pose.frame events. Warn loudly rather than drop quietly.
+    if cfg.min_confidence > cog_pose_estimation::inference::MODEL_TYPICAL_CONFIDENCE {
+        tracing::warn!(
+            min_confidence = cfg.min_confidence,
+            model_typical_confidence = cog_pose_estimation::inference::MODEL_TYPICAL_CONFIDENCE,
+            "configured min_confidence exceeds the model's typical confidence; \
+             no pose.frame events will be emitted until this is lowered"
+        );
+    }
+
     let engine = InferenceEngine::with_adapter(adapter.as_deref())?;
     if engine.is_calibrated() {
         tracing::info!("per-room calibration adapter loaded");

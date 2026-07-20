@@ -17,6 +17,15 @@
 
 use std::f32::consts::PI;
 
+/// Floor on the Box-Muller `u1` sample so `ln(u1)` stays finite when the PRNG
+/// returns ≈0 (ADR-155 M2 §8: de-magicked from a bare `1e-10`; value unchanged).
+const BOX_MULLER_U1_FLOOR: f32 = 1e-10;
+
+/// Magnitude below which `room_scale` is treated as zero and the amplitude
+/// division is skipped (guards `val / room_scale` against ÷≈0). De-magicked from
+/// a bare `1e-10`; value unchanged, no behaviour change.
+const MIN_ROOM_SCALE: f32 = 1e-10;
+
 // ---------------------------------------------------------------------------
 // Xorshift64 PRNG (matches dataset.rs pattern)
 // ---------------------------------------------------------------------------
@@ -67,7 +76,7 @@ impl Xorshift64 {
     /// Sample an approximate Gaussian (mean=0, std=1) via Box-Muller.
     #[inline]
     pub fn next_gaussian(&mut self) -> f32 {
-        let u1 = self.next_f32().max(1e-10);
+        let u1 = self.next_f32().max(BOX_MULLER_U1_FLOOR);
         let u2 = self.next_f32();
         (-2.0 * u1.ln()).sqrt() * (2.0 * PI * u2).cos()
     }
@@ -158,7 +167,7 @@ impl VirtualDomainAugmentor {
         for (k, &val) in frame.iter().enumerate() {
             let k_f = k as f32;
             // 1. Room-scale amplitude attenuation (guard against zero scale)
-            let scaled = if domain.room_scale.abs() < 1e-10 {
+            let scaled = if domain.room_scale.abs() < MIN_ROOM_SCALE {
                 val
             } else {
                 val / domain.room_scale
@@ -206,6 +215,42 @@ impl VirtualDomainAugmentor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR-155 M2 §8: the de-magicked guard epsilons must equal the prior inline
+    /// `1e-10` literals exactly (operating-value guard).
+    #[test]
+    fn virtual_aug_guard_consts_unchanged_from_literals() {
+        assert_eq!(BOX_MULLER_U1_FLOOR, 1e-10_f32);
+        assert_eq!(MIN_ROOM_SCALE, 1e-10_f32);
+    }
+
+    /// Characterize the zero-room-scale guard: a `room_scale` of exactly 0 must
+    /// pass amplitude through unscaled (the guard branch), never produce
+    /// Inf/NaN from `val / 0`.
+    #[test]
+    fn augment_frame_zero_room_scale_passes_amplitude_finite() {
+        let aug = VirtualDomainAugmentor::default();
+        let domain = VirtualDomain {
+            room_scale: 0.0,
+            // reflection_coeff = 1.0 ⇒ refl = 1.0 + (1-1)·cos(..) = 1.0 (constant,
+            // so the reflection step is the identity for this characterization).
+            reflection_coeff: 1.0,
+            n_scatterers: 0, // no scatterer interference
+            noise_std: 0.0,  // no additive noise
+            domain_id: 1,
+        };
+        let frame = vec![1.0_f32, 2.0, 3.0, 4.0];
+        let out = aug.augment_frame(&frame, &domain);
+        assert_eq!(out.len(), frame.len());
+        assert!(
+            out.iter().all(|v| v.is_finite()),
+            "zero room_scale must not yield Inf/NaN: {out:?}"
+        );
+        // With every other transform neutralised, the guard leaves amplitude as-is.
+        for (o, f) in out.iter().zip(frame.iter()) {
+            assert!((o - f).abs() < 1e-6, "expected pass-through, got {o} vs {f}");
+        }
+    }
 
     fn make_domain(scale: f32, coeff: f32, scatter: usize, noise: f32, id: u32) -> VirtualDomain {
         VirtualDomain {

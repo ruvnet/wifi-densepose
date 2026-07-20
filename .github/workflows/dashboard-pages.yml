@@ -26,6 +26,8 @@ jobs:
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Rust + wasm32 target
         uses: dtolnay/rust-toolchain@stable

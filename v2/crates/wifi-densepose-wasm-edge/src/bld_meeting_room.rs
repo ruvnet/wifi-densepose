@@ -54,6 +54,8 @@ pub enum MeetingState {
 
 /// Meeting room tracker.
 pub struct MeetingRoomTracker {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
     state: MeetingState,
     /// Frames in current state.
     state_frames: u32,
@@ -76,6 +78,7 @@ pub struct MeetingRoomTracker {
 impl MeetingRoomTracker {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 4],
             state: MeetingState::Empty,
             state_frames: 0,
             n_persons: 0,
@@ -116,7 +119,6 @@ impl MeetingRoomTracker {
             self.multi_person_frames += 1;
         }
 
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n_events = 0usize;
 
         let _prev_state = self.state;
@@ -146,9 +148,7 @@ impl MeetingRoomTracker {
                     self.meeting_count += 1;
 
                     if n_events < 4 {
-                        unsafe {
-                            EVENTS[n_events] = (EVENT_MEETING_START, self.n_persons as f32);
-                        }
+                        self.events[n_events] = (EVENT_MEETING_START, self.n_persons as f32);
                         n_events += 1;
                     }
                 } else if self.state_frames >= PRE_MEETING_TIMEOUT {
@@ -175,17 +175,13 @@ impl MeetingRoomTracker {
                     // Emit meeting end with duration.
                     let duration_mins = self.total_meeting_frames as f32 / (20.0 * 60.0);
                     if n_events < 4 {
-                        unsafe {
-                            EVENTS[n_events] = (EVENT_MEETING_END, duration_mins);
-                        }
+                        self.events[n_events] = (EVENT_MEETING_END, duration_mins);
                         n_events += 1;
                     }
 
                     // Emit peak headcount.
                     if n_events < 4 {
-                        unsafe {
-                            EVENTS[n_events] = (EVENT_PEAK_HEADCOUNT, self.peak_headcount as f32);
-                        }
+                        self.events[n_events] = (EVENT_PEAK_HEADCOUNT, self.peak_headcount as f32);
                         n_events += 1;
                     }
                 }
@@ -204,9 +200,7 @@ impl MeetingRoomTracker {
                     self.multi_person_frames = 0;
 
                     if n_events < 4 {
-                        unsafe {
-                            EVENTS[n_events] = (EVENT_ROOM_AVAILABLE, 1.0);
-                        }
+                        self.events[n_events] = (EVENT_ROOM_AVAILABLE, 1.0);
                         n_events += 1;
                     }
                 }
@@ -216,14 +210,12 @@ impl MeetingRoomTracker {
         // Periodic status emission.
         if self.frame_count % EMIT_INTERVAL == 0 && self.state == MeetingState::Active {
             if n_events < 4 {
-                unsafe {
-                    EVENTS[n_events] = (EVENT_PEAK_HEADCOUNT, self.peak_headcount as f32);
-                }
+                self.events[n_events] = (EVENT_PEAK_HEADCOUNT, self.peak_headcount as f32);
                 n_events += 1;
             }
         }
 
-        unsafe { &EVENTS[..n_events] }
+        &self.events[..n_events]
     }
 
     /// Get current meeting room state.

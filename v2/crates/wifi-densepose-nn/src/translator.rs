@@ -556,34 +556,122 @@ impl ModalityTranslator {
         }
     }
 
-    /// Apply multi-head attention
+    /// Apply single-head scaled-dot-product attention over the spatial
+    /// sequence: `softmax(Q·Kᵀ / √d) · V`, with `Q/K/V` linear projections of
+    /// each token's channel vector and a final output projection.
+    ///
+    /// The spatial grid `[B, C, H, W]` is treated as a length-`H·W` token
+    /// sequence of `C`-dim feature vectors. Each `*_weight` projection is a
+    /// `[C × C]` matrix applied per token. This is a genuine attention
+    /// operation (not the previous uniform-weight identity stub), so the
+    /// returned per-pair attention weights actually depend on the input.
+    ///
+    /// # Errors
+    /// Returns an error if any projection weight is not `[C × C]`, so a
+    /// mis-shaped checkpoint can never be silently treated as a no-op.
     fn apply_attention(
         &self,
         input: &Array4<f32>,
-        _weights: &AttentionWeights,
+        weights: &AttentionWeights,
     ) -> NnResult<(Array4<f32>, Array4<f32>)> {
         let (batch, channels, height, width) = input.dim();
         let seq_len = height * width;
 
-        // Flatten spatial dimensions
-        let mut flat = ndarray::Array2::zeros((batch, seq_len * channels));
+        // Every projection must be a square [C × C] matrix to act per token.
+        for (name, w) in [
+            ("query_weight", &weights.query_weight),
+            ("key_weight", &weights.key_weight),
+            ("value_weight", &weights.value_weight),
+            ("output_weight", &weights.output_weight),
+        ] {
+            if w.dim() != (channels, channels) {
+                return Err(NnError::invalid_input(format!(
+                    "attention {name} must be [{channels} x {channels}], got [{} x {}]",
+                    w.dim().0,
+                    w.dim().1
+                )));
+            }
+        }
+        if weights.output_bias.len() != channels {
+            return Err(NnError::shape_mismatch(
+                vec![channels],
+                vec![weights.output_bias.len()],
+            ));
+        }
+
+        // Flatten spatial grid into a [seq_len, channels] token matrix per batch.
+        // Project to Q, K, V; compute scaled-dot-product attention; project out.
+        let scale = 1.0 / (channels as f32).sqrt();
+        let mut out = Array4::zeros((batch, channels, height, width));
+        let mut attention_weights = Array4::zeros((batch, 1, seq_len, seq_len));
+
         for b in 0..batch {
+            // Tokens: [seq_len, channels].
+            let mut tokens = ndarray::Array2::<f32>::zeros((seq_len, channels));
             for h in 0..height {
                 for w in 0..width {
+                    let s = h * width + w;
                     for c in 0..channels {
-                        flat[[b, (h * width + w) * channels + c]] = input[[b, c, h, w]];
+                        tokens[[s, c]] = input[[b, c, h, w]];
+                    }
+                }
+            }
+
+            // Q = tokens·Wqᵀ, etc. (row vector × [C×C] projection).
+            let q = tokens.dot(&weights.query_weight.t());
+            let k = tokens.dot(&weights.key_weight.t());
+            let v = tokens.dot(&weights.value_weight.t());
+
+            // Scores = softmax_row(Q·Kᵀ · scale), then context = Scores·V.
+            let scores = q.dot(&k.t()).mapv(|x| x * scale);
+            for i in 0..seq_len {
+                // Numerically-stable row softmax.
+                let mut max = f32::NEG_INFINITY;
+                for j in 0..seq_len {
+                    max = max.max(scores[[i, j]]);
+                }
+                let mut sum = 0.0f32;
+                let mut row = vec![0.0f32; seq_len];
+                for j in 0..seq_len {
+                    let e = (scores[[i, j]] - max).exp();
+                    row[j] = e;
+                    sum += e;
+                }
+                if sum > 0.0 {
+                    for j in 0..seq_len {
+                        row[j] /= sum;
+                    }
+                }
+                for j in 0..seq_len {
+                    attention_weights[[b, 0, i, j]] = row[j];
+                }
+            }
+
+            // Context = attention · V, then output projection + bias.
+            for h in 0..height {
+                for w in 0..width {
+                    let i = h * width + w;
+                    // ctx[c] = Σ_j attn[i,j] · v[j,c]
+                    let mut ctx = vec![0.0f32; channels];
+                    for j in 0..seq_len {
+                        let a = attention_weights[[b, 0, i, j]];
+                        for c in 0..channels {
+                            ctx[c] += a * v[[j, c]];
+                        }
+                    }
+                    // out[c] = Σ_c' ctx[c'] · Wo[c, c'] + bias[c]
+                    for c in 0..channels {
+                        let mut acc = weights.output_bias[c];
+                        for cp in 0..channels {
+                            acc += ctx[cp] * weights.output_weight[[c, cp]];
+                        }
+                        out[[b, c, h, w]] = acc;
                     }
                 }
             }
         }
 
-        // For simplicity, return input unchanged with identity attention
-        let attention_weights = Array4::from_elem(
-            (batch, self.config.attention_heads, seq_len, seq_len),
-            1.0 / seq_len as f32,
-        );
-
-        Ok((input.clone(), attention_weights))
+        Ok((out, attention_weights))
     }
 
     /// Compute translation loss between predicted and target features
@@ -758,6 +846,76 @@ mod tests {
     fn test_activation_types() {
         let config = TranslatorConfig::default().with_activation(ActivationType::GELU);
         assert_eq!(config.activation, ActivationType::GELU);
+    }
+
+    // ADR-155 §Tier-2: apply_attention must perform real scaled-dot-product
+    // attention, not return uniform 1/seq_len weights. With identity Q/K/V
+    // projections and a non-uniform input, the attention weights must NOT all
+    // equal 1/seq_len, and each row must still be a valid distribution.
+    #[test]
+    fn test_attention_is_not_uniform_stub() {
+        let channels = 4usize;
+        let height = 2usize;
+        let width = 2usize;
+        let seq_len = height * width;
+
+        // Identity projections so Q=K=V=tokens; output = identity, zero bias.
+        let identity = ndarray::Array2::<f32>::eye(channels);
+        let weights = AttentionWeights {
+            query_weight: identity.clone(),
+            key_weight: identity.clone(),
+            value_weight: identity.clone(),
+            output_weight: identity,
+            output_bias: ndarray::Array1::zeros(channels),
+        };
+
+        // Non-uniform input: each spatial location has a distinct feature vector.
+        let mut input = Array4::<f32>::zeros((1, channels, height, width));
+        for c in 0..channels {
+            for h in 0..height {
+                for w in 0..width {
+                    input[[0, c, h, w]] = (c + 2 * h + 4 * w) as f32;
+                }
+            }
+        }
+
+        let config = TranslatorConfig::default().with_attention(1);
+        let translator = ModalityTranslator::new(config).unwrap();
+        let (out, attn) = translator.apply_attention(&input, &weights).unwrap();
+
+        // Each attention row must sum to 1 (valid softmax distribution).
+        for i in 0..seq_len {
+            let row_sum: f32 = (0..seq_len).map(|j| attn[[0, 0, i, j]]).sum();
+            assert!((row_sum - 1.0).abs() < 1e-5, "row {i} sum = {row_sum}");
+        }
+        // Weights must NOT all be the uniform 1/seq_len value of the old stub.
+        let uniform = 1.0 / seq_len as f32;
+        let any_non_uniform = (0..seq_len)
+            .flat_map(|i| (0..seq_len).map(move |j| (i, j)))
+            .any(|(i, j)| (attn[[0, 0, i, j]] - uniform).abs() > 1e-4);
+        assert!(any_non_uniform, "attention collapsed to uniform stub");
+        // Output is finite and shaped like the input.
+        assert_eq!(out.dim(), input.dim());
+        assert!(out.iter().all(|v| v.is_finite()));
+    }
+
+    // ADR-155 §Tier-2: a mis-shaped projection weight must be rejected, never
+    // silently treated as a no-op.
+    #[test]
+    fn test_attention_rejects_wrong_weight_shape() {
+        let channels = 4usize;
+        let bad = ndarray::Array2::<f32>::zeros((channels + 1, channels));
+        let weights = AttentionWeights {
+            query_weight: bad.clone(),
+            key_weight: bad.clone(),
+            value_weight: bad.clone(),
+            output_weight: bad,
+            output_bias: ndarray::Array1::zeros(channels),
+        };
+        let input = Array4::<f32>::zeros((1, channels, 2, 2));
+        let config = TranslatorConfig::default().with_attention(1);
+        let translator = ModalityTranslator::new(config).unwrap();
+        assert!(translator.apply_attention(&input, &weights).is_err());
     }
 
     #[test]

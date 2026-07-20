@@ -54,6 +54,8 @@ pub const EVENT_FLEEING_DETECTED: i32 = 252;
 
 /// Panic/erratic motion detector.
 pub struct PanicMotionDetector {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 3],
     /// Circular buffer of motion energy values.
     energy_buf: [f32; WINDOW],
     /// Circular buffer of phase variance values (for direction estimation).
@@ -75,6 +77,7 @@ pub struct PanicMotionDetector {
 impl PanicMotionDetector {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 3],
             energy_buf: [0.0; WINDOW],
             variance_buf: [0.0; WINDOW],
             buf_idx: 0,
@@ -102,7 +105,6 @@ impl PanicMotionDetector {
         self.cd_struggle = self.cd_struggle.saturating_sub(1);
         self.cd_fleeing = self.cd_fleeing.saturating_sub(1);
 
-        static mut EVENTS: [(i32, f32); 3] = [(0, 0.0); 3];
         let mut ne = 0usize;
 
         // Store in circular buffer.
@@ -117,13 +119,13 @@ impl PanicMotionDetector {
         if !self.buf_filled {
             self.prev_energy = motion_energy;
             self.prev_energy_init = true;
-            return unsafe { &EVENTS[..0] };
+            return &self.events[..0];
         }
 
         // Require presence.
         if presence < MIN_PRESENCE {
             self.prev_energy = motion_energy;
-            return unsafe { &EVENTS[..0] };
+            return &self.events[..0];
         }
 
         // Compute jerk (absolute rate of change of motion energy).
@@ -142,7 +144,7 @@ impl PanicMotionDetector {
 
         // Skip if not enough motion.
         if mean_energy < MIN_MOTION {
-            return unsafe { &EVENTS[..0] };
+            return &self.events[..0];
         }
 
         // Panic detection: high jerk AND high entropy over threshold fraction of window.
@@ -152,7 +154,7 @@ impl PanicMotionDetector {
 
         if is_panic && self.cd_panic == 0 && ne < 3 {
             let severity = (mean_jerk / JERK_THRESH) * (entropy / ENTROPY_THRESH);
-            unsafe { EVENTS[ne] = (EVENT_PANIC_DETECTED, severity.min(10.0)); }
+            self.events[ne] = (EVENT_PANIC_DETECTED, severity.min(10.0));
             ne += 1;
             self.cd_panic = COOLDOWN;
             self.panic_count += 1;
@@ -167,7 +169,7 @@ impl PanicMotionDetector {
             && entropy > ENTROPY_THRESH * 0.5;
 
         if is_struggle && !is_panic && self.cd_struggle == 0 && ne < 3 {
-            unsafe { EVENTS[ne] = (EVENT_STRUGGLE_PATTERN, mean_jerk); }
+            self.events[ne] = (EVENT_STRUGGLE_PATTERN, mean_jerk);
             ne += 1;
             self.cd_struggle = COOLDOWN;
         }
@@ -179,12 +181,12 @@ impl PanicMotionDetector {
             && entropy < FLEE_MAX_ENTROPY;
 
         if is_fleeing && !is_panic && self.cd_fleeing == 0 && ne < 3 {
-            unsafe { EVENTS[ne] = (EVENT_FLEEING_DETECTED, mean_energy); }
+            self.events[ne] = (EVENT_FLEEING_DETECTED, mean_energy);
             ne += 1;
             self.cd_fleeing = COOLDOWN;
         }
 
-        unsafe { &EVENTS[..ne] }
+        &self.events[..ne]
     }
 
     /// Compute window-level statistics.

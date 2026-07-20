@@ -1,5 +1,5 @@
 # ESP32 CSI Node Firmware (ADR-018)
-# Requires ESP-IDF v5.2+
+# Requires ESP-IDF v5.4+
 cmake_minimum_required(VERSION 3.16)
 
 set(EXTRA_COMPONENT_DIRS "")

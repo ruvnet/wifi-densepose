@@ -67,7 +67,10 @@ fn ht40_spec() -> TierSpec {
     TierSpec { label: "HT40", n_active: 114, bandwidth_mhz: 40, config: CalibrationConfig::ht40() }
 }
 fn he20_spec() -> TierSpec {
-    TierSpec { label: "HE20", n_active: 242, bandwidth_mhz: 20, config: CalibrationConfig::he20() }
+    // Issue #1009 §1b: real HE20 frames carry all 256 FFT bins (242 data +
+    // pilots/guards/DC), and the recorder now records all 256 (he20().num_active
+    // == 256). Feed 256-bin frames to match the wire format.
+    TierSpec { label: "HE20", n_active: 256, bandwidth_mhz: 20, config: CalibrationConfig::he20() }
 }
 
 // ---------------------------------------------------------------------------

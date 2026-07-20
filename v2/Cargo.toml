@@ -25,9 +25,9 @@ members = [
     "crates/wifi-densepose-ruvector",
     "crates/wifi-densepose-desktop",
     "crates/wifi-densepose-pointcloud",
-    "crates/wifi-densepose-geo",
-    "crates/wifi-densepose-worldgraph",  # ADR-139 — WorldGraph environmental digital twin
+    # geo + worldgraph extracted to ruvnet/worldgraph submodule (see crates/worldgraph)
     "crates/wifi-densepose-engine",      # ADR-135..146 integration/composition layer
+    "crates/wifi-densepose-calibration", # ADR-151 — per-room calibration & specialist training
     "crates/nvsim",
     "crates/nvsim-server",
     "crates/homecore",                 # ADR-127 — HOMECORE state machine
@@ -57,7 +57,7 @@ members = [
     "crates/wifi-densepose-bfld",
     # ADR-147: OccWorld thin-client bridge — WorldGraph PersonTrack history →
     # OccWorld Python subprocess → TrajectoryPrior injection into pose tracker.
-    "crates/wifi-densepose-worldmodel",
+    # worldmodel extracted to ruvnet/worldgraph submodule (consumed via path dep)
     # ADR-147 (Phase 5): OccWorld TransVQVAE ported to Candle — native Rust
     # inference without Python/IPC overhead. Loaded alongside the Python bridge
     # as a faster alternative once Phase-5 weights are available.
@@ -71,6 +71,11 @@ members = [
     "crates/homecore-assist",      # ADR-133 — HOMECORE voice assistant + ruflo bridge
     "crates/homecore-server",      # iter-9 — HOMECORE integration binary (all 8 crates wired together)
     "crates/ruview-swarm",                         # ADR-148 — drone swarm control system
+    # ADR-262 P1 — anti-corruption bridge converting RuView WiFi-CSI sensing
+    # output into signed RuField FieldEvents. Path-deps the `vendor/rufield`
+    # submodule crates (rufield-core/-provenance/-privacy/-fusion); single
+    # coupling point between RuView and the standalone RuField MFS spec.
+    "crates/wifi-densepose-rufield",
 ]
 # ADR-040: WASM edge crate targets wasm32-unknown-unknown (no_std),
 # excluded from workspace to avoid breaking `cargo test --workspace`.
@@ -82,6 +87,7 @@ members = [
 exclude = [
     "crates/wifi-densepose-wasm-edge",
     "crates/homecore-plugin-example",
+    "crates/worldgraph",   # ruvnet/worldgraph submodule — its own workspace (geo/worldgraph/worldmodel)
 ]
 
 [workspace.package]
@@ -186,15 +192,16 @@ midstreamer-temporal-compare = "0.2"
 midstreamer-attractor = "0.2"
 
 # ruvector integration (published on crates.io)
-# Vendored at v2.1.0 in vendor/ruvector; using crates.io versions until published.
+# Vendored at origin/main (a083bd77f) in vendor/ruvector; using crates.io versions
+# until published. Bumps per ADR-152 §2.6 (2026-06-10 vendor sync survey).
 ruvector-core = "2.2.0"
-ruvector-mincut = "2.0.4"
+ruvector-mincut = "2.0.6"
 ruvector-attn-mincut = "2.0.4"
 ruvector-temporal-tensor = "2.0.6"
-ruvector-solver = "2.0.4"
-ruvector-attention = "2.0.4"
+ruvector-solver = "2.0.6"
+ruvector-attention = "2.1.0"
 ruvector-crv = "0.1.1"
-ruvector-gnn = { version = "2.0.5", default-features = false }
+ruvector-gnn = { version = "2.2.0", default-features = false }
 
 
 # Internal crates
@@ -208,7 +215,7 @@ wifi-densepose-hardware = { version = "0.3.0", path = "crates/wifi-densepose-har
 wifi-densepose-wasm = { version = "0.3.0", path = "crates/wifi-densepose-wasm" }
 wifi-densepose-mat = { version = "0.3.0", path = "crates/wifi-densepose-mat" }
 wifi-densepose-ruvector = { version = "0.3.0", path = "crates/wifi-densepose-ruvector" }
-wifi-densepose-worldmodel = { version = "0.3.0", path = "crates/wifi-densepose-worldmodel" }
+wifi-densepose-worldmodel = { version = "0.3.0", path = "crates/worldgraph/wifi-densepose-worldmodel" }
 
 [profile.release]
 lto = true

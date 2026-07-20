@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Proposed |
+| **Status** | Accepted — partial (built + tested building block; integration glue pending — see Implementation Status, commit `0f336b7d3`) |
 | **Date** | 2026-05-28 |
 | **Deciders** | ruv |
 | **Codebase target** | `wifi-densepose-train` (`src/eval.rs`, `src/metrics.rs`, `src/ruview_metrics.rs`, `src/proof.rs`); `wifi-densepose-signal` (`src/bin/*_proof_runner.rs`); `wifi-densepose-cli` |

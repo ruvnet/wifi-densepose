@@ -100,6 +100,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Download QEMU artifact
         uses: actions/download-artifact@v4
@@ -214,6 +216,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install clang
         run: |
@@ -263,6 +267,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install NVS generator
         run: pip install esp-idf-nvs-partition-gen
@@ -317,6 +323,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Download QEMU artifact
         uses: actions/download-artifact@v4

@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Proposed |
+| **Status** | Accepted — partial (built + tested building block; integration glue pending — see Implementation Status, commit `521a012d8`) |
 | **Date** | 2026-05-28 |
 | **Deciders** | ruv |
 | **Codebase target** | New module/crate `wifi-densepose-worldgraph` alongside `v2/crates/wifi-densepose-geo` and `v2/crates/homecore`; petgraph bridge pattern from `v2/crates/ruv-neural/ruv-neural-graph/src/petgraph_bridge.rs`; integrates `homecore/src/registry.rs` `area_id` and `wifi-densepose-mat/src/domain/scan_zone.rs` |

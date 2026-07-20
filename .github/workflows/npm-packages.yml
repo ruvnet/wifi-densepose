@@ -1,0 +1,148 @@
+# ADR-265 D1 — the npm-package gate.
+#
+# Every Node package in this repo (published or private) gets: install, build,
+# tests, a version-literal gate (D3 — package.json is the only place a version
+# lives), a pack-content gate (no source maps, unpacked-size budget), a
+# tarball-install smoke test (would have caught ADR-264 F1's broken `require`
+# export), and the claim-check honesty lint on the README (D4).
+
+name: npm packages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'harness/ruview/**'
+      - 'tools/ruview-mcp/**'
+      - 'tools/ruview-cli/**'
+      - '.github/workflows/npm-packages.yml'
+  pull_request:
+    paths:
+      - 'harness/ruview/**'
+      - 'tools/ruview-mcp/**'
+      - 'tools/ruview-cli/**'
+      - '.github/workflows/npm-packages.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: ${{ matrix.package.dir }} (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+        package:
+          - dir: harness/ruview
+            build: false
+            publishable: true
+            # ADR-263: dependency-free harness; budget guards against dep creep.
+            unpacked_budget: 65536
+          - dir: tools/ruview-mcp
+            build: true
+            publishable: true
+            # ADR-264 O2: map-free tarball (was 188 kB with maps).
+            unpacked_budget: 140000
+          - dir: tools/ruview-cli
+            build: true
+            publishable: false
+            unpacked_budget: 0
+    defaults:
+      run:
+        working-directory: ${{ matrix.package.dir }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # Repo policy gitignores lockfiles under harness/ (the harness is
+      # dependency-free anyway); the TS packages commit theirs.
+      - name: Install
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-fund --no-audit; fi
+
+      - name: Build
+        if: ${{ matrix.package.build }}
+        run: npm run build
+
+      - name: Test
+        run: npm test --if-present
+
+      # ADR-265 D3 — package.json is the only place a version string lives.
+      - name: Version-literal gate
+        run: |
+          set -euo pipefail
+          hits=""
+          for d in src bin; do
+            if [ -d "$d" ]; then
+              hits+=$(grep -rEn '\b[0-9]+\.[0-9]+\.[0-9]+\b' "$d" | grep -vE '127\.0\.0\.1|0\.0\.0\.0' || true)
+            fi
+          done
+          if [ -n "$hits" ]; then
+            echo "Hardcoded version-like literals found (read package.json instead — ADR-265 D3):"
+            echo "$hits"
+            exit 1
+          fi
+
+      # ADR-265 D1.3 — pack-content gate: no maps, size budget enforced.
+      - name: Pack gate
+        if: ${{ matrix.package.publishable }}
+        run: |
+          npm pack --dry-run --json 2>/dev/null | node -e "
+            const [info] = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+            const budget = Number(process.env.UNPACKED_BUDGET);
+            const maps = info.files.filter((f) => f.path.endsWith('.map'));
+            if (maps.length > 0) {
+              console.error('Tarball contains source maps (ADR-264 F2):', maps.map((m) => m.path));
+              process.exit(1);
+            }
+            if (info.unpackedSize > budget) {
+              console.error(\`Unpacked size \${info.unpackedSize} B exceeds budget \${budget} B\`);
+              process.exit(1);
+            }
+            console.log(\`pack gate OK: \${info.files.length} files, \${info.unpackedSize} B unpacked (budget \${budget} B), 0 maps\`);
+          "
+        env:
+          UNPACKED_BUDGET: ${{ matrix.package.unpacked_budget }}
+
+      # ADR-265 D1.4 — install the real tarball and drive each bin/export.
+      - name: Tarball smoke test
+        if: ${{ matrix.package.publishable }}
+        run: |
+          set -euo pipefail
+          TGZ="$PWD/$(npm pack --silent 2>/dev/null | tail -1)"
+          SMOKE="$(mktemp -d)"
+          cd "$SMOKE"
+          npm init -y > /dev/null
+          npm i --no-fund --no-audit "$TGZ"
+          case "${{ matrix.package.dir }}" in
+            harness/ruview)
+              ./node_modules/.bin/ruview --version
+              ./node_modules/.bin/ruview doctor
+              # the honesty gate must fail closed on empty input (ADR-263 F1)
+              if ./node_modules/.bin/ruview claim-check; then
+                echo 'claim-check passed with no input — fail-open regression'; exit 1
+              fi
+              node --input-type=module -e "const m = await import('@ruvnet/ruview'); if (!m.TOOLS) process.exit(1);"
+              ;;
+            tools/ruview-mcp)
+              # initialize over stdio; server must answer and exit 0 on EOF
+              printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}\n' \
+                | timeout 30 ./node_modules/.bin/rvagent | grep -q '"serverInfo"'
+              # the ESM export must resolve from the installed tarball (ADR-264 F1)
+              timeout 30 node --input-type=module -e "await import('@ruvnet/rvagent');" < /dev/null
+              ;;
+          esac
+
+      # ADR-265 D4 — package READMEs must pass the project's own honesty lint.
+      - name: Claim-check README
+        run: |
+          if [ -f README.md ]; then
+            node "$GITHUB_WORKSPACE/harness/ruview/bin/cli.js" claim-check --file README.md
+          else
+            echo "no README.md — skipping"
+          fi

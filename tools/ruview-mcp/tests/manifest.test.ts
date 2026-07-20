@@ -15,11 +15,11 @@
  */
 
 import { readFileSync } from "node:fs";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const pkgPath = resolve(__dirname, "../package.json");
+// jest runs from the package root; avoid import.meta (ts-jest transforms this
+// suite to a module target that rejects it — pre-existing suite failure).
+const pkgPath = resolve(process.cwd(), "package.json");
 
 // Parse once; keep raw for snapshot assertions.
 const raw = readFileSync(pkgPath, "utf-8");

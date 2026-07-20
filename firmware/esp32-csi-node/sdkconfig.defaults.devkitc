@@ -1,0 +1,16 @@
+# DevKitC-1 (display-less) production overlay.
+#
+# The stock ESP32-S3-DevKitC-1 has no AMOLED panel, but the ADR-045 runtime
+# probe false-positives on it: with no TCA9554 and floating QSPI pins, the
+# SH8601 init sequence reports success, display_is_active() returns true, and
+# main.c skips the RuView#893 MGMT+DATA promiscuous upgrade — CSI yield
+# collapses to 0 pps (the exact symptom #893 fixed). Compiling display support
+# out makes has_display constant-false so the upgrade always applies.
+#
+# Build (from repo root, per README "Docker — the only reliable method"):
+#   MSYS_NO_PATHCONV=1 docker run --rm \
+#     -v "$(pwd)/firmware/esp32-csi-node:/project" -w /project \
+#     espressif/idf:v5.4 bash -c \
+#     "rm -rf build sdkconfig && idf.py -DSDKCONFIG_DEFAULTS='sdkconfig.defaults;sdkconfig.defaults.devkitc' set-target esp32s3 && idf.py -DSDKCONFIG_DEFAULTS='sdkconfig.defaults;sdkconfig.defaults.devkitc' build"
+
+# CONFIG_DISPLAY_ENABLE is not set

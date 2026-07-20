@@ -48,5 +48,41 @@ fn bench_cycle(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_cycle);
+/// Mesh guard in isolation: cold build (node set appears) vs steady state
+/// (identical weights next cycle → change-gated, zero graph updates) for a
+/// 12-node mesh — the full ADR-029 deployment size.
+fn bench_mesh_guard(c: &mut Criterion) {
+    use wifi_densepose_engine::MeshGuard;
+    let nodes: Vec<u8> = (0..12).collect();
+    let w = |i: usize, j: usize| 0.4 + 0.01 * ((i + j) % 7) as f64;
+
+    c.bench_function("mesh_guard_cold_build_12n", |b| {
+        b.iter_batched(
+            MeshGuard::default,
+            |mut g| g.update(&nodes, w),
+            BatchSize::SmallInput,
+        );
+    });
+
+    c.bench_function("mesh_guard_steady_state_12n", |b| {
+        let mut g = MeshGuard::default();
+        g.update(&nodes, w); // warm
+        b.iter(|| g.update(&nodes, w));
+    });
+
+    c.bench_function("mesh_guard_one_edge_change_12n", |b| {
+        let mut g = MeshGuard::default();
+        g.update(&nodes, w);
+        let mut flip = false;
+        b.iter(|| {
+            flip = !flip;
+            let delta = if flip { 0.2 } else { 0.0 };
+            g.update(&nodes, |i, j| {
+                if (i.min(j), i.max(j)) == (0, 1) { 0.4 + delta } else { w(i, j) }
+            })
+        });
+    });
+}
+
+criterion_group!(benches, bench_cycle, bench_mesh_guard);
 criterion_main!(benches);

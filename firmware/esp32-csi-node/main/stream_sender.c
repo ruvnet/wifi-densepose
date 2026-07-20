@@ -26,9 +26,16 @@ static struct sockaddr_in s_dest_addr;
  * rapid-fire CSI callbacks can exhaust the pbuf pool and crash the device.
  */
 static int64_t s_backoff_until_us = 0;       /* esp_timer timestamp to resume */
-#define ENOMEM_COOLDOWN_MS  100              /* suppress sends for 100 ms */
+#define ENOMEM_COOLDOWN_MS  100              /* base backoff; doubles per streak */
+#define ENOMEM_COOLDOWN_MAX_MS 2000          /* cap on the exponential backoff */
 #define ENOMEM_LOG_INTERVAL 50               /* log every Nth suppressed send */
 static uint32_t s_enomem_suppressed = 0;
+/* Consecutive ENOMEM episodes without an intervening successful send. A fixed
+ * 100 ms backoff is too short to drain sustained lwIP/WiFi buffer pressure
+ * (#1135 bug #1: tier-2 + concurrent TX keeps the node stuck), so the backoff
+ * grows 100→200→400→…→2000 ms per streak and resets on the first send that
+ * succeeds. */
+static uint32_t s_enomem_streak = 0;
 
 static int sender_init_internal(const char *ip, uint16_t port)
 {
@@ -93,16 +100,52 @@ int stream_sender_send(const uint8_t *data, size_t len)
                       (struct sockaddr *)&s_dest_addr, sizeof(s_dest_addr));
     if (sent < 0) {
         if (errno == ENOMEM) {
-            /* Start backoff to let lwIP reclaim buffers */
-            s_backoff_until_us = esp_timer_get_time() +
-                                 (int64_t)ENOMEM_COOLDOWN_MS * 1000;
-            ESP_LOGW(TAG, "sendto ENOMEM — backing off for %d ms", ENOMEM_COOLDOWN_MS);
+            /* Exponential backoff: double the cooldown each consecutive ENOMEM
+             * (capped) so sustained buffer pressure actually drains instead of
+             * the node re-failing every 100 ms forever (#1135 bug #1). */
+            uint32_t shift = s_enomem_streak < 5 ? s_enomem_streak : 5;
+            uint32_t cooldown = ENOMEM_COOLDOWN_MS << shift;
+            if (cooldown > ENOMEM_COOLDOWN_MAX_MS) cooldown = ENOMEM_COOLDOWN_MAX_MS;
+            s_enomem_streak++;
+            s_backoff_until_us = esp_timer_get_time() + (int64_t)cooldown * 1000;
+            ESP_LOGW(TAG, "sendto ENOMEM — backing off for %lu ms (streak %lu)",
+                     (unsigned long)cooldown, (unsigned long)s_enomem_streak);
         } else {
             ESP_LOGW(TAG, "sendto failed: errno %d", errno);
         }
         return -1;
     }
 
+    /* A send got through — buffer pressure cleared; reset the backoff streak. */
+    s_enomem_streak = 0;
+    return sent;
+}
+
+int stream_sender_send_priority(const uint8_t *data, size_t len)
+{
+    if (s_sock < 0) {
+        return -1;
+    }
+
+    /* Priority path (#1183): low-rate control packets (feature_state, HEALTH,
+     * mesh sync) bypass the global ENOMEM backoff gate so the high-rate CSI
+     * stream cannot starve them. These are ≤48 B at ≤1 Hz — negligible pbuf
+     * pressure, so they won't re-trigger the crash cascade that the backoff
+     * (driven by the 50 Hz CSI flood) exists to prevent.
+     *
+     * Crucially, an ENOMEM here is reported quietly and does NOT extend the
+     * global streak/backoff: a tiny control packet failing is a symptom of
+     * the bulk-stream pressure, not a cause, so it must not feed the cooldown
+     * that suppresses the next CSI frame. Likewise a success does not reset
+     * the streak — the bulk path owns that signal. */
+    int sent = sendto(s_sock, data, len, 0,
+                      (struct sockaddr *)&s_dest_addr, sizeof(s_dest_addr));
+    if (sent < 0) {
+        if (errno != ENOMEM) {
+            ESP_LOGW(TAG, "priority sendto failed: errno %d", errno);
+        }
+        return -1;
+    }
     return sent;
 }
 

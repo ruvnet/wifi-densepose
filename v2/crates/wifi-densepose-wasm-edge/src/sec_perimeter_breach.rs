@@ -92,6 +92,8 @@ impl ZoneState {
 
 /// Multi-zone perimeter breach detector.
 pub struct PerimeterBreachDetector {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
     zones: [ZoneState; MAX_ZONES],
     /// Calibration accumulators per zone: sum of gradient magnitudes.
     cal_grad_sum: [f32; MAX_ZONES],
@@ -118,6 +120,7 @@ pub struct PerimeterBreachDetector {
 impl PerimeterBreachDetector {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 4],
             zones: [ZoneState::new(); MAX_ZONES],
             cal_grad_sum: [0.0; MAX_ZONES],
             cal_var_sum: [0.0; MAX_ZONES],
@@ -155,7 +158,6 @@ impl PerimeterBreachDetector {
         self.cd_departure = self.cd_departure.saturating_sub(1);
         self.cd_transition = self.cd_transition.saturating_sub(1);
 
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut ne = 0usize;
 
         let subs_per_zone = n_sc / MAX_ZONES;
@@ -196,7 +198,7 @@ impl PerimeterBreachDetector {
         }
         if !self.phase_init {
             self.phase_init = true;
-            return unsafe { &EVENTS[..0] };
+            return &self.events[..0];
         }
 
         // Calibration phase.
@@ -214,7 +216,7 @@ impl PerimeterBreachDetector {
                 }
                 self.calibrated = true;
             }
-            return unsafe { &EVENTS[..0] };
+            return &self.events[..0];
         }
 
         // Detect breaches and direction per zone.
@@ -262,7 +264,7 @@ impl PerimeterBreachDetector {
             if self.approach_run[z] >= DIRECTION_DEBOUNCE && is_breach
                 && self.cd_approach == 0 && ne < 4
             {
-                unsafe { EVENTS[ne] = (EVENT_APPROACH_DETECTED, z as f32); }
+                self.events[ne] = (EVENT_APPROACH_DETECTED, z as f32);
                 ne += 1;
                 self.cd_approach = COOLDOWN;
                 self.approach_run[z] = 0;
@@ -272,7 +274,7 @@ impl PerimeterBreachDetector {
             if self.departure_run[z] >= DIRECTION_DEBOUNCE
                 && self.cd_departure == 0 && ne < 4
             {
-                unsafe { EVENTS[ne] = (EVENT_DEPARTURE_DETECTED, z as f32); }
+                self.events[ne] = (EVENT_DEPARTURE_DETECTED, z as f32);
                 ne += 1;
                 self.cd_departure = COOLDOWN;
                 self.departure_run[z] = 0;
@@ -281,7 +283,7 @@ impl PerimeterBreachDetector {
 
         // Perimeter breach event.
         if most_disturbed_zone >= 0 && self.cd_breach == 0 && ne < 4 {
-            unsafe { EVENTS[ne] = (EVENT_PERIMETER_BREACH, max_energy); }
+            self.events[ne] = (EVENT_PERIMETER_BREACH, max_energy);
             ne += 1;
             self.cd_breach = COOLDOWN;
         }
@@ -296,7 +298,7 @@ impl PerimeterBreachDetector {
             // Encode as from*10 + to.
             let transition_code = self.last_active_zone as f32 * 10.0
                 + most_disturbed_zone as f32;
-            unsafe { EVENTS[ne] = (EVENT_ZONE_TRANSITION, transition_code); }
+            self.events[ne] = (EVENT_ZONE_TRANSITION, transition_code);
             ne += 1;
             self.cd_transition = COOLDOWN;
         }
@@ -305,7 +307,7 @@ impl PerimeterBreachDetector {
             self.last_active_zone = most_disturbed_zone;
         }
 
-        unsafe { &EVENTS[..ne] }
+        &self.events[..ne]
     }
 
     pub fn is_calibrated(&self) -> bool { self.calibrated }

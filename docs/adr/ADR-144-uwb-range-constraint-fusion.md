@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Proposed |
+| **Status** | Accepted — partial (built + tested building block; no UWB radio in fleet — see Implementation Status, commit `b10bc2e9a`) |
 | **Date** | 2026-05-28 |
 | **Deciders** | ruv |
 | **Codebase target** | `wifi-densepose-hardware` (new UWB driver/parser/auto-detect in `src/`); `wifi-densepose-signal` (`ruvsense/pose_tracker.rs` constraint-aware Kalman update); `wifi-densepose-mat` (`localization/fusion.rs` constraint integration) |

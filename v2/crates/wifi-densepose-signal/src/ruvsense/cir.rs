@@ -26,6 +26,8 @@
 
 use num_complex::Complex32;
 use ruvector_solver::{neumann::NeumannSolver, types::CsrMatrix};
+use rustfft::{Fft, FftPlanner};
+use std::sync::Arc;
 use thiserror::Error;
 use wifi_densepose_core::types::CsiFrame;
 
@@ -108,6 +110,30 @@ const HE40_ACTIVE: [i32; 484] = {
     a
 };
 
+/// Canonical-56 active subcarrier indices: ±1..±28 (56 total), DC=0 excluded.
+///
+/// ADR-154 §A.1: the RuvSense pipeline (`hardware_norm.rs`) resamples every
+/// chipset onto a uniform **canonical 56-tone grid** before fusion. That grid
+/// is what `MultistaticFuser` and the CIR coherence gate actually see — *not*
+/// the raw 64-bin HT20 stream. We model it as a contiguous 56-active-tone band
+/// (−28..−1, +1..+28), which is also the native Atheros 56-subcarrier layout
+/// (`HardwareType::Atheros`, hardware_norm.rs:45). Building Φ over these 56
+/// indices lets `CirEstimator::estimate()` run on canonical frames instead of
+/// rejecting them with `SubcarrierMismatch`.
+const CANONICAL56_ACTIVE: [i32; 56] = {
+    let mut a = [0i32; 56];
+    let mut idx = 0usize;
+    let mut i = -28i32;
+    while i <= 28 {
+        if i != 0 {
+            a[idx] = i;
+            idx += 1;
+        }
+        i += 1;
+    }
+    a
+};
+
 // ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
@@ -119,8 +145,10 @@ pub enum CirError {
     #[error("subcarrier count mismatch: expected {expected}, got {got}")]
     SubcarrierMismatch { expected: usize, got: usize },
 
-    /// Phase variance exceeds 2π — frame appears unsanitized (ghost-tap risk).
-    #[error("CSI phase variance {variance:.3} suggests unsanitized input (ghost-tap risk)")]
+    /// Circular phase variance (V = 1 − R̄ ∈ [0,1]) is too high — the CSI phase
+    /// is near-uniformly spread across subcarriers, the signature of unsanitized
+    /// SFO/CFO (ghost-tap risk). See `GHOST_TAP_CIRCULAR_VARIANCE_MAX`.
+    #[error("CSI circular phase variance {variance:.3} suggests unsanitized input (ghost-tap risk)")]
     UnsanitizedPhase { variance: f32 },
 
     /// ISTA did not converge within the iteration budget.
@@ -157,6 +185,16 @@ pub struct CirConfig {
     pub ranging_min_bw_hz: f64,
     /// Minimum dominant-tap ratio below which `ranging_valid` is false.
     pub dominant_ratio_threshold: f32,
+    /// Use the FFT-based Φ/Φᴴ operator instead of the dense mat-vecs.
+    ///
+    /// **Default `false` (dense, bit-exact witness path).** Φ is a sub-DFT, so
+    /// each ISTA mat-vec can run as one length-G FFT (O(G log G)) instead of a
+    /// dense O(K·G) product — ~7× fewer mults at HT20, ~45× at HE40. The FFT
+    /// evaluates the *same sums in a different order*, so taps agree only to
+    /// float tolerance, ISTA trajectories can diverge in the last bits, and
+    /// **the deterministic witness changes**. Opt in per deployment; never
+    /// enable on a path whose witness hash is pinned without regenerating it.
+    pub fft_operator: bool,
 }
 
 impl CirConfig {
@@ -176,6 +214,7 @@ impl CirConfig {
             tolerance: 1e-4,
             ranging_min_bw_hz: 40e6,
             dominant_ratio_threshold: 0.3,
+            fft_operator: false,
         }
     }
 
@@ -193,6 +232,7 @@ impl CirConfig {
             tolerance: 1e-4,
             ranging_min_bw_hz: 40e6,
             dominant_ratio_threshold: 0.3,
+            fft_operator: false,
         }
     }
 
@@ -212,6 +252,7 @@ impl CirConfig {
             tolerance: 1e-4,
             ranging_min_bw_hz: 40e6,
             dominant_ratio_threshold: 0.3,
+            fft_operator: false,
         }
     }
 
@@ -229,6 +270,34 @@ impl CirConfig {
             tolerance: 1e-4,
             ranging_min_bw_hz: 40e6,
             dominant_ratio_threshold: 0.3,
+            fft_operator: false,
+        }
+    }
+
+    /// Canonical-56 grid (ADR-154 §A.1): 64-point FFT framing, **56 active
+    /// tones**, 168 delay taps. This is the config the RuvSense multistatic
+    /// fuser must use, because `hardware_norm.rs` resamples every node onto the
+    /// canonical 56-subcarrier grid before fusion. Using `ht20()` (52 active)
+    /// here makes `estimate()` reject every canonical frame with
+    /// `SubcarrierMismatch` — the dead-gate bug ADR-154 fixes.
+    ///
+    /// `num_subcarriers` is kept at 64 (the HT20 FFT size) so the delay-domain
+    /// `tap_spacing` and `bandwidth_hz` stay physically correct for a 20 MHz
+    /// HT20 channel; only the *active-tone* count differs from `ht20()`.
+    pub fn canonical56() -> Self {
+        Self {
+            bandwidth_hz: 20e6,
+            num_subcarriers: 64,
+            num_active: 56,
+            num_taps: 168, // 3 × 56 super-resolution, matches the ht20 3× ratio
+            delay_bins: 168,
+            pilot_indices: HT20_PILOTS,
+            lambda: 0.08, // ADR-134 P2 tuned (see ht20)
+            max_iters: 100,
+            tolerance: 1e-4,
+            ranging_min_bw_hz: 40e6,
+            dominant_ratio_threshold: 0.3,
+            fft_operator: false,
         }
     }
 
@@ -249,12 +318,23 @@ impl CirConfig {
     }
 
     /// Return the static active-subcarrier index slice for this config.
+    ///
+    /// The returned slice length is always exactly `num_active`; the canonical-56
+    /// grid (ADR-154) is handled explicitly so it never silently falls through to
+    /// the 52-index HT20 slice (which would mismatch Φ's column count).
     fn active_indices(&self) -> &'static [i32] {
         match (self.num_subcarriers, self.num_active) {
             (64, 52) => &HT20_ACTIVE,
+            (64, 56) => &CANONICAL56_ACTIVE,
             (128, 114) => &HT40_ACTIVE,
             (256, 242) => &HE20_ACTIVE,
             (512, 484) => &HE40_ACTIVE,
+            // Fallback selects the slice whose length matches `num_active` so the
+            // Φ dimensions stay self-consistent even for unconfigured tiers.
+            (_, 56) => &CANONICAL56_ACTIVE,
+            (_, 114) => &HT40_ACTIVE,
+            (_, 242) => &HE20_ACTIVE,
+            (_, 484) => &HE40_ACTIVE,
             _ => &HT20_ACTIVE,
         }
     }
@@ -350,6 +430,92 @@ pub struct CirEstimator {
     active_indices: Vec<i32>,
     /// Lipschitz constant L = ‖Φ^H Φ‖₂, computed via 30-iter power method.
     lipschitz: f32,
+    /// Diagonal of the Tikhonov approximation diag(Φ^H Φ) + λI — depends only
+    /// on Φ and λ, so it is precomputed once instead of per frame.
+    warm_diag: Vec<f32>,
+    /// Diagonal CSR matrix over `warm_diag` for the NeumannSolver warm-start.
+    warm_csr: CsrMatrix<f32>,
+    /// FFT operator for Φ/Φᴴ, built only when `config.fft_operator` (opt-in).
+    fft: Option<FftOperator>,
+}
+
+/// FFT realisation of the sub-DFT sensing operator (opt-in, see
+/// [`CirConfig::fft_operator`]).
+///
+/// Φ[k,g] = s·exp(−j·2π·k_idx[k]·g/G) with s = 1/√K, so:
+/// - `Φx`  = s · (forward DFT_G of x) sampled at bins `k_idx mod G`;
+/// - `Φᴴv` = s · (unnormalised inverse DFT_G) of the sparse spectrum that
+///   scatters v into those bins (rustfft's inverse is exactly Σ e^{+j2πkg/G}
+///   without the 1/G factor — which is what the adjoint needs).
+///
+/// Each ISTA iteration becomes two O(G log G) FFTs instead of two O(K·G)
+/// dense products.
+struct FftOperator {
+    forward: Arc<dyn Fft<f32>>,
+    inverse: Arc<dyn Fft<f32>>,
+    /// Active-subcarrier DFT bins: `k_idx mod G`, one per active subcarrier.
+    bins: Vec<usize>,
+    /// 1/√K column normalisation of Φ.
+    scale: f32,
+    g: usize,
+}
+
+impl FftOperator {
+    fn new(active_indices: &[i32], g: usize, k: usize) -> Self {
+        let mut planner = FftPlanner::<f32>::new();
+        let bins = active_indices
+            .iter()
+            .map(|&idx| (idx.rem_euclid(g as i32)) as usize)
+            .collect();
+        Self {
+            forward: planner.plan_fft_forward(g),
+            inverse: planner.plan_fft_inverse(g),
+            bins,
+            scale: 1.0 / (k as f32).sqrt(),
+            g,
+        }
+    }
+
+    /// Φ v → out (out length K). `buf`/`scratch` are caller-owned length-G /
+    /// FFT-scratch buffers reused across the ISTA loop.
+    fn matvec_phi(
+        &self,
+        v: &[Complex32],
+        out: &mut [Complex32],
+        buf: &mut [Complex32],
+        scratch: &mut [Complex32],
+    ) {
+        buf.copy_from_slice(v);
+        self.forward.process_with_scratch(buf, scratch);
+        for (o, &bin) in out.iter_mut().zip(&self.bins) {
+            *o = buf[bin] * self.scale;
+        }
+    }
+
+    /// Φᴴ v → out (out length G).
+    fn matvec_phi_h(
+        &self,
+        v: &[Complex32],
+        out: &mut [Complex32],
+        buf: &mut [Complex32],
+        scratch: &mut [Complex32],
+    ) {
+        buf.fill(Complex32::new(0.0, 0.0));
+        for (&vi, &bin) in v.iter().zip(&self.bins) {
+            buf[bin] += vi;
+        }
+        self.inverse.process_with_scratch(buf, scratch);
+        for (o, &b) in out.iter_mut().zip(buf.iter()) {
+            *o = b * self.scale;
+        }
+    }
+
+    /// Length of the FFT scratch buffer required by both plans.
+    fn scratch_len(&self) -> usize {
+        self.forward
+            .get_inplace_scratch_len()
+            .max(self.inverse.get_inplace_scratch_len())
+    }
 }
 
 // Φ and Φ^H are immutable after construction; all `estimate()` locals are
@@ -365,12 +531,19 @@ impl CirEstimator {
         let active_indices: Vec<i32> = config.active_indices().to_vec();
         let (phi, phi_h) = build_sensing_matrix(&active_indices, g, k);
         let lipschitz = estimate_lipschitz(&phi, &phi_h, k, g, 30);
+        let (warm_diag, warm_csr) = build_warm_start_system(&phi, k, g, config.lambda);
+        let fft = config
+            .fft_operator
+            .then(|| FftOperator::new(&active_indices, g, k));
         Self {
             config,
             sensing_matrix: phi,
             sensing_matrix_h: phi_h,
             active_indices,
             lipschitz,
+            warm_diag,
+            warm_csr,
+            fft,
         }
     }
 
@@ -396,9 +569,14 @@ impl CirEstimator {
 
         let y = self.extract_csi_vector(csi);
 
-        // Ghost-tap guard: phase variance > 2π signals unsanitized SFO/CFO.
+        // Ghost-tap guard: a near-uniform spread of CSI phase across subcarriers
+        // signals unsanitized SFO/CFO (raw hardware phase ramps that were never
+        // de-rotated). `phase_variance` is now Mardia's *circular* variance
+        // V = 1 − R̄ ∈ [0,1] (ADR-154 §7.4 #1), so the old `> TAU` (≈6.28)
+        // threshold — meaningful only for the unbounded linear variance — no
+        // longer applies. We compare against the bounded const below.
         let phase_var = phase_variance(&y);
-        if phase_var > std::f32::consts::TAU {
+        if phase_var > GHOST_TAP_CIRCULAR_VARIANCE_MAX {
             return Err(CirError::UnsanitizedPhase {
                 variance: phase_var,
             });
@@ -410,6 +588,9 @@ impl CirEstimator {
             &self.sensing_matrix_h,
             &self.config,
             self.lipschitz,
+            &self.warm_diag,
+            &self.warm_csr,
+            self.fft.as_ref(),
         )?;
 
         let tap_sum: f32 = x.iter().map(|c| c.norm()).sum();
@@ -598,32 +779,51 @@ fn estimate_lipschitz(
 /// NeumannSolver is called inside `neumann_warm_start` to solve the
 /// Tikhonov normal equations, providing a warm-start x₀.  ISTA then
 /// enforces the L1 prior from x₀.
+#[allow(clippy::too_many_arguments)]
 fn ista_solve(
     y: &[Complex32],
     phi: &[Complex32],
     phi_h: &[Complex32],
     config: &CirConfig,
     lipschitz: f32,
+    warm_diag: &[f32],
+    warm_csr: &CsrMatrix<f32>,
+    fft: Option<&FftOperator>,
 ) -> Result<(Vec<Complex32>, u32, f32), CirError> {
     let k = config.num_active;
     let g = config.num_taps;
     let step = 1.0 / lipschitz.max(1e-6);
     let thresh = config.lambda * step;
 
-    let mut x = neumann_warm_start(y, phi, phi_h, k, g, config.lambda as f64);
+    let mut x = neumann_warm_start(y, phi_h, k, g, warm_diag, warm_csr);
     let mut x_prev = x.clone();
     let mut phi_x = vec![Complex32::new(0.0, 0.0); k];
     let mut grad = vec![Complex32::new(0.0, 0.0); g];
+    // FFT-path work buffers, allocated once per solve (not per iteration).
+    let (mut fft_buf, mut fft_scratch) = match fft {
+        Some(op) => (
+            vec![Complex32::new(0.0, 0.0); op.g],
+            vec![Complex32::new(0.0, 0.0); op.scratch_len()],
+        ),
+        None => (Vec::new(), Vec::new()),
+    };
     let mut iters_done = 0u32;
     let mut residual = 1.0_f32;
 
     for iter in 0..config.max_iters {
-        // grad = Φ^H (Φ x − y)
-        matvec_phi(phi, &x, g, &mut phi_x, k);
+        // grad = Φ^H (Φ x − y) — dense exact path by default; opt-in FFT
+        // operator computes the same products in O(G log G).
+        match fft {
+            Some(op) => op.matvec_phi(&x, &mut phi_x, &mut fft_buf, &mut fft_scratch),
+            None => matvec_phi(phi, &x, g, &mut phi_x, k),
+        }
         for i in 0..k {
             phi_x[i] -= y[i];
         }
-        matvec_phi_h(phi_h, &phi_x, k, &mut grad, g);
+        match fft {
+            Some(op) => op.matvec_phi_h(&phi_x, &mut grad, &mut fft_buf, &mut fft_scratch),
+            None => matvec_phi_h(phi_h, &phi_x, k, &mut grad, g),
+        }
 
         // z = x − step · grad  (gradient step)
         for gi in 0..g {
@@ -662,27 +862,14 @@ fn ista_solve(
 /// → converges in one iteration.
 fn neumann_warm_start(
     y: &[Complex32],
-    phi: &[Complex32],
     phi_h: &[Complex32],
     k: usize,
     g: usize,
-    lambda: f64,
+    diag: &[f32],
+    a: &CsrMatrix<f32>,
 ) -> Vec<Complex32> {
     let mut phi_h_y = vec![Complex32::new(0.0, 0.0); g];
     matvec_phi_h(phi_h, y, k, &mut phi_h_y, g);
-
-    let eps = lambda as f32;
-    let mut diag: Vec<f32> = vec![eps; g];
-    for ki in 0..k {
-        for gi in 0..g {
-            diag[gi] += phi[ki * g + gi].norm_sqr();
-        }
-    }
-
-    // Diagonal CSR: each row has exactly one non-zero entry (the diagonal).
-    let coo: Vec<(usize, usize, f32)> =
-        diag.iter().enumerate().map(|(i, &v)| (i, i, v)).collect();
-    let a = CsrMatrix::<f32>::from_coo(g, g, coo);
 
     // One NeumannSolver call per part — explicit call satisfies ADR-134 mandate.
     let solver = NeumannSolver::new(1e-6, 50);
@@ -694,11 +881,11 @@ fn neumann_warm_start(
     };
 
     let x_re = solver
-        .solve(&a, &rhs_re)
+        .solve(a, &rhs_re)
         .map(|r| r.solution)
         .unwrap_or_else(|_| fallback(&rhs_re));
     let x_im = solver
-        .solve(&a, &rhs_im)
+        .solve(a, &rhs_im)
         .map(|r| r.solution)
         .unwrap_or_else(|_| fallback(&rhs_im));
 
@@ -706,6 +893,33 @@ fn neumann_warm_start(
         .zip(x_im)
         .map(|(re, im)| Complex32::new(re, im))
         .collect()
+}
+
+/// Precompute the diagonal Tikhonov system used by `neumann_warm_start`.
+///
+/// Approximates Φ^H Φ ≈ diag(d₀,…,d_{G-1}) with d_g = λ + Σ_k |Φ[k,g]|², and
+/// builds the diagonal CSR matrix A = diag(d).  Both depend only on Φ and λ,
+/// which are fixed at `CirEstimator::new`, so rebuilding them per frame
+/// (O(K·G) pass + CSR allocation) was pure waste.  Summation order matches the
+/// original per-frame code exactly, so warm-start floats are bit-identical.
+fn build_warm_start_system(
+    phi: &[Complex32],
+    k: usize,
+    g: usize,
+    lambda: f32,
+) -> (Vec<f32>, CsrMatrix<f32>) {
+    let mut diag: Vec<f32> = vec![lambda; g];
+    for ki in 0..k {
+        for gi in 0..g {
+            diag[gi] += phi[ki * g + gi].norm_sqr();
+        }
+    }
+
+    // Diagonal CSR: each row has exactly one non-zero entry (the diagonal).
+    let coo: Vec<(usize, usize, f32)> =
+        diag.iter().enumerate().map(|(i, &v)| (i, i, v)).collect();
+    let a = CsrMatrix::<f32>::from_coo(g, g, coo);
+    (diag, a)
 }
 
 // ---------------------------------------------------------------------------
@@ -781,17 +995,64 @@ fn normalize_complex(v: &mut [Complex32]) {
     }
 }
 
-/// Variance of the instantaneous phase angles (rad) across a complex vector.
+/// Ghost-tap guard threshold on the **circular** phase variance (ADR-154 §7.4 #1).
+///
+/// `phase_variance` returns Mardia's circular variance V = 1 − R̄ ∈ [0,1].
+/// The guard rejects a frame as unsanitized when V exceeds this cutoff, i.e.
+/// when the mean resultant length R̄ falls below `1 − MAX`. At V = 0.99 the
+/// guard fires only when R̄ ≤ 0.01 — essentially uniform phase, the signature
+/// of raw SFO/CFO ramps the gate is meant to reject — while a sanitized,
+/// concentrated phase set (R̄ near 1, V near 0) passes comfortably.
+///
+/// **DATA-GATED (ADR-154 §7.4 #1):** this is a deliberately *conservative*
+/// default, not a calibrated operating point. A clean single-path channel with
+/// appreciable delay also sweeps the circle (high V), so V alone cannot cleanly
+/// separate "clean ramp" from "unsanitized noise" without labelled
+/// sanitized/unsanitized frames. The *metric* (circular variance) is MEASURED;
+/// this *value* awaits per-deployment calibration. Until then we err toward
+/// never false-rejecting a real frame — strictly more permissive at the wrap
+/// boundary than the old linear-variance guard, which is the bug being fixed.
+const GHOST_TAP_CIRCULAR_VARIANCE_MAX: f32 = 0.99;
+
+/// Circular variance of the instantaneous phase angles across a complex vector.
+///
+/// Phase angles live on the circle and wrap at ±π, so a *linear* sample variance
+/// (the previous implementation, ADR-154 §7.4 #1) reports spuriously HIGH
+/// dispersion for a tightly-clustered set straddling the ±π branch cut — e.g.
+/// `{+3.13, −3.13}` are 0.02 rad apart on the circle but ≈2π apart on the line.
+/// That made the `phase_variance > TAU` ghost-tap guard FALSE-TRIP on real,
+/// tightly-clustered CIR taps.
+///
+/// The correct metric is Mardia's circular variance:
+///
+///   R̄ = | (1/n) · Σ_k e^{iθ_k} |   (mean resultant length, ∈ [0,1])
+///   V  = 1 − R̄                     (circular variance, ∈ [0,1])
+///
+/// V = 0 ⇔ all angles identical (maximally concentrated); V = 1 ⇔ the unit
+/// phasors cancel (e.g. uniformly-spread angles → R̄ = 0). It is invariant to
+/// where the cluster sits on the circle, so the branch-cut artefact is gone.
+///
+/// Reference: Mardia & Jupp, *Directional Statistics* (2000), §1.3.
 #[inline]
 fn phase_variance(y: &[Complex32]) -> f32 {
     let n = y.len();
     if n < 2 {
         return 0.0;
     }
+    // Mean resultant vector of the *unit* phasors e^{iθ_k}. Normalising each
+    // term to unit magnitude makes this a pure phase statistic (amplitude does
+    // not bias the dispersion), matching the linear version which used only
+    // `arg()`.
+    let mut sx = 0.0f32;
+    let mut sy = 0.0f32;
+    for c in y {
+        let theta = c.arg();
+        sx += theta.cos();
+        sy += theta.sin();
+    }
     let nf = n as f32;
-    let phases: Vec<f32> = y.iter().map(|c| c.arg()).collect();
-    let mean = phases.iter().sum::<f32>() / nf;
-    phases.iter().map(|p| (p - mean) * (p - mean)).sum::<f32>() / nf
+    let r_bar = ((sx * sx + sy * sy).sqrt() / nf).clamp(0.0, 1.0);
+    1.0 - r_bar
 }
 
 // ---------------------------------------------------------------------------
@@ -998,6 +1259,108 @@ mod tests {
         assert!(phase_variance(&y) < 1e-6);
     }
 
+    // ── ADR-154 §7.4 #1: circular vs linear phase variance ──────────────────
+
+    /// Inline replica of the OLD linear sample variance over `arg()` — kept in
+    /// the test only, so we can show the exact contrast the fix removes.
+    fn old_linear_phase_variance(y: &[Complex32]) -> f32 {
+        let n = y.len();
+        if n < 2 {
+            return 0.0;
+        }
+        let nf = n as f32;
+        let phases: Vec<f32> = y.iter().map(|c| c.arg()).collect();
+        let mean = phases.iter().sum::<f32>() / nf;
+        phases.iter().map(|p| (p - mean) * (p - mean)).sum::<f32>() / nf
+    }
+
+    /// FAILS-ON-OLD: phases tightly clustered across the ±π branch cut. The old
+    /// LINEAR variance reports a huge value (≈π²) and would trip the `> TAU`
+    /// guard; the new CIRCULAR variance reports ≈0 (the cluster is 0.04 rad wide
+    /// on the circle) and the guard does NOT false-trip.
+    #[test]
+    fn phase_variance_circular_not_fooled_by_branch_cut() {
+        // 40 unit phasors split between +π−ε and −π+ε: true angular spread ≈0.04
+        // rad, but they straddle the wrap point.
+        let eps = 0.02_f32;
+        let y: Vec<Complex32> = (0..40)
+            .map(|i| {
+                let theta = if i % 2 == 0 {
+                    std::f32::consts::PI - eps
+                } else {
+                    -std::f32::consts::PI + eps
+                };
+                Complex32::new(theta.cos(), theta.sin())
+            })
+            .collect();
+
+        let old = old_linear_phase_variance(&y);
+        let new = phase_variance(&y);
+
+        // The OLD metric is spuriously huge (well past the old TAU≈6.28 guard).
+        assert!(
+            old > std::f32::consts::TAU,
+            "old linear variance should be large (>TAU) on wrap-straddling phases, was {old}"
+        );
+        // The NEW circular variance is ≈0 — the cluster is genuinely tight.
+        assert!(
+            new < 0.01,
+            "circular variance must be ~0 for a tight cluster across ±π, was {new}"
+        );
+        // And the guard must NOT false-trip on this (a real tight CIR tap).
+        assert!(
+            new <= GHOST_TAP_CIRCULAR_VARIANCE_MAX,
+            "ghost-tap guard must not false-trip on a tight wrap-straddling cluster"
+        );
+    }
+
+    /// Circular variance is bounded [0,1] for arbitrary (deterministic-random)
+    /// inputs, and hits its documented extremes: ≈0 for identical angles, ≈1
+    /// for uniformly-spread angles.
+    #[test]
+    fn phase_variance_circular_is_bounded_and_extremal() {
+        // Deterministic pseudo-random phases via an LCG — bounded check.
+        let mut s: u32 = 0x1234_5678;
+        let y: Vec<Complex32> = (0..200)
+            .map(|_| {
+                s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let u = (s >> 8) as f32 / (1u32 << 24) as f32; // [0,1)
+                let theta = u * std::f32::consts::TAU - std::f32::consts::PI;
+                Complex32::new(theta.cos(), theta.sin())
+            })
+            .collect();
+        let v = phase_variance(&y);
+        assert!((0.0..=1.0).contains(&v), "V must be in [0,1], was {v}");
+
+        // Identical angles → V ≈ 0.
+        let same: Vec<Complex32> = (0..64)
+            .map(|_| {
+                let t = 0.7_f32;
+                Complex32::new(t.cos(), t.sin())
+            })
+            .collect();
+        assert!(
+            phase_variance(&same) < 1e-5,
+            "identical angles must give V≈0, got {}",
+            phase_variance(&same)
+        );
+
+        // Angles spread uniformly around the full circle → resultant cancels,
+        // V ≈ 1.
+        let n = 360usize;
+        let uniform: Vec<Complex32> = (0..n)
+            .map(|k| {
+                let t = std::f32::consts::TAU * (k as f32) / (n as f32);
+                Complex32::new(t.cos(), t.sin())
+            })
+            .collect();
+        assert!(
+            phase_variance(&uniform) > 0.99,
+            "uniformly-spread angles must give V≈1, got {}",
+            phase_variance(&uniform)
+        );
+    }
+
     /// Build a CsiFrame with a deterministic single-tap channel at `tau_sec`.
     fn make_single_tap_frame(
         num_subcarriers: usize,
@@ -1021,5 +1384,164 @@ mod tests {
         }
         let meta = CsiMetadata::new(DeviceId::new("test"), FrequencyBand::Band2_4GHz, 6);
         CsiFrame::new(meta, data)
+    }
+
+    // ---- Opt-in FFT operator (CirConfig::fft_operator) ----
+
+    /// The FFT operator computes the same Φ/Φᴴ products as the dense path to
+    /// float tolerance, for both a small (HT20) and the largest (HE40) config.
+    #[test]
+    fn fft_matvecs_match_dense() {
+        for config in [CirConfig::ht20(), CirConfig::he40()] {
+            let k = config.num_active;
+            let g = config.num_taps;
+            let active: Vec<i32> = config.active_indices().to_vec();
+            let (phi, phi_h) = build_sensing_matrix(&active, g, k);
+            let op = FftOperator::new(&active, g, k);
+            let mut buf = vec![Complex32::new(0.0, 0.0); g];
+            let mut scratch = vec![Complex32::new(0.0, 0.0); op.scratch_len()];
+
+            // Deterministic non-trivial input vectors.
+            let x: Vec<Complex32> = (0..g)
+                .map(|i| Complex32::new((i as f32 * 0.37).sin(), (i as f32 * 0.71).cos()))
+                .collect();
+            let v: Vec<Complex32> = (0..k)
+                .map(|i| Complex32::new((i as f32 * 0.13).cos(), (i as f32 * 0.29).sin()))
+                .collect();
+
+            // Φx: dense vs FFT.
+            let mut dense_kx = vec![Complex32::new(0.0, 0.0); k];
+            matvec_phi(&phi, &x, g, &mut dense_kx, k);
+            let mut fft_kx = vec![Complex32::new(0.0, 0.0); k];
+            op.matvec_phi(&x, &mut fft_kx, &mut buf, &mut scratch);
+            let scale_ref: f32 = dense_kx.iter().map(|c| c.norm()).sum::<f32>() / k as f32;
+            for (d, f) in dense_kx.iter().zip(&fft_kx) {
+                assert!(
+                    (d - f).norm() <= 1e-3 * scale_ref.max(1.0),
+                    "phi matvec mismatch (G={g}): {d} vs {f}"
+                );
+            }
+
+            // Φᴴv: dense vs FFT.
+            let mut dense_gv = vec![Complex32::new(0.0, 0.0); g];
+            matvec_phi_h(&phi_h, &v, k, &mut dense_gv, g);
+            let mut fft_gv = vec![Complex32::new(0.0, 0.0); g];
+            op.matvec_phi_h(&v, &mut fft_gv, &mut buf, &mut scratch);
+            let scale_ref_g: f32 = dense_gv.iter().map(|c| c.norm()).sum::<f32>() / g as f32;
+            for (d, f) in dense_gv.iter().zip(&fft_gv) {
+                assert!(
+                    (d - f).norm() <= 1e-3 * scale_ref_g.max(1.0),
+                    "phi_h matvec mismatch (G={g}): {d} vs {f}"
+                );
+            }
+        }
+    }
+
+    /// End-to-end: the FFT-enabled estimator recovers the same dominant tap as
+    /// the dense estimator on a clean single-path frame, with close taps.
+    #[test]
+    fn fft_estimate_matches_dense_dominant_tap() {
+        let dense_cfg = CirConfig::ht20();
+        let mut fft_cfg = CirConfig::ht20();
+        fft_cfg.fft_operator = true;
+
+        let frame = make_single_tap_frame(dense_cfg.num_subcarriers, 50e-9);
+        let dense = CirEstimator::new(dense_cfg).estimate(&frame).unwrap();
+        let fast = CirEstimator::new(fft_cfg).estimate(&frame).unwrap();
+
+        assert_eq!(dense.dominant_tap_idx, fast.dominant_tap_idx);
+        assert!((dense.dominant_tap_ratio - fast.dominant_tap_ratio).abs() < 1e-2);
+        // Tap vectors agree to float tolerance relative to the dominant tap.
+        let dom = dense.taps[dense.dominant_tap_idx].norm().max(1e-6);
+        for (a, b) in dense.taps.iter().zip(&fast.taps) {
+            assert!((a - b).norm() <= 1e-2 * dom);
+        }
+    }
+
+    /// ADR-154 §7.4 #14: the `fft_operator` path *changes the witness hash*
+    /// (documented in `CirConfig::fft_operator`), so it must be pinned as
+    /// numerically **close** to the dense path — not silently divergent. The
+    /// existing `fft_estimate_matches_dense_dominant_tap` covers HT20 / one tau;
+    /// this test asserts the **full `Cir` output** (every tap + every scalar
+    /// field) stays within a documented relative tolerance on the production
+    /// **canonical-56** config across several realistic delays. A regression
+    /// that lets the FFT path drift (wrong scaling, off-by-one Φ column, etc.)
+    /// fails here instead of corrupting a downstream witness unnoticed.
+    #[test]
+    fn fft_operator_within_tolerance_of_dense_canonical56() {
+        // Relative tolerances — documented, not silent. The FFT operator sums the
+        // same Φ entries in a different order, so taps agree to ~float epsilon
+        // scaled by the dominant-tap magnitude; ISTA can differ by a few last
+        // bits over its trajectory, hence 1e-2 (same order as the existing test).
+        const TAP_REL_TOL: f32 = 1e-2;
+        const RATIO_ABS_TOL: f32 = 1e-2;
+        const SPREAD_REL_TOL: f64 = 1e-2;
+
+        for &tau in &[20e-9_f64, 50e-9, 90e-9] {
+            let dense_cfg = CirConfig::canonical56();
+            let mut fft_cfg = CirConfig::canonical56();
+            fft_cfg.fft_operator = true;
+
+            let frame = make_single_tap_frame(dense_cfg.num_subcarriers, tau);
+            let dense = CirEstimator::new(dense_cfg).estimate(&frame).unwrap();
+            let fast = CirEstimator::new(fft_cfg).estimate(&frame).unwrap();
+
+            assert_eq!(dense.taps.len(), fast.taps.len());
+
+            // Full tap vector close (relative to the dominant tap magnitude).
+            let dom = dense.taps[dense.dominant_tap_idx].norm().max(1e-6);
+            let mut max_tap_err = 0.0_f32;
+            for (a, b) in dense.taps.iter().zip(&fast.taps) {
+                max_tap_err = max_tap_err.max((a - b).norm());
+            }
+            assert!(
+                max_tap_err <= TAP_REL_TOL * dom,
+                "tau={tau:e}: FFT taps diverged from dense — max err {max_tap_err} > {TAP_REL_TOL} * {dom} (NOT numerically close)"
+            );
+
+            // The dominant tap and the scalar summary fields must agree too —
+            // these feed the witness, so a silent divergence here is the bug #14
+            // guards against.
+            assert_eq!(
+                dense.dominant_tap_idx, fast.dominant_tap_idx,
+                "tau={tau:e}: dominant tap index moved"
+            );
+            assert!(
+                (dense.dominant_tap_ratio - fast.dominant_tap_ratio).abs() <= RATIO_ABS_TOL,
+                "tau={tau:e}: dominant_tap_ratio drift {} vs {}",
+                dense.dominant_tap_ratio,
+                fast.dominant_tap_ratio
+            );
+            assert_eq!(
+                dense.active_tap_count, fast.active_tap_count,
+                "tau={tau:e}: active_tap_count changed"
+            );
+            assert_eq!(
+                dense.ranging_valid, fast.ranging_valid,
+                "tau={tau:e}: ranging_valid flipped"
+            );
+            let spread_ref = dense.rms_delay_spread_s.abs().max(1e-12);
+            assert!(
+                (dense.rms_delay_spread_s - fast.rms_delay_spread_s).abs()
+                    <= SPREAD_REL_TOL * spread_ref,
+                "tau={tau:e}: rms_delay_spread drift {} vs {}",
+                dense.rms_delay_spread_s,
+                fast.rms_delay_spread_s
+            );
+        }
+    }
+
+    /// The default configs keep the FFT operator off — the dense, bit-exact
+    /// witness path is the default (enabling FFT shifts float results).
+    #[test]
+    fn fft_operator_is_off_by_default() {
+        for c in [
+            CirConfig::ht20(),
+            CirConfig::ht40(),
+            CirConfig::he20(),
+            CirConfig::he40(),
+        ] {
+            assert!(!c.fft_operator);
+        }
     }
 }

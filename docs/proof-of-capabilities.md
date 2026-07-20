@@ -181,7 +181,7 @@ A facade hides its failures. We document ours in detail:
   a 20 KB int4 edge model, with the quantization trade-offs shown.
 - **Retractions** — the "100% presence" figure was withdrawn in-place rather than quietly
   edited away.
-- **[ADR-147 benchmark proof](adr/ADR-147-benchmark-proof.md)** and
+- **[ADR-168 benchmark proof](adr/ADR-168-benchmark-proof.md)** and
   **[WITNESS-LOG-028](WITNESS-LOG-028.md)** — how the numbers are produced and a 33-row
   per-claim attestation matrix.
 

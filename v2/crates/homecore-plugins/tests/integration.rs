@@ -371,4 +371,259 @@ mod wasmtime_tests {
         let r = plugin.call_setup("{}").expect("setup");
         assert_eq!(r, 0);
     }
+
+    // ── ADR-162 P4: signature/integrity verification ────────────────────────
+    //
+    // Each of these FAILS on the pre-ADR-162 code, which had no
+    // `load_plugin` / `verify_module` at all — the manifest hash/sig/key
+    // were parsed and discarded. They drive the real verification gate.
+
+    use ed25519_dalek::{Signer, SigningKey};
+    use homecore_plugins::manifest::PluginManifest;
+    use homecore_plugins::verify::{encode_sha256, encode_signature, encode_verifying_key};
+    use homecore_plugins::PluginPolicy;
+
+    /// Deterministic publisher key (fixed seed — never use in production;
+    /// mirrors the cog-ha-matter witness_signing test-key convention).
+    fn publisher_key() -> SigningKey {
+        SigningKey::from_bytes(b"hc-plugins-integration-pub-seed-")
+    }
+
+    fn untrusted_key() -> SigningKey {
+        SigningKey::from_bytes(b"hc-plugins-integration-evil-seed")
+    }
+
+    /// A minimal valid module that writes `light.kitchen` on setup, plus a
+    /// `light.*` permission grant. Returns the WAT source.
+    const WRITE_LIGHT_WAT: &str = r#"
+(module
+  (import "env" "hc_state_get"       (func $hc_state_get (param i32 i32 i32 i32) (result i32)))
+  (import "env" "hc_state_set"       (func $hc_state_set (param i32 i32 i32 i32 i32 i32) (result i32)))
+  (import "env" "hc_state_subscribe" (func $hc_state_subscribe (param i32 i32) (result i32)))
+  (import "env" "hc_log"             (func $hc_log (param i32 i32 i32)))
+  (memory (export "memory") 1)
+  (global $bump (mut i32) (i32.const 512))
+  (data (i32.const 0)   "light.kitchen")
+  (data (i32.const 64)  "on")
+  (data (i32.const 128) "{}")
+  (func (export "alloc") (param i32) (result i32)
+    (local $p i32)
+    (local.set $p (global.get $bump))
+    (global.set $bump (i32.add (global.get $bump) (local.get 0)))
+    (local.get $p))
+  (func (export "dealloc") (param i32 i32))
+  (func (export "plugin_setup") (param i32 i32) (result i32)
+    (call $hc_state_set
+      (i32.const 0) (i32.const 13)   ;; "light.kitchen"
+      (i32.const 64) (i32.const 2)   ;; "on"
+      (i32.const 128) (i32.const 2)) ;; "{}"
+    drop
+    (i32.const 0))
+  (func (export "plugin_handle_state_changed") (param i32 i32) (result i32) (i32.const 0))
+)
+"#;
+
+    /// Build a manifest signed by `key` over the SHA-256 of `wasm_bytes`,
+    /// with the given write-permission grants.
+    fn signed_manifest(
+        wasm_bytes: &[u8],
+        key: &SigningKey,
+        perms: &[&str],
+    ) -> PluginManifest {
+        use sha2::{Digest, Sha256};
+        let digest: [u8; 32] = Sha256::digest(wasm_bytes).into();
+        let sig = key.sign(&digest);
+        let mut m = PluginManifest::parse_json(
+            r#"{"domain":"demo","name":"Demo","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        m.wasm_module = Some("demo.wasm".into());
+        m.wasm_module_hash = Some(encode_sha256(wasm_bytes));
+        m.wasm_module_sig = Some(encode_signature(&sig));
+        m.publisher_key = Some(encode_verifying_key(&key.verifying_key()));
+        m.homecore_permissions = perms.iter().map(|s| s.to_string()).collect();
+        m
+    }
+
+    #[test]
+    fn p4_valid_sig_from_trusted_key_loads() {
+        let wasm = wat::parse_str(WRITE_LIGHT_WAT).expect("WAT");
+        let key = publisher_key();
+        let manifest = signed_manifest(&wasm, &key, &["light.*"]);
+        let policy =
+            PluginPolicy::trusted(&[&encode_verifying_key(&key.verifying_key())]).unwrap();
+
+        let rt = WasmtimeRuntime::new().expect("rt");
+        let hc = HomeCore::new();
+        rt.load_plugin(&manifest, &wasm, hc, &policy)
+            .expect("a validly-signed, trusted plugin must load");
+    }
+
+    #[test]
+    fn p4_tampered_module_is_rejected() {
+        let wasm = wat::parse_str(WRITE_LIGHT_WAT).expect("WAT");
+        let key = publisher_key();
+        // Manifest signs the original bytes; we then load DIFFERENT bytes.
+        let manifest = signed_manifest(&wasm, &key, &["light.*"]);
+        let policy =
+            PluginPolicy::trusted(&[&encode_verifying_key(&key.verifying_key())]).unwrap();
+
+        // Re-compile a byte-different module (writes "off" not "on").
+        let tampered_src = WRITE_LIGHT_WAT.replace(r#""on""#, r#""of""#);
+        let tampered = wat::parse_str(&tampered_src).expect("WAT");
+        assert_ne!(wasm, tampered, "test bug: bytes must differ");
+
+        let rt = WasmtimeRuntime::new().expect("rt");
+        let hc = HomeCore::new();
+        match rt.load_plugin(&manifest, &tampered, hc, &policy) {
+            Err(homecore_plugins::PluginError::SignatureRejected(_)) => {}
+            Ok(_) => panic!("tampered module must be rejected (hash mismatch), but it loaded"),
+            Err(e) => panic!("expected SignatureRejected, got {e:?}"),
+        }
+    }
+
+    #[test]
+    fn p4_valid_sig_from_untrusted_key_is_rejected() {
+        let wasm = wat::parse_str(WRITE_LIGHT_WAT).expect("WAT");
+        // Correctly signed by the untrusted key — but it is not on the allowlist.
+        let manifest = signed_manifest(&wasm, &untrusted_key(), &["light.*"]);
+        let policy =
+            PluginPolicy::trusted(&[&encode_verifying_key(&publisher_key().verifying_key())])
+                .unwrap();
+
+        let rt = WasmtimeRuntime::new().expect("rt");
+        let hc = HomeCore::new();
+        match rt.load_plugin(&manifest, &wasm, hc, &policy) {
+            Err(homecore_plugins::PluginError::SignatureRejected(_)) => {}
+            Ok(_) => panic!("untrusted publisher must be rejected, but it loaded"),
+            Err(e) => panic!("expected SignatureRejected, got {e:?}"),
+        }
+    }
+
+    #[test]
+    fn p4_unsigned_module_rejected_by_default_loads_only_under_allow_unsigned() {
+        let wasm = wat::parse_str(WRITE_LIGHT_WAT).expect("WAT");
+        let mut manifest = PluginManifest::parse_json(
+            r#"{"domain":"u","name":"U","version":"1"}"#,
+        )
+        .unwrap();
+        manifest.wasm_module = Some("u.wasm".into());
+        manifest.homecore_permissions = vec!["light.*".into()];
+        // No hash/sig/key → unsigned.
+
+        let rt = WasmtimeRuntime::new().expect("rt");
+        // Secure default: rejected.
+        match rt.load_plugin(&manifest, &wasm, HomeCore::new(), &PluginPolicy::deny_all()) {
+            Err(homecore_plugins::PluginError::SignatureRejected(_)) => {}
+            Ok(_) => panic!("unsigned module must be rejected under the secure default"),
+            Err(e) => panic!("expected SignatureRejected, got {e:?}"),
+        }
+        // Dev escape hatch: loads (with a loud warn).
+        rt.load_plugin(
+            &manifest,
+            &wasm,
+            HomeCore::new(),
+            &PluginPolicy::AllowUnsigned,
+        )
+        .expect("AllowUnsigned dev policy must load an unsigned module");
+    }
+
+    // ── ADR-162 P5: authority / capability isolation ────────────────────────
+    //
+    // FAILS on the pre-ADR-162 code, where `hc_state_set` ignored
+    // `homecore_permissions` entirely and let any plugin write any entity.
+
+    /// Module that writes `lock.front_door` on setup (an over-privileged
+    /// write a `light.*` plugin must NOT be allowed to perform).
+    const WRITE_LOCK_WAT: &str = r#"
+(module
+  (import "env" "hc_state_get"       (func $hc_state_get (param i32 i32 i32 i32) (result i32)))
+  (import "env" "hc_state_set"       (func $hc_state_set (param i32 i32 i32 i32 i32 i32) (result i32)))
+  (import "env" "hc_state_subscribe" (func $hc_state_subscribe (param i32 i32) (result i32)))
+  (import "env" "hc_log"             (func $hc_log (param i32 i32 i32)))
+  (memory (export "memory") 1)
+  (global $bump (mut i32) (i32.const 512))
+  (data (i32.const 0)   "lock.front_door")
+  (data (i32.const 64)  "unlocked")
+  (data (i32.const 128) "{}")
+  (func (export "alloc") (param i32) (result i32)
+    (local $p i32)
+    (local.set $p (global.get $bump))
+    (global.set $bump (i32.add (global.get $bump) (local.get 0)))
+    (local.get $p))
+  (func (export "dealloc") (param i32 i32))
+  ;; plugin_setup returns the hc_state_set result code so the host test can
+  ;; assert the guest saw the typed permission-denied error (-3).
+  (func (export "plugin_setup") (param i32 i32) (result i32)
+    (call $hc_state_set
+      (i32.const 0) (i32.const 15)   ;; "lock.front_door"
+      (i32.const 64) (i32.const 8)   ;; "unlocked"
+      (i32.const 128) (i32.const 2))) ;; "{}"
+  (func (export "plugin_handle_state_changed") (param i32 i32) (result i32) (i32.const 0))
+)
+"#;
+
+    #[test]
+    fn p5_declared_light_plugin_may_write_light_but_not_lock() {
+        let key = publisher_key();
+        let trusted = PluginPolicy::trusted(&[&encode_verifying_key(&key.verifying_key())]).unwrap();
+        let rt = WasmtimeRuntime::new().expect("rt");
+
+        // (a) A `light.*` plugin writing `light.kitchen` → ALLOWED.
+        let light_wasm = wat::parse_str(WRITE_LIGHT_WAT).expect("WAT");
+        let light_manifest = signed_manifest(&light_wasm, &key, &["light.*"]);
+        let hc_a = HomeCore::new();
+        let plugin_a = rt
+            .load_plugin(&light_manifest, &light_wasm, hc_a.clone(), &trusted)
+            .expect("light plugin loads");
+        let r = plugin_a.call_setup("{}").expect("setup");
+        assert_eq!(r, 0, "write to declared light.kitchen should succeed");
+        let kitchen = homecore::EntityId::parse("light.kitchen").unwrap();
+        assert_eq!(
+            hc_a.states().get(&kitchen).expect("light.kitchen written").state,
+            "on"
+        );
+
+        // (b) The SAME `light.*` plugin attempting to write `lock.front_door`
+        // → REJECTED with the typed -3 code, and the lock is NOT written.
+        let lock_wasm = wat::parse_str(WRITE_LOCK_WAT).expect("WAT");
+        let lock_manifest = signed_manifest(&lock_wasm, &key, &["light.*"]);
+        let hc_b = HomeCore::new();
+        let plugin_b = rt
+            .load_plugin(&lock_manifest, &lock_wasm, hc_b.clone(), &trusted)
+            .expect("module loads (verification ok); the WRITE is what's gated");
+        let denied = plugin_b.call_setup("{}").expect("setup runs without trapping host");
+        assert_eq!(
+            denied, -3,
+            "over-privileged write to lock.front_door must return -3 (permission denied)"
+        );
+        let lock = homecore::EntityId::parse("lock.front_door").unwrap();
+        assert!(
+            hc_b.states().get(&lock).is_none(),
+            "lock.front_door must NOT have been written by a light-only plugin"
+        );
+    }
+
+    #[test]
+    fn p5_plugin_with_no_permissions_can_write_nothing() {
+        let key = publisher_key();
+        let trusted = PluginPolicy::trusted(&[&encode_verifying_key(&key.verifying_key())]).unwrap();
+        let rt = WasmtimeRuntime::new().expect("rt");
+
+        let wasm = wat::parse_str(WRITE_LIGHT_WAT).expect("WAT");
+        // No permissions declared at all.
+        let manifest = signed_manifest(&wasm, &key, &[]);
+        let hc = HomeCore::new();
+        let plugin = rt
+            .load_plugin(&manifest, &wasm, hc.clone(), &trusted)
+            .expect("module loads; the write is gated");
+        // WRITE_LIGHT_WAT drops the host-import result and returns 0, so we
+        // assert the denial via the side-effect: the write must NOT land.
+        plugin.call_setup("{}").expect("setup runs without trapping host");
+        let kitchen = homecore::EntityId::parse("light.kitchen").unwrap();
+        assert!(
+            hc.states().get(&kitchen).is_none(),
+            "no-permission plugin must not write light.kitchen (P5 authority isolation)"
+        );
+    }
 }

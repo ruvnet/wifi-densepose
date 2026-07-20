@@ -49,7 +49,27 @@ pub struct InferenceOutput {
     /// One waypoint per predicted frame, centred on the non-free voxel
     /// with the highest occupancy probability.  Empty when the model
     /// predicts all frames as free space.
+    ///
+    /// **Honesty note:** these priors are always computed by the *real*
+    /// convolutional forward pass (encoder → VQ → transformer → decoder).
+    /// When [`InferenceOutput::weights_trained`] is `false` they are a
+    /// deterministic, input-dependent function of the input but come from an
+    /// **untrained** network — do not treat them as trained-model accuracy.
     pub trajectory_priors: Vec<TrajectoryWaypoint>,
+
+    /// Whether the weights driving this prediction came from a trained
+    /// checkpoint.
+    ///
+    /// * `true`  — produced by [`OccWorldCandle::load`] from a real
+    ///   SafeTensors checkpoint; priors reflect trained-model behaviour.
+    /// * `false` — produced by [`OccWorldCandle::dummy`] with deterministic
+    ///   but **untrained** weights. The forward pass is real and
+    ///   input-dependent, but accuracy is *data-gated*: consumers MUST NOT
+    ///   present these priors as trained predictions.
+    ///
+    /// This flag is the explicit, machine-readable disclosure that replaces
+    /// the old silently-fake `randn` stubs.
+    pub weights_trained: bool,
 
     /// Wall-clock time for the full `predict` call in milliseconds.
     pub inference_ms: f64,
@@ -78,6 +98,9 @@ pub struct OccWorldCandle {
     vqvae: VQVAEComponents,
     transformer: OccWorldTransformer,
     device: Device,
+    /// `true` when weights came from a real checkpoint via [`Self::load`];
+    /// `false` for [`Self::dummy`] (deterministic but untrained).
+    weights_trained: bool,
 }
 
 impl std::fmt::Debug for OccWorldCandle {
@@ -122,12 +145,17 @@ impl OccWorldCandle {
             vqvae,
             transformer,
             device,
+            // A checkpoint was successfully loaded → weights are trained.
+            weights_trained: true,
         })
     }
 
-    /// Construct with random weights for testing and benchmarking.
+    /// Construct with deterministic *untrained* weights for testing and
+    /// benchmarking.
     ///
-    /// All shapes are correct; no checkpoint is required.
+    /// All shapes are correct and the forward pass is real and
+    /// input-dependent; no checkpoint is required. Predictions are flagged
+    /// `weights_trained: false` so consumers know accuracy is data-gated.
     pub fn dummy(config: OccWorldConfig, device: Device) -> Result<Self, OccWorldError> {
         let vqvae =
             VQVAEComponents::dummy(&config, &device).map_err(OccWorldError::Candle)?;
@@ -138,7 +166,21 @@ impl OccWorldCandle {
             vqvae,
             transformer,
             device,
+            // Deterministic but untrained → honestly flagged as not trained.
+            weights_trained: false,
         })
+    }
+
+    /// Whether this engine is backed by trained weights (`true`) or
+    /// deterministic-but-untrained `dummy` weights (`false`).
+    pub fn weights_trained(&self) -> bool {
+        self.weights_trained
+    }
+
+    /// The Candle device this engine runs on (CPU, or CUDA when the `cuda`
+    /// feature is enabled and a GPU is available).
+    pub fn device(&self) -> &Device {
+        &self.device
     }
 
     /// Infer 15 future occupancy frames from 16 past frames.
@@ -164,6 +206,27 @@ impl OccWorldCandle {
             )));
         }
 
+        // Validate the externally-supplied frame and batch counts at this
+        // system boundary. The temporal positional embedding has only
+        // `num_frames * 2` rows, so a larger `f_in` would over-index the
+        // embedding table deep inside the transformer and surface as a cryptic
+        // "gather" index error; a zero frame/batch count would feed a
+        // zero-element tensor into the reshape/conv pipeline. Reject both here
+        // with a clear, domain-level error instead.
+        if f_in == 0 || b == 0 {
+            return Err(OccWorldError::ShapeMismatch(format!(
+                "past_occupancy must have non-zero batch and frame dims, got \
+                 batch={b}, frames={f_in}"
+            )));
+        }
+        if f_in > cfg.num_frames * 2 {
+            return Err(OccWorldError::ShapeMismatch(format!(
+                "past_occupancy frame count {f_in} exceeds the temporal embedding \
+                 capacity ({} = num_frames*2)",
+                cfg.num_frames * 2
+            )));
+        }
+
         // ── Step 1: VQVAE encode each past frame ──────────────────────────
         // Flatten batch*frames: (B, F, H, W, D) → (B*F, H, W, D)
         let occ_flat = past_occupancy
@@ -182,8 +245,10 @@ impl OccWorldCandle {
             .forward(&occ_u32, cfg.grid_d)
             .map_err(OccWorldError::Candle)?;
 
-        // Encode (stub) → (B*F, z_channels, token_h, token_w)
-        let z = encode_occupancy(&embedded, cfg, &self.device)?;
+        // Real conv encoder → (B*F, z_channels, token_h, token_w).
+        // Deterministic and input-dependent — no randn.
+        let z = encode_occupancy(&self.vqvae.encoder, &embedded)
+            .map_err(OccWorldError::Candle)?;
 
         // quant_conv → (B*F, embed_dim, token_h, token_w)
         let z_e = self
@@ -249,8 +314,9 @@ impl OccWorldCandle {
             .forward(&z_dec_4d)
             .map_err(OccWorldError::Candle)?;
 
-        // ── Step 5: Decode to class logits (stub) → class predictions ─────
-        let class_logits = decode_to_logits(&z_post, cfg, &self.device)?;
+        // ── Step 5: Real conv decoder → class logits → class predictions ──
+        let class_logits = decode_to_logits(&self.vqvae.decoder, &z_post)
+            .map_err(OccWorldError::Candle)?;
         // class_logits: (B*F_out, num_classes, H, W, D)
         // Argmax over class dim → (B*F_out, H, W, D)
         let sem_flat = class_logits
@@ -271,6 +337,7 @@ impl OccWorldCandle {
         Ok(InferenceOutput {
             sem_pred,
             trajectory_priors,
+            weights_trained: self.weights_trained,
             inference_ms,
         })
     }
@@ -395,6 +462,11 @@ mod tests {
         Ok(())
     }
 
+    // The centerpiece honesty/determinism tests (input-dependence, run-to-run
+    // determinism, the `weights_trained` flag) live in
+    // `tests/predict_honesty.rs` so they exercise only the public API and keep
+    // this file under the 500-line limit.
+
     #[test]
     fn test_load_nonexistent_checkpoint() {
         let cfg = small_cfg();
@@ -404,4 +476,8 @@ mod tests {
             "expected CheckpointNotFound, got {result:?}"
         );
     }
+
+    // The `predict` input-validation boundary guards (zero/over-capacity frame
+    // counts) live in `tests/input_validation.rs` so they exercise only the
+    // public API and keep this file under the 500-line limit.
 }

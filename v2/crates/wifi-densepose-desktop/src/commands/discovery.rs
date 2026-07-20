@@ -430,6 +430,35 @@ fn is_esp32_compatible(vid: u16, pid: u16) -> bool {
     false
 }
 
+/// Validate WiFi credentials before they are interpolated into a
+/// newline-delimited serial command protocol.
+///
+/// The ESP32 firmware accepts line-oriented commands such as
+/// `wifi_config <ssid> <password>\r\n`. Because the SSID and password
+/// arrive from the webview (untrusted) and are concatenated directly into
+/// those command strings, a control character (`\r`, `\n`, or NUL) embedded
+/// in either field would let a malicious caller terminate the current line
+/// early and inject an arbitrary follow-up command (e.g. `reboot`, `erase`).
+///
+/// Enforce the IEEE 802.11 / WPA2 bounds and reject any control characters:
+/// - SSID: 1-32 bytes, no control characters
+/// - Password: 8-63 bytes (WPA2 PSK ASCII range), no control characters
+fn validate_wifi_credentials(ssid: &str, password: &str) -> Result<(), String> {
+    if ssid.is_empty() || ssid.len() > 32 {
+        return Err("SSID must be 1-32 characters".into());
+    }
+    if password.len() < 8 || password.len() > 63 {
+        return Err("WiFi password must be 8-63 characters".into());
+    }
+    if ssid.chars().any(|c| c.is_control()) {
+        return Err("SSID must not contain control characters".into());
+    }
+    if password.chars().any(|c| c.is_control()) {
+        return Err("WiFi password must not contain control characters".into());
+    }
+    Ok(())
+}
+
 /// Configure WiFi credentials on an ESP32 via serial port.
 ///
 /// Sends WiFi credentials to the ESP32 using a simple serial protocol.
@@ -442,6 +471,10 @@ pub async fn configure_esp32_wifi(
 ) -> Result<String, String> {
     use std::io::{Read, Write};
     use std::time::Duration;
+
+    // Reject control characters / out-of-range lengths before the credentials
+    // are spliced into the line-oriented serial command protocol below.
+    validate_wifi_credentials(&ssid, &password)?;
 
     tracing::info!("Configuring WiFi on port: {}", port);
 
@@ -547,6 +580,37 @@ mod tests {
         assert_eq!(node.mesh_role, MeshRole::Coordinator);
         assert_eq!(node.tdm_slot, Some(0));
         assert_eq!(node.tdm_total, Some(4));
+    }
+
+    #[test]
+    fn test_validate_wifi_credentials_accepts_valid() {
+        assert!(validate_wifi_credentials("MyNetwork", "password123").is_ok());
+        // Boundary: 32-char SSID, 63-char password are allowed.
+        assert!(validate_wifi_credentials(&"A".repeat(32), &"B".repeat(63)).is_ok());
+        // Boundary: 8-char password (WPA2 minimum) is allowed.
+        assert!(validate_wifi_credentials("net", "12345678").is_ok());
+    }
+
+    #[test]
+    fn test_validate_wifi_credentials_rejects_injection() {
+        // Newline/CR in SSID would terminate the serial command line early and
+        // let the caller inject a follow-up firmware command. Must be rejected.
+        assert!(validate_wifi_credentials("net\r\nreboot", "password123").is_err());
+        assert!(validate_wifi_credentials("net\ninjected", "password123").is_err());
+        // Same vector via the password field.
+        assert!(validate_wifi_credentials("net", "pass\r\nerase_nvs").is_err());
+        // Embedded NUL.
+        assert!(validate_wifi_credentials("net", "pass\0word1").is_err());
+    }
+
+    #[test]
+    fn test_validate_wifi_credentials_rejects_out_of_range() {
+        // Empty / over-length SSID.
+        assert!(validate_wifi_credentials("", "password123").is_err());
+        assert!(validate_wifi_credentials(&"A".repeat(33), "password123").is_err());
+        // Too-short / too-long password (WPA2 PSK bounds).
+        assert!(validate_wifi_credentials("net", "short").is_err());
+        assert!(validate_wifi_credentials("net", &"B".repeat(64)).is_err());
     }
 
     #[test]

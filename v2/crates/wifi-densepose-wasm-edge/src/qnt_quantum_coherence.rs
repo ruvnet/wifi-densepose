@@ -58,6 +58,8 @@ pub const EVENT_BLOCH_DRIFT: i32 = 852;
 
 /// Quantum-inspired coherence monitor using Bloch sphere representation.
 pub struct QuantumCoherenceMonitor {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 3],
     /// Previous aggregate Bloch vector [x, y, z].
     prev_bloch: [f32; 3],
     /// EMA-smoothed Von Neumann entropy.
@@ -74,6 +76,7 @@ impl QuantumCoherenceMonitor {
     /// Create a new monitor. Const-evaluable for static initialization.
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 3],
             prev_bloch: [0.0, 0.0, 1.0],
             smoothed_entropy: 0.0,
             prev_entropy: 0.0,
@@ -129,34 +132,27 @@ impl QuantumCoherenceMonitor {
         self.prev_bloch = bloch;
 
         // ── Build output events ──
-        static mut EVENTS: [(i32, f32); 3] = [(0, 0.0); 3];
         let mut n_events = 0usize;
 
         // Entropy (periodic).
         if self.frame_count % ENTROPY_EMIT_INTERVAL == 0 {
-            unsafe {
-                EVENTS[n_events] = (EVENT_ENTANGLEMENT_ENTROPY, self.smoothed_entropy);
-            }
+            self.events[n_events] = (EVENT_ENTANGLEMENT_ENTROPY, self.smoothed_entropy);
             n_events += 1;
         }
 
         // Decoherence event (immediate).
         if entropy_jump > DECOHERENCE_THRESHOLD {
-            unsafe {
-                EVENTS[n_events] = (EVENT_DECOHERENCE_EVENT, entropy_jump);
-            }
+            self.events[n_events] = (EVENT_DECOHERENCE_EVENT, entropy_jump);
             n_events += 1;
         }
 
         // Bloch drift (periodic).
         if self.frame_count % DRIFT_EMIT_INTERVAL == 0 {
-            unsafe {
-                EVENTS[n_events] = (EVENT_BLOCH_DRIFT, drift);
-            }
+            self.events[n_events] = (EVENT_BLOCH_DRIFT, drift);
             n_events += 1;
         }
 
-        unsafe { &EVENTS[..n_events] }
+        &self.events[..n_events]
     }
 
     /// Compute the mean Bloch vector from subcarrier phases.

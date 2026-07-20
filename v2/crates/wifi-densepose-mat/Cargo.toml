@@ -1,6 +1,6 @@
 [package]
 name = "wifi-densepose-mat"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 authors = ["rUv <ruv@ruv.net>", "WiFi-DensePose Contributors"]
 description = "Mass Casualty Assessment Tool - WiFi-based disaster survivor detection"
@@ -15,7 +15,17 @@ readme = "README.md"
 default = ["std", "api", "ruvector"]
 ruvector = ["dep:ruvector-solver", "dep:ruvector-temporal-tensor"]
 std = []
-api = ["dep:serde", "chrono/serde", "geo/use-serde"]
+# REST/WebSocket surface. Pulls the web stack (axum, futures-util) only when
+# enabled, and enables the `serde` FEATURE (not just `dep:serde`) so the
+# `cfg_attr(feature = "serde", ...)` derives on domain types are actually
+# active when the API is on (review finding 5: `api = ["dep:serde"]` enabled
+# the dependency but left every `feature = "serde"` cfg dead).
+api = ["serde", "dep:axum", "dep:futures-util"]
+# Real ESP32 serial CSI ingest. Pulls the native `serialport` crate (libudev on
+# Linux) only when enabled, so the default/no-default appliance build stays free
+# of native serial deps. With the feature OFF, the ESP32 serial *parser* still
+# works on supplied bytes; only live port reads return UnsupportedAdapter.
+serial = ["dep:serialport"]
 portable = ["low-power"]
 low-power = []
 distributed = ["tokio/sync"]
@@ -30,13 +40,15 @@ wifi-densepose-nn = { version = "0.3.0", path = "../wifi-densepose-nn" }
 ruvector-solver = { workspace = true, optional = true }
 ruvector-temporal-tensor = { workspace = true, optional = true }
 
-# Async runtime
+# Async runtime — required by the core integration layer (UDP CSI receiver,
+# hardware adapter, scan loop in `DisasterResponse::start_scanning`), not just
+# the REST API, so it is deliberately NOT gated behind `api`.
 tokio = { version = "1.35", features = ["rt", "sync", "time"] }
 async-trait = "0.1"
 
-# Web framework (REST API)
-axum = { version = "0.7", features = ["ws"] }
-futures-util = "0.3"
+# Web framework (REST API) — only compiled with the `api` feature.
+axum = { version = "0.7", features = ["ws"], optional = true }
+futures-util = { version = "0.3", optional = true }
 
 # Error handling
 thiserror = "2.0"
@@ -61,6 +73,9 @@ parking_lot = "0.12"
 
 # Geo calculations
 geo = "0.27"
+
+# Real serial CSI ingest (ESP32) — optional, native deps gated behind `serial`.
+serialport = { version = "4.3", optional = true }
 
 [dev-dependencies]
 tokio-test = "0.4"

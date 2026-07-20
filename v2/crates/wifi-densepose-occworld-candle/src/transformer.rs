@@ -35,9 +35,9 @@ impl TemporalEmbedding {
         Ok(Self { embed })
     }
 
-    /// Random initialisation.
+    /// Deterministic untrained initialisation.
     pub fn dummy(num_frames: usize, embed_dim: usize, device: &Device) -> Result<Self> {
-        let w = Tensor::randn(0f32, 1.0, (num_frames * 2, embed_dim), device)?;
+        let w = crate::cnn::det_fill(&[num_frames * 2, embed_dim], 0x07A0_0001, 1.0, device)?;
         let embed = Embedding::new(w, embed_dim);
         Ok(Self { embed })
     }
@@ -101,19 +101,19 @@ impl SpatialCrossAttn {
         })
     }
 
-    /// Random initialisation.
+    /// Deterministic untrained initialisation (distinct seed per projection).
     pub fn dummy(embed_dim: usize, num_heads: usize, device: &Device) -> Result<Self> {
-        let mk_linear = |i: usize, o: usize| -> Result<Linear> {
-            let w = Tensor::randn(0f32, 0.02, (o, i), device)?;
+        let mk_linear = |i: usize, o: usize, seed: u64| -> Result<Linear> {
+            let w = crate::cnn::det_fill(&[o, i], seed, 0.02, device)?;
             let b = Tensor::zeros(o, DType::F32, device)?;
             Ok(Linear::new(w, Some(b)))
         };
         let head_dim = embed_dim / num_heads;
         Ok(Self {
-            q_proj: mk_linear(embed_dim, embed_dim)?,
-            k_proj: mk_linear(embed_dim, embed_dim)?,
-            v_proj: mk_linear(embed_dim, embed_dim)?,
-            out_proj: mk_linear(embed_dim, embed_dim)?,
+            q_proj: mk_linear(embed_dim, embed_dim, 0x07A0_1001)?,
+            k_proj: mk_linear(embed_dim, embed_dim, 0x07A0_1002)?,
+            v_proj: mk_linear(embed_dim, embed_dim, 0x07A0_1003)?,
+            out_proj: mk_linear(embed_dim, embed_dim, 0x07A0_1004)?,
             num_heads,
             head_dim,
         })
@@ -193,14 +193,14 @@ impl FeedForward {
     }
 
     fn dummy(embed_dim: usize, ffn_hidden: usize, device: &Device) -> Result<Self> {
-        let mk = |i: usize, o: usize| -> Result<Linear> {
-            let w = Tensor::randn(0f32, 0.02, (o, i), device)?;
+        let mk = |i: usize, o: usize, seed: u64| -> Result<Linear> {
+            let w = crate::cnn::det_fill(&[o, i], seed, 0.02, device)?;
             let b = Tensor::zeros(o, DType::F32, device)?;
             Ok(Linear::new(w, Some(b)))
         };
         Ok(Self {
-            fc1: mk(embed_dim, ffn_hidden)?,
-            fc2: mk(ffn_hidden, embed_dim)?,
+            fc1: mk(embed_dim, ffn_hidden, 0x07A0_2001)?,
+            fc2: mk(ffn_hidden, embed_dim, 0x07A0_2002)?,
         })
     }
 
@@ -337,7 +337,12 @@ impl OccWorldTransformer {
         for _ in 0..cfg.num_layers {
             layers.push(OccWorldTransformerLayer::dummy(&cfg, device)?);
         }
-        let w = Tensor::randn(0f32, 0.02, (cfg.codebook_size, cfg.embed_dim), device)?;
+        let w = crate::cnn::det_fill(
+            &[cfg.codebook_size, cfg.embed_dim],
+            0x07A0_3001,
+            0.02,
+            device,
+        )?;
         let b = Tensor::zeros(cfg.codebook_size, DType::F32, device)?;
         let output_head = Linear::new(w, Some(b));
         Ok(Self {

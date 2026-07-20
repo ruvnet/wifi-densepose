@@ -46,6 +46,9 @@ use wifi_densepose_worldgraph::{
     WorldId, WorldNode, ZoneBoundsEnu,
 };
 
+pub mod mesh_guard;
+pub use mesh_guard::{MeshGuard, MeshPartitionReport};
+
 /// Errors from an engine cycle.
 #[derive(Debug)]
 pub enum EngineError {
@@ -97,6 +100,15 @@ pub struct TrustedOutput {
     /// BLAKE3 witness over the trust decision (provenance ‖ class ‖ calibration)
     /// — a deterministic, signed-belief fingerprint (ADR-137 §2.7 / ADR-028).
     pub witness: [u8; 32],
+    /// Whether the drift→recalibration advisor recommends re-running the
+    /// ADR-135 baseline / refitting the per-room adapter (ADR-150 §3.4):
+    /// sustained low coherence or an ADR-142 change-point this cycle.
+    pub recalibration_recommended: bool,
+    /// Dynamic min-cut partition report over the live mesh coupling graph
+    /// (None for meshes of fewer than two nodes). `at_risk` counts as a
+    /// structural event for the recalibration advisor and names the nodes
+    /// (`weak_side`) closest to splitting off — failure/jamming triage.
+    pub mesh: Option<MeshPartitionReport>,
 }
 
 /// Composition root for the RuView streaming engine.
@@ -116,6 +128,74 @@ pub struct StreamingEngine {
     slam: RfSlam,
     // ADR-139 live loop: stable track_id -> PersonTrack WorldId.
     person_tracks: BTreeMap<u64, WorldId>,
+    // WorldGraph belief retention: max live SemanticState nodes. The live loop
+    // appends one belief per cycle (1.7M/day at 20 Hz); durable history is the
+    // recorder's job, so old beliefs are evicted deterministically past this cap.
+    semantic_retention: usize,
+    // Per-room calibration adapter (ADR-150 §3.4: ~11 KB LoRA on a frozen
+    // base). Identity is part of the trust chain: when set, the adapter id is
+    // appended to the provenance model_version, so swapping adapters changes
+    // the witness. None = shared base model.
+    adapter: Option<AdapterInfo>,
+    // Drift→recalibration advisor (ADR-135 trigger for ADR-150 §3.4 refit).
+    recal: RecalibrationAdvisor,
+    // Dynamic min-cut mesh partition guard (incremental, change-gated).
+    mesh: MeshGuard,
+}
+
+/// Identity of an active per-room calibration adapter (ADR-150 §3.4). The id
+/// must be content-derived (e.g. a hash prefix of the adapter file) so the
+/// provenance/witness chain pins the exact weights that shaped inference.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdapterInfo {
+    /// Content-derived adapter identity (e.g. first 16 hex of its SHA-256).
+    pub adapter_id: String,
+    /// Number of in-room samples the adapter was fitted on (0 if unknown).
+    pub trained_samples: u32,
+}
+
+/// Recommends re-running calibration / adapter refit when the live signal
+/// degrades persistently (ADR-135 drift → ADR-150 §3.4 few-shot recalibration).
+///
+/// Two triggers, both cheap and deterministic:
+/// - `low_coherence_streak`: N consecutive cycles whose base coherence fell
+///   below the floor (sustained degradation, not a single bad frame);
+/// - any ADR-142 change-point this cycle (the environment itself changed).
+#[derive(Debug, Clone)]
+pub struct RecalibrationAdvisor {
+    /// Coherence below this counts toward the streak.
+    pub coherence_floor: f32,
+    /// Consecutive low-coherence cycles required to recommend recalibration.
+    pub streak_threshold: u32,
+    streak: u32,
+}
+
+impl Default for RecalibrationAdvisor {
+    fn default() -> Self {
+        Self {
+            coherence_floor: 0.5,
+            streak_threshold: 60, // ~3 s at 20 Hz of sustained degradation
+            streak: 0,
+        }
+    }
+}
+
+impl RecalibrationAdvisor {
+    /// Feed one cycle's evidence; returns whether recalibration is recommended.
+    fn observe(&mut self, base_coherence: f32, change_point: bool) -> bool {
+        if base_coherence < self.coherence_floor {
+            self.streak = self.streak.saturating_add(1);
+        } else {
+            self.streak = 0;
+        }
+        change_point || self.streak >= self.streak_threshold
+    }
+
+    /// Current consecutive low-coherence cycle count.
+    #[must_use]
+    pub fn streak(&self) -> u32 {
+        self.streak
+    }
 }
 
 impl StreamingEngine {
@@ -125,7 +205,7 @@ impl StreamingEngine {
     pub fn new(mode: PrivacyMode, model_version: u16, registration: GeoRegistration) -> Self {
         Self {
             fuser: MultistaticFuser::with_config(MultistaticConfig::default()),
-            coherence_accept: 0.85,
+            coherence_accept: Self::DEFAULT_COHERENCE_ACCEPT,
             privacy: PrivacyModeRegistry::new(mode),
             world: WorldGraph::new(registration),
             model_version,
@@ -133,9 +213,95 @@ impl StreamingEngine {
             array: ArrayCoordinator::new(ArrayCoordinatorConfig::default()),
             node_geom: BTreeMap::new(),
             evolution: None,
-            slam: RfSlam::with_discovery(0.5, 5, 0.6),
+            slam: RfSlam::with_discovery(
+                Self::SLAM_ASSOC_RADIUS_M,
+                Self::SLAM_MIN_SIGHTINGS,
+                Self::SLAM_MIN_COHERENCE,
+            ),
             person_tracks: BTreeMap::new(),
+            semantic_retention: Self::DEFAULT_SEMANTIC_RETENTION,
+            adapter: None,
+            recal: RecalibrationAdvisor::default(),
+            mesh: MeshGuard::default(),
         }
+    }
+
+    /// Override the multistatic fuser's timestamp guard interval (#1049/#1057).
+    /// Without this, `StreamingEngine::new` always builds
+    /// `MultistaticFuser::with_config(MultistaticConfig::default())` — a
+    /// hardcoded 60 ms hard guard that ignores whatever schedule/override the
+    /// caller derived from `WDP_TDM_SLOTS`/`WDP_GUARD_INTERVAL_US`, so
+    /// WiFi/ESP-NOW-synced multi-node deployments spuriously fail governed
+    /// trust cycles even after widening the guard elsewhere.
+    ///
+    /// Rebuilds the fuser, so call before any frames are processed.
+    pub fn set_multistatic_config(&mut self, cfg: MultistaticConfig) {
+        self.fuser = MultistaticFuser::with_config(cfg);
+    }
+
+    /// Activate a per-room calibration adapter (ADR-150 §3.4). From the next
+    /// cycle on, the adapter id is part of provenance `model_version` — and
+    /// therefore of the witness — so the exact weights shaping inference are
+    /// pinned in the trust chain. Pass the result of hashing the adapter file.
+    pub fn set_room_adapter(&mut self, info: AdapterInfo) {
+        self.adapter = Some(info);
+    }
+
+    /// Deactivate the adapter (revert to the shared base model).
+    pub fn clear_room_adapter(&mut self) {
+        self.adapter = None;
+    }
+
+    /// The active adapter, if any.
+    #[must_use]
+    pub fn room_adapter(&self) -> Option<&AdapterInfo> {
+        self.adapter.as_ref()
+    }
+
+    /// Tune the drift→recalibration advisor (floor + streak threshold).
+    pub fn set_recalibration_advisor(&mut self, advisor: RecalibrationAdvisor) {
+        self.recal = advisor;
+    }
+
+    /// Mutable access to the mesh partition guard (risk threshold, quantum,
+    /// min-node count). Operators tune the partition-risk sensitivity here.
+    pub fn mesh_guard_mut(&mut self) -> &mut MeshGuard {
+        &mut self.mesh
+    }
+
+    /// Default cap on live `SemanticState` beliefs in the WorldGraph
+    /// (~6 minutes of full-rate history at 20 Hz; older beliefs are evicted —
+    /// durable history belongs to the recorder).
+    pub const DEFAULT_SEMANTIC_RETENTION: usize = 7_200;
+
+    /// Cross-node coherence at or above which fusion records a positive
+    /// `CoherenceGateThreshold` evidence ref (ADR-137). Below it the cycle still
+    /// emits, but without that corroborating evidence — so this gate shapes the
+    /// trust record, not the privacy class. (== prior inline 0.85.)
+    pub const DEFAULT_COHERENCE_ACCEPT: f32 = 0.85;
+
+    /// ADR-143 reflector-discovery parameters used to build the persistent
+    /// `RfSlam`: association radius (m) within which two sightings are the same
+    /// reflector, the minimum number of sightings before a reflector is
+    /// considered stable, and the minimum per-sighting coherence to admit it.
+    /// (== prior inline `with_discovery(0.5, 5, 0.6)`.)
+    pub const SLAM_ASSOC_RADIUS_M: f64 = 0.5;
+    /// Minimum sightings before a discovered reflector is treated as stable.
+    pub const SLAM_MIN_SIGHTINGS: u64 = 5;
+    /// Minimum per-sighting coherence to admit a reflector sighting.
+    pub const SLAM_MIN_COHERENCE: f32 = 0.6;
+
+    /// ADR-143 static-anchor classification thresholds passed to
+    /// `RfSlam::static_anchors`: the wall/ceiling stationarity ceiling and the
+    /// mobile-reflector floor (anchors more mobile than this are dropped, not
+    /// persisted). (== prior inline `static_anchors(0.05, 1.0)`.)
+    pub const ANCHOR_WALL_CEILING: f64 = 0.05;
+    /// Mobility floor above which a reflector is treated as mobile (skipped).
+    pub const ANCHOR_MOBILE_FLOOR: f64 = 1.0;
+
+    /// Override the `SemanticState` retention cap (minimum 1).
+    pub fn set_semantic_retention(&mut self, max_states: usize) {
+        self.semantic_retention = max_states.max(1);
     }
 
     /// ADR-139 live loop: create or update a `PersonTrack` node by stable
@@ -207,7 +373,9 @@ impl StreamingEngine {
             self.slam.observe(obs);
         }
         let mut written = Vec::new();
-        for (pos, class) in self.slam.static_anchors(0.05, 1.0) {
+        for (pos, class) in
+            self.slam.static_anchors(Self::ANCHOR_WALL_CEILING, Self::ANCHOR_MOBILE_FLOOR)
+        {
             let kind = match class {
                 wifi_densepose_signal::ruvsense::ReflectorClass::Wall => AnchorKind::Reflector,
                 wifi_densepose_signal::ruvsense::ReflectorClass::Furniture => AnchorKind::Furniture,
@@ -321,21 +489,47 @@ impl StreamingEngine {
         // 4. Evolution change-point (ADR-142) over per-node mean amplitude.
         let change_point = self.track_evolution(node_frames, now_ms, room);
 
-        // 5. Privacy control plane (ADR-141): demote on a fusion-level OR an
-        //    array-level contradiction (monotonic — information only removed).
+        // 5. Mesh partition guard (ADR-032): dynamic min-cut over the coupling
+        //    graph. Coupling between nodes i and j is the product of their
+        //    fusion attention weights scaled by the node count, so a node the
+        //    fuser down-weights is exactly a node weakly coupled in the graph.
+        //    (Change-gated incremental updates: steady state touches 0 edges.)
+        let node_ids: Vec<u8> = node_frames.iter().map(|f| f.node_id).collect();
+        let weights = &quality.per_node_weights;
+        let n = weights.len() as f64;
+        let mesh = self.mesh.update(&node_ids, |i, j| {
+            let wi = weights.get(i).copied().unwrap_or(0.0) as f64;
+            let wj = weights.get(j).copied().unwrap_or(0.0) as f64;
+            wi * wj * n
+        });
+        let mesh_at_risk = mesh.as_ref().is_some_and(|m| m.at_risk);
+
+        // 6. Privacy control plane (ADR-141): demote on a fusion-level OR an
+        //    array-level contradiction OR a mesh close to partitioning. The
+        //    last is a security/reliability signal (ADR-032): a fragmenting
+        //    array makes the fused belief less trustworthy, so we emit at a
+        //    more restricted class. Monotonic — information is only ever
+        //    removed — and the demotion is part of the witness.
         let base_class = self.privacy.active_class();
-        let demoted = quality.forces_privacy_demotion() || array_contradiction;
+        let demoted = quality.forces_privacy_demotion() || array_contradiction || mesh_at_risk;
         let effective_class = if demoted { demote_one(base_class) } else { base_class };
 
-        // 6. Semantic state with mandatory provenance (ADR-139/140). The
+        // 7. Semantic state with mandatory provenance (ADR-139/140). The
         //    calibration version comes from the *agreed* epoch (None on mismatch).
+        //    When a per-room adapter is active (ADR-150 §3.4) its content-derived
+        //    id is part of model_version — and therefore of the witness — so the
+        //    exact weights shaping inference are pinned in the trust chain.
         let calibration_version = match quality.calibration_id {
             Some(c) => format!("cal:{:016x}", c.0),
             None => "cal:none".to_string(),
         };
+        let model_version = match &self.adapter {
+            Some(a) => format!("rfenc-v{}+adapter:{}", self.model_version, a.adapter_id),
+            None => format!("rfenc-v{}", self.model_version),
+        };
         let provenance = SemanticProvenance {
             evidence: quality.evidence_refs.iter().map(|e| format!("{e:?}")).collect(),
-            model_version: format!("rfenc-v{}", self.model_version),
+            model_version,
             calibration_version,
             privacy_decision: format!("{:?}/{:?}", self.privacy.active_mode(), effective_class),
         };
@@ -350,9 +544,22 @@ impl StreamingEngine {
             provenance.clone(),
             &[room],
         );
+        // Retention: bound the live belief set (one node is appended per cycle;
+        // without this the graph grows ~1.7M nodes/day at 20 Hz). Deterministic
+        // eviction; the just-added belief is always newest and survives.
+        self.world.prune_semantic_states(self.semantic_retention);
 
-        // 7. Deterministic witness over the trust decision (ADR-137 §2.7).
+        // 8. Deterministic witness over the trust decision (ADR-137 §2.7).
+        //    `effective_class` already reflects any mesh-risk demotion, so a
+        //    fragmenting array shifts the witness — partition risk is auditable.
         let witness = witness_of(&provenance, effective_class);
+
+        // 9. Drift→recalibration advisor (ADR-135 → ADR-150 §3.4): sustained
+        //    low coherence, an environment change-point, or a mesh close to
+        //    partitioning recommends refit.
+        let recalibration_recommended = self
+            .recal
+            .observe(quality.base_coherence, change_point.is_some() || mesh_at_risk);
 
         self.cycle += 1;
         Ok(TrustedOutput {
@@ -364,6 +571,8 @@ impl StreamingEngine {
             directional,
             change_point,
             witness,
+            recalibration_recommended,
+            mesh,
         })
     }
 
@@ -430,19 +639,46 @@ impl StreamingEngine {
     }
 }
 
+/// Domain-separation tag for the witness hash. Bumping this string
+/// intentionally invalidates every previously-recorded witness (a schema break).
+const WITNESS_DOMAIN: &[u8] = b"ruview.engine.witness.v1";
+
+/// Length-prefix a variable-length field into the witness hash so adjacent
+/// fields can never be confused for one another. The 8-byte little-endian
+/// length makes the field framing unambiguous regardless of the bytes inside
+/// it (a field can contain the separator, the domain tag, anything).
+fn witness_field(h: &mut blake3::Hasher, bytes: &[u8]) {
+    h.update(&(bytes.len() as u64).to_le_bytes());
+    h.update(bytes);
+}
+
 /// Deterministic BLAKE3 witness over a trust decision: the provenance tuple
 /// (evidence ‖ model ‖ calibration ‖ privacy decision) plus the effective
 /// privacy-class byte. Stable across runs for identical decisions — the
 /// "signed operational belief" fingerprint (ADR-137 §2.7 / ADR-028).
+///
+/// # Witness integrity (review finding: domain separation)
+/// Every privacy-relevant field is **length-prefixed** before hashing, and the
+/// (variable-length) evidence list is preceded by an explicit count. Without
+/// this framing the fields were concatenated boundary-to-boundary, so a string
+/// straddling a field boundary (e.g. an adapter id absorbing the leading bytes
+/// of the calibration epoch, or a model_version absorbing a trailing evidence
+/// ref) collided with a *different* trust decision — silently un-distinguishing
+/// two distinct privacy-relevant inputs and defeating the tamper/drift audit.
+/// `model_version` is operator-influenceable (per-room adapter id, ADR-150
+/// §3.4), so the ambiguity was reachable, not merely theoretical.
 fn witness_of(p: &SemanticProvenance, class: PrivacyClass) -> [u8; 32] {
     let mut h = blake3::Hasher::new();
+    h.update(WITNESS_DOMAIN);
+    // Explicit evidence count, then each ref length-prefixed: the number of
+    // evidence refs is itself privacy-relevant and must be unambiguous.
+    h.update(&(p.evidence.len() as u64).to_le_bytes());
     for e in &p.evidence {
-        h.update(e.as_bytes());
-        h.update(b"\x1f");
+        witness_field(&mut h, e.as_bytes());
     }
-    h.update(p.model_version.as_bytes());
-    h.update(p.calibration_version.as_bytes());
-    h.update(p.privacy_decision.as_bytes());
+    witness_field(&mut h, p.model_version.as_bytes());
+    witness_field(&mut h, p.calibration_version.as_bytes());
+    witness_field(&mut h, p.privacy_decision.as_bytes());
     h.update(&[class.as_u8()]);
     *h.finalize().as_bytes()
 }
@@ -517,8 +753,9 @@ mod tests {
     fn contradiction_demotes_privacy() {
         let (mut e, room) = engine();
         let cal = CalibrationId(7);
-        // 2 ms spread: within the 5 ms hard guard but above the 1 ms soft guard.
-        let frames = [node_frame(0, 1000, 56), node_frame(1, 3000, 56)];
+        // 25 ms spread: within the 60 ms hard guard but above the 20 ms soft
+        // guard (#1031 raised both to accommodate the real TDM slot offset).
+        let frames = [node_frame(0, 1_000, 56), node_frame(1, 26_000, 56)];
         let out = e.process_cycle(&frames, cal, room, 20_000).unwrap();
 
         assert!(out.demoted, "loose alignment must demote");
@@ -545,6 +782,205 @@ mod tests {
         assert_eq!(o1.provenance.evidence, o2.provenance.evidence);
         assert_eq!(o1.effective_class, o2.effective_class);
         assert_eq!(o1.quality.per_node_weights, o2.quality.per_node_weights);
+    }
+
+    /// ADR-150 §3.4 adapter provenance: activating a per-room adapter changes
+    /// the provenance model_version AND the witness — the exact weights shaping
+    /// inference are pinned in the trust chain, so an adapter can never swap
+    /// silently. Clearing it restores the base identity (and base witness).
+    #[test]
+    fn adapter_identity_is_witnessed() {
+        let cal = CalibrationId(9);
+        let frames = [node_frame(0, 1000, 56), node_frame(1, 1001, 56)];
+
+        let (mut e, room) = engine();
+        let base = e.process_cycle(&frames, cal, room, 1_000).unwrap();
+        assert_eq!(base.provenance.model_version, "rfenc-v1");
+
+        e.set_room_adapter(AdapterInfo {
+            adapter_id: "a1b2c3d4e5f60718".into(),
+            trained_samples: 150,
+        });
+        let adapted = e.process_cycle(&frames, cal, room, 2_000).unwrap();
+        assert_eq!(
+            adapted.provenance.model_version,
+            "rfenc-v1+adapter:a1b2c3d4e5f60718"
+        );
+        assert_ne!(adapted.witness, base.witness, "adapter must shift the witness");
+
+        // A different adapter id yields a different witness again.
+        e.set_room_adapter(AdapterInfo {
+            adapter_id: "ffffffffffffffff".into(),
+            trained_samples: 150,
+        });
+        let other = e.process_cycle(&frames, cal, room, 3_000).unwrap();
+        assert_ne!(other.witness, adapted.witness);
+
+        // Clearing restores the base identity and the base witness.
+        e.clear_room_adapter();
+        let back = e.process_cycle(&frames, cal, room, 4_000).unwrap();
+        assert_eq!(back.provenance.model_version, "rfenc-v1");
+        assert_eq!(back.witness, base.witness);
+    }
+
+    /// Drift→recalibration advisor logic: a sustained low-coherence streak
+    /// recommends refit; a single healthy cycle resets the streak; a
+    /// change-point recommends immediately regardless of streak.
+    #[test]
+    fn recalibration_advisor_streak_and_change_point() {
+        let mut adv = RecalibrationAdvisor {
+            coherence_floor: 0.5,
+            streak_threshold: 3,
+            ..Default::default()
+        };
+        // Healthy cycles never recommend and keep the streak at zero.
+        for _ in 0..5 {
+            assert!(!adv.observe(0.9, false));
+        }
+        assert_eq!(adv.streak(), 0);
+        // Two low cycles: not yet.
+        assert!(!adv.observe(0.2, false));
+        assert!(!adv.observe(0.2, false));
+        // Third consecutive low cycle: fire.
+        assert!(adv.observe(0.2, false));
+        // Recovery resets the streak.
+        assert!(!adv.observe(0.9, false));
+        assert_eq!(adv.streak(), 0);
+        // A change-point recommends immediately, even at full coherence.
+        assert!(adv.observe(0.9, true));
+    }
+
+    /// Engine-level: clean coherent cycles never recommend recalibration (the
+    /// advisor is wired into process_cycle and stays quiet on healthy input).
+    #[test]
+    fn healthy_cycles_do_not_recommend_recalibration() {
+        let (mut e, room) = engine();
+        e.set_recalibration_advisor(RecalibrationAdvisor {
+            coherence_floor: 0.5,
+            streak_threshold: 3,
+            ..Default::default()
+        });
+        let cal = CalibrationId(2);
+        for i in 0..5u64 {
+            let frames = [
+                node_frame(0, 1_000 + i * 50_000, 56),
+                node_frame(1, 1_001 + i * 50_000, 56),
+            ];
+            let out = e.process_cycle(&frames, cal, room, i as i64).unwrap();
+            assert!(!out.recalibration_recommended);
+        }
+    }
+
+    /// Maximum total coupling mass of an n-node mesh whose attention weights
+    /// sum to 1 (coupling = wᵢ·wⱼ·n): Σ_{i<j} wᵢwⱼ·n = n(1−Σwᵢ²)/2 ≤ (n−1)/2.
+    /// Any cut is a subset of the edges, so every achievable cut value is
+    /// bounded by this mass — a risk threshold at or above it is *guaranteed*
+    /// to be crossed (deterministic fixture, review finding 4).
+    fn max_coupling_mass(n_nodes: usize) -> f64 {
+        (n_nodes as f64 - 1.0) / 2.0
+    }
+
+    /// Mesh guard wiring: a balanced 2-node cycle reports a mesh (cut exists)
+    /// but never flags risk (min_nodes=3); a 3-node mesh whose cut value
+    /// *deterministically* falls at or below the configured risk threshold
+    /// (threshold = the provable upper bound on any achievable cut) is flagged
+    /// at_risk, and the structural event feeds the recalibration advisor
+    /// immediately — no conditional assertions (review finding 4).
+    #[test]
+    fn mesh_partition_risk_feeds_recalibration() {
+        let (mut e, room) = engine();
+        let cal = CalibrationId(3);
+
+        // Balanced 2-node mesh: report present, no risk.
+        let out = e
+            .process_cycle(&[node_frame(0, 1000, 56), node_frame(1, 1001, 56)], cal, room, 1)
+            .unwrap();
+        let mesh = out.mesh.expect("2-node mesh reports");
+        assert!(!mesh.at_risk);
+        assert!(!out.recalibration_recommended);
+
+        // 3-node mesh with the operator risk threshold set to the provable
+        // cut upper bound: the crossing is deterministic regardless of the
+        // fuser's exact weighting.
+        e.mesh_guard_mut().risk_threshold = max_coupling_mass(3);
+        let frames = [
+            node_frame(0, 10_000_000, 56),
+            node_frame(1, 10_000_001, 56),
+            node_frame(2, 10_000_002, 56),
+        ];
+        let out3 = e.process_cycle(&frames, cal, room, 2).unwrap();
+        let m3 = out3.mesh.expect("3-node mesh reports");
+        assert!(m3.at_risk, "cut ≤ threshold must flag partition risk");
+        assert!(
+            out3.recalibration_recommended,
+            "mesh risk is a structural event — the advisor must fire immediately, no streak"
+        );
+        assert!(m3.cut_value.is_finite() && m3.cut_value >= 0.0);
+    }
+
+    /// Mesh partition risk demotes the privacy class and shifts the witness —
+    /// a fragmenting array makes the fused belief less trustworthy, so it is
+    /// emitted at a more restricted class, and that demotion is auditable.
+    /// Both cycles use the *same 3-node topology and frames*; the engines
+    /// differ only in the forced mesh risk, so the witness delta is
+    /// attributable to the risk demotion alone (review finding 4).
+    #[test]
+    fn mesh_risk_demotes_privacy_and_shifts_witness() {
+        let cal = CalibrationId(8);
+        let frames3 = [
+            node_frame(0, 1000, 56),
+            node_frame(1, 1001, 56),
+            node_frame(2, 1002, 56),
+        ];
+
+        // Baseline: same topology, default risk threshold — clean cycle, not
+        // demoted (PrivateHome → Anonymous), mesh healthy.
+        let (mut e1, r1) = engine();
+        let base = e1.process_cycle(&frames3, cal, r1, 5_000).unwrap();
+        assert!(!base.mesh.as_ref().unwrap().at_risk);
+        assert!(!base.demoted);
+        assert_eq!(base.effective_class, PrivacyClass::Anonymous);
+
+        // Forced risk: identical frames/topology, threshold at the provable
+        // cut upper bound so the crossing is deterministic.
+        let (mut e2, r2) = engine();
+        e2.mesh_guard_mut().risk_threshold = max_coupling_mass(3);
+        let risky = e2.process_cycle(&frames3, cal, r2, 5_000).unwrap();
+        assert!(risky.mesh.as_ref().unwrap().at_risk);
+        assert!(risky.demoted, "mesh risk must demote");
+        // PrivateHome base Anonymous(2) → demoted to Restricted(3).
+        assert_eq!(risky.effective_class, PrivacyClass::Restricted);
+        assert!(risky.provenance.privacy_decision.contains("Restricted"));
+        assert_ne!(
+            risky.witness, base.witness,
+            "same topology, risk-only delta must shift the witness"
+        );
+    }
+
+    /// WorldGraph belief retention: the live loop appends one SemanticState per
+    /// cycle; past the cap the oldest beliefs are evicted so graph memory is
+    /// bounded, while structural nodes and the newest belief always survive.
+    #[test]
+    fn semantic_state_growth_is_bounded() {
+        let (mut e, room) = engine();
+        e.set_semantic_retention(5);
+        let cal = CalibrationId(1);
+        let mut last_id = None;
+        let baseline_nodes = 2; // room + sensor
+        for i in 0..20u64 {
+            let frames = [
+                node_frame(0, 1000 + i * 50_000, 56),
+                node_frame(1, 1001 + i * 50_000, 56),
+            ];
+            let out = e.process_cycle(&frames, cal, room, 5_000 + i as i64).unwrap();
+            last_id = Some(out.semantic_id);
+            assert!(e.world().node_count() <= baseline_nodes + 5);
+        }
+        // 20 cycles ran, only 5 beliefs remain, newest is still present.
+        assert_eq!(e.world().node_count(), baseline_nodes + 5);
+        assert!(e.world().node(last_id.unwrap()).is_some());
+        // Structural nodes survive eviction.
+        assert!(e.world().node(room).is_some());
     }
 
     fn node_frame_scaled(node_id: u8, ts_us: u64, n_sub: usize, scale: f32) -> MultiBandCsiFrame {
@@ -747,5 +1183,180 @@ mod tests {
             .unwrap();
         // StrictNoIdentity base = Restricted, even with no contradiction.
         assert_eq!(out.effective_class, PrivacyClass::Restricted);
+    }
+
+    /// De-magic pin (review finding): the named engine constants must keep
+    /// their prior inline values exactly, so the de-magic is a pure rename with
+    /// no behavior change.
+    #[test]
+    fn engine_constants_match_prior_values() {
+        assert_eq!(StreamingEngine::DEFAULT_COHERENCE_ACCEPT, 0.85);
+        assert_eq!(StreamingEngine::SLAM_ASSOC_RADIUS_M, 0.5);
+        assert_eq!(StreamingEngine::SLAM_MIN_SIGHTINGS, 5);
+        assert_eq!(StreamingEngine::SLAM_MIN_COHERENCE, 0.6);
+        assert_eq!(StreamingEngine::ANCHOR_WALL_CEILING, 0.05);
+        assert_eq!(StreamingEngine::ANCHOR_MOBILE_FLOOR, 1.0);
+    }
+
+    /// Privacy monotonicity (the crux): across EVERY base mode, a forced
+    /// contradiction may only ever make the emitted class *more* restrictive
+    /// (higher byte) and never less. Demotion is single-step and clamps at
+    /// Restricted; a clean cycle emits exactly the base class. This is the
+    /// information-only-removed invariant of ADR-141/120 stated as a property
+    /// over the whole mode set.
+    #[test]
+    fn forced_contradiction_never_relaxes_class() {
+        let cal_mismatch = [Some(CalibrationId(1)), Some(CalibrationId(2))]; // disagree → contradiction
+        let cal_match = [Some(CalibrationId(5)), Some(CalibrationId(5))];
+        let frames = [node_frame(0, 1000, 56), node_frame(1, 1001, 56)];
+        for mode in [
+            PrivacyMode::RawResearch,
+            PrivacyMode::PrivateHome,
+            PrivacyMode::EnterpriseAnonymous,
+            PrivacyMode::CareWithConsent,
+            PrivacyMode::StrictNoIdentity,
+        ] {
+            let base_class = mode.target_class();
+
+            // Clean cycle: emits exactly the base class (no relaxation upward).
+            let mut clean = StreamingEngine::new(mode, 1, GeoRegistration::default());
+            let room_c = clean.add_room("r", "R");
+            let oc = clean
+                .process_cycle_calibrated(&frames, &cal_match, room_c, 1)
+                .unwrap();
+            assert_eq!(oc.effective_class, base_class, "clean cycle == base class");
+            assert!(!oc.demoted);
+
+            // Forced contradiction: class byte only ever increases (more
+            // restrictive), never decreases below the base.
+            let mut dirty = StreamingEngine::new(mode, 1, GeoRegistration::default());
+            let room_d = dirty.add_room("r", "R");
+            let od = dirty
+                .process_cycle_calibrated(&frames, &cal_mismatch, room_d, 1)
+                .unwrap();
+            assert!(od.demoted, "calibration mismatch must demote in {mode:?}");
+            assert!(
+                od.effective_class.as_u8() >= base_class.as_u8(),
+                "demotion must never relax: {mode:?} base={:?} got={:?}",
+                base_class,
+                od.effective_class
+            );
+            // And it must be strictly more restrictive unless already clamped
+            // at the most-restrictive class.
+            if base_class != PrivacyClass::Restricted {
+                assert!(
+                    od.effective_class.as_u8() > base_class.as_u8(),
+                    "unclamped demotion must increase restriction in {mode:?}"
+                );
+            } else {
+                assert_eq!(od.effective_class, PrivacyClass::Restricted);
+            }
+        }
+    }
+
+    /// Fail-closed boundary: an empty cycle (zero frames) must NOT emit a
+    /// trusted output at all — fusion rejects it and the engine surfaces a
+    /// hard error. There is no degenerate output that could carry a stale or
+    /// over-permissive class.
+    #[test]
+    fn empty_cycle_fails_closed() {
+        let (mut e, room) = engine();
+        let err = e.process_cycle(&[], CalibrationId(1), room, 1);
+        assert!(matches!(err, Err(EngineError::Fusion(_))), "empty cycle must error, got {err:?}");
+        // No SemanticState was appended (room + sensor only).
+        assert_eq!(e.world().node_count(), 2);
+        assert_eq!(e.cycle_count(), 0, "a failed cycle must not advance the counter");
+    }
+
+    /// Single-node boundary characterization: a one-node cycle fuses (no
+    /// multistatic cross-check is possible), reports no mesh (n<2), and emits a
+    /// well-formed witness at the base class. Documents that single-node sensing
+    /// is a valid, non-demoting mode — not a silent bypass.
+    #[test]
+    fn single_node_cycle_is_well_formed() {
+        let (mut e, room) = engine();
+        let out = e
+            .process_cycle(&[node_frame(0, 1000, 56)], CalibrationId(1), room, 1)
+            .unwrap();
+        assert!(out.mesh.is_none(), "one node has no mesh cut");
+        assert!(out.directional.is_none(), "no geometry registered");
+        assert_eq!(out.effective_class, PrivacyClass::Anonymous); // PrivateHome base
+        assert_ne!(out.witness, [0u8; 32], "witness still emitted");
+    }
+
+    /// Witness domain-separation (review finding): the witness must change
+    /// whenever ANY privacy-relevant field changes. The model_version,
+    /// calibration_version, and privacy_decision fields are concatenated into
+    /// the hash; without an unambiguous delimiter between them, a string that
+    /// straddles the model/calibration boundary collides with a different
+    /// (model, calibration) tuple.
+    ///
+    /// `model_version` is operator-influenceable through the per-room adapter id
+    /// (ADR-150 §3.4), and `calibration_version` is `cal:<hex>` — so the two
+    /// provenances below are *both reachable* and represent genuinely different
+    /// trust decisions (different model identity, different calibration epoch),
+    /// yet the field-boundary ambiguity makes them hash-collide. A colliding
+    /// witness silently un-distinguishes two distinct privacy-relevant inputs,
+    /// defeating the tamper/drift audit guarantee.
+    #[test]
+    fn witness_distinguishes_model_calibration_boundary() {
+        let class = PrivacyClass::Anonymous;
+        // A: model "rfenc-v1+adapter:X", calibration epoch "cal:00ab".
+        let a = SemanticProvenance {
+            evidence: vec!["ev".into()],
+            model_version: "rfenc-v1+adapter:X".into(),
+            calibration_version: "cal:00ab".into(),
+            privacy_decision: "PrivateHome/Anonymous".into(),
+        };
+        // B: adapter id absorbs the leading "cal:00a" of A's calibration; B's
+        // own calibration is the remaining "b". A.model‖A.cal == B.model‖B.cal,
+        // so the unseparated concatenation hashes identically — yet these are
+        // distinct (model identity, calibration epoch) tuples.
+        let b = SemanticProvenance {
+            evidence: vec!["ev".into()],
+            model_version: "rfenc-v1+adapter:Xcal:00a".into(),
+            calibration_version: "b".into(),
+            privacy_decision: "PrivateHome/Anonymous".into(),
+        };
+        assert_ne!(a.model_version, b.model_version);
+        assert_ne!(a.calibration_version, b.calibration_version);
+        // Sanity: the two collide under naive concatenation.
+        assert_eq!(
+            format!("{}{}", a.model_version, a.calibration_version),
+            format!("{}{}", b.model_version, b.calibration_version),
+        );
+        assert_ne!(
+            witness_of(&a, class),
+            witness_of(&b, class),
+            "distinct (model, calibration) tuples must not share a witness"
+        );
+    }
+
+    /// Witness domain-separation across the evidence/model boundary: a witness
+    /// must distinguish an extra evidence ref from a model_version that absorbs
+    /// the same bytes. The evidence loop terminates each ref with one separator;
+    /// the model field must itself be unambiguously delimited from the (variable
+    /// number of) evidence refs that precede it.
+    #[test]
+    fn witness_distinguishes_evidence_model_boundary() {
+        let class = PrivacyClass::Anonymous;
+        let a = SemanticProvenance {
+            evidence: vec!["e1".into(), "e2".into()],
+            model_version: "m".into(),
+            calibration_version: "cal:1".into(),
+            privacy_decision: "PrivateHome/Anonymous".into(),
+        };
+        let b = SemanticProvenance {
+            evidence: vec!["e1".into()],
+            // absorbs "e2" + its 0x1f separator into the model field.
+            model_version: "e2\u{1f}m".into(),
+            calibration_version: "cal:1".into(),
+            privacy_decision: "PrivateHome/Anonymous".into(),
+        };
+        assert_ne!(
+            witness_of(&a, class),
+            witness_of(&b, class),
+            "an extra evidence ref must not collide with a model_version that absorbs it"
+        );
     }
 }

@@ -20,6 +20,34 @@ use ndarray::{s, Array4};
 use ruvector_solver::neumann::NeumannSolver;
 use ruvector_solver::types::CsrMatrix;
 
+// --- Sparse-interpolation tuning constants (ADR-155 M2 §8: de-magicked from
+// bare literals in `interpolate_subcarriers_sparse`; values bit-identical to the
+// prior inline literals — documentation only, no behaviour change). ---
+
+/// Gaussian-basis width (in the normalised `[0,1]` subcarrier position space)
+/// for the sparse-interpolation kernel `exp(-Δ²/σ²)`. Wider σ ⇒ smoother fit.
+const SPARSE_BASIS_SIGMA: f32 = 0.15;
+
+/// Sparsity cutoff: basis entries below this magnitude are dropped from the
+/// normal-equations assembly, keeping `AᵀA` sparse.
+const SPARSE_BASIS_THRESHOLD: f32 = 1e-4;
+
+/// Tikhonov regularisation strength `λ` added to the `AᵀA` diagonal for
+/// numerical stability of the (possibly ill-conditioned) normal equations.
+const SPARSE_REGULARIZATION_LAMBDA: f32 = 0.1;
+
+/// Magnitude below which an assembled `AᵀA` entry is treated as structurally
+/// zero and omitted from the COO triplet list.
+const SPARSE_COO_PRUNE_EPS: f32 = 1e-8;
+
+/// Convergence tolerance for the Neumann-series sparse solver (`f64` to match
+/// [`NeumannSolver::new`]).
+const SPARSE_SOLVER_TOL: f64 = 1e-5;
+
+/// Maximum Neumann-series iterations before the solver returns (falls back to
+/// linear interpolation on non-convergence).
+const SPARSE_SOLVER_MAX_ITERS: usize = 500;
+
 // ---------------------------------------------------------------------------
 // interpolate_subcarriers
 // ---------------------------------------------------------------------------
@@ -39,6 +67,11 @@ use ruvector_solver::types::CsrMatrix;
 /// # Panics
 ///
 /// Panics if `target_sc == 0` or the input has no subcarrier dimension.
+///
+/// Non-contiguous inputs (e.g. a transposed or strided view) are handled
+/// gracefully: the subcarrier lane is copied into a contiguous scratch buffer
+/// when the underlying storage is not contiguous, so this function never
+/// panics on layout (ADR-155 §Tier-2).
 pub fn interpolate_subcarriers(arr: &Array4<f32>, target_sc: usize) -> Array4<f32> {
     assert!(target_sc > 0, "target_sc must be > 0");
 
@@ -54,16 +87,23 @@ pub fn interpolate_subcarriers(arr: &Array4<f32>, target_sc: usize) -> Array4<f3
     // Precompute interpolation weights once.
     let weights = compute_interp_weights(n_sc, target_sc);
 
+    // Reusable scratch buffer for the non-contiguous fallback path.
+    let mut scratch: Vec<f32> = Vec::new();
+
     for t in 0..n_t {
         for tx in 0..n_tx {
             for rx in 0..n_rx {
                 let src = arr.slice(s![t, tx, rx, ..]);
-                let src_slice = src.as_slice().unwrap_or_else(|| {
-                    // Fallback: copy to a contiguous slice
-                    // (this path is hit when the array has a non-contiguous layout)
-                    // In practice ndarray arrays sliced along last dim are contiguous.
-                    panic!("Subcarrier slice is not contiguous");
-                });
+                // Prefer the contiguous fast path; fall back to an owned copy
+                // for non-contiguous layouts instead of panicking.
+                let src_slice: &[f32] = match src.as_slice() {
+                    Some(s) => s,
+                    None => {
+                        scratch.clear();
+                        scratch.extend(src.iter().copied());
+                        &scratch
+                    }
+                };
 
                 for (k, &(i0, i1, w)) in weights.iter().enumerate() {
                     let v = src_slice[i0] * (1.0 - w) + src_slice[i1] * w;
@@ -155,7 +195,7 @@ pub fn interpolate_subcarriers_sparse(arr: &Array4<f32>, target_sc: usize) -> Ar
 
     // Build the Gaussian basis matrix A: [src_sc, target_sc]
     // A[j, k] = exp(-((j/(n_sc-1) - k/(target_sc-1))^2) / sigma^2)
-    let sigma = 0.15_f32;
+    let sigma = SPARSE_BASIS_SIGMA;
     let sigma_sq = sigma * sigma;
 
     // Source and target normalized positions in [0, 1]
@@ -179,12 +219,12 @@ pub fn interpolate_subcarriers_sparse(arr: &Array4<f32>, target_sc: usize) -> Ar
         .collect();
 
     // Only include entries above a sparsity threshold
-    let threshold = 1e-4_f32;
+    let threshold = SPARSE_BASIS_THRESHOLD;
 
     // Build A^T A + λI regularized system for normal equations
     // We solve: (A^T A + λI) x = A^T b
     // A^T A is [target_sc × target_sc]
-    let lambda = 0.1_f32; // regularization
+    let lambda = SPARSE_REGULARIZATION_LAMBDA;
     let mut ata_coo: Vec<(usize, usize, f32)> = Vec::new();
 
     // Compute A^T A
@@ -214,7 +254,7 @@ pub fn interpolate_subcarriers_sparse(arr: &Array4<f32>, target_sc: usize) -> Ar
     for (k, row) in ata.iter().enumerate() {
         for (k2, &cell) in row.iter().enumerate() {
             let val = cell + if k == k2 { lambda } else { 0.0 };
-            if val.abs() > 1e-8 {
+            if val.abs() > SPARSE_COO_PRUNE_EPS {
                 ata_coo.push((k, k2, val));
             }
         }
@@ -222,7 +262,7 @@ pub fn interpolate_subcarriers_sparse(arr: &Array4<f32>, target_sc: usize) -> Ar
 
     // Build CsrMatrix for the normal equations system (A^T A + λI)
     let normal_matrix = CsrMatrix::<f32>::from_coo(target_sc, target_sc, ata_coo);
-    let solver = NeumannSolver::new(1e-5, 500);
+    let solver = NeumannSolver::new(SPARSE_SOLVER_TOL, SPARSE_SOLVER_MAX_ITERS);
 
     let mut out = Array4::<f32>::zeros((n_t, n_tx, n_rx, target_sc));
 
@@ -338,6 +378,42 @@ mod tests {
     use super::*;
     use approx::assert_abs_diff_eq;
 
+    /// ADR-155 M2 §8: the de-magicked sparse-interpolation consts must equal the
+    /// prior inline literals exactly (operating-value guard).
+    #[test]
+    fn sparse_interp_consts_unchanged_from_literals() {
+        assert_eq!(SPARSE_BASIS_SIGMA, 0.15_f32);
+        assert_eq!(SPARSE_BASIS_THRESHOLD, 1e-4_f32);
+        assert_eq!(SPARSE_REGULARIZATION_LAMBDA, 0.1_f32);
+        assert_eq!(SPARSE_COO_PRUNE_EPS, 1e-8_f32);
+        assert_eq!(SPARSE_SOLVER_TOL, 1e-5_f64);
+        assert_eq!(SPARSE_SOLVER_MAX_ITERS, 500);
+    }
+
+    /// Characterize the `target_sc == 1` boundary of `compute_interp_weights`:
+    /// the single output maps to source index 0 with zero fraction (the special
+    /// branch that avoids dividing by `target_sc - 1 == 0`).
+    #[test]
+    fn compute_interp_weights_single_target_is_index_zero() {
+        let w = compute_interp_weights(7, 1);
+        assert_eq!(w.len(), 1);
+        let (i0, i1, frac) = w[0];
+        assert_eq!(i0, 0);
+        assert_eq!(i1, 0);
+        assert_abs_diff_eq!(frac, 0.0_f32, epsilon = 1e-6);
+    }
+
+    /// Characterize sparse interpolation to a single subcarrier: must produce
+    /// the right shape and a finite value (exercises the `target_sc == 1`
+    /// normalized-position branch).
+    #[test]
+    fn sparse_interp_single_target_is_finite() {
+        let arr = Array4::<f32>::from_shape_fn((2, 1, 1, 8), |(_, _, _, k)| k as f32);
+        let out = interpolate_subcarriers_sparse(&arr, 1);
+        assert_eq!(out.shape(), &[2, 1, 1, 1]);
+        assert!(out.iter().all(|v| v.is_finite()));
+    }
+
     #[test]
     fn identity_resample() {
         let arr =
@@ -418,6 +494,35 @@ mod tests {
         });
         let out = interpolate_subcarriers_sparse(&arr, 56);
         assert_eq!(out.shape(), &[4, 1, 3, 56]);
+    }
+
+    // ADR-155 §Tier-2: a non-contiguous input (subcarrier axis strided after an
+    // axis permutation) must NOT panic — the old `.as_slice().unwrap_or_else(||
+    // panic!(...))` path crashed on any non-contiguous layout.
+    #[test]
+    fn non_contiguous_input_does_not_panic() {
+        // Build a [t, sc, tx, rx] array, then permute so subcarriers land in the
+        // last axis. The resulting owned Array4 has non-standard strides, so its
+        // last-axis lanes are non-contiguous in memory.
+        let base =
+            Array4::<f32>::from_shape_fn((4, 8, 3, 3), |(t, sc, tx, rx)| (t + sc + tx + rx) as f32);
+        // permuted_axes consumes the owned array and returns an owned Array4
+        // with swapped strides: logical shape [t, tx, rx, sc], sc axis strided.
+        let strided: Array4<f32> = base.permuted_axes([0, 2, 3, 1]);
+        // Sanity: a last-axis lane really is non-contiguous.
+        assert!(strided.slice(s![0, 0, 0, ..]).as_slice().is_none());
+
+        let out = interpolate_subcarriers(&strided, 4);
+        assert_eq!(out.shape(), &[4, 3, 3, 4]);
+        // Endpoints preserved exactly even via the fallback copy path.
+        for tx in 0..3 {
+            for rx in 0..3 {
+                let first = strided[[0, tx, rx, 0]];
+                let last = strided[[0, tx, rx, 7]];
+                assert_abs_diff_eq!(out[[0, tx, rx, 0]], first, epsilon = 1e-5);
+                assert_abs_diff_eq!(out[[0, tx, rx, 3]], last, epsilon = 1e-5);
+            }
+        }
     }
 
     #[test]

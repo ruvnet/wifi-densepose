@@ -14,6 +14,15 @@
 
 use super::QualityScored;
 
+/// Multiplicative coherence penalty applied per recorded contradiction
+/// (ADR-154 §7.4 — de-magicked; EMPIRICAL DEFAULT). `n` contradictions scale
+/// coherence by `CONTRADICTION_PENALTY.powi(n)`.
+const CONTRADICTION_PENALTY: f32 = 0.8;
+
+/// Confidence-bound half-width added per recorded contradiction (clamped so the
+/// interval stays within `[0, 1]`). EMPIRICAL DEFAULT.
+const CONTRADICTION_BOUND_HALFWIDTH: f32 = 0.1;
+
 /// Identifies which sensing family produced a fused frame, so one
 /// [`QualityScore`] can be correlated across the signal-domain fuser
 /// (`multistatic.rs`) and the embedding-domain fuser (`viewpoint/fusion.rs`).
@@ -113,7 +122,7 @@ impl QualityScore {
     /// streaming engine routes/gates on.
     #[must_use]
     pub fn penalized_coherence(&self) -> f32 {
-        let penalty = 0.8_f32.powi(self.contradiction_flags.len() as i32);
+        let penalty = CONTRADICTION_PENALTY.powi(self.contradiction_flags.len() as i32);
         (self.base_coherence * penalty).clamp(0.0, 1.0)
     }
 }
@@ -127,7 +136,8 @@ impl QualityScored for QualityScore {
         // Width grows with the number of tolerated contradictions: each adds
         // ±0.1 of uncertainty around the penalized coherence, clamped to [0,1].
         let c = self.penalized_coherence();
-        let half = (0.1 * self.contradiction_flags.len() as f32).min(c.min(1.0 - c));
+        let half =
+            (CONTRADICTION_BOUND_HALFWIDTH * self.contradiction_flags.len() as f32).min(c.min(1.0 - c));
         ((c - half).max(0.0), (c + half).min(1.0))
     }
 }
@@ -184,5 +194,25 @@ mod tests {
         let (lo, hi) = q.confidence_bounds();
         assert!((0.0..=1.0).contains(&s));
         assert!(0.0 <= lo && lo <= hi && hi <= 1.0);
+    }
+
+    // -- ADR-154 §7.4: de-magic-constant + boundary characterization tests.
+
+    /// De-magicked penalty/bound consts must equal the prior literals.
+    #[test]
+    fn fusion_quality_consts_unchanged_from_literals() {
+        assert_eq!(CONTRADICTION_PENALTY, 0.8_f32);
+        assert_eq!(CONTRADICTION_BOUND_HALFWIDTH, 0.1_f32);
+    }
+
+    /// Zero contradictions: penalty is `0.8^0 = 1.0` (coherence unchanged) and
+    /// the confidence bounds collapse to a point. Pins the n=0 boundary.
+    #[test]
+    fn no_contradiction_is_identity() {
+        let q = base();
+        assert!(q.contradiction_flags.is_empty());
+        assert!((q.penalized_coherence() - q.base_coherence).abs() < 1e-6);
+        let (lo, hi) = q.confidence_bounds();
+        assert!((hi - lo).abs() < 1e-6); // half-width is 0 with no contradictions
     }
 }

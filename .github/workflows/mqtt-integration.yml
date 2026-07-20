@@ -41,6 +41,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install mosquitto + clients and start with allow_anonymous
         run: |

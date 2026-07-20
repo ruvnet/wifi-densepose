@@ -185,8 +185,42 @@ def test_heart_rate_explicit_ctor() -> None:
 
 def test_heart_rate_extract_returns_none_with_too_few_samples() -> None:
     hr = HeartRateExtractor.esp32_default()
-    out = hr.extract(residuals=[0.0] * 56, weights=[])
+    out = hr.extract(residuals=[0.0] * 56, phases=[0.0] * 56)
     assert out is None
+
+
+def test_heart_rate_extract_rejects_old_weights_keyword() -> None:
+    hr = HeartRateExtractor.esp32_default()
+    with pytest.raises(TypeError):
+        hr.extract(residuals=[0.0] * 56, weights=[0.0] * 56)
+
+
+def test_heart_rate_extract_with_synthetic_signal_and_phases() -> None:
+    """Drive the extractor with a synthetic 1.2 Hz sine (72 BPM) plus
+    same-length phase data. This proves the binding feeds Rust's required
+    `phases` slice instead of an empty vector that would keep returning None."""
+    hr = HeartRateExtractor.esp32_default()
+    sample_rate = 100.0
+    target_freq = 1.2  # 72 BPM
+    n_samples = int(60 * sample_rate)
+    phases = [i * 0.01 for i in range(56)]
+
+    produced_estimate = False
+    rng = Random(43)
+    for i in range(n_samples):
+        t = i / sample_rate
+        base = math.sin(2.0 * math.pi * target_freq * t)
+        residuals = [base + rng.gauss(0.0, 0.01) for _ in range(56)]
+        est = hr.extract(residuals=residuals, phases=phases)
+        if est is not None:
+            produced_estimate = True
+            assert math.isfinite(est.value_bpm)
+            assert 0.0 <= est.confidence <= 1.0
+            break
+
+    assert produced_estimate, (
+        "HeartRateExtractor never produced an estimate after 60s of synthetic data"
+    )
 
 
 # ─── Build feature flag ──────────────────────────────────────────────

@@ -19,6 +19,38 @@
 use crate::ruvsense::field_model::WelfordStats;
 
 // ---------------------------------------------------------------------------
+// Drift-detection thresholds (ADR-154 §7.4 — de-magicked; EMPIRICAL DEFAULTS).
+//
+// These encode the "Key Invariants" documented in the module header. They were
+// previously bare literals scattered through `update_daily`/`is_ready`. Lifting
+// them to named consts makes the policy explicit and a future retune a visible,
+// tested change. Values are unchanged.
+// ---------------------------------------------------------------------------
+
+/// Minimum observation days before drift detection activates.
+const BASELINE_MIN_OBSERVATION_DAYS: u32 = 7;
+
+/// EMA update weight applied to the embedding centroid each day (the new
+/// sample's weight; the centroid retains `1 - EMBEDDING_EMA_ALPHA` of its old
+/// value, i.e. a decay of 0.95). Kept as the literal `0.05` rather than
+/// `1.0 - 0.95_f32` to stay bit-identical (the f32 subtraction is not exactly
+/// 0.05).
+const EMBEDDING_EMA_ALPHA: f32 = 0.05;
+
+/// Per-metric absolute z-score above which a day counts toward sustained drift.
+const DRIFT_ZSCORE_SIGMA: f64 = 2.0;
+
+/// Consecutive drift days required before a drift report is emitted.
+const DRIFT_SUSTAINED_DAYS: u32 = 3;
+
+/// Consecutive drift days at/above which monitoring escalates from `Drift`
+/// to `RiskCorrelation`.
+const DRIFT_ESCALATION_DAYS: u32 = 7;
+
+/// Denominator guard for cosine similarity (zero-norm vectors ⇒ 0.0).
+const COSINE_SIMILARITY_EPSILON: f32 = 1e-9;
+
+// ---------------------------------------------------------------------------
 // Error types
 // ---------------------------------------------------------------------------
 
@@ -226,7 +258,7 @@ impl PersonalBaseline {
 
     /// Whether baseline has enough data for drift detection.
     pub fn is_ready(&self) -> bool {
-        self.observation_days >= 7
+        self.observation_days >= BASELINE_MIN_OBSERVATION_DAYS
     }
 
     /// Update baseline with a daily summary.
@@ -240,10 +272,10 @@ impl PersonalBaseline {
         self.observation_days += 1;
         self.updated_at_us = timestamp_us;
 
-        // Update embedding centroid with EMA (decay = 0.95)
+        // Update embedding centroid with EMA (decay 0.95, alpha = 1 - 0.95)
         if let Some(ref emb) = summary.embedding_centroid {
             if emb.len() == self.embedding_centroid.len() {
-                let alpha = 0.05_f32; // 1 - 0.95
+                let alpha = EMBEDDING_EMA_ALPHA;
                 for (c, e) in self.embedding_centroid.iter_mut().zip(emb.iter()) {
                     *c = (1.0 - alpha) * *c + alpha * *e;
                 }
@@ -271,20 +303,20 @@ impl PersonalBaseline {
 
             let idx = Self::metric_index(metric);
 
-            if z.abs() > 2.0 {
+            if z.abs() > DRIFT_ZSCORE_SIGMA {
                 self.drift_counters[idx] += 1;
             } else {
                 self.drift_counters[idx] = 0;
             }
 
-            if self.drift_counters[idx] >= 3 {
+            if self.drift_counters[idx] >= DRIFT_SUSTAINED_DAYS {
                 let direction = if z > 0.0 {
                     DriftDirection::Increasing
                 } else {
                     DriftDirection::Decreasing
                 };
 
-                let level = if self.drift_counters[idx] >= 7 {
+                let level = if self.drift_counters[idx] >= DRIFT_ESCALATION_DAYS {
                     MonitoringLevel::RiskCorrelation
                 } else {
                     MonitoringLevel::Drift
@@ -310,7 +342,7 @@ impl PersonalBaseline {
 
     /// Check readiness at a specific observation day count (internal helper).
     fn is_ready_at(&self, days: u32) -> bool {
-        days >= 7
+        days >= BASELINE_MIN_OBSERVATION_DAYS
     }
 
     /// Get current drift counter for a metric.
@@ -545,12 +577,15 @@ impl EmbeddingHistory {
 }
 
 /// Cosine similarity between two f32 vectors.
+///
+/// Returns `0.0` if either vector has (near-)zero norm — the product of norms
+/// falls below [`COSINE_SIMILARITY_EPSILON`], so the division is skipped.
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
     let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
     let denom = norm_a * norm_b;
-    if denom < 1e-9 {
+    if denom < COSINE_SIMILARITY_EPSILON {
         0.0
     } else {
         dot / denom
@@ -1016,5 +1051,41 @@ mod tests {
         for (i, _) in &pf {
             assert!(*i < h.len());
         }
+    }
+
+    // -- ADR-154 §7.4: de-magic-constant + boundary characterization tests.
+
+    /// The de-magicked drift thresholds MUST equal the prior bare literals.
+    #[test]
+    fn drift_consts_unchanged_from_literals() {
+        assert_eq!(BASELINE_MIN_OBSERVATION_DAYS, 7);
+        assert_eq!(EMBEDDING_EMA_ALPHA, 0.05_f32);
+        assert_eq!(DRIFT_ZSCORE_SIGMA, 2.0);
+        assert_eq!(DRIFT_SUSTAINED_DAYS, 3);
+        assert_eq!(DRIFT_ESCALATION_DAYS, 7);
+        assert_eq!(COSINE_SIMILARITY_EPSILON, 1e-9_f32);
+    }
+
+    /// `is_ready_at` pins the exact day-6 (not ready) / day-7 (ready) boundary
+    /// independent of Welford state.
+    #[test]
+    fn is_ready_at_day_boundary() {
+        let baseline = PersonalBaseline::new(1, 8);
+        assert!(!baseline.is_ready_at(BASELINE_MIN_OBSERVATION_DAYS - 1)); // day 6
+        assert!(baseline.is_ready_at(BASELINE_MIN_OBSERVATION_DAYS)); // day 7
+        assert!(baseline.is_ready_at(BASELINE_MIN_OBSERVATION_DAYS + 1)); // day 8
+    }
+
+    /// Cosine similarity returns 0.0 for a zero-norm vector (denominator below
+    /// `COSINE_SIMILARITY_EPSILON`) and a finite value otherwise.
+    #[test]
+    fn cosine_similarity_zero_vector_is_zero() {
+        let zero = [0.0_f32; 4];
+        let v = [1.0_f32, 2.0, 3.0, 4.0];
+        assert_eq!(cosine_similarity(&zero, &v), 0.0);
+        assert_eq!(cosine_similarity(&v, &zero), 0.0);
+        assert_eq!(cosine_similarity(&zero, &zero), 0.0);
+        // identical non-zero vectors -> ~1.0
+        assert!((cosine_similarity(&v, &v) - 1.0).abs() < 1e-5);
     }
 }

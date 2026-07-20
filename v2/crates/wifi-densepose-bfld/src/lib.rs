@@ -10,6 +10,14 @@
 //! - **I3**: Cross-site identity correlation is cryptographically impossible.
 //!
 //! Status: P1 in progress — frame format + sink marker traits. P2–P6 follow.
+//! The §3.6 Soul Signature matching algorithm is now implemented and tested
+//! ([`soul_match`] / [`soul_channels`]): a running per-channel weighted-cosine
+//! matcher with measured separability and a real [`coherence_gate::SoulMatchOracle`]
+//! ([`soul_match::EnrolledMatcher`]). Named-identity locking remains **data-gated** —
+//! it requires the decisive high-weight channels (real AETHER enrollment +
+//! body-resonance) to be fed real data, which has not been done; on cardiac +
+//! respiratory channels alone identity is NOT separable (see
+//! `tests/soul_match.rs::cardiac_alone_cannot_separate_identity_matches_audit`).
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -43,6 +51,8 @@ pub mod privacy_mode;
 pub mod rumqttc_publisher;
 pub mod signature_hasher;
 pub mod sink;
+pub mod soul_channels;
+pub mod soul_match;
 
 pub use coherence_gate::{CoherenceGate, MatchOutcome, NullOracle, SoulMatchOracle};
 #[cfg(feature = "std")]
@@ -81,6 +91,13 @@ pub use privacy_mode::{PrivacyAction, PrivacyAttestationProof, PrivacyMode};
 pub use privacy_mode::PrivacyModeRegistry;
 pub use signature_hasher::{SignatureHasher, RF_SIGNATURE_LEN, SITE_SALT_LEN};
 pub use sink::{check_class, LocalSink, MatterSink, NetworkSink, Sink};
+pub use soul_channels::{
+    Channel, FeatureError, FeatureVector, MatchWeights, SoulChannels, WeightError, CHANNEL_COUNT,
+    DEFAULT_WEIGHTS, FEATURE_VECTOR_CAP,
+};
+pub use soul_match::{cosine_sim, match_score, MatchScore};
+#[cfg(feature = "std")]
+pub use soul_match::EnrolledMatcher;
 
 /// Privacy classification carried in every `BfldFrame`. See ADR-120 §2.1.
 #[repr(u8)]

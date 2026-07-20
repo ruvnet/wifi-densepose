@@ -12,6 +12,7 @@
 //! |-----------------|-------------------------------------------------------|
 //! | `config`        | `OccWorldConfig` — hyper-parameters                  |
 //! | `error`         | `OccWorldError` — unified error enum                 |
+//! | `cnn`           | Real conv `Encoder2D` / `Decoder2D` (deterministic)   |
 //! | `vqvae`         | Class embedding, VQ codebook, quant convolutions      |
 //! | `transformer`   | Autoregressive transformer (`PlanUAutoRegTransformer`) |
 //! | `model`         | SafeTensors weight loading + key mapping              |
@@ -19,11 +20,15 @@
 //!
 //! ## Implementation status
 //!
-//! The VQVAE encoder/decoder ResNet blocks are **stubs** that return random
-//! tensors of the correct shape.  All other components (class embedding,
-//! VQ codebook, quant/post-quant convolutions, transformer, trajectory
-//! extraction) are fully implemented.  The stubs will be replaced in Phase 5
-//! once the SafeTensors checkpoint is available.
+//! The VQVAE encoder/decoder are a **real, deterministic, input-dependent**
+//! convolutional forward pass (`crate::cnn`) — no `randn` anywhere in the
+//! prediction path. All other components (class embedding, VQ codebook,
+//! quant/post-quant convolutions, transformer, trajectory extraction) are
+//! fully implemented. What remains **data-gated** is a *trained* checkpoint:
+//! with `OccWorldCandle::dummy` the weights are deterministically initialised
+//! but untrained, so the model is honest-but-unaccurate. This is surfaced via
+//! [`InferenceOutput::weights_trained`] (`false` until `load` reads a real
+//! checkpoint) — consumers must never treat untrained priors as trained.
 //!
 //! ## Usage
 //!
@@ -40,6 +45,7 @@
 //! println!("predicted {} frames in {:.1} ms", out.sem_pred.dim(1).unwrap(), out.inference_ms);
 //! ```
 
+pub mod cnn;
 pub mod config;
 pub mod error;
 pub mod inference;

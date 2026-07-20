@@ -99,6 +99,8 @@ pub const EVENT_FORGETTING_RISK: i32 = 748;
 
 /// Elastic Weight Consolidation lifelong on-device learner.
 pub struct EwcLifelong {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
     /// Current learnable parameters [N_PARAMS] (flattened [N_OUTPUT][N_INPUT]).
     params: [f32; N_PARAMS],
     /// Fisher Information diagonal [N_PARAMS].
@@ -128,6 +130,7 @@ pub struct EwcLifelong {
 impl EwcLifelong {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 4],
             params: Self::default_params(),
             fisher: [0.0; N_PARAMS],
             theta_star: [0.0; N_PARAMS],
@@ -169,7 +172,6 @@ impl EwcLifelong {
     ///
     /// Returns events as `(event_id, value)` pairs.
     pub fn process_frame(&mut self, features: &[f32], target_zone: i32) -> &[(i32, f32)] {
-        static mut EVENTS: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut n_ev = 0usize;
 
         if features.len() < N_INPUT {
@@ -217,17 +219,13 @@ impl EwcLifelong {
                 && self.task_count < MAX_TASKS
             {
                 self.commit_task();
-                unsafe {
-                    EVENTS[n_ev] = (EVENT_NEW_TASK_LEARNED, self.task_count as f32);
-                }
+                self.events[n_ev] = (EVENT_NEW_TASK_LEARNED, self.task_count as f32);
                 n_ev += 1;
 
                 // Emit mean Fisher value.
                 let mean_fisher = self.mean_fisher();
                 if n_ev < 4 {
-                    unsafe {
-                        EVENTS[n_ev] = (EVENT_FISHER_UPDATE, mean_fisher);
-                    }
+                    self.events[n_ev] = (EVENT_FISHER_UPDATE, mean_fisher);
                     n_ev += 1;
                 }
             }
@@ -235,9 +233,7 @@ impl EwcLifelong {
             // Periodic reporting.
             if self.frame_count % REPORT_INTERVAL == 0 {
                 if n_ev < 4 {
-                    unsafe {
-                        EVENTS[n_ev] = (EVENT_KNOWLEDGE_RETAINED, ewc_penalty);
-                    }
+                    self.events[n_ev] = (EVENT_KNOWLEDGE_RETAINED, ewc_penalty);
                     n_ev += 1;
                 }
 
@@ -248,15 +244,13 @@ impl EwcLifelong {
                     0.0
                 };
                 if n_ev < 4 {
-                    unsafe {
-                        EVENTS[n_ev] = (EVENT_FORGETTING_RISK, risk);
-                    }
+                    self.events[n_ev] = (EVENT_FORGETTING_RISK, risk);
                     n_ev += 1;
                 }
             }
         }
 
-        unsafe { &EVENTS[..n_ev] }
+        &self.events[..n_ev]
     }
 
     /// Forward pass: linear classifier `output = params * features`.

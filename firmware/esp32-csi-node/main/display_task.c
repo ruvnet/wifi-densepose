@@ -114,6 +114,19 @@ esp_err_t display_task_start(void)
     /* Init touch (optional) */
     esp_err_t touch_ret = display_hal_init_touch();
 
+    /* The SH8601 QSPI panel is write-only — display_hal_init_panel() above "succeeds"
+     * even on a bare board with no panel attached, so it cannot detect absence. The
+     * FT3168 touch controller is an I2C device with readback and is always present on
+     * the Touch-AMOLED board. If touch is absent, the panel "success" was a false-
+     * positive on a display-less DevKit: bail to headless so display_is_active() stays
+     * false and CSI upgrades to MGMT+DATA capture instead of starving at MGMT-only
+     * (RuView#1000). */
+    if (touch_ret != ESP_OK) {
+        ESP_LOGW(TAG, "No FT3168 touch readback — SH8601 probe was a false-positive on a "
+                      "display-less board; running headless so CSI captures (#1000)");
+        return ESP_OK;
+    }
+
     /* Initialize LVGL */
     lv_init();
 

@@ -25,6 +25,18 @@ use midstreamer_attractor::{AttractorAnalyzer, AttractorType, PhasePoint};
 use super::longitudinal::DriftMetric;
 
 // ---------------------------------------------------------------------------
+// Internal constants (ADR-154 §7.4 — de-magicked; values unchanged)
+// ---------------------------------------------------------------------------
+
+/// Per-metric ring-buffer capacity: one year of daily observations.
+const METRIC_BUFFER_CAPACITY: usize = 365;
+
+/// Number of most-recent values averaged to estimate a point-attractor's
+/// stable centre. Empirical default — a short tail that tracks the latest
+/// converged level without over-smoothing.
+const STABLE_CENTER_WINDOW: usize = 10;
+
+// ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
@@ -232,7 +244,7 @@ impl AttractorDriftAnalyzer {
 
         let buffers = DriftMetric::all()
             .iter()
-            .map(|&m| MetricBuffer::new(m, 365)) // 1 year of daily observations
+            .map(|&m| MetricBuffer::new(m, METRIC_BUFFER_CAPACITY))
             .collect();
 
         Ok(Self {
@@ -296,8 +308,12 @@ impl AttractorDriftAnalyzer {
 
                 match info.attractor_type {
                     AttractorType::PointAttractor => {
-                        // Compute center as mean of last few values
-                        let recent = &values[values.len().saturating_sub(10)..];
+                        // Compute center as the mean of the last STABLE_CENTER_WINDOW
+                        // values. `recent` is non-empty here: the `count < min_needed`
+                        // guard above guarantees `values.len() >= min_observations >= 1`
+                        // before this branch, so `recent.len() >= 1` and the division
+                        // below cannot be a divide-by-zero.
+                        let recent = &values[values.len().saturating_sub(STABLE_CENTER_WINDOW)..];
                         let center = recent.iter().sum::<f64>() / recent.len() as f64;
                         BiophysicalAttractor::Stable { center }
                     }
@@ -562,5 +578,39 @@ mod tests {
         let a = default_analyzer();
         let dbg = format!("{:?}", a);
         assert!(dbg.contains("AttractorDriftAnalyzer"));
+    }
+
+    // -- ADR-154 §7.4: de-magic-constant + boundary characterization tests.
+
+    /// De-magicked internal constants must equal the prior inline literals.
+    #[test]
+    fn attractor_consts_unchanged_from_literals() {
+        assert_eq!(METRIC_BUFFER_CAPACITY, 365);
+        assert_eq!(STABLE_CENTER_WINDOW, 10);
+    }
+
+    /// `analyze` returns InsufficientData strictly below `min_observations` and
+    /// succeeds at exactly `min_observations`. Pins the off-by-one boundary
+    /// (previously only the well-below case was tested) and, with it, the
+    /// implicit `recent.len() >= 1` divide-safety in the PointAttractor branch.
+    #[test]
+    fn analyze_min_observations_boundary() {
+        let cfg = AttractorDriftConfig {
+            min_observations: 12,
+            ..Default::default()
+        };
+        let mut a = AttractorDriftAnalyzer::new(7, cfg.clone()).unwrap();
+        // One below the boundary -> InsufficientData.
+        for i in 0..(cfg.min_observations - 1) {
+            a.add_observation(DriftMetric::GaitSymmetry, 0.1 + i as f64 * 0.001);
+        }
+        assert!(matches!(
+            a.analyze(DriftMetric::GaitSymmetry, 0),
+            Err(AttractorDriftError::InsufficientData { needed: 12, have: 11 })
+        ));
+        // Exactly at the boundary -> Ok (no panic, finite center if Stable).
+        a.add_observation(DriftMetric::GaitSymmetry, 0.111);
+        let report = a.analyze(DriftMetric::GaitSymmetry, 0).unwrap();
+        assert_eq!(report.observation_count, 12);
     }
 }

@@ -9,7 +9,7 @@ on:
 
 env:
   PYTHON_VERSION: '3.11'
-  NODE_VERSION: '18'
+  NODE_VERSION: '20' # ADR-265: all Node packages in this repo declare engines >= 20
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
@@ -29,6 +29,7 @@ jobs:
       continue-on-error: true
       uses: actions/checkout@v4
       with:
+        submodules: recursive
         fetch-depth: 0
 
     - name: Set up Python
@@ -82,6 +83,11 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
+      # ADR-262 P1: `wifi-densepose-rufield` path-deps the `vendor/rufield`
+      # submodule. Without a recursive checkout the workspace build fails to
+      # resolve those path deps in CI even though it passes locally.
 
     # `wifi-densepose-desktop` is a Tauri v2 app — `glib-sys`, `gtk-sys`,
     # `webkit2gtk-sys`, etc. need the Linux dev libraries via pkg-config or the
@@ -121,13 +127,27 @@ jobs:
       with:
         workspaces: v2
 
+    # The 38-crate workspace debug build exhausts the runner's disk when built
+    # with full debuginfo (observed: "final link failed: No space left on
+    # device" once the engine/benchmark crates landed; the same tree's local
+    # debug target measured 151 GB). Debuginfo is useless in CI — tests either
+    # pass or print their failure — so build without it; target shrinks ~5-10x.
     - name: Run Rust tests
       working-directory: v2
+      env:
+        CARGO_PROFILE_DEV_DEBUG: "0"
+        CARGO_PROFILE_TEST_DEBUG: "0"
       run: cargo test --workspace --no-default-features
 
     - name: Run ADR-147 worldmodel tests
       working-directory: v2
-      run: cargo test -p wifi-densepose-worldmodel --no-default-features
+      env:
+        CARGO_PROFILE_DEV_DEBUG: "0"
+        CARGO_PROFILE_TEST_DEBUG: "0"
+      run: >-
+        cargo test
+        --manifest-path crates/worldgraph/wifi-densepose-worldmodel/Cargo.toml
+        --no-default-features
 
     # ADR-134 CIR tests are behind the `cir` feature so the bench dependency
     # (Criterion) only pulls when actually exercised. Run them as a separate
@@ -191,6 +211,8 @@ jobs:
     - name: Checkout code
       continue-on-error: true
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Set up Python ${{ matrix.python-version }}
       continue-on-error: true
@@ -228,7 +250,7 @@ jobs:
       continue-on-error: true
       uses: codecov/codecov-action@v6
       with:
-        file: ./coverage.xml
+        files: ./coverage.xml
         flags: unittests
         name: codecov-umbrella
 
@@ -256,6 +278,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -324,6 +348,8 @@ jobs:
     - name: Checkout code
       continue-on-error: true
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Set up Docker Buildx
       continue-on-error: true
@@ -396,6 +422,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Set up Python
       uses: actions/setup-python@v6

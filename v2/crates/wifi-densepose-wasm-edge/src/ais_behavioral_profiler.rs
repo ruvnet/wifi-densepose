@@ -111,6 +111,8 @@ pub struct BehavioralProfiler {
     obs_cycles: u32,
     cooldown: u16,
     anomaly_count: u32,
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 4],
 }
 
 impl BehavioralProfiler {
@@ -118,6 +120,7 @@ impl BehavioralProfiler {
         Self {
             stats: [Welford::new(); N_DIM], obs: ObsWindow::new(),
             mature: false, frame_count: 0, obs_cycles: 0, cooldown: 0, anomaly_count: 0,
+            events: [(0, 0.0); 4],
         }
     }
 
@@ -127,7 +130,6 @@ impl BehavioralProfiler {
         self.cooldown = self.cooldown.saturating_sub(1);
         self.obs.push(present, motion, n_persons);
 
-        static mut EV: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut ne = 0usize;
 
         if self.frame_count % (OBS_WIN as u32) == 0 && self.obs.len == OBS_WIN {
@@ -139,7 +141,7 @@ impl BehavioralProfiler {
                 if self.obs_cycles >= LEARNING_FRAMES / (OBS_WIN as u32) {
                     self.mature = true;
                     let days = self.frame_count as f32 / (20.0 * 86400.0);
-                    unsafe { EV[ne] = (EVENT_PROFILE_MATURITY, days); }
+                    self.events[ne] = (EVENT_PROFILE_MATURITY, days);
                     ne += 1;
                 }
             } else {
@@ -159,12 +161,12 @@ impl BehavioralProfiler {
                 if self.cooldown == 0 {
                     if cz > ANOMALY_Z {
                         self.anomaly_count += 1;
-                        unsafe { EV[ne] = (EVENT_BEHAVIOR_ANOMALY, cz); } ne += 1;
-                        if ne < 4 { unsafe { EV[ne] = (EVENT_PROFILE_DEVIATION, max_d as f32); } ne += 1; }
+                        self.events[ne] = (EVENT_BEHAVIOR_ANOMALY, cz); ne += 1;
+                        if ne < 4 { self.events[ne] = (EVENT_PROFILE_DEVIATION, max_d as f32); ne += 1; }
                         self.cooldown = COOLDOWN;
                     }
                     if hi_z >= NOVEL_MIN && ne < 4 {
-                        unsafe { EV[ne] = (EVENT_NOVEL_PATTERN, hi_z as f32); } ne += 1;
+                        self.events[ne] = (EVENT_NOVEL_PATTERN, hi_z as f32); ne += 1;
                         if self.cooldown == 0 { self.cooldown = COOLDOWN; }
                     }
                 }
@@ -173,10 +175,10 @@ impl BehavioralProfiler {
 
         // Periodic maturity report.
         if self.mature && self.frame_count % MATURITY_INTERVAL == 0 && ne < 4 {
-            unsafe { EV[ne] = (EVENT_PROFILE_MATURITY, self.frame_count as f32 / (20.0 * 86400.0)); }
+            self.events[ne] = (EVENT_PROFILE_MATURITY, self.frame_count as f32 / (20.0 * 86400.0));
             ne += 1;
         }
-        unsafe { &EV[..ne] }
+        &self.events[..ne]
     }
 
     pub fn is_mature(&self) -> bool { self.mature }

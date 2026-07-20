@@ -1015,6 +1015,7 @@ dependencies = [
  "candle-core 0.9.2",
  "candle-nn 0.9.2",
  "clap",
+ "criterion",
  "safetensors 0.4.5",
  "serde",
  "serde_json",
@@ -1034,6 +1035,7 @@ dependencies = [
  "candle-core 0.9.2",
  "candle-nn 0.9.2",
  "clap",
+ "criterion",
  "hex",
  "safetensors 0.4.5",
  "serde",
@@ -3472,6 +3474,7 @@ dependencies = [
  "axum",
  "chrono",
  "dashmap",
+ "futures-util",
  "homecore",
  "http-body-util",
  "hyper 1.8.1",
@@ -3479,6 +3482,7 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-tungstenite",
  "tower 0.5.3",
  "tower-http",
  "tracing",
@@ -3552,9 +3556,13 @@ name = "homecore-plugins"
 version = "0.1.0-alpha.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
+ "ed25519-dalek",
+ "hex",
  "homecore",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 1.0.69",
  "tokio",
  "uuid",
@@ -3587,6 +3595,7 @@ dependencies = [
  "anyhow",
  "axum",
  "clap",
+ "futures",
  "homecore",
  "homecore-api",
  "homecore-assist",
@@ -3594,8 +3603,13 @@ dependencies = [
  "homecore-hap",
  "homecore-plugins",
  "homecore-recorder",
+ "http-body-util",
+ "reqwest 0.12.28",
+ "serde",
  "serde_json",
  "tokio",
+ "tower 0.5.3",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
 ]
@@ -3759,6 +3773,7 @@ dependencies = [
  "tokio",
  "tokio-rustls 0.26.4",
  "tower-service",
+ "webpki-roots 1.0.7",
 ]
 
 [[package]]
@@ -6862,6 +6877,8 @@ dependencies = [
  "native-tls",
  "percent-encoding",
  "pin-project-lite",
+ "quinn",
+ "rustls 0.23.37",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -6869,6 +6886,7 @@ dependencies = [
  "sync_wrapper 1.0.2",
  "tokio",
  "tokio-native-tls",
+ "tokio-rustls 0.26.4",
  "tower 0.5.3",
  "tower-http",
  "tower-service",
@@ -6876,6 +6894,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "webpki-roots 1.0.7",
 ]
 
 [[package]]
@@ -7075,6 +7094,42 @@ dependencies = [
  "num-traits",
  "serde",
  "smallvec",
+]
+
+[[package]]
+name = "rufield-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rufield-fusion"
+version = "0.1.0"
+dependencies = [
+ "rufield-core",
+ "rufield-provenance",
+ "serde",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "rufield-privacy"
+version = "0.1.0"
+dependencies = [
+ "rufield-core",
+]
+
+[[package]]
+name = "rufield-provenance"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "rufield-core",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -7328,9 +7383,9 @@ dependencies = [
 
 [[package]]
 name = "ruvector-attention"
-version = "2.0.4"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4233c1cecd0ea826d95b787065b398489328885042247ff5ffcbb774e864ff"
+checksum = "a92e8e456458188d04aee946579aa7cf96d7b8f276cbf6094532b2c3f6d8cc0b"
 dependencies = [
  "rand 0.8.5",
  "rayon",
@@ -7395,14 +7450,14 @@ dependencies = [
 
 [[package]]
 name = "ruvector-gnn"
-version = "2.0.5"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e17c1cf1ff3380026b299ff3c1ba3a5685c3d8d54700e6ab0b585b6cec21d7b"
+checksum = "a251f9ced8d3231395d922369edc803ef0fc513c7776128f7b4ef21f20dd1f4b"
 dependencies = [
  "anyhow",
  "dashmap",
  "libc",
- "ndarray 0.16.1",
+ "ndarray 0.17.2",
  "parking_lot",
  "rand 0.8.5",
  "rand_distr 0.4.3",
@@ -7415,9 +7470,9 @@ dependencies = [
 
 [[package]]
 name = "ruvector-mincut"
-version = "2.0.4"
+version = "2.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d62e10cbb7d80b1e2b72d55c1e3eb7f0c4c5e3f31984bc3baa9b7a02700741e"
+checksum = "d60947433f740d0f589a2911d7b72a02e07a916e7257e478b14386f0ff068fb7"
 dependencies = [
  "anyhow",
  "crossbeam",
@@ -7437,9 +7492,9 @@ dependencies = [
 
 [[package]]
 name = "ruvector-solver"
-version = "2.0.4"
+version = "2.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce69cbde4ee5747281edb1d987a8292940397723924262b6218fc19022cbf687"
+checksum = "9be7c4f61940ae8b451f88b9a629a08ee8ee5c8e6b00ab96ca10ecf59e70f558"
 dependencies = [
  "dashmap",
  "getrandom 0.2.17",
@@ -7478,7 +7533,6 @@ dependencies = [
  "tokio-test",
  "toml 0.8.23",
  "tracing",
- "wifi-densepose-core",
 ]
 
 [[package]]
@@ -10812,11 +10866,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "wifi-densepose-cli"
+name = "wifi-densepose-calibration"
 version = "0.3.0"
+dependencies = [
+ "ndarray 0.17.2",
+ "num-complex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+ "wifi-densepose-core",
+ "wifi-densepose-signal",
+]
+
+[[package]]
+name = "wifi-densepose-cli"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "axum",
  "chrono",
  "clap",
  "colored",
@@ -10832,9 +10901,12 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tower 0.4.13",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "wifi-densepose-calibration",
  "wifi-densepose-core",
  "wifi-densepose-mat",
  "wifi-densepose-signal",
@@ -10888,35 +10960,22 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-engine"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "blake3",
  "criterion",
+ "ruvector-mincut",
  "wifi-densepose-bfld",
  "wifi-densepose-core",
- "wifi-densepose-geo 0.1.0",
+ "wifi-densepose-geo",
  "wifi-densepose-ruvector",
  "wifi-densepose-signal",
- "wifi-densepose-worldgraph 0.3.0",
+ "wifi-densepose-worldgraph",
 ]
 
 [[package]]
 name = "wifi-densepose-geo"
 version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "wifi-densepose-geo"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "092ea59d81e7be76d6d9c2d81628c1dbe768fd77591f0e82dd3c80e2963ff04a"
 dependencies = [
  "anyhow",
  "chrono",
@@ -10928,7 +10987,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-hardware"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "approx",
  "byteorder",
@@ -10948,7 +11007,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-mat"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "approx",
@@ -10967,6 +11026,7 @@ dependencies = [
  "ruvector-temporal-tensor",
  "serde",
  "serde_json",
+ "serialport",
  "thiserror 2.0.18",
  "tokio",
  "tokio-test",
@@ -10979,7 +11039,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-nn"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "candle-core 0.4.1",
@@ -11022,6 +11082,7 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
+ "criterion",
  "dirs 5.0.1",
  "reqwest 0.12.28",
  "serde",
@@ -11031,12 +11092,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "wifi-densepose-rufield"
+version = "0.3.0"
+dependencies = [
+ "rufield-core",
+ "rufield-fusion",
+ "rufield-privacy",
+ "rufield-provenance",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "wifi-densepose-ruvector"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "approx",
  "criterion",
- "ruvector-attention 2.0.4",
+ "ruvector-attention 2.1.0",
  "ruvector-attn-mincut",
  "ruvector-core",
  "ruvector-crv",
@@ -11052,7 +11125,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-sensing-server"
-version = "0.3.1"
+version = "0.3.4"
 dependencies = [
  "axum",
  "chrono",
@@ -11075,14 +11148,19 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ureq 2.12.1",
+ "wifi-densepose-bfld",
+ "wifi-densepose-engine",
+ "wifi-densepose-geo",
  "wifi-densepose-hardware",
+ "wifi-densepose-rufield",
  "wifi-densepose-signal",
  "wifi-densepose-wifiscan",
+ "wifi-densepose-worldgraph",
 ]
 
 [[package]]
 name = "wifi-densepose-signal"
-version = "0.3.2"
+version = "0.3.5"
 dependencies = [
  "chrono",
  "criterion",
@@ -11094,7 +11172,7 @@ dependencies = [
  "num-traits",
  "proptest",
  "rustfft",
- "ruvector-attention 2.0.4",
+ "ruvector-attention 2.1.0",
  "ruvector-attn-mincut",
  "ruvector-mincut",
  "ruvector-solver",
@@ -11109,7 +11187,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-train"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "approx",
@@ -11125,7 +11203,7 @@ dependencies = [
  "num-traits",
  "petgraph",
  "proptest",
- "ruvector-attention 2.0.4",
+ "ruvector-attention 2.1.0",
  "ruvector-attn-mincut",
  "ruvector-mincut",
  "ruvector-solver",
@@ -11147,8 +11225,9 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-vitals"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
+ "criterion",
  "serde",
  "serde_json",
  "tracing",
@@ -11178,46 +11257,23 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-wifiscan"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "tokio",
  "tracing",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
 name = "wifi-densepose-worldgraph"
-version = "0.3.0"
+version = "0.3.2"
 dependencies = [
  "petgraph",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
- "wifi-densepose-geo 0.1.0",
-]
-
-[[package]]
-name = "wifi-densepose-worldgraph"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13ad8df7b323061ed7afae1917dac7eedfbd24a463a668a55a16cde79df067e2"
-dependencies = [
- "petgraph",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "wifi-densepose-geo 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
-name = "wifi-densepose-worldmodel"
-version = "0.3.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "wifi-densepose-worldgraph 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wifi-densepose-geo",
 ]
 
 [[package]]

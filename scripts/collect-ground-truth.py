@@ -6,9 +6,19 @@ synchronizes with ESP32 CSI recording from the sensing server.
 
 Output: JSONL file in data/ground-truth/ with per-frame 17-keypoint COCO poses.
 
+With --calibration <bundle.json> (produced by scripts/calibrate-camera-room.py,
+ADR-152 S2.1.3), every record is additionally stamped with room-frame bearing
+rays for each keypoint, the calibration_id, and the transceiver geometry --
+the PerceptAlign-style defense against coordinate overfitting. Raw image
+coordinates are always kept; without depth the room-frame representation is
+a projective alignment (rays, not 3D points) -- see scripts/calibration_lib.py.
+Without --calibration the output is byte-identical to the original ADR-079
+format.
+
 Usage:
     python scripts/collect-ground-truth.py --preview --duration 60
     python scripts/collect-ground-truth.py --server http://192.168.1.10:3000
+    python scripts/collect-ground-truth.py --calibration data/calibration/camera-room.json
 """
 
 from __future__ import annotations
@@ -168,7 +178,22 @@ def main():
         default="data/ground-truth",
         help="Output directory (default: data/ground-truth)",
     )
+    parser.add_argument(
+        "--calibration",
+        default=None,
+        help="Camera-room calibration bundle JSON from scripts/calibrate-camera-room.py "
+        "(ADR-152 S2.1.3); adds room-frame keypoint rays + transceiver geometry "
+        "to every record",
+    )
     args = parser.parse_args()
+
+    if not args.calibration:
+        print(
+            "WARNING: no --calibration bundle; labels stay in raw camera coordinates "
+            "and are layout-brittle (coordinate overfitting, ADR-152 S2.1.3) -- run "
+            "scripts/calibrate-camera-room.py first.",
+            file=sys.stderr,
+        )
 
     # --- Resolve paths relative to repo root ---
     repo_root = Path(__file__).resolve().parent.parent
@@ -192,6 +217,25 @@ def main():
     frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     print(f"Camera opened: {frame_w}x{frame_h}")
+
+    # --- Load calibration bundle (ADR-152 S2.1.3) ---
+    calib_ctx = None
+    if args.calibration:
+        # Lazy import keeps the no-calibration path identical to the original.
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import calibration_lib
+
+        try:
+            calib_ctx = calibration_lib.load_calibration_context(
+                Path(args.calibration), frame_w, frame_h
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"ERROR: Cannot load calibration bundle {args.calibration}: {exc}",
+                  file=sys.stderr)
+            sys.exit(1)
+        n_nodes = len(calib_ctx.transceiver_geometry.get("nodes", []))
+        print(f"Calibration: {calib_ctx.calibration_id[:23]}... "
+              f"({n_nodes} transceiver node(s)); emitting room-frame keypoint rays")
 
     # --- Create PoseLandmarker ---
     options = PoseLandmarkerOptions(
@@ -287,6 +331,10 @@ def main():
                 "n_visible": n_visible,
                 "n_persons": n_persons,
             }
+            if calib_ctx is not None:
+                # Adds keypoints_room (bearing rays), camera_origin_room,
+                # calibration_id, transceiver_geometry (ADR-152 S2.1.3).
+                record = calibration_lib.augment_record(record, calib_ctx)
             out_file.write(json.dumps(record) + "\n")
             frame_count += 1
             total_confidence += confidence

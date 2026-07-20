@@ -42,6 +42,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Determine deployment environment
       id: determine-env
@@ -86,6 +88,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Set up kubectl
       uses: azure/setup-kubectl@v3
@@ -132,6 +136,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Set up kubectl
       uses: azure/setup-kubectl@v3

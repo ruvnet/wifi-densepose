@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Proposed |
+| **Status** | Accepted — partial (built + tested building block; integration glue pending — see §8 Implementation Status, commit `11f89727f`) |
 | **Date** | 2026-05-28 |
 | **Deciders** | ruv |
 | **Codebase target** | `wifi-densepose-core` (`types.rs`: `CsiFrame`/`CsiMetadata`); `wifi-densepose-signal/src/ruvsense/mod.rs` (`RuvSensePipeline`, six-stage flow); `v2/Cargo.toml` (workspace topology) |

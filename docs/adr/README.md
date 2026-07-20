@@ -1,6 +1,11 @@
 # Architecture Decision Records
 
-This folder contains 45 Architecture Decision Records (ADRs) that document every significant technical choice in the RuView / WiFi-DensePose project.
+Latest proposed decisions:
+
+- [ADR-264: Versioned wire protocol for RTL8720F CFR and Range-FFT reports](ADR-264-rtl8720f-radar-wire-protocol.md)
+- [ADR-263: Adopt RTL8720F 2.4 GHz FMCW radar as an optional RuView sensing platform](ADR-263-rtl8720f-2-4ghz-fmcw-radar-platform.md)
+
+This folder contains 182 Architecture Decision Records (ADRs) that document every significant technical choice in the RuView / WiFi-DensePose project. (The index tables below list a curated subset per domain; see the directory listing for the full set.)
 
 ## Why ADRs?
 
@@ -79,6 +84,10 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-023](ADR-023-trained-densepose-model-ruvector-pipeline.md) | Trained DensePose Model with RuVector Pipeline | Proposed |
 | [ADR-024](ADR-024-contrastive-csi-embedding-model.md) | Project AETHER: Contrastive CSI Embeddings | Required |
 | [ADR-027](ADR-027-cross-environment-domain-generalization.md) | Project MERIDIAN: Cross-Environment Generalization | Proposed |
+| [ADR-149](ADR-149-public-community-leaderboard-huggingface.md) | AetherArena: public spatial-intelligence benchmark on Hugging Face | Proposed |
+| [ADR-150](ADR-150-rf-foundation-encoder.md) | RF Foundation Encoder: pose-preserving, subject/room/device-invariant CSI embedding | Proposed |
+| [ADR-151](ADR-151-room-calibration-specialist-training.md) | Per-Room Calibration & Specialized Model Training (room-first → bank of small ruVector specialists) | Proposed |
+| [ADR-152](ADR-152-wifi-pose-sota-2026-intake.md) | WiFi-Pose SOTA 2026 Intake: geometry-conditioned calibration, external benchmarks, foundation-encoder recipe | Proposed |
 
 ### Platform and UI
 
@@ -93,6 +102,8 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-036](ADR-036-rvf-training-pipeline-ui.md) | Training Pipeline UI Integration | Proposed |
 | [ADR-043](ADR-043-sensing-server-ui-api-completion.md) | Sensing Server UI API Completion (14 endpoints) | Accepted |
 | [ADR-115](ADR-115-home-assistant-integration.md) | Home Assistant integration via MQTT auto-discovery + Matter bridge (HA-DISCO + HA-FABRIC + HA-MIND) | Accepted (MQTT track) / Proposed (Matter SDK P8b) |
+| [ADR-169](ADR-169-adam-mode-light-theme.md) | adam-mode — light theme toggle for the three.js realtime demo | Proposed |
+| [ADR-170](ADR-170-yoga-mode-pose-system.md) | yoga-mode — yoga pose detection, classification, and scoring for the three.js realtime demo | Proposed |
 
 ### Architecture and infrastructure
 
@@ -114,6 +125,9 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-097](ADR-097-adopt-rvcsi-as-ruview-csi-runtime.md) | Adopt rvCSI as RuView's primary CSI runtime (phased adoption) | Proposed |
 | [ADR-098](ADR-098-evaluate-midstream-fit.md) | Evaluate `ruvnet/midstream` for RuView's CSI / WebSocket / mesh pipeline | Rejected |
 | [ADR-099](ADR-099-midstream-introspection-tap.md) | Adopt midstream as RuView's real-time introspection + low-latency tap | Proposed |
+| [ADR-263](ADR-263-ruview-npm-harness-deep-review.md) | `@ruvnet/ruview` npm harness — deep review + optimization strategy | Proposed |
+| [ADR-264](ADR-264-rvagent-mcp-and-cli-npm-deep-review.md) | `@ruvnet/rvagent` MCP server + `@ruv/ruview-cli` — deep review + optimization strategy | Proposed |
+| [ADR-265](ADR-265-ruview-npm-distribution-strategy.md) | RuView npm distribution strategy — CI gate, provenance, version single-sourcing, namespace | Proposed |
 
 ---
 

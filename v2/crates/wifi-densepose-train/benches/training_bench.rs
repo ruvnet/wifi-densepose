@@ -149,7 +149,16 @@ fn bench_config_validate(c: &mut Criterion) {
 // PCK computation benchmark (pure Rust, no tch dependency)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Inline PCK@threshold computation for a single (pred, gt) sample.
+/// Inline raw-threshold PCK for a single (pred, gt) sample — **BENCH FIXTURE
+/// ONLY**.
+///
+/// DO NOT USE for reported metrics (ADR-155 §Tier-1.1). This is a deliberately
+/// trivial `dist ≤ threshold` kernel chosen to exercise the hot loop without a
+/// torso-normalization step; it is NOT the canonical metric. The single source
+/// of truth for any reported PCK is
+/// `wifi_densepose_train::metrics::pck_canonical` (torso-normalized, COCO
+/// convention). This local copy exists only so the bench can run without the
+/// tch-gated `metrics` module.
 #[inline(always)]
 fn compute_pck(pred: &[[f32; 2]], gt: &[[f32; 2]], threshold: f32) -> f32 {
     let n = pred.len();

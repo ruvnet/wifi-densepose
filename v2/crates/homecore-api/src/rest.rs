@@ -12,8 +12,20 @@ use crate::state::SharedState;
 #[derive(Serialize)]
 pub struct ApiRunning { message: &'static str }
 
-pub async fn api_root() -> Json<ApiRunning> {
-    Json(ApiRunning { message: "API running." })
+/// `GET /api/` — the HA `APIStatusView` ("API running." ping).
+///
+/// Security (HC-API-AUTH-01): HA's `APIStatusView` inherits
+/// `requires_auth = True` from `HomeAssistantView`, so an unauthenticated
+/// (or wrong-token) request to `/api/` returns **401**, not 200. HA
+/// clients (and the companion app) rely on this status route as a
+/// *token-validation probe* — a 200 here would tell a client a bad token
+/// is good, and would let an unauthenticated party confirm a live
+/// HOMECORE-API endpoint. The P2 handler skipped the bearer gate that
+/// every sibling route applies; this restores wire-compat by validating
+/// the bearer like `get_config`/`get_states` before replying.
+pub async fn api_root(headers: HeaderMap, State(s): State<SharedState>) -> ApiResult<Json<ApiRunning>> {
+    let _ = BearerAuth::from_headers(&headers, s.tokens()).await?;
+    Ok(Json(ApiRunning { message: "API running." }))
 }
 
 #[derive(Serialize)]

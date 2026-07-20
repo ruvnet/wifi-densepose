@@ -34,6 +34,15 @@ pub const API_TOKEN_ENV: &str = "RUVIEW_API_TOKEN";
 /// Path prefix the middleware protects when auth is enabled.
 pub const PROTECTED_PREFIX: &str = "/api/v1/";
 
+/// `/api/v1/stream/pose` is a WebSocket upgrade endpoint reachable from
+/// browser code. Unlike a plain fetch(), the browser `WebSocket` constructor
+/// cannot attach an `Authorization` header to the handshake request, so this
+/// path can never carry a bearer token from a stock browser client — the
+/// same reasoning that already exempts `/ws/sensing` (see module docs).
+/// Exempted here rather than moved out of `/api/v1/*` to avoid an API
+/// surface change for existing clients.
+const EXEMPT_PATHS: &[&str] = &["/api/v1/stream/pose"];
+
 /// Cheap, cloneable handle to the configured token (or `None`).
 #[derive(Debug, Clone, Default)]
 pub struct AuthState {
@@ -93,7 +102,8 @@ pub async fn require_bearer(
     let Some(expected) = auth.token.clone() else {
         return next.run(request).await;
     };
-    if !request.uri().path().starts_with(PROTECTED_PREFIX) {
+    let path = request.uri().path();
+    if !path.starts_with(PROTECTED_PREFIX) || EXEMPT_PATHS.contains(&path) {
         return next.run(request).await;
     }
     let supplied = request
@@ -141,6 +151,7 @@ mod tests {
             .route("/health", get(|| async { "ok" }))
             .route("/api/v1/info", get(|| async { "ok" }))
             .route("/api/v1/sensitive", axum::routing::post(|| async { "ok" }))
+            .route("/api/v1/stream/pose", get(|| async { "ok" }))
             .route("/ui/index.html", get(|| async { "<html/>" }))
     }
 
@@ -254,6 +265,98 @@ mod tests {
         );
     }
 
+    /// REGRESSION (ADR-080 #3, CWE-598 — token in URL query string).
+    ///
+    /// ADR-080 flagged "JWT in URL" as a HIGH finding (tokens in query strings
+    /// leak into logs, proxies, browser history, `Referer`). The current
+    /// sensing-server only ever reads the token from the `Authorization: Bearer`
+    /// header — there is no `?token=` / `?access_token=` query path in
+    /// `require_bearer` (see [`require_bearer`] above, which only inspects the
+    /// `AUTHORIZATION` header). This test pins that: a request carrying the
+    /// correct token *only* in the query string is still `401`, while the same
+    /// token in the header is `200`. If anyone ever re-introduces a query-string
+    /// token path, this fails.
+    #[tokio::test]
+    async fn query_string_token_is_never_accepted() {
+        let r = wrap(AuthState::from_token("s3cr3t"));
+        // Correct token, but supplied only in the URL — must NOT authenticate.
+        assert_eq!(
+            status(r.clone(), "GET", "/api/v1/info?token=s3cr3t", None).await,
+            StatusCode::UNAUTHORIZED,
+            "?token= in the query string must not authenticate (CWE-598)"
+        );
+        assert_eq!(
+            status(
+                r.clone(),
+                "GET",
+                "/api/v1/info?access_token=s3cr3t",
+                None
+            )
+            .await,
+            StatusCode::UNAUTHORIZED,
+            "?access_token= in the query string must not authenticate (CWE-598)"
+        );
+        // A query token must not "help" a request that also lacks the header,
+        // even combined with an unrelated param.
+        assert_eq!(
+            status(
+                r.clone(),
+                "GET",
+                "/api/v1/info?foo=bar&token=s3cr3t",
+                None
+            )
+            .await,
+            StatusCode::UNAUTHORIZED
+        );
+        // The header path is the only accepted channel — same token, header,
+        // succeeds. (Proves we didn't just break auth entirely.)
+        assert_eq!(
+            status(r, "GET", "/api/v1/info?token=s3cr3t", Some("s3cr3t")).await,
+            StatusCode::OK,
+            "the Authorization: Bearer header is the supported channel"
+        );
+    }
+
+    /// REGRESSION (ADR-080 #1 — X-Forwarded-For spoofing).
+    ///
+    /// The bearer middleware authenticates on the token alone and must be
+    /// completely insensitive to a client-supplied `X-Forwarded-For` header:
+    /// an attacker cannot flip an auth decision by spoofing XFF. A wrong token
+    /// stays `401` and a right token stays `200` regardless of XFF. (The
+    /// sensing-server has no IP-based rate-limit / allowlist that XFF could
+    /// bypass; this locks in that auth itself never consults XFF.)
+    #[tokio::test]
+    async fn xff_header_never_affects_auth_decision() {
+        let r = wrap(AuthState::from_token("s3cr3t"));
+        async fn with_xff(router: Router, token: Option<&str>, xff: &str) -> StatusCode {
+            let mut req = Request::builder()
+                .method("GET")
+                .uri("/api/v1/info")
+                .header("X-Forwarded-For", xff)
+                .body(Body::empty())
+                .unwrap();
+            if let Some(t) = token {
+                req.headers_mut()
+                    .insert(AUTHORIZATION, format!("Bearer {t}").parse().unwrap());
+            }
+            router.oneshot(req).await.unwrap().status()
+        }
+        // Spoofed XFF + no/ wrong token ⇒ still rejected.
+        assert_eq!(
+            with_xff(r.clone(), None, "127.0.0.1").await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            with_xff(r.clone(), Some("nope"), "10.0.0.1, 127.0.0.1").await,
+            StatusCode::UNAUTHORIZED
+        );
+        // Spoofed XFF + correct token ⇒ still accepted (XFF is irrelevant).
+        assert_eq!(
+            with_xff(r, Some("s3cr3t"), "evil-proxy").await,
+            StatusCode::OK
+        );
+    }
+
     #[tokio::test]
     async fn enabled_never_gates_paths_outside_api_v1() {
         let r = wrap(AuthState::from_token("s3cr3t"));
@@ -266,6 +369,26 @@ mod tests {
         assert_eq!(
             status(r, "GET", "/ui/index.html", None).await,
             StatusCode::OK
+        );
+    }
+
+    /// `/api/v1/stream/pose` is a WebSocket upgrade the browser `WebSocket`
+    /// constructor drives directly — it cannot attach an `Authorization`
+    /// header, so this path must stay reachable even with auth ON (mirrors
+    /// the existing `/ws/sensing` exemption, just inside the `/api/v1/*`
+    /// prefix this time).
+    #[tokio::test]
+    async fn enabled_exempts_pose_stream_websocket() {
+        let r = wrap(AuthState::from_token("s3cr3t"));
+        assert_eq!(
+            status(r.clone(), "GET", "/api/v1/stream/pose", None).await,
+            StatusCode::OK,
+            "pose stream WS must stay reachable without a bearer token"
+        );
+        // The exemption is narrow: it must not leak to other /api/v1/* paths.
+        assert_eq!(
+            status(r, "GET", "/api/v1/info", None).await,
+            StatusCode::UNAUTHORIZED
         );
     }
 

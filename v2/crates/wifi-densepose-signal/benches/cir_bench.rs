@@ -157,6 +157,36 @@ fn bench_estimate(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// Benchmark 1b: opt-in FFT operator (CirConfig::fft_operator = true)
+// ---------------------------------------------------------------------------
+
+/// Same workload as `cir_estimate`, with the O(G log G) FFT Φ/Φᴴ operator
+/// enabled. Compare against `cir_estimate/<tier>` for the dense baseline.
+fn bench_estimate_fft(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cir_estimate_fft");
+
+    let tiers: &[(&str, u16)] = &[("ht20", 20), ("ht40", 40), ("he40", 40)];
+
+    for &(label, bw_mhz) in tiers {
+        let mut cfg = CirConfig::for_bandwidth_mhz(bw_mhz);
+        cfg.fft_operator = true;
+        let k_active = cfg.delay_bins / 3;
+
+        group.throughput(Throughput::Elements(k_active as u64));
+
+        let est = CirEstimator::new(cfg.clone());
+        let csi = synth_csi(&cfg);
+        let frame = make_frame(bw_mhz, csi);
+
+        group.bench_with_input(BenchmarkId::from_parameter(label), &frame, |b, f| {
+            b.iter(|| black_box(est.estimate(black_box(f)).ok()));
+        });
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
 // Benchmark 2: 12-link amortisation (shared estimator across links)
 // ---------------------------------------------------------------------------
 
@@ -241,6 +271,7 @@ fn bench_estimator_construction(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_estimate,
+    bench_estimate_fft,
     bench_estimate_12link,
     bench_estimator_construction,
 );

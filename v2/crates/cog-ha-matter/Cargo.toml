@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Cognitum Cog: Home Assistant + Matter integration for the Seed (ADR-116). Wraps ADR-115's HA-DISCO + HA-MIND publisher as a Seed-installable artifact with mDNS, embedded broker, RuVector-backed thresholds, and Ed25519 witness."
+description = "Cognitum Cog: Home Assistant (MQTT) integration for the Seed (ADR-116). Wraps ADR-115's HA-DISCO + HA-MIND publisher as a Seed-installable artifact with mDNS, embedded broker, RuVector-backed thresholds, and Ed25519 witness. LAN-only (no TLS); Matter Bridge commissioning is deferred to v0.8 and not yet implemented."
 
 [[bin]]
 name = "cog-ha-matter"

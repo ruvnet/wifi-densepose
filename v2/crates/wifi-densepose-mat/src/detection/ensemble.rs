@@ -9,7 +9,9 @@
 //! The classifier produces a single confidence score and a recommended
 //! triage status based on the combined signals.
 
-use crate::domain::{BreathingType, MovementType, TriageStatus, VitalSignsReading};
+use crate::domain::{
+    triage::TriageCalculator, MovementType, TriageStatus, VitalSignsReading,
+};
 
 /// Configuration for the ensemble classifier
 #[derive(Debug, Clone)]
@@ -133,79 +135,40 @@ impl EnsembleClassifier {
         }
     }
 
-    /// Determine triage status based on vital signs analysis.
+    /// Determine triage status for a reading.
     ///
-    /// Uses START triage protocol logic:
-    /// - Immediate (Red): Breathing abnormal (agonal, apnea, too fast/slow)
-    /// - Delayed (Yellow): Breathing present, limited movement
-    /// - Minor (Green): Normal breathing + active movement
-    /// - Deceased (Black): No vitals detected at all
-    /// - Unknown: Insufficient data to classify
+    /// CANONICAL TRIAGE: this delegates to [`TriageCalculator::calculate`], the
+    /// single source of truth used by both the ensemble gate (here) and the
+    /// `Survivor` record (`Survivor::new` / `update_vitals`). Previously this
+    /// method implemented a *second*, divergent START-protocol approximation
+    /// (different rate bands, different movement handling). The pipeline gated
+    /// on the ensemble's triage then discarded it and recomputed via
+    /// `TriageCalculator` in `Survivor::new`, so a survivor could be gated as
+    /// one priority and recorded as another (e.g. 28 bpm + Tremor: old ensemble
+    /// said Delayed, the survivor record said Immediate). In a mass-casualty
+    /// tool that divergence is a life-safety defect. The two are now unified.
     ///
-    /// Critical patterns (Agonal, Apnea, extreme rates) are always classified
-    /// as Immediate regardless of confidence level, because in disaster response
-    /// a false negative (missing a survivor in distress) is far more costly
-    /// than a false positive.
+    /// The only ensemble-specific behaviour retained is the confidence gate:
+    /// when the combined ensemble confidence is below the configured minimum,
+    /// the reading is reported [`TriageStatus::Unknown`] (insufficient signal to
+    /// classify) UNLESS the canonical calculator flags it [`TriageStatus::Immediate`].
+    /// Distress is never suppressed by low confidence — a false negative
+    /// (missing a survivor in distress) is far more costly than a false positive.
     fn determine_triage(&self, reading: &VitalSignsReading, confidence: f64) -> TriageStatus {
-        // CRITICAL PATTERNS: always classify regardless of confidence.
-        // In disaster response, any sign of distress must be escalated.
-        if let Some(ref breathing) = reading.breathing {
-            match breathing.pattern_type {
-                BreathingType::Agonal | BreathingType::Apnea => {
-                    return TriageStatus::Immediate;
-                }
-                _ => {}
-            }
+        let canonical = TriageCalculator::calculate(reading);
 
-            let rate = breathing.rate_bpm;
-            if !(10.0..=30.0).contains(&rate) {
-                return TriageStatus::Immediate;
-            }
+        // Distress (Immediate) is always surfaced regardless of confidence.
+        if canonical == TriageStatus::Immediate {
+            return TriageStatus::Immediate;
         }
 
-        // Below confidence threshold: not enough signal to classify further
+        // Below the ensemble confidence threshold: not enough signal to trust a
+        // non-distress classification. Report Unknown rather than guessing.
         if confidence < self.config.min_ensemble_confidence {
             return TriageStatus::Unknown;
         }
 
-        let has_breathing = reading.breathing.is_some();
-        let has_movement = reading.movement.movement_type != MovementType::None;
-
-        if !has_breathing && !has_movement {
-            // SAFETY: a detectable heartbeat means the survivor is ALIVE. No
-            // sensed breathing/movement *with* a pulse is respiratory arrest —
-            // the most time-critical savable state (Immediate), never Deceased.
-            // Only the total absence of breathing, movement AND heartbeat is
-            // reported Deceased.
-            if reading.heartbeat.is_some() {
-                return TriageStatus::Immediate;
-            }
-            return TriageStatus::Deceased;
-        }
-
-        if !has_breathing && has_movement {
-            return TriageStatus::Immediate;
-        }
-
-        // Has breathing above threshold - assess triage level
-        if let Some(ref breathing) = reading.breathing {
-            let rate = breathing.rate_bpm;
-
-            if !(12.0..=24.0).contains(&rate) {
-                if has_movement {
-                    return TriageStatus::Delayed;
-                }
-                return TriageStatus::Immediate;
-            }
-
-            // Normal breathing rate
-            if has_movement {
-                return TriageStatus::Minor;
-            }
-            return TriageStatus::Delayed;
-        }
-
-        TriageStatus::Unknown
+        canonical
     }
 
     /// Get configuration
@@ -218,7 +181,8 @@ impl EnsembleClassifier {
 mod tests {
     use super::*;
     use crate::domain::{
-        BreathingPattern, ConfidenceScore, HeartbeatSignature, MovementProfile, SignalStrength,
+        BreathingPattern, BreathingType, ConfidenceScore, HeartbeatSignature, MovementProfile,
+        SignalStrength,
     };
 
     fn make_reading(
@@ -251,7 +215,12 @@ mod tests {
     }
 
     #[test]
-    fn test_normal_breathing_with_movement_is_minor() {
+    fn test_normal_breathing_with_periodic_movement_is_canonical() {
+        // UNIFICATION: Periodic movement maps to MinimalMovement in the canonical
+        // calculator (it is likely breathing-correlated, not purposeful), so
+        // Normal breathing + Periodic → Delayed. The old ensemble engine treated
+        // ANY non-None movement as "active" and returned Minor — diverging from
+        // the survivor record. Gate and survivor must now agree.
         let classifier = EnsembleClassifier::new(EnsembleConfig::default());
         let reading = make_reading(
             Some((16.0, BreathingType::Normal)),
@@ -261,8 +230,29 @@ mod tests {
 
         let result = classifier.classify(&reading);
         assert!(result.confidence > 0.0);
-        assert_eq!(result.recommended_triage, TriageStatus::Minor);
         assert!(result.breathing_detected);
+        let survivor = crate::domain::triage::TriageCalculator::calculate(&reading);
+        assert_eq!(result.recommended_triage, survivor);
+        assert_eq!(result.recommended_triage, TriageStatus::Delayed);
+    }
+
+    #[test]
+    fn test_normal_breathing_purposeful_movement_is_minor() {
+        // Gross + voluntary = Responsive (following commands / walking wounded).
+        // make_reading sets is_voluntary=true for any non-None movement, so Gross
+        // here is voluntary → Responsive → Minor. Confirms the canonical "walking
+        // wounded" path still resolves to Minor and gate==survivor.
+        let classifier = EnsembleClassifier::new(EnsembleConfig::default());
+        let reading = make_reading(
+            Some((16.0, BreathingType::Normal)),
+            None,
+            MovementType::Gross,
+        );
+
+        let result = classifier.classify(&reading);
+        let survivor = crate::domain::triage::TriageCalculator::calculate(&reading);
+        assert_eq!(result.recommended_triage, survivor);
+        assert_eq!(result.recommended_triage, TriageStatus::Minor);
     }
 
     #[test]
@@ -275,8 +265,16 @@ mod tests {
     }
 
     #[test]
-    fn test_normal_breathing_no_movement_is_delayed() {
-        let classifier = EnsembleClassifier::new(EnsembleConfig::default());
+    fn test_normal_breathing_no_movement_is_immediate_canonical() {
+        // UNIFICATION: Normal breathing but ZERO detectable movement means the
+        // survivor is unresponsive (not following commands) — START classifies
+        // breathing-but-unresponsive as Immediate. The old ensemble engine
+        // returned Delayed here, diverging from the survivor record. Gate and
+        // survivor must agree.
+        let classifier = EnsembleClassifier::new(EnsembleConfig {
+            min_ensemble_confidence: 0.0,
+            ..EnsembleConfig::default()
+        });
         let reading = make_reading(
             Some((16.0, BreathingType::Normal)),
             None,
@@ -284,11 +282,19 @@ mod tests {
         );
 
         let result = classifier.classify(&reading);
-        assert_eq!(result.recommended_triage, TriageStatus::Delayed);
+        let survivor = crate::domain::triage::TriageCalculator::calculate(&reading);
+        assert_eq!(result.recommended_triage, survivor);
+        assert_eq!(result.recommended_triage, TriageStatus::Immediate);
     }
 
     #[test]
-    fn test_no_vitals_is_deceased() {
+    fn test_no_vitals_is_unknown_canonical() {
+        // UNIFICATION: with the canonical TriageCalculator now driving the gate,
+        // a reading with NO sensed vitals at all is Unknown (a remote sensor that
+        // sees nothing cannot confirm death — it may be a signal/occlusion issue),
+        // matching what `Survivor::new` records. The old ensemble engine returned
+        // Deceased here, diverging from the survivor record; that is the bug this
+        // task fixes.
         let mv = MovementProfile::default();
         let mut reading = VitalSignsReading::new(None, None, mv);
         reading.confidence = ConfidenceScore::new(0.5);
@@ -300,7 +306,48 @@ mod tests {
         let classifier = EnsembleClassifier::new(config);
 
         let result = classifier.classify(&reading);
-        assert_eq!(result.recommended_triage, TriageStatus::Deceased);
+        assert_eq!(result.recommended_triage, TriageStatus::Unknown);
+        // And it must agree with the canonical calculator directly.
+        assert_eq!(
+            result.recommended_triage,
+            crate::domain::triage::TriageCalculator::calculate(&reading)
+        );
+    }
+
+    /// CRITICAL unification regression (fails on the old divergent engines).
+    ///
+    /// A 28 bpm Normal-rate breather with only an involuntary Tremor is a
+    /// classic divergent boundary case:
+    ///  - OLD ensemble engine: 28 ∈ [10,30] and ∈ [12,24] is false, but it had
+    ///    movement → Delayed.
+    ///  - OLD `TriageCalculator` (used by `Survivor::new`): 28 ∈ [10,30] = Normal
+    ///    breathing, Tremor → InvoluntaryOnly (not following commands) → Immediate.
+    /// The gate would have admitted it as Delayed while the survivor record said
+    /// Immediate. After unification BOTH must return the SAME triage.
+    #[test]
+    fn test_divergent_boundary_28bpm_tremor_gate_equals_survivor() {
+        let reading = make_reading(
+            Some((28.0, BreathingType::Normal)),
+            None,
+            MovementType::Tremor,
+        );
+
+        let classifier = EnsembleClassifier::new(EnsembleConfig {
+            min_ensemble_confidence: 0.0,
+            ..EnsembleConfig::default()
+        });
+
+        // Gate triage (ensemble) and survivor-record triage (Survivor::new path,
+        // i.e. TriageCalculator::calculate) must be identical.
+        let gate = classifier.classify(&reading).recommended_triage;
+        let survivor = crate::domain::triage::TriageCalculator::calculate(&reading);
+
+        assert_eq!(
+            gate, survivor,
+            "gate triage {gate:?} must equal survivor-record triage {survivor:?}"
+        );
+        // And the canonical answer for this distress case is Immediate.
+        assert_eq!(gate, TriageStatus::Immediate);
     }
 
     /// SAFETY regression: heartbeat present but no sensed breathing/movement is

@@ -9,6 +9,16 @@
 //!
 //! `ha_version` is the homecore version string — see ADR-130 Q1 for the
 //! companion-app feature-detect concern.
+//!
+//! ## Security (ADR-161)
+//!
+//! The `auth` token is validated against [`crate::tokens::LongLivedTokenStore`]
+//! via `state.tokens().is_valid()` — the *same* store the REST path uses
+//! (`auth::BearerAuth`). A wrong token receives `auth_invalid` and the socket
+//! is closed. (HC-WS-01 closed the prior bypass where any non-empty token was
+//! accepted.) Command replies are transmitted by a dedicated writer task that
+//! drains the response channel onto the socket (HC-WS-02 closed the prior
+//! reply-theater where responses were logged and discarded).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -18,7 +28,7 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
-use tracing::{debug, warn};
+use tracing::warn;
 
 use homecore::{Context, ServiceCall, ServiceName, SystemEvent};
 
@@ -58,11 +68,18 @@ async fn handle_socket(mut socket: WebSocket, state: SharedState) {
         _ => return,
     };
 
-    // P1: accept any non-empty token. P2: validate against store.
-    if token.trim().is_empty() {
+    // Validate the bearer token against the same store the REST path
+    // uses (`state.tokens().is_valid()` — see `rest.rs` /
+    // `auth::BearerAuth`). Before the HC-WS-01 fix this checked only
+    // `token.trim().is_empty()` and accepted ANY non-empty token even
+    // with a provisioned `HOMECORE_TOKENS` whitelist — a full WS auth
+    // bypass. `is_valid()` rejects the empty token internally and, in
+    // DEV (`allow_any`) mode, still accepts any non-empty bearer (with
+    // a warn) so smoke tests keep working.
+    if !state.tokens().is_valid(&token).await {
         let _ = socket
             .send(Message::Text(
-                serde_json::json!({"type":"auth_invalid","message":"empty token"}).to_string(),
+                serde_json::json!({"type":"auth_invalid","message":"invalid token"}).to_string(),
             ))
             .await;
         return;
@@ -140,54 +157,71 @@ impl Connection {
         }
     }
 
-    async fn run(self, mut socket: WebSocket) {
+    async fn run(self, socket: WebSocket) {
+        use futures_util::{SinkExt, StreamExt};
+
         let conn = Arc::new(self);
+        // Split the socket so a dedicated writer task can drain `rx` onto
+        // the wire while the reader task processes commands concurrently.
+        // Before the HC-WS-02 fix the socket was moved into a recv-only
+        // task and the only `rx` consumer just `debug!`-logged and
+        // DISCARDED every message — so no `result`/`pong`/`event` ever
+        // reached the client. Now `rx` feeds `socket.send`.
+        let (mut sink, mut stream) = socket.split();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
-        let sender_tx = tx.clone();
-        let recv_task = {
-            let conn = Arc::clone(&conn);
-            tokio::spawn(async move {
-                while let Some(frame) = socket.recv().await {
-                    match frame {
-                        Ok(Message::Text(raw)) => {
-                            let cmd: WsCommand = match serde_json::from_str(&raw) {
-                                Ok(c) => c,
-                                Err(e) => {
-                                    warn!("bad ws command: {e}");
-                                    continue;
-                                }
-                            };
-                            conn.handle_cmd(cmd, &sender_tx).await;
-                        }
-                        Ok(Message::Ping(p)) => {
-                            let _ = sender_tx.send(format!("__pong:{}", p.len()));
-                        }
-                        Ok(Message::Close(_)) | Err(_) => break,
-                        _ => {}
-                    }
+        // Writer task: drain replies onto the socket. A `__pong:<n>`
+        // sentinel maps to a binary Pong control frame; everything else
+        // is a JSON text frame.
+        let writer_task = tokio::spawn(async move {
+            while let Some(msg) = rx.recv().await {
+                let send_result = if let Some(n) = msg.strip_prefix("__pong:") {
+                    let len: usize = n.parse().unwrap_or(0);
+                    sink.send(Message::Pong(vec![0u8; len])).await
+                } else {
+                    sink.send(Message::Text(msg)).await
+                };
+                if send_result.is_err() {
+                    break;
                 }
-                // Cancel all subscriptions on disconnect.
-                for entry in conn.subs.iter() {
-                    entry.value().abort.abort();
-                }
-            });
+            }
+        });
 
-            tokio::spawn(async move {
-                while let Some(msg) = rx.recv().await {
-                    if msg.starts_with("__pong:") {
-                        // pong handled inline; skip
-                        continue;
+        // Reader task: parse and dispatch commands; responses are pushed
+        // into `tx` and transmitted by the writer task above.
+        let reader_tx = tx.clone();
+        {
+            let conn = Arc::clone(&conn);
+            while let Some(frame) = stream.next().await {
+                match frame {
+                    Ok(Message::Text(raw)) => {
+                        let cmd: WsCommand = match serde_json::from_str(&raw) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                warn!("bad ws command: {e}");
+                                continue;
+                            }
+                        };
+                        conn.handle_cmd(cmd, &reader_tx).await;
                     }
-                    // Use the socket from the recv task via a one-shot mpsc
-                    // (in this minimal P1, the recv task owns the socket
-                    // and we ack inline below — this branch is for the
-                    // subscription fan-out emit path)
-                    debug!("ws emit: {msg}");
+                    Ok(Message::Ping(p)) => {
+                        let _ = reader_tx.send(format!("__pong:{}", p.len()));
+                    }
+                    Ok(Message::Close(_)) | Err(_) => break,
+                    _ => {}
                 }
-            })
-        };
-        let _ = recv_task.await;
+            }
+            // Cancel all subscriptions on disconnect.
+            for entry in conn.subs.iter() {
+                entry.value().abort.abort();
+            }
+        }
+
+        // Reader loop ended → drop the senders so the writer task's `rx`
+        // closes and the task exits cleanly.
+        drop(tx);
+        drop(reader_tx);
+        let _ = writer_task.await;
     }
 
     async fn handle_cmd(&self, cmd: WsCommand, tx: &tokio::sync::mpsc::UnboundedSender<String>) {
@@ -264,7 +298,17 @@ impl Connection {
                                     }
                                 }
                                 Ok(_) => {}
-                                Err(_) => break,
+                                // A slow consumer that falls >4,096 events behind
+                                // gets `Lagged(n)`, which is RECOVERABLE: the bus
+                                // doc (`bus.rs` §"Lagged receivers must re-sync")
+                                // and HA's WS contract both keep the subscription
+                                // alive across a lag. The pre-fix `Err(_) => break`
+                                // treated `Lagged` as fatal, silently killing the
+                                // client's event stream on a burst (HC-WS-LAG-01).
+                                // Skip the dropped window and continue; only a
+                                // `Closed` sender ends the task.
+                                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                                Err(broadcast::error::RecvError::Closed) => break,
                             },
                             evt = domain_rx.recv() => match evt {
                                 Ok(de) => {
@@ -282,7 +326,12 @@ impl Connection {
                                         if tx_clone.send(payload.to_string()).is_err() { break; }
                                     }
                                 }
-                                Err(_) => break,
+                                // Same recoverable-lag handling as the system arm
+                                // above (HC-WS-LAG-01): a lagged domain-event
+                                // receiver re-syncs and continues; only `Closed`
+                                // terminates the subscription.
+                                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                                Err(broadcast::error::RecvError::Closed) => break,
                             }
                         }
                     }

@@ -54,12 +54,16 @@ pub struct TemporalCompressor {
     prev_ts: u32,
     has_ts: bool,
     ratio: f32,
+    /// Per-call event scratch buffers (owned; replace former `static mut`).
+    events: [(i32, f32); 4],
+    timer_events: [(i32, f32); 2],
 }
 
 impl TemporalCompressor {
     pub const fn new() -> Self {
         const E: Snap = Snap::empty();
-        Self { buf: [E; CAP], w_idx: 0, total: 0, frame_rate: 20.0, prev_ts: 0, has_ts: false, ratio: 1.0 }
+        Self { buf: [E; CAP], w_idx: 0, total: 0, frame_rate: 20.0, prev_ts: 0, has_ts: false, ratio: 1.0,
+               events: [(0, 0.0); 4], timer_events: [(0, 0.0); 2] }
     }
 
     fn occ(&self) -> usize { if (self.total as usize) < CAP { self.total as usize } else { CAP } }
@@ -97,7 +101,6 @@ impl TemporalCompressor {
         }
         self.prev_ts = ts_ms; self.has_ts = true;
 
-        static mut EV: [(i32, f32); 4] = [(0, 0.0); 4];
         let mut ne = 0usize;
         let occ = self.occ();
 
@@ -113,23 +116,22 @@ impl TemporalCompressor {
                     let mut j = 0;
                     while j < VALS { let d = dequantize(self.buf[slot].data[j], s, old_l); self.buf[slot].data[j] = quantize(d, s, new_l); j += 1; }
                     self.buf[slot].tier = new_t;
-                    if ne < 4 { unsafe { EV[ne] = (EVENT_TIER_TRANSITION, new_t as i32 as f32); } ne += 1; }
+                    if ne < 4 { self.events[ne] = (EVENT_TIER_TRANSITION, new_t as i32 as f32); ne += 1; }
                 }
             }
         }
         self.ratio = self.calc_ratio(occ);
-        if self.total % 64 == 0 && ne < 4 { unsafe { EV[ne] = (EVENT_COMPRESSION_RATIO, self.ratio); } ne += 1; }
-        unsafe { &EV[..ne] }
+        if self.total % 64 == 0 && ne < 4 { self.events[ne] = (EVENT_COMPRESSION_RATIO, self.ratio); ne += 1; }
+        &self.events[..ne]
     }
 
     /// Periodic timer events.
-    pub fn on_timer(&self) -> &[(i32, f32)] {
-        static mut TE: [(i32, f32); 2] = [(0, 0.0); 2];
+    pub fn on_timer(&mut self) -> &[(i32, f32)] {
         let mut n = 0;
         let h = self.history_hours();
-        if h > 0.0 { unsafe { TE[n] = (EVENT_HISTORY_DEPTH_HOURS, h); } n += 1; }
-        unsafe { TE[n] = (EVENT_COMPRESSION_RATIO, self.ratio); } n += 1;
-        unsafe { &TE[..n] }
+        if h > 0.0 { self.timer_events[n] = (EVENT_HISTORY_DEPTH_HOURS, h); n += 1; }
+        self.timer_events[n] = (EVENT_COMPRESSION_RATIO, self.ratio); n += 1;
+        &self.timer_events[..n]
     }
 
     fn calc_ratio(&self, occ: usize) -> f32 {

@@ -261,9 +261,15 @@ pub enum ClockGateDecision {
     /// Both terms pass: node admitted at full weight.
     Admit,
     /// Phase OK but clock degraded: evidence-only, NO environment/model update.
-    MonitorOnly { clock_quality: f32 },
+    MonitorOnly {
+        /// Combined clock-quality score in [0, 1] (dispersion × age terms).
+        clock_quality: f32,
+    },
     /// Either term fails hard: node excluded this cycle.
-    Reject { reason: ClockRejectReason },
+    Reject {
+        /// Which hard term failed (phase, dispersion, or age).
+        reason: ClockRejectReason,
+    },
 }
 
 /// Clock-quality gate: combines the phase [`CoherenceGate`] with clock

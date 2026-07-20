@@ -116,6 +116,29 @@ export RUST_LOG="homecore=debug,homecore_api=info"
 | `--db` | `HOMECORE_DB` | `sqlite::memory:` | SQLite path (`:memory:` for ephemeral) |
 | `--location-name` | `HOMECORE_LOCATION` | `Home` | Friendly name returned by `/api/config` |
 | `--no-recorder` | — | off | Disable SQLite recorder (low-resource deployments) |
+| `--ui-dir` | `HOMECORE_UI_DIR` | `<crate>/ui` | HOMECORE-UI asset dir served at `/homecore` (ADR-131); empty disables the mount |
+
+## HOMECORE-UI dashboard (ADR-131)
+
+This binary also serves the **HOMECORE-UI** — the complete operational dashboard
+for the two-tier Cognitum stack (v0 Appliance → SEEDs → ESP32 nodes) — at
+`/homecore`, alongside the HA-compat `/api` surface. It is a zero-dependency,
+no-build-step vanilla TS/JS + CSS frontend living in `ui/`:
+
+```bash
+cargo run -p homecore-server          # then open http://localhost:8123/homecore/
+```
+
+It drives the live `/api` + `/api/websocket` (`subscribe_events`) endpoints; panels
+backed by services not in this binary (SEED HTTPS API, calibration ADR-151,
+federation ADR-105) render against a DEMO-flagged contract-conformant mock until
+those endpoints land (ADR-131 §7.1). Frontend tests + benchmark run under plain
+`node` (no `npm install`):
+
+```bash
+cd ui && npm test     # import graph + render-smoke + interaction (24 checks)
+cd ui && npm run bench # bundle budget (~137 KB, ~37× smaller than HA) + render timing
+```
 
 ## Comparison to Home Assistant
 

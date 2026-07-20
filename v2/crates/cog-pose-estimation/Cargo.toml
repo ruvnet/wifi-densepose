@@ -39,6 +39,12 @@ wifi-densepose-train = { version = "0.3.1", path = "../wifi-densepose-train", de
 
 [dev-dependencies]
 tempfile = "3"
+# ADR-163: steady-state infer latency bench (real pose_v1 weights, Device::Cpu).
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "infer_bench"
+harness = false
 
 [features]
 default = []

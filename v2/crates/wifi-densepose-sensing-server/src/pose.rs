@@ -192,6 +192,11 @@ pub fn derive_single_person_pose(
             height: (max_y - min_y).max(160.0),
         },
         zone: format!("zone_{}", person_idx + 1),
+        // Field-derived fields (#1050) — defaulted here; the live `/ws/sensing`
+        // path attaches real positions via `attach_field_positions`.
+        position: [0.0, 0.0, 0.0],
+        motion_score: 0.0,
+        pose: None,
     }
 }
 

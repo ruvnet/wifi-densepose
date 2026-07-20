@@ -9,20 +9,20 @@
 //! | `QuantConv`          | Full    | `Conv2d(128 → 512, k=1)` — quant_conv          |
 //! | `PostQuantConv`      | Full    | `Conv2d(512 → 128, k=1)` — post_quant_conv     |
 //! | `fold_3d_to_2d`      | Full    | (B*F, C, H, W*D) reshape for 2D CNN            |
-//! | Encoder2D (ResNet)   | STUB    | Returns random z of correct shape (B*F,128,50,50). |
-//!                                    Full implementation requires loading ~35 M params  |
-//!                                    from the Phase-5 SafeTensors checkpoint.           |
-//! | Decoder2D (ResNet)   | STUB    | Returns random logits of correct shape.        |
+//! | `Encoder2D` (conv)   | Full    | Real deterministic conv encoder — see [`crate::cnn`]. |
+//! | `Decoder2D` (conv)   | Full    | Real deterministic conv decoder — see [`crate::cnn`]. |
 //!
-//! The stubs produce outputs of the correct dtype and shape so that the full
-//! inference pipeline compiles, runs, and can be benchmarked end-to-end
-//! before the checkpoint is available.
+//! The encoder/decoder are a genuine, input-dependent convolutional forward
+//! pass (no `randn`). With the `dummy` constructor the weights are
+//! deterministically initialised but **untrained** — accuracy is data-gated
+//! on a Phase-5 checkpoint, disclosed via the `weights_trained` flag on
+//! [`crate::inference::InferenceOutput`].
 
 use candle_core::{DType, Device, Module, Result, Tensor};
 use candle_nn::{Conv2d, Conv2dConfig, Embedding, VarBuilder};
 
+use crate::cnn::{Decoder2D, Encoder2D};
 use crate::config::OccWorldConfig;
-use crate::error::OccWorldError;
 
 // ── Class embedding ───────────────────────────────────────────────────────────
 
@@ -40,9 +40,9 @@ impl ClassEmbedding {
         Ok(Self { embed })
     }
 
-    /// Build with random initialisation (for tests / benchmarks).
+    /// Build with deterministic untrained initialisation (tests / benchmarks).
     pub fn dummy(num_classes: usize, embed_dim: usize, device: &Device) -> Result<Self> {
-        let w = Tensor::randn(0f32, 1.0, (num_classes, embed_dim), device)?;
+        let w = crate::cnn::det_fill(&[num_classes, embed_dim], 0x0CE0_0001, 1.0, device)?;
         let embed = Embedding::new(w, embed_dim);
         Ok(Self { embed })
     }
@@ -118,9 +118,10 @@ impl VQCodebook {
         })
     }
 
-    /// Random initialisation (for tests / benchmarks).
+    /// Deterministic untrained initialisation (for tests / benchmarks).
     pub fn dummy(codebook_size: usize, embed_dim: usize, device: &Device) -> Result<Self> {
-        let embeddings = Tensor::randn(0f32, 1.0, (codebook_size, embed_dim), device)?;
+        let embeddings =
+            crate::cnn::det_fill(&[codebook_size, embed_dim], 0x0CE0_0002, 1.0, device)?;
         Ok(Self {
             embeddings,
             codebook_size,
@@ -136,6 +137,17 @@ impl VQCodebook {
         let orig_shape = z.shape().clone();
         let orig_dims = orig_shape.dims().to_vec();
         let last = *orig_shape.dims().last().unwrap_or(&0);
+        // Guard the divide below: a scalar (rank-0) or empty-last-dim tensor
+        // would make `last == 0` and panic on the `elem_count() / last`
+        // division. `encode` is a `pub fn` on a `pub struct`, so this is a
+        // reachable public boundary — fail closed with a clear error instead.
+        if last == 0 {
+            return Err(candle_core::Error::Msg(format!(
+                "VQCodebook::encode expects a tensor with a non-zero last dim of \
+                 size embed_dim={}, got shape {orig_dims:?}",
+                self.embed_dim
+            )));
+        }
         // Flatten to (N, embed_dim)
         let n = z.elem_count() / last;
         let z_flat = z.reshape((n, last))?; // (N, D)
@@ -200,9 +212,9 @@ impl QuantConv {
         Ok(Self { conv })
     }
 
-    /// Random initialisation.
+    /// Deterministic untrained initialisation.
     pub fn dummy(z_channels: usize, embed_dim: usize, device: &Device) -> Result<Self> {
-        let w = Tensor::randn(0f32, 1.0, (embed_dim, z_channels, 1, 1), device)?;
+        let w = crate::cnn::det_fill(&[embed_dim, z_channels, 1, 1], 0x0CE0_0003, 1.0, device)?;
         let b = Tensor::zeros(embed_dim, DType::F32, device)?;
         let conv = Conv2d::new(w, Some(b), Conv2dConfig::default());
         Ok(Self { conv })
@@ -232,9 +244,9 @@ impl PostQuantConv {
         Ok(Self { conv })
     }
 
-    /// Random initialisation.
+    /// Deterministic untrained initialisation.
     pub fn dummy(embed_dim: usize, z_channels: usize, device: &Device) -> Result<Self> {
-        let w = Tensor::randn(0f32, 1.0, (z_channels, embed_dim, 1, 1), device)?;
+        let w = crate::cnn::det_fill(&[z_channels, embed_dim, 1, 1], 0x0CE0_0004, 1.0, device)?;
         let b = Tensor::zeros(z_channels, DType::F32, device)?;
         let conv = Conv2d::new(w, Some(b), Conv2dConfig::default());
         Ok(Self { conv })
@@ -246,73 +258,14 @@ impl PostQuantConv {
     }
 }
 
-// ── Encoder2D stub ────────────────────────────────────────────────────────────
-
-/// **STUB** — returns a random tensor of the correct shape.
-///
-/// The full `Encoder2D` from `vae_2d_resnet.py` is a multi-resolution ResNet
-/// with three down-sampling stages (stride-2 `Conv2d` + residual blocks).
-/// Porting all ~35 M parameters requires the Phase-5 SafeTensors checkpoint
-/// to be available so the weight names can be mapped.  Until then, this
-/// stub ensures the pipeline compiles and end-to-end shape tests pass.
-///
-/// Replace this function with the real ResNet implementation in Phase 5.
-pub fn encode_occupancy(
-    x: &Tensor,
-    cfg: &OccWorldConfig,
-    device: &Device,
-) -> std::result::Result<Tensor, OccWorldError> {
-    // Derive batch*frames from the input shape
-    let dims = x.dims();
-    // Acceptable input shapes: (B, F, H, W, D) or (B*F, H, W, D)
-    let bf = match dims.len() {
-        5 => dims[0] * dims[1],
-        4 => dims[0],
-        _ => {
-            return Err(OccWorldError::ShapeMismatch(format!(
-                "encode_occupancy: expected 4-D or 5-D input, got {}-D",
-                dims.len()
-            )))
-        }
-    };
-
-    // STUB: return random z of correct shape (B*F, z_channels, token_h, token_w)
-    let z = Tensor::randn(
-        0f32,
-        1.0,
-        (bf, cfg.z_channels, cfg.token_h, cfg.token_w),
-        device,
-    )
-    .map_err(OccWorldError::Candle)?;
-
-    Ok(z)
-}
-
-/// **STUB** — returns random class logits of the correct shape.
-///
-/// The full `Decoder2D` mirrors the encoder: three up-sampling stages
-/// followed by a `Conv2d` head that produces `num_classes` logits per voxel.
-/// Implementation is deferred to Phase 5 (checkpoint loading).
-///
-/// Replace with the real decoder when Phase-5 weights are available.
-pub fn decode_to_logits(
-    z: &Tensor,
-    cfg: &OccWorldConfig,
-    device: &Device,
-) -> std::result::Result<Tensor, OccWorldError> {
-    let (bf, _c, _h, _w) = z.dims4().map_err(OccWorldError::Candle)?;
-
-    // STUB: return random logits (B*F, num_classes, H, W, D)
-    let logits = Tensor::randn(
-        0f32,
-        1.0,
-        (bf, cfg.num_classes, cfg.grid_h, cfg.grid_w, cfg.grid_d),
-        device,
-    )
-    .map_err(OccWorldError::Candle)?;
-
-    Ok(logits)
-}
+// ── Encoder / decoder entry points ────────────────────────────────────────────
+//
+// The former `Tensor::randn` stubs are gone. The real, deterministic,
+// input-dependent convolutional encoder/decoder live in [`crate::cnn`]; the
+// VQVAE bundle below owns a concrete [`Encoder2D`] / [`Decoder2D`] instance and
+// the inference engine drives them directly. These thin re-exports keep the
+// historical call sites working.
+pub use crate::cnn::{decode_to_logits, encode_occupancy};
 
 // ── VQVAE component bundle ────────────────────────────────────────────────────
 
@@ -320,40 +273,54 @@ pub fn decode_to_logits(
 pub struct VQVAEComponents {
     /// Class label → float embedding (`nn.Embedding(18, 64)` in Python).
     pub class_embed: ClassEmbedding,
+    /// Real convolutional encoder: occupancy grid → latent feature map.
+    pub encoder: Encoder2D,
     /// `Conv2d(z_channels → embed_dim, k=1)` before quantisation.
     pub quant_conv: QuantConv,
     /// VQ codebook for nearest-neighbour quantisation.
     pub codebook: VQCodebook,
     /// `Conv2d(embed_dim → z_channels, k=1)` after quantisation.
     pub post_quant_conv: PostQuantConv,
+    /// Real convolutional decoder: latent codes → per-voxel class logits.
+    pub decoder: Decoder2D,
 }
 
 impl VQVAEComponents {
-    /// Build all components from a single [`VarBuilder`].
+    /// Build all components from a single [`VarBuilder`] (trained checkpoint).
     pub fn new(cfg: &OccWorldConfig, vb: VarBuilder<'_>) -> Result<Self> {
         let class_embed = ClassEmbedding::new(cfg.num_classes, cfg.base_channels, vb.clone())?;
+        let encoder = Encoder2D::from_weights(cfg, vb.clone())?;
         let quant_conv = QuantConv::new(cfg.z_channels, cfg.embed_dim, vb.clone())?;
         let codebook = VQCodebook::new(cfg.codebook_size, cfg.embed_dim, vb.clone())?;
-        let post_quant_conv = PostQuantConv::new(cfg.embed_dim, cfg.z_channels, vb)?;
+        let post_quant_conv = PostQuantConv::new(cfg.embed_dim, cfg.z_channels, vb.clone())?;
+        let decoder = Decoder2D::from_weights(cfg, vb)?;
         Ok(Self {
             class_embed,
+            encoder,
             quant_conv,
             codebook,
             post_quant_conv,
+            decoder,
         })
     }
 
-    /// Build all components with random weights (for testing / benchmarking).
+    /// Build all components with deterministic *untrained* weights (tests /
+    /// benchmarks). The forward pass is real and input-dependent; only the
+    /// weight values are not from a trained checkpoint.
     pub fn dummy(cfg: &OccWorldConfig, device: &Device) -> Result<Self> {
         let class_embed = ClassEmbedding::dummy(cfg.num_classes, cfg.base_channels, device)?;
+        let encoder = Encoder2D::dummy(cfg, device)?;
         let quant_conv = QuantConv::dummy(cfg.z_channels, cfg.embed_dim, device)?;
         let codebook = VQCodebook::dummy(cfg.codebook_size, cfg.embed_dim, device)?;
         let post_quant_conv = PostQuantConv::dummy(cfg.embed_dim, cfg.z_channels, device)?;
+        let decoder = Decoder2D::dummy(cfg, device)?;
         Ok(Self {
             class_embed,
+            encoder,
             quant_conv,
             codebook,
             post_quant_conv,
+            decoder,
         })
     }
 }
@@ -381,6 +348,21 @@ mod tests {
         assert_eq!(z_decoded.dims(), &[4, 512]);
 
         Ok(())
+    }
+
+    #[test]
+    fn encode_rejects_scalar_without_panicking() {
+        // A rank-0 (scalar) tensor has an empty dims list → `last == 0`.
+        // Before the guard this divided by zero and panicked; now it returns
+        // a clean error. `encode` is public, so this is a reachable boundary.
+        let device = Device::Cpu;
+        let codebook = VQCodebook::dummy(4, 8, &device).unwrap();
+        let scalar = Tensor::from_vec(vec![1.0f32], (), &device).unwrap();
+        let result = codebook.encode(&scalar);
+        assert!(
+            result.is_err(),
+            "scalar input must error, not panic; got {result:?}"
+        );
     }
 
     #[test]

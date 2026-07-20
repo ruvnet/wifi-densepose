@@ -77,6 +77,8 @@ impl HourBin {
 
 /// Energy audit analyzer.
 pub struct EnergyAuditor {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 3],
     /// Weekly histogram: [day][hour].
     histogram: [[HourBin; HOURS_PER_DAY]; DAYS_PER_WEEK],
     /// Current simulated hour (0-23). In production, derived from host timestamp.
@@ -98,6 +100,7 @@ impl EnergyAuditor {
         const BIN_INIT: HourBin = HourBin::new();
         const DAY_INIT: [HourBin; HOURS_PER_DAY] = [BIN_INIT; HOURS_PER_DAY];
         Self {
+            events: [(0, 0.0); 3],
             histogram: [DAY_INIT; DAYS_PER_WEEK],
             current_hour: 8, // Default start: 8 AM.
             current_day: 0,  // Monday.
@@ -161,14 +164,11 @@ impl EnergyAuditor {
         }
 
         // Build events.
-        static mut EVENTS: [(i32, f32); 3] = [(0, 0.0); 3];
         let mut n_events = 0usize;
 
         // After-hours alert.
         if self.after_hours_presence >= AFTER_HOURS_ALERT_FRAMES && n_events < 3 {
-            unsafe {
-                EVENTS[n_events] = (EVENT_AFTER_HOURS_ALERT, self.current_hour as f32);
-            }
+            self.events[n_events] = (EVENT_AFTER_HOURS_ALERT, self.current_hour as f32);
             n_events += 1;
         }
 
@@ -177,23 +177,19 @@ impl EnergyAuditor {
             // Emit current hour's occupancy rate.
             let rate = self.histogram[d][h].occupancy_rate();
             if n_events < 3 {
-                unsafe {
-                    EVENTS[n_events] = (EVENT_SCHEDULE_SUMMARY, rate);
-                }
+                self.events[n_events] = (EVENT_SCHEDULE_SUMMARY, rate);
                 n_events += 1;
             }
 
             // Emit overall utilization rate.
             if n_events < 3 {
                 let util = self.utilization_rate();
-                unsafe {
-                    EVENTS[n_events] = (EVENT_UTILIZATION_RATE, util);
-                }
+                self.events[n_events] = (EVENT_UTILIZATION_RATE, util);
                 n_events += 1;
             }
         }
 
-        unsafe { &EVENTS[..n_events] }
+        &self.events[..n_events]
     }
 
     /// Check if a given hour is after-hours.

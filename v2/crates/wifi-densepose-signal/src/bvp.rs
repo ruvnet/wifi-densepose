@@ -93,10 +93,16 @@ pub fn extract_bvp(
     let n_frames = (n_samples - config.window_size) / config.hop_size + 1;
     let n_fft_bins = config.window_size / 2 + 1;
 
-    // Hann window
-    let window: Vec<f64> = (0..config.window_size)
-        .map(|i| 0.5 * (1.0 - (2.0 * PI * i as f64 / (config.window_size - 1) as f64).cos()))
-        .collect();
+    // Hann window. ADR-154: `window_size == 0` is rejected above, but
+    // `window_size == 1` would divide by `(1 - 1) == 0` → NaN samples. Guard the
+    // length-1 case to the standard constant-1.0 window.
+    let window: Vec<f64> = if config.window_size == 1 {
+        vec![1.0]
+    } else {
+        (0..config.window_size)
+            .map(|i| 0.5 * (1.0 - (2.0 * PI * i as f64 / (config.window_size - 1) as f64).cos()))
+            .collect()
+    };
 
     let mut planner = FftPlanner::new();
     let fft = planner.plan_fft_forward(config.window_size);
@@ -280,6 +286,24 @@ mod tests {
         let expected_frames = (1000 - 128) / 32 + 1;
         assert_eq!(bvp.n_time, expected_frames);
         assert_eq!(bvp.velocity_bins.len(), 64);
+    }
+
+    // ADR-154: window_size == 1 divided by (1-1) == 0 → NaN Hann window. The
+    // guard must produce a finite (constant-1.0) window instead.
+    #[test]
+    fn bvp_window_size_one_is_finite() {
+        let csi = Array2::from_shape_fn((64, 4), |(t, _)| (t as f64 * 0.1).sin());
+        let config = BvpConfig {
+            window_size: 1,
+            hop_size: 1,
+            n_velocity_bins: 8,
+            ..Default::default()
+        };
+        let bvp = extract_bvp(&csi, 100.0, &config).unwrap();
+        assert!(
+            bvp.data.iter().all(|v| v.is_finite()),
+            "window_size=1 must not produce NaN BVP samples"
+        );
     }
 
     #[test]

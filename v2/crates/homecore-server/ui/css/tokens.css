@@ -1,0 +1,34 @@
+/*
+ * HOMECORE-UI design tokens — ADR-131 §3.1 / §3.2.
+ *
+ * These values are extracted verbatim from the production Cognitum
+ * platform (seed.cognitum.one/store + /status). DO NOT introduce new
+ * colours, typefaces, or border radii — ADR-131 §3.3 invariant. A user
+ * navigating from the Cog Store into HOMECORE must not notice a seam.
+ */
+:root {
+  /* §3.1 colour palette */
+  --bg: #0a0e1a;          /* page background (very dark navy)            */
+  --bg2: #111627;         /* secondary background / nav strip           */
+  --card: #171d30;        /* card / panel surface                       */
+  --card-h: #1e2540;      /* card hover state                           */
+  --border: #252d45;      /* all border strokes (~0.67px, subtle)       */
+  --t1: #e0e4f0;          /* primary text (near-white)                  */
+  --t2: #8890a8;          /* secondary / muted text                     */
+  --t3: #505872;          /* tertiary / disabled text                   */
+  --cyan: #4ecdc4;        /* primary action colour                      */
+  --cyan-d: rgba(78,205,196,0.15);
+  --green: #6bcb77;       /* success / online / healthy                 */
+  --green-d: rgba(107,203,119,0.15);
+  --amber: #d4a574;       /* warning / stale / degraded                 */
+  --amber-d: rgba(212,165,116,0.15);
+  --red: #e06060;         /* error / offline / veto                     */
+  --red-d: rgba(224,96,96,0.15);
+  --purple: #a78bfa;      /* informational / epoch / chain              */
+  --purple-d: rgba(167,139,250,0.15);
+  --r: 10px;              /* standard border radius                     */
+
+  /* §3.2 typography */
+  --font: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --mono: 'Cascadia Code', 'Fira Code', Consolas, monospace;
+}

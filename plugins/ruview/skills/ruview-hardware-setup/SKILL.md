@@ -18,6 +18,8 @@ Bring a RuView sensing node online: build firmware → flash → provision WiFi 
 
 **Not supported:** original ESP32, ESP32-C3 (single-core).
 
+**⚠️ Ask about board form factor before flashing.** If the user's board is a coin-sized clone (ESP32-S3-Zero, SuperMini, or similar — not a full DevKitC/XIAO-style board with a real USB connector and visible regulator), warn them before they walk away from it: this firmware runs the WiFi radio continuously (`WIFI_PS_NONE`) plus a full DSP pipeline (`edge_tier=2`), which is sustained high current draw that full-size dev boards handle fine but tiny clones with minimal copper/budget regulators may not. At least one field report: boards ran hot during a normal session and failed to power on again afterward (regulator damage suspected). Tell them to give the board airflow (don't stack/enclose it) and check it by touch during the first several minutes of any new deployment.
+
 ## 1. Build firmware (Windows — Python subprocess, NOT bash directly)
 
 ESP-IDF v5.4 does not support MSYS2/Git Bash. Use the Espressif Python venv as a subprocess with `MSYSTEM*` env vars stripped. The proven command lives in `CLAUDE.local.md` — reproduce it:

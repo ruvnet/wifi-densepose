@@ -88,6 +88,8 @@ pub const EVENT_LOCATION_LABEL: i32 = 687;
 /// Pre-configured with 16 reference points (4 rooms, 12 zones) and a
 /// linear projection from 8D CSI features to 2D Poincare disk.
 pub struct HyperbolicEmbedder {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 3],
     /// Reference embeddings on the Poincare disk [N_REFS][DIM].
     references: [[f32; DIM]; N_REFS],
     /// Linear projection matrix W: [DIM][FEAT_DIM] (2x8).
@@ -111,6 +113,7 @@ pub struct HyperbolicEmbedder {
 impl HyperbolicEmbedder {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); 3],
             references: Self::default_references(),
             projection_w: Self::default_projection(),
             prev_label: 0,
@@ -166,7 +169,6 @@ impl HyperbolicEmbedder {
     ///
     /// Returns events as `(event_id, value)` pairs.
     pub fn process_frame(&mut self, amplitudes: &[f32]) -> &[(i32, f32)] {
-        static mut EVENTS: [(i32, f32); 3] = [(0, 0.0); 3];
         let mut n_ev = 0usize;
 
         if amplitudes.len() < FEAT_DIM {
@@ -250,22 +252,16 @@ impl HyperbolicEmbedder {
         let level: u8 = if radius < LEVEL_RADIUS_THRESHOLD { 0 } else { 1 };
 
         // Emit events.
-        unsafe {
-            EVENTS[n_ev] = (EVENT_HIERARCHY_LEVEL, level as f32);
-        }
+        self.events[n_ev] = (EVENT_HIERARCHY_LEVEL, level as f32);
         n_ev += 1;
 
-        unsafe {
-            EVENTS[n_ev] = (EVENT_HYPERBOLIC_RADIUS, radius);
-        }
+        self.events[n_ev] = (EVENT_HYPERBOLIC_RADIUS, radius);
         n_ev += 1;
 
-        unsafe {
-            EVENTS[n_ev] = (EVENT_LOCATION_LABEL, best_label as f32);
-        }
+        self.events[n_ev] = (EVENT_LOCATION_LABEL, best_label as f32);
         n_ev += 1;
 
-        unsafe { &EVENTS[..n_ev] }
+        &self.events[..n_ev]
     }
 
     /// Set a reference embedding.  `index` must be < N_REFS.

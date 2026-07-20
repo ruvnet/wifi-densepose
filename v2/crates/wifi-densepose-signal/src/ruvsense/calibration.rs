@@ -40,6 +40,30 @@ const VERSION: u8 = 1;
 const HEADER_LEN: usize = 16; // magic(4) + version(1) + tier(1) + reserved(2) + unix_s(8)
 const SUBCARRIER_RECORD_LEN: usize = 16; // 4 × f32
 
+// ADR-154 §7.4 — de-magicked (values unchanged). The tuning thresholds below
+// are EMPIRICAL DEFAULTS pending labelled empty-vs-occupied calibration traces.
+
+/// Default minimum frames for a baseline finalization (30 s @ 20 Hz). Shared by
+/// every tier constructor (`ht20`/`ht40`/`he20`/`he40`).
+const DEFAULT_MIN_FRAMES: u32 = 600;
+
+/// Amplitude standard-deviation floor used as the z-score divisor in
+/// `deviation()`, guarding against a zero-variance baseline subcarrier.
+const AMP_STD_FLOOR: f32 = 1e-12;
+
+/// `deviation()` flags motion when the median amplitude z-score exceeds this
+/// many σ. EMPIRICAL DEFAULT.
+const MOTION_AMP_Z_THRESHOLD: f32 = 2.0;
+
+/// `deviation()` flags motion when the median phase drift exceeds this many
+/// radians (π/6 = 30°). EMPIRICAL DEFAULT.
+const MOTION_PHASE_DRIFT_THRESHOLD: f32 = std::f32::consts::PI / 6.0;
+
+/// Minimum complex magnitude in `subtract_in_place` below which a bin is left
+/// untouched (a near-zero bin has no meaningful baseline to subtract and the
+/// `(norm - baseline)/norm` scaling would be ill-conditioned).
+const SUBTRACT_MIN_NORM: f64 = 1e-30;
+
 // ---------------------------------------------------------------------------
 // PHY tier
 // ---------------------------------------------------------------------------
@@ -103,19 +127,36 @@ pub struct CalibrationConfig {
 impl CalibrationConfig {
     /// HT20 defaults: 64 FFT, 52 active, 600 frame minimum (30 s @ 20 Hz).
     pub fn ht20() -> Self {
-        Self { tier: PhyTier::Ht20, num_subcarriers: 64, num_active: 52, min_frames: 600, max_phase_variance: 0.3 }
+        Self { tier: PhyTier::Ht20, num_subcarriers: 64, num_active: 52, min_frames: DEFAULT_MIN_FRAMES, max_phase_variance: 0.3 }
     }
     /// HT40 defaults: 128 FFT, 114 active.
     pub fn ht40() -> Self {
-        Self { tier: PhyTier::Ht40, num_subcarriers: 128, num_active: 114, min_frames: 600, max_phase_variance: 0.3 }
+        Self { tier: PhyTier::Ht40, num_subcarriers: 128, num_active: 114, min_frames: DEFAULT_MIN_FRAMES, max_phase_variance: 0.3 }
     }
-    /// HE20 defaults: 256 FFT, 242 active.
+    /// HE20 defaults: 256 FFT, **256 active** (record all delivered bins).
+    ///
+    /// Issue #1009: the ESP-IDF v5.5.2 driver delivers all 256 FFT bins on the
+    /// wire for an HE20 frame (242 data tones + pilots + guards + DC; n_subc =
+    /// 0x0100 LE, wire-verified on ESP32-C6). We set `num_active: 256` so the
+    /// recorder accumulates statistics over **every** delivered bin rather than
+    /// trimming to the first 242 columns.
+    ///
+    /// Why not 242? `CalibrationRecorder` has no HE20 tone map — `extract_first_stream`
+    /// takes the first `num_active` columns *sequentially*. With 242 it would
+    /// keep bins 0..242 of the 256-bin grid, which are NOT the 242 active tones
+    /// (they include the lower guard band and DC) — silently corrupting the
+    /// empty-room baseline. Recording all 256 bins keeps amplitude/phase stats
+    /// aligned 1:1 with the live `deviation()` path (which also sees 256 bins),
+    /// so guard/DC bins simply carry near-zero, stable statistics and never
+    /// generate false occupancy alarms. The exact-242 tone map lives only in
+    /// `cir.rs` (`HE20_ACTIVE`), where the Φ sensing matrix genuinely needs it;
+    /// the baseline recorder does not.
     pub fn he20() -> Self {
-        Self { tier: PhyTier::He20, num_subcarriers: 256, num_active: 242, min_frames: 600, max_phase_variance: 0.3 }
+        Self { tier: PhyTier::He20, num_subcarriers: 256, num_active: 256, min_frames: DEFAULT_MIN_FRAMES, max_phase_variance: 0.3 }
     }
     /// HE40 defaults: 512 FFT, 484 active.
     pub fn he40() -> Self {
-        Self { tier: PhyTier::He40, num_subcarriers: 512, num_active: 484, min_frames: 600, max_phase_variance: 0.3 }
+        Self { tier: PhyTier::He40, num_subcarriers: 512, num_active: 484, min_frames: DEFAULT_MIN_FRAMES, max_phase_variance: 0.3 }
     }
 }
 
@@ -247,7 +288,7 @@ impl BaselineCalibration {
         for (ki, (c, baseline)) in y.iter().zip(self.subcarriers.iter()).enumerate() {
             let _ = ki;
             let amp = c.norm();
-            let std = baseline.amp_variance.sqrt().max(1e-12_f32);
+            let std = baseline.amp_variance.sqrt().max(AMP_STD_FLOOR);
             z_amp.push((amp - baseline.amp_mean) / std);
             let theta = c.arg();
             let drift = circular_distance(theta, baseline.phase_mean);
@@ -256,7 +297,8 @@ impl BaselineCalibration {
         let amplitude_z_median = median_abs(&z_amp);
         let amplitude_z_max = z_amp.iter().map(|v| v.abs()).fold(0.0_f32, f32::max);
         let phase_drift_median = median_slice(&phase_drift);
-        let motion_flagged = amplitude_z_median > 2.0 || phase_drift_median > std::f32::consts::PI / 6.0;
+        let motion_flagged =
+            amplitude_z_median > MOTION_AMP_Z_THRESHOLD || phase_drift_median > MOTION_PHASE_DRIFT_THRESHOLD;
         Ok(CalibrationDeviationScore { amplitude_z_median, amplitude_z_max, phase_drift_median, motion_flagged })
     }
 
@@ -307,20 +349,25 @@ impl BaselineCalibration {
             return Err(CalibrationError::SubcarrierMismatch { expected, got: n_sc });
         }
         let n_streams = frame.num_spatial_streams();
-        let n_total = self.tier_num_subcarriers();
-        let active_input = n_sc == expected;
+        // ADR-154: this module uses the **sequential active-index convention** —
+        // the baseline's i-th `SubcarrierBaseline` aligns with `frame.data[[s, i]]`
+        // for both the active-only and full-FFT input shapes. This matches the
+        // sibling `extract_first_stream` (used by `deviation()`), which likewise
+        // reads `frame.data[[0, ki]]` sequentially. The previous code wrote
+        // `if active_input { ki } else { ki }` — a vacuous branch that *looked*
+        // like the full-FFT path remapped to physical FFT bins but did not. The
+        // branch is removed to stop the comment from lying about behaviour; the
+        // numeric result is unchanged.
         for ki in 0..expected {
-            let col = if active_input { ki } else { ki }; // sequential when active-only
             let baseline_amp = self.subcarriers[ki].amp_mean as f64;
             for s in 0..n_streams {
-                let c = frame.data[[s, col]];
+                let c = frame.data[[s, ki]];
                 let norm = c.norm();
-                if norm > 1e-30 {
+                if norm > SUBTRACT_MIN_NORM {
                     let scale = ((norm - baseline_amp).max(0.0)) / norm;
-                    frame.data[[s, col]] = num_complex::Complex64::new(c.re * scale, c.im * scale);
+                    frame.data[[s, ki]] = num_complex::Complex64::new(c.re * scale, c.im * scale);
                 }
             }
-            let _ = n_total;
         }
         Ok(())
     }
@@ -469,7 +516,8 @@ impl CalibrationRecorder {
         let amplitude_z_median = median_slice(&z_amp_abs);
         let amplitude_z_max = z_amp_abs.iter().copied().fold(0.0_f32, f32::max);
         let phase_drift_median = median_slice(&phase_drift);
-        let motion_flagged = amplitude_z_median > 2.0 || phase_drift_median > std::f32::consts::PI / 6.0;
+        let motion_flagged =
+            amplitude_z_median > MOTION_AMP_Z_THRESHOLD || phase_drift_median > MOTION_PHASE_DRIFT_THRESHOLD;
         Ok(CalibrationDeviationScore { amplitude_z_median, amplitude_z_max, phase_drift_median, motion_flagged })
     }
 
@@ -669,11 +717,36 @@ mod tests {
 
         let he20 = CalibrationConfig::he20();
         assert_eq!(he20.num_subcarriers, 256);
-        assert_eq!(he20.num_active, 242);
+        // Issue #1009: HE20 records all 256 delivered bins (no tone map in the
+        // baseline recorder), not the 242 active tones — see he20() rationale.
+        assert_eq!(he20.num_active, 256);
 
         let he40 = CalibrationConfig::he40();
         assert_eq!(he40.num_subcarriers, 512);
         assert_eq!(he40.num_active, 484);
+    }
+
+    // Issue #1009 §1b: a real HE20 frame carries all 256 FFT bins. The recorder
+    // must accept it AND build the baseline over all 256 bins — not silently
+    // trim to the first 242 columns (which are guards/DC, not active tones).
+    //
+    // FAILS ON OLD CODE: with `he20().num_active == 242` the finalised baseline
+    // had only 242 subcarriers (256 → 242 sequential trim). This asserts 256.
+    #[test]
+    fn he20_records_all_256_bins_not_trimmed_to_242() {
+        let mut cfg = CalibrationConfig::he20();
+        cfg.min_frames = 1;
+        let mut rec = CalibrationRecorder::new(cfg);
+        // Feed a 256-bin frame exactly as ESP-IDF v5.5.2 delivers it.
+        let frame = constant_frame(256, 1.0, 0.0);
+        rec.record(&frame).expect("256-bin HE20 frame must be accepted");
+        let baseline = rec.finalize().expect("finalize after 1 frame (min_frames=1)");
+        assert_eq!(
+            baseline.subcarriers.len(),
+            256,
+            "HE20 baseline must cover all 256 delivered bins, not a 242-trim"
+        );
+        assert_eq!(baseline.tier, PhyTier::He20);
     }
 
     // Additional: insufficient frames → error.
@@ -686,6 +759,27 @@ mod tests {
         match rec.finalize() {
             Err(CalibrationError::InsufficientFrames { got: 1, need: 600 }) => {}
             other => panic!("expected InsufficientFrames, got {:?}", other),
+        }
+    }
+
+    // -- ADR-154 §7.4: de-magic-constant pin test.
+
+    /// The de-magicked calibration constants MUST equal the prior literals, and
+    /// every tier constructor MUST share the one DEFAULT_MIN_FRAMES default.
+    #[test]
+    fn calibration_consts_unchanged_from_literals() {
+        assert_eq!(DEFAULT_MIN_FRAMES, 600);
+        assert_eq!(AMP_STD_FLOOR, 1e-12_f32);
+        assert_eq!(MOTION_AMP_Z_THRESHOLD, 2.0_f32);
+        assert_eq!(MOTION_PHASE_DRIFT_THRESHOLD, std::f32::consts::PI / 6.0);
+        assert_eq!(SUBTRACT_MIN_NORM, 1e-30_f64);
+        for cfg in [
+            CalibrationConfig::ht20(),
+            CalibrationConfig::ht40(),
+            CalibrationConfig::he20(),
+            CalibrationConfig::he40(),
+        ] {
+            assert_eq!(cfg.min_frames, DEFAULT_MIN_FRAMES);
         }
     }
 

@@ -27,6 +27,16 @@ pub const INPUT_SUBCARRIERS: usize = 56;
 pub const INPUT_TIMESTEPS: usize = 20;
 pub const OUTPUT_KEYPOINTS: usize = 17;
 
+/// The model's typical self-reported confidence. `pose_v1` has **no confidence
+/// head** (the head emits 34 keypoint coordinates only), so per-frame confidence
+/// is not available from the network. This is the validation-set PCK@50 (18.5%)
+/// the training run reported, used as the published per-frame confidence floor.
+///
+/// Surfaced as a public constant so the runtime can warn when a configured
+/// `min_confidence` threshold exceeds it — otherwise a default install would
+/// silently emit zero `pose.frame` events while health reports healthy.
+pub const MODEL_TYPICAL_CONFIDENCE: f32 = 0.185;
+
 #[derive(Debug, Clone)]
 pub struct CsiWindow {
     pub data: Vec<f32>, // length INPUT_SUBCARRIERS * INPUT_TIMESTEPS
@@ -283,12 +293,15 @@ impl InferenceEngine {
         let out = model.net.forward(&t)?; // [1, 34]
         let flat: Vec<f32> = out.flatten_all()?.to_vec1()?;
         // Confidence from pose_v1 is a published constant rather than per-frame —
-        // the trained model didn't emit a confidence head. Use the validation-set
-        // PCK@50 (18.5%) as the published self-reported confidence so downstream
-        // consumers can gate display decisions on it.
+        // the trained model has no confidence head (the head emits 34 keypoint
+        // coordinates only), so a real per-frame value is genuinely unavailable.
+        // We surface the validation-set PCK@50 (`MODEL_TYPICAL_CONFIDENCE`) as the
+        // honest self-reported confidence. The runtime's `min_confidence` default
+        // is pinned at or below this so a default install actually emits frames
+        // (and warns if an operator raises the threshold above the model's reach).
         Ok(PoseOutput {
             keypoints: flat,
-            confidence: 0.185,
+            confidence: MODEL_TYPICAL_CONFIDENCE,
         })
     }
 }

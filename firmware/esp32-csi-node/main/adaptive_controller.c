@@ -319,7 +319,9 @@ static void emit_feature_state(void)
                               (uint64_t)esp_timer_get_time(),
                               profile);
 
-    int sent = stream_sender_send((const uint8_t *)&pkt, sizeof(pkt));
+    /* feature_state is ~1 Hz and small — priority path so the CSI ENOMEM
+     * backoff can't starve it (#1183). */
+    int sent = stream_sender_send_priority((const uint8_t *)&pkt, sizeof(pkt));
     if (sent < 0) {
         ESP_LOGW(TAG, "feature_state emit failed");
     }
@@ -333,11 +335,14 @@ static void slow_loop_cb(TimerHandle_t t)
      * detect sync-error drift. */
     uint8_t nid[8];
     node_id_bytes(nid);
-    rv_mesh_send_health(s_role, s_mesh_epoch, nid);
+    /* #1183: report the actual send result — the old log printed "HEALTH sent"
+     * unconditionally even when rv_mesh_send returned ESP_FAIL. */
+    esp_err_t health_rc = rv_mesh_send_health(s_role, s_mesh_epoch, nid);
 
-    ESP_LOGI(TAG, "slow tick (state=%u, feature_state_seq=%u, role=%u, epoch=%u) HEALTH sent",
+    ESP_LOGI(TAG, "slow tick (state=%u, feature_state_seq=%u, role=%u, epoch=%u) HEALTH %s",
              (unsigned)s_state, (unsigned)s_feature_state_seq,
-             (unsigned)s_role, (unsigned)s_mesh_epoch);
+             (unsigned)s_role, (unsigned)s_mesh_epoch,
+             health_rc == ESP_OK ? "sent" : "FAILED");
 }
 
 /* ---- Public API ---- */

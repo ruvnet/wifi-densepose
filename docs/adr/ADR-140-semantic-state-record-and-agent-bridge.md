@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Proposed |
+| **Status** | Accepted — partial (built + tested building block; integration glue pending — see Implementation Status, commit `169a355bd`) |
 | **Date** | 2026-05-28 |
 | **Deciders** | ruv |
 | **Codebase target** | `wifi-densepose-sensing-server/src/semantic/` (`bus.rs`, `common.rs`); `homecore/src/state.rs` + `event.rs`; `homecore-assist` |

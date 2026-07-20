@@ -894,7 +894,7 @@ mod tests {
 
     #[test]
     fn file_round_trip() {
-        let dir = std::env::temp_dir().join("rvf_test");
+        let dir = std::env::temp_dir().join(format!("rvf_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test_model.rvf");
 

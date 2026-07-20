@@ -118,7 +118,7 @@ impl WiFiDensePoseLoss {
         // Normalise by number of visible joints in the batch.
         let n_visible = visibility.sum(Kind::Float);
         // Guard against division by zero (entire batch may have no labels).
-        let safe_n = n_visible.clamp(1.0, f64::MAX);
+        let safe_n = n_visible.clamp_min(1.0);
 
         masked.sum(Kind::Float) / safe_n
     }
@@ -165,7 +165,7 @@ impl WiFiDensePoseLoss {
         let masked_target_uv = target_uv * &fg_mask_f;
 
         // Count foreground pixels × 48 channels to normalise.
-        let n_fg = fg_mask_f.sum(Kind::Float).clamp(1.0, f64::MAX);
+        let n_fg = fg_mask_f.sum(Kind::Float).clamp_min(1.0);
 
         // Smooth-L1 with beta=1.0, reduction=Sum then divide by fg count.
         let uv_loss_sum = masked_pred_uv.smooth_l1_loss(&masked_target_uv, Reduction::Sum, 1.0);
@@ -234,7 +234,7 @@ impl WiFiDensePoseLoss {
                 // UV loss (foreground masked)
                 let fg_mask = target_int.not_equal(0_i64);
                 let fg_mask_f = fg_mask.unsqueeze(1).expand_as(pu).to_kind(Kind::Float);
-                let n_fg = fg_mask_f.sum(Kind::Float).clamp(1.0, f64::MAX);
+                let n_fg = fg_mask_f.sum(Kind::Float).clamp_min(1.0);
                 let uv_loss =
                     (pu * &fg_mask_f).smooth_l1_loss(&(tu * &fg_mask_f), Reduction::Sum, 1.0)
                         / n_fg;
@@ -743,10 +743,11 @@ mod tests {
         }
 
         // Visible batch (index 1) should have non-zero heatmaps.
+        let heatmaps_ref = &heatmaps;
         let batch1_sum: f32 = (0..num_joints)
             .map(|j| {
                 (0..size)
-                    .flat_map(|r| (0..size).map(move |c| heatmaps[[1, j, r, c]]))
+                    .flat_map(|r| (0..size).map(move |c| heatmaps_ref[[1, j, r, c]]))
                     .sum::<f32>()
             })
             .sum();

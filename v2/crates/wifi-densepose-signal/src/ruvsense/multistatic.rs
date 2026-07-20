@@ -84,11 +84,32 @@ pub struct FusedSensingFrame {
 #[derive(Debug, Clone)]
 pub struct MultistaticConfig {
     /// Maximum timestamp spread (microseconds) across nodes in one cycle.
-    /// Default: 5000 us (5 ms), well within the 50 ms TDMA cycle.
+    ///
+    /// # Derivation from the TDM schedule (issue #1031)
+    ///
+    /// In an N-slot TDMA mesh, node `k` transmits in slot `k`, so two nodes
+    /// are *deliberately* separated by `(cycle_us × slot_fraction)`. On a real
+    /// 2-node mesh (slots 0 and 1 of a ~36 ms cycle) we measured an
+    /// **18,194 µs** spread between paired frames — i.e. the spread is the slot
+    /// offset, NOT clock jitter. The previous 5,000 µs default therefore
+    /// rejected every real frame set and fusion silently fell back to per-node
+    /// sum/dedup, so multistatic fusion never actually ran on hardware.
+    ///
+    /// The default is now **60,000 µs (60 ms)**: a full 50 ms TDMA cycle (the
+    /// worst-case spread for the last slot of a maximally-loaded schedule) plus
+    /// ~20% headroom for inter-cycle scheduling jitter. This accepts a real
+    /// N-node cycle as coherent while still rejecting a spread that exceeds one
+    /// whole cycle (which would mean frames from *different* sensing cycles were
+    /// mixed). Tune per deployment with [`MultistaticConfig::for_tdm_schedule`].
     pub guard_interval_us: u64,
     /// ADR-137 soft guard (microseconds): a spread above this but within
     /// `guard_interval_us` is fused but recorded as a `TimestampMismatch`
-    /// contradiction (loose alignment ⇒ privacy demotion). Default guard/5.
+    /// contradiction (loose alignment ⇒ privacy demotion).
+    ///
+    /// Set to **20,000 µs (20 ms)**: just above the observed 18,194 µs 2-slot
+    /// spread, so a normal 2-node cycle fuses *cleanly* (no demotion), but a
+    /// spread approaching a full cycle is flagged as loose alignment. Kept below
+    /// `guard_interval_us` so the soft band is meaningful.
     pub soft_guard_us: u64,
     /// Minimum number of nodes for multistatic mode.
     /// Falls back to single-node mode if fewer nodes are available.
@@ -106,12 +127,52 @@ pub struct MultistaticConfig {
 impl Default for MultistaticConfig {
     fn default() -> Self {
         Self {
-            guard_interval_us: 5000,
-            soft_guard_us: 1000,
+            // 60 ms hard / 20 ms soft — see field docs for the TDM derivation
+            // (issue #1031). The old 5 ms hard guard rejected every real frame
+            // set (observed 2-slot spread ≈ 18.2 ms), silently disabling fusion.
+            guard_interval_us: 60_000,
+            soft_guard_us: 20_000,
             min_nodes: 2,
             attention_temperature: 1.0,
             enable_person_separation: true,
             use_cir_gate: true,
+        }
+    }
+}
+
+impl MultistaticConfig {
+    /// Derive a guard interval from an explicit TDM schedule (issue #1031).
+    ///
+    /// In an N-slot schedule with per-slot duration `slot_duration_us`, the
+    /// maximum legitimate spread between two paired node frames in one cycle is
+    /// the full cycle length `tdm_total_slots × slot_duration_us` (last slot vs
+    /// first slot). The hard guard is set to that cycle length plus 20% jitter
+    /// headroom; the soft guard to ~⅓ of the cycle (a normal adjacent-slot pair
+    /// fuses cleanly, a near-full-cycle spread is flagged as loose alignment).
+    ///
+    /// `tdm_total_slots` is clamped to ≥ 1. All other fields take their
+    /// [`Default`] values.
+    ///
+    /// # Example
+    /// ```
+    /// use wifi_densepose_signal::ruvsense::multistatic::MultistaticConfig;
+    /// // 2 slots × 18 ms = 36 ms cycle → ~43 ms hard guard accepts the
+    /// // reported 18,194 µs 2-slot spread.
+    /// let cfg = MultistaticConfig::for_tdm_schedule(2, 18_000);
+    /// assert!(cfg.guard_interval_us >= 18_194);
+    /// ```
+    #[must_use]
+    pub fn for_tdm_schedule(tdm_total_slots: usize, slot_duration_us: u64) -> Self {
+        let slots = tdm_total_slots.max(1) as u64;
+        let cycle_us = slots.saturating_mul(slot_duration_us);
+        // +20% jitter headroom on the full cycle.
+        let guard_interval_us = cycle_us.saturating_add(cycle_us / 5).max(1);
+        // Soft band at ~⅓ cycle, kept strictly below the hard guard.
+        let soft_guard_us = (cycle_us / 3).clamp(1, guard_interval_us.saturating_sub(1).max(1));
+        Self {
+            guard_interval_us,
+            soft_guard_us,
+            ..Default::default()
         }
     }
 }
@@ -174,9 +235,32 @@ impl MultistaticFuser {
         self.cir_estimator = estimator;
     }
 
-    /// Create a fuser with a pre-built `CirEstimator` for HT20 (ADR-134 default).
+    /// Create a fuser with a pre-built `CirEstimator` for **canonical-56**
+    /// frames (ADR-154 — the correct default for the RuvSense pipeline).
     ///
-    /// Equivalent to `new()` followed by `set_cir_estimator(Some(Arc::new(CirEstimator::new(CirConfig::ht20()))))`.
+    /// The fuser operates on `CanonicalCsiFrame`s, which `hardware_norm.rs`
+    /// resamples onto a uniform 56-tone grid. `CirConfig::canonical56()` builds
+    /// Φ over those 56 tones so `estimate()` actually runs; `CirConfig::ht20()`
+    /// (52 active) would reject every canonical frame with `SubcarrierMismatch`
+    /// and silently fall back to the frequency-domain coherence — the dead-gate
+    /// bug ADR-154 fixes. Prefer this constructor for canonical-56 deployments.
+    pub fn with_cir_canonical56() -> Self {
+        let mut fuser = Self::new();
+        fuser.cir_estimator = Some(Arc::new(CirEstimator::new(CirConfig::canonical56())));
+        fuser
+    }
+
+    /// Create a fuser with a pre-built `CirEstimator` for **raw HT20** frames
+    /// (64 FFT bins / 52 active tones).
+    ///
+    /// # Warning (ADR-154)
+    ///
+    /// This config only runs on frames whose subcarrier count is 64 or 52. The
+    /// RuvSense multistatic path feeds *canonical-56* frames, so this estimator
+    /// rejects them with `SubcarrierMismatch` and the CIR gate silently
+    /// degrades to frequency-domain coherence. Use [`Self::with_cir_canonical56`]
+    /// for the canonical pipeline; keep this only for paths that genuinely feed
+    /// raw 64/52-bin HT20 frames.
     pub fn with_cir_ht20() -> Self {
         let mut fuser = Self::new();
         fuser.cir_estimator = Some(Arc::new(CirEstimator::new(CirConfig::ht20())));
@@ -470,8 +554,42 @@ impl MultistaticFuser {
                 // Frame not sanitized — fall back to freq-domain coherence.
                 freq_coherence
             }
+            Err(super::cir::CirError::SubcarrierMismatch { expected, got }) => {
+                // ADR-154: a mismatch here means the estimator was built for the
+                // WRONG tier (e.g. ht20's 52-active Φ vs a canonical-56 frame).
+                // That is a *config* error, not a runtime data condition, so make
+                // it LOUD in debug builds instead of silently degrading — a silent
+                // degrade is exactly how the dead-gate bug hid in production.
+                debug_assert!(
+                    false,
+                    "CIR gate DEAD: estimator expects {expected} subcarriers but got {got}; \
+                     build it with CirConfig::canonical56() (see MultistaticFuser::with_cir_canonical56). \
+                     Falling back to frequency-domain coherence."
+                );
+                freq_coherence
+            }
             Err(_) => freq_coherence,
         }
+    }
+
+    /// Test/diagnostic hook (ADR-154): run the CIR estimator on the first frame
+    /// of `node_frames` and return the raw `estimate()` result. Returns `None`
+    /// when the gate is disabled or no estimator/frame is available.
+    ///
+    /// This exposes the Ok/Err verdict that `cir_gate_coherence` consumes, so a
+    /// regression test can prove the gate actually runs (counts Ok vs Err on a
+    /// canonical-56 stream) rather than silently degrading.
+    pub fn cir_estimate_first(
+        &self,
+        node_frames: &[MultiBandCsiFrame],
+    ) -> Option<Result<super::cir::Cir, super::cir::CirError>> {
+        if !self.config.use_cir_gate {
+            return None;
+        }
+        let estimator = self.cir_estimator.as_ref()?;
+        let cf = node_frames.first()?.channel_frames.first()?;
+        let csi_frame = build_csi_frame_from_channel(cf);
+        Some(estimator.estimate(&csi_frame))
     }
 }
 
@@ -768,19 +886,85 @@ mod tests {
     #[test]
     fn ac_fuse_scored_loose_alignment_flags_soft_contradiction() {
         use super::super::fusion_quality::ContradictionFlag;
-        // guard 5000 us; spread 2000 us is within guard but > soft_guard 1000 us.
+        // Default soft_guard is now 20_000 us (#1031). A spread above soft but
+        // within the 60_000 us hard guard is fused yet flagged as loose. Use a
+        // 25_000 us spread: > soft (20 ms), < hard (60 ms).
         let fuser = MultistaticFuser::new();
-        let f0 = make_node_frame(0, 1000, 56, 1.0);
-        let f1 = make_node_frame(1, 3000, 56, 1.0);
+        let f0 = make_node_frame(0, 1_000, 56, 1.0);
+        let f1 = make_node_frame(1, 26_000, 56, 1.0);
         let (_fused, score) = fuser.fuse_scored(&[f0, f1], 0.85).unwrap();
 
         assert!(score.forces_privacy_demotion(), "loose alignment ⇒ demotion");
         assert!(matches!(
             score.contradiction_flags[0],
-            ContradictionFlag::TimestampMismatch { spread_ns: 2_000_000, soft_guard_ns: 1_000_000 }
+            ContradictionFlag::TimestampMismatch { spread_ns: 25_000_000, soft_guard_ns: 20_000_000 }
         ));
         // Penalized coherence is strictly below base when a contradiction fires.
         assert!(score.penalized_coherence() < score.base_coherence);
+    }
+
+    /// REGRESSION (issue #1031): a real 2-node TDM frame set with an 18,194 µs
+    /// spread (the reported value) must FUSE under the default config — the old
+    /// 5,000 µs guard rejected it with `TimestampMismatch`, silently disabling
+    /// multistatic fusion on every real deployment.
+    #[test]
+    fn fuse_real_tdm_spread_18194us_fuses_with_default_guard() {
+        let fuser = MultistaticFuser::new(); // default config
+        let f0 = make_node_frame(0, 1_000, 56, 1.0);
+        let f1 = make_node_frame(1, 1_000 + 18_194, 56, 1.0);
+        let fused = fuser
+            .fuse(&[f0, f1])
+            .expect("18,194 us 2-slot spread must fuse under the #1031 default guard");
+        assert_eq!(fused.active_nodes, 2, "both nodes contribute (real fusion)");
+        // The 18.2 ms spread is below the soft guard (20 ms), so fuse_scored
+        // records it as a CLEAN fuse (no privacy demotion) — the common case.
+        let f0b = make_node_frame(0, 1_000, 56, 1.0);
+        let f1b = make_node_frame(1, 1_000 + 18_194, 56, 1.0);
+        let (_f, score) = fuser.fuse_scored(&[f0b, f1b], 0.85).unwrap();
+        assert!(
+            !score.forces_privacy_demotion(),
+            "a normal 2-slot spread (18.2 ms < 20 ms soft) must NOT demote privacy"
+        );
+    }
+
+    /// The guard still does its job: a spread larger than a whole TDM cycle
+    /// (frames from different cycles) is rejected. Uses a tight per-deployment
+    /// config derived from the schedule via `for_tdm_schedule`.
+    #[test]
+    fn configurable_guard_rejects_too_large_spread() {
+        // 2 slots × 18 ms = 36 ms cycle → ~43 ms hard guard.
+        let cfg = MultistaticConfig::for_tdm_schedule(2, 18_000);
+        assert!(
+            cfg.guard_interval_us >= 18_194,
+            "derived guard must accept the reported 2-slot spread: {}",
+            cfg.guard_interval_us
+        );
+        let fuser = MultistaticFuser::with_config(cfg.clone());
+        // A spread well beyond a full cycle (e.g. 2× the hard guard) is rejected.
+        let too_large = cfg.guard_interval_us * 2;
+        let f0 = make_node_frame(0, 0, 56, 1.0);
+        let f1 = make_node_frame(1, too_large, 56, 1.0);
+        assert!(
+            matches!(
+                fuser.fuse(&[f0, f1]),
+                Err(MultistaticError::TimestampMismatch { .. })
+            ),
+            "a spread beyond a full TDM cycle must still be rejected"
+        );
+    }
+
+    /// The derived soft guard stays strictly below the hard guard, and a
+    /// degenerate (0-slot) schedule clamps to a usable config.
+    #[test]
+    fn for_tdm_schedule_invariants() {
+        let cfg = MultistaticConfig::for_tdm_schedule(4, 12_500); // 50 ms cycle
+        assert!(cfg.soft_guard_us < cfg.guard_interval_us);
+        assert!(cfg.guard_interval_us >= 50_000);
+        // Degenerate input clamps instead of producing a zero/overflow guard.
+        let degenerate = MultistaticConfig::for_tdm_schedule(0, 0);
+        assert!(degenerate.guard_interval_us >= 1);
+        assert!(degenerate.soft_guard_us >= 1);
+        assert!(degenerate.soft_guard_us < degenerate.guard_interval_us.max(2));
     }
 
     #[test]
@@ -939,7 +1123,11 @@ mod tests {
     #[test]
     fn default_config() {
         let cfg = MultistaticConfig::default();
-        assert_eq!(cfg.guard_interval_us, 5000);
+        // #1031: hard guard raised to 60 ms (was 5 ms) to accommodate the real
+        // TDM slot offset; soft guard 20 ms, both strictly ordered.
+        assert_eq!(cfg.guard_interval_us, 60_000);
+        assert_eq!(cfg.soft_guard_us, 20_000);
+        assert!(cfg.soft_guard_us < cfg.guard_interval_us);
         assert_eq!(cfg.min_nodes, 2);
         assert!((cfg.attention_temperature - 1.0).abs() < f32::EPSILON);
         assert!(cfg.enable_person_separation);
@@ -953,5 +1141,110 @@ mod tests {
             intra_correlation: 0.85,
         };
         assert_eq!(cluster.link_indices.len(), 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // ADR-154: CIR coherence gate regression tests (headline anti-slop fix).
+    //
+    // Before the fix, `with_cir_ht20()` built a 52-active Φ, so every
+    // canonical-56 frame returned `SubcarrierMismatch` and the gate silently
+    // degraded to frequency-domain coherence (100% Err, blend never applied).
+    // After the fix, `with_cir_canonical56()` runs on canonical-56 frames.
+    // -----------------------------------------------------------------------
+
+    /// Build a deterministic canonical-56 stream with sanitized (small) phase
+    /// so the CIR estimator's ghost-tap guard does not trip.
+    fn canonical56_stream(n: usize) -> Vec<MultiBandCsiFrame> {
+        (0..n)
+            .map(|i| make_node_frame(i as u8, 1000 + i as u64, 56, 1.0 + 0.05 * i as f32))
+            .collect()
+    }
+
+    /// PROOF (ADR-154): the old ht20 estimator is DEAD on canonical-56 frames —
+    /// 100% of `estimate()` calls return `SubcarrierMismatch`.
+    #[test]
+    fn cir_gate_ht20_is_dead_on_canonical56() {
+        let fuser = MultistaticFuser::with_cir_ht20();
+        let frames = canonical56_stream(8);
+        let mut ok = 0;
+        let mut err_mismatch = 0;
+        for f in &frames {
+            match fuser.cir_estimate_first(std::slice::from_ref(f)) {
+                Some(Ok(_)) => ok += 1,
+                Some(Err(super::super::cir::CirError::SubcarrierMismatch { .. })) => {
+                    err_mismatch += 1
+                }
+                other => panic!("unexpected estimate result: {other:?}"),
+            }
+        }
+        assert_eq!(ok, 0, "ht20 estimator must NOT decode canonical-56 frames");
+        assert_eq!(
+            err_mismatch, 8,
+            "every canonical-56 frame must hit SubcarrierMismatch under ht20 (dead gate)"
+        );
+    }
+
+    /// PROOF (ADR-154): after the fix, the canonical-56 estimator decodes every
+    /// frame (0% Err) — the gate is alive.
+    #[test]
+    fn cir_gate_canonical56_is_alive() {
+        let fuser = MultistaticFuser::with_cir_canonical56();
+        let frames = canonical56_stream(8);
+        let mut ok = 0;
+        let mut err = 0;
+        for f in &frames {
+            match fuser.cir_estimate_first(std::slice::from_ref(f)) {
+                Some(Ok(_)) => ok += 1,
+                Some(Err(_)) => err += 1,
+                None => panic!("gate disabled unexpectedly"),
+            }
+        }
+        assert_eq!(err, 0, "canonical-56 estimator must decode every frame");
+        assert_eq!(ok, 8, "all 8 canonical-56 frames must produce a CIR");
+    }
+
+    /// PROOF (ADR-154): with the live gate, the blended coherence differs from
+    /// the gate-off (frequency-domain only) coherence — the CIR term is applied.
+    #[test]
+    fn cir_gate_on_changes_coherence_vs_off() {
+        let frames = canonical56_stream(4);
+
+        // Gate ON, canonical-56 estimator (alive).
+        let on = MultistaticFuser::with_cir_canonical56();
+        let coh_on = on.fuse(&frames).unwrap().cross_node_coherence;
+
+        // Gate OFF: same frames, CIR path disabled → pure freq-domain coherence.
+        let off = MultistaticFuser::with_config(MultistaticConfig {
+            use_cir_gate: false,
+            ..Default::default()
+        });
+        let coh_off = off.fuse(&frames).unwrap().cross_node_coherence;
+
+        assert!(
+            (coh_on - coh_off).abs() > 1e-6,
+            "live CIR gate must change coherence: on={coh_on} off={coh_off}"
+        );
+    }
+
+    /// PROOF (ADR-154): the dead ht20 gate is indistinguishable from gate-off —
+    /// confirming the silent degradation the fix eliminates. (debug_assert is
+    /// disabled here via release-style check: we call the coherence path which
+    /// only debug-asserts; this test asserts the *numeric* degeneracy and is
+    /// gated to release to avoid the intentional debug panic.)
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn cir_gate_dead_ht20_equals_gate_off() {
+        let frames = canonical56_stream(4);
+        let dead = MultistaticFuser::with_cir_ht20();
+        let coh_dead = dead.fuse(&frames).unwrap().cross_node_coherence;
+        let off = MultistaticFuser::with_config(MultistaticConfig {
+            use_cir_gate: false,
+            ..Default::default()
+        });
+        let coh_off = off.fuse(&frames).unwrap().cross_node_coherence;
+        assert!(
+            (coh_dead - coh_off).abs() < 1e-9,
+            "dead ht20 gate silently equals gate-off: dead={coh_dead} off={coh_off}"
+        );
     }
 }

@@ -96,6 +96,8 @@ pub enum EngagementLevel {
 
 /// Detects and classifies customer shelf engagement from CSI data.
 pub struct ShelfEngagementDetector {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); MAX_EVENTS],
     /// Previous phase values for perturbation calculation.
     prev_phases: [f32; MAX_SC],
     /// Phase perturbation EMA (high-frequency component).
@@ -133,6 +135,7 @@ pub struct ShelfEngagementDetector {
 impl ShelfEngagementDetector {
     pub const fn new() -> Self {
         Self {
+            events: [(0, 0.0); MAX_EVENTS],
             prev_phases: [0.0; MAX_SC],
             perturbation_ema: Ema::new(PERTURBATION_EMA_ALPHA),
             motion_ema: Ema::new(MOTION_EMA_ALPHA),
@@ -221,7 +224,6 @@ impl ShelfEngagementDetector {
         self.phase_diff_history.push(perturbation);
 
         // Build events.
-        static mut EVENTS: [(i32, f32); MAX_EVENTS] = [(0, 0.0); MAX_EVENTS];
         let mut ne = 0usize;
 
         if !is_present {
@@ -234,7 +236,7 @@ impl ShelfEngagementDetector {
             self.still_frames = 0;
             self.level = EngagementLevel::None;
             self.prev_emitted_level = EngagementLevel::None;
-            unsafe { return &EVENTS[..ne]; }
+            return &self.events[..ne];
         }
 
         // Detect stillness (low translational motion).
@@ -249,7 +251,7 @@ impl ShelfEngagementDetector {
             self.engagement_frames = 0;
             self.level = EngagementLevel::None;
             self.prev_emitted_level = EngagementLevel::None;
-            unsafe { return &EVENTS[..ne]; }
+            return &self.events[..ne];
         }
 
         // Only start engagement counting after debounce.
@@ -284,9 +286,7 @@ impl ShelfEngagementDetector {
                 };
 
                 if event_id != 0 && ne < MAX_EVENTS {
-                    unsafe {
-                        EVENTS[ne] = (event_id, duration);
-                    }
+                    self.events[ne] = (event_id, duration);
                     ne += 1;
                     self.prev_emitted_level = self.level;
                     self.cooldown = ENGAGEMENT_COOLDOWN;
@@ -297,13 +297,11 @@ impl ShelfEngagementDetector {
         // Reach detection: sudden high-frequency phase burst while still.
         if self.still_frames > STILL_DEBOUNCE && perturbation > REACH_BURST_THRESH && ne < MAX_EVENTS {
             self.total_reaches += 1;
-            unsafe {
-                EVENTS[ne] = (EVENT_REACH_DETECTED, perturbation);
-            }
+            self.events[ne] = (EVENT_REACH_DETECTED, perturbation);
             ne += 1;
         }
 
-        unsafe { &EVENTS[..ne] }
+        &self.events[..ne]
     }
 
     /// Emit engagement end event based on current level.

@@ -83,15 +83,28 @@ pub struct PluginManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wasm_module: Option<String>,
 
-    /// [HOMECORE] `sha256:<hex>` hash of the wasm binary; verified before execution.
+    /// [HOMECORE] `sha256:<hex>` hash of the wasm binary.
+    ///
+    /// **(P4 — ENFORCED, ADR-162):** `verify::verify_module` computes the
+    /// SHA-256 of the real `.wasm` bytes on load and rejects the module if
+    /// it does not equal this hash (tamper detection). See [`crate::verify`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wasm_module_hash: Option<String>,
 
     /// [HOMECORE] Ed25519 signature of the wasm binary hash (`ed25519:<base64>`).
+    ///
+    /// **(P4 — ENFORCED, ADR-162):** verified against `publisher_key` over
+    /// the SHA-256 module digest before instantiation. A bad/forged/absent
+    /// signature is rejected under the secure trust policy (the
+    /// `cog-ha-matter::witness_signing` Ed25519 pattern is reused).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wasm_module_sig: Option<String>,
 
     /// [HOMECORE] Ed25519 public key of the plugin publisher.
+    ///
+    /// **(P4 — ENFORCED, ADR-162):** used to verify `wasm_module_sig`, and
+    /// checked against the host's [`crate::verify::PluginPolicy`] trust
+    /// allowlist — an unknown publisher is rejected by the secure default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publisher_key: Option<String>,
 
@@ -104,6 +117,12 @@ pub struct PluginManifest {
     pub host_imports_required: Vec<String>,
 
     /// [HOMECORE] Coarse-grained permission claims (glob patterns).
+    ///
+    /// **(P5 — ENFORCED, ADR-162):** `state:write:<glob>` (or a bare entity
+    /// glob like `light.*`) grants are parsed into a
+    /// [`crate::permissions::PermissionSet` ] and consulted by the
+    /// `hc_state_set` host import. A plugin can no longer write an entity it
+    /// did not declare; a plugin with no write grants can write nothing.
     #[serde(default)]
     pub homecore_permissions: Vec<PermissionClaim>,
 

@@ -78,6 +78,10 @@
 #![warn(rustdoc::missing_crate_level_docs)]
 
 pub mod alerting;
+/// REST API surface (Axum). Requires the `api` feature — its DTOs derive
+/// serde, which is an optional dependency gated behind that feature.
+#[cfg(feature = "api")]
+#[cfg_attr(docsrs, doc(cfg(feature = "api")))]
 pub mod api;
 pub mod detection;
 pub mod domain;
@@ -122,6 +126,8 @@ pub use integration::{
     AdapterError, HardwareAdapter, IntegrationConfig, NeuralAdapter, SignalAdapter,
 };
 
+#[cfg(feature = "api")]
+#[cfg_attr(docsrs, doc(cfg(feature = "api")))]
 pub use api::{create_router, AppState};
 
 pub use ml::{

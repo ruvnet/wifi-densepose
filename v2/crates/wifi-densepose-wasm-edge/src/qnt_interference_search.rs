@@ -112,6 +112,8 @@ impl Hypothesis {
 
 /// Grover-inspired room state search engine.
 pub struct InterferenceSearch {
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 3],
     /// Amplitude for each of the 16 hypotheses.
     amplitudes: [f32; N_HYPO],
     /// Total Grover iterations applied.
@@ -130,6 +132,7 @@ impl InterferenceSearch {
     pub const fn new() -> Self {
         // 1/sqrt(16) = 0.25
         Self {
+            events: [(0, 0.0); 3],
             amplitudes: [0.25; N_HYPO],
             iteration_count: 0,
             converged: false,
@@ -178,37 +181,30 @@ impl InterferenceSearch {
         self.converged = winner_prob > CONVERGENCE_PROB;
 
         // ── Build output events ──
-        static mut EVENTS: [(i32, f32); 3] = [(0, 0.0); 3];
         let mut n_events = 0usize;
 
         // Emit winner periodically or on change.
         let winner_changed = winner_idx as u8 != self.prev_winner;
         if winner_changed || self.frame_count % WINNER_EMIT_INTERVAL == 0 {
-            unsafe {
-                EVENTS[n_events] = (EVENT_HYPOTHESIS_WINNER, winner_idx as f32);
-            }
+            self.events[n_events] = (EVENT_HYPOTHESIS_WINNER, winner_idx as f32);
             n_events += 1;
         }
 
         // Emit amplitude periodically.
         if self.frame_count % AMPLITUDE_EMIT_INTERVAL == 0 {
-            unsafe {
-                EVENTS[n_events] = (EVENT_HYPOTHESIS_AMPLITUDE, winner_prob);
-            }
+            self.events[n_events] = (EVENT_HYPOTHESIS_AMPLITUDE, winner_prob);
             n_events += 1;
         }
 
         // Emit iteration count periodically.
         if self.frame_count % ITERATION_EMIT_INTERVAL == 0 {
-            unsafe {
-                EVENTS[n_events] = (EVENT_SEARCH_ITERATIONS, self.iteration_count as f32);
-            }
+            self.events[n_events] = (EVENT_SEARCH_ITERATIONS, self.iteration_count as f32);
             n_events += 1;
         }
 
         self.prev_winner = winner_idx as u8;
 
-        unsafe { &EVENTS[..n_events] }
+        &self.events[..n_events]
     }
 
     /// Apply the oracle: set boost/dampen factors based on CSI evidence.

@@ -1,16 +1,41 @@
 //! Evaluation metrics for WiFi-DensePose training.
 //!
-//! This module provides:
+//! # CANONICAL METRIC (ADR-155 §Tier-1.1 — single source of truth)
 //!
-//! - **PCK\@0.2** (Percentage of Correct Keypoints): a keypoint is considered
-//!   correct when its Euclidean distance from the ground truth is within 20%
-//!   of the person bounding-box diagonal.
-//! - **OKS** (Object Keypoint Similarity): the COCO-style metric that uses a
-//!   per-joint exponential kernel with sigmas from the COCO annotation
-//!   guidelines.
+//! As of ADR-155 there is exactly **one** definition of PCK and one of OKS
+//! that may be used for any *reported / claimed* number. They live in the
+//! un-gated [`crate::metrics_core`] module (so the single definition is
+//! reachable with or without `tch-backend`) and are re-exported here:
 //!
-//! Results are accumulated over mini-batches via [`MetricsAccumulator`] and
-//! finalized into a [`MetricsResult`] at the end of a validation epoch.
+//! - [`pck_canonical`] — **PCK\@k, torso-normalized.** A keypoint `j` is
+//!   correct iff `‖pred_j − gt_j‖₂ ≤ k · torso`, where
+//!   `torso = ‖left_hip(11) − right_hip(12)‖₂` in the *same* coordinate space
+//!   as the keypoints. This matches the COCO / ADR-152 convention validated in
+//!   `benchmarks/wiflow-std/RESULTS.md` (the ~96% PCK@20 reproduction). When
+//!   the two hip joints are not both visible we fall back to the diagonal of
+//!   the visible-keypoint bounding box (a stable, scale-aware normalizer).
+//!   **Zero visible joints ⇒ PCK = 0.0** (no evidence of correctness — the
+//!   opposite of the historical `MetricsAccumulator` bug that scored it 1.0).
+//!
+//! - [`oks_canonical`] — **OKS, COCO standard.** `s = sqrt(area)` where `area`
+//!   is the GT keypoint bounding-box area *in the keypoint coordinate space*.
+//!   Passing `s = 1.0` on normalized [0,1] coordinates is **forbidden** — it
+//!   makes every distance ≈0 and OKS ≈1.0 ("fake Gold tier"); that historical
+//!   bug is fixed here by always deriving `s` from the actual pose extent and
+//!   returning 0.0 when the area is degenerate.
+//!
+//! `Trainer::evaluate`, `eval.rs`, `proof.rs`, the WiFlow-STD bench and
+//! `ruview_metrics` all route through these two functions.
+//!
+//! ## Deprecated / non-canonical (DO NOT USE for reported metrics)
+//!
+//! The following predate the unification and are retained only for internal
+//! callers / back-compat; each is annotated `#[deprecated]` and forwards to the
+//! canonical implementation where behaviour-compatible:
+//!
+//! - [`compute_pck_v2`] / [`compute_oks_v2`] / [`MetricsAccumulatorV2`]
+//!   (hip↔hip torso but pixel-space, scale-from-area — folded into canonical).
+//! - `ruview_metrics`' bbox-diagonal PCK + its private OKS.
 //!
 //! # No mock data
 //!
@@ -19,36 +44,27 @@
 
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::visit::EdgeRef;
 use ruvector_mincut::{DynamicMinCut, MinCutBuilder};
 use std::collections::VecDeque;
 
-// ---------------------------------------------------------------------------
-// COCO keypoint sigmas (17 joints)
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// CANONICAL METRIC — single source of truth (ADR-155 §Tier-1.1)
+// ===========================================================================
+//
+// The canonical metric core was hoisted to the **un-gated** `metrics_core`
+// module (ADR-155 Milestone-1) so the single PCK/OKS definition is reachable
+// from the workspace test gate (`--no-default-features`) — this whole `metrics`
+// module is gated behind `tch-backend`. Re-exporting here keeps every existing
+// call site (`MetricsAccumulator`, `compute_pck`, the deprecated v2 path, the
+// tch trainer) pointing at exactly **one** implementation.
 
-/// Per-joint sigma values from the COCO keypoint evaluation standard.
-///
-/// These constants control the spread of the OKS Gaussian kernel for each
-/// of the 17 COCO-defined body joints.
-pub const COCO_KP_SIGMAS: [f32; 17] = [
-    0.026, // 0  nose
-    0.025, // 1  left_eye
-    0.025, // 2  right_eye
-    0.035, // 3  left_ear
-    0.035, // 4  right_ear
-    0.079, // 5  left_shoulder
-    0.079, // 6  right_shoulder
-    0.072, // 7  left_elbow
-    0.072, // 8  right_elbow
-    0.062, // 9  left_wrist
-    0.062, // 10 right_wrist
-    0.107, // 11 left_hip
-    0.107, // 12 right_hip
-    0.087, // 13 left_knee
-    0.087, // 14 right_knee
-    0.089, // 15 left_ankle
-    0.089, // 16 right_ankle
-];
+pub use crate::metrics_core::{
+    canonical_torso_size, oks_canonical, pck_canonical, CANON_LEFT_HIP, CANON_RIGHT_HIP,
+    COCO_KP_SIGMAS,
+};
+// `bounding_box_diagonal` stays crate-internal (metrics_core); the only caller
+// here is a test, which references it via its full path.
 
 // ---------------------------------------------------------------------------
 // MetricsResult
@@ -107,6 +123,24 @@ impl Default for MetricsResult {
 }
 
 // ---------------------------------------------------------------------------
+// EvalMetrics
+// ---------------------------------------------------------------------------
+
+/// Per-evaluation pose metrics.
+///
+/// Plain value container produced by evaluation runs: lower `mpjpe`/`gps`
+/// and higher `pck_at_05` indicate better predictions.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct EvalMetrics {
+    /// Mean Per-Joint Position Error (normalised units).
+    pub mpjpe: f64,
+    /// Percentage of Correct Keypoints at threshold 0.05 (0-1 scale).
+    pub pck_at_05: f64,
+    /// Geodesic Point Similarity error for DensePose surface predictions.
+    pub gps: f64,
+}
+
+// ---------------------------------------------------------------------------
 // MetricsAccumulator
 // ---------------------------------------------------------------------------
 
@@ -155,74 +189,27 @@ impl MetricsAccumulator {
 
     /// Update the accumulator with one sample's predictions.
     ///
+    /// Routes through the **canonical** [`pck_canonical`] / [`oks_canonical`]
+    /// definitions (ADR-155 §Tier-1.1) so the trainer's reported numbers are
+    /// identical to `eval.rs`, `proof.rs` and the WiFlow-STD bench.
+    ///
     /// # Arguments
     ///
     /// - `pred_kp`:    `[17, 2]` – predicted keypoint (x, y) in `[0, 1]`.
     /// - `gt_kp`:      `[17, 2]` – ground-truth keypoint (x, y) in `[0, 1]`.
     /// - `visibility`: `[17]`   – 0 = invisible, 1/2 = visible.
     ///
-    /// Keypoints with `visibility == 0` are skipped.
+    /// Keypoints with `visibility == 0` are skipped. A sample with no visible
+    /// joints (or a degenerate torso reference) contributes PCK=0 / OKS=0 — it
+    /// is **not** counted as trivially correct (closes the historical
+    /// false-perfect bug).
     pub fn update(&mut self, pred_kp: &Array2<f32>, gt_kp: &Array2<f32>, visibility: &Array1<f32>) {
-        let num_joints = pred_kp.shape()[0]
-            .min(gt_kp.shape()[0])
-            .min(visibility.len());
+        let (_, visible_count, sample_pck) =
+            pck_canonical(pred_kp, gt_kp, visibility, self.pck_threshold);
+        let sample_oks = oks_canonical(pred_kp, gt_kp, visibility);
 
-        // Compute bounding-box diagonal from visible ground-truth keypoints.
-        let bbox_diag = bounding_box_diagonal(gt_kp, visibility, num_joints);
-        // Guard against degenerate (point) bounding boxes.
-        let safe_diag = bbox_diag.max(1e-3);
-
-        let mut pck_correct = 0usize;
-        let mut visible_count = 0usize;
-        let mut oks_num = 0.0f64;
-        let mut oks_den = 0.0f64;
-
-        for j in 0..num_joints {
-            if visibility[j] < 0.5 {
-                // Invisible joint: skip.
-                continue;
-            }
-            visible_count += 1;
-
-            let dx = pred_kp[[j, 0]] - gt_kp[[j, 0]];
-            let dy = pred_kp[[j, 1]] - gt_kp[[j, 1]];
-            let dist = (dx * dx + dy * dy).sqrt();
-
-            // PCK: correct if within threshold × diagonal.
-            if dist <= self.pck_threshold * safe_diag {
-                pck_correct += 1;
-            }
-
-            // OKS contribution for this joint.
-            let sigma = if j < COCO_KP_SIGMAS.len() {
-                COCO_KP_SIGMAS[j]
-            } else {
-                0.07 // fallback sigma for non-standard joints
-            };
-            // Normalise distance by (2 × sigma)² × (area = diagonal²).
-            let two_sigma_sq = 2.0 * (sigma as f64) * (sigma as f64);
-            let area = (safe_diag as f64) * (safe_diag as f64);
-            let exp_arg = -(dist as f64 * dist as f64) / (two_sigma_sq * area + 1e-10);
-            oks_num += exp_arg.exp();
-            oks_den += 1.0;
-        }
-
-        // Per-sample PCK (fraction of visible joints that were correct).
-        let sample_pck = if visible_count > 0 {
-            pck_correct as f64 / visible_count as f64
-        } else {
-            1.0 // No visible joints: trivially correct (no evidence of error).
-        };
-
-        // Per-sample OKS.
-        let sample_oks = if oks_den > 0.0 {
-            oks_num / oks_den
-        } else {
-            1.0
-        };
-
-        self.pck_sum += sample_pck;
-        self.oks_sum += sample_oks;
+        self.pck_sum += sample_pck as f64;
+        self.oks_sum += sample_oks as f64;
         self.num_keypoints += visible_count;
         self.num_samples += 1;
     }
@@ -260,70 +247,21 @@ impl MetricsAccumulator {
 // ---------------------------------------------------------------------------
 // Geometric helpers
 // ---------------------------------------------------------------------------
-
-/// Compute the Euclidean diagonal of the bounding box of visible keypoints.
-///
-/// The bounding box is defined by the axis-aligned extent of all keypoints
-/// that have `visibility[j] >= 0.5`.  Returns 0.0 if there are no visible
-/// keypoints or all are co-located.
-fn bounding_box_diagonal(kp: &Array2<f32>, visibility: &Array1<f32>, num_joints: usize) -> f32 {
-    let mut x_min = f32::MAX;
-    let mut x_max = f32::MIN;
-    let mut y_min = f32::MAX;
-    let mut y_max = f32::MIN;
-    let mut any_visible = false;
-
-    for j in 0..num_joints {
-        if visibility[j] >= 0.5 {
-            let x = kp[[j, 0]];
-            let y = kp[[j, 1]];
-            x_min = x_min.min(x);
-            x_max = x_max.max(x);
-            y_min = y_min.min(y);
-            y_max = y_max.max(y);
-            any_visible = true;
-        }
-    }
-
-    if !any_visible {
-        return 0.0;
-    }
-
-    let w = (x_max - x_min).max(0.0);
-    let h = (y_max - y_min).max(0.0);
-    (w * w + h * h).sqrt()
-}
+//
+// `bounding_box_diagonal` (the canonical normalizer's bbox fallback) now lives
+// in `metrics_core` alongside the canonical metric it supports.
 
 // ---------------------------------------------------------------------------
 // Per-sample PCK and OKS free functions (required by the training evaluator)
 // ---------------------------------------------------------------------------
 
-// Keypoint indices for torso-diameter PCK normalisation (COCO ordering).
-const IDX_LEFT_HIP: usize = 11;
-const IDX_RIGHT_SHOULDER: usize = 6;
-
-/// Compute the torso diameter for PCK normalisation.
-///
-/// Torso diameter = ||left_hip − right_shoulder||₂ in normalised [0,1] space.
-/// Returns 0.0 when either landmark is invisible, indicating the caller
-/// should fall back to a unit normaliser.
-fn torso_diameter_pck(gt_kpts: &Array2<f32>, visibility: &Array1<f32>) -> f32 {
-    if visibility[IDX_LEFT_HIP] < 0.5 || visibility[IDX_RIGHT_SHOULDER] < 0.5 {
-        return 0.0;
-    }
-    let dx = gt_kpts[[IDX_LEFT_HIP, 0]] - gt_kpts[[IDX_RIGHT_SHOULDER, 0]];
-    let dy = gt_kpts[[IDX_LEFT_HIP, 1]] - gt_kpts[[IDX_RIGHT_SHOULDER, 1]];
-    (dx * dx + dy * dy).sqrt()
-}
-
 /// Compute PCK (Percentage of Correct Keypoints) for a single frame.
 ///
-/// A keypoint `j` is "correct" when its Euclidean distance to the ground
-/// truth is within `threshold × torso_diameter` (left_hip ↔ right_shoulder).
-/// When the torso reference joints are not visible the threshold is applied
-/// directly in normalised [0,1] coordinate space (unit normaliser).
-///
-/// Only keypoints with `visibility[j] > 0` contribute to the count.
+/// Thin wrapper over the **canonical** [`pck_canonical`] (ADR-155 §Tier-1.1):
+/// torso-normalized by hip↔hip with bbox-diagonal fallback, and `(0,0,0.0)`
+/// for a sample with no measurable evidence. Prior to ADR-155 this used a
+/// hip↔shoulder torso and a unit-normalizer fallback — both replaced here so
+/// every call site agrees on one definition.
 ///
 /// # Returns
 /// `(correct_count, total_count, pck_value)` where `pck_value ∈ [0,1]`;
@@ -334,38 +272,14 @@ pub fn compute_pck(
     visibility: &Array1<f32>,
     threshold: f32,
 ) -> (usize, usize, f32) {
-    let torso = torso_diameter_pck(gt_kpts, visibility);
-    let norm = if torso > 1e-6 { torso } else { 1.0_f32 };
-    let dist_threshold = threshold * norm;
-
-    let mut correct = 0_usize;
-    let mut total = 0_usize;
-
-    for j in 0..17 {
-        if visibility[j] < 0.5 {
-            continue;
-        }
-        total += 1;
-        let dx = pred_kpts[[j, 0]] - gt_kpts[[j, 0]];
-        let dy = pred_kpts[[j, 1]] - gt_kpts[[j, 1]];
-        let dist = (dx * dx + dy * dy).sqrt();
-        if dist <= dist_threshold {
-            correct += 1;
-        }
-    }
-
-    let pck = if total > 0 {
-        correct as f32 / total as f32
-    } else {
-        0.0
-    };
-    (correct, total, pck)
+    pck_canonical(pred_kpts, gt_kpts, visibility, threshold)
 }
 
 /// Compute per-joint PCK over a batch of frames.
 ///
 /// Returns `[f32; 17]` where entry `j` is the fraction of frames in which
 /// joint `j` was both visible and correctly predicted at the given threshold.
+/// Uses the canonical torso normalizer ([`canonical_torso_size`]).
 pub fn compute_per_joint_pck(
     pred_batch: &[Array2<f32>],
     gt_batch: &[Array2<f32>],
@@ -379,9 +293,11 @@ pub fn compute_per_joint_pck(
     let mut total = [0_usize; 17];
 
     for (pred, (gt, vis)) in pred_batch.iter().zip(gt_batch.iter().zip(vis_batch.iter())) {
-        let torso = torso_diameter_pck(gt, vis);
-        let norm = if torso > 1e-6 { torso } else { 1.0_f32 };
-        let dist_thr = threshold * norm;
+        // Canonical normalizer; skip frames with no measurable reference.
+        let dist_thr = match canonical_torso_size(gt, vis) {
+            Some(t) => threshold * t,
+            None => continue,
+        };
 
         for j in 0..17 {
             if vis[j] < 0.5 {
@@ -410,45 +326,21 @@ pub fn compute_per_joint_pck(
 
 /// Compute Object Keypoint Similarity (OKS) for a single person.
 ///
-/// COCO OKS formula:
+/// Thin wrapper over the **canonical** [`oks_canonical`] (ADR-155 §Tier-1.1).
 ///
-/// ```text
-/// OKS = Σᵢ exp(-dᵢ² / (2·s²·kᵢ²)) · δ(vᵢ>0)  /  Σᵢ δ(vᵢ>0)
-/// ```
-///
-/// - `dᵢ` – Euclidean distance between predicted and GT keypoint `i`
-/// - `s` – object scale (`object_scale`; pass `1.0` when bbox is unknown)
-/// - `kᵢ` – per-joint sigma from [`COCO_KP_SIGMAS`]
-///
-/// Returns `0.0` when no keypoints are visible.
+/// The legacy `object_scale` parameter is **ignored**: passing `1.0` on
+/// normalized [0,1] coordinates was the "fake Gold tier" bug (every distance
+/// ≈ 0 ⇒ OKS ≈ 1.0 for any pose). The scale is now always derived from the GT
+/// pose extent, so the result is honest regardless of what scale a caller
+/// would have passed. The argument is retained only for signature
+/// compatibility and will be removed in a future cleanup.
 pub fn compute_oks(
     pred_kpts: &Array2<f32>,
     gt_kpts: &Array2<f32>,
     visibility: &Array1<f32>,
-    object_scale: f32,
+    _object_scale: f32,
 ) -> f32 {
-    let s_sq = object_scale * object_scale;
-    let mut numerator = 0.0_f32;
-    let mut denominator = 0.0_f32;
-
-    for j in 0..17 {
-        if visibility[j] < 0.5 {
-            continue;
-        }
-        denominator += 1.0;
-        let dx = pred_kpts[[j, 0]] - gt_kpts[[j, 0]];
-        let dy = pred_kpts[[j, 1]] - gt_kpts[[j, 1]];
-        let d_sq = dx * dx + dy * dy;
-        let k = COCO_KP_SIGMAS[j];
-        let exp_arg = -d_sq / (2.0 * s_sq * k * k);
-        numerator += exp_arg.exp();
-    }
-
-    if denominator > 0.0 {
-        numerator / denominator
-    } else {
-        0.0
-    }
+    oks_canonical(pred_kpts, gt_kpts, visibility)
 }
 
 /// Aggregate result type returned by [`aggregate_metrics`].
@@ -867,9 +759,9 @@ pub fn find_augmenting_path(
 ///        l_ankle, r_ankle.
 pub const COCO_KPT_SIGMAS: [f32; 17] = COCO_KP_SIGMAS;
 
-/// COCO joint indices for hip-to-hip torso size used by PCK.
-const KPT_LEFT_HIP: usize = 11;
-const KPT_RIGHT_HIP: usize = 12;
+// (hip indices for the canonical normalizer live as CANON_LEFT_HIP /
+// CANON_RIGHT_HIP near the top of this module; the old per-region duplicates
+// were removed when the V2 path was folded into the canonical metric.)
 
 // ── Spec MetricsResult ──────────────────────────────────────────────────────
 
@@ -913,52 +805,41 @@ pub struct MetricsResultDetailed {
 /// * `image_size` — `(width, height)` in pixels
 ///
 /// Returns `(overall_pck, per_joint_pck)`.
+#[deprecated(
+    since = "ADR-155",
+    note = "DO NOT USE for reported metrics — use pck_canonical. Retained for \
+            back-compat; now forwards to the canonical definition (image_size \
+            is ignored because canonical PCK is a scale-invariant ratio)."
+)]
 pub fn compute_pck_v2(
     pred_kpts: ArrayView2<f32>,
     gt_kpts: ArrayView2<f32>,
     visibility: ArrayView1<f32>,
     threshold: f32,
-    image_size: (usize, usize),
+    _image_size: (usize, usize),
 ) -> (f32, [f32; 17]) {
-    let (w, h) = image_size;
-    let (wf, hf) = (w as f32, h as f32);
-
-    let lh_vis = visibility[KPT_LEFT_HIP] > 0.0;
-    let rh_vis = visibility[KPT_RIGHT_HIP] > 0.0;
-
-    let torso_size = if lh_vis && rh_vis {
-        let dx = (gt_kpts[[KPT_LEFT_HIP, 0]] - gt_kpts[[KPT_RIGHT_HIP, 0]]) * wf;
-        let dy = (gt_kpts[[KPT_LEFT_HIP, 1]] - gt_kpts[[KPT_RIGHT_HIP, 1]]) * hf;
-        (dx * dx + dy * dy).sqrt()
-    } else {
-        0.1 * (wf * wf + hf * hf).sqrt()
-    };
-
-    let max_dist = threshold * torso_size;
+    // Canonical PCK is a ratio (dist/torso) so the pixel scaling in the old
+    // implementation cancelled out; route through the single source of truth.
+    let pred = pred_kpts.to_owned();
+    let gt = gt_kpts.to_owned();
+    let vis = visibility.to_owned();
+    let torso = canonical_torso_size(&gt, &vis);
 
     let mut per_joint_pck = [0.0f32; 17];
-    let mut total_visible = 0u32;
-    let mut total_correct = 0u32;
-
-    for j in 0..17 {
-        if visibility[j] <= 0.0 {
-            continue;
-        }
-        total_visible += 1;
-        let dx = (pred_kpts[[j, 0]] - gt_kpts[[j, 0]]) * wf;
-        let dy = (pred_kpts[[j, 1]] - gt_kpts[[j, 1]]) * hf;
-        if (dx * dx + dy * dy).sqrt() <= max_dist {
-            total_correct += 1;
-            per_joint_pck[j] = 1.0;
+    let (_, _, overall) = pck_canonical(&pred, &gt, &vis, threshold);
+    if let Some(t) = torso {
+        let max_dist = threshold * t;
+        for j in 0..17 {
+            if vis[j] < 0.5 {
+                continue;
+            }
+            let dx = pred[[j, 0]] - gt[[j, 0]];
+            let dy = pred[[j, 1]] - gt[[j, 1]];
+            if (dx * dx + dy * dy).sqrt() <= max_dist {
+                per_joint_pck[j] = 1.0;
+            }
         }
     }
-
-    let overall = if total_visible == 0 {
-        0.0
-    } else {
-        total_correct as f32 / total_visible as f32
-    };
-
     (overall, per_joint_pck)
 }
 
@@ -972,6 +853,14 @@ pub fn compute_pck_v2(
 /// [`COCO_KPT_SIGMAS`].
 ///
 /// Returns 0.0 when no keypoints are visible or `area == 0`.
+#[deprecated(
+    since = "ADR-155",
+    note = "DO NOT USE for reported metrics — use oks_canonical. Retained for \
+            back-compat. When `area <= 0` it still returns 0.0; otherwise it \
+            uses the caller-supplied `area` as before so explicit-area callers \
+            are unchanged, but new code should call oks_canonical which derives \
+            scale from the pose and cannot be spoofed with area=1.0."
+)]
 pub fn compute_oks_v2(
     pred_kpts: ArrayView2<f32>,
     gt_kpts: ArrayView2<f32>,
@@ -1200,17 +1089,28 @@ impl MetricsAccumulatorV2 {
         pred: ArrayView2<f32>,
         gt: ArrayView2<f32>,
         vis: ArrayView1<f32>,
-        image_size: (usize, usize),
+        _image_size: (usize, usize),
     ) {
-        let (_, per_joint) = compute_pck_v2(pred, gt, vis, 0.2, image_size);
+        // Route through the canonical metric (ADR-155 §Tier-1.1). `image_size`
+        // is unused because canonical PCK is a scale-invariant ratio and OKS
+        // derives its scale from the pose.
+        let pred_o = pred.to_owned();
+        let gt_o = gt.to_owned();
+        let vis_o = vis.to_owned();
+        let torso = canonical_torso_size(&gt_o, &vis_o);
         for j in 0..17 {
             if vis[j] > 0.0 {
                 self.total_visible[j] += 1.0;
-                self.total_correct[j] += per_joint[j];
+                if let Some(t) = torso {
+                    let dx = pred[[j, 0]] - gt[[j, 0]];
+                    let dy = pred[[j, 1]] - gt[[j, 1]];
+                    if (dx * dx + dy * dy).sqrt() <= 0.2 * t {
+                        self.total_correct[j] += 1.0;
+                    }
+                }
             }
         }
-        let area = kpt_bbox_area_v2(gt, vis, image_size);
-        self.total_oks += compute_oks_v2(pred, gt, vis, area);
+        self.total_oks += oks_canonical(&pred_o, &gt_o, &vis_o);
         self.num_samples += 1;
     }
 
@@ -1248,30 +1148,9 @@ impl Default for MetricsAccumulatorV2 {
     }
 }
 
-/// Estimate bounding-box area (pixels²) from visible GT keypoints.
-fn kpt_bbox_area_v2(gt: ArrayView2<f32>, vis: ArrayView1<f32>, image_size: (usize, usize)) -> f32 {
-    let (w, h) = image_size;
-    let (wf, hf) = (w as f32, h as f32);
-    let mut x_min = f32::INFINITY;
-    let mut x_max = f32::NEG_INFINITY;
-    let mut y_min = f32::INFINITY;
-    let mut y_max = f32::NEG_INFINITY;
-    for j in 0..17 {
-        if vis[j] <= 0.0 {
-            continue;
-        }
-        let x = gt[[j, 0]] * wf;
-        let y = gt[[j, 1]] * hf;
-        x_min = x_min.min(x);
-        x_max = x_max.max(x);
-        y_min = y_min.min(y);
-        y_max = y_max.max(y);
-    }
-    if x_min.is_infinite() {
-        return 0.01 * wf * hf;
-    }
-    (x_max - x_min).max(1.0) * (y_max - y_min).max(1.0)
-}
+// kpt_bbox_area_v2 was removed in ADR-155: the V2 accumulator now derives its
+// OKS scale from the canonical pose extent (oks_canonical), so a separate
+// image-size-dependent area estimate is no longer needed.
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -1314,15 +1193,19 @@ mod tests {
     }
 
     #[test]
-    fn all_invisible_gives_trivial_pck() {
+    fn all_invisible_gives_zero_pck() {
+        // ADR-155 §Tier-1.1: a sample with NO visible joints has no measurable
+        // evidence of correctness ⇒ PCK = 0.0. (Previously this returned 1.0 —
+        // the MetricsAccumulator false-perfect bug that let an empty/garbage
+        // prediction inflate the reported metric.)
         let mut acc = MetricsAccumulator::default_threshold();
         let pred = Array2::zeros((17, 2));
         let gt = Array2::zeros((17, 2));
         let vis = Array1::zeros(17);
         acc.update(&pred, &gt, &vis);
         let result = acc.finalize().unwrap();
-        // No visible joints → trivially "perfect" (no errors to measure)
-        assert_abs_diff_eq!(result.pck, 1.0_f32, epsilon = 1e-5);
+        assert_abs_diff_eq!(result.pck, 0.0_f32, epsilon = 1e-5);
+        assert_abs_diff_eq!(result.oks, 0.0_f32, epsilon = 1e-5);
     }
 
     #[test]
@@ -1375,7 +1258,7 @@ mod tests {
     fn bbox_diagonal_unit_square() {
         let kp = array![[0.0_f32, 0.0], [1.0, 1.0]];
         let vis = array![2.0_f32, 2.0];
-        let diag = bounding_box_diagonal(&kp, &vis, 2);
+        let diag = crate::metrics_core::bounding_box_diagonal(&kp, &vis, 2);
         assert_abs_diff_eq!(diag, std::f32::consts::SQRT_2, epsilon = 1e-5);
     }
 
@@ -1403,12 +1286,19 @@ mod tests {
         Array1::ones(17)
     }
 
+    // A pose centred at (x, y) but with a NON-DEGENERATE torso: the two hips
+    // (joints 11, 12) are offset so that the canonical hip↔hip normalizer is
+    // positive (ADR-155 §Tier-1.1 — a zero-extent pose is correctly
+    // unscoreable, so test fixtures must give the pose a real scale).
     fn uniform_kpts_17(x: f32, y: f32) -> Array2<f32> {
         let mut arr = Array2::zeros((17, 2));
         for j in 0..17 {
             arr[[j, 0]] = x;
             arr[[j, 1]] = y;
         }
+        // Give the torso a 0.1-wide hip span so torso_size > 0.
+        arr[[CANON_LEFT_HIP, 0]] = x - 0.05;
+        arr[[CANON_RIGHT_HIP, 0]] = x + 0.05;
         arr
     }
 
@@ -1565,13 +1455,16 @@ mod tests {
 
     // ── Spec-required API tests ───────────────────────────────────────────────
 
+    // Non-degenerate all-visible pose for the V2 spec tests: hips offset so the
+    // canonical normalizer is positive (ADR-155 §Tier-1.1).
+    fn spec_pose_17() -> Array2<f32> {
+        uniform_kpts_17(0.5, 0.5)
+    }
+
     #[test]
+    #[allow(deprecated)] // compute_pck_v2 forwards to pck_canonical (ADR-155).
     fn spec_pck_v2_perfect() {
-        let mut kpts = Array2::<f32>::zeros((17, 2));
-        for j in 0..17 {
-            kpts[[j, 0]] = 0.5;
-            kpts[[j, 1]] = 0.5;
-        }
+        let kpts = spec_pose_17();
         let vis = Array1::ones(17_usize);
         let (pck, per_joint) =
             compute_pck_v2(kpts.view(), kpts.view(), vis.view(), 0.2, (256, 256));
@@ -1582,6 +1475,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn spec_pck_v2_no_visible() {
         let kpts = Array2::<f32>::zeros((17, 2));
         let vis = Array1::zeros(17_usize);
@@ -1591,21 +1485,22 @@ mod tests {
 
     #[test]
     fn spec_oks_v2_perfect() {
-        let mut kpts = Array2::<f32>::zeros((17, 2));
-        for j in 0..17 {
-            kpts[[j, 0]] = 0.5;
-            kpts[[j, 1]] = 0.5;
-        }
+        // Now uses the canonical OKS (scale derived from the pose), which is the
+        // honest definition (ADR-155 §Tier-1.1). Perfect prediction ⇒ OKS=1.0.
+        let kpts = spec_pose_17();
         let vis = Array1::ones(17_usize);
-        let oks = compute_oks_v2(kpts.view(), kpts.view(), vis.view(), 128.0 * 128.0);
+        let oks = oks_canonical(&kpts, &kpts, &vis);
         assert!((oks - 1.0).abs() < 1e-5, "oks={oks}");
     }
 
     #[test]
     fn spec_oks_v2_zero_area() {
+        // A zero-extent (all-coincident) pose has no measurable scale ⇒ OKS=0.0
+        // under the canonical definition — exactly the property that kills the
+        // s=1.0 "fake Gold tier" bug.
         let kpts = Array2::<f32>::zeros((17, 2));
         let vis = Array1::ones(17_usize);
-        let oks = compute_oks_v2(kpts.view(), kpts.view(), vis.view(), 0.0);
+        let oks = oks_canonical(&kpts, &kpts, &vis);
         assert_eq!(oks, 0.0);
     }
 
@@ -1643,11 +1538,7 @@ mod tests {
 
     #[test]
     fn spec_accumulator_v2_perfect() {
-        let mut kpts = Array2::<f32>::zeros((17, 2));
-        for j in 0..17 {
-            kpts[[j, 0]] = 0.5;
-            kpts[[j, 1]] = 0.5;
-        }
+        let kpts = spec_pose_17();
         let vis = Array1::ones(17_usize);
         let mut acc = MetricsAccumulatorV2::new();
         acc.update(kpts.view(), kpts.view(), vis.view(), (256, 256));
@@ -1671,13 +1562,87 @@ mod tests {
         assert_eq!(result.num_samples, 0);
     }
 
+    // ── Canonical metric: the ADR-155 bug-catching tests ─────────────────────
+
+    #[test]
+    fn canonical_pck_zero_visible_is_zero_not_one() {
+        // Regression test for the MetricsAccumulator false-perfect bug: a sample
+        // with no visible joints must NOT score 1.0.
+        let pred = Array2::<f32>::zeros((17, 2));
+        let gt = Array2::<f32>::zeros((17, 2));
+        let vis = Array1::<f32>::zeros(17);
+        let (correct, total, pck) = pck_canonical(&pred, &gt, &vis, 0.2);
+        assert_eq!((correct, total), (0, 0));
+        assert_eq!(pck, 0.0);
+    }
+
+    #[test]
+    fn canonical_oks_not_one_for_wrong_pose_on_normalized_coords() {
+        // Regression test for the s=1.0 "fake Gold tier" bug: a clearly wrong
+        // prediction on normalized [0,1] coords must NOT yield OKS≈1.0, because
+        // the scale is derived from the (small) pose extent, not a fixed 1.0.
+        let mut gt = Array2::<f32>::zeros((17, 2));
+        for j in 0..17 {
+            gt[[j, 0]] = 0.5;
+            gt[[j, 1]] = 0.5;
+        }
+        gt[[CANON_LEFT_HIP, 0]] = 0.45;
+        gt[[CANON_RIGHT_HIP, 0]] = 0.55; // torso ≈ 0.1
+                                         // Prediction off by 0.3 (3× the torso) — should be a poor OKS.
+        let mut pred = gt.clone();
+        for j in 0..17 {
+            pred[[j, 0]] += 0.3;
+        }
+        let vis = Array1::<f32>::ones(17);
+        let oks = oks_canonical(&pred, &gt, &vis);
+        assert!(
+            oks < 0.2,
+            "wrong pose on normalized coords must not look near-perfect, got OKS={oks}"
+        );
+        // The old buggy path (s=1.0) would have returned ≈1.0 here.
+    }
+
+    #[test]
+    fn canonical_pck_uses_hip_to_hip_torso() {
+        // torso = ‖hip11 − hip12‖ = 0.1; threshold 0.2 ⇒ max dist 0.02.
+        let mut gt = Array2::<f32>::zeros((17, 2));
+        for j in 0..17 {
+            gt[[j, 0]] = 0.5;
+            gt[[j, 1]] = 0.5;
+        }
+        gt[[CANON_LEFT_HIP, 0]] = 0.45;
+        gt[[CANON_RIGHT_HIP, 0]] = 0.55;
+        let torso = canonical_torso_size(&gt, &Array1::ones(17)).unwrap();
+        assert!((torso - 0.1).abs() < 1e-6, "torso={torso}");
+
+        // A joint 0.015 away (< 0.02) is correct; 0.05 away (> 0.02) is not.
+        let mut pred = gt.clone();
+        pred[[0, 0]] += 0.015; // nose within tolerance
+        pred[[5, 0]] += 0.05; // shoulder out of tolerance
+        let vis = Array1::ones(17);
+        let (_, _, pck) = pck_canonical(&pred, &gt, &vis, 0.2);
+        // 16 of 17 within tolerance.
+        assert!((pck - 16.0 / 17.0).abs() < 1e-5, "pck={pck}");
+    }
+
+    #[test]
+    fn canonical_torso_falls_back_to_bbox_when_hips_hidden() {
+        // Hips invisible ⇒ fall back to visible-keypoint bbox diagonal.
+        let mut gt = Array2::<f32>::zeros((17, 2));
+        gt[[0, 0]] = 0.0;
+        gt[[0, 1]] = 0.0;
+        gt[[5, 0]] = 0.3;
+        gt[[5, 1]] = 0.4; // diagonal = 0.5
+        let mut vis = Array1::<f32>::zeros(17);
+        vis[0] = 1.0;
+        vis[5] = 1.0;
+        let torso = canonical_torso_size(&gt, &vis).unwrap();
+        assert!((torso - 0.5).abs() < 1e-6, "fallback torso={torso}");
+    }
+
     #[test]
     fn spec_evaluate_dataset_v2_perfect() {
-        let mut kpts = Array2::<f32>::zeros((17, 2));
-        for j in 0..17 {
-            kpts[[j, 0]] = 0.5;
-            kpts[[j, 1]] = 0.5;
-        }
+        let kpts = spec_pose_17();
         let vis = Array1::ones(17_usize);
         let samples: Vec<(Array2<f32>, Array1<f32>)> =
             (0..4).map(|_| (kpts.clone(), vis.clone())).collect();

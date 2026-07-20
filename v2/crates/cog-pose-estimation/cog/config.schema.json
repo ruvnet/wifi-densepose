@@ -26,8 +26,8 @@
       "type": "number",
       "minimum": 0,
       "maximum": 1,
-      "default": 0.3,
-      "description": "Drop frames where the inferred pose confidence is below this threshold."
+      "default": 0.185,
+      "description": "Drop frames where the inferred pose confidence is below this threshold. pose_v1 has no confidence head, so every frame carries the model's published per-frame confidence (0.185 = validation PCK@50); the default is pinned to that value so a default install actually emits frames. Raising it above 0.185 suppresses ALL pose.frame events (the runtime warns when this happens)."
     }
   },
   "required": ["model_path"]

@@ -1,7 +1,15 @@
-//! Gait analysis — ADR-041 Category 1 Medical module.
+//! Gait-parameter proxies & fall-risk-like scoring — ADR-041 Category 1 Medical module.
 //!
-//! Extracts gait parameters from CSI phase variance periodicity to assess
-//! mobility and fall risk:
+//! ⚠️ EXPERIMENTAL RESEARCH MODULE — NOT VALIDATED AGAINST CLINICAL DATA.
+//! ⚠️ NOT A MEDICAL DEVICE. Do NOT use for diagnosis, fall-risk assessment, or
+//! ⚠️ any clinical decision. This module computes *candidate* gait-parameter
+//! ⚠️ proxies and a fall-risk-like score only; it has never been compared
+//! ⚠️ against gait labs, clinical fall-risk instruments, or any reference
+//! ⚠️ standard, and its accuracy is unproven (see ADR-160 §A1). Gated behind
+//! ⚠️ the non-default `medical-experimental` cargo feature.
+//!
+//! Extracts candidate gait-parameter proxies from CSI phase-variance
+//! periodicity (experimental, NOT clinical measurements):
 //!   - Step cadence (steps/min) from dominant phase variance frequency
 //!   - Gait asymmetry from left/right step interval ratio
 //!   - Stride variability (coefficient of variation)
@@ -109,6 +117,9 @@ pub struct GaitAnalyzer {
 
     /// Frame counter.
     frame_count: u32,
+
+    /// Per-call event scratch buffer (owned; replaces former `static mut`).
+    events: [(i32, f32); 5],
 }
 
 impl GaitAnalyzer {
@@ -132,6 +143,7 @@ impl GaitAnalyzer {
             last_asymmetry: 0.0,
             last_fall_risk: 0.0,
             frame_count: 0,
+            events: [(0, 0.0); 5],
         }
     }
 
@@ -162,7 +174,6 @@ impl GaitAnalyzer {
         self.var_idx = (self.var_idx + 1) % GAIT_WINDOW;
         if self.var_len < GAIT_WINDOW { self.var_len += 1; }
 
-        static mut EVENTS: [(i32, f32); 5] = [(0, 0.0); 5];
         let mut n = 0usize;
 
         // ── Step detection (peak in variance) ───────────────────────────
@@ -201,13 +212,13 @@ impl GaitAnalyzer {
 
             // Emit cadence.
             if n < 5 {
-                unsafe { EVENTS[n] = (EVENT_STEP_CADENCE, cadence); }
+                self.events[n] = (EVENT_STEP_CADENCE, cadence);
                 n += 1;
             }
 
             // Emit asymmetry if above threshold.
             if fabsf(asymmetry - 1.0) > ASYMMETRY_THRESH && n < 5 {
-                unsafe { EVENTS[n] = (EVENT_GAIT_ASYMMETRY, asymmetry); }
+                self.events[n] = (EVENT_GAIT_ASYMMETRY, asymmetry);
                 n += 1;
             }
 
@@ -215,7 +226,7 @@ impl GaitAnalyzer {
             if cadence > SHUFFLE_CADENCE_HIGH && avg_energy < SHUFFLE_ENERGY_LOW
                 && self.cd_shuffle == 0 && n < 5
             {
-                unsafe { EVENTS[n] = (EVENT_SHUFFLING_DETECTED, cadence); }
+                self.events[n] = (EVENT_SHUFFLING_DETECTED, cadence);
                 n += 1;
                 self.cd_shuffle = COOLDOWN_SECS;
             }
@@ -223,7 +234,7 @@ impl GaitAnalyzer {
             // Festination: accelerating cadence.
             if self.cadence_len >= 3 && self.cd_festination == 0 && n < 5 {
                 if self.detect_festination() {
-                    unsafe { EVENTS[n] = (EVENT_FESTINATION, cadence); }
+                    self.events[n] = (EVENT_FESTINATION, cadence);
                     n += 1;
                     self.cd_festination = COOLDOWN_SECS;
                 }
@@ -233,7 +244,7 @@ impl GaitAnalyzer {
             let risk = self.compute_fall_risk(cadence, asymmetry, variability, avg_energy);
             self.last_fall_risk = risk;
             if n < 5 {
-                unsafe { EVENTS[n] = (EVENT_FALL_RISK_SCORE, risk); }
+                self.events[n] = (EVENT_FALL_RISK_SCORE, risk);
                 n += 1;
             }
 
@@ -241,7 +252,7 @@ impl GaitAnalyzer {
             self.step_count = 0;
         }
 
-        unsafe { &EVENTS[..n] }
+        &self.events[..n]
     }
 
     /// Compute cadence in steps/min from step intervals.

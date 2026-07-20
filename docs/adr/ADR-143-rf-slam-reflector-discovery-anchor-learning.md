@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Proposed |
+| **Status** | Accepted — partial (built + tested building block, v1 fixed-map default; v2 dataset-gated — see Implementation Status, commit `2d4f3dea5`) |
 | **Date** | 2026-05-28 |
 | **Deciders** | ruv |
 | **Codebase target** | `wifi-densepose-signal` (`ruvsense/field_model.rs`, new `ruvsense/rf_slam.rs`); `wifi-densepose-mat` (`tracking/kalman.rs`, `localization/triangulation.rs`); `wifi-densepose-geo`; `wifi-densepose-ruvector` (`mat/triangulation.rs`) |
