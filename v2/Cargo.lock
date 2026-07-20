@@ -11084,9 +11084,11 @@ dependencies = [
  "clap",
  "criterion",
  "dirs 5.0.1",
+ "libloading 0.8.9",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "tower-http",
 ]

@@ -19,6 +19,8 @@ clap = { version = "4", features = ["derive"] }
 chrono = "0.4"
 dirs = "5"
 reqwest = { version = "0.12", features = ["json"], default-features = false }
+libloading = "0.8"
+sha2 = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

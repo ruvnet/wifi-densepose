@@ -954,6 +954,46 @@ Open `http://localhost:9880` for the interactive Three.js 3D viewer.
 | Camera (`/dev/video0`) | Yes (Linux UVC) | RGB frames → MiDaS depth → 3D points |
 | ESP32 CSI (UDP:3333) | Yes (if provisioned) | ADR-018 binary → occupancy + pose + vitals |
 | MiDaS depth server (port 9885) | Optional | GPU-accelerated neural depth estimation |
+| depth-anything.cpp ABI v4 | Optional | Local metric depth + confidence + calibrated camera geometry |
+
+### Depth Anything backend (optional)
+
+RuView can load [`depth-anything.cpp`](https://github.com/mudler/depth-anything.cpp)
+at runtime without adding a C++ requirement to normal Rust builds. Build its
+shared library with `DA_SHARED=ON`, obtain an official **metric** GGUF separately,
+and configure:
+
+```bash
+export RUVIEW_DEPTH_BACKEND=depth-anything
+export RUVIEW_DA_LIBRARY=/opt/depth-anything/libdepthanything.so
+export RUVIEW_DA_MODEL=/opt/models/depth-anything-metric.gguf
+export RUVIEW_DA_MODEL_LICENSE=Apache-2.0
+export RUVIEW_DA_MODEL_SHA256=<64-character-model-digest>
+export RUVIEW_DA_THREADS=8
+export RUVIEW_DA_MIN_CONFIDENCE=1.0
+
+ruview-pointcloud serve --bind 127.0.0.1:9880
+```
+
+On Windows, build with both `DA_SHARED=ON` and
+`CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON`, then point `RUVIEW_DA_LIBRARY` at the
+ABI-v4 DLL. The upstream default Windows shared build currently exports no C
+symbols. RuView also retains the process-singleton native context until Windows
+process teardown to avoid an upstream DA2 destructor access violation observed
+after successful inference. On macOS, use the corresponding `.dylib`.
+`RUVIEW_DEPTH_BACKEND=auto` (the default) activates
+Depth Anything only when its library/model variables are configured, then falls
+back to the loopback MiDaS service and finally the deterministic heuristic.
+Selecting `depth-anything` explicitly is fail-closed: configuration, license,
+digest, ABI, non-metric output, or inference errors are returned to the caller.
+
+RuView does not bundle model weights. Apache-2.0 model declarations are accepted
+by default. CC-BY-NC-4.0 requires `RUVIEW_DA_ALLOW_NONCOMMERCIAL=1` and remains
+local/non-commercial; unknown licenses are rejected. Consult each official model
+card rather than inferring a weight license from the engine's MIT license.
+
+The current upstream C ABI takes image paths, so RuView uses create-new temporary
+PPM files with automatic cleanup. An in-memory RGB ABI is the planned replacement.
 
 ### Commands
 
@@ -966,6 +1006,8 @@ Open `http://localhost:9880` for the interactive Three.js 3D viewer.
 | `ruview-pointcloud train --data-dir ./data [--brain URL]` | Depth calibration + occupancy training (writes under canonicalized `data-dir`; refuses `..` traversal) |
 | `ruview-pointcloud csi-test --count 100` | Send test CSI frames (no ESP32 needed) |
 | `ruview-pointcloud fingerprint <name> [--seconds 5]` | Record a named CSI room fingerprint for later matching |
+| `ruview-pointcloud depth-check --abi-only` | Verify configured native symbols and ABI v4 without loading a model |
+| `ruview-pointcloud depth-check --infer` | Verify license/digest/model load and run one synthetic metric-depth inference |
 
 ### Pipeline Components
 
@@ -974,7 +1016,7 @@ Open `http://localhost:9880` for the interactive Three.js 3D viewer.
 3. **Vital Signs** — Breathing rate from CSI phase analysis (peak counting on stable subcarrier)
 4. **Motion Detection** — CSI amplitude variance over 20 frames, triggers adaptive capture
 5. **RF Tomography** — Backprojection from per-node RSSI to 8×8×4 occupancy grid
-6. **Camera Depth** — MiDaS monocular depth (GPU) with luminance+edge fallback
+6. **Camera Depth** — optional depth-anything.cpp metric depth, then MiDaS, then a deterministic luminance+edge fallback
 7. **Sensor Fusion** — Voxel-grid merging of camera depth + CSI occupancy
 8. **Brain Bridge** — Stores spatial observations in the ruOS brain every 60 seconds
 

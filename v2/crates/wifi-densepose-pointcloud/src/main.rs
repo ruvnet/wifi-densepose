@@ -13,6 +13,7 @@ mod brain_bridge;
 mod camera;
 mod csi_pipeline;
 mod depth;
+mod depth_anything;
 mod fusion;
 mod parser;
 mod pointcloud;
@@ -85,6 +86,15 @@ enum Commands {
         #[arg(long, default_value = "5")]
         seconds: u64,
     },
+    /// Validate the optional depth-anything.cpp runtime and model configuration.
+    DepthCheck {
+        /// Check only shared-library symbols and ABI; do not load a model.
+        #[arg(long)]
+        abi_only: bool,
+        /// After model validation, run one synthetic RGB inference.
+        #[arg(long)]
+        infer: bool,
+    },
 }
 
 #[tokio::main]
@@ -99,9 +109,12 @@ async fn main() -> Result<()> {
             if camera::camera_available() {
                 let config = camera::CameraConfig::default();
                 let frame = camera::capture_frame(&config)?;
-                let depth = depth::estimate_depth(&frame.rgb, frame.width, frame.height)?;
-                let intrinsics = depth::CameraIntrinsics::default();
-                let cloud = depth::backproject_depth(&depth, &intrinsics, Some(&frame.rgb), 2);
+                let estimate = depth::estimate_depth_frame(&frame.rgb, frame.width, frame.height)?;
+                let cloud = depth::backproject_estimate(
+                    &estimate,
+                    Some((&frame.rgb, frame.width, frame.height)),
+                    2,
+                );
                 pointcloud::write_ply(&cloud, &output)?;
                 println!("Captured {} points to {output}", cloud.points.len());
             } else {
@@ -149,6 +162,48 @@ async fn main() -> Result<()> {
                     st.fingerprints.len(),
                     st.total_frames
                 );
+            }
+        }
+        Commands::DepthCheck { abi_only, infer } => {
+            let library = std::env::var("RUVIEW_DA_LIBRARY")
+                .map(std::path::PathBuf::from)
+                .map_err(|_| anyhow::anyhow!("RUVIEW_DA_LIBRARY is required"))?;
+            let abi = depth_anything::probe_library(&library)?;
+            println!("Depth Anything library: {}", library.display());
+            println!("C ABI: {abi} (supported)");
+            if !abi_only {
+                let config = depth_anything::DepthAnythingConfig::from_env()?;
+                let mut backend = depth_anything::DepthAnythingBackend::load(&config)?;
+                println!("Model: {}", config.model_path.display());
+                println!("License declaration: {}", config.model_license);
+                println!("Model load: OK");
+                if infer {
+                    let width = 64u32;
+                    let height = 64u32;
+                    let mut rgb = vec![0u8; (width * height * 3) as usize];
+                    for y in 0..height {
+                        for x in 0..width {
+                            let index = ((y * width + x) * 3) as usize;
+                            rgb[index] = (x * 255 / (width - 1)) as u8;
+                            rgb[index + 1] = (y * 255 / (height - 1)) as u8;
+                            rgb[index + 2] = 127;
+                        }
+                    }
+                    let estimate = backend.infer_rgb(&rgb, width, height)?;
+                    let (min_depth, max_depth) = estimate
+                        .depth
+                        .iter()
+                        .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), value| {
+                            (min.min(*value), max.max(*value))
+                        });
+                    println!(
+                        "Inference: {}x{}, metric={}, depth={min_depth:.4}..{max_depth:.4}m, confidence={}",
+                        estimate.width,
+                        estimate.height,
+                        estimate.is_metric,
+                        estimate.confidence.is_some()
+                    );
+                }
             }
         }
     }
