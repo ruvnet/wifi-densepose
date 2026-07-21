@@ -1,0 +1,106 @@
+groups:
+  # Log event names for the sensing server's curated telemetry — each
+  # instrumented `tracing` call site carries one of these as its explicit
+  # event name (never tracing's default `event <file>:<line>`), so the
+  # exported Logs signal stays registry-backed. Uncurated log lines keep
+  # their default names; only these events are part of the contract.
+  - id: event.ruview.node.online
+    type: event
+    name: ruview.node.online
+    stability: development
+    brief: >
+      A sensing node delivered its first frame (CSI or edge-vitals) —
+      either a new node joining the mesh or a previously evicted node
+      returning.
+    attributes:
+      - ref: ruview.node.id
+        requirement_level: required
+  - id: event.ruview.node.offline
+    type: event
+    name: ruview.node.offline
+    stability: development
+    brief: >
+      A sensing node was evicted after delivering no frames for the
+      staleness window (60 s).
+    attributes:
+      - ref: ruview.node.id
+        requirement_level: required
+  - id: event.ruview.csi.stats
+    type: event
+    name: ruview.csi.stats
+    stability: development
+    brief: >
+      Periodic CSI capture snapshot (every 100 sensing ticks): total
+      frames processed and currently active nodes.
+    attributes:
+      - ref: ruview.csi.frames_total
+        requirement_level: required
+      - ref: ruview.csi.nodes_active
+        requirement_level: required
+      - ref: ruview.csi.source
+        requirement_level: recommended
+  - id: event.ruview.presence.changed
+    type: event
+    name: ruview.presence.changed
+    stability: development
+    brief: >
+      The smoothed presence classification flipped between present and
+      absent. Emitted on transitions only, never per frame.
+    attributes:
+      - ref: ruview.presence.state
+        requirement_level: required
+      - ref: ruview.motion.level
+        requirement_level: recommended
+      - ref: ruview.inference.confidence
+        requirement_level: recommended
+      - ref: ruview.persons.count
+        requirement_level: recommended
+      - ref: ruview.csi.source
+        requirement_level: recommended
+  - id: event.ruview.vitals.estimate
+    type: event
+    name: ruview.vitals.estimate
+    stability: development
+    brief: >
+      Periodic vital-sign estimate (breathing / heart rate with
+      confidences), emitted on the ruview.csi.stats cadence when the
+      detector produced an estimate.
+    attributes:
+      - ref: ruview.vitals.breathing_rate_bpm
+        requirement_level: recommended
+      - ref: ruview.vitals.heart_rate_bpm
+        requirement_level: recommended
+      - ref: ruview.vitals.breathing_confidence
+        requirement_level: recommended
+      - ref: ruview.vitals.heartbeat_confidence
+        requirement_level: recommended
+      - ref: ruview.csi.source
+        requirement_level: recommended
+  - id: event.ruview.fall.detected
+    type: event
+    name: ruview.fall.detected
+    stability: development
+    brief: >
+      An ESP32 edge-vitals frame raised its fall flag. Edge-triggered on
+      the flag's rising edge per node, not re-emitted while it stays set.
+    attributes:
+      - ref: ruview.node.id
+        requirement_level: required
+  - id: event.ruview.mqtt.error
+    type: event
+    name: ruview.mqtt.error
+    stability: development
+    brief: >
+      An MQTT publish or connection error in the Home Assistant
+      discovery publisher; the publisher reconnects and retries.
+    attributes:
+      - ref: ruview.node.id
+        requirement_level: opt_in
+  - id: event.ruview.model.loaded
+    type: event
+    name: ruview.model.loaded
+    stability: development
+    brief: An inference model was loaded via the model-management API.
+    attributes:
+      - ref: ruview.model.id
+        requirement_level: required
