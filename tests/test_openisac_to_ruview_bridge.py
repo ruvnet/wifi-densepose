@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import subprocess
 import struct
 import sys
 from pathlib import Path
@@ -296,10 +297,49 @@ def test_frame_assembler_isolates_senders_and_counts_duplicate_chunks():
     assert assembler.partial_frame_count == 1
 
 
+def test_runtime_parameter_update_discards_inflight_fragments_and_pairs():
+    bridge = load_bridge()
+    old_params = bridge.ViewerRuntimeParams(wire_rows=2, wire_cols=2)
+    new_params = bridge.ViewerRuntimeParams(wire_rows=4, wire_cols=4)
+    assembler = bridge.FrameAssembler()
+    pairer = bridge.FramePairer(
+        params=old_params,
+        source_instance_id="0123456789abcdef0123456789abcdef",
+    )
+    sender = ("127.0.0.1", 9000)
+
+    assert assembler.add_datagram(
+        struct.pack("!III", 12, 2, 0) + b"old",
+        sender=sender,
+        now=0.0,
+    ) is None
+    assert pairer.add(
+        {"kind": "range_doppler", "source": "unit", "frame_id": 12, "range_doppler": {}},
+        sender=sender,
+        now=0.0,
+    ) is None
+
+    discarded_fragments = assembler.reset_for_configuration()
+    discarded_pairs = pairer.update_params(new_params)
+
+    assert discarded_fragments == 1
+    assert discarded_pairs == 1
+    assert assembler.partial_frame_count == 0
+    assert pairer.pending_pair_count == 0
+    assert pairer.config_epoch == 1
+    assert pairer.params == new_params
+    assert assembler.add_datagram(
+        struct.pack("!III", 12, 2, 1) + b"new",
+        sender=sender,
+        now=0.1,
+    ) is None
+
+
 def test_frame_pairer_emits_versioned_observation_only_after_both_halves():
     bridge = load_bridge()
     params = bridge.ViewerRuntimeParams()
-    pairer = bridge.FramePairer(params=params)
+    source_instance_id = "0123456789abcdef0123456789abcdef"
+    pairer = bridge.FramePairer(params=params, source_instance_id=source_instance_id)
     sender = ("127.0.0.1", 9000)
     raw = {
         "kind": "range_doppler",
@@ -321,7 +361,9 @@ def test_frame_pairer_emits_versioned_observation_only_after_both_halves():
     observation = pairer.add(metadata, sender=sender, now=0.1, received_at_ns=200)
 
     assert observation["schema"] == "ruview.rf_observation"
-    assert observation["protocol_version"] == 1
+    assert observation["protocol_version"] == 2
+    assert observation["source_instance_id"] == source_instance_id
+    assert observation["config_epoch"] == 0
     assert observation["source"] == "unit"
     assert observation["frame_id"] == 42
     assert observation["sequence"] == 42
@@ -366,16 +408,38 @@ def test_frame_recorder_writes_jsonl_and_raw_payloads(tmp_path):
     recorder = bridge.FrameRecorder(
         jsonl_path=tmp_path / "frames.jsonl",
         raw_dir=tmp_path / "raw",
+        run_id="run-test",
     )
     payload = bridge.CompletedPayload(frame_id=9, payload=b"raw-bytes", is_metadata=True)
     frame = {"schema": "ruview.rf_observation", "source": "unit", "sequence": 9}
+    config_hash = "sha256:" + "a" * 64
 
-    recorder.record_payload(payload)
+    first_path = recorder.record_payload(
+        payload,
+        sender=("127.0.0.1", 9000),
+        config_epoch=3,
+        config_hash=config_hash,
+    )
+    second_path = recorder.record_payload(
+        payload,
+        sender=("127.0.0.1", 9000),
+        config_epoch=3,
+        config_hash=config_hash,
+    )
     recorder.record_frame(frame)
     recorder.close()
 
     assert json.loads((tmp_path / "frames.jsonl").read_text(encoding="utf-8")) == frame
-    assert (tmp_path / "raw" / "frame_000000009_metadata.bin").read_bytes() == b"raw-bytes"
+    assert first_path != second_path
+    assert first_path.read_bytes() == b"raw-bytes"
+    assert second_path.read_bytes() == b"raw-bytes"
+    manifest_path = tmp_path / "raw" / "run-test" / "manifest.jsonl"
+    manifest = [json.loads(line) for line in manifest_path.read_text(encoding="utf-8").splitlines()]
+    assert [entry["collision_index"] for entry in manifest] == [0, 1]
+    assert all(entry["sender"] == "127.0.0.1:9000" for entry in manifest)
+    assert all(entry["config_epoch"] == 3 for entry in manifest)
+    assert all(entry["config_hash"] == config_hash for entry in manifest)
+    assert all(entry["payload_sha256"] == __import__("hashlib").sha256(b"raw-bytes").hexdigest() for entry in manifest)
 
 
 def test_decode_aggregate_payload_returns_channel_frames():
@@ -489,6 +553,39 @@ def test_compose_does_not_publish_rf_udp_ports_by_default():
 
     assert '"5010:5010/udp"' not in compose
     assert '"5020:5020/udp"' not in compose
+
+
+def test_deployment_does_not_expose_legacy_usrp_inference_source():
+    root = MODULE_PATH.parents[1]
+    compose = (root / "docker" / "docker-compose.yml").read_text(encoding="utf-8")
+    dockerfile = (root / "docker" / "Dockerfile.rust").read_text(encoding="utf-8")
+    entrypoint = (root / "docker" / "docker-entrypoint.sh").read_text(encoding="utf-8")
+
+    assert "USRP_UDP_PORT" not in compose
+    assert "USRP_UDP_PORT" not in dockerfile
+    assert "USRP_UDP_PORT" not in entrypoint
+    assert "--usrp-udp-port" not in entrypoint
+
+
+def test_x310_cw_worker_is_retired_and_fails_closed():
+    root = MODULE_PATH.parents[1]
+    worker = root / "scripts" / "x310_cw_worker.py"
+    archived = root / "archive" / "experiments" / "x310_cw_unvalidated_experiment.py"
+
+    result = subprocess.run(
+        [sys.executable, str(worker), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    active_source = worker.read_text(encoding="utf-8")
+    assert result.returncode == 0
+    assert "retired" in result.stdout.lower()
+    assert "openisac_to_ruview_bridge.py" in result.stdout
+    assert "motion_energy" not in active_source
+    assert archived.is_file()
+    assert "UNVALIDATED HISTORICAL EXPERIMENT" in archived.read_text(encoding="utf-8")
 
 
 def test_ui_accepts_only_explicit_rf_source_labels():

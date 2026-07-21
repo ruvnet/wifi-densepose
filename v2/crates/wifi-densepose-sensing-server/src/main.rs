@@ -90,10 +90,6 @@ struct Args {
     #[arg(long, default_value = "5005")]
     udp_port: u16,
 
-    /// UDP port for USRP/SDR feature frames (JSON datagrams)
-    #[arg(long, default_value = "5010", env = "USRP_UDP_PORT")]
-    usrp_udp_port: u16,
-
     /// UDP port for RF-native feature frames (JSON datagrams)
     #[arg(long, default_value = "5020", env = "RF_UDP_PORT")]
     rf_udp_port: u16,
@@ -137,7 +133,7 @@ struct Args {
     #[command(flatten)]
     mqtt_opts: wifi_densepose_sensing_server::cli::MqttArgs,
 
-    /// Data source: auto, wifi, esp32, usrp, rf-direct, simulate
+    /// Data source: auto, wifi, esp32, rf-direct, simulated
     #[arg(long, default_value = "auto")]
     source: String,
 
@@ -272,35 +268,6 @@ struct Esp32Frame {
     phases: Vec<f64>,
 }
 
-/// UDP JSON feature frame produced by a USRP/UHD/GNU Radio bridge.
-///
-/// This is intentionally a feature-frame contract, not a UHD binding. USRP
-/// hardware can expose raw IQ for many waveforms, while RuView's current
-/// sensing path expects CSI-like amplitude/phase vectors. A small external
-/// bridge owns waveform-specific demodulation or subcarrier extraction and
-/// sends either `amplitudes` + optional `phases`, or raw complex `iq_pairs`.
-#[derive(Debug, Deserialize)]
-struct UsrpFeatureFrame {
-    #[serde(default)]
-    node_id: Option<u8>,
-    #[serde(default)]
-    sequence: Option<u32>,
-    #[serde(default)]
-    freq_mhz: Option<u16>,
-    #[serde(default)]
-    rssi_dbm: Option<f64>,
-    #[serde(default)]
-    noise_floor_dbm: Option<f64>,
-    #[serde(default)]
-    sample_rate_hz: Option<f64>,
-    #[serde(default)]
-    amplitudes: Option<Vec<f64>>,
-    #[serde(default)]
-    phases: Option<Vec<f64>>,
-    #[serde(default)]
-    iq_pairs: Option<Vec<[f64; 2]>>,
-}
-
 const MAX_RF_RANGE_BINS: usize = 16_384;
 const MAX_RF_DIAGNOSTIC_PEAKS: usize = 64;
 const MAX_RF_CFAR_CLUSTERS: usize = 1_024;
@@ -312,6 +279,8 @@ struct RfObservation {
     schema: String,
     protocol_version: u16,
     source: String,
+    source_instance_id: String,
+    config_epoch: u64,
     frame_id: u64,
     sequence: u64,
     source_timestamp_ns: Option<u64>,
@@ -379,13 +348,21 @@ struct RfCandidateCluster {
 
 impl RfObservation {
     fn validate(&self) -> Result<(), String> {
-        if self.schema != "ruview.rf_observation" || self.protocol_version != 1 {
+        if self.schema != "ruview.rf_observation" || self.protocol_version != 2 {
             return Err("unsupported RF observation schema or protocol version".into());
         }
         if self.frame_id != self.sequence {
             return Err("RF observation frame_id and sequence must match".into());
         }
-        if self.source.is_empty() || self.source.len() > 128 || self.received_at_ns == 0 {
+        if self.source.is_empty()
+            || self.source.len() > 128
+            || self.received_at_ns == 0
+            || self.source_instance_id.len() != 32
+            || !self
+                .source_instance_id
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
             return Err("RF observation source or receive timestamp is invalid".into());
         }
         let hash = self.config_hash.strip_prefix("sha256:").unwrap_or("");
@@ -459,14 +436,53 @@ enum RfSequenceDisposition {
     Accept,
     Duplicate,
     OutOfOrder,
+    RetiredEpoch,
+    EpochLimit,
 }
 
-fn classify_rf_sequence(previous: Option<u64>, incoming: u64) -> RfSequenceDisposition {
-    match previous {
-        None => RfSequenceDisposition::Accept,
-        Some(value) if incoming > value => RfSequenceDisposition::Accept,
-        Some(value) if incoming == value => RfSequenceDisposition::Duplicate,
-        Some(_) => RfSequenceDisposition::OutOfOrder,
+const MAX_RETIRED_RF_INSTANCES: usize = 32;
+
+#[derive(Debug, Clone, Default)]
+struct RfSequenceTracker {
+    current_instance_id: Option<String>,
+    current_sequence: Option<u64>,
+    retired_instance_ids: VecDeque<String>,
+}
+
+impl RfSequenceTracker {
+    fn observe(&mut self, instance_id: &str, incoming: u64) -> RfSequenceDisposition {
+        if self.current_instance_id.as_deref() == Some(instance_id) {
+            let disposition = match self.current_sequence {
+                None => RfSequenceDisposition::Accept,
+                Some(value) if incoming > value => RfSequenceDisposition::Accept,
+                Some(value) if incoming == value => RfSequenceDisposition::Duplicate,
+                Some(_) => RfSequenceDisposition::OutOfOrder,
+            };
+            if disposition == RfSequenceDisposition::Accept {
+                self.current_sequence = Some(incoming);
+            }
+            return disposition;
+        }
+
+        if self
+            .retired_instance_ids
+            .iter()
+            .any(|retired| retired == instance_id)
+        {
+            return RfSequenceDisposition::RetiredEpoch;
+        }
+
+        if self.current_instance_id.is_some()
+            && self.retired_instance_ids.len() >= MAX_RETIRED_RF_INSTANCES
+        {
+            return RfSequenceDisposition::EpochLimit;
+        }
+
+        if let Some(previous) = self.current_instance_id.replace(instance_id.to_owned()) {
+            self.retired_instance_ids.push_back(previous);
+        }
+        self.current_sequence = Some(incoming);
+        RfSequenceDisposition::Accept
     }
 }
 
@@ -476,6 +492,8 @@ struct RfIngestStats {
     invalid: u64,
     duplicate: u64,
     out_of_order: u64,
+    retired_epoch: u64,
+    epoch_limit: u64,
     unauthorized_sender: u64,
 }
 
@@ -522,7 +540,6 @@ fn canonical_source_arg(source: &str) -> Option<&'static str> {
         "auto" => Some("auto"),
         "wifi" => Some("wifi"),
         "esp32" => Some("esp32"),
-        "usrp" => Some("usrp"),
         "rf-direct" | "rf" => Some("rf-direct"),
         "simulated" | "simulate" => Some("simulated"),
         _ => None,
@@ -1308,8 +1325,8 @@ struct AppStateInner {
     last_esp32_frame: Option<std::time::Instant>,
     /// Instant of the last accepted RF observation.
     last_rf_frame: Option<std::time::Instant>,
-    /// Monotonic RF sequence high-water used to reject replay/reordering.
-    last_rf_sequence: Option<u64>,
+    /// Per-producer RF epoch and sequence state used to reject replay/reordering.
+    rf_sequence_tracker: RfSequenceTracker,
     /// Observable RF boundary counters.
     rf_ingest_stats: RfIngestStats,
     /// Latest validated RTL8720F summary; raw radar samples are not retained here.
@@ -1986,81 +2003,6 @@ mod issue_1009_n_subcarriers_u16_tests {
 
 // ── Signal field generation ──────────────────────────────────────────────────
 
-/// Parse a USRP feature JSON datagram into the existing CSI-like frame path.
-fn parse_usrp_feature_frame(buf: &[u8]) -> Option<(Esp32Frame, f64)> {
-    let input: UsrpFeatureFrame = serde_json::from_slice(buf).ok()?;
-
-    let (amplitudes, phases) = match (input.amplitudes, input.phases, input.iq_pairs) {
-        (Some(amplitudes), phases, _) => {
-            if amplitudes.is_empty() || amplitudes.iter().any(|v| !v.is_finite()) {
-                return None;
-            }
-            let phases = phases
-                .filter(|p| p.len() == amplitudes.len() && p.iter().all(|v| v.is_finite()))
-                .unwrap_or_else(|| vec![0.0; amplitudes.len()]);
-            (amplitudes, phases)
-        }
-        (None, _, Some(iq_pairs)) => {
-            if iq_pairs.is_empty() {
-                return None;
-            }
-            let mut amplitudes = Vec::with_capacity(iq_pairs.len());
-            let mut phases = Vec::with_capacity(iq_pairs.len());
-            for [i_val, q_val] in iq_pairs {
-                if !i_val.is_finite() || !q_val.is_finite() {
-                    return None;
-                }
-                amplitudes.push((i_val * i_val + q_val * q_val).sqrt());
-                phases.push(q_val.atan2(i_val));
-            }
-            (amplitudes, phases)
-        }
-        _ => return None,
-    };
-
-    let n_subcarriers = u16::try_from(amplitudes.len()).ok()?;
-    if n_subcarriers == 0 {
-        return None;
-    }
-
-    let rssi = input
-        .rssi_dbm
-        .filter(|v| v.is_finite())
-        .unwrap_or_else(|| {
-            let mean_amp = amplitudes.iter().sum::<f64>() / amplitudes.len() as f64;
-            20.0 * mean_amp.max(1e-9).log10() - 90.0
-        })
-        .clamp(i8::MIN as f64, i8::MAX as f64)
-        .round() as i8;
-
-    let noise_floor = input
-        .noise_floor_dbm
-        .filter(|v| v.is_finite())
-        .unwrap_or(-95.0)
-        .clamp(i8::MIN as f64, i8::MAX as f64)
-        .round() as i8;
-
-    let frame = Esp32Frame {
-        magic: 0xC511_0101,
-        node_id: input.node_id.unwrap_or(1),
-        n_antennas: 1,
-        n_subcarriers,
-        // USRP feature frames use the legacy CSI-like compatibility path and
-        // do not claim an HE-LTF grid.
-        ppdu_type: wifi_densepose_hardware::PpduType::HtLegacy,
-        freq_mhz: input.freq_mhz.unwrap_or(2400),
-        sequence: input.sequence.unwrap_or(0),
-        rssi,
-        noise_floor,
-        amplitudes,
-        phases,
-    };
-
-    Some((
-        frame,
-        input.sample_rate_hz.filter(|v| *v > 0.0).unwrap_or(20.0),
-    ))
-}
 
 /// Generate a signal field that reflects where motion and signal changes are occurring.
 ///
@@ -6851,169 +6793,6 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
 
 // ── Simulated data task ──────────────────────────────────────────────────────
 
-async fn usrp_udp_receiver_task(state: SharedState, udp_port: u16) {
-    let addr = format!("0.0.0.0:{udp_port}");
-    let socket = match UdpSocket::bind(&addr).await {
-        Ok(s) => {
-            info!("UDP listening on {addr} for USRP/SDR feature JSON frames");
-            s
-        }
-        Err(e) => {
-            error!("Failed to bind USRP UDP {addr}: {e}");
-            return;
-        }
-    };
-
-    let mut buf = [0u8; 65535];
-    loop {
-        match socket.recv_from(&mut buf).await {
-            Ok((len, src)) => {
-                let Some((frame, sample_rate_hz)) = parse_usrp_feature_frame(&buf[..len]) else {
-                    debug!("Ignoring malformed USRP feature frame from {src} ({len} bytes)");
-                    continue;
-                };
-
-                debug!(
-                    "USRP feature frame from {src}: node={}, bins={}, seq={}, fs={:.1}Hz",
-                    frame.node_id, frame.n_subcarriers, frame.sequence, sample_rate_hz
-                );
-
-                let mut s = state.write().await;
-                s.source = "usrp".to_string();
-                s.tick += 1;
-                let tick = s.tick;
-
-                s.frame_history.push_back(frame.amplitudes.clone());
-                if s.frame_history.len() > FRAME_HISTORY_CAPACITY {
-                    s.frame_history.pop_front();
-                }
-
-                let (features, mut classification, breathing_rate_hz, sub_variances, raw_motion) =
-                    extract_features_from_frame(&frame, &s.frame_history, sample_rate_hz);
-                smooth_and_classify(&mut s, &mut classification, raw_motion);
-                adaptive_override(&s, &features, &mut classification);
-
-                s.rssi_history.push_back(features.mean_rssi);
-                if s.rssi_history.len() > 60 {
-                    s.rssi_history.pop_front();
-                }
-
-                let raw_vitals = s
-                    .vital_detector
-                    .process_frame(&frame.amplitudes, &frame.phases);
-                let vitals = smooth_vitals(&mut s, &raw_vitals);
-                s.latest_vitals = vitals.clone();
-
-                s.p95_variance.push(features.variance);
-                s.p95_motion_band_power.push(features.motion_band_power);
-                s.p95_spectral_power.push(features.spectral_power);
-
-                let raw_score = compute_person_score(&s, &features);
-                s.smoothed_person_score = s.smoothed_person_score * 0.90 + raw_score * 0.10;
-                let est_persons = if classification.presence {
-                    let count = s.person_count();
-                    s.prev_person_count = count;
-                    count
-                } else {
-                    s.prev_person_count = 0;
-                    0
-                };
-
-                let motion_score = if classification.motion_level == "active" {
-                    0.8
-                } else if classification.motion_level == "present_still" {
-                    0.3
-                } else {
-                    0.05
-                };
-
-                let frame_amplitudes = frame.amplitudes.clone();
-                let frame_n_sub = frame.n_subcarriers;
-                let node_id = frame.node_id;
-
-                let mut update = SensingUpdate {
-                    msg_type: "sensing_update".to_string(),
-                    timestamp: chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
-                    source: "usrp".to_string(),
-                    tick,
-                    nodes: vec![NodeInfo {
-                        node_id,
-                        rssi_dbm: features.mean_rssi,
-                        position: [2.0, 0.0, 1.5],
-                        amplitude: frame_amplitudes,
-                        subcarrier_count: frame_n_sub as usize,
-                        sync: None,
-                    }],
-                    features: features.clone(),
-                    classification,
-                    signal_field: generate_signal_field(
-                        features.mean_rssi,
-                        motion_score,
-                        breathing_rate_hz,
-                        features.variance.min(1.0),
-                        &sub_variances,
-                    ),
-                    vital_signs: Some(vitals),
-                    enhanced_motion: Some(serde_json::json!({
-                        "source": "usrp",
-                        "sample_rate_hz": sample_rate_hz,
-                        "freq_mhz": frame.freq_mhz,
-                    })),
-                    enhanced_breathing: None,
-                    posture: None,
-                    signal_quality_score: None,
-                    quality_verdict: None,
-                    bssid_count: None,
-                    pose_keypoints: None,
-                    model_status: if s.model_loaded {
-                        Some(serde_json::json!({
-                            "loaded": true,
-                            "source": "usrp-feature-bridge",
-                            "layers": s.progressive_loader.as_ref()
-                                .map(|l| { let (a,b,c) = l.layer_status(); a as u8 + b as u8 + c as u8 })
-                                .unwrap_or(0),
-                            "sona_profile": s.active_sona_profile.as_deref().unwrap_or("default"),
-                        }))
-                    } else {
-                        None
-                    },
-                    persons: None,
-                    estimated_persons: if est_persons > 0 {
-                        Some(est_persons)
-                    } else {
-                        None
-                    },
-                    node_features: None,
-                    rf_observation: None,
-                };
-
-                let raw_persons = derive_pose_from_sensing(&update);
-                let mut last_tracker_instant = s.last_tracker_instant.take();
-                let tracked = tracker_bridge::tracker_update(
-                    &mut s.pose_tracker,
-                    &mut last_tracker_instant,
-                    raw_persons,
-                );
-                s.last_tracker_instant = last_tracker_instant;
-                if !tracked.is_empty() {
-                    update.persons = Some(tracked);
-                }
-
-                if update.classification.presence {
-                    s.total_detections += 1;
-                }
-                if let Ok(json) = serde_json::to_string(&update) {
-                    let _ = s.tx.send(json);
-                }
-                s.latest_update = Some(update);
-            }
-            Err(e) => {
-                warn!("USRP UDP recv error: {e}");
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        }
-    }
-}
 
 fn rf_observation_to_sensing_update(frame: RfObservation, tick: u64) -> SensingUpdate {
     let range_profile = frame.observation.range_doppler.range_profile.clone();
@@ -7096,7 +6875,10 @@ async fn rf_direct_udp_receiver_task(state: SharedState, bind_ip: IpAddr, udp_po
                 };
 
                 let mut s = state.write().await;
-                match classify_rf_sequence(s.last_rf_sequence, frame.sequence) {
+                match s
+                    .rf_sequence_tracker
+                    .observe(&frame.source_instance_id, frame.sequence)
+                {
                     RfSequenceDisposition::Accept => {}
                     RfSequenceDisposition::Duplicate => {
                         s.rf_ingest_stats.duplicate += 1;
@@ -7106,10 +6888,17 @@ async fn rf_direct_udp_receiver_task(state: SharedState, bind_ip: IpAddr, udp_po
                         s.rf_ingest_stats.out_of_order += 1;
                         continue;
                     }
+                    RfSequenceDisposition::RetiredEpoch => {
+                        s.rf_ingest_stats.retired_epoch += 1;
+                        continue;
+                    }
+                    RfSequenceDisposition::EpochLimit => {
+                        s.rf_ingest_stats.epoch_limit += 1;
+                        continue;
+                    }
                 }
                 s.source = "rf-direct".to_string();
                 s.last_rf_frame = Some(std::time::Instant::now());
-                s.last_rf_sequence = Some(frame.sequence);
                 s.rf_ingest_stats.accepted += 1;
                 s.tick += 1;
                 let tick = s.tick;
@@ -8246,10 +8035,6 @@ async fn main() {
     info!("  WebSocket: ws://localhost:{}/ws/sensing", args.ws_port);
     info!("  UDP:       0.0.0.0:{} (ESP32 CSI)", args.udp_port);
     info!(
-        "  USRP UDP:  0.0.0.0:{} (JSON feature frames)",
-        args.usrp_udp_port
-    );
-    info!(
         "  RF UDP:    {}:{} (versioned RF observations)",
         args.rf_bind_addr, args.rf_udp_port
     );
@@ -8261,7 +8046,7 @@ async fn main() {
     // Reject unknown and misspelled source names before creating a task plan.
     let Some(normalized) = canonical_source_arg(&args.source) else {
         error!(
-            "Unknown --source {:?}. Expected one of: auto, wifi, esp32, usrp, rf-direct, simulated",
+            "Unknown --source {:?}. Expected one of: auto, wifi, esp32, rf-direct, simulated",
             args.source
         );
         std::process::exit(78);
@@ -8521,7 +8306,7 @@ async fn main() {
         source: source.into(),
         last_esp32_frame: None,
         last_rf_frame: None,
-        last_rf_sequence: None,
+        rf_sequence_tracker: RfSequenceTracker::default(),
         rf_ingest_stats: RfIngestStats::default(),
         latest_realtek_radar: None,
         last_realtek_frame: None,
@@ -8638,13 +8423,9 @@ async fn main() {
         field_surface: field_surface.clone(),
     }));
 
-    // Start background tasks from the resolved plan. USRP and RF-direct have
-    // dedicated receivers; auto/ESP32/WiFi/simulated use the shared plan.
+    // Start background tasks from the resolved plan. RF-direct has a dedicated
+    // receiver; auto/ESP32/WiFi/simulated use the shared plan.
     match source {
-        "usrp" => {
-            tokio::spawn(usrp_udp_receiver_task(state.clone(), args.usrp_udp_port));
-            tokio::spawn(broadcast_tick_task(state.clone(), args.tick_ms));
-        }
         "rf-direct" | "rf" => {
             tokio::spawn(rf_direct_udp_receiver_task(
                 state.clone(),
@@ -9659,8 +9440,10 @@ mod rf_observation_contract_tests {
     fn valid_observation_json(sequence: u64) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({
             "schema": "ruview.rf_observation",
-            "protocol_version": 1,
+            "protocol_version": 2,
             "source": "openisac-rd",
+            "source_instance_id": "0123456789abcdef0123456789abcdef",
+            "config_epoch": 0,
             "frame_id": sequence,
             "sequence": sequence,
             "source_timestamp_ns": null,
@@ -9707,11 +9490,16 @@ mod rf_observation_contract_tests {
     }
 
     #[test]
-    fn rf_observation_v1_parses_as_observation_not_inference() {
+    fn rf_observation_v2_parses_as_observation_not_inference() {
         let observation = parse_rf_observation(&valid_observation_json(42)).unwrap();
 
         assert_eq!(observation.schema, "ruview.rf_observation");
-        assert_eq!(observation.protocol_version, 1);
+        assert_eq!(observation.protocol_version, 2);
+        assert_eq!(
+            observation.source_instance_id,
+            "0123456789abcdef0123456789abcdef"
+        );
+        assert_eq!(observation.config_epoch, 0);
         assert_eq!(observation.sequence, 42);
         assert_eq!(observation.observation.cfar.candidate_clusters.len(), 1);
     }
@@ -9720,7 +9508,7 @@ mod rf_observation_contract_tests {
     fn rf_observation_rejects_wrong_version_or_mismatched_frame_id() {
         let mut wrong_version: serde_json::Value =
             serde_json::from_slice(&valid_observation_json(42)).unwrap();
-        wrong_version["protocol_version"] = serde_json::json!(2);
+        wrong_version["protocol_version"] = serde_json::json!(1);
         assert!(parse_rf_observation(&serde_json::to_vec(&wrong_version).unwrap()).is_err());
 
         let mut mismatched: serde_json::Value =
@@ -9741,21 +9529,55 @@ mod rf_observation_contract_tests {
 
     #[test]
     fn rf_sequence_gate_rejects_duplicate_and_out_of_order_frames() {
+        let mut tracker = RfSequenceTracker::default();
+        let first_instance = "0123456789abcdef0123456789abcdef";
+        let second_instance = "fedcba9876543210fedcba9876543210";
+
         assert_eq!(
-            classify_rf_sequence(None, 10),
+            tracker.observe(first_instance, 10),
             RfSequenceDisposition::Accept
         );
         assert_eq!(
-            classify_rf_sequence(Some(10), 11),
+            tracker.observe(first_instance, 11),
             RfSequenceDisposition::Accept
         );
         assert_eq!(
-            classify_rf_sequence(Some(10), 10),
+            tracker.observe(first_instance, 11),
             RfSequenceDisposition::Duplicate
         );
         assert_eq!(
-            classify_rf_sequence(Some(10), 9),
+            tracker.observe(first_instance, 9),
             RfSequenceDisposition::OutOfOrder
+        );
+        assert_eq!(
+            tracker.observe(second_instance, 0),
+            RfSequenceDisposition::Accept
+        );
+        assert_eq!(
+            tracker.observe(first_instance, 12),
+            RfSequenceDisposition::RetiredEpoch
+        );
+    }
+
+    #[test]
+    fn rf_sequence_gate_fails_closed_when_retired_epoch_history_is_full() {
+        let mut tracker = RfSequenceTracker::default();
+
+        for index in 0..=MAX_RETIRED_RF_INSTANCES {
+            let instance_id = format!("{index:032x}");
+            assert_eq!(
+                tracker.observe(&instance_id, 0),
+                RfSequenceDisposition::Accept
+            );
+        }
+
+        assert_eq!(
+            tracker.observe("ffffffffffffffffffffffffffffffff", 0),
+            RfSequenceDisposition::EpochLimit
+        );
+        assert_eq!(
+            tracker.observe("00000000000000000000000000000000", 1),
+            RfSequenceDisposition::RetiredEpoch
         );
     }
 
@@ -9775,6 +9597,7 @@ mod rf_observation_contract_tests {
     fn source_typos_are_rejected_instead_of_becoming_simulation() {
         assert_eq!(canonical_source_arg("rf"), Some("rf-direct"));
         assert_eq!(canonical_source_arg("simulate"), Some("simulated"));
+        assert_eq!(canonical_source_arg("usrp"), None);
         assert_eq!(canonical_source_arg("rf-direc"), None);
         assert_eq!(canonical_source_arg(""), None);
     }

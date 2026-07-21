@@ -414,3 +414,10 @@ payload 离线回放、JSONL/raw 录制，
 真正的停止点是 USRP 主机上 OpenISAC `OFDMModulator` 输出 8888/udp 数据后的 live 联调。
 
 硬件交接清单见 `D:/ruview/docs/integrations/openisac-x310-hardware-handoff.md`。
+# 2026-07-21 状态说明
+
+本文保留为集成决策的历史记录。文中建议保留的 `x310_cw_worker.py` 和旧
+`RfDirectFrame` 已被后续对抗审查否决：活跃 CW worker 现在失败关闭，旧实现仅存于
+`archive/experiments`，生产入口改为 `ruview.rf_observation` v2。当前操作说明以
+[`x310-rf-direct.md`](x310-rf-direct.md) 和
+[`ruview-openisac-follow-up-findings.md`](ruview-openisac-follow-up-findings.md) 为准。

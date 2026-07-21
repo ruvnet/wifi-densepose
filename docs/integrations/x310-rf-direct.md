@@ -108,8 +108,10 @@ The bridge sends paired observations like:
 ```json
 {
   "schema": "ruview.rf_observation",
-  "protocol_version": 1,
+  "protocol_version": 2,
   "source": "openisac-rd",
+  "source_instance_id": "0123456789abcdef0123456789abcdef",
+  "config_epoch": 0,
   "frame_id": 1,
   "sequence": 1,
   "source_timestamp_ns": null,
@@ -131,6 +133,16 @@ metadata-derived CFAR clusters appear as `candidate_clusters`. If raw or
 metadata is missing, the bridge forwards nothing. After five seconds without a
 valid frame, the source becomes `rf-direct:offline`, freshness becomes `stale`,
 and candidate clusters are cleared.
+
+Each bridge process generates a random `source_instance_id`. A new instance can
+restart its sequence at zero; RuView retires the previous instance and rejects
+later replay from it. RuView retains up to 32 retired instance IDs and fails
+closed on an unknown 34th instance rather than forgetting replay history; restart
+the RuView service under operator control to open a fresh trust window. Runtime
+parameter changes increment `config_epoch` and
+atomically discard incomplete chunks and unmatched frame halves. Raw recordings
+are stored under run/epoch/sender directories with a SHA-256 manifest and
+collision suffixes, so repeated frame IDs never silently overwrite evidence.
 
 ## Optimization Roadmap
 

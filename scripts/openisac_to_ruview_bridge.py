@@ -17,6 +17,7 @@ import math
 import socket
 import struct
 import time
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -146,6 +147,8 @@ class AssemblerStats:
     duplicate_chunks: int = 0
     expired_frames: int = 0
     evicted_frames: int = 0
+    configuration_resets: int = 0
+    discarded_on_configuration_reset: int = 0
 
 
 @dataclass
@@ -156,6 +159,8 @@ class PairingStats:
     duplicate_payloads: int = 0
     duplicate_frames: int = 0
     out_of_order_frames: int = 0
+    configuration_resets: int = 0
+    discarded_on_configuration_reset: int = 0
 
 
 @dataclass
@@ -181,15 +186,20 @@ class FrameRecorder:
         self,
         jsonl_path: Optional[str | Path] = None,
         raw_dir: Optional[str | Path] = None,
+        run_id: Optional[str] = None,
     ) -> None:
         self._jsonl_file = None
         self._raw_dir = Path(raw_dir) if raw_dir else None
+        self.run_id = run_id or f"{time.time_ns()}-{uuid.uuid4().hex}"
+        self._raw_run_dir = self._raw_dir / self.run_id if self._raw_dir else None
+        self._manifest_file = None
         if jsonl_path:
             path = Path(jsonl_path)
             path.parent.mkdir(parents=True, exist_ok=True)
             self._jsonl_file = path.open("a", encoding="utf-8")
-        if self._raw_dir:
-            self._raw_dir.mkdir(parents=True, exist_ok=True)
+        if self._raw_run_dir:
+            self._raw_run_dir.mkdir(parents=True, exist_ok=True)
+            self._manifest_file = (self._raw_run_dir / "manifest.jsonl").open("a", encoding="utf-8")
 
     def record_frame(self, frame: dict) -> None:
         if self._jsonl_file is None:
@@ -198,17 +208,68 @@ class FrameRecorder:
         self._jsonl_file.write("\n")
         self._jsonl_file.flush()
 
-    def record_payload(self, completed: CompletedPayload) -> None:
-        if self._raw_dir is None:
-            return
+    def record_payload(
+        self,
+        completed: CompletedPayload,
+        *,
+        sender: tuple[str, int],
+        config_epoch: int,
+        config_hash: str,
+    ) -> Optional[Path]:
+        if self._raw_run_dir is None:
+            return None
         kind = "metadata" if completed.is_metadata else "raw"
-        path = self._raw_dir / f"frame_{completed.frame_id:09d}_{kind}.bin"
-        path.write_bytes(completed.payload)
+        hash_token = config_hash.removeprefix("sha256:")[:12]
+        sender_text = f"{sender[0]}:{sender[1]}"
+        sender_token = "".join(
+            character if character.isalnum() or character in {".", "-", "_"} else "_"
+            for character in sender_text
+        )
+        evidence_dir = (
+            self._raw_run_dir
+            / f"epoch_{int(config_epoch):06d}_{hash_token}"
+            / f"sender_{sender_token}"
+        )
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        stem = f"frame_{completed.frame_id:09d}_{kind}"
+        collision_index = 0
+        while True:
+            suffix = "" if collision_index == 0 else f"_collision_{collision_index:03d}"
+            path = evidence_dir / f"{stem}{suffix}.bin"
+            try:
+                with path.open("xb") as payload_file:
+                    payload_file.write(completed.payload)
+                break
+            except FileExistsError:
+                collision_index += 1
+
+        manifest_entry = {
+            "run_id": self.run_id,
+            "config_epoch": int(config_epoch),
+            "config_hash": config_hash,
+            "sender": sender_text,
+            "frame_id": int(completed.frame_id),
+            "kind": kind,
+            "collision_index": collision_index,
+            "payload_bytes": len(completed.payload),
+            "payload_sha256": hashlib.sha256(completed.payload).hexdigest(),
+            "relative_path": path.relative_to(self._raw_run_dir).as_posix(),
+        }
+        assert self._manifest_file is not None
+        self._manifest_file.write(
+            json.dumps(manifest_entry, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+        )
+        self._manifest_file.write("\n")
+        self._manifest_file.flush()
+        return path
 
     def close(self) -> None:
         if self._jsonl_file is not None:
             self._jsonl_file.close()
             self._jsonl_file = None
+        if self._manifest_file is not None:
+            self._manifest_file.close()
+            self._manifest_file = None
 
 
 class FrameAssembler:
@@ -258,6 +319,13 @@ class FrameAssembler:
         oldest_key = min(self._frames, key=lambda key: self._frames[key].updated_at)
         del self._frames[oldest_key]
         self.stats.evicted_frames += 1
+
+    def reset_for_configuration(self) -> int:
+        discarded = len(self._frames)
+        self._frames.clear()
+        self.stats.configuration_resets += 1
+        self.stats.discarded_on_configuration_reset += discarded
+        return discarded
 
     def add_datagram(
         self,
@@ -329,12 +397,20 @@ class FramePairer:
         self,
         *,
         params: ViewerRuntimeParams,
+        source_instance_id: Optional[str] = None,
         max_pending_pairs: int = DEFAULT_MAX_PENDING_PAIRS,
         pair_ttl_seconds: float = DEFAULT_PAIR_TTL_SECONDS,
     ) -> None:
         if max_pending_pairs <= 0 or pair_ttl_seconds <= 0.0:
             raise ValueError("frame pairing limits must be positive")
         self.params = params
+        self.source_instance_id = source_instance_id or uuid.uuid4().hex
+        if (
+            len(self.source_instance_id) != 32
+            or any(character not in "0123456789abcdef" for character in self.source_instance_id)
+        ):
+            raise ValueError("source_instance_id must be 32 lowercase hexadecimal characters")
+        self.config_epoch = 0
         self.max_pending_pairs = int(max_pending_pairs)
         self.pair_ttl_seconds = float(pair_ttl_seconds)
         self.stats = PairingStats()
@@ -362,6 +438,15 @@ class FramePairer:
         oldest_key = min(self._pending, key=lambda key: self._pending[key].updated_at)
         del self._pending[oldest_key]
         self.stats.evicted_pairs += 1
+
+    def update_params(self, params: ViewerRuntimeParams) -> int:
+        discarded = len(self._pending)
+        self._pending.clear()
+        self.params = params
+        self.config_epoch += 1
+        self.stats.configuration_resets += 1
+        self.stats.discarded_on_configuration_reset += discarded
+        return discarded
 
     def add(
         self,
@@ -408,6 +493,8 @@ class FramePairer:
             pair.raw,
             pair.metadata,
             params=self.params,
+            source_instance_id=self.source_instance_id,
+            config_epoch=self.config_epoch,
             received_at_ns=time.time_ns() if received_at_ns is None else int(received_at_ns),
         )
         self._last_forwarded[sender_key] = frame_id
@@ -877,6 +964,8 @@ def build_rf_observation(
     metadata: dict,
     *,
     params: ViewerRuntimeParams,
+    source_instance_id: str,
+    config_epoch: int,
     received_at_ns: int,
 ) -> dict:
     raw_frame_id = int(raw["frame_id"])
@@ -888,8 +977,10 @@ def build_rf_observation(
 
     observation = {
         "schema": "ruview.rf_observation",
-        "protocol_version": 1,
+        "protocol_version": 2,
         "source": str(raw["source"]),
+        "source_instance_id": source_instance_id,
+        "config_epoch": int(config_epoch),
         "frame_id": raw_frame_id,
         "sequence": raw_frame_id,
         "source_timestamp_ns": None,
@@ -1086,8 +1177,13 @@ def replay_payload_files(
     return frames
 
 
-def demo_frames(rate_hz: float) -> list[dict]:
+def demo_frames(
+    rate_hz: float,
+    *,
+    source_instance_id: Optional[str] = None,
+) -> list[dict]:
     frames = []
+    instance_id = source_instance_id or uuid.uuid4().hex
     params = ViewerRuntimeParams(
         frame_format=FRAME_FORMAT_DENSE_RANGE_DOPPLER,
         wire_rows=32,
@@ -1125,6 +1221,8 @@ def demo_frames(rate_hz: float) -> list[dict]:
                 raw,
                 metadata,
                 params=params,
+                source_instance_id=instance_id,
+                config_epoch=0,
                 received_at_ns=time.time_ns(),
             )
         )
@@ -1187,7 +1285,8 @@ def bridge_udp_loop(args: argparse.Namespace) -> int:
                 parsed = parse_params_packet(data)
                 if parsed is not None:
                     params = parsed
-                    pairer = FramePairer(params=params)
+                    assembler.reset_for_configuration()
+                    pairer.update_params(params)
                     if args.verbose:
                         print(f"openisac bridge: params updated {params}", flush=True)
                 elif command == READY_COMMAND:
@@ -1200,7 +1299,12 @@ def bridge_udp_loop(args: argparse.Namespace) -> int:
                 continue
 
             stats.completed_payloads += 1
-            recorder.record_payload(completed)
+            recorder.record_payload(
+                completed,
+                sender=sender,
+                config_epoch=pairer.config_epoch,
+                config_hash=_configuration_hash(params),
+            )
             try:
                 summary = _handle_payload(
                     completed,
@@ -1252,9 +1356,13 @@ def run_demo(args: argparse.Namespace) -> int:
     period = 1.0 / max(0.1, float(args.feature_rate_hz))
     start = time.monotonic()
     seq_offset = 0
+    source_instance_id = uuid.uuid4().hex
     try:
         while args.duration <= 0 or time.monotonic() - start < args.duration:
-            for frame in demo_frames(args.feature_rate_hz):
+            for frame in demo_frames(
+                args.feature_rate_hz,
+                source_instance_id=source_instance_id,
+            ):
                 frame["sequence"] = int(frame["sequence"]) + seq_offset
                 frame["frame_id"] = int(frame["frame_id"]) + seq_offset
                 send_json(sock, target, frame)

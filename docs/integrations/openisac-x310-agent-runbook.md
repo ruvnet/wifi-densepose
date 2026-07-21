@@ -423,32 +423,16 @@ ls -lh data/openisac-raw | tail -n 20
 tail -n 20 data/openisac-bridge.jsonl 2>/dev/null || true
 ```
 
-## 13. Stage I：可选 CW baseline
+## 13. Stage I：CW baseline 已退役
 
-如果 OpenISAC 实流不稳定，但 UHD/Python 可用，可以用 RuView 的 CW worker 单独验证
-X310 RF-direct path。仅在 RF 安全条件满足时执行：
+不要再运行 `scripts/x310_cw_worker.py`。旧 worker 会把未经标注验证的 CW
+相位变化升级成运动和呼吸字段，而且其无版本 JSON 已与 RF observation v2
+不兼容。活跃入口现在会失败关闭并指向 `openisac_to_ruview_bridge.py`。
 
-```bash
-cd "$RUVIEW_DIR"
-python3 scripts/x310_cw_worker.py \
-  --device-args addr=192.168.10.2 \
-  --center-freq 2450000000 \
-  --rate 1000000 \
-  --feature-rate-hz 20 \
-  --tone-hz 25000 \
-  --tx-chan 0 \
-  --rx-chan 1 \
-  --tx-ant TX/RX \
-  --rx-ant RX2 \
-  --tx-gain 0 \
-  --rx-gain 10 \
-  --tx-amplitude 0.05 \
-  --host 127.0.0.1 \
-  --port 5020 \
-  --verbose
-```
-
-不要把 CW baseline 当成 OpenISAC 成功；它只证明 RuView rf-direct 和 UHD 基础路径可用。
+如需复现历史实验，源码仅保留在
+`archive/experiments/x310_cw_unvalidated_experiment.py`，并要求显式传入
+`--allow-unvalidated-output`。它只能用于隔离、带标签的研究记录，不能发送到
+生产 RuView，也不能作为 OpenISAC、运动、呼吸或人体检测成功的证据。
 
 ## 14. Claude Code 最终交付包
 
