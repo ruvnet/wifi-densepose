@@ -29,6 +29,8 @@ pub mod semantic;
 pub mod rufield_surface;
 pub mod rvf_container;
 pub mod rvf_pipeline;
+pub mod semconv;
+pub mod telemetry;
 pub mod sona;
 pub mod sparse_inference;
 #[allow(dead_code)]
