@@ -186,11 +186,12 @@ fn capture_camera_cloud_with_luminance() -> (pointcloud::PointCloud, Option<f32>
                 None
             };
 
-            let cloud = match depth::estimate_depth(&frame.rgb, frame.width, frame.height) {
-                Ok(dm) => {
-                    let intr = depth::CameraIntrinsics::default();
-                    depth::backproject_depth(&dm, &intr, Some(&frame.rgb), 2)
-                }
+            let cloud = match depth::estimate_depth_frame(&frame.rgb, frame.width, frame.height) {
+                Ok(estimate) => depth::backproject_estimate(
+                    &estimate,
+                    Some((&frame.rgb, frame.width, frame.height)),
+                    2,
+                ),
                 Err(_) => depth::demo_depth_cloud(),
             };
             (cloud, lum)
