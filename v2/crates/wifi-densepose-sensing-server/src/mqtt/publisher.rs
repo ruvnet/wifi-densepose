@@ -184,7 +184,7 @@ async fn run(
                 match ev {
                     Ok(_) => {}
                     Err(e) => {
-                        error!("[mqtt] event loop error, will reconnect: {e}");
+                        error!(name: crate::semconv::EVENT_RUVIEW_MQTT_ERROR, "[mqtt] event loop error, will reconnect: {e}");
                         rate_limiter.reset();
                         // Brief backoff before next poll attempt.
                         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -197,7 +197,7 @@ async fn run(
                 if last_heartbeat.elapsed() >= AVAILABILITY_HEARTBEAT {
                     for (_, na) in nodes.values() {
                         if let Err(e) = publish_availability(&client, na, "online").await {
-                            warn!("[mqtt] heartbeat publish failed: {e}");
+                            warn!(name: crate::semconv::EVENT_RUVIEW_MQTT_ERROR, "[mqtt] heartbeat publish failed: {e}");
                         }
                     }
                     last_heartbeat = Instant::now();
@@ -207,7 +207,7 @@ async fn run(
                         if let Err(e) =
                             publish_all_discovery(&client, &nb.as_borrowed(), &entities).await
                         {
-                            warn!("[mqtt] discovery refresh failed: {e}");
+                            warn!(name: crate::semconv::EVENT_RUVIEW_MQTT_ERROR, "[mqtt] discovery refresh failed: {e}");
                         }
                     }
                     last_refresh = Instant::now();
@@ -228,11 +228,11 @@ async fn run(
                             if let Err(e) =
                                 publish_all_discovery(&client, &borrowed, &entities).await
                             {
-                                warn!("[mqtt] node {} discovery failed: {e}", snap.node_id);
+                                warn!(name: crate::semconv::EVENT_RUVIEW_MQTT_ERROR, "[mqtt] node {} discovery failed: {e}", snap.node_id);
                             }
                             let na = NodeAvailability::for_builder(&borrowed, &entities);
                             if let Err(e) = publish_availability(&client, &na, "online").await {
-                                warn!("[mqtt] node {} availability failed: {e}", snap.node_id);
+                                warn!(name: crate::semconv::EVENT_RUVIEW_MQTT_ERROR, "[mqtt] node {} availability failed: {e}", snap.node_id);
                             }
                             nodes.insert(snap.node_id.clone(), (nb, na));
                         }
