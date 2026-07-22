@@ -90,6 +90,16 @@ struct Args {
     #[arg(long, default_value = "5005")]
     udp_port: u16,
 
+    /// Bind address for the UDP CSI receiver (default 0.0.0.0, unchanged from
+    /// prior behaviour — ESP32/MediaTek/Qualcomm/RTL8720F nodes are typically
+    /// on the LAN). Set to 127.0.0.1 to restrict CSI ingest to loopback, e.g.
+    /// for a bundled desktop install where the HTTP API is already loopback-only
+    /// (see `bind_addr`) and no LAN hardware is paired. Mirrors `--bind-addr`'s
+    /// shape but is independently configurable, since the common real-hardware
+    /// case is HTTP on loopback with UDP still open to the LAN. (#1394)
+    #[arg(long, default_value = "0.0.0.0", env = "SENSING_UDP_BIND_ADDR")]
+    udp_bind_addr: String,
+
     /// Path to UI static files (repo `ui/`; from `v2/` use `../ui` or rely on auto-detect)
     #[arg(long, default_value = "../ui")]
     ui_path: PathBuf,
@@ -2870,8 +2880,8 @@ async fn probe_windows_wifi() -> bool {
 }
 
 /// Probe if ESP32 is streaming on UDP port
-async fn probe_esp32(port: u16) -> bool {
-    let addr = format!("0.0.0.0:{port}");
+async fn probe_esp32(port: u16, bind_addr: &str) -> bool {
+    let addr = format!("{bind_addr}:{port}");
     match UdpSocket::bind(&addr).await {
         Ok(sock) => {
             // 2048 covers the largest ADR-018 frame: an ESP32-C6 HE-SU
@@ -5587,8 +5597,8 @@ async fn info_page() -> Html<String> {
 
 // ── UDP receiver task ────────────────────────────────────────────────────────
 
-async fn udp_receiver_task(state: SharedState, udp_port: u16) {
-    let addr = format!("0.0.0.0:{udp_port}");
+async fn udp_receiver_task(state: SharedState, udp_port: u16, udp_bind_addr: String) {
+    let addr = format!("{udp_bind_addr}:{udp_port}");
     let socket = match UdpSocket::bind(&addr).await {
         Ok(s) => {
             info!("UDP listening on {addr} for ESP32, MediaTek, Qualcomm CSI, and RTL8720F radar frames");
@@ -7527,7 +7537,7 @@ async fn main() {
     info!("WiFi-DensePose Sensing Server (Rust + Axum + RuVector)");
     info!("  HTTP:      http://localhost:{}", args.http_port);
     info!("  WebSocket: ws://localhost:{}/ws/sensing", args.ws_port);
-    info!("  UDP:       0.0.0.0:{} (ESP32 CSI)", args.udp_port);
+    info!("  UDP:       {}:{} (ESP32 CSI)", args.udp_bind_addr, args.udp_port);
     info!("  UI path:   {}", args.ui_path.display());
     info!("  Source:    {}", args.source);
 
@@ -7547,7 +7557,7 @@ async fn main() {
     let normalized = if args.source == "simulate" { "simulated" } else { args.source.as_str() };
     let plan = if normalized == "auto" {
         info!("Auto-detecting data source (UDP :{} bound either way)...", args.udp_port);
-        let esp32 = probe_esp32(args.udp_port).await;
+        let esp32 = probe_esp32(args.udp_port, &args.udp_bind_addr).await;
         let wifi = if esp32 { false } else { probe_windows_wifi().await };
         if esp32 {
             info!("  ESP32 CSI detected on UDP :{}", args.udp_port);
@@ -7901,7 +7911,23 @@ async fn main() {
     // promoted — see `simulated_data_task`). Explicit `--source simulated` has
     // `bind_udp = false`, so it serves simulated data only, with no live binding.
     if plan.bind_udp {
-        tokio::spawn(udp_receiver_task(state.clone(), args.udp_port));
+        // #1394: the CSI datagram path carries no PSK/HMAC/allow-list, so an
+        // operator restricting the HTTP API to loopback should know the UDP
+        // listener's exposure is independently configured.
+        let udp_ip: std::net::IpAddr = args
+            .udp_bind_addr
+            .parse()
+            .expect("Invalid --udp-bind-addr (use 127.0.0.1 or 0.0.0.0)");
+        if udp_ip.is_unspecified() {
+            info!(
+                "UDP CSI receiver: bound to {} (LAN-reachable, unauthenticated) — \
+                 set --udp-bind-addr 127.0.0.1 to restrict to loopback",
+                args.udp_bind_addr
+            );
+        } else {
+            info!("UDP CSI receiver: bound to {} (restricted)", args.udp_bind_addr);
+        }
+        tokio::spawn(udp_receiver_task(state.clone(), args.udp_port, args.udp_bind_addr.clone()));
         tokio::spawn(broadcast_tick_task(state.clone(), args.tick_ms));
     }
     if plan.run_wifi {
