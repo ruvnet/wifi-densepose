@@ -45,9 +45,9 @@ class MockCSIGenerator:
         num_subcarriers: int = 64,
         num_antennas: int = 4,
         num_samples: int = 100,
-        noise_level: float = 0.1,
-        movement_freq: float = 0.5,
-        movement_amplitude: float = 0.3,
+        noise_level: float = 0.018,       # was 0.1  — seated = très peu de bruit
+        movement_freq: float = 0.25,      # was 0.5  — ~15 rpm (fréquence respiratoire)
+        movement_amplitude: float = 0.04, # was 0.3  — assis = micro-mouvement seulement
     ):
         """Initialize mock CSI generator.
 

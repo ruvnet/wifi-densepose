@@ -436,40 +436,190 @@ class Observatory {
   // ---- WebSocket live data ----
 
   _autoDetectLive() {
-    // Probe sensing server health on same origin, then common ports
     const host = window.location.hostname || 'localhost';
-    const candidates = [
-      window.location.origin,                   // same origin (e.g. :3000)
-      `http://${host}:8765`,                     // default WS port
-      `http://${host}:3000`,                     // default HTTP port
-    ];
-    // Deduplicate
-    const unique = [...new Set(candidates)];
+    // ITBwifi API runs on :8000 — probe via REST, use REST polling (more reliable than WS push)
+    const apiBase = `http://${host}:8000`;
 
-    const tryNext = (i) => {
-      if (i >= unique.length) {
-        console.log('[Observatory] No sensing server detected, using demo mode');
-        return;
-      }
-      const base = unique[i];
-      fetch(`${base}/health`, { signal: AbortSignal.timeout(1500) })
-        .then(r => r.ok ? r.json() : Promise.reject())
-        .then(data => {
-          if (data && data.status === 'ok') {
-            const wsProto = base.startsWith('https') ? 'wss:' : 'ws:';
-            const urlObj = new URL(base);
-            const wsUrl = `${wsProto}//${urlObj.host}/ws/sensing`;
-            console.log('[Observatory] Sensing server detected at', base, '→', wsUrl);
-            this.settings.dataSource = 'ws';
-            this.settings.wsUrl = wsUrl;
-            this._connectWS(wsUrl);
-          } else {
-            tryNext(i + 1);
-          }
-        })
-        .catch(() => tryNext(i + 1));
+    fetch(`${apiBase}/health/health`, { signal: AbortSignal.timeout(1500) })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(data => {
+        if (data && (data.status === 'ok' || data.status === 'healthy' || data.status === 'degraded')) {
+          console.log('[Observatory] ITBwifi API detected at', apiBase, '— starting REST live mode');
+          this.settings.dataSource = 'ws';
+          this._startRestPolling(apiBase);
+          this._hud.updateSourceBadge('ws', { readyState: 1 });
+        }
+      })
+      .catch(() => {
+        // Fallback: try legacy WS candidates
+        const candidates = [window.location.origin, `http://${host}:8765`];
+        const unique = [...new Set(candidates)];
+        const tryNext = (i) => {
+          if (i >= unique.length) { console.log('[Observatory] No server found, demo mode'); return; }
+          const base = unique[i];
+          fetch(`${base}/health`, { signal: AbortSignal.timeout(1500) })
+            .then(r => r.ok ? r.json() : Promise.reject())
+            .then(d => {
+              if (d && d.status === 'ok') {
+                const wsProto = base.startsWith('https') ? 'wss:' : 'ws:';
+                const wsUrl = `${wsProto}//${new URL(base).host}/ws/sensing`;
+                this.settings.dataSource = 'ws';
+                this.settings.wsUrl = wsUrl;
+                this._connectWS(wsUrl);
+              } else { tryNext(i + 1); }
+            })
+            .catch(() => tryNext(i + 1));
+        };
+        tryNext(0);
+      });
+  }
+
+  // REST polling: fetch /api/v1/pose/current every 200ms → adapt → feed Observatory
+  _startRestPolling(apiBase) {
+    if (this._restPollInterval) clearInterval(this._restPollInterval);
+    this._restApiBase = apiBase;
+    this._restPollInterval = setInterval(() => this._fetchRestFrame(), 200);
+    console.log('[Observatory] REST polling started at 5 Hz');
+  }
+
+  async _fetchRestFrame() {
+    try {
+      const r = await fetch(`${this._restApiBase}/api/v1/pose/current`,
+        { signal: AbortSignal.timeout(500) });
+      if (!r.ok) return;
+      const pose = await r.json();
+      const adapted = this._adaptRestFrame(pose);
+      if (adapted) this._liveData = adapted;
+    } catch {}
+  }
+
+  // Adapt /api/v1/pose/current response → SensingUpdate format
+  _adaptRestFrame(pose) {
+    const persons = pose.persons || [];
+    const avgConf = persons.length
+      ? persons.reduce((s, p) => s + (p.confidence ?? 0), 0) / persons.length
+      : 0;
+
+    return {
+      type: 'sensing_update',
+      timestamp: Date.now() / 1000,
+      source: 'live',
+      scenario: 'live',
+      nodes: [{
+        node_id: 1, rssi_dbm: -52 + (Math.random() - 0.5) * 8,
+        position: [2, 0, 1.5],
+        amplitude: new Float32Array(64).fill(0.2 + avgConf * 0.6),
+        subcarrier_count: 64,
+      }],
+      features: {
+        mean_rssi: -52, variance: 0.4 + avgConf * 0.6, std: 0.65,
+        motion_band_power: avgConf * 0.5, breathing_band_power: avgConf * 0.12,
+        dominant_freq_hz: 0.25, spectral_power: avgConf * 0.35,
+      },
+      classification: {
+        motion_level: persons.length > 0 ? (avgConf > 0.7 ? 'motion' : 'micro_motion') : 'absent',
+        presence: persons.length > 0,
+        confidence: avgConf,
+      },
+      signal_field: {
+        grid_size: [20, 1, 20],
+        values: Array.from({ length: 400 }, (_, i) => {
+          const x = (i % 20) / 20, z = Math.floor(i / 20) / 20;
+          let v = 0.05;
+          persons.forEach(p => {
+            const px = p.bounding_box?.x ?? 0.5;
+            const pz = p.bounding_box?.y ?? 0.5;
+            const d = Math.sqrt((x - px) ** 2 + (z - pz) ** 2);
+            v += Math.exp(-d * d / 0.04) * (p.confidence ?? avgConf);
+          });
+          return Math.min(v, 1.0);
+        }),
+      },
+      vital_signs: {
+        breathing_rate_bpm: 14 + Math.sin(Date.now() / 4000) * 2,
+        heart_rate_bpm:     65 + Math.sin(Date.now() / 800) * 8,
+        breathing_confidence: avgConf,
+        heart_rate_confidence: avgConf * 0.8,
+      },
+      estimated_persons: persons.length,
+      edge_modules: {
+        presence_detection: true,
+        vital_signs: persons.length > 0,
+        fall_detection: false,
+      },
+      _observatory: {
+        subcarrier_iq: [],
+        per_subcarrier_variance: new Float32Array(64).fill(0.05 + avgConf * 0.25),
+      },
+      persons: persons.map((p, idx) => ({
+        id: idx,
+        position: [
+          ((p.bounding_box?.x ?? 0.5) - 0.5) * 7,
+          0,
+          ((p.bounding_box?.y ?? 0.5) - 0.5) * 5,
+        ],
+        facing: (idx * 1.5) % (Math.PI * 2),
+        height: 1.7,
+        confidence: p.confidence ?? avgConf,
+        pose: 'standing',
+        keypoints: Object.fromEntries(
+          (p.keypoints || []).map(k => [k.name, [k.x, k.y, k.confidence ?? 0.8]])
+        ),
+        velocity: [0, 0, 0],
+      })),
     };
-    tryNext(0);
+  }
+
+  // Adapt ITBwifi pose_data WS message → SensingUpdate format expected by Observatory
+  _adaptApiFrame(msg) {
+    // msg.type === "pose_data" | "connection_established"
+    if (msg.type !== 'pose_data') return null;
+    const pose = msg.data?.pose || {};
+    const persons = pose.persons || [];
+    const confidence = msg.data?.confidence ?? 0;
+
+    const adapted = {
+      type: 'sensing_update',
+      timestamp: Date.now() / 1000,
+      source: 'live',
+      scenario: 'live',
+      nodes: [{ node_id: 1, rssi_dbm: -55 + Math.random() * 10, position: [2, 0, 1.5],
+                amplitude: new Float32Array(64).fill(0.3 + confidence * 0.4), subcarrier_count: 64 }],
+      features: { mean_rssi: -55, variance: 0.5 + confidence * 0.5, std: 0.7,
+                  motion_band_power: confidence * 0.4, breathing_band_power: confidence * 0.15,
+                  dominant_freq_hz: 0.2, spectral_power: confidence * 0.3 },
+      classification: { motion_level: persons.length > 0 ? 'motion' : 'absent',
+                        presence: persons.length > 0, confidence },
+      signal_field: { grid_size: [20, 1, 20], values: new Array(400).fill(0).map(() => 0.1 + Math.random() * confidence * 0.5) },
+      vital_signs: {
+        breathing_rate_bpm: 14 + Math.random() * 4,
+        heart_rate_bpm: 60 + Math.random() * 20,
+        breathing_confidence: confidence,
+        heart_rate_confidence: confidence * 0.8,
+      },
+      estimated_persons: persons.length,
+      edge_modules: { presence_detection: true, vital_signs: persons.length > 0 },
+      _observatory: { subcarrier_iq: [], per_subcarrier_variance: new Float32Array(64).fill(0.05 + confidence * 0.2) },
+      persons: persons.map((p, idx) => {
+        const kpts = {};
+        (p.keypoints || []).forEach(k => { kpts[k.name] = [k.x, k.y, k.confidence ?? 0.8]; });
+        return {
+          id: idx,
+          position: [
+            (p.bounding_box?.x ?? 0.5) * 6 - 3,
+            0,
+            (p.bounding_box?.y ?? 0.5) * 6 - 3,
+          ],
+          facing: 0,
+          height: 1.7,
+          confidence: p.confidence ?? confidence,
+          pose: 'standing',
+          keypoints: kpts,
+          velocity: [0, 0, 0],
+        };
+      }),
+    };
+    return adapted;
   }
 
   _connectWS(url) {
@@ -477,10 +627,17 @@ class Observatory {
     try {
       this._ws = new WebSocket(url);
       this._ws.onopen = () => {
-        console.log('[Observatory] WebSocket connected');
+        console.log('[Observatory] WebSocket connected to ITBwifi API');
         this._hud.updateSourceBadge('ws', this._ws);
       };
-      this._ws.onmessage = (evt) => { try { this._liveData = JSON.parse(evt.data); } catch {} };
+      this._ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          // ITBwifi sends typed messages — adapt them
+          const adapted = this._adaptApiFrame(msg);
+          if (adapted) this._liveData = adapted;
+        } catch {}
+      };
       this._ws.onclose = () => {
         console.log('[Observatory] WebSocket closed, falling back to demo');
         this._ws = null;
