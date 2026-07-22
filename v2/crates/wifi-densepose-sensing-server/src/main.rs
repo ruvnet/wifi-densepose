@@ -462,6 +462,11 @@ struct NodeState {
     vital_detector: VitalSignDetector,
     latest_vitals: VitalSigns,
     pub(crate) last_frame_time: Option<std::time::Instant>,
+    /// Source IP of this node's most recent UDP packet. Lets a caller find
+    /// a node on the LAN (e.g. to hit its `/system/sleep` endpoint) without
+    /// a separate discovery mechanism -- the sensing server already knows
+    /// this from every packet it receives.
+    pub(crate) last_ip: Option<std::net::IpAddr>,
     edge_vitals: Option<Esp32VitalsPacket>,
     /// ADR-110 §A0.12: Latest sync packet received from this node. When a
     /// CSI frame arrives with byte 19 bit 4 set (`adr018_flags.ieee802154_sync_valid`),
@@ -738,6 +743,7 @@ impl NodeState {
             vital_detector: VitalSignDetector::new(10.0),
             latest_vitals: VitalSigns::default(),
             last_frame_time: None,
+            last_ip: None,
             edge_vitals: None,
             latest_sync: None,
             latest_sync_at: None,
@@ -5559,6 +5565,7 @@ async fn nodes_endpoint(State(state): State<SharedState>) -> Json<serde_json::Va
                 "rssi_dbm": rssi,
                 "motion_level": &ns.current_motion_level,
                 "person_count": ns.prev_person_count,
+                "ip_address": ns.last_ip.map(|ip| ip.to_string()),
             })
         })
         .collect();
@@ -6124,6 +6131,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     // CSI arrivals. The helper sets `last_frame_time` as a
                     // side effect, so the previous bare assignment is gone.
                     ns.observe_csi_frame_arrival(std::time::Instant::now());
+                    ns.last_ip = Some(src.ip());
 
                     // ADR-084 Pass 3: cluster-Pi novelty sensor.
                     // Score this frame's feature vector against the per-node

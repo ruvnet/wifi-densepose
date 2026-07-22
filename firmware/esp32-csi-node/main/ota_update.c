@@ -6,6 +6,16 @@
  * The HTTP server runs on port 8032 and accepts:
  *   POST /ota — firmware binary payload (application/octet-stream)
  *   GET /ota/status — current firmware version and partition info
+ *   POST /system/sleep — enter indefinite deep sleep (remote "off")
+ *
+ * /system/sleep shares the OTA endpoint's PSK auth (fail-closed the same
+ * way): unprovisioned nodes reject it, same as /ota. There is deliberately
+ * no wake-on-network path here -- deep sleep powers down the WiFi radio, so
+ * nothing can reach the node again over the air. Waking it back up needs a
+ * physical power-cycle (or, on hardware with the wake GPIO wired up, an
+ * external trigger). This is a real, unavoidable limitation of WiFi-based
+ * remote control, not an oversight -- document it for callers rather than
+ * pretend a remote wake exists.
  */
 
 #include "ota_update.h"
@@ -15,6 +25,7 @@
 #include "esp_ota_ops.h"
 #include "esp_http_server.h"
 #include "esp_app_desc.h"
+#include "esp_sleep.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 
@@ -209,6 +220,44 @@ static esp_err_t ota_upload_handler(httpd_req_t *req)
     return ESP_OK;  /* Never reached. */
 }
 
+/**
+ * POST /system/sleep — enter indefinite deep sleep (remote "off").
+ *
+ * Reuses the OTA PSK auth: an unprovisioned node (no PSK in NVS) rejects
+ * this the same way it rejects OTA uploads. This is deliberately a
+ * heavier-weight check than a simple on/off toggle deserves in isolation,
+ * but it means there's exactly one auth mechanism to reason about and
+ * provision for this whole server, not two.
+ *
+ * No wake timer, no wake-on-network -- see the file header comment. The
+ * caller is expected to already know they'll need physical access (or a
+ * smart-plug power cycle) to bring the node back.
+ */
+static esp_err_t system_sleep_handler(httpd_req_t *req)
+{
+    if (!ota_check_auth(req)) {
+        ESP_LOGW(TAG, "sleep request rejected: authentication failed");
+        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN,
+                            "Authentication required. Use: Authorization: Bearer <psk>");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGW(TAG, "Remote sleep requested over HTTP -- entering deep sleep. "
+                  "Physical power-cycle required to wake.");
+
+    const char *resp = "{\"status\":\"ok\",\"message\":\"Entering deep sleep. "
+                        "Physical power-cycle required to wake.\"}";
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, resp, strlen(resp));
+
+    /* Let the response flush before the radio (and everything else) goes
+     * down -- same pattern as the OTA reboot below. */
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_deep_sleep_start();
+
+    return ESP_OK;  /* Never reached. */
+}
+
 /** Internal: start the HTTP server and register OTA endpoints. */
 static esp_err_t ota_start_server(httpd_handle_t *out_handle)
 {
@@ -243,9 +292,18 @@ static esp_err_t ota_start_server(httpd_handle_t *out_handle)
     };
     httpd_register_uri_handler(server, &upload_uri);
 
+    httpd_uri_t sleep_uri = {
+        .uri      = "/system/sleep",
+        .method   = HTTP_POST,
+        .handler  = system_sleep_handler,
+        .user_ctx = NULL,
+    };
+    httpd_register_uri_handler(server, &sleep_uri);
+
     ESP_LOGI(TAG, "OTA HTTP server started on port %d", OTA_PORT);
-    ESP_LOGI(TAG, "  GET  /ota/status — firmware version info");
-    ESP_LOGI(TAG, "  POST /ota        — upload new firmware binary");
+    ESP_LOGI(TAG, "  GET  /ota/status     — firmware version info");
+    ESP_LOGI(TAG, "  POST /ota            — upload new firmware binary");
+    ESP_LOGI(TAG, "  POST /system/sleep   — enter deep sleep (physical power-cycle to wake)");
 
     if (out_handle) *out_handle = server;
     return ESP_OK;
