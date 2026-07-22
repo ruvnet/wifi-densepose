@@ -31,8 +31,10 @@ asyncio.run(main())
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Optional
 
@@ -41,6 +43,16 @@ try:
     import websockets  # type: ignore[import-not-found]
     from websockets.exceptions import ConnectionClosed  # type: ignore[import-not-found]
     _WEBSOCKETS_AVAILABLE = True
+    # The `websockets.connect` keyword for custom headers was renamed within
+    # the >=12.0 range this package pins: `extra_headers` (<14) became
+    # `additional_headers` (>=14). Detect via signature introspection rather
+    # than parsing __version__, so this doesn't silently drift if the cutover
+    # version turns out to be off by a patch release.
+    _CONNECT_HEADERS_KWARG = (
+        "additional_headers"
+        if "additional_headers" in inspect.signature(websockets.connect).parameters
+        else "extra_headers"
+    )
 except ImportError:  # pragma: no cover
     _WEBSOCKETS_AVAILABLE = False
 
@@ -178,6 +190,7 @@ class SensingClient:
         self,
         url: str,
         *,
+        token: Optional[str] = None,
         ping_interval: float = 20.0,
         ping_timeout: float = 20.0,
         max_size: int = 16 * 1024 * 1024,
@@ -188,18 +201,24 @@ class SensingClient:
                 "`pip install \"wifi-densepose[client]\"` to enable the client extras."
             )
         self.url = url
+        # Bearer token for RUVIEW_API_TOKEN-protected servers. Python isn't
+        # browser-constrained (unlike the web UI), so the header can go
+        # straight on the WS upgrade — no ticket/round-trip indirection.
+        self._token = token if token is not None else os.environ.get("RUVIEW_API_TOKEN")
         self._ping_interval = ping_interval
         self._ping_timeout = ping_timeout
         self._max_size = max_size
         self._ws: Any = None  # websockets.WebSocketClientProtocol — typed Any to avoid import cost
 
     async def __aenter__(self) -> "SensingClient":
-        self._ws = await websockets.connect(
-            self.url,
-            ping_interval=self._ping_interval,
-            ping_timeout=self._ping_timeout,
-            max_size=self._max_size,
-        )
+        connect_kwargs: dict[str, Any] = {
+            "ping_interval": self._ping_interval,
+            "ping_timeout": self._ping_timeout,
+            "max_size": self._max_size,
+        }
+        if self._token:
+            connect_kwargs[_CONNECT_HEADERS_KWARG] = {"Authorization": f"Bearer {self._token}"}
+        self._ws = await websockets.connect(self.url, **connect_kwargs)
         return self
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
