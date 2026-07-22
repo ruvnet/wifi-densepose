@@ -31,8 +31,10 @@ asyncio.run(main())
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Optional
 
@@ -46,6 +48,28 @@ except ImportError:  # pragma: no cover
 
 
 log = logging.getLogger(__name__)
+
+
+def _authorization_header_kwargs(token: str | None) -> dict[str, Any]:
+    """Build version-compatible ``websockets.connect`` header arguments.
+
+    websockets 14 renamed ``extra_headers`` to ``additional_headers``.
+    Inspecting the installed callable keeps the client compatible with the
+    full declared ``websockets>=12`` dependency range without relying on a
+    separately parsed package version.
+    """
+    if not token:
+        return {}
+
+    parameters = inspect.signature(websockets.connect).parameters
+    headers = {"Authorization": f"Bearer {token}"}
+    if "additional_headers" in parameters:
+        return {"additional_headers": headers}
+    if "extra_headers" in parameters:
+        return {"extra_headers": headers}
+    raise RuntimeError(
+        "Unsupported websockets.connect API: expected additional_headers or extra_headers"
+    )
 
 
 # ─── Typed messages ──────────────────────────────────────────────────
@@ -172,12 +196,17 @@ class SensingClient:
     the ``async with`` in your own retry loop. Auto-reconnect logic is
     application-specific (e.g., "retry forever" for a long-running
     automation vs "fail fast" for a CLI tool that should exit).
+
+    When ``token`` is omitted, the client reads ``RUVIEW_API_TOKEN``.
+    Pass a token explicitly to override the environment, or ``token=""``
+    to disable authentication.
     """
 
     def __init__(
         self,
         url: str,
         *,
+        token: str | None = None,
         ping_interval: float = 20.0,
         ping_timeout: float = 20.0,
         max_size: int = 16 * 1024 * 1024,
@@ -191,6 +220,7 @@ class SensingClient:
         self._ping_interval = ping_interval
         self._ping_timeout = ping_timeout
         self._max_size = max_size
+        self._token = token if token is not None else os.environ.get("RUVIEW_API_TOKEN")
         self._ws: Any = None  # websockets.WebSocketClientProtocol — typed Any to avoid import cost
 
     async def __aenter__(self) -> "SensingClient":
@@ -199,6 +229,7 @@ class SensingClient:
             ping_interval=self._ping_interval,
             ping_timeout=self._ping_timeout,
             max_size=self._max_size,
+            **_authorization_header_kwargs(self._token),
         )
         return self
 
