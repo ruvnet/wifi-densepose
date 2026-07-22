@@ -65,6 +65,15 @@ _FIXTURE_MESSAGES = [
 ]
 
 
+def _request_headers(websocket: Any) -> Any:
+    """Return the upgrade-request headers regardless of websockets version:
+    the legacy server protocol (<14, still reachable via >=12.0's floor)
+    exposes `request_headers`; the newer asyncio-based server exposes
+    `request.headers` instead."""
+    legacy = getattr(websocket, "request_headers", None)
+    return legacy if legacy is not None else websocket.request.headers
+
+
 async def _handler(websocket: Any) -> None:
     for msg in _FIXTURE_MESSAGES:
         await websocket.send(json.dumps(msg))
@@ -172,6 +181,77 @@ def test_sensing_client_decoder_directly() -> None:
     assert msg.breathing_rate_bpm is None  # not present → None, not 0.0
     assert msg.heartrate_bpm is None
     assert msg.rssi is None
+
+
+async def test_sensing_client_sends_bearer_token_on_upgrade() -> None:
+    """#1395: a token passed to the constructor must reach the server as
+    an `Authorization: Bearer <token>` header on the WS upgrade request."""
+    captured_auth: dict[str, Any] = {}
+
+    async def handler(websocket: Any) -> None:
+        captured_auth["value"] = _request_headers(websocket).get("Authorization")
+        await websocket.send(json.dumps({"type": "connection_established", "node_id": "auth-test"}))
+        await websocket.wait_closed()
+
+    server = await websockets.serve(handler, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+    try:
+        async with SensingClient(f"ws://127.0.0.1:{port}/ws/sensing", token="s3cr3t") as client:
+            await client.recv_one(timeout=2.0)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert captured_auth["value"] == "Bearer s3cr3t"
+
+
+async def test_sensing_client_omits_auth_header_when_no_token(monkeypatch: Any) -> None:
+    """No token passed and RUVIEW_API_TOKEN unset: no Authorization header
+    at all, not an empty one — matches the HTTP client's no-op behaviour."""
+    monkeypatch.delenv("RUVIEW_API_TOKEN", raising=False)
+    captured_auth: dict[str, Any] = {}
+
+    async def handler(websocket: Any) -> None:
+        captured_auth["present"] = "Authorization" in _request_headers(websocket)
+        await websocket.send(
+            json.dumps({"type": "connection_established", "node_id": "no-auth-test"})
+        )
+        await websocket.wait_closed()
+
+    server = await websockets.serve(handler, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+    try:
+        async with SensingClient(f"ws://127.0.0.1:{port}/ws/sensing") as client:
+            await client.recv_one(timeout=2.0)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert captured_auth["present"] is False
+
+
+async def test_sensing_client_reads_token_from_env(monkeypatch: Any) -> None:
+    """Constructor token defaults to RUVIEW_API_TOKEN when not passed explicitly."""
+    monkeypatch.setenv("RUVIEW_API_TOKEN", "from-env-token")
+    captured_auth: dict[str, Any] = {}
+
+    async def handler(websocket: Any) -> None:
+        captured_auth["value"] = _request_headers(websocket).get("Authorization")
+        await websocket.send(
+            json.dumps({"type": "connection_established", "node_id": "env-token-test"})
+        )
+        await websocket.wait_closed()
+
+    server = await websockets.serve(handler, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+    try:
+        async with SensingClient(f"ws://127.0.0.1:{port}/ws/sensing") as client:
+            await client.recv_one(timeout=2.0)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert captured_auth["value"] == "Bearer from-env-token"
 
 
 def test_sensing_client_decoder_handles_None_subfields() -> None:
