@@ -34,9 +34,8 @@
 # dedicated follow-up commit (drop `password:`, add the OIDC id-token
 # permission + `environment: pypi`) so there is no capability gap between.
 #
-# Q3 (witness hash v2 — open in ADR-117 §11.3) MUST be resolved
-# before the first v2.0.0 publish. When v2 lands, add a parallel
-# step that verifies the v2 hash against the Rust pipeline.
+# Production publishing fails closed until the ADR-117 §11.3 v2 witness
+# hash exists. TestPyPI remains usable to validate release artifacts.
 
 name: pip-release
 
@@ -83,7 +82,7 @@ jobs:
             arch: x86_64
           - os: ubuntu-latest
             arch: aarch64
-          - os: macos-13          # x86_64 runner
+          - os: macos-15-intel    # x86_64 runner
             arch: x86_64
           - os: macos-14          # arm64 runner
             arch: arm64
@@ -150,6 +149,46 @@ jobs:
         with:
           name: sdist
           path: sdist/*.tar.gz
+          if-no-files-found: error
+
+  build-ruview:
+    name: Build ruview meta-package
+    if: |
+      github.event_name == 'workflow_dispatch' && inputs.target == 'v2-wheels' ||
+      startsWith(github.ref, 'refs/tags/v2.')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Verify lock-step package versions
+        shell: python
+        run: |
+          import pathlib
+          import tomllib
+
+          root = pathlib.Path("python")
+          core = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+          meta = tomllib.loads((root / "ruview-meta" / "pyproject.toml").read_text(encoding="utf-8"))
+          core_version = core["project"]["version"]
+          meta_version = meta["project"]["version"]
+          expected_dependency = f"wifi-densepose=={core_version}"
+          if meta_version != core_version:
+              raise SystemExit(
+                  f"package versions differ: wifi-densepose={core_version}, ruview={meta_version}"
+              )
+          if expected_dependency not in meta["project"]["dependencies"]:
+              raise SystemExit(f"ruview must depend on {expected_dependency}")
+          print(f"lock-step version: {core_version}")
+      - name: Build ruview wheel and sdist
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build python/ruview-meta --outdir ruview-dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ruview
+          path: ruview-dist/*
           if-no-files-found: error
 
   # ────────────────────────────────────────────────────────────────
@@ -236,18 +275,29 @@ jobs:
   # ────────────────────────────────────────────────────────────────
 
   publish-v2:
-    name: Publish v2 wheels
-    needs: [build-wheels, build-sdist]
+    name: Publish wifi-densepose + ruview
+    needs: [build-wheels, build-sdist, build-ruview]
     if: |
       always() &&
       needs.build-wheels.result == 'success' &&
       needs.build-sdist.result == 'success' &&
+      needs.build-ruview.result == 'success' &&
       (
         github.event_name == 'workflow_dispatch' && inputs.target == 'v2-wheels' ||
         startsWith(github.ref, 'refs/tags/v2.')
       )
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - name: Enforce production witness gate
+        if: |
+          startsWith(github.ref, 'refs/tags/v2.') ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish_to == 'pypi')
+        run: |
+          test -s archive/v1/data/proof/expected_features_v2.sha256 || {
+            echo "::error::ADR-117 §11.3 release gate is incomplete: archive/v1/data/proof/expected_features_v2.sha256 is missing or empty"
+            exit 1
+          }
       - name: Gather all artifacts into dist/
         uses: actions/download-artifact@v4
         with:
@@ -264,7 +314,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          password: ${{ secrets.TESTPYPI_API_TOKEN }}
           packages-dir: dist
           skip-existing: true
       - name: Publish to PyPI
@@ -275,6 +325,7 @@ jobs:
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
           packages-dir: dist
+          verbose: true
 
   publish-tombstone:
     name: Publish v1.99 tombstone
@@ -299,7 +350,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          password: ${{ secrets.TESTPYPI_API_TOKEN }}
           packages-dir: dist
           skip-existing: true
       - name: Publish to PyPI
