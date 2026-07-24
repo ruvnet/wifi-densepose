@@ -12,6 +12,7 @@ name: ADR-115 MQTT integration tests
 on:
   pull_request:
     paths:
+      - 'v2/crates/wifi-densepose-sensing-server/src/main.rs'
       - 'v2/crates/wifi-densepose-sensing-server/src/mqtt/**'
       - 'v2/crates/wifi-densepose-sensing-server/tests/mqtt_integration.rs'
       - 'v2/crates/wifi-densepose-sensing-server/Cargo.toml'
@@ -19,6 +20,7 @@ on:
   push:
     branches: [main]
     paths:
+      - 'v2/crates/wifi-densepose-sensing-server/src/main.rs'
       - 'v2/crates/wifi-densepose-sensing-server/src/mqtt/**'
   workflow_dispatch: {}
 
@@ -87,14 +89,22 @@ jobs:
       - name: Verify unit tests still pass under --features mqtt
         working-directory: v2
         # `cargo test` accepts a single TESTNAME filter, so we run the
-        # whole --lib suite here. That gives us the full 410-test green
-        # bar under --features mqtt (which is more reassuring than
-        # filtering anyway).
+        # whole --lib suite here. That gives us the full library green
+        # bar under --features mqtt without a test-count comment that
+        # goes stale as coverage grows.
         run: >-
           cargo test -p wifi-densepose-sensing-server
           --features mqtt --no-default-features
           --lib
           --no-fail-fast
+
+      - name: Verify MQTT startup decisions
+        working-directory: v2
+        run: >-
+          cargo test -p wifi-densepose-sensing-server
+          --features mqtt --no-default-features
+          --bin sensing-server
+          mqtt_startup_tests
 
       - name: Run integration tests against mosquitto
         working-directory: v2
