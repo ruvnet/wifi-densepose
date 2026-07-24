@@ -8,6 +8,7 @@
  * - Dot-matrix mist body mass, particle trails, WiFi waves, signal field
  * - Reflective floor, settings dialog, and practical data HUD
  */
+import { withWsTicket } from '../../services/ws-ticket.js';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
@@ -462,7 +463,7 @@ class Observatory {
             console.log('[Observatory] Sensing server detected at', base, '→', wsUrl);
             this.settings.dataSource = 'ws';
             this.settings.wsUrl = wsUrl;
-            this._connectWS(wsUrl);
+            void this._connectWS(wsUrl);
           } else {
             tryNext(i + 1);
           }
@@ -472,10 +473,13 @@ class Observatory {
     tryNext(0);
   }
 
-  _connectWS(url) {
+  // async: `/ws/sensing` is gated (ADR-272); mint a single-use ticket first.
+  async _connectWS(url) {
     this._disconnectWS();
+    let wsUrl = url;
+    try { wsUrl = await withWsTicket(url); } catch { /* auth off or pre-ADR-272 server */ }
     try {
-      this._ws = new WebSocket(url);
+      this._ws = new WebSocket(wsUrl);
       this._ws.onopen = () => {
         console.log('[Observatory] WebSocket connected');
         this._hud.updateSourceBadge('ws', this._ws);

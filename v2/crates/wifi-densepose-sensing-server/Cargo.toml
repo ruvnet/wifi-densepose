@@ -41,6 +41,12 @@ chrono = { version = "0.4", features = ["serde"] }
 # CLI
 clap = { workspace = true }
 
+# ADR-185 §3.2/§13: AETHER pure-compute stack (embedding / graph_transformer /
+# sona / sparse_inference), hoisted into a std-only leaf crate and re-exported
+# from `lib.rs` so the Python `[aether]` wheel can bind it without this server's
+# Axum/tokio/worldgraph/ruvector tree.
+wifi-densepose-aether = { version = "0.3.0", path = "../wifi-densepose-aether" }
+
 # Multi-BSSID WiFi scanning pipeline (ADR-022 Phase 3)
 wifi-densepose-wifiscan = { version = "0.3.0", path = "../wifi-densepose-wifiscan" }
 
@@ -85,6 +91,17 @@ ureq      = { version = "2", default-features = false, features = ["tls", "json"
 sha2      = "0.10"
 thiserror = "1"
 
+# ADR-271 — Cognitum OAuth access-token verification. Reuses the `ureq`
+# transport above rather than pulling a second HTTP stack: `ruview-auth`'s
+# JWKS fetch sits behind a trait, and its default feature is the ureq one.
+ruview-auth = { path = "../ruview-auth", features = ["pkce"] }
+# ADR-271 browser sign-in: signed transaction + session cookies.
+hmac = "0.12"
+subtle = "2"
+base64 = "0.21"
+# ADR-272 — unpredictable single-use WebSocket tickets.
+rand = "0.8"
+
 # ADR-115 §3.8 — MQTT publisher (HA-DISCO).
 # Gated behind the `mqtt` feature so the default binary stays small for users
 # who don't need Home Assistant integration. `rumqttc` is the chosen Rust MQTT
@@ -123,6 +140,10 @@ matter = []
 tempfile = "3.10"
 # `tower::ServiceExt::oneshot` for in-process Router tests (bearer_auth).
 tower = { workspace = true }
+# ADR-186 P6 — real-socket WebSocket client for the `/ws/train/progress`
+# 101-upgrade + live-progress-frame test. Pinned to the version already resolved
+# in the workspace lock (via homecore-api) so this adds no new lock entry.
+tokio-tungstenite = "0.24"
 # ADR-115 P9 — micro-benchmarks for MQTT hot paths + semantic bus.
 # Heavy dep tree (~80 transitive crates) so it's dev-only; benches live
 # behind --features mqtt because they bench the mqtt module.
@@ -132,6 +153,12 @@ criterion = { version = "0.5", features = ["html_reports"] }
 # (random Unicode, control chars, etc.). Pinned to a small version that
 # doesn't pull in proptest-derive (we don't need it).
 proptest = { version = "1.5", default-features = false, features = ["std"] }
+# ADR-271 — sign real ES256 tokens so the middleware's OAuth path is exercised
+# end to end (router → middleware → verifier), not just mocked at the seam.
+# Keys are generated at test runtime; none are committed.
+jsonwebtoken = "9"
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+base64 = "0.21"
 
 [[bench]]
 name = "mqtt_throughput"

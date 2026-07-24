@@ -28,7 +28,7 @@ from __future__ import annotations
 # Public Python version follows the wheel version, NOT the Rust core
 # version. The Rust core version is surfaced separately as
 # `__rust_version__` for diagnostics.
-__version__ = "2.0.0a1"
+__version__ = "2.0.0"
 
 # Re-export the compiled module's surface. The leading underscore on
 # `_native` is intentional — it marks the binding module as internal.

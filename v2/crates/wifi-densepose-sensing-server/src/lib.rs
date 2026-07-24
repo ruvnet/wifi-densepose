@@ -9,13 +9,12 @@
 //! - Real-time CSI introspection / low-latency tap (`introspection`, ADR-099)
 
 pub mod bearer_auth;
+pub mod browser_session;
+pub mod ws_ticket;
 pub mod cli;
 pub mod dataset;
 pub mod edge_registry;
-#[allow(dead_code)]
-pub mod embedding;
 pub mod error_response;
-pub mod graph_transformer;
 pub mod host_validation;
 pub mod introspection;
 pub mod matter;
@@ -31,8 +30,6 @@ pub mod rvf_container;
 pub mod rvf_pipeline;
 pub mod semconv;
 pub mod telemetry;
-pub mod sona;
-pub mod sparse_inference;
 #[allow(dead_code)]
 pub mod trainer;
 pub mod vital_signs;
@@ -44,3 +41,12 @@ pub mod vendor_origin_plume;
 pub mod vendor_remaining;
 /// ADR-270 provider registry and canonical event helpers.
 pub mod vendor_rf;
+
+// ADR-185 §3.2/§13: the AETHER pure-compute stack (contrastive embedding,
+// CSI-to-pose transformer, SONA, quantization) was hoisted into the std-only
+// `wifi-densepose-aether` leaf crate so the Python `[aether]` wheel can bind it
+// without this crate's Axum/tokio/worldgraph/ruvector tree. Re-exported here so
+// this crate's own code (`crate::embedding`, `crate::graph_transformer`,
+// `crate::sona`) and public API (`wifi_densepose_sensing_server::embedding`, …)
+// are unchanged.
+pub use wifi_densepose_aether::{embedding, graph_transformer, sona, sparse_inference};

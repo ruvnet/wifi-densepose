@@ -1,0 +1,26 @@
+[package]
+name = "wifi-densepose-aether"
+description = "AETHER pure-compute stack (ADR-024): contrastive CSI embedding, CSI-to-pose transformer, SONA drift/LoRA, and quantization — std-only, no async/server deps so the Python `[aether]` wheel stays lean (ADR-185 §3.2)"
+version = "0.3.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+# Intentionally dependency-free: this crate is the leaf hoisted out of
+# `wifi-densepose-sensing-server` (ADR-185 §13) precisely so that binding it into
+# the `wifi_densepose[aether]` wheel does not pull the Axum/tokio/worldgraph/
+# ruvector server tree. Keep it std-only.
+[dependencies]
+
+# Test-only: parses the committed golden fixtures shared with the Python parity
+# tests. Never linked into the library or the wheel.
+[dev-dependencies]
+serde_json = "1"
+
+[lib]
+name = "wifi_densepose_aether"
+path = "src/lib.rs"

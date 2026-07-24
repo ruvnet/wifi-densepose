@@ -56,6 +56,14 @@ csv = "1.3"
 
 # Error handling
 anyhow = "1.0"
+
+# ADR-271 phase 2 — `login`/`logout`/`whoami`. The `login` feature carries the
+# interactive half (PKCE, loopback, OOB paste, credential store, refresh);
+# the sensing server depends on this same crate with default features and
+# gets only the verifier.
+ruview-auth = { path = "../ruview-auth", features = ["login"] }
+# Only for constructing the HTTP client  hands to Session.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 thiserror = "2.0"
 
 # Time

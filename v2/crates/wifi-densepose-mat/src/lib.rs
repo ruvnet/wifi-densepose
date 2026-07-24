@@ -87,6 +87,10 @@ pub mod detection;
 pub mod domain;
 pub mod integration;
 pub mod localization;
+/// ONNX-backed ML detection. Requires the `ml` feature (pulls
+/// `wifi-densepose-nn` + `ort`). The core survivor-detection/triage
+/// pipeline works without it.
+#[cfg(feature = "ml")]
 pub mod ml;
 pub mod tracking;
 
@@ -130,6 +134,7 @@ pub use integration::{
 #[cfg_attr(docsrs, doc(cfg(feature = "api")))]
 pub use api::{create_router, AppState};
 
+#[cfg(feature = "ml")]
 pub use ml::{
     AttenuationPrediction,
     BreathingClassification,
@@ -207,6 +212,7 @@ pub enum MatError {
     Io(#[from] std::io::Error),
 
     /// Machine learning error
+    #[cfg(feature = "ml")]
     #[error("ML error: {0}")]
     Ml(#[from] ml::MlError),
 }
@@ -592,8 +598,6 @@ pub mod prelude {
         AssociationResult,
         BreathingPattern,
         Coordinates3D,
-        DebrisClassification,
-        DebrisModel,
         DetectionEvent,
         DetectionObservation,
         // Detection
@@ -614,11 +618,6 @@ pub mod prelude {
         // Localization
         LocalizationService,
         MatError,
-        MaterialType,
-        // ML types
-        MlDetectionConfig,
-        MlDetectionPipeline,
-        MlDetectionResult,
         Priority,
         Result,
         ScanZone,
@@ -631,11 +630,16 @@ pub mod prelude {
         TrackerConfig,
         TrackingEvent,
         TriageStatus,
-        UncertaintyEstimate,
-        VitalSignsClassifier,
         VitalSignsDetector,
         VitalSignsReading,
         ZoneBounds,
+    };
+
+    // ONNX-backed ML types — only when the `ml` feature is enabled.
+    #[cfg(feature = "ml")]
+    pub use crate::{
+        DebrisClassification, DebrisModel, MaterialType, MlDetectionConfig, MlDetectionPipeline,
+        MlDetectionResult, UncertaintyEstimate, VitalSignsClassifier,
     };
 }
 

@@ -35,7 +35,13 @@ cuda = ["tch-backend"]
 [dependencies]
 # Internal crates
 wifi-densepose-signal = { version = "0.3.0", path = "../wifi-densepose-signal", default-features = false }
-wifi-densepose-nn = { version = "0.3.0", path = "../wifi-densepose-nn" }
+# NOTE: `wifi-densepose-nn` was declared here but never imported anywhere in
+# this crate's src/ or bin/ (the tch-backend model path uses `tch` directly,
+# not this crate). It was a dead dependency that pulled `ort` (ONNX Runtime) +
+# reqwest/hyper into every downstream consumer — including the ADR-185
+# `[meridian]` wheel. Removed to slim the dependency graph. Inference at
+# serving time is done via `wifi-densepose-nn` by the binaries that actually
+# load models, which depend on it directly.
 
 # Core
 thiserror.workspace = true

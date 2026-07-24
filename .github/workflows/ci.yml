@@ -171,6 +171,41 @@ jobs:
     - name: ADR-135 calibration witness proof (determinism guard)
       run: bash scripts/verify-calibration-proof.sh
 
+    # The workspace runs with --no-default-features, which switches OFF
+    # ruview-auth's `login` and `pkce` features. That silently excluded 40 of
+    # its 87 tests — the whole interactive sign-in path: credential storage,
+    # single-flight refresh, the advisory file lock, the loopback callback, and
+    # PKCE generation. They were green locally and never executed here.
+    # Measured: 47 tests with --no-default-features, 87 with --all-features.
+    - name: Run ruview-auth tests with all features (ADR-271 login path)
+      working-directory: v2
+      env:
+        CARGO_PROFILE_DEV_DEBUG: "0"
+        CARGO_PROFILE_TEST_DEBUG: "0"
+      run: cargo test -p ruview-auth --all-features
+
+  # Browser-facing JavaScript.
+  #
+  # These run the dashboard's own modules in Node with stubbed browser globals.
+  # They exist because the Rust suite cannot see them at all: two ADR-271/272
+  # defects (a service worker caching /oauth/status, and the WebSocket ticket
+  # helper) lived entirely in `ui/` and were invisible to a fully green
+  # workspace. Blocking, and fast — no browser, no install step.
+  ui-tests:
+    name: UI JavaScript Tests
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
+    - name: Run UI unit tests
+      run: node --test ui/sw.test.mjs ui/services/ws-ticket.test.mjs
+
   # Unit and Integration Tests
   # Python pytest matrix — runs against the archived v1 Python tree.
   # `continue-on-error: true` for the same reason as code-quality above:

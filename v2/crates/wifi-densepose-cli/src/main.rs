@@ -18,6 +18,15 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Login(args) => {
+            wifi_densepose_cli::auth::login_cmd(args).await?;
+        }
+        Commands::Logout(args) => {
+            wifi_densepose_cli::auth::logout_cmd(args).await?;
+        }
+        Commands::Whoami(args) => {
+            wifi_densepose_cli::auth::whoami_cmd(args).await?;
+        }
         Commands::Calibrate(args) => {
             wifi_densepose_cli::calibrate::execute(args).await?;
         }

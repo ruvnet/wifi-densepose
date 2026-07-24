@@ -822,7 +822,72 @@ impl EmbeddingExtractor {
         self.projection = proj;
         Ok(())
     }
+
+    /// Serialize all weights (transformer + projection) to `path`.
+    ///
+    /// Format (little-endian, zero-dep so the std-only leaf crate stays
+    /// dependency-free): 8-byte magic `AETHERW1`, then a `u32` parameter
+    /// count, then that many `f32` values — exactly `flatten_weights()`.
+    ///
+    /// This is the counterpart of [`Self::load_weights`]. It enables loading a
+    /// *real trained* checkpoint once one exists (ADR-185 §13.a); it does not
+    /// itself make the default (random-init) extractor trained.
+    pub fn save_weights<P: AsRef<std::path::Path>>(&self, path: P) -> std::io::Result<()> {
+        let weights = self.flatten_weights();
+        let mut buf = Vec::with_capacity(WEIGHT_HEADER_LEN + weights.len() * 4);
+        buf.extend_from_slice(WEIGHT_MAGIC);
+        buf.extend_from_slice(&(weights.len() as u32).to_le_bytes());
+        for v in &weights {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        std::fs::write(path, buf)
+    }
+
+    /// Load weights previously written by [`Self::save_weights`] (or any file in
+    /// that format) into this extractor, replacing the current (random-init or
+    /// prior) weights.
+    ///
+    /// Errors (never panics) on: unreadable file, a payload shorter than the
+    /// header, a wrong magic, a truncated/oversized payload, or a parameter
+    /// count that does not match this extractor's architecture (delegated to
+    /// [`Self::unflatten_weights`]).
+    pub fn load_weights<P: AsRef<std::path::Path>>(&mut self, path: P) -> Result<(), String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("failed to read weight file: {e}"))?;
+        if bytes.len() < WEIGHT_HEADER_LEN {
+            return Err(format!(
+                "weight file too short: {} bytes < {WEIGHT_HEADER_LEN}-byte header",
+                bytes.len()
+            ));
+        }
+        if &bytes[0..8] != WEIGHT_MAGIC {
+            return Err("bad magic: not an AETHER weight file (expected 'AETHERW1')".to_string());
+        }
+        let count = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
+        let expected_len = WEIGHT_HEADER_LEN + count * 4;
+        if bytes.len() != expected_len {
+            return Err(format!(
+                "weight payload size mismatch: header declares {count} params ({expected_len} bytes), file is {} bytes",
+                bytes.len()
+            ));
+        }
+        let mut weights = Vec::with_capacity(count);
+        for i in 0..count {
+            let o = WEIGHT_HEADER_LEN + i * 4;
+            weights.push(f32::from_le_bytes([
+                bytes[o],
+                bytes[o + 1],
+                bytes[o + 2],
+                bytes[o + 3],
+            ]));
+        }
+        self.unflatten_weights(&weights)
+    }
 }
+
+/// Magic prefix for AETHER weight files (see [`EmbeddingExtractor::save_weights`]).
+const WEIGHT_MAGIC: &[u8; 8] = b"AETHERW1";
+/// 8-byte magic + 4-byte `u32` param count.
+const WEIGHT_HEADER_LEN: usize = 12;
 
 // ── CSI feature statistics ─────────────────────────────────────────────────
 
@@ -1217,6 +1282,84 @@ mod tests {
         for (a, b) in emb1.iter().zip(emb2.iter()) {
             assert!((a - b).abs() < 1e-5, "mismatch: {a} vs {b}");
         }
+    }
+
+    // ── Weight save/load (ADR-185 §13.a) ────────────────────────────────
+
+    /// Deterministic, non-random weight pattern. Values are `k/65536 - 0.5`
+    /// with `k ∈ [0, 65535]`, i.e. multiples of 2⁻¹⁶ — exactly representable
+    /// in both f32 and f64 so a cross-language (Rust ↔ Python) fixture using
+    /// the same formula produces byte-identical weights.
+    fn deterministic_weights(n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|i| {
+                let k = (i as u32).wrapping_mul(1_103_515_245).wrapping_add(12_345) % 65_536;
+                k as f32 / 65_536.0 - 0.5
+            })
+            .collect()
+    }
+
+    #[test]
+    fn load_weights_actually_replaces_weights_and_round_trips() {
+        let mut ext = EmbeddingExtractor::new(small_config(), small_embed_config());
+        let csi = make_csi(4, 16, 42);
+        let baseline = ext.extract(&csi); // random Xavier init
+
+        // Build a source extractor with deterministic non-default weights and
+        // serialize it.
+        let det = deterministic_weights(ext.param_count());
+        let mut src = EmbeddingExtractor::new(small_config(), small_embed_config());
+        src.unflatten_weights(&det).unwrap();
+        let src_emb = src.extract(&csi);
+
+        let path = std::env::temp_dir()
+            .join(format!("aether_wtest_{}_{:p}.bin", std::process::id(), &ext));
+        src.save_weights(&path).unwrap();
+
+        // Load into the random-init extractor.
+        ext.load_weights(&path).unwrap();
+        let loaded_emb = ext.extract(&csi);
+
+        // (1) The loaded weights are ACTUALLY used — output moved away from the
+        //     random-init baseline (proves load is not a silent no-op).
+        let differs = baseline
+            .iter()
+            .zip(&loaded_emb)
+            .any(|(a, b)| (a - b).abs() > 1e-6);
+        assert!(
+            differs,
+            "load_weights had no effect: embedding still equals the random-init baseline"
+        );
+
+        // (2) It matches the source extractor whose weights we saved (round-trip).
+        for (a, b) in src_emb.iter().zip(&loaded_emb) {
+            assert!((a - b).abs() < 1e-6, "loaded embedding != source: {a} vs {b}");
+        }
+
+        // (3) The weights are bit-identical after the file round-trip.
+        assert_eq!(ext.flatten_weights(), det);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn load_weights_rejects_bad_magic_and_wrong_count() {
+        let mut ext = EmbeddingExtractor::new(small_config(), small_embed_config());
+        let base = std::env::temp_dir().join(format!("aether_wbad_{}.bin", std::process::id()));
+
+        // Bad magic.
+        std::fs::write(&base, b"NOPEMAGIC\x00\x00\x00").unwrap();
+        assert!(ext.load_weights(&base).is_err());
+
+        // Right magic, wrong param count for this architecture.
+        let mut bad = Vec::new();
+        bad.extend_from_slice(WEIGHT_MAGIC);
+        bad.extend_from_slice(&3u32.to_le_bytes());
+        bad.extend_from_slice(&[0u8; 12]); // 3 f32s — won't match param_count
+        std::fs::write(&base, &bad).unwrap();
+        assert!(ext.load_weights(&base).is_err());
+
+        std::fs::remove_file(&base).ok();
     }
 
     // ── FingerprintIndex tests ──────────────────────────────────────────

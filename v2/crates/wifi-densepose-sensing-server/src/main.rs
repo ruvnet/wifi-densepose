@@ -20,8 +20,14 @@ mod multistatic_bridge;
 mod mediatek_csi;
 mod qualcomm_csi;
 mod realtek_radar;
+mod path_safety;
 pub mod pose;
 mod rvf_container;
+// ADR-186 (TRAIN-RECONNECT): the in-server training pipeline was written but
+// never declared as a module, so it was orphaned / uncompiled. Declaring it
+// here compiles it against the real `AppStateInner` and wires its `routes()`
+// (including `/ws/train/progress`) into the live router below.
+mod training_api;
 mod rvf_pipeline;
 mod tracker_bridge;
 pub mod types;
@@ -1121,11 +1127,13 @@ struct AppStateInner {
     recording_current_id: Option<String>,
     /// Shutdown signal for the recording writer task.
     recording_stop_tx: Option<tokio::sync::watch::Sender<bool>>,
-    // ── Training fields ─────────────────────────────────────────────────────
-    /// Training status: "idle", "running", "completed", "failed".
-    training_status: String,
-    /// Training configuration, if any.
-    training_config: Option<serde_json::Value>,
+    // ── Training fields (ADR-186 TRAIN-RECONNECT) ────────────────────────────
+    /// Live training state (shared status snapshot + cooperative cancel flag +
+    /// background task handle) for the in-server trainer in `training_api`.
+    training_state: training_api::TrainingState,
+    /// Fan-out channel the background training job publishes progress JSON to;
+    /// the `/ws/train/progress` WebSocket handler subscribes to it.
+    training_progress_tx: broadcast::Sender<String>,
     // ── Adaptive classifier (environment-tuned) ──────────────────────────
     /// Trained adaptive model (loaded from data/adaptive_model.json or trained at runtime).
     adaptive_model: Option<adaptive_classifier::AdaptiveModel>,
@@ -1248,6 +1256,87 @@ impl AppStateInner {
 const FRAME_HISTORY_CAPACITY: usize = 100;
 
 type SharedState = Arc<RwLock<AppStateInner>>;
+
+#[cfg(test)]
+impl AppStateInner {
+    /// Minimal, dependency-free `AppStateInner` for in-process router tests
+    /// (ADR-186 P6). Uses the same field constructors as the real state seeding
+    /// in `main()` but with trivial values and no CLI/config inputs, so tests can
+    /// build the training router without the full server boot.
+    pub(crate) fn minimal() -> Self {
+        AppStateInner {
+            latest_update: None,
+            rssi_history: VecDeque::new(),
+            frame_history: VecDeque::new(),
+            tick: 0,
+            source: "test".to_string(),
+            last_esp32_frame: None,
+            latest_realtek_radar: None,
+            last_realtek_frame: None,
+            latest_mediatek_csi: None,
+            last_mediatek_frame: None,
+            latest_qualcomm_csi: None,
+            last_qualcomm_frame: None,
+            latest_vendor_rf: BTreeMap::new(),
+            tx: broadcast::channel::<String>(16).0,
+            intro: wifi_densepose_sensing_server::introspection::IntrospectionState::new(),
+            intro_tx: broadcast::channel::<String>(16).0,
+            total_detections: 0,
+            start_time: std::time::Instant::now(),
+            vital_detector: VitalSignDetector::new(10.0),
+            latest_vitals: VitalSigns::default(),
+            rvf_info: None,
+            save_rvf_path: None,
+            progressive_loader: None,
+            active_sona_profile: None,
+            model_loaded: false,
+            smoothed_person_score: 0.0,
+            prev_person_count: 0,
+            smoothed_motion: 0.0,
+            current_motion_level: "absent".to_string(),
+            debounce_counter: 0,
+            debounce_candidate: "absent".to_string(),
+            baseline_motion: 0.0,
+            baseline_frames: 0,
+            smoothed_hr: 0.0,
+            smoothed_br: 0.0,
+            smoothed_hr_conf: 0.0,
+            smoothed_br_conf: 0.0,
+            hr_buffer: VecDeque::with_capacity(8),
+            br_buffer: VecDeque::with_capacity(8),
+            edge_vitals: None,
+            latest_wasm_events: None,
+            discovered_models: Vec::new(),
+            active_model_id: None,
+            recordings: Vec::new(),
+            recording_active: false,
+            recording_start_time: None,
+            recording_current_id: None,
+            recording_stop_tx: None,
+            training_state: training_api::TrainingState::default(),
+            training_progress_tx: broadcast::channel::<String>(256).0,
+            adaptive_model: None,
+            node_states: HashMap::new(),
+            pose_tracker: PoseTracker::new(),
+            last_tracker_instant: None,
+            multistatic_fuser: MultistaticFuser::new(),
+            engine_bridge: engine_bridge::EngineBridge::new(
+                wifi_densepose_bfld::PrivacyMode::PrivateHome,
+                1,
+                "default",
+                "Default Room",
+                None,
+            ),
+            field_model: None,
+            p95_variance: RollingP95::new(600, 60),
+            p95_motion_band_power: RollingP95::new(600, 60),
+            p95_spectral_power: RollingP95::new(600, 60),
+            dedup_factor: 3.0,
+            data_dir: std::path::PathBuf::from("data"),
+            field_surface: Arc::new(RwLock::new(rufield_surface::FieldSurface::from_env())),
+        }
+    }
+}
 
 // ── ESP32 Edge Vitals Packet (ADR-039, magic 0xC511_0002) ────────────────────
 
@@ -4976,54 +5065,12 @@ fn scan_recording_files() -> Vec<serde_json::Value> {
 }
 
 // ── Training Endpoints ──────────────────────────────────────────────────────
-
-/// GET /api/v1/train/status — get training status.
-async fn train_status(State(state): State<SharedState>) -> Json<serde_json::Value> {
-    let s = state.read().await;
-    Json(serde_json::json!({
-        "status": s.training_status,
-        "config": s.training_config,
-    }))
-}
-
-/// POST /api/v1/train/start — start a training run.
-async fn train_start(
-    State(state): State<SharedState>,
-    Json(body): Json<serde_json::Value>,
-) -> Json<serde_json::Value> {
-    let mut s = state.write().await;
-    if s.training_status == "running" {
-        return Json(serde_json::json!({
-            "error": "training already running",
-            "success": false,
-        }));
-    }
-    s.training_status = "running".to_string();
-    s.training_config = Some(body.clone());
-    info!("Training started with config: {}", body);
-    Json(serde_json::json!({
-        "success": true,
-        "status": "running",
-        "message": "Training pipeline started. Use GET /api/v1/train/status to monitor.",
-    }))
-}
-
-/// POST /api/v1/train/stop — stop the current training run.
-async fn train_stop(State(state): State<SharedState>) -> Json<serde_json::Value> {
-    let mut s = state.write().await;
-    if s.training_status != "running" {
-        return Json(serde_json::json!({
-            "error": "no training in progress",
-            "success": false,
-        }));
-    }
-    s.training_status = "idle".to_string();
-    info!("Training stopped");
-    Json(serde_json::json!({
-        "success": true,
-        "status": "idle",
-    }))
-}
+//
+// ADR-186 (TRAIN-RECONNECT): the former stub handlers here flipped a status
+// string and logged one line without ever starting a job (issue #1233). They
+// are replaced by the real `training_api` router, merged into the app below,
+// which runs the pure-Rust trainer on a background task and streams live
+// progress over `/ws/train/progress`.
 
 // ── Adaptive classifier endpoints ────────────────────────────────────────────
 
@@ -7754,6 +7801,10 @@ async fn main() {
     // ADR-044 §5.3: load persisted runtime config from the data directory.
     let data_dir = std::path::PathBuf::from("data");
     let runtime_config = load_runtime_config(&data_dir);
+    // ADR-271: resolve (or generate + persist) the browser-session signing key
+    // before any request can arrive. Zero-config for a single appliance; the
+    // env var still wins for a multi-instance deployment that must share one.
+    wifi_densepose_sensing_server::browser_session::init_secret(&data_dir);
     info!(
         "Loaded runtime config: dedup_factor={:.2}",
         runtime_config.dedup_factor
@@ -7903,9 +7954,9 @@ async fn main() {
         recording_start_time: None,
         recording_current_id: None,
         recording_stop_tx: None,
-        // Training
-        training_status: "idle".to_string(),
-        training_config: None,
+        // Training (ADR-186 TRAIN-RECONNECT)
+        training_state: training_api::TrainingState::default(),
+        training_progress_tx: broadcast::channel::<String>(256).0,
         adaptive_model:
             adaptive_classifier::AdaptiveModel::load(&adaptive_classifier::model_path())
                 .ok()
@@ -8001,9 +8052,33 @@ async fn main() {
     // #443: optional bearer-token auth on `/api/v1/*`. `RUVIEW_API_TOKEN`
     // unset/empty ⇒ middleware is a no-op (LAN-mode default preserved); set ⇒
     // every `/api/v1/*` request must carry `Authorization: Bearer <token>`.
-    let bearer_auth_state = wifi_densepose_sensing_server::bearer_auth::AuthState::from_env();
+    //
+    // ADR-271: additionally, `RUVIEW_OAUTH_ISSUER` enables Cognitum OAuth
+    // verification alongside (not instead of) the static token.
+    //
+    // FAIL CLOSED. If OAuth was requested but cannot work — empty issuer, or a
+    // JWKS we cannot fetch at boot — we exit rather than serve. Starting anyway
+    // would silently downgrade an operator who asked for OAuth to either an
+    // open API or a single-shared-secret one, and they would have no signal
+    // that it happened. A loud death at boot is the kind thing here.
+    let bearer_auth_state =
+        match wifi_densepose_sensing_server::bearer_auth::AuthState::from_env() {
+            Ok(s) => s,
+            Err(e) => {
+                error!(
+                    "API auth: OAuth was requested but cannot be initialised: {e}. \
+                     Refusing to start — unset RUVIEW_OAUTH_ISSUER to run without it."
+                );
+                std::process::exit(1);
+            }
+        };
     if bearer_auth_state.is_enabled() {
-        info!("API auth: bearer-token enforcement ON for /api/v1/* (RUVIEW_API_TOKEN set)");
+        if bearer_auth_state.oauth_enabled() {
+            info!("API auth: ON for /api/v1/* — Cognitum OAuth (ADR-271){}",
+                if bearer_auth_state.static_token_enabled() { " + static RUVIEW_API_TOKEN" } else { "" });
+        } else {
+            info!("API auth: bearer-token enforcement ON for /api/v1/* (RUVIEW_API_TOKEN set)");
+        }
         if bind_ip.is_unspecified() {
             warn!(
                 "API auth ON but bind-addr is {} — consider --bind-addr 127.0.0.1 for LAN-only deployments",
@@ -8012,7 +8087,7 @@ async fn main() {
         }
     } else {
         info!(
-            "API auth: OFF — /api/v1/* is unauthenticated. Set RUVIEW_API_TOKEN=<token> to enforce bearer auth."
+            "API auth: OFF — /api/v1/* is unauthenticated. Set RUVIEW_API_TOKEN=<token> or RUVIEW_OAUTH_ISSUER=<issuer> to enforce auth."
         );
     }
 
@@ -8050,6 +8125,18 @@ async fn main() {
         // so a client on :8765 can stream signed RuField FieldEvents alongside
         // `/ws/sensing`. Merged with its own FieldState (different state type).
         .merge(rufield_surface::router(field_surface.clone()))
+        // ADR-272 FIX: this router had NO auth layer at all. `/ws/sensing` and
+        // `/ws/field` on the dedicated WS port accepted unauthenticated
+        // upgrades even with auth ON — and this is the port the UI actually
+        // uses (ui/services/sensing.service.js maps HTTP 8080 -> WS 8765), so
+        // gating only the HTTP port protected a path the browser never takes.
+        // Applied AFTER the merge so it covers the RuField routes too.
+        // AuthState shares its TicketStore via Arc, so a ticket minted at
+        // POST /api/v1/ws-ticket on the HTTP port is redeemable here.
+        .layer(axum::middleware::from_fn_with_state(
+            bearer_auth_state.clone(),
+            wifi_densepose_sensing_server::bearer_auth::require_bearer,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             host_allowlist.clone(),
             wifi_densepose_sensing_server::host_validation::require_allowed_host,
@@ -8124,6 +8211,18 @@ async fn main() {
         )
         // Stream endpoints
         .route("/api/v1/stream/status", get(stream_status))
+        // ADR-272 — browsers cannot set Authorization on a WebSocket upgrade,
+        // so they exchange their credential here for a 30s single-use ticket.
+        .route("/api/v1/ws-ticket", axum::routing::post(ws_ticket_handler))
+        // ADR-271 browser sign-in. Deliberately NOT under /api/v1/*: these are
+        // how a browser obtains a credential, so gating them would deadlock.
+        .route("/oauth/start", get(oauth_start))
+        .route("/oauth/callback", get(oauth_callback))
+        .route("/oauth/logout", get(oauth_logout))
+        // Ungated on purpose: a signed-OUT browser needs to discover whether
+        // sign-in is available, and it cannot ask a gated endpoint that.
+        // Returns only capability + who-you-are, never a credential.
+        .route("/oauth/status", get(oauth_status))
         .route("/api/v1/stream/pose", get(ws_pose_handler))
         // Sensing WebSocket on the HTTP port so the UI can reach it without a second port
         .route("/ws/sensing", get(ws_sensing_handler))
@@ -8146,10 +8245,12 @@ async fn main() {
         .route("/api/v1/recording/start", post(start_recording))
         .route("/api/v1/recording/stop", post(stop_recording))
         .route("/api/v1/recording/{id}", delete(delete_recording))
-        // Training endpoints
-        .route("/api/v1/train/status", get(train_status))
-        .route("/api/v1/train/start", post(train_start))
-        .route("/api/v1/train/stop", post(train_stop))
+        // Training endpoints (ADR-186 TRAIN-RECONNECT): the real in-server
+        // trainer + `/ws/train/progress` stream. Merged while the router is
+        // still `Router<SharedState>` (before `.with_state`) so these routes
+        // share `AppStateInner` and `/api/v1/train/*` sits under the bearer gate
+        // applied below (like the rest of `/api/v1/*`).
+        .merge(training_api::routes())
         // Adaptive classifier endpoints
         .route("/api/v1/adaptive/train", post(adaptive_train))
         .route("/api/v1/adaptive/status", get(adaptive_status))
@@ -8177,19 +8278,27 @@ async fn main() {
         // is unset/empty the middleware is a no-op — the default stays
         // LAN-mode-friendly. `/health*`, `/ws/sensing`, and `/ui/*` are never
         // gated (orchestrator probes + local browsers).
+        // ADR-272: the ws-ticket handler needs the store the middleware owns.
+        .layer(axum::Extension(bearer_auth_state.clone()))
+        .with_state(state.clone())
+        // ADR-262 P3: additive RuField surface (`/api/field` + `/ws/field`).
+        // Merged AFTER `.with_state` (so http_app is already `Router<()>` and
+        // can absorb the field router's own `FieldState`).
+        .merge(rufield_surface::router(field_surface.clone()))
+        // Opt-in bearer auth (#443) + ADR-272 WebSocket gating.
+        //
+        // Applied AFTER the merge, and that ordering is load-bearing: axum
+        // `.layer()` wraps only what is already registered, so while this sat
+        // above the merge, `/ws/field` bypassed authentication entirely —
+        // measured 101 on an unauthenticated upgrade with auth ON. Adding
+        // routes after an auth layer silently exempts them, which is exactly
+        // the failure mode ADR-272 exists to prevent.
+        //
+        // Unset RUVIEW_API_TOKEN/RUVIEW_OAUTH_ISSUER still makes this a no-op.
         .layer(axum::middleware::from_fn_with_state(
             bearer_auth_state.clone(),
             wifi_densepose_sensing_server::bearer_auth::require_bearer,
         ))
-        .with_state(state.clone())
-        // ADR-262 P3: additive RuField surface (`/api/field` + `/ws/field`).
-        // Merged AFTER `.with_state` (so http_app is already `Router<()>` and
-        // can absorb the field router's own `FieldState`). These routes sit
-        // OUTSIDE `/api/v1/*` so they are not bearer-gated, but the
-        // host-validation layer below still applies (it is added last, so it
-        // runs first, over the whole merged router). The surface's own §10
-        // egress gate is what keeps above-policy classes off the wire.
-        .merge(rufield_surface::router(field_surface.clone()))
         // DNS-rebinding defense: applied last so it runs first on the request
         // path (axum layers run outermost-in). Rejects requests whose `Host`
         // header is not in the allowlist before any handler — including
@@ -9142,5 +9251,504 @@ mod observatory_persons_field_position_tests {
         let p = &update.persons.as_ref().unwrap()[0];
         assert_eq!(p.position, [0.0, 0.0, 0.0], "no peak → default origin, not fabricated coords");
         assert!((p.motion_score - 55.0).abs() < 1e-6, "motion_score stays real");
+    }
+}
+
+/// `POST /api/v1/ws-ticket` — mint a single-use WebSocket ticket (ADR-272).
+///
+/// Reached only through the auth middleware, so an unauthenticated caller
+/// cannot mint one. The ticket inherits the caller's scopes, so a
+/// `sensing:read` session cannot produce a ticket that outranks itself.
+///
+/// Exists because a browser's `WebSocket` constructor cannot set an
+/// `Authorization` header. Native clients do not need this — they send a bearer
+/// on the upgrade directly.
+async fn ws_ticket_handler(
+    axum::Extension(auth): axum::Extension<wifi_densepose_sensing_server::bearer_auth::AuthState>,
+    request: axum::extract::Request,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use wifi_densepose_sensing_server::ws_ticket::TicketGrant;
+
+    // Present when the caller authenticated with OAuth; absent when they used
+    // the legacy static token, which predates scopes and carries full authority.
+    let principal = request.extensions().get::<ruview_auth::Principal>();
+    let grant = TicketGrant {
+        scopes: principal.map(|p| p.scopes().collect::<Vec<_>>().join(" ")),
+        subject: principal.map(|p| p.subject.clone()),
+    };
+
+    match auth.tickets().issue(grant) {
+        Some(ticket) => (
+            axum::http::StatusCode::OK,
+            axum::Json(serde_json::json!({
+                "ticket": ticket,
+                "expires_in_secs": wifi_densepose_sensing_server::ws_ticket::TICKET_TTL.as_secs(),
+                "usage": "append as ?ticket=<value> to the WebSocket URL; valid once",
+            })),
+        )
+            .into_response(),
+        // Refusing beats growing the store without bound.
+        None => (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "too many outstanding WebSocket tickets; retry shortly\n",
+        )
+            .into_response(),
+    }
+}
+
+// ---- ADR-271 browser sign-in ------------------------------------------------
+//
+// Ported from cognitum-one/freetokens (`src/auth/oauth.ts`, live). The browser
+// never holds an OAuth token: this server does the exchange and issues its own
+// signed session cookie. Closes the gap where `wifi-densepose login` wrote a
+// file no browser could read.
+
+fn request_is_tls(headers: &axum::http::HeaderMap) -> bool {
+    // Behind a reverse proxy the TLS terminates upstream, so trust the standard
+    // forwarding header when present. Conservative default: not TLS, which only
+    // ever omits `Secure` — it never adds a cookie where it shouldn't be.
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .map(|p| p.eq_ignore_ascii_case("https"))
+        .unwrap_or(false)
+        || wifi_densepose_sensing_server::browser_session::public_base_url().starts_with("https://")
+}
+
+async fn oauth_start(
+    axum::Extension(auth): axum::Extension<wifi_densepose_sensing_server::bearer_auth::AuthState>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use wifi_densepose_sensing_server::browser_session as bs;
+
+    let Some(issuer) = auth.oauth_issuer() else {
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "OAuth is not enabled on this server (set RUVIEW_OAUTH_ISSUER)\n",
+        )
+            .into_response();
+    };
+    let secure = request_is_tls(&headers);
+    // Least privilege: a browser session asks for read. Admin work goes through
+    // the CLI, which requires an explicit --admin. See BROWSER_SIGNIN_SCOPE for
+    // what widening this would cost.
+    match bs::begin(&issuer, &auth.primary_client_id(), bs::BROWSER_SIGNIN_SCOPE, secure) {
+        Ok((location, cookie)) => (
+            axum::http::StatusCode::FOUND,
+            [
+                (axum::http::header::LOCATION, location),
+                (axum::http::header::SET_COOKIE, cookie),
+            ],
+        )
+            .into_response(),
+        Err(e) => (axum::http::StatusCode::SERVICE_UNAVAILABLE, format!("{e}\n")).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct OAuthCallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+}
+
+async fn oauth_callback(
+    axum::Extension(auth): axum::Extension<wifi_densepose_sensing_server::bearer_auth::AuthState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<OAuthCallbackQuery>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use wifi_densepose_sensing_server::browser_session as bs;
+
+    let secure = request_is_tls(&headers);
+    let bad = |code: axum::http::StatusCode, msg: String| {
+        (code, [(axum::http::header::SET_COOKIE, bs::clear_transaction(secure))], msg)
+            .into_response()
+    };
+
+    if let Some(err) = q.error {
+        return bad(axum::http::StatusCode::BAD_REQUEST, format!("Cognitum declined the sign-in: {err}\n"));
+    }
+    let (Some(code), Some(state)) = (q.code, q.state) else {
+        return bad(axum::http::StatusCode::BAD_REQUEST, "Incomplete sign-in response\n".into());
+    };
+    let cookie_header = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+
+    // CSRF check BEFORE the single-use code is spent.
+    let verifier = match bs::verifier_for_callback(&cookie_header, &state) {
+        Ok(v) => v,
+        Err(e) => return bad(axum::http::StatusCode::BAD_REQUEST, format!("{e}\n")),
+    };
+
+    let Some(issuer) = auth.oauth_issuer() else {
+        return bad(axum::http::StatusCode::SERVICE_UNAVAILABLE, "OAuth is not enabled\n".into());
+    };
+    let client_id = auth.primary_client_id();
+
+    // `ureq` is blocking; spawn_blocking so a slow token endpoint cannot park an
+    // async worker (the same mistake this codebase had to fix in jwks.rs).
+    let exchange = tokio::task::spawn_blocking(move || {
+        ureq::post(&format!("{issuer}/oauth/token"))
+            .send_form(&[
+                ("grant_type", "authorization_code"),
+                ("code", &code),
+                ("code_verifier", &verifier),
+                ("client_id", &client_id),
+                ("redirect_uri", &bs::redirect_uri()),
+            ])
+            .map_err(|e| e.to_string())
+            .and_then(|r| r.into_string().map_err(|e| e.to_string()))
+    })
+    .await;
+
+    let body = match exchange {
+        Ok(Ok(b)) => b,
+        Ok(Err(e)) => return bad(axum::http::StatusCode::BAD_GATEWAY, format!("token exchange failed: {e}\n")),
+        Err(e) => return bad(axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("token exchange task failed: {e}\n")),
+    };
+    let access_token = match serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| v.get("access_token")?.as_str().map(str::to_owned))
+    {
+        Some(t) => t,
+        None => return bad(axum::http::StatusCode::BAD_GATEWAY, "token endpoint returned no access_token\n".into()),
+    };
+
+    // Verify with the SAME verifier that gates every other request — signature,
+    // audience, typ, expiry, scope. A browser sign-in must not be a softer path.
+    let principal = match auth.verify_for_browser(&access_token) {
+        Ok(p) => p,
+        Err(e) => return bad(axum::http::StatusCode::UNAUTHORIZED, format!("{e}\n")),
+    };
+
+    let session_cookie = match bs::issue(&principal, secure) {
+        Ok(c) => c,
+        Err(e) => return bad(axum::http::StatusCode::SERVICE_UNAVAILABLE, format!("{e}\n")),
+    };
+    tracing::info!(sub = %principal.subject, "browser sign-in complete");
+
+    // Clear the spent transaction as well as issuing the session. A consumed
+    // OAuth transaction has no further use, and leaving it to age out for ten
+    // minutes means every subsequent request carries a dead cookie.
+    (
+        axum::http::StatusCode::FOUND,
+        // AppendHeaders, NOT an array: the array form REPLACES same-name
+        // headers, so a second Set-Cookie silently overwrites the first — which
+        // would drop the session cookie and make sign-in a no-op.
+        axum::response::AppendHeaders([
+            (axum::http::header::LOCATION, format!("/ui/?signed_in={}", now_millis())),
+            (axum::http::header::SET_COOKIE, session_cookie),
+            (axum::http::header::SET_COOKIE, bs::clear_transaction(secure)),
+        ]),
+    )
+        .into_response()
+}
+
+async fn oauth_logout(headers: axum::http::HeaderMap) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    // Local only: forgets this browser's session. Revoking the Cognitum session
+    // for every device is an account-level action at auth.cognitum.one.
+    let secure = request_is_tls(&headers);
+    use wifi_densepose_sensing_server::browser_session as bs;
+    (
+        axum::http::StatusCode::FOUND,
+        axum::response::AppendHeaders([
+            // Cache-busting query so the landing page is re-fetched rather than
+            // restored from the back/forward cache with a stale panel.
+            (axum::http::header::LOCATION, format!("/ui/?signed_out={}", now_millis())),
+            (axum::http::header::SET_COOKIE, bs::clear_session(secure)),
+            (axum::http::header::SET_COOKIE, bs::clear_transaction(secure)),
+        ]),
+    )
+        .into_response()
+}
+
+fn now_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+/// `GET /oauth/status` — what a signed-out browser needs to render the right UI.
+///
+/// Deliberately ungated and deliberately thin: capability flags and, if a live
+/// session exists, who it belongs to. No token, no scope escalation hints, no
+/// server configuration beyond "is sign-in possible here".
+async fn oauth_status(
+    axum::Extension(auth): axum::Extension<wifi_densepose_sensing_server::bearer_auth::AuthState>,
+    headers: axum::http::HeaderMap,
+) -> axum::Json<serde_json::Value> {
+    use wifi_densepose_sensing_server::browser_session as bs;
+    let raw = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok());
+    let session = raw.and_then(bs::from_cookie_header);
+    axum::Json(serde_json::json!({
+        "auth_required": auth.is_enabled(),
+        "oauth_enabled": auth.oauth_enabled(),
+        "browser_signin": auth.oauth_enabled() && bs::is_configured(),
+        "signed_in": session.is_some(),
+        "account": session.as_ref().map(|s| s.account_id.clone()),
+        "scope": session.as_ref().map(|s| s.scope.clone()),
+    }))
+}
+#[cfg(test)]
+mod adr186_http_tests {
+    //! ADR-186 P6: HTTP-level tests that build the real `training_api` router
+    //! and drive it in-process, guarding against the module being orphaned again
+    //! (`training_api::routes()` cannot compile unless the module is declared).
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    /// Serializes tests that read/toggle the process-global
+    /// `RUVIEW_DISABLE_SERVER_TRAINING` env var, so the disabled-path test cannot
+    /// flip enablement while an enabled-path test is mid-request.
+    static TRAIN_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn test_state() -> SharedState {
+        Arc::new(RwLock::new(AppStateInner::minimal()))
+    }
+
+    /// The `/ws/train/progress` route is registered and reaches the WebSocket
+    /// handler (issue #1233 was a 404). Over `oneshot` there is no real socket to
+    /// upgrade, so axum returns 426 Upgrade Required — which still distinguishes a
+    /// wired WS endpoint (426) from an orphaned/absent route (404). The genuine
+    /// 101 handshake is asserted by `ws_train_progress_live_101_and_frame`.
+    #[tokio::test]
+    async fn ws_train_progress_route_is_wired_not_404() {
+        let app = training_api::routes().with_state(test_state());
+        let req = Request::builder()
+            .uri("/ws/train/progress")
+            .header("connection", "upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_ne!(resp.status(), StatusCode::NOT_FOUND, "route must not 404");
+        assert_eq!(
+            resp.status(),
+            StatusCode::UPGRADE_REQUIRED,
+            "a wired WS route returns 426 under oneshot — got {}",
+            resp.status()
+        );
+    }
+
+    /// ADR-186 §7 acceptance: over a real socket, `/ws/train/progress` completes a
+    /// genuine 101 WebSocket handshake and, after a `POST /api/v1/train/start`,
+    /// delivers at least one real `progress` frame to the connected client.
+    #[tokio::test]
+    async fn ws_train_progress_live_101_and_frame() {
+        use futures_util::StreamExt;
+        use tokio::io::AsyncWriteExt;
+        use tokio_tungstenite::tungstenite::Message as TMsg;
+
+        let _env_lock = TRAIN_ENV_LOCK.lock().unwrap(); // enablement must stay ON
+        let shared = test_state();
+        {
+            let mut s = shared.write().await;
+            for i in 0..40 {
+                let sub: Vec<f64> = (0..56)
+                    .map(|k| 10.0 + ((i as f64) * 0.3 + (k as f64) * 0.1).sin() * 2.0)
+                    .collect();
+                s.frame_history.push_back(sub);
+            }
+        }
+
+        // Serve the training router on an ephemeral port.
+        let app = training_api::routes().with_state(shared.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        // A successful `connect_async` IS the 101 handshake (it errors otherwise).
+        let (mut ws, resp) =
+            tokio_tungstenite::connect_async(format!("ws://{addr}/ws/train/progress"))
+                .await
+                .expect("WebSocket handshake should succeed (101)");
+        assert_eq!(resp.status().as_u16(), 101, "handshake must be 101");
+
+        // Drive training via a real HTTP POST over a fresh TCP connection.
+        let body = r#"{"dataset_ids":[],"config":{"epochs":3,"batch_size":8,"warmup_epochs":1,"early_stopping_patience":10}}"#;
+        let req = format!(
+            "POST /api/v1/train/start HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let mut post = tokio::net::TcpStream::connect(addr).await.unwrap();
+        post.write_all(req.as_bytes()).await.unwrap();
+        post.flush().await.unwrap();
+
+        // Read WS frames until a `progress` frame arrives (or a 10s ceiling).
+        let mut got_progress = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(std::time::Duration::from_secs(2), ws.next()).await {
+                Ok(Some(Ok(TMsg::Text(txt)))) => {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
+                        if v.get("type").and_then(|t| t.as_str()) == Some("progress") {
+                            got_progress = true;
+                            break;
+                        }
+                    }
+                }
+                Ok(Some(Ok(_))) => {}
+                Ok(Some(Err(_))) | Ok(None) => break,
+                Err(_) => {}
+            }
+        }
+        assert!(
+            got_progress,
+            "should receive a real progress frame over the live WS after POST start"
+        );
+        // NOTE: deliberately no directory-diff cleanup here. `data/models` is
+        // gitignored, and deleting by dir-diff would race concurrent model-writing
+        // tests (it could remove a `.rvf` another test is asserting exists).
+    }
+
+    /// Full HTTP round-trip: POST /api/v1/train/start → poll /api/v1/train/status
+    /// until completion → a real `.rvf` model artifact exists on disk, and real
+    /// progress frames were streamed on the broadcast channel.
+    #[tokio::test]
+    async fn http_train_start_produces_model_and_streams() {
+        let _env_lock = TRAIN_ENV_LOCK.lock().unwrap(); // enablement must stay ON
+        let shared = test_state();
+        // Seed synthetic frames so training's fallback path has data (no files).
+        {
+            let mut s = shared.write().await;
+            for i in 0..40 {
+                let sub: Vec<f64> = (0..56)
+                    .map(|k| 10.0 + ((i as f64) * 0.3 + (k as f64) * 0.1).sin() * 2.0)
+                    .collect();
+                s.frame_history.push_back(sub);
+            }
+        }
+        let mut progress_rx = {
+            let s = shared.read().await;
+            s.training_progress_tx.subscribe()
+        };
+
+        let models_dir = std::path::PathBuf::from(training_api::MODELS_DIR);
+        let before: std::collections::HashSet<std::path::PathBuf> = std::fs::read_dir(&models_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+
+        let app = training_api::routes().with_state(shared.clone());
+
+        // POST start.
+        let body = serde_json::json!({
+            "dataset_ids": [],
+            "config": {"epochs": 3, "batch_size": 8, "warmup_epochs": 1, "early_stopping_patience": 10}
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/train/start")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "start should be accepted");
+
+        // Poll status until the job reports completion.
+        let mut completed = false;
+        for _ in 0..250 {
+            let req = Request::builder()
+                .uri("/api/v1/train/status")
+                .body(Body::empty())
+                .unwrap();
+            let resp = app.clone().oneshot(req).await.unwrap();
+            let bytes = axum::body::to_bytes(resp.into_body(), 65536).await.unwrap();
+            let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            // Status also carries the P5 enablement flag.
+            assert_eq!(v.get("enabled"), Some(&serde_json::Value::Bool(true)));
+            if v.get("active") == Some(&serde_json::Value::Bool(false))
+                && v.get("phase").and_then(|p| p.as_str()) == Some("completed")
+            {
+                completed = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(completed, "training should reach the completed phase");
+
+        // Real progress frames were streamed.
+        let mut saw_progress = false;
+        while progress_rx.try_recv().is_ok() {
+            saw_progress = true;
+        }
+        assert!(saw_progress, "expected streamed progress frames over the WS channel");
+
+        // A new .rvf artifact was written by the run.
+        let after: std::collections::HashSet<std::path::PathBuf> = std::fs::read_dir(&models_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        let new_models: Vec<_> = after
+            .difference(&before)
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("rvf"))
+            .cloned()
+            .collect();
+        assert!(
+            !new_models.is_empty(),
+            "training should write a new .rvf model artifact under {}",
+            models_dir.display()
+        );
+        // No deletion here: removing by dir-diff would race concurrent
+        // model-writing tests. `data/models` is gitignored.
+    }
+
+    /// P5 fallback guarantee: with server training disabled, POST start returns a
+    /// structured `{enabled:false, cli:...}` 409 — never a silent success.
+    #[tokio::test]
+    async fn http_train_start_disabled_returns_structured_409() {
+        // Serialize against the enabled-path tests so our env toggle can't race
+        // their in-flight requests.
+        let _env_lock = TRAIN_ENV_LOCK.lock().unwrap();
+        std::env::set_var("RUVIEW_DISABLE_SERVER_TRAINING", "1");
+
+        let app = training_api::routes().with_state(test_state());
+        let body = serde_json::json!({"dataset_ids": [], "config": {"epochs": 1}});
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/train/start")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 65536).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        std::env::remove_var("RUVIEW_DISABLE_SERVER_TRAINING");
+
+        assert_eq!(status, StatusCode::CONFLICT, "disabled start must be 4xx/409");
+        assert_eq!(v.get("enabled"), Some(&serde_json::Value::Bool(false)));
+        assert_eq!(
+            v.get("cli").and_then(|c| c.as_str()),
+            Some("wifi-densepose train-room"),
+            "must point at the CLI fallback, never a silent success"
+        );
+        assert_ne!(
+            v.get("success"),
+            Some(&serde_json::Value::Bool(true)),
+            "must never claim success:true when disabled"
+        );
     }
 }

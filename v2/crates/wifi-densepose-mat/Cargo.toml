@@ -12,15 +12,25 @@ categories = ["science", "algorithms"]
 readme = "README.md"
 
 [features]
-default = ["std", "api", "ruvector"]
+default = ["std", "api", "ruvector", "ml"]
 ruvector = ["dep:ruvector-solver", "dep:ruvector-temporal-tensor"]
 std = []
+# ONNX-backed ML detection (debris + vital-signs classifiers). Pulls
+# `wifi-densepose-nn` (and, via its default `onnx` feature, the `ort`
+# ONNX Runtime + its download/reqwest stack) ONLY when enabled. The
+# survivor-detection/triage pipeline works without it (ML is an optional
+# enhancement, off unless `DetectionConfig::enable_ml`), so consumers that
+# don't need ONNX — e.g. the ADR-185 `wifi-densepose-py` `[mat]` wheel —
+# build `--no-default-features` and drop the entire ort/reqwest tree,
+# keeping the wheel within the ADR-117 §5.4 budget.
+ml = ["dep:wifi-densepose-nn"]
 # REST/WebSocket surface. Pulls the web stack (axum, futures-util) only when
 # enabled, and enables the `serde` FEATURE (not just `dep:serde`) so the
 # `cfg_attr(feature = "serde", ...)` derives on domain types are actually
 # active when the API is on (review finding 5: `api = ["dep:serde"]` enabled
 # the dependency but left every `feature = "serde"` cfg dead).
-api = ["serde", "dep:axum", "dep:futures-util"]
+# The REST surface exposes ML status (`ml_ready`), so `api` implies `ml`.
+api = ["ml", "serde", "dep:axum", "dep:futures-util"]
 # Real ESP32 serial CSI ingest. Pulls the native `serialport` crate (libudev on
 # Linux) only when enabled, so the default/no-default appliance build stays free
 # of native serial deps. With the feature OFF, the ESP32 serial *parser* still
@@ -36,14 +46,18 @@ serde = ["dep:serde", "chrono/serde", "geo/use-serde"]
 # Workspace dependencies
 wifi-densepose-core = { version = "0.3.0", path = "../wifi-densepose-core" }
 wifi-densepose-signal = { version = "0.3.0", path = "../wifi-densepose-signal", default-features = false }
-wifi-densepose-nn = { version = "0.3.0", path = "../wifi-densepose-nn" }
+wifi-densepose-nn = { version = "0.3.0", path = "../wifi-densepose-nn", optional = true }
 ruvector-solver = { workspace = true, optional = true }
 ruvector-temporal-tensor = { workspace = true, optional = true }
 
 # Async runtime — required by the core integration layer (UDP CSI receiver,
 # hardware adapter, scan loop in `DisasterResponse::start_scanning`), not just
 # the REST API, so it is deliberately NOT gated behind `api`.
-tokio = { version = "1.35", features = ["rt", "sync", "time"] }
+# `macros` is needed by `tokio::select!` in integration/hardware_adapter.rs.
+# It was previously satisfied only by feature-unification from the (now
+# optional) `wifi-densepose-nn` dep; declare it explicitly so a
+# `--no-default-features` build (the ADR-185 [mat] wheel) still compiles.
+tokio = { version = "1.35", features = ["rt", "sync", "time", "macros"] }
 async-trait = "0.1"
 
 # Web framework (REST API) — only compiled with the `api` feature.
