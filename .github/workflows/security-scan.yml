@@ -143,7 +143,7 @@ jobs:
 
     - name: Upload vulnerability reports
       continue-on-error: true
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: vulnerability-reports
@@ -374,7 +374,7 @@ jobs:
 
     - name: Upload license report
       continue-on-error: true
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: license-report
         path: licenses.json
@@ -464,7 +464,7 @@ jobs:
 
     - name: Upload security summary
       continue-on-error: true
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: security-summary
         path: security-summary.md

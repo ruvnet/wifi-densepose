@@ -125,7 +125,7 @@ jobs:
           package-dir: python
           output-dir: wheelhouse
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-${{ matrix.os }}-${{ matrix.arch }}
           path: wheelhouse/*.whl
@@ -146,7 +146,7 @@ jobs:
       - name: Build sdist
         working-directory: python
         run: maturin sdist --out ../sdist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sdist
           path: sdist/*.tar.gz
@@ -225,7 +225,7 @@ jobs:
             exit 1
           fi
           echo "Tombstone wheel correctly raises ImportError with migration URL."
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: tombstone
           path: tombstone-dist/*

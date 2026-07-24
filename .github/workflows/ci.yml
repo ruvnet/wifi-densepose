@@ -68,7 +68,7 @@ jobs:
 
     - name: Upload security reports
       continue-on-error: true
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: security-reports
@@ -256,7 +256,7 @@ jobs:
 
     - name: Upload test results
       continue-on-error: true
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: test-results-${{ matrix.python-version }}
@@ -326,7 +326,7 @@ jobs:
 
     - name: Upload performance results
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: performance-results
         path: archive/v1/perf-junit.xml
