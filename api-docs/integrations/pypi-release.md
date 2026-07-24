@@ -4,9 +4,12 @@ Operations doc for the `.github/workflows/pip-release.yml` CI workflow.
 
 ## Auth
 
-The workflow uses one GitHub Actions secret named `PYPI_API_TOKEN`.
-It's a project-token issued by the rUv PyPI account with upload
-scope for both `wifi-densepose` and `ruview`.
+Production uses the GitHub Actions secret `PYPI_API_TOKEN`. It is a
+project token issued by the rUv PyPI account with upload scope for both
+`wifi-densepose` and `ruview`.
+
+TestPyPI uses a separate `TESTPYPI_API_TOKEN` secret issued by
+test.pypi.org. PyPI and TestPyPI accounts and tokens are independent.
 
 ## Refreshing the token
 
@@ -47,16 +50,19 @@ Per ADR-117 §7.3, the tombstone publishes first so it claims the
    tombstone live at `https://pypi.org/project/wifi-densepose/1.99.0/`
 2. Verify: `pip install wifi-densepose==1.99.0; python -c "import
    wifi_densepose"` → ImportError with migration URL.
-3. `git tag v2.0.0-pip && git push origin v2.0.0-pip` → v2 wheel
-   matrix live at `https://pypi.org/project/wifi-densepose/2.0.0/`.
-4. (Optional, in lock-step) build + publish a matching `ruview`
-   release from `python/ruview-meta/` so the meta-package version
-   stays pinned to the same wifi-densepose version.
+3. Confirm `archive/v1/data/proof/expected_features_v2.sha256` is
+   committed and non-empty. Production publishing fails closed without it.
+4. `git tag v2.0.0-pip && git push origin v2.0.0-pip` → the v2
+   `wifi-densepose` wheel matrix and matching `ruview` wheel/sdist are
+   published together. Their versions and dependency pin are checked in CI.
+5. Verify both `https://pypi.org/project/wifi-densepose/2.0.0/` and
+   `https://pypi.org/project/ruview/2.0.0/`.
 
 ## Off-loop manual gates
 
-- **Q3** (ADR-117 §11.3) — generate `expected_features_v2.sha256`
-  from the v2 Rust pipeline before any v2 publish.
+- **Q3** (ADR-117 §11.3) — generate
+  `archive/v1/data/proof/expected_features_v2.sha256` from the v2 Rust
+  pipeline before a production v2 publish. The workflow enforces this gate.
 - **OIDC Trusted Publisher** — not used. The workflow is token-based;
   this is a deliberate choice to keep the secret refresh entirely in
   GCP. If the project migrates to OIDC later, remove `password:`
