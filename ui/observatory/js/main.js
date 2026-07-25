@@ -486,10 +486,10 @@ class Observatory {
       };
       this._ws.onmessage = (evt) => { try { this._liveData = JSON.parse(evt.data); } catch {} };
       this._ws.onclose = () => {
-        console.log('[Observatory] WebSocket closed, falling back to demo');
+        console.log('[Observatory] WebSocket closed, no real data available');
         this._ws = null;
-        this.settings.dataSource = 'demo';
-        this._hud.updateSourceBadge('demo', null);
+        this.settings.dataSource = 'waiting';
+        this._hud.updateSourceBadge('waiting', null);
       };
       this._ws.onerror = () => {};
     } catch {}
@@ -509,13 +509,21 @@ class Observatory {
     const dt = Math.min(this._clock.getDelta(), 0.1);
     const elapsed = this._clock.getElapsedTime();
 
-    // Data source
+    // Data source — only use real data, never demo (issue #1125)
     if (this.settings.dataSource === 'ws' && this._liveData) {
       this._currentData = this._liveData;
     } else {
-      this._currentData = this._demoData.update(dt);
+      // No real data available — don't fabricate demo data
+      this._currentData = null;
     }
     const data = this._currentData;
+
+    // If no real data, skip rendering and just clear the scene
+    if (!data) {
+      this._figurePool.clear();
+      this._hud.updateHUD(null, null);
+      return;
+    }
 
     // Updates
     this._nebula.update(dt, elapsed);
