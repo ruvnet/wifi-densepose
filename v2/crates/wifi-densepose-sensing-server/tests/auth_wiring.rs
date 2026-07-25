@@ -74,7 +74,7 @@ impl Server {
             "--udp-port", &udp.to_string(),
             "--bind-addr", "127.0.0.1",
             "--no-edge-registry",
-            "--source", "simulate",
+            "--source", "esp32",
         ])
         // Inherit nothing auth-related from the developer's shell, or a local
         // RUVIEW_* export would silently change what this test proves.

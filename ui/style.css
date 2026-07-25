@@ -1070,10 +1070,9 @@ body {
   box-shadow: 0 0 6px #00cc88;
 }
 
-.status-indicator.sim {
-  background: #ffa500;
-  box-shadow: 0 0 6px #ffa500;
-  animation: pulse 1.5s infinite;
+.status-indicator.waiting {
+  background: #6c757d;
+  box-shadow: 0 0 6px rgba(108, 117, 125, 0.5);
 }
 
 .status-indicator.connecting {
@@ -1106,10 +1105,10 @@ body {
   color: #00cc88;
 }
 
-.demo-source-sim {
-  background: rgba(255, 165, 0, 0.15);
-  border: 1px solid #ffa500;
-  color: #ffa500;
+.demo-source-waiting {
+  background: rgba(108, 117, 125, 0.12);
+  border: 1px solid #6c757d;
+  color: #6c757d;
 }
 
 .demo-source-reconnecting {
@@ -1117,12 +1116,6 @@ body {
   border: 1px solid #f0ad4e;
   color: #f0ad4e;
   animation: pulse 1.5s infinite;
-}
-
-.demo-source-offline {
-  background: rgba(255, 60, 60, 0.12);
-  border: 1px solid #ff3c3c;
-  color: #ff3c3c;
 }
 
 .demo-source-unknown {
@@ -1844,9 +1837,9 @@ canvas {
   box-shadow: 0 0 6px #00cc88;
 }
 
-.sensing-dot.simulated {
-  background: var(--color-warning);
-  box-shadow: 0 0 6px var(--color-warning);
+.sensing-dot.waiting {
+  background: #6c757d;
+  box-shadow: 0 0 6px rgba(108, 117, 125, 0.5);
 }
 
 .sensing-dot.connecting {
@@ -1903,6 +1896,12 @@ canvas {
   color: #00cc88;
 }
 
+.sensing-source-waiting {
+  background: rgba(108, 117, 125, 0.12);
+  border: 1px solid #6c757d;
+  color: #6c757d;
+}
+
 .sensing-source-reconnecting {
   background: rgba(255, 180, 0, 0.12);
   border: 1px solid var(--color-warning);
@@ -1910,21 +1909,9 @@ canvas {
   animation: pulse 1.5s infinite;
 }
 
-.sensing-source-server-sim {
-  background: rgba(255, 165, 0, 0.15);
-  border: 1px solid #ffa500;
-  color: #ffa500;
-}
-
-.sensing-source-simulated {
-  background: rgba(255, 60, 60, 0.12);
-  border: 1px solid var(--color-error);
-  color: var(--color-error);
-}
-
-/* Health indicator for server-simulated data */
-.health-sim {
-  color: #ffa500;
+/* Health indicator for waiting state */
+.health-waiting {
+  color: #6c757d;
   font-weight: 600;
 }
 

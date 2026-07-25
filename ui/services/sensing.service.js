@@ -31,10 +31,6 @@ export function buildSensingWsUrl(locationLike = (typeof window !== 'undefined' 
 const SENSING_WS_URL = buildSensingWsUrl();
 const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000];
 const MAX_RECONNECT_ATTEMPTS = 20;
-// Number of failed attempts that must occur before simulation starts.
-// This prevents the UI from flashing "SIMULATED" on a brief hiccup.
-const SIM_FALLBACK_AFTER_ATTEMPTS = 5;
-const SIMULATION_INTERVAL = 500; // ms
 
 class SensingService {
   constructor() {
@@ -44,14 +40,12 @@ class SensingService {
     this._stateListeners = new Set();
     this._reconnectAttempt = 0;
     this._reconnectTimer = null;
-    this._simTimer = null;
-    // Connection state: disconnected | connecting | connected | reconnecting | simulated
+    // Connection state: disconnected | connecting | connected | reconnecting
     this._state = 'disconnected';
     // Data-source label exposed to the UI:
-    //   "live"              — real ESP32 hardware connected
-    //   "server-simulated"  — server is running but using synthetic data (no hardware)
-    //   "reconnecting"      — WebSocket disconnected, retrying
-    //   "simulated"         — client-side fallback simulation (server unreachable)
+    //   "live"                  — real ESP32 hardware connected
+    //   "waiting_for_hardware"  — server is running but no real hardware detected
+    //   "reconnecting"          — WebSocket disconnected, retrying
     this._dataSource = 'reconnecting';
     // The raw source string from the server (e.g. "esp32", "simulated", "simulate")
     this._serverSource = null;
@@ -111,9 +105,9 @@ class SensingService {
 
   /**
    * Current data source label.
-   * "live"         — frames are arriving from the real ESP32 over WebSocket
-   * "reconnecting" — WebSocket disconnected; actively retrying, no frames emitted
-   * "simulated"    — max reconnect attempts exhausted; emitting synthetic frames
+   * "live"                  — frames are arriving from the real ESP32 over WebSocket
+   * "reconnecting"          — WebSocket disconnected; actively retrying, no frames emitted
+   * "waiting_for_hardware"  — server is running but no real hardware has been detected
    */
   get dataSource() {
     return this._dataSource;
@@ -143,14 +137,15 @@ class SensingService {
       this._ws = new WebSocket(url);
     } catch (err) {
       console.warn('[Sensing] WebSocket constructor failed:', err.message);
-      this._fallbackToSimulation();
+      this._setState('reconnecting');
+      this._setDataSource('waiting_for_hardware');
+      this._scheduleReconnect();
       return;
     }
 
     this._ws.onopen = () => {
       console.info('[Sensing] Connected to', SENSING_WS_URL);
       this._reconnectAttempt = 0;
-      this._stopSimulation();
       this._setState('connected');
       // Don't assume "live" yet — wait for first frame's source field.
       // Fetch server status to determine actual data source immediately.
@@ -184,8 +179,10 @@ class SensingService {
 
   _scheduleReconnect() {
     if (this._reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
-      console.warn('[Sensing] Max reconnect attempts (%d) reached, switching to simulation', MAX_RECONNECT_ATTEMPTS);
-      this._fallbackToSimulation();
+      console.warn('[Sensing] Max reconnect attempts (%d) reached, will continue polling', MAX_RECONNECT_ATTEMPTS);
+      // Stop retrying to avoid hammering the server, but keep the reconnecting state
+      this._setState('reconnecting');
+      this._setDataSource('waiting_for_hardware');
       return;
     }
 
@@ -200,101 +197,15 @@ class SensingService {
       this._reconnectTimer = null;
       void this._connect();
     }, delay);
-
-    // Only start simulation after several failed attempts so a brief hiccup
-    // does not immediately switch the UI to "SIMULATED DATA".
-    if (this._reconnectAttempt >= SIM_FALLBACK_AFTER_ATTEMPTS && this._state !== 'simulated') {
-      this._fallbackToSimulation();
-    }
   }
 
-  // ---- Simulation fallback -----------------------------------------------
-
-  _fallbackToSimulation() {
-    this._setState('simulated');
-    this._setDataSource('simulated');
-    if (this._simTimer) return; // already running
-    console.info('[Sensing] Running in simulation mode');
-
-    this._simTimer = setInterval(() => {
-      const data = this._generateSimulatedData();
-      this._handleData(data);
-    }, SIMULATION_INTERVAL);
-  }
+  // ---- Simulation fallback removed in issue #1125 -----------------------------------------------
+  // When no hardware is present, the service now idles in "waiting_for_hardware" state
+  // instead of fabricating synthetic data. This prevents user confusion about whether
+  // they are looking at real or fake data.
 
   _stopSimulation() {
-    if (this._simTimer) {
-      clearInterval(this._simTimer);
-      this._simTimer = null;
-    }
-  }
-
-  _generateSimulatedData() {
-    const t = Date.now() / 1000;
-    const baseRssi = -45;
-    const variance = 1.5 + Math.sin(t * 0.1) * 1.0;
-    const motionBand = 0.05 + Math.abs(Math.sin(t * 0.3)) * 0.15;
-    const breathBand = 0.03 + Math.abs(Math.sin(t * 0.05)) * 0.08;
-    const isPresent = variance > 0.8;
-    const isActive = motionBand > 0.12;
-
-    // Generate signal field
-    const gridSize = 20;
-    const values = [];
-    for (let iz = 0; iz < gridSize; iz++) {
-      for (let ix = 0; ix < gridSize; ix++) {
-        const cx = gridSize / 2, cy = gridSize / 2;
-        const dist = Math.sqrt((ix - cx) ** 2 + (iz - cy) ** 2);
-        let v = Math.max(0, 1 - dist / (gridSize * 0.7)) * 0.3;
-        // Body blob
-        const bx = cx + 3 * Math.sin(t * 0.2);
-        const by = cy + 2 * Math.cos(t * 0.15);
-        const bodyDist = Math.sqrt((ix - bx) ** 2 + (iz - by) ** 2);
-        if (isPresent) {
-          v += Math.exp(-bodyDist * bodyDist / 8) * (0.3 + motionBand * 3);
-        }
-        values.push(Math.min(1, Math.max(0, v + Math.random() * 0.05)));
-      }
-    }
-
-    return {
-      type: 'sensing_update',
-      timestamp: t,
-      source: 'simulated',
-      // Explicit machine-readable marker so the UI can always detect simulated
-      // frames regardless of which code path produced them.
-      _simulated: true,
-      nodes: [{
-        node_id: 1,
-        rssi_dbm: baseRssi + Math.sin(t * 0.5) * 3,
-        position: [2, 0, 1.5],
-        amplitude: [],
-        subcarrier_count: 0,
-      }],
-      features: {
-        mean_rssi: baseRssi + Math.sin(t * 0.5) * 3,
-        variance,
-        std: Math.sqrt(variance),
-        motion_band_power: motionBand,
-        breathing_band_power: breathBand,
-        dominant_freq_hz: 0.3 + Math.sin(t * 0.02) * 0.1,
-        change_points: Math.floor(Math.random() * 3),
-        spectral_power: motionBand + breathBand + Math.random() * 0.1,
-        range: variance * 3,
-        iqr: variance * 1.5,
-        skewness: (Math.random() - 0.5) * 0.5,
-        kurtosis: Math.random() * 2,
-      },
-      classification: {
-        motion_level: isActive ? 'active' : (isPresent ? 'present_still' : 'absent'),
-        presence: isPresent,
-        confidence: isPresent ? 0.75 + Math.random() * 0.2 : 0.5 + Math.random() * 0.3,
-      },
-      signal_field: {
-        grid_size: [gridSize, 1, gridSize],
-        values,
-      },
-    };
+    // No-op placeholder — simulation fallback has been removed.
   }
 
   // ---- Server source detection -------------------------------------------
@@ -325,11 +236,11 @@ class SensingService {
     this._serverSource = rawSource;
     if (rawSource === 'esp32' || rawSource === 'wifi' || rawSource === 'live') {
       this._setDataSource('live');
-    } else if (rawSource === 'simulated' || rawSource === 'simulate') {
-      this._setDataSource('server-simulated');
+    } else if (rawSource === 'waiting_for_hardware') {
+      this._setDataSource('waiting_for_hardware');
     } else {
-      // Unknown source — show as server-simulated to be safe
-      this._setDataSource('server-simulated');
+      // Unknown source or old enum values — report as waiting
+      this._setDataSource('waiting_for_hardware');
     }
   }
 
@@ -397,7 +308,7 @@ class SensingService {
   /**
    * Update the dataSource label and notify state listeners so the UI can
    * react without needing a separate subscription.
-   * @param {'live'|'server-simulated'|'reconnecting'|'simulated'} source
+   * @param {'live'|'waiting_for_hardware'|'reconnecting'} source
    */
   _setDataSource(source) {
     if (source === this._dataSource) return;
@@ -410,7 +321,6 @@ class SensingService {
   }
 
   _clearTimers() {
-    this._stopSimulation();
     if (this._reconnectTimer) {
       clearTimeout(this._reconnectTimer);
       this._reconnectTimer = null;

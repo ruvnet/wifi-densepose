@@ -12,15 +12,13 @@
 #
 # Environment variables:
 #   CSI_SOURCE   — data source. Valid values:
-#                    auto       — try ESP32 then Windows WiFi, **fail-loud if no
-#                                 real hardware is detected** (issue #937 fix:
-#                                 the server no longer silently falls back to
-#                                 synthetic data — that's now opt-in only).
+#                    auto       — try ESP32 then Windows WiFi, then wait for
+#                                 hardware. When no real CSI is available at
+#                                 startup, reports source: "waiting_for_hardware"
+#                                 (issue #1125: no simulator fallback).
 #                    esp32      — listen for UDP CSI on the configured port.
 #                    wifi       — Windows-native WiFi capture.
-#                    simulated  — explicit demo mode with synthetic CSI.
-#                  Default is `auto`. Set CSI_SOURCE=simulated when you want
-#                  fake data tagged as such; never set it implicitly.
+#                  Default is `auto`.
 #   MODELS_DIR   — directory to scan for .rvf model files (default: data/models)
 set -e
 

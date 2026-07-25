@@ -122,7 +122,7 @@ export class LiveDemoTab {
       const tryAutoStart = () => {
         if (this._autoStartOnce || this.state.isActive) return;
         const ds = sensingService.dataSource;
-        if (ds === 'live' || ds === 'server-simulated') {
+        if (ds === 'live' || ds === 'waiting_for_hardware') {
           this._autoStartOnce = true;
           this.logger.info('Auto-starting pose detection (data source: ' + ds + ')');
           this.startDemo();
@@ -1307,7 +1307,7 @@ export class LiveDemoTab {
     }
     const ds = sensingService.dataSource;
     if (ds === 'live') return 'active';
-    if (ds === 'server-simulated') return 'sim';
+    if (ds === 'waiting_for_hardware') return 'connecting';
     return 'connecting';
   }
 
@@ -1317,8 +1317,7 @@ export class LiveDemoTab {
     }
     const ds = sensingService.dataSource;
     if (ds === 'live') return 'Active \u2014 ESP32 Live';
-    if (ds === 'server-simulated') return 'Active \u2014 Simulated Data';
-    if (ds === 'simulated') return 'Active \u2014 Offline Simulation';
+    if (ds === 'waiting_for_hardware') return 'Active \u2014 Waiting for Hardware';
     return 'Connecting...';
   }
 
@@ -1328,10 +1327,9 @@ export class LiveDemoTab {
     if (!banner) return;
     const ds = sensingService.dataSource;
     const config = {
-      'live':             { text: 'LIVE \u2014 ESP32 Hardware Connected',           cls: 'demo-source-live' },
-      'server-simulated': { text: 'SIMULATED DATA \u2014 No Hardware Detected',     cls: 'demo-source-sim' },
-      'reconnecting':     { text: 'RECONNECTING TO SERVER...',                      cls: 'demo-source-reconnecting' },
-      'simulated':        { text: 'OFFLINE \u2014 Server Unreachable, Local Sim',   cls: 'demo-source-offline' },
+      'live':                  { text: 'LIVE \u2014 ESP32 Hardware Connected',           cls: 'demo-source-live' },
+      'waiting_for_hardware':  { text: 'WAITING FOR HARDWARE \u2014 No CSI Source',      cls: 'demo-source-waiting' },
+      'reconnecting':          { text: 'RECONNECTING TO SERVER...',                      cls: 'demo-source-reconnecting' },
     };
     const cfg = config[ds] || config['reconnecting'];
     banner.textContent = cfg.text;
@@ -1368,16 +1366,14 @@ export class LiveDemoTab {
     if (elements.connectionStatus) {
       const ds = sensingService.dataSource;
       const dsLabels = {
-        'live':              'Connected \u2014 ESP32',
-        'server-simulated':  'Connected \u2014 Simulated',
-        'reconnecting':      'Reconnecting...',
-        'simulated':         'Offline \u2014 Simulated',
+        'live':                  'Connected \u2014 ESP32',
+        'waiting_for_hardware':  'Connected \u2014 Waiting for Hardware',
+        'reconnecting':          'Reconnecting...',
       };
       const label = dsLabels[ds] || this.state.connectionState;
       elements.connectionStatus.textContent = label;
       const cls = ds === 'live' ? 'good'
-        : ds === 'server-simulated' ? 'sim'
-        : ds === 'simulated' ? 'bad'
+        : ds === 'waiting_for_hardware' ? 'poor'
         : this.getHealthClass(this.state.connectionState);
       elements.connectionStatus.className = `health-${cls}`;
     }

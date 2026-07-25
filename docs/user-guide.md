@@ -77,7 +77,7 @@ WiFi DensePose turns commodity WiFi signals into real-time human pose estimation
 | Intel 5300 / Atheros AR9580 | $50-100 | Full CSI with 3x3 MIMO (Linux only) |
 | Any WiFi laptop | $0 | RSSI-only: coarse presence and motion detection |
 
-No hardware? The system runs in **simulated mode** with synthetic CSI data.
+No hardware? The system waits for a hardware source to connect. See the [Data Sources](#data-sources) section for details.
 
 ---
 
@@ -97,9 +97,8 @@ Multi-architecture image (amd64 + arm64). Works on Intel/AMD and Apple Silicon M
 
 | Value | Description |
 |-------|-------------|
-| `auto` | (default) Probe for ESP32 on UDP 5005, fall back to simulation |
-| `esp32` | Receive real CSI frames from ESP32 devices over UDP |
-| `simulated` | Generate synthetic CSI frames (no hardware required) |
+| `auto` | (default) Probe for ESP32 on UDP 5005, then WiFi. If no hardware is found, waits for a real CSI source to connect (reports `source: "waiting_for_hardware"` — no simulator fallback). |
+| `esp32` | Receive real CSI frames from ESP32 devices over UDP. Waits for the first frame if no CSI is flowing at startup. |
 | `wifi` | Host Wi-Fi RSSI (not available inside containers) |
 
 Example: `docker run -e CSI_SOURCE=esp32 -p 3000:3000 -p 5005:5005/udp ruvnet/wifi-densepose:latest`
