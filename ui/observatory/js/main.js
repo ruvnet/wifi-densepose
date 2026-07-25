@@ -12,12 +12,10 @@ import { withWsTicket } from '../../services/ws-ticket.js';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-import { DemoDataGenerator } from './demo-data.js';
 import { NebulaBackground } from './nebula-background.js';
 import { PostProcessing } from './post-processing.js';
 import { FigurePool, SKELETON_PAIRS } from './figure-pool.js';
 import { PoseSystem } from './pose-system.js';
-import { ScenarioProps } from './scenario-props.js';
 import { HudController, DEFAULTS, SETTINGS_VERSION, PRESETS, SCENARIO_NAMES } from './hud-controller.js';
 
 // ---- Palette ----
@@ -90,14 +88,8 @@ class Observatory {
 
     this._clock = new THREE.Clock();
 
-    // Data
-    this._demoData = new DemoDataGenerator();
-    this._demoData.setCycleDuration(this.settings.cycle || 30);
-    if (this.settings.scenario && this.settings.scenario !== 'auto') {
-      this._demoData.setScenario(this.settings.scenario);
-    }
+    // Data source
     this._currentData = null;
-    this._currentScenario = null;
 
     // Build scene
     this._setupLighting();
@@ -106,7 +98,6 @@ class Observatory {
     this._buildRouter();
     this._poseSystem = new PoseSystem();
     this._figurePool = new FigurePool(this._scene, this.settings, this._poseSystem);
-    this._scenarioProps = new ScenarioProps(this._scene);
     this._buildDotMatrixMist();
     this._buildParticleTrail();
     this._buildWifiWaves();
@@ -401,16 +392,11 @@ class Observatory {
           this._autopilot = !this._autopilot;
           this._controls.enabled = !this._autopilot;
           break;
-        case 'd': this._demoData.cycleScenario(); break;
         case 'f':
           this._showFps = !this._showFps;
           document.getElementById('fps-counter').style.display = this._showFps ? 'block' : 'none';
           break;
         case 's': this._hud.toggleSettings(); break;
-        case ' ':
-          e.preventDefault();
-          this._demoData.paused = !this._demoData.paused;
-          break;
       }
     });
   }
@@ -449,7 +435,7 @@ class Observatory {
 
     const tryNext = (i) => {
       if (i >= unique.length) {
-        console.log('[Observatory] No sensing server detected, using demo mode');
+        console.log('[Observatory] No sensing server detected, waiting for hardware');
         return;
       }
       const base = unique[i];
@@ -528,12 +514,11 @@ class Observatory {
     // Updates
     this._nebula.update(dt, elapsed);
     this._figurePool.update(data, elapsed);
-    this._scenarioProps.update(data, this._demoData.currentScenario);
     this._updateDotMatrixMist(data, elapsed);
     this._updateParticleTrail(data, dt, elapsed);
     this._updateWifiWaves(elapsed);
     this._updateSignalField(data);
-    this._hud.updateHUD(data, this._demoData);
+    this._hud.updateHUD(data, null);
     this._hud.updateSparkline(data);
 
     // Router LED
