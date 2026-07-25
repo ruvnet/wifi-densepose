@@ -2,12 +2,12 @@ import { withWsTicket } from './ws-ticket.js';
 /**
  * Sensing WebSocket Service
  *
- * Manages the connection to the Python sensing WebSocket server
- * (ws://localhost:8765) and provides a callback-based API for the UI.
+ * Manages the connection to the sensing WebSocket server
+ * and provides a callback-based API for the UI.
  *
- * Falls back to simulated data only after MAX_RECONNECT_ATTEMPTS exhausted.
- * While reconnecting the service stays in "reconnecting" state and does NOT
- * emit simulated frames so the UI can clearly distinguish live vs. fallback data.
+ * When no real hardware is present, the service reports 'waiting_for_hardware'
+ * instead of fabricating synthetic data (issue #1125).
+ * Users always see the true state: connected to real hardware or waiting for it.
  */
 
 const SENSING_WS_PORT_BY_HTTP_PORT = {
