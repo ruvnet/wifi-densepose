@@ -206,7 +206,7 @@ export class HudController {
       obs._camera.updateProjectionMatrix();
     });
     this._bindRange('opt-orbit-speed', 'orbitSpeed');
-    this._bindRange('opt-cycle', 'cycle', v => { obs._demoData.setCycleDuration(v); });
+    // Demo-specific cycle control removed (was tied to deleted _demoData)
 
     // Color pickers
     document.getElementById('opt-wire-color').value = s.wireColor;
@@ -228,12 +228,12 @@ export class HudController {
       s.room = e.target.checked; obs._roomWire.visible = e.target.checked; this.saveSettings();
     });
 
-    // Scenario select
+    // Scenario select (demo-only control, no-op when using real hardware)
     const scenarioSel = document.getElementById('opt-scenario');
     scenarioSel.value = s.scenario;
     scenarioSel.addEventListener('change', (e) => {
       s.scenario = e.target.value;
-      obs._demoData.setScenario(e.target.value);
+      // Demo scenario control removed with _demoData
       this.saveSettings();
     });
 
@@ -293,7 +293,7 @@ export class HudController {
     const sel = document.getElementById('scenario-quick-select');
     if (!sel) return;
     sel.addEventListener('change', (e) => {
-      this._obs._demoData.setScenario(e.target.value);
+      // Demo scenario control removed with _demoData
       const settingsSel = document.getElementById('opt-scenario');
       if (settingsSel) settingsSel.value = e.target.value;
       this._obs.settings.scenario = e.target.value;
@@ -351,7 +351,7 @@ export class HudController {
     obs._floorMat.metalness = obs.settings.reflect * 0.5;
     obs._camera.fov = obs.settings.fov;
     obs._camera.updateProjectionMatrix();
-    obs._demoData.setCycleDuration(obs.settings.cycle);
+    // Demo cycle control removed with _demoData
     obs._applyColors();
   }
 
@@ -379,12 +379,14 @@ export class HudController {
     const feat = data.features || {};
     const cls = data.classification || {};
 
-    // Sync scenario dropdown
-    const quickSel = document.getElementById('scenario-quick-select');
-    const cur = demoData._autoMode ? 'auto' : demoData.currentScenario;
-    if (quickSel && quickSel.value !== cur) quickSel.value = cur;
-    const autoIcon = document.getElementById('autoplay-icon');
-    if (autoIcon) autoIcon.className = demoData._autoMode ? '' : 'hidden';
+    // Sync scenario dropdown (only when in demo mode with demoData)
+    if (demoData) {
+      const quickSel = document.getElementById('scenario-quick-select');
+      const cur = demoData._autoMode ? 'auto' : demoData.currentScenario;
+      if (quickSel && quickSel.value !== cur) quickSel.value = cur;
+      const autoIcon = document.getElementById('autoplay-icon');
+      if (autoIcon) autoIcon.className = demoData._autoMode ? '' : 'hidden';
+    }
 
     const targetHr = vs.heart_rate_bpm || 0;
     const targetBr = vs.breathing_rate_bpm || 0;
@@ -438,12 +440,14 @@ export class HudController {
     const fallEl = document.getElementById('fall-alert');
     if (fallEl) fallEl.style.display = cls.fall_detected ? 'block' : 'none';
 
-    // Scenario description and edge modules
-    const scenarioKey = demoData._autoMode ? (demoData.currentScenario || 'auto') : (demoData.currentScenario || 'auto');
-    if (scenarioKey !== this._currentScenarioKey) {
-      this._currentScenarioKey = scenarioKey;
-      this._updateScenarioDescription(scenarioKey);
-      this._updateEdgeModules(scenarioKey);
+    // Scenario description and edge modules (demo-only, when demoData is present)
+    if (demoData) {
+      const scenarioKey = demoData._autoMode ? (demoData.currentScenario || 'auto') : (demoData.currentScenario || 'auto');
+      if (scenarioKey !== this._currentScenarioKey) {
+        this._currentScenarioKey = scenarioKey;
+        this._updateScenarioDescription(scenarioKey);
+        this._updateEdgeModules(scenarioKey);
+      }
     }
   }
 
