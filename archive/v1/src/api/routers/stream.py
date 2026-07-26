@@ -16,7 +16,8 @@ from src.api.dependencies import (
     get_stream_service,
     get_pose_service,
     get_current_user_ws,
-    require_auth
+    require_auth,
+    get_admin_user
 )
 from src.api.websocket.connection_manager import connection_manager
 from src.services.stream_service import StreamService
@@ -436,26 +437,12 @@ async def get_connected_clients(
 @router.delete("/clients/{client_id}")
 async def disconnect_client(
     client_id: str,
-    current_user: Dict = Depends(require_auth)
+    current_user: Dict = Depends(get_admin_user)
 ):
-    """Disconnect a specific WebSocket client."""
+    """Disconnect a specific WebSocket client. Requires admin privileges."""
     try:
-        logger.info(f"Disconnecting client {client_id} by user: {current_user['id']}")
-        
-        # Verify ownership: ensure the client belongs to the current user
-        clients = await connection_manager.get_connected_clients()
-        client_info = next((c for c in clients if c.get("client_id") == client_id), None)
-        if client_info is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Client {client_id} not found"
-            )
-        if client_info.get("user_id") != current_user["id"]:
-            raise HTTPException(
-                status_code=403,
-                detail="Not authorized to disconnect this client"
-            )
-        
+        logger.info(f"Disconnecting client {client_id} by admin: {current_user['id']}")
+
         success = await connection_manager.disconnect(client_id)
         
         if not success:
