@@ -1,6 +1,6 @@
 [package]
 name = "wifi-densepose-cli"
-version = "0.3.1"
+version = "0.3.2"
 edition.workspace = true
 description = "CLI for WiFi-DensePose"
 authors.workspace = true

@@ -996,7 +996,7 @@ dependencies = [
 
 [[package]]
 name = "cog-ha-matter"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "clap",
  "ed25519-dalek",
@@ -1015,7 +1015,7 @@ dependencies = [
 
 [[package]]
 name = "cog-person-count"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "approx",
  "candle-core 0.9.2",
@@ -1036,7 +1036,7 @@ dependencies = [
 
 [[package]]
 name = "cog-pose-estimation"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "candle-core 0.9.2",
  "candle-nn 0.9.2",
@@ -5359,7 +5359,7 @@ checksum = "830b246a0e5f20af87141b25c173cd1b609bd7779a4617d6ec582abaf90870f3"
 
 [[package]]
 name = "nvsim"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "approx",
  "criterion",
@@ -5377,7 +5377,7 @@ dependencies = [
 
 [[package]]
 name = "nvsim-server"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "axum",
  "clap",
@@ -7677,7 +7677,7 @@ dependencies = [
 
 [[package]]
 name = "ruview-unified"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "criterion",
  "ndarray 0.17.2",
@@ -11056,7 +11056,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-calibration"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "ndarray 0.17.2",
  "num-complex",
@@ -11070,7 +11070,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-cli"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -11105,7 +11105,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-trait",
  "blake3",
@@ -11122,7 +11122,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-desktop"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "chrono",
  "flume",
@@ -11178,7 +11178,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-hardware"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "approx",
  "byteorder",
@@ -11198,7 +11198,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-mat"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "approx",
@@ -11230,7 +11230,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-nn"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "candle-core 0.4.1",
@@ -11253,7 +11253,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-occworld-candle"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "approx",
  "candle-core 0.9.2",
@@ -11296,7 +11296,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-ruvector"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "approx",
  "criterion",
@@ -11316,7 +11316,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-sensing-server"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "axum",
  "base64 0.21.7",
@@ -11360,7 +11360,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-signal"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "chrono",
  "criterion",
@@ -11387,7 +11387,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-train"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "approx",
@@ -11424,7 +11424,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-vitals"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "criterion",
  "serde",
@@ -11434,7 +11434,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-wasm"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "chrono",
  "console_error_panic_hook",
@@ -11456,7 +11456,7 @@ dependencies = [
 
 [[package]]
 name = "wifi-densepose-wifiscan"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "serde",
  "tokio",
