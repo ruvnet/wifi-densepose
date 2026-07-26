@@ -138,6 +138,10 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-276](ADR-276-physics-guided-synthetic-rf-worlds.md) | Physics-guided synthetic RF world generator | Accepted (P1 implemented) |
 | [ADR-277](ADR-277-edge-sensing-control-plane.md) | Edge sensing control plane (802.11bf / ETSI ISAC aligned) | Accepted (P1 implemented) |
 | [ADR-278](ADR-278-radar-inverse-rendering-research-program.md) | Radar inverse rendering + differentiable RF SLAM research program | Proposed |
+| [ADR-279](ADR-279-native-rf-frame-contract.md) | Native RF frame contract — `RfFrameV2` authoritative, canonical tensor derived | Accepted (implemented) |
+| [ADR-280](ADR-280-active-sensing-programmable-perception.md) | Active sensing & programmable perception control plane | Accepted (implemented) |
+| [ADR-281](ADR-281-ble-cs-delay-doppler-pose-factorization.md) | BLE Channel Sounding, delay-Doppler tensors, P3162 import, factorized pose | Accepted (implemented) |
+| [ADR-282](ADR-282-ruview-ecosystem-positioning.md) | Ecosystem positioning + mandatory L0–L5 evidence ladder | Accepted |
 
 ---
 

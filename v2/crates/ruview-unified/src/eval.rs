@@ -32,6 +32,9 @@ pub struct PartitionKey {
     pub firmware: String,
     /// Antenna layout identifier.
     pub layout: String,
+    /// Capture session identifier (packet-session leakage is as real as
+    /// room leakage — ADR-279 §4 split manifest).
+    pub session: String,
 }
 
 /// Which dimension of [`PartitionKey`] a split holds out.
@@ -49,6 +52,8 @@ pub enum PartitionDim {
     Firmware,
     /// Hold out complete antenna layouts.
     Layout,
+    /// Hold out complete capture sessions.
+    Session,
 }
 
 impl PartitionDim {
@@ -60,8 +65,75 @@ impl PartitionDim {
             Self::Chipset => &k.chipset,
             Self::Firmware => &k.firmware,
             Self::Layout => &k.layout,
+            Self::Session => &k.session,
         }
     }
+
+    /// All partition dimensions, for exhaustive manifest checks.
+    pub const ALL: [Self; 7] = [
+        Self::Room,
+        Self::Day,
+        Self::Person,
+        Self::Chipset,
+        Self::Firmware,
+        Self::Layout,
+        Self::Session,
+    ];
+}
+
+/// The mandatory split manifest (ADR-279 §4): per-dimension disjointness
+/// certificates for a train/test split. A result is only reportable as
+/// leakage-resistant along the dimensions this manifest certifies.
+#[derive(Debug, Clone)]
+pub struct SplitManifest {
+    /// `(dimension, train∩test == ∅)` for every partition dimension.
+    pub disjoint: Vec<(PartitionDim, bool)>,
+}
+
+impl SplitManifest {
+    /// Builds the manifest for an arbitrary index split.
+    #[must_use]
+    pub fn build(keys: &[PartitionKey], train: &[usize], test: &[usize]) -> Self {
+        let disjoint = PartitionDim::ALL
+            .iter()
+            .map(|dim| {
+                let train_vals: BTreeSet<&str> =
+                    train.iter().map(|&i| dim.value(&keys[i])).collect();
+                let test_vals: BTreeSet<&str> =
+                    test.iter().map(|&i| dim.value(&keys[i])).collect();
+                (*dim, train_vals.is_disjoint(&test_vals))
+            })
+            .collect();
+        Self { disjoint }
+    }
+
+    /// True iff the given dimension is certified disjoint.
+    #[must_use]
+    pub fn is_disjoint(&self, dim: PartitionDim) -> bool {
+        self.disjoint.iter().any(|(d, ok)| *d == dim && *ok)
+    }
+
+    /// True iff every dimension is disjoint (the full anti-leakage bar:
+    /// `train_rooms ∩ test_rooms = ∅` … `train_sessions ∩ test_sessions = ∅`).
+    #[must_use]
+    pub fn fully_disjoint(&self) -> bool {
+        self.disjoint.iter().all(|(_, ok)| *ok)
+    }
+}
+
+/// Mean per-joint position error (metres) between two joint sets.
+///
+/// # Panics
+/// If the slices have different lengths or are empty.
+#[must_use]
+pub fn mpjpe(pred: &[[f64; 3]], truth: &[[f64; 3]]) -> f64 {
+    assert_eq!(pred.len(), truth.len());
+    assert!(!pred.is_empty());
+    pred.iter()
+        .zip(truth)
+        .map(|(p, t)| ((p[0] - t[0]).powi(2) + (p[1] - t[1]).powi(2) + (p[2] - t[2]).powi(2)).sqrt())
+        .sum::<f64>()
+        / pred.len() as f64
 }
 
 /// A train/test index split with a proof-of-disjointness certificate.
@@ -225,6 +297,7 @@ mod tests {
                         chipset: "esp32s3".into(),
                         firmware: "v1.2".into(),
                         layout: "L".into(),
+                        session: format!("{room}-{day}-{person}"),
                     });
                 }
             }
@@ -251,6 +324,28 @@ mod tests {
         // Manufacture a leak: push a room-c sample into training.
         split.train.push(split.test[0]);
         assert!(!split.verify(&keys), "leak must be detected");
+    }
+
+    #[test]
+    fn split_manifest_certifies_per_dimension_disjointness() {
+        let keys = keys();
+        let split = StrictSplit::holdout(&keys, PartitionDim::Room, &["room-c"]);
+        let manifest = SplitManifest::build(&keys, &split.train, &split.test);
+        // Rooms are disjoint (and sessions, which embed the room)…
+        assert!(manifest.is_disjoint(PartitionDim::Room));
+        assert!(manifest.is_disjoint(PartitionDim::Session));
+        // …but people/days/chipsets are shared, and the manifest says so
+        // instead of letting the split masquerade as fully leakage-free.
+        assert!(!manifest.is_disjoint(PartitionDim::Person));
+        assert!(!manifest.is_disjoint(PartitionDim::Chipset));
+        assert!(!manifest.fully_disjoint());
+    }
+
+    #[test]
+    fn mpjpe_basics() {
+        let a = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
+        let b = [[0.0, 0.0, 0.1], [1.0, 0.0, 0.0]];
+        assert!((mpjpe(&a, &b) - 0.05).abs() < 1e-12);
     }
 
     #[test]

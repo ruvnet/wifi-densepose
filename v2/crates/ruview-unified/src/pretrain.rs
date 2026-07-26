@@ -110,13 +110,15 @@ pub fn masked_loss_and_grads(
     }
     loss *= norm;
 
-    // Fusion: z = g ⊙ gate + Wg·geo + bg.
+    // Fusion: z = g ⊙ gate + Wg·geo + bg. The gate input is the
+    // log-scaled age feature, matching the forward pass.
+    let age_feat = crate::encoder::age_feature(ctx.age_s);
     let mut dg = vec![0.0; h_dim];
     for k in 0..h_dim {
         let dgate = dz[k] * cache.g[k];
         dg[k] = dz[k] * cache.gate[k];
         let dsig = cache.gate[k] * (1.0 - cache.gate[k]);
-        grads.age_w[k] += dgate * dsig * ctx.age_s;
+        grads.age_w[k] += dgate * dsig * age_feat;
         grads.age_b[k] += dgate * dsig;
     }
     enc.wg.accumulate_grad(&mut grads.wg, &dz, &ctx.geometry);

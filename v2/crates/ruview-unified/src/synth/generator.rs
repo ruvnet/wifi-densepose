@@ -220,6 +220,9 @@ impl SynthGenerator {
                         chipset: hw.chipset.clone(),
                         firmware: hw.firmware.clone(),
                         layout: hw.layout.clone(),
+                        // Windows sharing a start-time slot within a room
+                        // form one capture session.
+                        session: format!("room-{room_idx}-s{}", w % 6),
                     },
                 });
             }

@@ -27,6 +27,14 @@
 use rand_chacha::ChaCha20Rng;
 
 use crate::math::{sigmoid, xavier_init};
+
+/// Age input transform for the freshness gate (ADR-281 §4, the age-aware
+/// CSI recipe): `log(1 + sample_age_ms)` — log-scaling keeps millisecond
+/// and multi-second staleness on comparable input scales.
+#[must_use]
+pub fn age_feature(age_s: f64) -> f64 {
+    (1.0 + age_s * 1000.0).ln()
+}
 use crate::tokenizer::{position_encoding, RfToken, TokenizedWindow, D_IN, D_POS};
 
 /// Dense row-major matrix with a bias vector (one linear layer).
@@ -256,11 +264,12 @@ impl RfEncoder {
             *v = v.tanh();
         }
 
+        let age_feat = age_feature(ctx.age_s);
         let gate: Vec<f64> = self
             .age_w
             .iter()
             .zip(&self.age_b)
-            .map(|(w, b)| sigmoid(w * ctx.age_s + b))
+            .map(|(w, b)| sigmoid(w * age_feat + b))
             .collect();
 
         let geo = self.wg.forward(&ctx.geometry);

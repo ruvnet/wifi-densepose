@@ -73,6 +73,20 @@ pub enum RawCapture {
         /// Device identifier.
         device_id: String,
     },
+    /// Bluetooth 6.0 Channel Sounding capture: per-frequency-step phase
+    /// samples plus optional round-trip timing (ADR-281 §2). Phase-based
+    /// ranging and RTT are **separate evidence sources** — see
+    /// [`ble_cs_range`] for the agreement/divergence contract.
+    BleCs {
+        /// The channel-sounding frame.
+        frame: BleCsFrame,
+        /// Initiator→reflector link geometry (single link).
+        links: Vec<LinkGeometry>,
+        /// Age in seconds.
+        age_s: f64,
+        /// Device identifier.
+        device_id: String,
+    },
     /// 5G NR uplink SRS frequency response `(links, comb_res, symbols)` with
     /// a comb factor (only every `comb`-th subcarrier is sounded).
     CellularSrs {
@@ -101,9 +115,103 @@ impl RawCapture {
             Self::WifiCsi { .. } => RfModality::WifiCsi,
             Self::FmcwRadarCube { .. } => RfModality::FmcwRadar,
             Self::UwbCir { .. } => RfModality::UwbCir,
+            Self::BleCs { .. } => RfModality::BleCs,
             Self::CellularSrs { .. } => RfModality::CellularSrs,
         }
     }
+}
+
+/// Bluetooth Channel Sounding frame (ADR-281 §2): tone phases across
+/// frequency steps plus optional round-trip timing.
+#[derive(Debug, Clone)]
+pub struct BleCsFrame {
+    /// Sounded frequencies, Hz (uniformly spaced, ascending).
+    pub frequency_steps_hz: Vec<f64>,
+    /// Measured round-trip tone phase at each step, radians (wrapped).
+    pub phase_samples_rad: Vec<f64>,
+    /// Round-trip time measurement, ns, when the mode includes RTT.
+    pub round_trip_time_ns: Option<f64>,
+}
+
+/// Anomaly classes when the two CS evidence sources disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangingAnomaly {
+    /// Phase-based and RTT distances diverge beyond tolerance — multipath
+    /// bias, a relay attack, a timing fault, or a calibration problem.
+    Divergent,
+}
+
+/// Distance evidence from one CS exchange. Phase-based ranging and RTT
+/// are deliberately separate: agreement raises confidence, disagreement
+/// is surfaced as an anomaly instead of silently averaged away.
+#[derive(Debug, Clone)]
+pub struct RangingEvidence {
+    /// Distance from the unwrapped phase-vs-frequency slope, metres.
+    pub phase_distance_m: f64,
+    /// Distance from round-trip timing, metres (when measured).
+    pub rtt_distance_m: Option<f64>,
+    /// Whether the two sources agree within tolerance.
+    pub agreement: bool,
+    /// Confidence in `[0, 1]` (decays with divergence).
+    pub confidence: f64,
+    /// Set when the sources diverge.
+    pub anomaly: Option<RangingAnomaly>,
+}
+
+/// Agreement tolerance between phase and RTT distances, metres.
+const CS_AGREEMENT_TOLERANCE_M: f64 = 0.5;
+
+/// Extracts ranging evidence from a CS frame.
+///
+/// Physics: the round-trip tone phase is `θ(f) = −4π·f·d/c (mod 2π)`, so
+/// the unwrapped slope gives `d = |dθ/df|·c/(4π)`. RTT gives
+/// `d = rtt·c/2` independently. Cross-validation is the security value:
+/// a relay attack that defeats one mechanism generally cannot fake both
+/// consistently.
+pub fn ble_cs_range(frame: &BleCsFrame) -> Result<RangingEvidence> {
+    let n = frame.frequency_steps_hz.len();
+    if n < 2 || frame.phase_samples_rad.len() != n {
+        return Err(UnifiedError::ShapeMismatch(format!(
+            "CS frame needs >= 2 steps with matching phases, got {n} steps / {} phases",
+            frame.phase_samples_rad.len()
+        )));
+    }
+    let df = frame.frequency_steps_hz[1] - frame.frequency_steps_hz[0];
+    if !(df.is_finite() && df > 0.0) {
+        return Err(UnifiedError::InvalidInput("frequency steps must ascend uniformly".into()));
+    }
+    // Unwrap phases across steps, then least-squares slope per Hz.
+    let mut unwrapped = Vec::with_capacity(n);
+    let mut prev = frame.phase_samples_rad[0];
+    unwrapped.push(prev);
+    for &p in &frame.phase_samples_rad[1..] {
+        let mut v = p;
+        while v - prev > std::f64::consts::PI {
+            v -= 2.0 * std::f64::consts::PI;
+        }
+        while v - prev < -std::f64::consts::PI {
+            v += 2.0 * std::f64::consts::PI;
+        }
+        unwrapped.push(v);
+        prev = v;
+    }
+    let slope_per_step = crate::math::linear_slope(&unwrapped);
+    let c = 299_792_458.0;
+    let phase_distance_m = (slope_per_step / df).abs() * c / (4.0 * std::f64::consts::PI);
+
+    let rtt_distance_m = frame.round_trip_time_ns.map(|rtt| rtt * 1e-9 * c / 2.0);
+    let (agreement, confidence, anomaly) = match rtt_distance_m {
+        None => (true, 0.5, None), // single-source evidence: capped confidence
+        Some(d_rtt) => {
+            let divergence = (phase_distance_m - d_rtt).abs();
+            if divergence <= CS_AGREEMENT_TOLERANCE_M {
+                (true, (1.0 - divergence / CS_AGREEMENT_TOLERANCE_M).mul_add(0.5, 0.5), None)
+            } else {
+                (false, (-divergence).exp().min(0.2), Some(RangingAnomaly::Divergent))
+            }
+        }
+    };
+    Ok(RangingEvidence { phase_distance_m, rtt_distance_m, agreement, confidence, anomaly })
 }
 
 /// A hardware adapter: normalizes one family of raw captures into the
@@ -120,8 +228,12 @@ pub trait RfAdapter: Send + Sync {
 
 /// Shared stage 1–3 pipeline: resample to canonical dims, per-link median
 /// amplitude normalization, per-(link, snapshot) phase detrend.
+///
+/// Crate-visible so [`crate::frame::RfFrameV2::to_canonical`] derives the
+/// compatibility view through the exact same code path as every adapter
+/// (ADR-279 §3 — one normalization, many entry points).
 #[allow(clippy::too_many_arguments)]
-fn finish_normalization(
+pub(crate) fn normalize_grid(
     modality: RfModality,
     mut grid: Array3<Complex64>, // (links, bins, snapshots) at source resolution
     links: Vec<LinkGeometry>,
@@ -288,7 +400,7 @@ impl RfAdapter for WifiCsiAdapter {
         let center_freq_hz = f64::from(meta.frequency_band.center_frequency_mhz()) * 1e6;
         let ts = &meta.timestamp;
         let timestamp_ns = u64::try_from(ts.seconds).unwrap_or(0) * 1_000_000_000 + u64::from(ts.nanos);
-        finish_normalization(
+        normalize_grid(
             RfModality::WifiCsi,
             grid,
             links.clone(),
@@ -359,7 +471,7 @@ impl RfAdapter for FmcwRadarAdapter {
         // Range profiles are already phase-meaningful per bin; the linear
         // detrend would erase target range information, so radar declares
         // itself phase-calibrated and only amplitude-normalizes.
-        finish_normalization(
+        normalize_grid(
             RfModality::FmcwRadar,
             grid,
             links.clone(),
@@ -405,7 +517,7 @@ impl RfAdapter for UwbCirAdapter {
                 got: raw.modality(),
             });
         };
-        finish_normalization(
+        normalize_grid(
             RfModality::UwbCir,
             taps.clone(),
             links.clone(),
@@ -479,7 +591,7 @@ impl RfAdapter for CellularSrsAdapter {
                 }
             }
         }
-        finish_normalization(
+        normalize_grid(
             RfModality::CellularSrs,
             grid,
             links.clone(),
@@ -491,6 +603,63 @@ impl RfAdapter for CellularSrsAdapter {
             0.99, // gNB reference clock
             0.1,
             false,
+        )
+    }
+}
+
+/// Bluetooth Channel Sounding adapter: tone phasors over frequency steps
+/// become the canonical bin axis (delay structure preserved — the ranging
+/// ramp *is* the signal, so phase detrending is skipped).
+pub struct BleCsAdapter {
+    hardware_id: String,
+}
+
+impl BleCsAdapter {
+    /// New adapter for the given CS radio id (e.g. `"nrf54-cs"`).
+    #[must_use]
+    pub fn new(hardware_id: impl Into<String>) -> Self {
+        Self { hardware_id: hardware_id.into() }
+    }
+}
+
+impl RfAdapter for BleCsAdapter {
+    fn modality(&self) -> RfModality {
+        RfModality::BleCs
+    }
+
+    fn hardware_id(&self) -> &str {
+        &self.hardware_id
+    }
+
+    fn normalize(&self, raw: &RawCapture) -> Result<RfTensor> {
+        let RawCapture::BleCs { frame, links, age_s, device_id } = raw else {
+            return Err(UnifiedError::ModalityMismatch {
+                adapter: self.hardware_id.clone(),
+                got: raw.modality(),
+            });
+        };
+        let n = frame.frequency_steps_hz.len();
+        if n < 2 || frame.phase_samples_rad.len() != n {
+            return Err(UnifiedError::ShapeMismatch("malformed CS frame".into()));
+        }
+        let mut grid = Array3::zeros((1, n, 1));
+        for (b, theta) in frame.phase_samples_rad.iter().enumerate() {
+            grid[[0, b, 0]] = Complex64::from_polar(1.0, *theta);
+        }
+        let centre = (frame.frequency_steps_hz[0] + frame.frequency_steps_hz[n - 1]) / 2.0;
+        let bandwidth = frame.frequency_steps_hz[n - 1] - frame.frequency_steps_hz[0];
+        normalize_grid(
+            RfModality::BleCs,
+            grid,
+            links.clone(),
+            centre,
+            bandwidth.max(1.0),
+            *age_s,
+            0,
+            device_id.clone(),
+            0.9,
+            0.15,
+            true, // the phase ramp is the measurement; never detrend it
         )
     }
 }
@@ -517,6 +686,7 @@ impl AdapterRegistry {
         r.register(Box::new(FmcwRadarAdapter::new("mr60bha2")));
         r.register(Box::new(UwbCirAdapter::new("dw3000")));
         r.register(Box::new(CellularSrsAdapter::new("oai-srs-xapp")));
+        r.register(Box::new(BleCsAdapter::new("nrf54-cs")));
         r
     }
 
@@ -669,12 +839,73 @@ mod tests {
         assert_eq!(t.modality, RfModality::CellularSrs);
     }
 
+    /// Synthesizes CS phases for a known distance: θ(f) = −4π·f·d/c.
+    fn cs_frame(distance_m: f64, rtt_ns: Option<f64>) -> BleCsFrame {
+        let c = 299_792_458.0;
+        let steps: Vec<f64> = (0..40).map(|k| 2.402e9 + 1e6 * k as f64).collect();
+        let phases: Vec<f64> = steps
+            .iter()
+            .map(|f| {
+                let theta = -4.0 * std::f64::consts::PI * f * distance_m / c;
+                theta.rem_euclid(2.0 * std::f64::consts::PI)
+            })
+            .collect();
+        BleCsFrame { frequency_steps_hz: steps, phase_samples_rad: phases, round_trip_time_ns: rtt_ns }
+    }
+
+    #[test]
+    fn ble_cs_phase_ranging_recovers_exact_distance() {
+        let c = 299_792_458.0;
+        for d in [1.5, 5.0, 12.0] {
+            let rtt_ns = 2.0 * d / c * 1e9;
+            let ev = ble_cs_range(&cs_frame(d, Some(rtt_ns))).expect("evidence");
+            assert!(
+                (ev.phase_distance_m - d).abs() < 1e-6,
+                "phase ranging {} vs true {d}",
+                ev.phase_distance_m
+            );
+            assert!((ev.rtt_distance_m.unwrap() - d).abs() < 1e-9);
+            assert!(ev.agreement, "consistent sources must agree");
+            assert!(ev.confidence > 0.9);
+            assert!(ev.anomaly.is_none());
+        }
+    }
+
+    #[test]
+    fn ble_cs_flags_relay_style_divergence_instead_of_averaging() {
+        // Phase says 5 m; a relay/timing fault inflates RTT to ~51 m.
+        let ev = ble_cs_range(&cs_frame(5.0, Some(340.0))).expect("evidence");
+        assert!((ev.phase_distance_m - 5.0).abs() < 1e-6);
+        assert!(ev.rtt_distance_m.unwrap() > 50.0);
+        assert!(!ev.agreement);
+        assert_eq!(ev.anomaly, Some(RangingAnomaly::Divergent));
+        assert!(ev.confidence < 0.25, "divergent evidence must not be trusted");
+    }
+
+    #[test]
+    fn ble_cs_adapter_produces_canonical_tensor() {
+        let adapter = BleCsAdapter::new("nrf54-cs");
+        let raw = RawCapture::BleCs {
+            frame: cs_frame(3.0, None),
+            links: test_links(1),
+            age_s: 0.01,
+            device_id: "nrf54-a".into(),
+        };
+        let t = adapter.normalize(&raw).expect("normalizes");
+        assert_eq!(t.dims(), (1, CANONICAL_BINS, CANONICAL_SNAPSHOTS));
+        assert_eq!(t.modality, RfModality::BleCs);
+        // The ranging ramp must survive (no detrend): phase varies across bins.
+        let p0 = t.data[[0, 0, 0]].arg();
+        let p_mid = t.data[[0, CANONICAL_BINS / 2, 0]].arg();
+        assert!((p0 - p_mid).abs() > 1e-3, "phase ramp must be preserved");
+    }
+
     #[test]
     fn registry_is_fail_closed_and_type_safe() {
         let registry = AdapterRegistry::with_reference_adapters();
         assert_eq!(
             registry.hardware_ids(),
-            vec!["dw3000", "esp32s3-csi", "mr60bha2", "oai-srs-xapp"]
+            vec!["dw3000", "esp32s3-csi", "mr60bha2", "nrf54-cs", "oai-srs-xapp"]
         );
 
         // Unknown hardware ⇒ error, never a default adapter.

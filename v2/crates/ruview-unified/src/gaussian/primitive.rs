@@ -107,19 +107,30 @@ pub struct RfGaussian {
     pub reflectivity: [[f64; ANGLE_BINS]; Band::COUNT],
     /// Radial velocity estimate, m/s (signed).
     pub doppler_mps: f64,
+    /// Doppler estimate variance, (m/s)² (ADR-281 lifecycle fields).
+    pub doppler_variance: f64,
     /// Coarse motion class.
     pub motion: MotionState,
     /// Confidence in `[0, 1]`.
     pub confidence: f64,
+    /// First-observed timestamp, ns since epoch (static structure is
+    /// distinguishable from transients by lifetime, not just decay τ).
+    pub first_seen_ns: u64,
     /// Last-updated timestamp, ns since epoch.
     pub timestamp_ns: u64,
     /// Confidence e-folding time in seconds (decay clock).
     pub decay_tau_s: f64,
     /// Evidence provenance.
     pub provenance: Provenance,
+    /// Receipt ids of the source frames that shaped this Gaussian
+    /// (measurement→inference lineage; capped on fusion).
+    pub source_receipts: Vec<u128>,
     /// Links into the scene graph / RuVector entities.
     pub links: Vec<EntityLink>,
 }
+
+/// Maximum receipts retained per Gaussian after fusion (bounded lineage).
+pub const MAX_SOURCE_RECEIPTS: usize = 16;
 
 impl RfGaussian {
     /// Validated constructor: normalizes the quaternion and range-checks
@@ -175,11 +186,14 @@ impl RfGaussian {
             semantic: [0.0; SEMANTIC_DIM],
             reflectivity: [[0.0; ANGLE_BINS]; Band::COUNT],
             doppler_mps: 0.0,
+            doppler_variance: 0.0,
             motion: MotionState::Static,
             confidence,
+            first_seen_ns: timestamp_ns,
             timestamp_ns,
             decay_tau_s,
             provenance,
+            source_receipts: Vec::new(),
             links: Vec::new(),
         })
     }

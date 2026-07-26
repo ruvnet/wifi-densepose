@@ -28,13 +28,21 @@ pub const CANONICAL_SNAPSHOTS: usize = 8;
 pub enum RfModality {
     /// 802.11 Channel State Information (per-subcarrier frequency response).
     WifiCsi,
+    /// 802.11 channel impulse response (delay-domain taps).
+    WifiCir,
+    /// 802.11 beamforming feedback report (BFI/BFLD path).
+    WifiBfReport,
     /// 5G NR uplink Sounding Reference Signal frequency response (O-RAN ISAC path).
     CellularSrs,
     /// FMCW radar range profile (post range-FFT complex bins).
     FmcwRadar,
+    /// FMCW radar range–azimuth map.
+    FmcwRangeAzimuth,
+    /// FMCW radar Doppler–azimuth map.
+    FmcwDopplerAzimuth,
     /// Ultra-wideband channel impulse response taps.
     UwbCir,
-    /// Bluetooth Channel Sounding tones.
+    /// Bluetooth Channel Sounding tones (phase-based ranging + RTT).
     BleCs,
     /// Output of the ADR-276 synthetic world generator (honest labeling:
     /// tensors of this modality must never be reported as measured).
@@ -204,6 +212,37 @@ impl RfTensor {
     pub fn wavelength_m(&self) -> f64 {
         299_792_458.0 / self.center_freq_hz
     }
+
+    /// Delay–Doppler magnitude map for one link (ADR-281 §3): IDFT over the
+    /// frequency axis (→ delay bins) crossed with a DFT over the snapshot
+    /// axis (→ Doppler bins). Shape `(bins, snapshots)`.
+    ///
+    /// Delay-Doppler-native modalities (OTFS ISAC, radar) must not be
+    /// collapsed into scalar motion energy before storage — this transform
+    /// keeps the native representation queryable locally.
+    pub fn delay_doppler_map(&self, link: usize) -> crate::Result<ndarray::Array2<f64>> {
+        let (n_links, n_bins, n_snaps) = self.dims();
+        if link >= n_links {
+            return Err(crate::UnifiedError::DimensionMismatch(format!(
+                "link {link} out of range ({n_links} links)"
+            )));
+        }
+        let mut out = ndarray::Array2::zeros((n_bins, n_snaps));
+        for d in 0..n_bins {
+            for v in 0..n_snaps {
+                let mut acc = Complex64::new(0.0, 0.0);
+                for b in 0..n_bins {
+                    for s in 0..n_snaps {
+                        let ang = 2.0 * std::f64::consts::PI
+                            * ((b * d) as f64 / n_bins as f64 - (s * v) as f64 / n_snaps as f64);
+                        acc += self.data[[link, b, s]] * Complex64::new(ang.cos(), ang.sin());
+                    }
+                }
+                out[[d, v]] = acc.norm() / (n_bins * n_snaps) as f64;
+            }
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -241,6 +280,29 @@ mod tests {
         // 2.437 GHz → λ ≈ 0.1230 m.
         assert!((t.wavelength_m() - 0.123_017).abs() < 1e-4);
         assert!((t.links[0].distance_m() - 5.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn delay_doppler_map_localizes_a_synthetic_target() {
+        // A scatterer at delay bin 7 with Doppler bin 3:
+        // H[b,s] = exp(-j2πb·7/B) · exp(+j2πs·3/S) ⇒ single peak at (7, 3).
+        let (d0, v0) = (7usize, 3usize);
+        let data = Array3::from_shape_fn((1, CANONICAL_BINS, CANONICAL_SNAPSHOTS), |(_, b, s)| {
+            let ang = -2.0 * std::f64::consts::PI * (b * d0) as f64 / CANONICAL_BINS as f64
+                + 2.0 * std::f64::consts::PI * (s * v0) as f64 / CANONICAL_SNAPSHOTS as f64;
+            Complex64::new(ang.cos(), ang.sin())
+        });
+        let t = build(data, vec![link()]).expect("valid tensor");
+        let map = t.delay_doppler_map(0).expect("map");
+        assert!((map[[d0, v0]] - 1.0).abs() < 1e-9, "peak must be unit at ({d0},{v0})");
+        for d in 0..CANONICAL_BINS {
+            for v in 0..CANONICAL_SNAPSHOTS {
+                if (d, v) != (d0, v0) {
+                    assert!(map[[d, v]] < 1e-9, "leakage at ({d},{v}): {}", map[[d, v]]);
+                }
+            }
+        }
+        assert!(t.delay_doppler_map(5).is_err(), "out-of-range link is a typed error");
     }
 
     #[test]

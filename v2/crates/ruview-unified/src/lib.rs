@@ -30,9 +30,16 @@
 //!   [`policy::BoundedEvent`] (uncertainty + provenance + model version +
 //!   purpose, all mandatory) is exportable, and unknown zones/purposes deny.
 
+// The numeric kernels (encoder forward/backward, low-rank heads) index
+// several parallel arrays per iteration; index loops are the clearest and
+// equally fast form there.
+#![allow(clippy::needless_range_loop)]
+
 pub mod adapters;
+pub mod control;
 pub mod encoder;
 pub mod eval;
+pub mod frame;
 pub mod gaussian;
 pub mod heads;
 pub mod math;

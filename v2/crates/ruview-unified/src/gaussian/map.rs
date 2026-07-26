@@ -134,11 +134,20 @@ impl GaussianMap {
                     }
                 }
                 e.doppler_mps = (wa * e.doppler_mps + wb * g.doppler_mps) / wsum;
+                e.doppler_variance = (wa * e.doppler_variance + wb * g.doppler_variance) / wsum;
                 e.confidence = (wa + wb - wa * wb).clamp(0.0, 1.0);
+                e.first_seen_ns = e.first_seen_ns.min(g.first_seen_ns);
                 if g.timestamp_ns >= e.timestamp_ns {
                     e.timestamp_ns = g.timestamp_ns;
                     e.provenance = g.provenance;
                     e.motion = g.motion;
+                }
+                for r in g.source_receipts {
+                    if !e.source_receipts.contains(&r)
+                        && e.source_receipts.len() < super::primitive::MAX_SOURCE_RECEIPTS
+                    {
+                        e.source_receipts.push(r);
+                    }
                 }
                 for link in g.links {
                     if !e.links.contains(&link) {
