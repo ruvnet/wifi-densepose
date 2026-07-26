@@ -1,6 +1,6 @@
 [package]
 name = "wifi-densepose-nn"
-version = "0.3.1"
+version = "0.3.2"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
