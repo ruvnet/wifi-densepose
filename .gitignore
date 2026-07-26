@@ -291,3 +291,8 @@ harness/**/ruvector.db
 # ruvector runtime/hook DB — never tracked (any depth)
 ruvector.db
 **/ruvector.db
+
+# sensing-server runtime artifacts written by its test suite (trained model
+# snapshots + the generated session-secret) — never tracked
+v2/crates/wifi-densepose-sensing-server/data/
+*.proptest-regressions

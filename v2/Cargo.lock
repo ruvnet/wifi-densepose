@@ -7676,6 +7676,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruview-unified"
+version = "0.3.0"
+dependencies = [
+ "criterion",
+ "ndarray 0.17.2",
+ "num-complex",
+ "proptest",
+ "rand 0.8.5",
+ "rand_chacha 0.3.1",
+ "serde",
+ "thiserror 2.0.18",
+ "wifi-densepose-core",
+ "wifi-densepose-hardware",
+]
+
+[[package]]
 name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -25,6 +25,7 @@ Dual codebase: Python v1 (`v1/`) and Rust port (`v2/`).
 | `vendor/rufield` (submodule) | **RuField MFS** — the open spec for camera-free multimodal field sensing (ADR-260). A common `FieldEvent`/`FieldTensor`/`FusionGraph`/`PrivacyClass`/`ProvenanceReceipt` model *above* WiFi CSI/CIR/BFLD, UWB, BLE Channel Sounding, mmWave radar, ultrasound, subsonic, infrared, and quantum sensors. Lives in its own repo ([github.com/ruvnet/rufield](https://github.com/ruvnet/rufield)), vendored here under `vendor/rufield`. Not a `v2/` workspace member. v0.1 reference stack = 7 crates (`rufield-core`/`-provenance`/`-privacy`/`-adapters`/`-fusion`/`-bench`/`-viewer`), 72 tests/0 failed; `rufield-viewer` is an Axum + vanilla-JS read-only dashboard (`cargo run -p rufield-viewer`) completing ADR-260 §27.9. The WiFi-CSI modality is now **real-replay-backed** via `CsiReplayAdapter` (ingests real captured `.csi.jsonl` → fused presence/breathing inferences; replay-from-file, unlabeled CSI-variance proxy, not validated accuracy); mmWave/thermal + all synthetic-bench F1 numbers remain **SYNTHETIC** (no live hardware — live streaming + labeled accuracy are roadmap). |
 | `wifi-densepose-rufield` | ADR-262 P1 **anti-corruption bridge** — converts RuView WiFi-CSI sensing output (`SensingSnapshot` mirroring `SensingUpdate` + `TrustedOutput`, owned primitives, no dep on `wifi-densepose-sensing-server`) into **signed RuField `FieldEvent`s** (`Modality::WifiCsi`, real `timestamp_ns`, sha256 + ed25519 provenance, `synthetic=false`). The single coupling point between RuView and the standalone RuField MFS spec (§5.4); path-deps the `vendor/rufield` submodule crates (`rufield-core`/`-provenance`/`-privacy`/`-fusion`). **Critical §3.3 privacy mapping** (`map_privacy`): maps RuView class → RuField P0–P5 by **information content, never byte value**, fail-closed (`Derived → P4/P5`, never P1; `demoted` floors to ≥ P2). 15 tests / 0 failed (round-trip / `is_fusable` / fusion-ingest / privacy-safety / determinism). P1 plumbing — not wired into the live server (P3), no accuracy claim. |
 | `ruview-swarm` | Drone swarm control system (ADR-148) — hierarchical-mesh topology, Raft consensus, MARL, CSI sensing payload, MAVLink/PX4 compat, Ruflo AI-agent integration |
+| `ruview-unified` | ADR-273..282 **unified RF spatial world model**: authoritative native `RfFrameV2` frame contract (native IQ never overwritten, phase-state/evidence-ladder/provenance invariants) with the canonical `RfTensor` as a derived view; fail-closed hardware adapter registry (WiFi CSI / FMCW cube / UWB CIR / 5G SRS / BLE Channel Sounding with phase-vs-RTT cross-validated ranging); universal RF foundation encoder (masked-reconstruction pretraining with finite-difference-verified backprop, `z = Enc ⊙ σ(AgeEnc(log age)) + Geom` fusion, ≤1% scalar / <2% structured task adapters incl. RePos-factorized pose); RF-aware Gaussian spatial memory (fusion/decay/channel-gain queries + inverse updates, lineage receipts, task-gated scene graph); physics-guided synthetic RF world generator (image-method multipath, Fresnel materials, emergent Doppler, seeded domain randomization); edge sensing control plane (802.11bf/ETSI-ISAC purposes/zones/tasks, AoI active-sensing planner, fail-closed coherent-aperture fusion, governed RIS actuation; raw RF structurally unexportable); delay-Doppler-native transforms. Pure Rust leaf; all accuracy numbers SYNTHETIC (evidence level L0) until real-data validation. |
 
 ### RuvSense Modules (`signal/src/ruvsense/`)
 | Module | Purpose |
@@ -62,7 +63,7 @@ All 5 ruvector crates integrated in workspace:
 - `ruvector-attention` → `model.rs` (apply_spatial_attention) + `bvp.rs`
 
 ### Architecture Decisions
-182 ADRs in `docs/adr/` (numbered ADR-001 through ADR-265, with gaps). Key ones:
+205 ADRs in `docs/adr/` (numbered ADR-001 through ADR-282, with gaps). Key ones:
 - ADR-014: SOTA signal processing (Accepted)
 - ADR-015: MM-Fi + Wi-Pose training datasets (Accepted)
 - ADR-016: RuVector training pipeline integration (Accepted — complete)
@@ -81,6 +82,16 @@ All 5 ruvector crates integrated in workspace:
 - ADR-263: `@ruvnet/ruview` npm harness deep review + optimization strategy (Proposed)
 - ADR-264: `@ruvnet/rvagent` MCP server + `@ruv/ruview-cli` deep review + optimization strategy (Proposed)
 - ADR-265: RuView npm distribution strategy — CI gate, provenance, version single-sourcing (Proposed)
+- ADR-273: Unified RF spatial world model — umbrella + anti-leakage evaluation protocol + acceptance gates (Accepted — P1 implemented in `ruview-unified`)
+- ADR-274: Universal RF foundation encoder + hardware adapter registry (Accepted — P1 implemented)
+- ADR-275: RF-aware Gaussian spatial memory — fusion, decay, channel-gain queries, inverse updates, task-gated scene graph (Accepted — P1 implemented)
+- ADR-276: Physics-guided synthetic RF world generator — randomize physics, not textures (Accepted — P1 implemented)
+- ADR-277: Edge sensing control plane — purposes/zones/retention/identity double-gate; raw RF unexportable (Accepted — P1 implemented)
+- ADR-278: Radar inverse rendering + differentiable RF SLAM research program — RISE/DiffRadar/GeRaF reproduction gates (Proposed)
+- ADR-279: Native RF frame contract — `RfFrameV2` authoritative, canonical tensor demoted to derived view; 7 invariants; split manifest with session dimension (Accepted — implemented)
+- ADR-280: Active sensing & programmable perception — sensing tasks/actions, AoI freshness scheduler (95% traffic reduction measured), fail-closed coherent-aperture fusion, governed RIS actuation, task-sufficient representations (Accepted — implemented)
+- ADR-281: BLE Channel Sounding (phase vs RTT cross-validated ranging), delay-Doppler-native tensors, IEEE P3162 import profile, RePos factorized pose (Accepted — implemented)
+- ADR-282: Ecosystem positioning — RuView as edge RF perception runtime; RuField/RuVector/MetaHarness layering; mandatory L0–L5 evidence ladder (Accepted)
 
 ### Supported Hardware
 

@@ -146,7 +146,7 @@ impl PpduType {
 ///   bit 3   : LDPC (reserved — not yet populated by firmware)
 ///   bit 4   : 802.15.4 time-sync valid (C6 only)
 ///   bit 5-7 : reserved
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Adr018Flags {
     pub bw40: bool,
     pub stbc: bool,
@@ -170,12 +170,6 @@ impl Adr018Flags {
         if self.ldpc { b |= 0x08; }
         if self.ieee802154_sync_valid { b |= 0x10; }
         b
-    }
-}
-
-impl Default for Adr018Flags {
-    fn default() -> Self {
-        Self { bw40: false, stbc: false, ldpc: false, ieee802154_sync_valid: false }
     }
 }
 

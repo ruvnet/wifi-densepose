@@ -588,6 +588,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_temp_file_is_never_world_readable_even_for_an_instant() {
         // The test above checks the FINAL file. It passed while `save` wrote via
