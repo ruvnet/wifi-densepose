@@ -964,7 +964,6 @@ pub fn score_to_person_count(smoothed_score: f64, prev_count: usize) -> usize {
     }
 }
 
-/// Generate a simulated ESP32 frame for testing/demo mode.
 /// Generate a simple timestamp (epoch seconds) for recording IDs.
 pub fn chrono_timestamp() -> u64 {
     std::time::SystemTime::now()

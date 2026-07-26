@@ -113,7 +113,11 @@ pub async fn start_server(
     // the server will report "waiting_for_hardware" (issue #1125:
     // no simulator fallback). Users can explicitly select "esp32" or "wifi"
     // if they need to lock to a specific source.
-    let source = config.source.as_deref().unwrap_or("auto");
+    // Normalize invalid sources (e.g., old configs with "simulate") to "auto".
+    let source = match config.source.as_deref() {
+        Some("auto") | Some("esp32") | Some("wifi") => config.source.as_deref().unwrap(),
+        _ => "auto", // Fallback for invalid/missing values (including removed "simulate")
+    };
     cmd.args(["--source", source]);
 
     // Redirect stdout/stderr to pipes for monitoring
