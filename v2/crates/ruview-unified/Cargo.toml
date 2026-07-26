@@ -31,6 +31,11 @@ rand_chacha = { version = "0.3", default-features = false }
 [dev-dependencies]
 criterion = { workspace = true }
 proptest = { workspace = true }
+# Dev-only: bridges real ESP32 ADR-018 UDP captures (wifi-densepose-hardware's
+# already-proven Esp32CsiParser) into wifi_densepose_core::CsiFrame for the
+# `esp32_live_hardware_test` example. Does not affect the published dependency
+# graph — the crate's real dependency stays thin-dependency (see above).
+wifi-densepose-hardware = { workspace = true }
 
 [[bench]]
 name = "unified_bench"

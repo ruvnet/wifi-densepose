@@ -7688,6 +7688,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "wifi-densepose-core",
+ "wifi-densepose-hardware",
 ]
 
 [[package]]

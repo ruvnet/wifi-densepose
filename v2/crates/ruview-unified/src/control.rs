@@ -114,6 +114,15 @@ pub fn admit_task(engine: &PolicyEngine, task: &SensingTask) -> Result<()> {
     if !(task.minimum_confidence.is_finite() && (0.0..=1.0).contains(&task.minimum_confidence)) {
         return Err(UnifiedError::InvalidInput("minimum_confidence must be in [0,1]".into()));
     }
+    if !(task.requested_resolution_m.is_finite() && task.requested_resolution_m > 0.0) {
+        return Err(UnifiedError::InvalidInput("requested_resolution_m must be finite and > 0".into()));
+    }
+    if task.maximum_latency_ms == 0 {
+        return Err(UnifiedError::InvalidInput("maximum_latency_ms must be > 0".into()));
+    }
+    if task.modalities.is_empty() {
+        return Err(UnifiedError::InvalidInput("a sensing task must declare at least one modality".into()));
+    }
     if task.purpose == SensingPurpose::IdentityRecognition && task.consent_reference.is_none() {
         return Err(UnifiedError::PolicyDenied(
             "identity recognition tasks require a consent reference".into(),
@@ -662,5 +671,47 @@ mod tests {
         let mut orphan = rep(PrivacyClass::P2, &["identity", "vitals"]);
         orphan.source_receipts.clear();
         assert!(validate_representation(&orphan, SensingPurpose::Presence).is_err());
+    }
+
+    /// Only `Presence` was ever exercised above; the other three
+    /// ceiling/exclusion-set branches (Activity/Localization at P3,
+    /// Vitals/PoseTracking at P4, IdentityRecognition at P5) had zero test
+    /// coverage — a bug in any of them would go undetected.
+    #[test]
+    fn task_sufficient_representation_covers_every_purpose_branch() {
+        let rep = |class: PrivacyClass, excluded: &[&str]| TaskSufficientRepresentation {
+            task_id: 6,
+            source_receipts: vec![1],
+            semantic_state: vec![0.2],
+            information_bound_bits: 4.0,
+            excluded_information: excluded.iter().map(|s| (*s).to_string()).collect(),
+            privacy_class: class,
+        };
+
+        for purpose in [SensingPurpose::Activity, SensingPurpose::Localization] {
+            // P3 ceiling excluding identity: fine.
+            assert!(validate_representation(&rep(PrivacyClass::P3, &["identity"]), purpose).is_ok());
+            // Forgot to exclude identity: deny.
+            assert!(validate_representation(&rep(PrivacyClass::P3, &[]), purpose).is_err());
+            // Above the P3 ceiling: deny.
+            assert!(validate_representation(&rep(PrivacyClass::P4, &["identity"]), purpose).is_err());
+        }
+
+        for purpose in [SensingPurpose::Vitals, SensingPurpose::PoseTracking] {
+            // P4 ceiling excluding identity: fine.
+            assert!(validate_representation(&rep(PrivacyClass::P4, &["identity"]), purpose).is_ok());
+            // Forgot to exclude identity: deny.
+            assert!(validate_representation(&rep(PrivacyClass::P4, &[]), purpose).is_err());
+            // Above the P4 ceiling: deny.
+            assert!(validate_representation(&rep(PrivacyClass::P5, &["identity"]), purpose).is_err());
+        }
+
+        // IdentityRecognition: P5 ceiling, nothing required to be excluded.
+        assert!(validate_representation(&rep(PrivacyClass::P5, &[]), SensingPurpose::IdentityRecognition)
+            .is_ok());
+        // Still bounded — no class exceeds P5, so exercise the lineage guard instead.
+        let mut orphan = rep(PrivacyClass::P5, &[]);
+        orphan.source_receipts.clear();
+        assert!(validate_representation(&orphan, SensingPurpose::IdentityRecognition).is_err());
     }
 }

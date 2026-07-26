@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use ndarray::{Array3, Axis};
 use num_complex::Complex64;
-use wifi_densepose_core::types::CsiFrame;
+use wifi_densepose_core::types::{CsiFrame, FrequencyBand};
 
 use crate::math::{linear_slope, median, resample_complex};
 use crate::tensor::{
@@ -378,6 +378,28 @@ impl WifiCsiAdapter {
     }
 }
 
+/// IEEE 802.11 channel-number → center-frequency, in MHz.
+///
+/// `CsiMetadata::frequency_band` alone only identifies which ~100 MHz-wide
+/// band a capture came from (a fixed per-band constant), not the actual
+/// channel — using the band constant directly misreports every channel
+/// except the one it happens to match (2.4 GHz channel 6, 5 GHz channel 36),
+/// by up to tens of MHz on 2.4 GHz and hundreds of MHz on 5/6 GHz. Falls back
+/// to the band constant only when the channel number is out of the known
+/// range (e.g. `0`, meaning "unknown").
+fn channel_center_freq_mhz(band: FrequencyBand, channel: u8) -> f64 {
+    match band {
+        FrequencyBand::Band2_4GHz => match channel {
+            1..=13 => 2407.0 + 5.0 * f64::from(channel),
+            14 => 2484.0,
+            _ => f64::from(band.center_frequency_mhz()),
+        },
+        FrequencyBand::Band5GHz if channel > 0 => 5000.0 + 5.0 * f64::from(channel),
+        FrequencyBand::Band6GHz if channel > 0 => 5950.0 + 5.0 * f64::from(channel),
+        FrequencyBand::Band5GHz | FrequencyBand::Band6GHz => f64::from(band.center_frequency_mhz()),
+    }
+}
+
 impl RfAdapter for WifiCsiAdapter {
     fn modality(&self) -> RfModality {
         RfModality::WifiCsi
@@ -419,7 +441,7 @@ impl RfAdapter for WifiCsiAdapter {
         let snr_db =
             frames.iter().map(|f| f.metadata.snr_db()).sum::<f64>() / frames.len() as f64;
         let uncertainty = (1.0 - snr_db / 40.0).clamp(0.0, 1.0);
-        let center_freq_hz = f64::from(meta.frequency_band.center_frequency_mhz()) * 1e6;
+        let center_freq_hz = channel_center_freq_mhz(meta.frequency_band, meta.channel) * 1e6;
         let ts = &meta.timestamp;
         let timestamp_ns = u64::try_from(ts.seconds).unwrap_or(0) * 1_000_000_000 + u64::from(ts.nanos);
         normalize_grid(

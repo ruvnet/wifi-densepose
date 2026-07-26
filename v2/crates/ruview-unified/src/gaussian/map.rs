@@ -185,7 +185,12 @@ impl GaussianMap {
         for g in &mut self.gaussians {
             let dt_s = (now_ns.saturating_sub(g.timestamp_ns)) as f64 / 1e9;
             let lifetime_s = (g.timestamp_ns.saturating_sub(g.first_seen_ns)) as f64 / 1e9;
-            let tau_eff = g.decay_tau_s * (1.0 + (1.0 + lifetime_s / g.decay_tau_s).ln());
+            // `RfGaussian::new` validates `decay_tau_s > 0`, but the field is
+            // mutable after construction (`gaussians_mut`); re-clamp here so a
+            // stray zero/negative value can't turn this division into NaN
+            // instead of a merely-fast decay.
+            let tau = g.decay_tau_s.max(1e-6);
+            let tau_eff = tau * (1.0 + (1.0 + lifetime_s / tau).ln());
             g.confidence *= (-dt_s / tau_eff).exp();
         }
         self.gaussians.retain(|g| g.confidence >= PRUNE_CONFIDENCE);
@@ -209,6 +214,18 @@ impl GaussianMap {
                     continue;
                 }
                 let (a, b) = (&self.gaussians[i], &self.gaussians[j]);
+                // Same entity-kind gate as `insert` (§3.2): never conflate
+                // Gaussians linked to different entity kinds (e.g. a Room
+                // structure and a PersonClass detection sitting within each
+                // other's merge gate near a doorway).
+                let same_kind = match (a.links.first(), b.links.first()) {
+                    (Some(la), Some(lb)) => la.kind == lb.kind,
+                    (None, None) => true,
+                    _ => false,
+                };
+                if !same_kind {
+                    continue;
+                }
                 let mutual = a.mahalanobis_sq(b.position) < MERGE_MAHALANOBIS_SQ
                     && b.mahalanobis_sq(a.position) < MERGE_MAHALANOBIS_SQ;
                 if !mutual {

@@ -239,9 +239,15 @@ proptest! {
     }
 
     /// Representation validation never approves an identity-retaining
-    /// occupancy representation, whatever the other fields say.
+    /// occupancy representation, whatever the other fields say — checked
+    /// across *every* `SensingPurpose` branch (each has a distinct ceiling
+    /// and exclusion set in `validate_representation`; testing only
+    /// `Presence`, as this property previously did, leaves the other three
+    /// branches — covering P3–P5, the higher-risk representations —
+    /// completely unverified).
     #[test]
     fn occupancy_representations_must_exclude_identity(
+        purpose in any_purpose(),
         class in prop_oneof![
             Just(PrivacyClass::P0), Just(PrivacyClass::P1), Just(PrivacyClass::P2),
             Just(PrivacyClass::P3), Just(PrivacyClass::P4), Just(PrivacyClass::P5)
@@ -257,12 +263,33 @@ proptest! {
             excluded_information: excluded.clone(),
             privacy_class: class,
         };
-        let verdict = validate_representation(&rep, SensingPurpose::Presence);
-        let excludes_required = excluded.iter().any(|e| e == "identity")
-            && excluded.iter().any(|e| e == "vitals");
+        let verdict = validate_representation(&rep, purpose);
+        // Oracle mirrors the (ceiling, must_exclude) table in
+        // `control::validate_representation` so this property checks the
+        // *contract* per purpose group, not just the Presence case.
+        let (ceiling, must_exclude): (PrivacyClass, &[&str]) = match purpose {
+            SensingPurpose::Presence | SensingPurpose::ChannelDiagnostics => {
+                (PrivacyClass::P2, &["identity", "vitals"])
+            }
+            SensingPurpose::Activity | SensingPurpose::Localization => {
+                (PrivacyClass::P3, &["identity"])
+            }
+            SensingPurpose::Vitals | SensingPurpose::PoseTracking => {
+                (PrivacyClass::P4, &["identity"])
+            }
+            SensingPurpose::IdentityRecognition => (PrivacyClass::P5, &[]),
+        };
+        let excludes_required =
+            must_exclude.iter().all(|c| excluded.iter().any(|e| e == c));
         if verdict.is_ok() {
-            prop_assert!(excludes_required, "approved rep must exclude identity+vitals");
-            prop_assert!(class <= PrivacyClass::P2, "approved rep must respect the ceiling");
+            prop_assert!(
+                excludes_required,
+                "approved rep for {:?} must exclude {:?}", purpose, must_exclude
+            );
+            prop_assert!(
+                class <= ceiling,
+                "approved rep for {:?} must respect ceiling {:?}", purpose, ceiling
+            );
         }
     }
 }

@@ -132,6 +132,12 @@ pub fn resample_complex(x: &[Complex64], m: usize) -> Vec<Complex64> {
     if n == 1 {
         return vec![x[0]; m];
     }
+    if m == 1 {
+        // `(m - 1)` would divide by zero below; a single output point is the
+        // mean of the series rather than an arbitrary NaN-poisoned sample.
+        let sum: Complex64 = x.iter().copied().sum();
+        return vec![sum / n as f64];
+    }
     let mut out = Vec::with_capacity(m);
     for j in 0..m {
         let pos = (j as f64) * ((n - 1) as f64) / ((m - 1) as f64);

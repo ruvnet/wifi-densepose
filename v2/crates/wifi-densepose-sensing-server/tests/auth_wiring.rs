@@ -66,48 +66,64 @@ impl Server {
     /// test in the suite that observes real wiring disarmed itself exactly when
     /// it mattered; a boot-time panic in the auth path would have shipped green.
     fn start(env: &[(&str, &str)]) -> Self {
-        let (http, ws, udp) = (free_port(), free_port(), free_port());
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_sensing-server"));
-        cmd.args([
-            "--http-port", &http.to_string(),
-            "--ws-port", &ws.to_string(),
-            "--udp-port", &udp.to_string(),
-            "--bind-addr", "127.0.0.1",
-            "--no-edge-registry",
-            "--source", "simulate",
-        ])
-        // Inherit nothing auth-related from the developer's shell, or a local
-        // RUVIEW_* export would silently change what this test proves.
-        .env_remove("RUVIEW_API_TOKEN")
-        .env_remove("RUVIEW_OAUTH_ISSUER")
-        .env_remove("RUVIEW_WS_LEGACY_UNAUTHENTICATED")
-        .stdout(Stdio::null())
-        // Captured, not discarded: if the server dies at boot, its stderr is the
-        // only thing that says why, and the panic below reproduces it.
-        .stderr(Stdio::piped());
-        for (k, v) in env {
-            cmd.env(k, v);
-        }
-        let mut child = cmd.spawn().expect("spawn sensing-server");
-        let http_port = http;
-        let ws_port = ws;
-        if !await_ready(http_port, ws_port) {
+        // `free_port()` releases the port before the child binds it, so under
+        // parallel `cargo test` execution another test's server can grab the
+        // same ephemeral port first (observed as `Os { code: 10048/98, kind:
+        // AddrInUse }` on the child's actual bind, distinct from a genuine
+        // auth-wiring break). Retry a bounded number of times on THAT specific
+        // signature only — any other boot failure (including a real wiring
+        // regression) still panics on the first attempt, preserving the
+        // fail-loud property described above.
+        const MAX_ATTEMPTS: u32 = 3;
+        for attempt in 1..=MAX_ATTEMPTS {
+            let (http, ws, udp) = (free_port(), free_port(), free_port());
+            let mut cmd = Command::new(env!("CARGO_BIN_EXE_sensing-server"));
+            cmd.args([
+                "--http-port", &http.to_string(),
+                "--ws-port", &ws.to_string(),
+                "--udp-port", &udp.to_string(),
+                "--bind-addr", "127.0.0.1",
+                "--no-edge-registry",
+                "--source", "simulate",
+            ])
+            // Inherit nothing auth-related from the developer's shell, or a local
+            // RUVIEW_* export would silently change what this test proves.
+            .env_remove("RUVIEW_API_TOKEN")
+            .env_remove("RUVIEW_OAUTH_ISSUER")
+            .env_remove("RUVIEW_WS_LEGACY_UNAUTHENTICATED")
+            .stdout(Stdio::null())
+            // Captured, not discarded: if the server dies at boot, its stderr is the
+            // only thing that says why, and the panic below reproduces it.
+            .stderr(Stdio::piped());
+            for (k, v) in env {
+                cmd.env(k, v);
+            }
+            let mut child = cmd.spawn().expect("spawn sensing-server");
+            if await_ready(http, ws) {
+                return Server { child, http, ws };
+            }
             let mut err = String::new();
             if let Some(mut s) = child.stderr.take() {
                 let _ = s.read_to_string(&mut err);
             }
             let _ = child.kill();
             let _ = child.wait();
+            let looks_like_port_collision =
+                err.contains("AddrInUse") || err.contains("Address already in use")
+                    || err.contains("code: 10048") || err.contains("code: 98");
+            if looks_like_port_collision && attempt < MAX_ATTEMPTS {
+                continue;
+            }
             panic!(
-                "sensing-server did not become ready on :{http_port} (http) and :{ws_port} (ws) \
-                 within 30s. This is a FAILURE, not a skip — the wiring assertions below cannot \
-                 run, and a boot-time break in the auth path is exactly what they exist to catch.\n\
+                "sensing-server did not become ready on :{http} (http) and :{ws} (ws) \
+                 within 30s (attempt {attempt}/{MAX_ATTEMPTS}). This is a FAILURE, not a skip — \
+                 the wiring assertions below cannot run, and a boot-time break in the auth path \
+                 is exactly what they exist to catch.\n\
                  --- server stderr ---\n{err}"
             );
         }
-        Server { child, http: http_port, ws: ws_port }
+        unreachable!("loop always returns or panics");
     }
-
 }
 
 fn await_ready(http: u16, ws: u16) -> bool {

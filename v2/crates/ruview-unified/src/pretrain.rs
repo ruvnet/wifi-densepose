@@ -193,6 +193,12 @@ pub struct PretrainReport {
 }
 
 fn sample_mask(rng: &mut rand_chacha::ChaCha20Rng, n_tokens: usize, fraction: f64) -> Vec<usize> {
+    // A window with fewer than 2 tokens has nothing left to reconstruct from
+    // once one token is masked; return an empty mask rather than panicking
+    // (`clamp(1, n_tokens - 1)` is invalid once `n_tokens - 1 < 1`).
+    if n_tokens < 2 {
+        return Vec::new();
+    }
     let n_mask = ((n_tokens as f64 * fraction).round() as usize).clamp(1, n_tokens - 1);
     let mut idx: Vec<usize> = (0..n_tokens).collect();
     idx.shuffle(rng);
@@ -216,12 +222,16 @@ pub fn pretrain(
         .map(|w| sample_mask(&mut rng, w.tokens.len(), cfg.mask_fraction))
         .collect();
     let eval = |e: &RfEncoder| {
-        windows
-            .iter()
-            .zip(&eval_masks)
-            .map(|(w, m)| masked_loss(e, &w.tokens, m, WindowContext::from(w)))
-            .sum::<f64>()
-            / windows.len() as f64
+        let mut total = 0.0;
+        let mut n = 0usize;
+        for (w, m) in windows.iter().zip(&eval_masks) {
+            if m.is_empty() {
+                continue;
+            }
+            total += masked_loss(e, &w.tokens, m, WindowContext::from(w));
+            n += 1;
+        }
+        if n == 0 { 0.0 } else { total / n as f64 }
     };
 
     let initial_loss = eval(enc);
