@@ -78,6 +78,11 @@ members = [
     "crates/homecore-assist",      # ADR-133 — HOMECORE voice assistant + ruflo bridge
     "crates/homecore-server",      # iter-9 — HOMECORE integration binary (all 8 crates wired together)
     "crates/ruview-swarm",                         # ADR-148 — drone swarm control system
+    # ADR-273..277 — unified RF spatial world model: canonical RF tensor +
+    # hardware adapters, universal foundation encoder (masked-reconstruction
+    # pretraining, ≤1% task adapters), RF-aware Gaussian spatial memory,
+    # physics-guided synthetic RF worlds, edge sensing control plane.
+    "crates/ruview-unified",
     # ADR-262 P1 — anti-corruption bridge converting RuView WiFi-CSI sensing
     # output into signed RuField FieldEvents. Path-deps the `vendor/rufield`
     # submodule crates (rufield-core/-provenance/-privacy/-fusion); single
