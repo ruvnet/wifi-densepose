@@ -151,13 +151,22 @@ impl RfGaussian {
                 return Err(UnifiedError::InvalidInput("non-finite Gaussian field".into()));
             }
         }
-        if scale.iter().any(|s| *s <= 0.0) {
-            return Err(UnifiedError::InvalidInput(format!("scale must be > 0, got {scale:?}")));
+        // Physical plausibility bounds, not just positivity: a subnormal
+        // scale (e.g. 5e-324) passes `> 0` but overflows `1/σ²` to ∞ and
+        // turns the density at the Gaussian's own centre into NaN (found
+        // by `tests/security_boundaries.rs` property testing); a
+        // kilometre-scale σ is equally meaningless indoors.
+        const MIN_SCALE_M: f64 = 1e-6;
+        const MAX_SCALE_M: f64 = 1e4;
+        if scale.iter().any(|s| !(*s >= MIN_SCALE_M && *s <= MAX_SCALE_M)) {
+            return Err(UnifiedError::InvalidInput(format!(
+                "scale must be within [{MIN_SCALE_M}, {MAX_SCALE_M}] m, got {scale:?}"
+            )));
         }
         let norm =
             orientation.iter().map(|q| q * q).sum::<f64>().sqrt();
-        if norm < 1e-9 {
-            return Err(UnifiedError::InvalidInput("zero quaternion".into()));
+        if norm < 1e-6 {
+            return Err(UnifiedError::InvalidInput("degenerate quaternion".into()));
         }
         let orientation = [
             orientation[0] / norm,
@@ -165,8 +174,12 @@ impl RfGaussian {
             orientation[2] / norm,
             orientation[3] / norm,
         ];
-        if !(occupancy.is_finite() && occupancy >= 0.0) {
-            return Err(UnifiedError::InvalidInput(format!("occupancy must be >= 0, got {occupancy}")));
+        // Extinction beyond 1e6 nepers/m is physically meaningless and
+        // only serves to smuggle ∞ into downstream gain products.
+        if !(occupancy.is_finite() && (0.0..=1e6).contains(&occupancy)) {
+            return Err(UnifiedError::InvalidInput(format!(
+                "occupancy must be in [0, 1e6] nepers/m, got {occupancy}"
+            )));
         }
         if !(0.0..=1.0).contains(&confidence) {
             return Err(UnifiedError::InvalidInput(format!(

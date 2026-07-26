@@ -45,6 +45,15 @@ The P1 control plane is transport-agnostic and already fronts the cellular seam:
 - **Reuse BFLD's privacy classes directly** — rejected: BFLD (ADR-120) classifies *captures*; this plane authorizes *outputs by purpose and zone*. They compose (a BFLD-classified capture feeding a head still exits through `TrustBoundary`), and ADR-262's `map_privacy` remains the capture-side mapping.
 - **Config-file allow-lists without types** — rejected: the 19 ETSI issue classes are mostly "the code path existed" failures; unrepresentability beats configuration.
 
+## 5.5 Boundary hardening (property-tested)
+
+`tests/security_boundaries.rs` drives every validated constructor and every authorization gate with `proptest` over arbitrary values — including NaN/±inf smuggled via `f64::from_bits` — and asserts the *contract* (valid object **or** typed error, never a panic, never a permissive default). Three real defects surfaced and were fixed, all input-controlled denial-of-service or NaN-propagation:
+
+1. `ble_cs_range` unwrap looped forever on a **non-finite** phase (`+inf − x = +inf`); a **finite-but-huge** phase (1e300 rad) made the same loop run ~1e299 iterations. Fixed by rejecting implausible phases (> 1e6 rad) and replacing the loop-based unwrap with O(1) modular arithmetic.
+2. A **subnormal** Gaussian scale (5e-324) passed `> 0` but overflowed `1/σ²` to ∞, making the density at the primitive's own centre NaN. Fixed with physical plausibility bounds (σ ∈ [1e-6, 1e4] m, occupancy ∈ [0, 1e6] nepers/m).
+
+The eight properties now proven: tensor/Gaussian/BoundedEvent constructors never panic; `ble_cs_range` never panics and yields only finite non-negative distances; the policy engine is fail-closed for every (purpose, grants, zone) triple; raw export is unreachable for every task configuration; coherent fusion rejects every non-finite or out-of-bounds sync state; occupancy representations can never retain identity.
+
 ## 6. Consequences
 
 - Enterprise/telecom conversations get a concrete artifact: a privacy manifest is a serialization of zones + purposes + retention (all types already `serde`).

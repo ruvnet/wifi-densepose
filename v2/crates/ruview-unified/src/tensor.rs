@@ -220,7 +220,49 @@ impl RfTensor {
     /// Delay-Doppler-native modalities (OTFS ISAC, radar) must not be
     /// collapsed into scalar motion energy before storage — this transform
     /// keeps the native representation queryable locally.
+    ///
+    /// Implemented **separably** — delay IDFT per snapshot, then Doppler
+    /// DFT per delay row: `O(B²S + S²B)` instead of the direct form's
+    /// `O(B²S²)` (equivalence proven in tests, speedup measured in
+    /// `benches/unified_bench.rs`).
     pub fn delay_doppler_map(&self, link: usize) -> crate::Result<ndarray::Array2<f64>> {
+        let (n_links, n_bins, n_snaps) = self.dims();
+        if link >= n_links {
+            return Err(crate::UnifiedError::DimensionMismatch(format!(
+                "link {link} out of range ({n_links} links)"
+            )));
+        }
+        // Stage 1: per snapshot, IDFT over bins → delay columns.
+        let mut delay = ndarray::Array2::from_elem((n_bins, n_snaps), Complex64::new(0.0, 0.0));
+        for s in 0..n_snaps {
+            for d in 0..n_bins {
+                let mut acc = Complex64::new(0.0, 0.0);
+                for b in 0..n_bins {
+                    let ang = 2.0 * std::f64::consts::PI * (b * d) as f64 / n_bins as f64;
+                    acc += self.data[[link, b, s]] * Complex64::new(ang.cos(), ang.sin());
+                }
+                delay[[d, s]] = acc / n_bins as f64;
+            }
+        }
+        // Stage 2: per delay row, DFT over snapshots → Doppler.
+        let mut out = ndarray::Array2::zeros((n_bins, n_snaps));
+        for d in 0..n_bins {
+            for v in 0..n_snaps {
+                let mut acc = Complex64::new(0.0, 0.0);
+                for s in 0..n_snaps {
+                    let ang = -2.0 * std::f64::consts::PI * (s * v) as f64 / n_snaps as f64;
+                    acc += delay[[d, s]] * Complex64::new(ang.cos(), ang.sin());
+                }
+                out[[d, v]] = acc.norm() / n_snaps as f64;
+            }
+        }
+        Ok(out)
+    }
+
+    /// Direct (non-separable) reference implementation of
+    /// [`Self::delay_doppler_map`] — kept for the equivalence test and the
+    /// benchmark baseline.
+    pub fn delay_doppler_map_direct(&self, link: usize) -> crate::Result<ndarray::Array2<f64>> {
         let (n_links, n_bins, n_snaps) = self.dims();
         if link >= n_links {
             return Err(crate::UnifiedError::DimensionMismatch(format!(
@@ -303,6 +345,32 @@ mod tests {
             }
         }
         assert!(t.delay_doppler_map(5).is_err(), "out-of-range link is a typed error");
+    }
+
+    #[test]
+    fn separable_delay_doppler_matches_direct_form() {
+        // Random-ish structured tensor: several scatterers + noise floor.
+        let data = Array3::from_shape_fn((1, CANONICAL_BINS, CANONICAL_SNAPSHOTS), |(_, b, s)| {
+            let a1 = -2.0 * std::f64::consts::PI * (b * 3) as f64 / CANONICAL_BINS as f64
+                + 2.0 * std::f64::consts::PI * (s * 2) as f64 / CANONICAL_SNAPSHOTS as f64;
+            let a2 = -2.0 * std::f64::consts::PI * (b * 11) as f64 / CANONICAL_BINS as f64
+                - 2.0 * std::f64::consts::PI * s as f64 / CANONICAL_SNAPSHOTS as f64;
+            Complex64::new(a1.cos() + 0.4 * a2.cos() + 0.01 * ((b * 7 + s) % 5) as f64,
+                           a1.sin() + 0.4 * a2.sin())
+        });
+        let t = build(data, vec![link()]).expect("valid tensor");
+        let fast = t.delay_doppler_map(0).expect("separable");
+        let direct = t.delay_doppler_map_direct(0).expect("direct");
+        for d in 0..CANONICAL_BINS {
+            for v in 0..CANONICAL_SNAPSHOTS {
+                assert!(
+                    (fast[[d, v]] - direct[[d, v]]).abs() < 1e-10,
+                    "mismatch at ({d},{v}): {} vs {}",
+                    fast[[d, v]],
+                    direct[[d, v]]
+                );
+            }
+        }
     }
 
     #[test]

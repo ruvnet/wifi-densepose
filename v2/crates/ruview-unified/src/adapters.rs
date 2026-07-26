@@ -176,22 +176,44 @@ pub fn ble_cs_range(frame: &BleCsFrame) -> Result<RangingEvidence> {
             frame.phase_samples_rad.len()
         )));
     }
+    // Boundary validation BEFORE unwrapping. Two DoS classes were found
+    // here by `tests/security_boundaries.rs` property testing:
+    // (a) a non-finite phase makes a loop-based unwrap spin forever
+    //     (+inf minus anything stays +inf);
+    // (b) a *finite but huge* phase (e.g. 1e300 rad) makes a loop-based
+    //     unwrap take O(|Δ|/2π) ≈ 1e299 iterations.
+    // Defense: reject implausible values (a tone phase is physically
+    // meaningful mod 2π; |p| > 1e6 rad is garbage), and unwrap in O(1)
+    // via modular arithmetic instead of a loop.
+    const MAX_PLAUSIBLE_PHASE_RAD: f64 = 1e6;
+    if frame
+        .phase_samples_rad
+        .iter()
+        .any(|p| !p.is_finite() || p.abs() > MAX_PLAUSIBLE_PHASE_RAD)
+        || frame.frequency_steps_hz.iter().any(|f| !f.is_finite())
+    {
+        return Err(UnifiedError::InvalidInput(
+            "CS frame contains non-finite or implausible phase/frequency samples".into(),
+        ));
+    }
+    if let Some(rtt) = frame.round_trip_time_ns {
+        if !rtt.is_finite() {
+            return Err(UnifiedError::InvalidInput("non-finite round-trip time".into()));
+        }
+    }
     let df = frame.frequency_steps_hz[1] - frame.frequency_steps_hz[0];
     if !(df.is_finite() && df > 0.0) {
         return Err(UnifiedError::InvalidInput("frequency steps must ascend uniformly".into()));
     }
-    // Unwrap phases across steps, then least-squares slope per Hz.
+    // O(1) unwrap per step: shift each raw phase by the multiple of 2π
+    // that lands it within ±π of its predecessor.
+    let tau = 2.0 * std::f64::consts::PI;
     let mut unwrapped = Vec::with_capacity(n);
     let mut prev = frame.phase_samples_rad[0];
     unwrapped.push(prev);
     for &p in &frame.phase_samples_rad[1..] {
-        let mut v = p;
-        while v - prev > std::f64::consts::PI {
-            v -= 2.0 * std::f64::consts::PI;
-        }
-        while v - prev < -std::f64::consts::PI {
-            v += 2.0 * std::f64::consts::PI;
-        }
+        let delta = (p - prev + std::f64::consts::PI).rem_euclid(tau) - std::f64::consts::PI;
+        let v = prev + delta;
         unwrapped.push(v);
         prev = v;
     }

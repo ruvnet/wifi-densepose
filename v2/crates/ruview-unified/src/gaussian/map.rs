@@ -175,13 +175,105 @@ impl GaussianMap {
 
     /// Applies exponential confidence decay up to `now_ns` and prunes below
     /// [`PRUNE_CONFIDENCE`]. Deterministic: same inputs, same result.
+    ///
+    /// **Static persistence** (ADR-275 update-loop step 7): the effective
+    /// decay constant is stretched by how long the Gaussian has been
+    /// repeatedly observed — `τ_eff = τ · (1 + ln(1 + lifetime/τ))` with
+    /// `lifetime = last_seen − first_seen`. A wall confirmed for hours
+    /// outlives a transient echo seen once, even at equal nominal τ.
     pub fn decay(&mut self, now_ns: u64) {
         for g in &mut self.gaussians {
             let dt_s = (now_ns.saturating_sub(g.timestamp_ns)) as f64 / 1e9;
-            g.confidence *= (-dt_s / g.decay_tau_s).exp();
+            let lifetime_s = (g.timestamp_ns.saturating_sub(g.first_seen_ns)) as f64 / 1e9;
+            let tau_eff = g.decay_tau_s * (1.0 + (1.0 + lifetime_s / g.decay_tau_s).ln());
+            g.confidence *= (-dt_s / tau_eff).exp();
         }
         self.gaussians.retain(|g| g.confidence >= PRUNE_CONFIDENCE);
         self.rebuild_grid();
+    }
+
+    /// Merge pass (ADR-275 update-loop step 5): collapses pairs whose
+    /// centres lie inside each other's merge gate *mutually* and whose
+    /// semantics are compatible (cosine ≥ 0.7, or both unlabeled). The
+    /// survivor absorbs the partner with the same confidence-weighted rule
+    /// as [`Self::insert`] fusion. Returns the number of merges performed.
+    pub fn merge_overlapping(&mut self) -> usize {
+        let mut merged = 0usize;
+        let mut removed = vec![false; self.gaussians.len()];
+        for i in 0..self.gaussians.len() {
+            if removed[i] {
+                continue;
+            }
+            for j in (i + 1)..self.gaussians.len() {
+                if removed[j] {
+                    continue;
+                }
+                let (a, b) = (&self.gaussians[i], &self.gaussians[j]);
+                let mutual = a.mahalanobis_sq(b.position) < MERGE_MAHALANOBIS_SQ
+                    && b.mahalanobis_sq(a.position) < MERGE_MAHALANOBIS_SQ;
+                if !mutual {
+                    continue;
+                }
+                let (na, nb): (f64, f64) = (
+                    a.semantic.iter().map(|v| f64::from(*v).powi(2)).sum(),
+                    b.semantic.iter().map(|v| f64::from(*v).powi(2)).sum(),
+                );
+                let compatible = if na < 1e-12 && nb < 1e-12 {
+                    true // both unlabeled: pure geometry merge
+                } else if na < 1e-12 || nb < 1e-12 {
+                    false // one labeled, one not: keep separate
+                } else {
+                    let dot: f64 = a
+                        .semantic
+                        .iter()
+                        .zip(&b.semantic)
+                        .map(|(x, y)| f64::from(*x) * f64::from(*y))
+                        .sum();
+                    dot / (na.sqrt() * nb.sqrt()) >= 0.7
+                };
+                if !compatible {
+                    continue;
+                }
+                // Fuse j into i (same math as insert-fusion).
+                let partner = self.gaussians[j].clone();
+                let e = &mut self.gaussians[i];
+                let (wa, wb) = (e.confidence, partner.confidence);
+                let wsum = (wa + wb).max(1e-12);
+                for k in 0..3 {
+                    e.position[k] = (wa * e.position[k] + wb * partner.position[k]) / wsum;
+                    e.scale[k] = (wa * e.scale[k] + wb * partner.scale[k]) / wsum;
+                }
+                e.occupancy = (wa * e.occupancy + wb * partner.occupancy) / wsum;
+                for k in 0..SEMANTIC_DIM {
+                    e.semantic[k] = ((f64::from(e.semantic[k]) * wa
+                        + f64::from(partner.semantic[k]) * wb)
+                        / wsum) as f32;
+                }
+                e.confidence = (wa + wb - wa * wb).clamp(0.0, 1.0);
+                e.first_seen_ns = e.first_seen_ns.min(partner.first_seen_ns);
+                e.timestamp_ns = e.timestamp_ns.max(partner.timestamp_ns);
+                for r in partner.source_receipts {
+                    if !e.source_receipts.contains(&r)
+                        && e.source_receipts.len() < super::primitive::MAX_SOURCE_RECEIPTS
+                    {
+                        e.source_receipts.push(r);
+                    }
+                }
+                for link in partner.links {
+                    if !e.links.contains(&link) {
+                        e.links.push(link);
+                    }
+                }
+                removed[j] = true;
+                merged += 1;
+            }
+        }
+        if merged > 0 {
+            let mut keep = removed.iter().map(|r| !r);
+            self.gaussians.retain(|_| keep.next().unwrap_or(true));
+            self.rebuild_grid();
+        }
+        merged
     }
 
     /// Indices of Gaussians whose centres lie within `radius` of `p`, via
@@ -403,6 +495,53 @@ mod tests {
         replay.decay(240_000_000_000);
         assert_eq!(replay.len(), map.len());
         assert_eq!(replay.gaussians()[0].confidence, map.gaussians()[0].confidence);
+    }
+
+    #[test]
+    fn long_lived_structure_outlives_transients_at_equal_tau() {
+        let mut map = GaussianMap::new(1.0);
+        // A wall confirmed over 30 minutes: first_seen 0, last update at
+        // t = 1800 s. A transient echo seen once at t = 1800 s. Same τ = 60 s.
+        let mut wall = g_at([0.0, 0.0, 1.0], 0.9, 1_800_000_000_000);
+        wall.first_seen_ns = 0;
+        let transient = g_at([6.0, 0.0, 1.0], 0.9, 1_800_000_000_000);
+        map.insert(wall);
+        map.insert(transient);
+
+        // 5 minutes after the last observation (τ = 60 s ⇒ transient decays
+        // by e^{-5} ≈ 0.0067 < prune floor; the wall's stretched τ_eff keeps it).
+        map.decay(2_100_000_000_000);
+        assert_eq!(map.len(), 1, "only the long-lived structure survives");
+        assert!((map.gaussians()[0].position[0]).abs() < 1e-9, "survivor is the wall");
+    }
+
+    #[test]
+    fn merge_pass_collapses_mutual_overlaps_but_respects_semantics() {
+        // Two overlapping unlabeled Gaussians that insert-fusion misses
+        // because its gate only scans the ±1-cell neighborhood: with a
+        // 0.05 m cell pitch, 0.40 m spacing is far outside the cell window
+        // yet well inside the 3σ Mahalanobis merge gate (σ = 0.3).
+        let mut map2 = GaussianMap::new(0.05);
+        map2.insert(g_at([1.00, 0.0, 1.0], 0.5, 10));
+        map2.insert(g_at([1.40, 0.0, 1.0], 0.5, 20));
+        assert_eq!(map2.len(), 2, "insert kept them separate (cell-local gate)");
+        let merged = map2.merge_overlapping();
+        assert_eq!(merged, 1, "merge pass collapses the mutual overlap");
+        assert_eq!(map2.len(), 1);
+        let g = &map2.gaussians()[0];
+        assert!((g.position[0] - 1.20).abs() < 1e-9, "confidence-weighted midpoint");
+        assert!((g.confidence - 0.75).abs() < 1e-9, "noisy-OR confidence");
+
+        // Semantically incompatible pair does NOT merge.
+        let mut c = g_at([5.0, 0.0, 1.0], 0.5, 30);
+        c.semantic[0] = 1.0;
+        let mut d = g_at([5.2, 0.0, 1.0], 0.5, 40);
+        d.semantic[1] = 1.0; // orthogonal embedding
+        map2.insert(c);
+        map2.insert(d);
+        let before = map2.len();
+        assert_eq!(map2.merge_overlapping(), 0, "orthogonal semantics must not merge");
+        assert_eq!(map2.len(), before);
     }
 
     #[test]

@@ -33,7 +33,8 @@ Validated constructor (quaternion normalized, ranges checked); anisotropy and ro
 `GaussianMap` (`map.rs`): spatial-hash grid (1 m default pitch) over a flat store.
 
 - **Fusion, not accumulation**: an insert within Mahalanobis² 9 of a same-entity-kind Gaussian merges — confidence-weighted position/scale/occupancy/semantics/reflectivity/Doppler, noisy-OR confidence (`c₁+c₂−c₁c₂`), newest provenance wins, links union. Test: two 0.5-confidence observations 0.1 m apart fuse to one Gaussian at the weighted midpoint with confidence 0.75.
-- **Decay**: exponential confidence decay per Gaussian τ; prune below 0.02; deterministic (replay test).
+- **Decay + static persistence** (update-loop step 7): exponential confidence decay per Gaussian τ, **stretched by observed lifetime** — `τ_eff = τ·(1 + ln(1 + lifetime/τ))` with `lifetime = last_seen − first_seen` — so a wall confirmed over 30 min outlives a once-seen transient at equal nominal τ (test `long_lived_structure_outlives_transients_at_equal_tau`); prune below 0.02; deterministic (replay test).
+- **Merge pass** (update-loop step 5): `merge_overlapping` collapses pairs that are *mutually* inside each other's Mahalanobis gate **and** semantically compatible (cosine ≥ 0.7, or both unlabeled) — orthogonal-semantic overlaps stay separate (test `merge_pass_collapses_mutual_overlaps_but_respects_semantics`). This catches drift the insert-time gate (±1 cell neighborhood only) misses.
 - **Queries**: radius (hash + linear reference impl, equivalence-tested on 100-Gaussian grids), kNN (expanding ring), semantic cosine top-k, and the segment-corridor query below.
 
 ## 4. Decision — channel gain as a first-class query + inverse update
