@@ -42,6 +42,11 @@ pub fn router(state: SharedState) -> Router {
         .route("/api/template", post(rest::render_template))
         .route("/api/config/core/check_config", post(rest::check_config))
         .route("/api/error_log", get(rest::error_log))
+        .route("/api/history/period", get(rest::get_history))
+        .route(
+            "/api/history/period/:start_time",
+            get(rest::get_history_period),
+        )
         .route("/api/homecore/compatibility", get(rest::compatibility))
         .route("/api/websocket", get(ws::websocket_handler))
         .layer(cors)

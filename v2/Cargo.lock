@@ -3553,6 +3553,7 @@ dependencies = [
  "futures-util",
  "homecore",
  "homecore-automation",
+ "homecore-recorder",
  "http-body-util",
  "hyper 1.8.1",
  "serde",

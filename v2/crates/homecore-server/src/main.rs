@@ -251,7 +251,7 @@ async fn main() -> Result<()> {
     }
 
     // ── 2. Recorder (optional) ──────────────────────────────────────
-    if let Some(recorder) = recorder {
+    if let Some(recorder) = recorder.clone() {
         let _recorder_task = RecorderListener::new(hc.states(), recorder).spawn();
         info!(
             "Recorder open at {} — state_changed events being persisted",
@@ -310,7 +310,8 @@ async fn main() -> Result<()> {
         cli.location_name,
         env!("CARGO_PKG_VERSION"),
         tokens,
-    );
+    )
+    .with_recorder(recorder);
     // BFF gateway (ADR-131 §11): single-origin aggregation of the
     // calibration API + SEED/appliance tiers. Shares the same token store
     // for auth; upstream credentials stay server-side.

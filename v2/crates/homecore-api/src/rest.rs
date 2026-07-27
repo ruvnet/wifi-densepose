@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
@@ -90,6 +90,141 @@ pub struct StateView {
     pub last_changed: String,
     pub last_updated: String,
     pub context: ContextView,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HistoryQuery {
+    filter_entity_id: Option<String>,
+    end_time: Option<String>,
+    #[serde(default)]
+    minimal_response: bool,
+    #[serde(default)]
+    no_attributes: bool,
+    #[serde(default)]
+    significant_changes_only: bool,
+}
+
+const MAX_HISTORY_ENTITIES: usize = 32;
+
+pub async fn get_history(
+    headers: HeaderMap,
+    State(s): State<SharedState>,
+    Query(query): Query<HistoryQuery>,
+) -> ApiResult<Json<Vec<Vec<StateView>>>> {
+    history_response(headers, s, None, query).await
+}
+
+pub async fn get_history_period(
+    headers: HeaderMap,
+    State(s): State<SharedState>,
+    Path(start_time): Path<String>,
+    Query(query): Query<HistoryQuery>,
+) -> ApiResult<Json<Vec<Vec<StateView>>>> {
+    history_response(headers, s, Some(start_time), query).await
+}
+
+async fn history_response(
+    headers: HeaderMap,
+    state: SharedState,
+    start_time: Option<String>,
+    query: HistoryQuery,
+) -> ApiResult<Json<Vec<Vec<StateView>>>> {
+    let _ = BearerAuth::from_headers(&headers, state.tokens()).await?;
+    let recorder = state
+        .recorder()
+        .ok_or_else(|| ApiError::Unavailable("recorder is disabled".into()))?;
+    let now = chrono::Utc::now();
+    let start = match start_time {
+        Some(value) => parse_history_time(&value)?,
+        None => now - chrono::Duration::days(1),
+    };
+    let end = match query.end_time.as_deref() {
+        Some(value) => parse_history_time(value)?,
+        None => now,
+    };
+    if end < start {
+        return Err(ApiError::BadRequest(
+            "end_time must not precede start_time".into(),
+        ));
+    }
+
+    let entity_ids = match query.filter_entity_id.as_deref() {
+        Some(raw) => raw
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                EntityId::parse(value)
+                    .map_err(|error| ApiError::BadRequest(format!("invalid entity_id: {error}")))
+            })
+            .collect::<ApiResult<Vec<_>>>()?,
+        None => state
+            .homecore()
+            .states()
+            .all()
+            .into_iter()
+            .map(|snapshot| snapshot.entity_id.clone())
+            .collect(),
+    };
+    if entity_ids.len() > MAX_HISTORY_ENTITIES {
+        return Err(ApiError::BadRequest(format!(
+            "history queries are limited to {MAX_HISTORY_ENTITIES} entities"
+        )));
+    }
+
+    let mut result = Vec::with_capacity(entity_ids.len());
+    for entity_id in entity_ids {
+        let rows = recorder
+            .get_state_history(&entity_id, start, end)
+            .await
+            .map_err(|error| ApiError::Internal(format!("history query failed: {error}")))?;
+        let mut previous_state: Option<String> = None;
+        let states = rows
+            .into_iter()
+            .filter_map(|row| {
+                if query.significant_changes_only
+                    && previous_state.as_deref() == Some(row.state.as_str())
+                {
+                    return None;
+                }
+                previous_state = Some(row.state.clone());
+                let changed = history_timestamp(row.last_changed_ts);
+                let updated = history_timestamp(row.last_updated_ts);
+                Some(StateView {
+                    entity_id: row.entity_id.as_str().to_owned(),
+                    state: row.state,
+                    attributes: if query.no_attributes || query.minimal_response {
+                        serde_json::json!({})
+                    } else {
+                        row.attributes
+                    },
+                    last_changed: changed,
+                    last_updated: updated,
+                    context: ContextView {
+                        id: row.context_id.unwrap_or_default(),
+                        user_id: None,
+                        parent_id: None,
+                    },
+                })
+            })
+            .collect();
+        result.push(states);
+    }
+    Ok(Json(result))
+}
+
+fn parse_history_time(value: &str) -> ApiResult<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .map_err(|_| ApiError::BadRequest("history timestamps must be RFC 3339".into()))
+}
+
+fn history_timestamp(seconds: f64) -> String {
+    let whole = seconds.floor() as i64;
+    let nanos = ((seconds - seconds.floor()) * 1_000_000_000.0).round() as u32;
+    chrono::DateTime::<chrono::Utc>::from_timestamp(whole, nanos.min(999_999_999))
+        .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH)
+        .to_rfc3339()
 }
 
 #[derive(Serialize)]
@@ -373,7 +508,7 @@ pub async fn compatibility(
             "template": "implemented",
             "check_config": "implemented",
             "error_log": "implemented",
-            "history": "requires_recorder",
+            "history": "implemented_when_recorder_enabled",
             "camera_calendar_media": "integration_dependent"
         },
         "websocket": {

@@ -63,3 +63,42 @@ async fn compatibility_matrix_is_authenticated() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn history_reads_real_recorder_rows() {
+    use homecore::{Context, EntityId};
+    use homecore_recorder::Recorder;
+
+    let homecore = HomeCore::new();
+    let recorder = Recorder::open("sqlite::memory:").await.unwrap();
+    let mut changes = homecore.states().subscribe();
+    homecore.states().set(
+        EntityId::parse("light.history_probe").unwrap(),
+        "on",
+        serde_json::json!({"brightness": 123}),
+        Context::new(),
+    );
+    let change = changes.recv().await.unwrap();
+    recorder.record_state(&change).await.unwrap();
+
+    let tokens = LongLivedTokenStore::empty();
+    tokens.register("test-token").await;
+    let state =
+        SharedState::with_tokens(homecore, "Test", "test", tokens).with_recorder(Some(recorder));
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/api/history/period?filter_entity_id=light.history_probe")
+                .header("authorization", "Bearer test-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body[0][0]["entity_id"], "light.history_probe");
+    assert_eq!(body[0][0]["state"], "on");
+    assert_eq!(body[0][0]["attributes"]["brightness"], 123);
+}

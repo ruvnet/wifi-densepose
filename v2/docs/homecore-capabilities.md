@@ -35,6 +35,7 @@ integration or every Apple Home controller.
 - `POST /api/template`
 - `POST /api/config/core/check_config`
 - `GET /api/error_log`
+- `GET /api/history/period[/<start_time>]`
 - `GET /api/websocket`
 - `POST /api/intent/handle`
 - `GET /api/homecore/compatibility`
@@ -47,8 +48,9 @@ subscribers resynchronize.
 
 `GET /api/homecore/compatibility` is the machine-readable support matrix.
 HOMECORE implements the core contract above, not every endpoint contributed by
-Home Assistant integrations. History needs an attached recorder query surface;
-camera, calendar, media, and Lovelace behavior remain integration-dependent.
+Home Assistant integrations. History is available when the recorder is
+enabled; camera, calendar, media, and Lovelace behavior remain
+integration-dependent.
 Registry mutations require a persistent registry mutation backend. The area
 registry currently returns a valid empty list.
 
