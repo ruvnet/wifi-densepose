@@ -365,7 +365,7 @@ export class HudController {
     if (dataSource === 'ws' && ws?.readyState === WebSocket.OPEN) {
       dot.className = 'dot dot--live'; label.textContent = 'LIVE';
     } else {
-      dot.className = 'dot dot--demo'; label.textContent = 'DEMO';
+      dot.className = 'dot dot--waiting'; label.textContent = 'WAITING';
     }
   }
 
