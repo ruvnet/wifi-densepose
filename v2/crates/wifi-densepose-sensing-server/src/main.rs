@@ -393,6 +393,62 @@ struct ClassificationInfo {
     confidence: f64,
 }
 
+/// Derives the classification triple from raw ESP32 vitals fields.
+///
+/// `presence` is derived from `motion_level`, never taken from the raw
+/// `presence` flag directly, so `motion_level: "present_moving"` can never
+/// pair with `presence: false` (issue #1442) — matches the convention
+/// already used elsewhere (the per-node path and `csi.rs`'s label-derived
+/// `classification.presence = label != "absent"`).
+fn classify_vitals(motion: bool, presence: bool, presence_score: f32) -> ClassificationInfo {
+    let motion_level = if motion {
+        "present_moving"
+    } else if presence {
+        "present_still"
+    } else {
+        "absent"
+    };
+    ClassificationInfo {
+        motion_level: motion_level.to_string(),
+        presence: motion_level != "absent",
+        confidence: presence_score as f64,
+    }
+}
+
+#[cfg(test)]
+mod classify_vitals_tests {
+    use super::classify_vitals;
+
+    #[test]
+    fn motion_implies_presence_issue_1442() {
+        // The exact contradictory frame from issue #1442:
+        // motion=true, presence=false must not yield presence: false.
+        let c = classify_vitals(true, false, 0.69);
+        assert_eq!(c.motion_level, "present_moving");
+        assert!(c.presence, "motion implies presence regardless of the raw presence flag");
+    }
+
+    #[test]
+    fn presence_without_motion_is_present_still() {
+        let c = classify_vitals(false, true, 0.5);
+        assert_eq!(c.motion_level, "present_still");
+        assert!(c.presence);
+    }
+
+    #[test]
+    fn neither_motion_nor_presence_is_absent() {
+        let c = classify_vitals(false, false, 0.0);
+        assert_eq!(c.motion_level, "absent");
+        assert!(!c.presence);
+    }
+
+    #[test]
+    fn confidence_passes_through_presence_score() {
+        let c = classify_vitals(true, true, 0.33);
+        assert!((c.confidence - 0.33_f64).abs() < 1e-6);
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SignalField {
     grid_size: [usize; 3],
@@ -5786,13 +5842,6 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     s.tick += 1;
                     let tick = s.tick;
 
-                    let motion_level = if vitals.motion {
-                        "present_moving"
-                    } else if vitals.presence {
-                        "present_still"
-                    } else {
-                        "absent"
-                    };
                     let motion_score = if vitals.motion {
                         0.8
                     } else if vitals.presence {
@@ -5899,11 +5948,8 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     // Cross-node fusion: combine features from all active nodes.
                     let fused_features = fuse_multi_node_features(&features, &s.node_states);
 
-                    let mut classification = ClassificationInfo {
-                        motion_level: motion_level.to_string(),
-                        presence: vitals.presence,
-                        confidence: vitals.presence_score as f64,
-                    };
+                    let mut classification =
+                        classify_vitals(vitals.motion, vitals.presence, vitals.presence_score);
 
                     // Boost classification confidence with multi-node coverage.
                     let n_active = s
