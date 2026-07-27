@@ -115,10 +115,7 @@ pub fn discover_plugins(
         let manifest_bytes =
             bounded_regular_file(&manifest_path, limits.max_manifest_bytes, "manifest")?;
         let manifest_text = std::str::from_utf8(&manifest_bytes).map_err(|e| {
-            PluginError::InvalidManifest(format!(
-                "{} is not UTF-8: {e}",
-                manifest_path.display()
-            ))
+            PluginError::InvalidManifest(format!("{} is not UTF-8: {e}", manifest_path.display()))
         })?;
         let manifest = PluginManifest::parse_json(manifest_text)?;
         if !domains.insert(manifest.domain.clone()) {
@@ -235,9 +232,13 @@ mod tests {
         let root = root();
         package(&root, "z-last", "zeta", "z.wasm");
         package(&root, "a-first", "alpha", "a.wasm");
-        let found = discover_plugins(&[root.clone()], DiscoveryLimits::default()).unwrap();
+        let found =
+            discover_plugins(std::slice::from_ref(&root), DiscoveryLimits::default()).unwrap();
         assert_eq!(
-            found.iter().map(|p| p.manifest.domain.as_str()).collect::<Vec<_>>(),
+            found
+                .iter()
+                .map(|p| p.manifest.domain.as_str())
+                .collect::<Vec<_>>(),
             ["alpha", "zeta"]
         );
         fs::remove_dir_all(root).unwrap();
@@ -247,7 +248,8 @@ mod tests {
     fn traversal_module_path_is_rejected() {
         let root = root();
         package(&root, "bad", "bad", "../bad.wasm");
-        let error = discover_plugins(&[root.clone()], DiscoveryLimits::default()).unwrap_err();
+        let error =
+            discover_plugins(std::slice::from_ref(&root), DiscoveryLimits::default()).unwrap_err();
         assert!(matches!(error, PluginError::InvalidManifest(_)));
         fs::remove_dir_all(root).unwrap();
     }
@@ -257,7 +259,7 @@ mod tests {
         let root = root();
         package(&root, "large", "large", "large.wasm");
         let error = discover_plugins(
-            &[root.clone()],
+            std::slice::from_ref(&root),
             DiscoveryLimits {
                 max_module_bytes: 4,
                 ..DiscoveryLimits::default()

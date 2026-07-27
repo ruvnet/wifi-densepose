@@ -62,7 +62,8 @@ base64 = "0.22"
 # Optional Wasmtime runtime (P2, default-off — 30 MB dep).
 # Bumped from 25.0.3 → 42 to remediate RUSTSEC-2026-0095 and RUSTSEC-2026-0096
 # (Cranelift/Winch sandbox-escape CVEs, CVSS 9.0 — iter-11 security sprint HC-03/04).
-wasmtime = { version = "42", optional = true }
+# v40 is the newest line compatible with HOMECORE's Rust 1.89 MSRV.
+wasmtime = { version = "40.0.4", optional = true }
 
 # Optional wasm3 interpretation runtime (P3, default-off).
 wasm3 = { version = "0.3", optional = true }

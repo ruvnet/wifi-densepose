@@ -37,6 +37,7 @@ use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
 mod gateway;
+mod plugins;
 mod restore;
 use gateway::{GatewayConfig, GatewayState};
 
@@ -116,6 +117,26 @@ struct Cli {
     /// Optional Home Assistant-style automations YAML file to load at boot.
     #[arg(long, env = "HOMECORE_AUTOMATIONS")]
     automations: Option<std::path::PathBuf>,
+
+    /// Explicit directories containing packaged WebAssembly plugins.
+    #[arg(
+        long = "plugin-dir",
+        env = "HOMECORE_PLUGIN_DIRS",
+        value_delimiter = ','
+    )]
+    plugin_dirs: Vec<std::path::PathBuf>,
+
+    /// Base64 Ed25519 publisher keys trusted to sign WebAssembly packages.
+    #[arg(
+        long = "plugin-trusted-publisher",
+        env = "HOMECORE_PLUGIN_TRUSTED_PUBLISHERS",
+        value_delimiter = ','
+    )]
+    plugin_trusted_publishers: Vec<String>,
+
+    /// Permit unsigned WebAssembly plugins. Unsafe; development only.
+    #[arg(long, env = "HOMECORE_PLUGIN_ALLOW_UNSIGNED", default_value_t = false)]
+    plugin_allow_unsigned: bool,
 }
 
 #[tokio::main]
@@ -206,6 +227,17 @@ async fn main() -> Result<()> {
     }
 
     // ── 3. Plugin runtime ───────────────────────────────────────────
+    let server_plugins = plugins::ServerPlugins::start(
+        hc.clone(),
+        plugins::PluginConfig {
+            directories: cli.plugin_dirs.clone(),
+            trusted_publishers: cli.plugin_trusted_publishers.clone(),
+            allow_unsigned: cli.plugin_allow_unsigned,
+            limits: homecore_plugins::DiscoveryLimits::default(),
+        },
+    )
+    .await?;
+
     // ── 4. Automation engine ────────────────────────────────────────
     // Construct AND start the engine (HC-WS-03, ADR-161). `start()`
     // spawns the state-change event loop + the 1 Hz wall-clock timer
@@ -302,6 +334,7 @@ async fn main() -> Result<()> {
             info!("Shutdown requested; draining active HTTP connections");
         })
         .await?;
+    server_plugins.shutdown().await;
     Ok(())
 }
 

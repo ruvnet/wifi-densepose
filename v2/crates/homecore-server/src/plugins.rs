@@ -10,8 +10,8 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result};
 use homecore::HomeCore;
 use homecore_plugins::{
-    DiscoveryLimits, HomeCorePlugin, InProcessRuntime, PluginError, PluginManifest,
-    PluginRegistry, StateChangedEventJson,
+    DiscoveryLimits, HomeCorePlugin, InProcessRuntime, PluginError, PluginManifest, PluginRegistry,
+    StateChangedEventJson,
 };
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
@@ -22,9 +22,10 @@ use homecore_plugins::{
 };
 
 /// Factory entry for a trusted plugin linked into the server at compile time.
+type NativePluginFactory = fn() -> Result<(PluginManifest, Arc<dyn HomeCorePlugin>), PluginError>;
+
 pub struct NativePluginRegistration {
-    pub create:
-        fn() -> Result<(PluginManifest, Arc<dyn HomeCorePlugin>), PluginError>,
+    pub create: NativePluginFactory,
 }
 
 /// This is intentionally empty in the generic server. Appliance builds can
@@ -36,6 +37,7 @@ pub struct PluginConfig {
     pub directories: Vec<PathBuf>,
     pub trusted_publishers: Vec<String>,
     pub allow_unsigned: bool,
+    #[cfg_attr(not(feature = "wasmtime"), allow(dead_code))]
     pub limits: DiscoveryLimits,
 }
 
@@ -52,8 +54,8 @@ impl ServerPlugins {
     pub async fn start(hc: HomeCore, config: PluginConfig) -> Result<Self> {
         let native = Arc::new(PluginRegistry::new(InProcessRuntime));
         for registration in NATIVE_PLUGINS {
-            let (manifest, plugin) = (registration.create)()
-                .context("compiled-in native plugin factory failed")?;
+            let (manifest, plugin) =
+                (registration.create)().context("compiled-in native plugin factory failed")?;
             native
                 .load(manifest, plugin, hc.clone())
                 .await
@@ -87,7 +89,10 @@ impl ServerPlugins {
                 let change = match receiver.recv().await {
                     Ok(change) => change,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                        warn!(skipped, "plugin state dispatcher lagged; events were dropped");
+                        warn!(
+                            skipped,
+                            "plugin state dispatcher lagged; events were dropped"
+                        );
                         continue;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -106,7 +111,10 @@ impl ServerPlugins {
                 }
                 #[cfg(feature = "wasmtime")]
                 for (id, plugin) in &dispatch_wasm {
-                    if !plugin.subscriptions().iter().any(|entity| entity == change.entity_id.as_str())
+                    if !plugin
+                        .subscriptions()
+                        .iter()
+                        .any(|entity| entity == change.entity_id.as_str())
                     {
                         continue;
                     }
@@ -117,23 +125,30 @@ impl ServerPlugins {
                         event.new_state.as_deref(),
                         event.attributes.clone(),
                     );
-                    match tokio::task::spawn_blocking(move || plugin.call_state_changed(&event)).await
+                    match tokio::task::spawn_blocking(move || plugin.call_state_changed(&event))
+                        .await
                     {
                         Ok(Ok(0)) => {}
-                        Ok(Ok(code)) => error!(plugin = %id, code, "WASM state_changed returned failure"),
-                        Ok(Err(error)) => error!(plugin = %id, %error, "WASM state_changed trapped"),
+                        Ok(Ok(code)) => {
+                            error!(plugin = %id, code, "WASM state_changed returned failure")
+                        }
+                        Ok(Err(error)) => {
+                            error!(plugin = %id, %error, "WASM state_changed trapped")
+                        }
                         Err(error) => error!(plugin = %id, %error, "WASM dispatch task failed"),
                     }
                 }
             }
         });
 
+        #[cfg(feature = "wasmtime")]
         info!(
             native = NATIVE_PLUGINS.len(),
-            #[cfg(feature = "wasmtime")]
             wasm = wasm.len(),
             "plugin subsystem started"
         );
+        #[cfg(not(feature = "wasmtime"))]
+        info!(native = NATIVE_PLUGINS.len(), "plugin subsystem started");
         Ok(Self {
             native,
             dispatcher,
@@ -171,11 +186,15 @@ async fn load_wasm_plugins(
         warn!("INSECURE plugin policy enabled: unsigned plugins may execute");
         PluginPolicy::AllowUnsigned
     } else {
-        let keys: Vec<_> = config.trusted_publishers.iter().map(String::as_str).collect();
+        let keys: Vec<_> = config
+            .trusted_publishers
+            .iter()
+            .map(String::as_str)
+            .collect();
         PluginPolicy::trusted(&keys).context("invalid trusted plugin publisher key")?
     };
-    let discovered = discover_plugins(&config.directories, config.limits)
-        .context("plugin discovery failed")?;
+    let discovered =
+        discover_plugins(&config.directories, config.limits).context("plugin discovery failed")?;
     let runtime = WasmtimeRuntime::new().context("Wasmtime initialization failed")?;
     let mut loaded: Vec<(PluginId, WasmPlugin)> = Vec::with_capacity(discovered.len());
     for package in discovered {
