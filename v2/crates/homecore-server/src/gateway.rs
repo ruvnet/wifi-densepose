@@ -115,7 +115,7 @@ pub fn gateway_router(state: GatewayState) -> Router {
         .route("/api/homecore/cogs/updates", get(empty_list))
         .route("/api/homecore/hailo", get(stub_503))
         .route("/api/homecore/tokens", get(stub_503))
-        .route("/api/events", get(stub_503))
+        .route("/api/homecore/events", get(stub_503))
         .with_state(state)
 }
 
@@ -728,7 +728,7 @@ mod tests {
             "/api/homecore/seeds",
             "/api/homecore/federation",
             "/api/homecore/witness",
-            "/api/events",
+            "/api/homecore/events",
         ] {
             let (status, body) = send(gateway_router(gw()), "GET", p).await;
             assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{p} should be 503");
