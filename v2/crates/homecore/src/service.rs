@@ -1,4 +1,4 @@
-//! Service registry stub.
+//! Concurrent service registry with panic-isolated direct dispatch.
 //!
 //! Mirrors `homeassistant.core.ServiceRegistry`. P1 ships the public
 //! surface + a simple direct-dispatch `call` so downstream ADRs can
@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::RwLock;
 
-use crate::event::Context;
+use crate::bus::EventBus;
+use crate::event::{Context, SystemEvent};
 
 /// Service name within a domain. e.g. `light.turn_on` → domain
 /// `"light"`, service `"turn_on"`.
@@ -78,12 +79,22 @@ where
 #[derive(Clone)]
 pub struct ServiceRegistry {
     handlers: Arc<RwLock<HashMap<ServiceName, Arc<dyn ServiceHandler>>>>,
+    bus: Option<EventBus>,
 }
 
 impl ServiceRegistry {
     pub fn new() -> Self {
+        Self::new_inner(None)
+    }
+
+    pub fn with_event_bus(bus: EventBus) -> Self {
+        Self::new_inner(Some(bus))
+    }
+
+    fn new_inner(bus: Option<EventBus>) -> Self {
         Self {
             handlers: Arc::new(RwLock::new(HashMap::new())),
+            bus,
         }
     }
 
@@ -111,6 +122,14 @@ impl ServiceRegistry {
     /// that drives the engine. Mirrors HA isolating service-handler
     /// exceptions.
     pub async fn call(&self, call: ServiceCall) -> Result<serde_json::Value, ServiceError> {
+        if let Some(bus) = &self.bus {
+            bus.fire_system(SystemEvent::ServiceCalled {
+                domain: call.name.domain.clone(),
+                service: call.name.service.clone(),
+                data: call.data.clone(),
+                context: call.context.clone(),
+            });
+        }
         let handler = {
             let guard = self.handlers.read().await;
             guard.get(&call.name).cloned()

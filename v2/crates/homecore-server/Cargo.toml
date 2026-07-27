@@ -23,8 +23,7 @@ path = "src/main.rs"
 # The 8 HOMECORE crates this binary integrates
 homecore           = { path = "../homecore",           version = "0.1.0-alpha.0" }
 homecore-api       = { path = "../homecore-api",       version = "0.1.0-alpha.0" }
-homecore-plugins   = { path = "../homecore-plugins",   version = "0.1.0-alpha.0" }
-homecore-hap       = { path = "../homecore-hap",       version = "0.1.0-alpha.0" }
+homecore-plugins   = { path = "../homecore-plugins", version = "0.1.0-alpha.0", optional = true }
 homecore-recorder  = { path = "../homecore-recorder",  version = "0.1.0-alpha.0" }
 homecore-automation = { path = "../homecore-automation", version = "0.1.0-alpha.0" }
 homecore-assist    = { path = "../homecore-assist",    version = "0.1.0-alpha.0" }
@@ -50,6 +49,7 @@ tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
 # CHANGELOG / ADR-131 security note).
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
 # Concurrent fan-out of per-bank RoomState fetches in the gateway (§11 perf).
 futures = "0.3"
 
@@ -63,4 +63,4 @@ default = []
 # Pull in ruvector-backed semantic memory.
 ruvector = ["homecore-recorder/ruvector"]
 # Pull in real Wasmtime plugin runtime (vs InProcessRuntime).
-wasmtime = ["homecore-plugins/wasmtime"]
+wasmtime = ["dep:homecore-plugins", "homecore-plugins/wasmtime"]

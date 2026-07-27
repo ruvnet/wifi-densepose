@@ -29,12 +29,16 @@ use axum::body::Bytes;
 use axum::extract::{Path, RawQuery, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use homecore_api::auth::BearerAuth;
 use homecore_api::SharedState;
+use homecore_assist::{AssistPipeline, RegexIntentRecognizer};
+#[cfg(test)]
+use homecore_assist::{HassCancelAll, HassLightSet, HassNevermind, HassTurnOff, HassTurnOn};
 
 /// Static gateway configuration (from CLI/env in `main`).
 pub struct GatewayConfig {
@@ -54,15 +58,36 @@ pub struct GatewayState {
     pub shared: SharedState,
     pub http: reqwest::Client,
     pub cfg: Arc<GatewayConfig>,
+    pub assist: Arc<AssistPipeline<RegexIntentRecognizer>>,
 }
 
 impl GatewayState {
+    #[cfg(test)]
     pub fn new(shared: SharedState, cfg: GatewayConfig) -> Self {
+        let mut assist = AssistPipeline::new(RegexIntentRecognizer::new());
+        assist.register_handler(HassTurnOn);
+        assist.register_handler(HassTurnOff);
+        assist.register_handler(HassLightSet);
+        assist.register_handler(HassNevermind);
+        assist.register_handler(HassCancelAll);
+        Self::with_assist(shared, cfg, assist)
+    }
+
+    pub fn with_assist(
+        shared: SharedState,
+        cfg: GatewayConfig,
+        assist: AssistPipeline<RegexIntentRecognizer>,
+    ) -> Self {
         let http = reqwest::Client::builder()
             .timeout(cfg.timeout)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
-        Self { shared, http, cfg: Arc::new(cfg) }
+        Self {
+            shared,
+            http,
+            cfg: Arc::new(cfg),
+            assist: Arc::new(assist),
+        }
     }
 }
 
@@ -76,6 +101,7 @@ pub fn gateway_router(state: GatewayState) -> Router {
         .route("/api/homecore/rooms", get(rooms))
         .route("/api/homecore/cogs", get(cogs_list))
         .route("/api/homecore/appliance", get(appliance))
+        .route("/api/intent/handle", post(handle_intent))
         // ── upstream-dependent stubs (W3 / W5 / W6): typed 503 ───────
         .route("/api/homecore/seeds", get(stub_503))
         .route("/api/homecore/seeds/:id", get(stub_503))
@@ -93,6 +119,43 @@ pub fn gateway_router(state: GatewayState) -> Router {
         .with_state(state)
 }
 
+#[derive(Deserialize)]
+struct IntentRequest {
+    #[serde(alias = "text")]
+    utterance: String,
+    #[serde(default = "default_language")]
+    language: String,
+}
+
+fn default_language() -> String {
+    "en".to_owned()
+}
+
+async fn handle_intent(
+    State(st): State<GatewayState>,
+    headers: HeaderMap,
+    Json(request): Json<IntentRequest>,
+) -> Response {
+    if let Err(response) = require_auth(&headers, &st).await {
+        return response;
+    }
+    if request.utterance.trim().is_empty() {
+        return bad_request("utterance cannot be empty");
+    }
+    match st
+        .assist
+        .process(&request.utterance, &request.language, st.shared.homecore())
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => typed(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "intent_failed",
+            &error.to_string(),
+        ),
+    }
+}
+
 // ── auth + typed errors ─────────────────────────────────────────────
 
 async fn require_auth(headers: &HeaderMap, st: &GatewayState) -> Result<(), Response> {
@@ -106,7 +169,11 @@ fn typed(status: StatusCode, error: &str, detail: &str) -> Response {
     (status, Json(json!({ "error": error, "detail": detail }))).into_response()
 }
 fn upstream_unavailable(detail: &str) -> Response {
-    typed(StatusCode::SERVICE_UNAVAILABLE, "upstream_unavailable", detail)
+    typed(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "upstream_unavailable",
+        detail,
+    )
 }
 fn upstream_timeout(detail: &str) -> Response {
     typed(StatusCode::GATEWAY_TIMEOUT, "upstream_timeout", detail)
@@ -130,33 +197,32 @@ fn bad_request(detail: &str) -> Response {
 ///     like `%252e` decodes once to `%2e` and is caught here).
 ///
 /// Legitimate `v1/...` paths (the only shape the UI sends) pass unchanged.
-fn validate_proxy_path(path: &str) -> Result<(), Response> {
+fn validate_proxy_path(path: &str) -> Result<(), &'static str> {
     // 1. Reject on the raw form first (cheap; catches backslash + leading `/`).
     if path.starts_with('/') {
-        return Err(bad_request("proxied path must be relative (leading '/' not allowed)"));
+        return Err("proxied path must be relative (leading '/' not allowed)");
     }
     if path.contains('\\') {
-        return Err(bad_request("proxied path must not contain a backslash"));
+        return Err("proxied path must not contain a backslash");
     }
     // 2. Percent-decode once and re-check; reject if decoding is invalid.
-    let decoded = percent_decode_once(path)
-        .ok_or_else(|| bad_request("proxied path has invalid percent-encoding"))?;
+    let decoded = percent_decode_once(path).ok_or("proxied path has invalid percent-encoding")?;
     if decoded.starts_with('/') || decoded.contains('\\') {
-        return Err(bad_request("proxied path resolves to an absolute/traversal path"));
+        return Err("proxied path resolves to an absolute/traversal path");
     }
     // 3. Reject any `.`/`..` segment on BOTH the raw and decoded forms so an
     //    encoded `%2e%2e%2f` cannot slip a dot-segment past the split.
     for form in [path, decoded.as_str()] {
         for seg in form.split(['/', '\\']) {
             if seg == "." || seg == ".." {
-                return Err(bad_request("proxied path must not contain '.' or '..' segments"));
+                return Err("proxied path must not contain '.' or '..' segments");
             }
         }
         // Defence in depth: a residual encoded traversal marker survived the
         // single decode (e.g. originally double-encoded). Reject it outright.
         let lower = form.to_ascii_lowercase();
         if lower.contains("%2e") || lower.contains("%2f") || lower.contains("%5c") {
-            return Err(bad_request("proxied path must not contain encoded traversal markers"));
+            return Err("proxied path must not contain encoded traversal markers");
         }
     }
     Ok(())
@@ -194,7 +260,9 @@ async fn stub_503(State(st): State<GatewayState>, headers: HeaderMap) -> Respons
     if let Err(r) = require_auth(&headers, &st).await {
         return r;
     }
-    upstream_unavailable("endpoint not yet wired — see ADR-131 §11/§12 (SEED device / appliance upstream)")
+    upstream_unavailable(
+        "endpoint not yet wired — see ADR-131 §11/§12 (SEED device / appliance upstream)",
+    )
 }
 
 /// Auth-gated empty-array response (e.g. OTA updates with no feed wired).
@@ -216,12 +284,14 @@ async fn cal_proxy_get(
     if let Err(r) = require_auth(&headers, &st).await {
         return r;
     }
-    if let Err(r) = validate_proxy_path(&path) {
-        return r;
+    if let Err(detail) = validate_proxy_path(&path) {
+        return bad_request(detail);
     }
     let base = match &st.cfg.calibration_url {
         Some(u) => u,
-        None => return upstream_unavailable("calibration service not configured (set --calibration-url / HOMECORE_CALIBRATION_URL)"),
+        None => return upstream_unavailable(
+            "calibration service not configured (set --calibration-url / HOMECORE_CALIBRATION_URL)",
+        ),
     };
     let qs = q.map(|s| format!("?{s}")).unwrap_or_default();
     // The wildcard already carries the `v1/...` segment (the UI calls
@@ -239,12 +309,14 @@ async fn cal_proxy_post(
     if let Err(r) = require_auth(&headers, &st).await {
         return r;
     }
-    if let Err(r) = validate_proxy_path(&path) {
-        return r;
+    if let Err(detail) = validate_proxy_path(&path) {
+        return bad_request(detail);
     }
     let base = match &st.cfg.calibration_url {
         Some(u) => u,
-        None => return upstream_unavailable("calibration service not configured (set --calibration-url / HOMECORE_CALIBRATION_URL)"),
+        None => return upstream_unavailable(
+            "calibration service not configured (set --calibration-url / HOMECORE_CALIBRATION_URL)",
+        ),
     };
     let url = format!("{}/api/{}", base.trim_end_matches('/'), path);
     let rb = st
@@ -264,7 +336,8 @@ async fn proxy(st: &GatewayState, mut rb: reqwest::RequestBuilder) -> Response {
     }
     match rb.send().await {
         Ok(resp) => {
-            let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let status =
+                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
             let ct = resp
                 .headers()
                 .get(reqwest::header::CONTENT_TYPE)
@@ -325,7 +398,10 @@ async fn rooms(State(st): State<GatewayState>, headers: HeaderMap) -> Response {
         let base = base.as_str();
         async move {
             let url = format!("{base}/api/v1/room/state?bank={bank}");
-            fetch_json(st, &url).await.ok().map(|v| adapt_room_state(&bank, &v))
+            fetch_json(st, &url)
+                .await
+                .ok()
+                .map(|v| adapt_room_state(&bank, &v))
         }
     });
     let out: Vec<Value> = futures::future::join_all(fetches)
@@ -352,10 +428,7 @@ fn bank_names(v: &Value) -> Vec<String> {
                 _ => None,
             })
             .collect(),
-        Value::Object(o) => o
-            .get("baselines")
-            .map(|b| bank_names(b))
-            .unwrap_or_default(),
+        Value::Object(o) => o.get("baselines").map(bank_names).unwrap_or_default(),
         _ => Vec::new(),
     }
 }
@@ -456,7 +529,11 @@ async fn cogs_list(State(st): State<GatewayState>, headers: HeaderMap) -> Respon
 }
 
 fn read_pid(dir: &std::path::Path, id: &str) -> Option<i64> {
-    for name in [format!("{id}.pid"), "pid".to_string(), "app.pid".to_string()] {
+    for name in [
+        format!("{id}.pid"),
+        "pid".to_string(),
+        "app.pid".to_string(),
+    ] {
         if let Ok(s) = std::fs::read_to_string(dir.join(&name)) {
             if let Ok(p) = s.trim().parse::<i64>() {
                 return Some(p);
@@ -515,7 +592,9 @@ async fn appliance(State(st): State<GatewayState>, headers: HeaderMap) -> Respon
 }
 
 fn read_first_line(path: &str) -> Option<String> {
-    std::fs::read_to_string(path).ok().and_then(|s| s.lines().next().map(str::to_string))
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.lines().next().map(str::to_string))
 }
 
 fn uptime_secs() -> Option<u64> {
@@ -551,7 +630,9 @@ fn cpu_load_pct() -> Option<f64> {
         .next()?
         .parse::<f64>()
         .ok()?;
-    let ncpu = std::thread::available_parallelism().map(|n| n.get() as f64).unwrap_or(1.0);
+    let ncpu = std::thread::available_parallelism()
+        .map(|n| n.get() as f64)
+        .unwrap_or(1.0);
     Some(((load / ncpu * 100.0).min(100.0) * 10.0).round() / 10.0)
 }
 
@@ -606,7 +687,9 @@ mod tests {
             .await
             .unwrap();
         let status = resp.status();
-        let b = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let b = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         (status, String::from_utf8_lossy(&b).into_owned())
     }
 
@@ -614,7 +697,12 @@ mod tests {
     async fn unauthenticated_is_rejected() {
         let app = gateway_router(gw());
         let resp = app
-            .oneshot(Request::builder().uri("/api/homecore/cogs").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/homecore/cogs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -636,7 +724,12 @@ mod tests {
 
     #[tokio::test]
     async fn seed_tier_routes_are_typed_503() {
-        for p in ["/api/homecore/seeds", "/api/homecore/federation", "/api/homecore/witness", "/api/events"] {
+        for p in [
+            "/api/homecore/seeds",
+            "/api/homecore/federation",
+            "/api/homecore/witness",
+            "/api/events",
+        ] {
             let (status, body) = send(gateway_router(gw()), "GET", p).await;
             assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{p} should be 503");
             assert!(body.contains("upstream_unavailable"), "{p} typed body");
@@ -649,6 +742,46 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert!(body.contains("\"services\""));
         assert!(body.contains("\"ram_pct\""));
+    }
+
+    #[tokio::test]
+    async fn intent_endpoint_executes_a_real_service() {
+        let state = gw();
+        let hc = state.shared.homecore().clone();
+        let id = homecore::EntityId::parse("light.kitchen").unwrap();
+        hc.states().set(
+            id.clone(),
+            "off",
+            serde_json::json!({}),
+            homecore::Context::new(),
+        );
+        crate::register_builtin_services(&hc).await;
+        let assist = crate::build_assist_pipeline().await.unwrap();
+        let state = GatewayState::with_assist(
+            state.shared,
+            GatewayConfig {
+                calibration_url: None,
+                calibration_token: None,
+                apps_dir: PathBuf::from("/nonexistent-apps-dir"),
+                timeout: Duration::from_millis(200),
+            },
+            assist,
+        );
+        let response = gateway_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/intent/handle")
+                    .header("authorization", "Bearer dev")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"utterance":"turn on light.kitchen"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(hc.states().get(&id).unwrap().state, "on");
     }
 
     #[test]
@@ -668,7 +801,10 @@ mod tests {
         assert_eq!(ui["stale"], true);
         assert_eq!(ui["presence"]["value"], "occupied");
         assert_eq!(ui["breathing_bpm"]["value"], 12.0);
-        assert!(ui["heart_bpm"].is_null(), "None heartbeat must map to null (not trained)");
+        assert!(
+            ui["heart_bpm"].is_null(),
+            "None heartbeat must map to null (not trained)"
+        );
         // §6 invariant 3: upstream RoomState carries no threshold here, so the
         // adapter must emit null (withheld) — NOT a fabricated constant.
         assert!(
@@ -685,7 +821,10 @@ mod tests {
             "anomaly": {"kind":"Anomaly","value":0.2,"confidence":0.5,"threshold":0.73},
         });
         let ui = adapt_room_state("bedroom_1", &cal);
-        assert_eq!(ui["anomaly"]["threshold"], 0.73, "real threshold must pass through");
+        assert_eq!(
+            ui["anomaly"]["threshold"], 0.73,
+            "real threshold must pass through"
+        );
     }
 
     #[test]
@@ -731,8 +870,15 @@ mod tests {
             ("POST", "/api/cal/v1/../../x"),
         ] {
             let (status, body) = send(gateway_router(gw()), method, path).await;
-            assert_eq!(status, StatusCode::BAD_REQUEST, "{method} {path} must be 400");
-            assert!(body.contains("bad_request"), "{method} {path} typed 400 body");
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "{method} {path} must be 400"
+            );
+            assert!(
+                body.contains("bad_request"),
+                "{method} {path} typed 400 body"
+            );
             assert!(
                 !body.contains("upstream_unavailable"),
                 "{method} {path} must NOT reach the upstream-config branch"
@@ -746,13 +892,19 @@ mod tests {
         // "not configured" 503 (proving it was NOT blocked as traversal).
         let (status, body) = send(gateway_router(gw()), "GET", "/api/cal/v1/room/state").await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-        assert!(body.contains("upstream_unavailable"), "legit path should reach upstream branch");
+        assert!(
+            body.contains("upstream_unavailable"),
+            "legit path should reach upstream branch"
+        );
     }
 
     #[test]
     fn bank_names_accepts_strings_and_objects() {
         assert_eq!(bank_names(&json!(["a", "b"])), vec!["a", "b"]);
-        assert_eq!(bank_names(&json!([{"name":"x"}, {"id":"y"}])), vec!["x", "y"]);
+        assert_eq!(
+            bank_names(&json!([{"name":"x"}, {"id":"y"}])),
+            vec!["x", "y"]
+        );
         assert_eq!(bank_names(&json!({"baselines":["z"]})), vec!["z"]);
     }
 }

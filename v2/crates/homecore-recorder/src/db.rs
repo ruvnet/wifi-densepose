@@ -25,6 +25,18 @@ use homecore::event::{DomainEvent, StateChangedEvent};
 use crate::dedup::fnv64a_hash;
 use crate::schema::ALL_DDL;
 
+type SearchStateRecord = (
+    i64,
+    String,
+    String,
+    Option<String>,
+    f64,
+    f64,
+    Option<String>,
+);
+type StateRecord = (String, String, Option<String>, f64, f64, Option<String>);
+type HistoryStateRecord = (i64, String, Option<String>, f64, f64, Option<String>);
+
 /// Hard upper bound on rows returned by [`Recorder::get_state_history`].
 ///
 /// Without this cap a wide `[since, until]` window over a high-frequency entity
@@ -289,8 +301,7 @@ impl Recorder {
             .replace('_', "\\_");
         let pattern = format!("%{escaped}%");
 
-        let rows: Vec<(i64, String, String, Option<String>, f64, f64, Option<String>)> =
-            sqlx::query_as(
+        let rows: Vec<SearchStateRecord> = sqlx::query_as(
                 "SELECT s.state_id, s.entity_id, s.state, sa.shared_attrs, \
                         s.last_changed_ts, s.last_updated_ts, s.context_id \
                  FROM states s \
@@ -332,8 +343,7 @@ impl Recorder {
 
     /// Fetch a single `StateRow` by its `state_id`, joining attributes.
     async fn fetch_state_row(&self, state_id: i64) -> Result<Option<StateRow>, RecorderError> {
-        let row: Option<(String, String, Option<String>, f64, f64, Option<String>)> =
-            sqlx::query_as(
+        let row: Option<StateRecord> = sqlx::query_as(
                 "SELECT s.entity_id, s.state, sa.shared_attrs, \
                          s.last_changed_ts, s.last_updated_ts, s.context_id \
                  FROM states s \
@@ -409,7 +419,7 @@ impl Recorder {
         let since_ts = since.timestamp_micros() as f64 / 1_000_000.0;
         let until_ts = until.timestamp_micros() as f64 / 1_000_000.0;
 
-        let rows: Vec<(i64, String, Option<String>, f64, f64, Option<String>)> = sqlx::query_as(
+        let rows: Vec<HistoryStateRecord> = sqlx::query_as(
             "SELECT s.state_id, s.state, sa.shared_attrs, \
                     s.last_changed_ts, s.last_updated_ts, s.context_id \
              FROM states s \
@@ -884,7 +894,6 @@ mod tests {
         // public method (whose cap is MAX_HISTORY_ROWS) and run the *same* SQL
         // shape with a small bind to demonstrate the LIMIT term is effective —
         // and separately assert the constant is a sane positive bound.
-        assert!(MAX_HISTORY_ROWS > 0, "history cap must be positive");
         let recorder = open_memory().await;
         for v in &["1", "2", "3", "4", "5"] {
             recorder

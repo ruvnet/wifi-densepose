@@ -31,7 +31,7 @@ export function demoMode() {
 
 export const api = {
   base: '',
-  token: () => { try { return localStorage.getItem('homecore_token') || 'dev-token'; } catch { return 'dev-token'; } },
+  token: () => { try { return localStorage.getItem('homecore_token') || ''; } catch { return ''; } },
   isDemo: (key) => !!demoFlags[key],
   anyDemo: () => demoMode() && Object.keys(demoFlags).length > 0,
   demoMode,

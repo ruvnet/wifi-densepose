@@ -84,9 +84,23 @@ impl Default for Context {
 #[derive(Clone, Debug)]
 pub enum SystemEvent {
     StateChanged(StateChangedEvent),
-    ServiceRegistered { domain: String, service: String },
-    ServiceRemoved { domain: String, service: String },
-    ComponentLoaded { component: String },
+    ServiceCalled {
+        domain: String,
+        service: String,
+        data: serde_json::Value,
+        context: Context,
+    },
+    ServiceRegistered {
+        domain: String,
+        service: String,
+    },
+    ServiceRemoved {
+        domain: String,
+        service: String,
+    },
+    ComponentLoaded {
+        component: String,
+    },
     HomeCoreStart,
     HomeCoreStarted,
     HomeCoreStop,

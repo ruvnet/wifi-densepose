@@ -74,7 +74,7 @@ impl Condition {
                 Condition::State { entity_id, state } => {
                     ctx.states
                         .get(entity_id)
-                        .map_or(false, |s| s.state == *state)
+                        .is_some_and(|s| s.state == *state)
                 }
                 Condition::NumericState { entity_id, above, below } => {
                     let value: Option<f64> = ctx
@@ -84,16 +84,13 @@ impl Condition {
                     match value {
                         None => false,
                         Some(v) => {
-                            above.map_or(true, |a| v > a) && below.map_or(true, |b| v < b)
+                            above.is_none_or(|a| v > a) && below.is_none_or(|b| v < b)
                         }
                     }
                 }
                 Condition::Template { value_template } => {
                     if let Some(env) = &ctx.template_env {
-                        match env.render_bool(value_template) {
-                            Ok(v) => v,
-                            Err(_) => false,
-                        }
+                        env.render_bool(value_template).unwrap_or_default()
                     } else {
                         false
                     }

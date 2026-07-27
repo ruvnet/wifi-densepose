@@ -5,10 +5,8 @@
 //!   - HomeCore runtime (state machine + event bus + service registry)
 //!   - SQLite recorder writing every state_changed event
 //!   - REST + WebSocket API on :8123 (HA wire-compat)
-//!   - Plugin runtime (InProcessRuntime by default; Wasmtime with --features wasmtime)
 //!   - Automation engine subscribed to the state machine
 //!   - Assist pipeline (intent recognizer + handler set)
-//!   - HAP bridge surface (accessories registered via the API)
 //!
 //! Run with:
 //!
@@ -19,21 +17,20 @@
 //!     cargo run -p homecore-server --features ruvector,wasmtime -- ...
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use anyhow::Result;
 use clap::Parser;
 use tracing::{info, warn};
 
-use homecore::{Context, EntityId, HomeCore, ServiceCall, ServiceError, ServiceName};
 use homecore::service::FnHandler;
+use homecore::{Context, EntityId, HomeCore, ServiceCall, ServiceError, ServiceName};
 use homecore_api::{build_cors_layer, router, LongLivedTokenStore, SharedState};
-use homecore_assist::pipeline::default_pipeline;
-use homecore_assist::RegexIntentRecognizer;
+use homecore_assist::{
+    AssistPipeline, HassCancelAll, HassLightSet, HassNevermind, HassTurnOff, HassTurnOn,
+    RegexIntentRecognizer,
+};
 use homecore_automation::AutomationEngine;
-use homecore_hap::{bridge::HapBridge, mdns::HapServiceRecord};
-use homecore_plugins::{InProcessRuntime, PluginRegistry};
-use homecore_recorder::Recorder;
+use homecore_recorder::{Recorder, RecorderListener};
 
 use axum::Router;
 use tower_http::services::ServeDir;
@@ -71,7 +68,11 @@ struct Cli {
     calibration_token: Option<String>,
 
     /// COG install directory the gateway's supervisor reads (ADR-131 §11.6).
-    #[arg(long, env = "HOMECORE_APPS_DIR", default_value = "/var/lib/cognitum/apps")]
+    #[arg(
+        long,
+        env = "HOMECORE_APPS_DIR",
+        default_value = "/var/lib/cognitum/apps"
+    )]
     apps_dir: String,
 
     /// Per-upstream proxy timeout in milliseconds (ADR-131 §11.1).
@@ -79,7 +80,7 @@ struct Cli {
     gateway_timeout_ms: u64,
 
     /// SQLite recorder DB path. Use `:memory:` for an ephemeral run.
-    #[arg(long, env = "HOMECORE_DB", default_value = "sqlite::memory:")]
+    #[arg(long, env = "HOMECORE_DB", default_value = "sqlite://homecore.db")]
     db: String,
 
     /// Friendly location name surfaced via `/api/config`.
@@ -90,20 +91,50 @@ struct Cli {
     #[arg(long)]
     no_recorder: bool,
 
-    /// Skip the boot-time entity seeding (10 demo entities including
-    /// 4 RuView-derived sensors). Use this when wiring real
-    /// integrations that will populate the state machine themselves.
+    /// Explicitly allow any non-empty bearer token. Development only.
+    #[arg(long, env = "HOMECORE_INSECURE_DEV_AUTH", default_value_t = false)]
+    insecure_dev_auth: bool,
+
+    /// Seed synthetic demo entities. Disabled by default so simulated
+    /// biometric readings are never mistaken for live sensor data.
     #[arg(long)]
-    no_seed_entities: bool,
+    seed_demo_entities: bool,
+
+    /// Optional Home Assistant-style automations YAML file to load at boot.
+    #[arg(long, env = "HOMECORE_AUTOMATIONS")]
+    automations: Option<std::path::PathBuf>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
     let cli = Cli::parse();
+    let has_tokens = std::env::var("HOMECORE_TOKENS")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    if !has_tokens && !cli.insecure_dev_auth {
+        anyhow::bail!(
+            "HOMECORE_TOKENS is required; use --insecure-dev-auth only for isolated development"
+        );
+    }
+    let tokens = if has_tokens {
+        let store = LongLivedTokenStore::from_env();
+        info!(
+            "Provisioned {} bearer token(s) from HOMECORE_TOKENS",
+            store.len().await
+        );
+        store
+    } else {
+        warn!(
+            "Insecure development authentication enabled: any non-empty bearer token is accepted"
+        );
+        LongLivedTokenStore::allow_any_non_empty()
+    };
 
-    info!("HOMECORE booting — bind={}, db={}, location={:?}",
-          cli.bind, cli.db, cli.location_name);
+    info!(
+        "HOMECORE booting — bind={}, db={}, location={:?}",
+        cli.bind, cli.db, cli.location_name
+    );
 
     // ── 1. HomeCore runtime ─────────────────────────────────────────
     let hc = HomeCore::new();
@@ -114,33 +145,27 @@ async fn main() -> Result<()> {
     // first boot. These are no-op handlers (they just echo back the
     // call as JSON for observability) — integrations override them
     // by registering the same ServiceName later.
-    seed_default_services(&hc).await;
+    register_builtin_services(&hc).await;
 
     // Seed 10 representative entities so the web UI's Dashboard +
     // States pages have content out of the box. Operators registering
     // real integrations / plugins overwrite these by writing the same
     // entity_id with new values. Opt out with `--no-seed-entities`.
-    if !cli.no_seed_entities {
+    if cli.seed_demo_entities {
         seed_default_entities(&hc);
     } else {
-        info!("Entity seeding disabled by --no-seed-entities");
+        info!("Synthetic demo entities disabled (use --seed-demo-entities to opt in)");
     }
 
     // ── 2. Recorder (optional) ──────────────────────────────────────
     if !cli.no_recorder {
-        match Recorder::open(&cli.db).await {
+        match open_recorder(&cli.db).await {
             Ok(recorder) => {
-                let recorder = Arc::new(recorder);
-                let rec_clone = Arc::clone(&recorder);
-                let mut state_rx = hc.states().subscribe();
-                tokio::spawn(async move {
-                    while let Ok(event) = state_rx.recv().await {
-                        if let Err(e) = rec_clone.record_state(&event).await {
-                            warn!("recorder write failed: {e}");
-                        }
-                    }
-                });
-                info!("Recorder open at {} — state_changed events being persisted", cli.db);
+                let _recorder_task = RecorderListener::new(hc.states(), recorder).spawn();
+                info!(
+                    "Recorder open at {} — state_changed events being persisted",
+                    cli.db
+                );
             }
             Err(e) => {
                 warn!("Recorder failed to open ({e}) — continuing without persistence");
@@ -151,11 +176,6 @@ async fn main() -> Result<()> {
     }
 
     // ── 3. Plugin runtime ───────────────────────────────────────────
-    let plugin_runtime = InProcessRuntime;
-    let plugin_registry: PluginRegistry<InProcessRuntime> = PluginRegistry::new(plugin_runtime);
-    info!("Plugin registry ready (runtime: InProcess; Wasmtime available with --features wasmtime)");
-    let _ = plugin_registry; // wired-but-empty at boot; integrations register here
-
     // ── 4. Automation engine ────────────────────────────────────────
     // Construct AND start the engine (HC-WS-03, ADR-161). `start()`
     // spawns the state-change event loop + the 1 Hz wall-clock timer
@@ -166,6 +186,14 @@ async fn main() -> Result<()> {
     // boot yet (YAML loader is P-next); integrations register via
     // `engine.register(..)`.
     let automation_engine = AutomationEngine::new(hc.clone());
+    if let Some(path) = &cli.automations {
+        let raw = tokio::fs::read_to_string(path).await?;
+        let automations: Vec<homecore_automation::Automation> = serde_yaml::from_str(&raw)
+            .map_err(|e| anyhow::anyhow!("invalid automations file {}: {e}", path.display()))?;
+        for automation in automations {
+            automation_engine.register(automation);
+        }
+    }
     let _automation_task = automation_engine.start();
     info!(
         "Automation engine started ({} automations registered) — \
@@ -174,36 +202,12 @@ async fn main() -> Result<()> {
     );
 
     // ── 5. Assist pipeline ──────────────────────────────────────────
-    let recognizer = RegexIntentRecognizer::new();
-    let pipeline = default_pipeline(recognizer);
-    info!("Assist pipeline ready (5 built-in intent handlers via default_pipeline)");
-    let _ = pipeline; // wired-but-idle at boot; voice WS plugs in here
-
     // ── 6. HAP bridge surface ───────────────────────────────────────
-    let hap_record = HapServiceRecord {
-        instance_name: "HOMECORE".to_string(),
-        port: 51826,
-        setup_code: "123-45-678".to_string(),
-        device_id: "AA:BB:CC:DD:EE:FF".to_string(),
-    };
-    let hap_bridge = HapBridge::new(hap_record);
-    info!("HAP bridge surface ready ({} accessories registered)", hap_bridge.running_accessories().len());
-    let _ = hap_bridge;
-
     // ── 7. REST + WS API ────────────────────────────────────────────
     // Token provisioning closes audit findings HC-01/HC-02. If
     // HOMECORE_TOKENS is set in the env, populate the store from
     // its comma-separated list. Otherwise fall back to DEV mode
     // (warn-on-each-request) so existing smoke tests still work.
-    let tokens = if std::env::var("HOMECORE_TOKENS").map(|v| !v.trim().is_empty()).unwrap_or(false) {
-        let s = LongLivedTokenStore::from_env();
-        let n = s.len().await;
-        info!("LongLivedTokenStore provisioned with {} bearer token(s) from HOMECORE_TOKENS", n);
-        s
-    } else {
-        warn!("HOMECORE_TOKENS not set — token store in DEV mode (any non-empty bearer accepted). Provision real tokens before exposing to the network.");
-        LongLivedTokenStore::allow_any_non_empty()
-    };
     let api_state = SharedState::with_tokens(
         hc.clone(),
         cli.location_name,
@@ -213,7 +217,12 @@ async fn main() -> Result<()> {
     // BFF gateway (ADR-131 §11): single-origin aggregation of the
     // calibration API + SEED/appliance tiers. Shares the same token store
     // for auth; upstream credentials stay server-side.
-    let gw = GatewayState::new(
+    let assist = build_assist_pipeline().await?;
+    info!(
+        "Assist intent endpoint ready with {} handlers",
+        assist.handler_count()
+    );
+    let gw = GatewayState::with_assist(
         api_state.clone(),
         GatewayConfig {
             calibration_url: cli.calibration_url.clone(),
@@ -221,6 +230,7 @@ async fn main() -> Result<()> {
             apps_dir: std::path::PathBuf::from(&cli.apps_dir),
             timeout: std::time::Duration::from_millis(cli.gateway_timeout_ms),
         },
+        assist,
     );
     // Merge the HA-compat API + UI mount with the BFF gateway, THEN apply the
     // audited CORS allowlist + request tracing to the WHOLE surface. The
@@ -233,19 +243,35 @@ async fn main() -> Result<()> {
         .layer(build_cors_layer())
         .layer(TraceLayer::new_for_http());
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;
-    info!("HOMECORE-API listening on http://{} (HA-compat /api + /api/websocket)", cli.bind);
+    info!(
+        "HOMECORE-API listening on http://{} (HA-compat /api + /api/websocket)",
+        cli.bind
+    );
     info!(
         "HOMECORE BFF gateway active: /api/homecore/* + /api/cal/* (calibration_url={:?})",
         cli.calibration_url
     );
     if !cli.ui_dir.trim().is_empty() {
-        info!("HOMECORE-UI (ADR-131) served at http://{}/homecore/ from {}", cli.bind, cli.ui_dir);
+        info!(
+            "HOMECORE-UI (ADR-131) served at http://{}/homecore/ from {}",
+            cli.bind, cli.ui_dir
+        );
     } else {
         info!("HOMECORE-UI mount disabled (--ui-dir empty)");
     }
 
-    // Run forever (until SIGINT). axum::serve handles graceful shutdown.
-    axum::serve(listener, app).await?;
+    let shutdown_hc = hc.clone();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            if let Err(error) = tokio::signal::ctrl_c().await {
+                warn!("failed to install Ctrl-C handler: {error}");
+            }
+            shutdown_hc
+                .bus()
+                .fire_system(homecore::SystemEvent::HomeCoreStop);
+            info!("Shutdown requested; draining active HTTP connections");
+        })
+        .await?;
     Ok(())
 }
 
@@ -263,11 +289,68 @@ fn build_app(api_state: SharedState, ui_dir: &str) -> Router {
     app.nest_service("/homecore", ServeDir::new(ui_dir))
 }
 
+#[cfg(not(feature = "ruvector"))]
+async fn open_recorder(path: &str) -> anyhow::Result<Recorder> {
+    Ok(Recorder::open(path).await?)
+}
+
+async fn build_assist_pipeline() -> anyhow::Result<AssistPipeline<RegexIntentRecognizer>> {
+    let recognizer = RegexIntentRecognizer::new();
+    recognizer
+        .register(
+            "HassTurnOn",
+            r"^turn on (?:the )?(?P<entity_id>[a-z0-9_]+\.[a-z0-9_]+)$",
+            "*",
+        )
+        .await?;
+    recognizer
+        .register(
+            "HassTurnOff",
+            r"^turn off (?:the )?(?P<entity_id>[a-z0-9_]+\.[a-z0-9_]+)$",
+            "*",
+        )
+        .await?;
+    recognizer
+        .register(
+            "HassLightSet",
+            r"^set (?P<entity_id>light\.[a-z0-9_]+) to (?P<brightness>[0-9]{1,3})$",
+            "*",
+        )
+        .await?;
+    recognizer
+        .register("HassNevermind", r"^(?:never ?mind|cancel that)$", "*")
+        .await?;
+    recognizer
+        .register("HassCancelAll", r"^cancel all automations$", "*")
+        .await?;
+
+    let mut pipeline = AssistPipeline::new(recognizer);
+    pipeline.register_handler(HassTurnOn);
+    pipeline.register_handler(HassTurnOff);
+    pipeline.register_handler(HassLightSet);
+    pipeline.register_handler(HassNevermind);
+    pipeline.register_handler(HassCancelAll);
+    Ok(pipeline)
+}
+
+#[cfg(feature = "ruvector")]
+async fn open_recorder(path: &str) -> anyhow::Result<Recorder> {
+    use homecore_recorder::{RuvectorSemanticIndex, SemanticIndex};
+    use tokio::sync::RwLock;
+
+    let index = RuvectorSemanticIndex::new(100_000)
+        .map_err(|error| anyhow::anyhow!("failed to initialize ruvector index: {error}"))?;
+    let semantic: std::sync::Arc<RwLock<dyn SemanticIndex>> =
+        std::sync::Arc::new(RwLock::new(index));
+    Ok(Recorder::open_with_index(path, semantic).await?)
+}
+
 fn init_tracing() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,homecore=debug,homecore_server=debug,tower_http=info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "info,homecore=debug,homecore_server=debug,tower_http=info".into()
+            }),
         )
         .init();
 }
@@ -281,42 +364,125 @@ fn init_tracing() {
 /// light / switch / scene / automation domains) plus a `homecore.*`
 /// domain so operators can see HOMECORE-native services distinguished
 /// from the HA-compat ones.
-async fn seed_default_services(hc: &HomeCore) {
-    let echo = || FnHandler(|call: ServiceCall| async move {
-        Ok(serde_json::json!({
-            "called": format!("{}.{}", call.name.domain, call.name.service),
-            "service_data": call.data,
-            "acknowledged": true,
-        }))
-    });
+async fn register_builtin_services(hc: &HomeCore) {
+    hc.services()
+        .register(
+            ServiceName::new("homecore", "ping"),
+            FnHandler(|_call| async { Ok(serde_json::json!({ "pong": true })) }),
+        )
+        .await;
 
-    let svcs = [
-        // Conventional HA wire-compat services
-        ("homeassistant", "restart"),
-        ("homeassistant", "stop"),
-        ("homeassistant", "reload_core_config"),
-        ("light", "turn_on"),
-        ("light", "turn_off"),
-        ("light", "toggle"),
-        ("switch", "turn_on"),
-        ("switch", "turn_off"),
-        ("switch", "toggle"),
-        ("scene", "apply"),
-        ("automation", "trigger"),
-        // HOMECORE-native services
-        ("homecore", "ping"),
-        ("homecore", "snapshot_state"),
-    ];
+    let snapshot_states = hc.states().clone();
+    hc.services()
+        .register(
+            ServiceName::new("homecore", "snapshot_state"),
+            FnHandler(move |_call| {
+                let states = snapshot_states.clone();
+                async move { Ok(serde_json::to_value(states.all()).unwrap_or_default()) }
+            }),
+        )
+        .await;
 
-    for (domain, service) in svcs {
-        hc.services()
-            .register(ServiceName::new(domain, service), echo())
-            .await;
+    for domain in ["homeassistant", "light", "switch"] {
+        for action in ["turn_on", "turn_off", "toggle"] {
+            let states = hc.states().clone();
+            let required_domain = (domain != "homeassistant").then(|| domain.to_owned());
+            hc.services()
+                .register(
+                    ServiceName::new(domain, action),
+                    FnHandler(move |call: ServiceCall| {
+                        let states = states.clone();
+                        let required_domain = required_domain.clone();
+                        async move {
+                            let ids = service_entity_ids(&call.data)?;
+                            let mut changed = Vec::with_capacity(ids.len());
+                            for id in ids {
+                                if let Some(domain) = required_domain.as_deref() {
+                                    if id.domain() != domain {
+                                        return Err(ServiceError::HandlerFailed(format!(
+                                            "{}.{} only accepts {domain} entities",
+                                            call.name.domain, call.name.service
+                                        )));
+                                    }
+                                }
+                                let current = states.get(&id).ok_or_else(|| {
+                                    ServiceError::HandlerFailed(format!(
+                                        "entity not found: {}",
+                                        id.as_str()
+                                    ))
+                                })?;
+                                let next = match call.name.service.as_str() {
+                                    "turn_on" => "on",
+                                    "turn_off" => "off",
+                                    "toggle" if current.state == "on" => "off",
+                                    "toggle" => "on",
+                                    _ => unreachable!("only registered actions are dispatched"),
+                                };
+                                let mut attributes = current.attributes.clone();
+                                if next == "on" {
+                                    if let (Some(object), Some(brightness)) =
+                                        (attributes.as_object_mut(), call.data.get("brightness"))
+                                    {
+                                        object.insert("brightness".into(), brightness.clone());
+                                    }
+                                }
+                                states.set(
+                                    id.clone(),
+                                    next,
+                                    attributes,
+                                    Context::child_of(&call.context),
+                                );
+                                changed.push(id.as_str().to_owned());
+                            }
+                            Ok(serde_json::json!({ "changed": changed }))
+                        }
+                    }),
+                )
+                .await;
+        }
     }
 
-    let count = hc.services().registered_services().await.len();
-    let _ = ServiceError::NotRegistered { domain: String::new(), service: String::new() };
-    info!("Service registry seeded with {} default service(s)", count);
+    info!(
+        "Registered {} executable built-in services",
+        hc.services().registered_services().await.len()
+    );
+}
+
+fn service_entity_ids(data: &serde_json::Value) -> Result<Vec<EntityId>, ServiceError> {
+    let value = data
+        .get("entity_id")
+        .or_else(|| {
+            data.get("target")
+                .and_then(|target| target.get("entity_id"))
+        })
+        .ok_or_else(|| ServiceError::HandlerFailed("missing entity_id".into()))?;
+    let raw_ids: Vec<&str> = match value {
+        serde_json::Value::String(value) => vec![value],
+        serde_json::Value::Array(values) => values
+            .iter()
+            .map(|value| {
+                value.as_str().ok_or_else(|| {
+                    ServiceError::HandlerFailed("entity_id array must contain strings".into())
+                })
+            })
+            .collect::<Result<_, _>>()?,
+        _ => {
+            return Err(ServiceError::HandlerFailed(
+                "entity_id must be a string or string array".into(),
+            ));
+        }
+    };
+    if raw_ids.is_empty() {
+        return Err(ServiceError::HandlerFailed(
+            "entity_id array cannot be empty".into(),
+        ));
+    }
+    raw_ids
+        .into_iter()
+        .map(|value| {
+            EntityId::parse(value).map_err(|error| ServiceError::HandlerFailed(error.to_string()))
+        })
+        .collect()
 }
 
 /// Register 10 representative entities so a fresh `--db :memory:`
@@ -325,45 +491,85 @@ async fn seed_default_services(hc: &HomeCore) {
 /// they stay in sync.
 fn seed_default_entities(hc: &HomeCore) {
     let entities: Vec<(&str, &str, serde_json::Value)> = vec![
-        ("sensor.living_room_presence", "false", serde_json::json!({
-            "friendly_name": "Living Room Presence", "device_class": "occupancy",
-            "source": "RuView ESP32-C6 BFLD"
-        })),
-        ("sensor.living_room_motion_score", "0.0", serde_json::json!({
-            "friendly_name": "Living Room Motion Score", "unit_of_measurement": "score",
-            "icon": "mdi:motion-sensor"
-        })),
-        ("sensor.bedroom_breathing_rate", "14.5", serde_json::json!({
-            "friendly_name": "Bedroom Breathing Rate", "unit_of_measurement": "BPM",
-            "device_class": "frequency", "source": "Seeed MR60BHA2 mmWave"
-        })),
-        ("sensor.bedroom_heart_rate", "68.0", serde_json::json!({
-            "friendly_name": "Bedroom Heart Rate", "unit_of_measurement": "BPM",
-            "device_class": "frequency", "source": "Seeed MR60BHA2 mmWave"
-        })),
-        ("light.kitchen_ceiling", "on", serde_json::json!({
-            "friendly_name": "Kitchen Ceiling", "brightness": 230,
-            "color_temp_kelvin": 4000, "supported_color_modes": ["color_temp"]
-        })),
-        ("light.living_room_lamp", "off", serde_json::json!({
-            "friendly_name": "Living Room Lamp", "brightness": 0,
-            "supported_color_modes": ["brightness"]
-        })),
-        ("switch.coffee_maker", "off", serde_json::json!({
-            "friendly_name": "Coffee Maker", "device_class": "outlet"
-        })),
-        ("binary_sensor.front_door", "off", serde_json::json!({
-            "friendly_name": "Front Door", "device_class": "door"
-        })),
-        ("climate.thermostat", "heat", serde_json::json!({
-            "friendly_name": "Thermostat", "current_temperature": 21.5,
-            "temperature": 22.0, "hvac_modes": ["off", "heat", "cool", "auto"],
-            "supported_features": 387
-        })),
-        ("sensor.air_quality_index", "42", serde_json::json!({
-            "friendly_name": "Air Quality Index", "unit_of_measurement": "AQI",
-            "device_class": "aqi"
-        })),
+        (
+            "sensor.living_room_presence",
+            "false",
+            serde_json::json!({
+                "friendly_name": "Living Room Presence", "device_class": "occupancy",
+                "source": "RuView ESP32-C6 BFLD"
+            }),
+        ),
+        (
+            "sensor.living_room_motion_score",
+            "0.0",
+            serde_json::json!({
+                "friendly_name": "Living Room Motion Score", "unit_of_measurement": "score",
+                "icon": "mdi:motion-sensor"
+            }),
+        ),
+        (
+            "sensor.bedroom_breathing_rate",
+            "14.5",
+            serde_json::json!({
+                "friendly_name": "Bedroom Breathing Rate", "unit_of_measurement": "BPM",
+                "device_class": "frequency", "source": "Seeed MR60BHA2 mmWave"
+            }),
+        ),
+        (
+            "sensor.bedroom_heart_rate",
+            "68.0",
+            serde_json::json!({
+                "friendly_name": "Bedroom Heart Rate", "unit_of_measurement": "BPM",
+                "device_class": "frequency", "source": "Seeed MR60BHA2 mmWave"
+            }),
+        ),
+        (
+            "light.kitchen_ceiling",
+            "on",
+            serde_json::json!({
+                "friendly_name": "Kitchen Ceiling", "brightness": 230,
+                "color_temp_kelvin": 4000, "supported_color_modes": ["color_temp"]
+            }),
+        ),
+        (
+            "light.living_room_lamp",
+            "off",
+            serde_json::json!({
+                "friendly_name": "Living Room Lamp", "brightness": 0,
+                "supported_color_modes": ["brightness"]
+            }),
+        ),
+        (
+            "switch.coffee_maker",
+            "off",
+            serde_json::json!({
+                "friendly_name": "Coffee Maker", "device_class": "outlet"
+            }),
+        ),
+        (
+            "binary_sensor.front_door",
+            "off",
+            serde_json::json!({
+                "friendly_name": "Front Door", "device_class": "door"
+            }),
+        ),
+        (
+            "climate.thermostat",
+            "heat",
+            serde_json::json!({
+                "friendly_name": "Thermostat", "current_temperature": 21.5,
+                "temperature": 22.0, "hvac_modes": ["off", "heat", "cool", "auto"],
+                "supported_features": 387
+            }),
+        ),
+        (
+            "sensor.air_quality_index",
+            "42",
+            serde_json::json!({
+                "friendly_name": "Air Quality Index", "unit_of_measurement": "AQI",
+                "device_class": "aqi"
+            }),
+        ),
     ];
 
     for (id, state, attrs) in entities {
@@ -381,8 +587,11 @@ fn seed_default_entities(hc: &HomeCore) {
         context: Context::new(),
     };
     let total = hc.states().all().len();
-    info!("State machine seeded with {} default entit{}", total,
-          if total == 1 { "y" } else { "ies" });
+    info!(
+        "State machine seeded with {} default entit{}",
+        total,
+        if total == 1 { "y" } else { "ies" }
+    );
 }
 
 #[cfg(test)]
@@ -419,9 +628,19 @@ mod ui_tests {
     async fn ui_index_is_served_at_homecore() {
         let app = build_app(test_state(), DEFAULT_UI_DIR);
         let (status, body) = get(app, "/homecore/").await;
-        assert_eq!(status, StatusCode::OK, "GET /homecore/ should serve index.html");
-        assert!(body.contains("HOMECORE"), "index.html should mention HOMECORE");
-        assert!(body.contains("./js/app.js"), "index.html should bootstrap app.js");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "GET /homecore/ should serve index.html"
+        );
+        assert!(
+            body.contains("HOMECORE"),
+            "index.html should mention HOMECORE"
+        );
+        assert!(
+            body.contains("./js/app.js"),
+            "index.html should bootstrap app.js"
+        );
     }
 
     #[tokio::test]
@@ -437,8 +656,18 @@ mod ui_tests {
     #[tokio::test]
     async fn ui_panels_are_served() {
         let app = build_app(test_state(), DEFAULT_UI_DIR);
-        for p in ["dashboard", "rooms", "calibration", "fleet", "seed-detail",
-                  "entities", "cogs", "events", "audit", "settings"] {
+        for p in [
+            "dashboard",
+            "rooms",
+            "calibration",
+            "fleet",
+            "seed-detail",
+            "entities",
+            "cogs",
+            "events",
+            "audit",
+            "settings",
+        ] {
             let (status, _) = get(app.clone(), &format!("/homecore/js/panels/{p}.js")).await;
             assert_eq!(status, StatusCode::OK, "panel {p}.js should be served");
         }
@@ -459,9 +688,15 @@ mod ui_tests {
             .await
             .unwrap();
         let status = resp.status();
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let body = String::from_utf8_lossy(&bytes);
-        assert_eq!(status, StatusCode::OK, "the HA-compat API must coexist with the UI mount");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "the HA-compat API must coexist with the UI mount"
+        );
         assert!(body.contains("API running"));
     }
 
@@ -469,12 +704,16 @@ mod ui_tests {
     async fn ui_mount_can_be_disabled() {
         let app = build_app(test_state(), "");
         let (status, _) = get(app, "/homecore/").await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "empty --ui-dir disables the mount");
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "empty --ui-dir disables the mount"
+        );
     }
 
     /// Build the SAME merged + layered surface `main()` serves: API + UI mount
     /// + BFF gateway, with the audited CORS allowlist + tracing applied to the
-    /// whole thing. Used to prove the gateway routes are CORS-covered.
+    ///   whole thing. Used to prove the gateway routes are CORS-covered.
     fn full_app(state: SharedState) -> Router {
         use crate::gateway::{GatewayConfig, GatewayState};
         let gw = GatewayState::new(
@@ -526,5 +765,48 @@ mod ui_tests {
             allow_origin, "http://localhost:5173",
             "gateway route must echo the allowlisted dev origin"
         );
+    }
+
+    #[tokio::test]
+    async fn builtin_light_service_changes_real_state() {
+        let hc = HomeCore::new();
+        let id = EntityId::parse("light.kitchen").unwrap();
+        hc.states().set(
+            id.clone(),
+            "off",
+            serde_json::json!({"friendly_name": "Kitchen"}),
+            Context::new(),
+        );
+        register_builtin_services(&hc).await;
+
+        let result = hc
+            .services()
+            .call(ServiceCall {
+                name: ServiceName::new("light", "turn_on"),
+                data: serde_json::json!({"entity_id": "light.kitchen", "brightness": 123}),
+                context: Context::new(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result["changed"][0], "light.kitchen");
+        let state = hc.states().get(&id).unwrap();
+        assert_eq!(state.state, "on");
+        assert_eq!(state.attributes["brightness"], 123);
+    }
+
+    #[tokio::test]
+    async fn unsupported_builtin_service_is_not_success_shaped() {
+        let hc = HomeCore::new();
+        register_builtin_services(&hc).await;
+        let result = hc
+            .services()
+            .call(ServiceCall {
+                name: ServiceName::new("homeassistant", "restart"),
+                data: serde_json::json!({}),
+                context: Context::new(),
+            })
+            .await;
+        assert!(matches!(result, Err(ServiceError::NotRegistered { .. })));
     }
 }

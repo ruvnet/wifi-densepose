@@ -26,17 +26,15 @@
 //! }
 //! ```
 
-use std::path::Path;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use homecore::{registry::DisabledBy, EntityCategory, EntityEntry, EntityId};
 
-use crate::{
-    storage::read_envelope,
-    storage_format::v13,
-    MigrateError,
-};
+use crate::{storage::read_envelope, storage_format::v13, MigrateError};
 
 // Key used by `inspect` subcommand when scanning the directory.
 #[allow(dead_code)]
@@ -75,21 +73,21 @@ struct HaEntityRow {
     // Fields present in v13 that we capture but do not yet map to HOMECORE.
     // Forwarded as Q5 items.
     #[serde(default)]
-    hidden_by: Option<String>,        // v13: "user" | "integration"
+    hidden_by: Option<String>, // v13: "user" | "integration"
     #[serde(default)]
-    has_entity_name: Option<bool>,    // v13: HA naming convention flag
+    has_entity_name: Option<bool>, // v13: HA naming convention flag
     #[serde(default)]
-    original_name: Option<String>,    // v13: integration-provided default name
+    original_name: Option<String>, // v13: integration-provided default name
     #[serde(default)]
-    icon: Option<String>,             // v13: mdi:xxx icon override
+    icon: Option<String>, // v13: mdi:xxx icon override
     #[serde(default)]
-    original_icon: Option<String>,    // v13: integration-provided icon
+    original_icon: Option<String>, // v13: integration-provided icon
     #[serde(default)]
-    aliases: Option<Vec<String>>,     // v13: user-set aliases for voice assist
+    aliases: Option<Vec<String>>, // v13: user-set aliases for voice assist
     #[serde(default)]
     capabilities: Option<serde_json::Value>, // v13: integration-specific caps
     #[serde(default)]
-    supported_features: Option<u64>,  // v13: bitmask
+    supported_features: Option<u64>, // v13: bitmask
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -166,6 +164,64 @@ pub fn read_entity_registry(path: &Path) -> Result<Vec<EntityEntry>, MigrateErro
     Ok(entries)
 }
 
+/// Persist imported entries using the HA-compatible v13 storage envelope.
+///
+/// The destination is created if needed and the file is written through a
+/// same-directory temporary file followed by an atomic rename. Existing
+/// registries are never overwritten implicitly.
+pub fn write_entity_registry(
+    storage_dir: &Path,
+    entries: &[EntityEntry],
+) -> Result<PathBuf, MigrateError> {
+    fs::create_dir_all(storage_dir).map_err(|source| MigrateError::Io {
+        path: storage_dir.display().to_string(),
+        source,
+    })?;
+    let target = storage_dir.join(FILE_KEY);
+    if target.exists() {
+        return Err(MigrateError::Io {
+            path: target.display().to_string(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "destination exists; refusing to overwrite",
+            ),
+        });
+    }
+    let temp = storage_dir.join(format!(".{FILE_KEY}.{}.tmp", std::process::id()));
+    let payload = serde_json::json!({
+        "version": 1,
+        "minor_version": 13,
+        "key": FILE_KEY,
+        "data": {
+            "entities": entries,
+            "deleted_entities": []
+        }
+    });
+    let bytes = serde_json::to_vec_pretty(&payload).map_err(|source| MigrateError::JsonParse {
+        path: target.display().to_string(),
+        source,
+    })?;
+
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp)?;
+        file.write_all(&bytes)?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        fs::rename(&temp, &target)
+    })();
+    if let Err(source) = result {
+        let _ = fs::remove_file(&temp);
+        return Err(MigrateError::Io {
+            path: target.display().to_string(),
+            source,
+        });
+    }
+    Ok(target)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,7 +283,10 @@ mod tests {
     fn entity_fields_round_trip_correctly() {
         let f = write_fixture(FIXTURE_V13);
         let entries = read_entity_registry(f.path()).unwrap();
-        let light = entries.iter().find(|e| e.entity_id.as_str() == "light.kitchen").unwrap();
+        let light = entries
+            .iter()
+            .find(|e| e.entity_id.as_str() == "light.kitchen")
+            .unwrap();
         assert_eq!(light.unique_id.as_deref(), Some("hue_lamp_42"));
         assert_eq!(light.platform, "hue");
         assert_eq!(light.name.as_deref(), Some("Kitchen lamp"));
@@ -236,6 +295,21 @@ mod tests {
         assert_eq!(light.device_id.as_deref(), Some("abc123"));
         assert!(light.entity_category.is_none());
         assert_eq!(light.config_entry_id.as_deref(), Some("ce_001"));
+    }
+
+    #[test]
+    fn writes_atomic_compatible_registry_without_overwrite() {
+        let source = write_fixture(FIXTURE_V13);
+        let entries = read_entity_registry(source.path()).unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        let path = write_entity_registry(destination.path(), &entries).unwrap();
+        let imported = read_entity_registry(&path).unwrap();
+        assert_eq!(imported.len(), entries.len());
+        assert_eq!(imported[0].entity_id, entries[0].entity_id);
+
+        let second = write_entity_registry(destination.path(), &entries).unwrap_err();
+        assert!(second.to_string().contains("refusing to overwrite"));
     }
 
     #[test]
@@ -260,7 +334,13 @@ mod tests {
         let f = write_fixture(json);
         let err = read_entity_registry(f.path()).unwrap_err();
         assert!(
-            matches!(err, MigrateError::UnsupportedSchemaVersion { minor_version: 99, .. }),
+            matches!(
+                err,
+                MigrateError::UnsupportedSchemaVersion {
+                    minor_version: 99,
+                    ..
+                }
+            ),
             "got: {err}"
         );
         let msg = err.to_string();
