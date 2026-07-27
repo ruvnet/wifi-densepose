@@ -149,6 +149,7 @@ async fn history_response(
         ));
     }
 
+    let explicit_filter = query.filter_entity_id.is_some();
     let entity_ids = match query.filter_entity_id.as_deref() {
         Some(raw) => raw
             .split(',')
@@ -167,9 +168,15 @@ async fn history_response(
             .map(|snapshot| snapshot.entity_id.clone())
             .collect(),
     };
-    if entity_ids.len() > MAX_HISTORY_ENTITIES {
+    // Only reject an explicit, unusually-large `filter_entity_id` list. The
+    // real HA frontend's history page calls this endpoint with NO filter by
+    // design (meaning "all entities") — a real install routinely has 50-500+
+    // entities, so applying this cap there rejected the single most common
+    // call shape outright. The `MAX_API_HISTORY_ROWS` total-row budget below
+    // already bounds the actual work regardless of entity count.
+    if explicit_filter && entity_ids.len() > MAX_HISTORY_ENTITIES {
         return Err(ApiError::BadRequest(format!(
-            "history queries are limited to {MAX_HISTORY_ENTITIES} entities"
+            "history queries are limited to {MAX_HISTORY_ENTITIES} explicitly filtered entities"
         )));
     }
 
@@ -277,6 +284,7 @@ async fn logbook_response(
             "end_time must not precede start_time".into(),
         ));
     }
+    let explicit_filter = query.entity.is_some();
     let entity_ids = match query.entity.as_deref() {
         Some(raw) => raw
             .split(',')
@@ -295,9 +303,13 @@ async fn logbook_response(
             .map(|snapshot| snapshot.entity_id.clone())
             .collect(),
     };
-    if entity_ids.len() > MAX_HISTORY_ENTITIES {
+    // See the matching comment in `history_response`: only reject an
+    // explicit, unusually-large filter — the default (no filter, "all
+    // entities") is the real HA frontend's normal call shape, and the
+    // `MAX_API_HISTORY_ROWS` row budget below already bounds the work.
+    if explicit_filter && entity_ids.len() > MAX_HISTORY_ENTITIES {
         return Err(ApiError::BadRequest(format!(
-            "logbook queries are limited to {MAX_HISTORY_ENTITIES} entities"
+            "logbook queries are limited to {MAX_HISTORY_ENTITIES} explicitly filtered entities"
         )));
     }
     let mut entries = Vec::new();
@@ -592,6 +604,23 @@ pub async fn get_events(
     ))
 }
 
+/// Whether `event_type` is acceptable to fire on the domain bus.
+///
+/// Real Home Assistant places essentially no format restriction on event
+/// types beyond "non-empty string" — integrations commonly fire types with
+/// mixed case, dots, or hyphens (e.g. `mobile_app.notification_action`,
+/// `ios.action_fired`). The original check here only accepted
+/// `[a-z0-9_]+`, silently rejecting any of those — a real behavioral gap
+/// versus the documented contract, not a security boundary (this endpoint is
+/// already bearer-authenticated). We keep only the bounds that protect the
+/// server itself: non-empty, a sane length cap, and no control characters
+/// (which could otherwise corrupt log lines or downstream storage).
+pub(crate) fn is_valid_event_type(event_type: &str) -> bool {
+    !event_type.is_empty()
+        && event_type.len() <= 255
+        && event_type.chars().all(|ch| !ch.is_control())
+}
+
 pub async fn fire_event(
     headers: HeaderMap,
     State(s): State<SharedState>,
@@ -599,12 +628,7 @@ pub async fn fire_event(
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let _ = BearerAuth::from_headers(&headers, s.tokens()).await?;
-    if event_type.is_empty()
-        || event_type.len() > 255
-        || !event_type
-            .chars()
-            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
-    {
+    if !is_valid_event_type(&event_type) {
         return Err(ApiError::BadRequest("invalid event_type".into()));
     }
     if !body.is_object() && !body.is_null() {
@@ -704,4 +728,29 @@ pub async fn compatibility(
             "lovelace_media": "integration_dependent"
         }
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_valid_event_type;
+
+    /// Real HA integrations commonly fire event types with mixed case, dots,
+    /// or hyphens (e.g. `mobile_app.notification_action`). The original
+    /// `[a-z0-9_]+`-only check rejected all of these; only non-empty,
+    /// length, and control-character bounds should remain.
+    #[test]
+    fn realistic_ha_event_types_are_accepted() {
+        assert!(is_valid_event_type("mobile_app.notification_action"));
+        assert!(is_valid_event_type("ios.action_fired"));
+        assert!(is_valid_event_type("Custom-Event.2"));
+        assert!(is_valid_event_type("state_changed"));
+    }
+
+    #[test]
+    fn empty_oversized_or_control_char_event_types_are_rejected() {
+        assert!(!is_valid_event_type(""));
+        assert!(!is_valid_event_type(&"a".repeat(256)));
+        assert!(!is_valid_event_type("bad\nevent"));
+        assert!(!is_valid_event_type("bad\tevent"));
+    }
 }

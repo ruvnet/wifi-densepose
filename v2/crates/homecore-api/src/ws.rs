@@ -328,12 +328,7 @@ impl Connection {
                     self.err(tx, cmd.id, "invalid_format", "event_type is required");
                     return;
                 };
-                if event_type.is_empty()
-                    || event_type.len() > 255
-                    || !event_type
-                        .chars()
-                        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
-                {
+                if !crate::rest::is_valid_event_type(&event_type) {
                     self.err(tx, cmd.id, "invalid_format", "invalid event_type");
                     return;
                 }

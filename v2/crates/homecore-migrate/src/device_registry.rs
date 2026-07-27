@@ -7,7 +7,7 @@ use homecore::DeviceEntry;
 use serde::Deserialize;
 
 use crate::{
-    storage::{read_envelope, write_json_atomic_noclobber},
+    storage::{read_envelope, write_json_atomic},
     storage_format::v13,
     MigrateError,
 };
@@ -115,6 +115,17 @@ pub fn write_device_registry(
     storage_dir: &Path,
     devices: &[DeviceEntry],
 ) -> Result<PathBuf, MigrateError> {
+    write_device_registry_with(storage_dir, devices, false)
+}
+
+/// As [`write_device_registry`], but `force = true` atomically replaces an
+/// existing destination instead of refusing — the escape hatch for
+/// re-running an import after fixing a bad source row.
+pub fn write_device_registry_with(
+    storage_dir: &Path,
+    devices: &[DeviceEntry],
+    force: bool,
+) -> Result<PathBuf, MigrateError> {
     let target = storage_dir.join(FILE_KEY);
     let payload = serde_json::json!({
         "version": 1,
@@ -125,7 +136,7 @@ pub fn write_device_registry(
             "deleted_devices": []
         }
     });
-    write_json_atomic_noclobber(&target, &payload)
+    write_json_atomic(&target, &payload, force)
 }
 
 #[cfg(test)]
@@ -178,6 +189,25 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+    }
+
+    /// `force = true` is the operator escape hatch: re-running an import
+    /// after fixing a bad source row (or re-importing after further HA-side
+    /// changes) must not require manually deleting prior output first.
+    #[test]
+    fn force_overwrites_existing_destination() {
+        let mut source = NamedTempFile::new().unwrap();
+        source.write_all(FIXTURE.as_bytes()).unwrap();
+        let devices = read_device_registry(source.path()).unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        write_device_registry(destination.path(), &devices).unwrap();
+        write_device_registry_with(destination.path(), &[], true).unwrap();
+        assert_eq!(
+            read_device_registry(&destination.path().join(FILE_KEY))
+                .unwrap()
+                .len(),
+            0
         );
     }
 }

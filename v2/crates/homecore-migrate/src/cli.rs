@@ -48,6 +48,11 @@ pub struct ImportEntitiesArgs {
     /// Path to the HOMECORE storage directory (destination).
     #[arg(long)]
     pub to: PathBuf,
+    /// Overwrite an existing destination file instead of refusing. Use this
+    /// to re-run an import after fixing a bad source row, or to re-import
+    /// after further changes on the HA side.
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Debug, clap::Args)]
@@ -58,6 +63,11 @@ pub struct ImportDevicesArgs {
     /// Path to the HOMECORE storage directory (destination).
     #[arg(long)]
     pub to: PathBuf,
+    /// Overwrite an existing destination file instead of refusing. Use this
+    /// to re-run an import after fixing a bad source row, or to re-import
+    /// after further changes on the HA side.
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Debug, clap::Args)]
@@ -68,6 +78,11 @@ pub struct ImportConfigEntriesArgs {
     /// Path to the HOMECORE storage directory (destination).
     #[arg(long)]
     pub to: PathBuf,
+    /// Overwrite an existing destination file instead of refusing. Use this
+    /// to re-run an import after fixing a bad source row, or to re-import
+    /// after further changes on the HA side.
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Debug, clap::Args)]

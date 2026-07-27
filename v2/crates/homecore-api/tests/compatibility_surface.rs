@@ -102,3 +102,92 @@ async fn history_reads_real_recorder_rows() {
     assert_eq!(body[0][0]["state"], "on");
     assert_eq!(body[0][0]["attributes"]["brightness"], 123);
 }
+
+/// The real HA frontend's history/logbook pages call these endpoints with NO
+/// entity filter by design (meaning "all entities") — a real install
+/// routinely has 50-500+ entities. The 32-entity cap must only reject an
+/// explicit, unusually-large `filter_entity_id`/`entity` list, never the
+/// default unfiltered "all entities" shape.
+#[tokio::test]
+async fn history_and_logbook_unfiltered_are_not_capped_by_entity_count() {
+    use homecore::{Context, EntityId};
+    use homecore_recorder::Recorder;
+
+    let homecore = HomeCore::new();
+    let recorder = Recorder::open("sqlite::memory:").await.unwrap();
+    for i in 0..40 {
+        homecore.states().set(
+            EntityId::parse(&format!("sensor.probe_{i}")).unwrap(),
+            "on",
+            serde_json::json!({}),
+            Context::new(),
+        );
+    }
+    assert_eq!(homecore.states().all().len(), 40, "sanity: more than MAX_HISTORY_ENTITIES");
+
+    let tokens = LongLivedTokenStore::empty();
+    tokens.register("test-token").await;
+    let state =
+        SharedState::with_tokens(homecore, "Test", "test", tokens).with_recorder(Some(recorder));
+    let app = router(state);
+
+    let history_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/history/period")
+                .header("authorization", "Bearer test-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        history_response.status(),
+        StatusCode::OK,
+        "unfiltered history with >32 known entities must not be rejected"
+    );
+
+    let logbook_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/logbook")
+                .header("authorization", "Bearer test-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        logbook_response.status(),
+        StatusCode::OK,
+        "unfiltered logbook with >32 known entities must not be rejected"
+    );
+}
+
+/// An explicit, unusually-large `filter_entity_id` list is still rejected —
+/// only the default "no filter" shape is exempt from the cap.
+#[tokio::test]
+async fn history_explicit_oversized_filter_is_still_rejected() {
+    use homecore_recorder::Recorder;
+
+    let homecore = HomeCore::new();
+    let recorder = Recorder::open("sqlite::memory:").await.unwrap();
+    let tokens = LongLivedTokenStore::empty();
+    tokens.register("test-token").await;
+    let state =
+        SharedState::with_tokens(homecore, "Test", "test", tokens).with_recorder(Some(recorder));
+
+    let filter: String = (0..40).map(|i| format!("sensor.probe_{i}")).collect::<Vec<_>>().join(",");
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/history/period?filter_entity_id={filter}"))
+                .header("authorization", "Bearer test-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

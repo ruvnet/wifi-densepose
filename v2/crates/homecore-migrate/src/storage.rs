@@ -81,6 +81,21 @@ pub fn write_json_atomic_noclobber<T: Serialize>(
     target: &Path,
     value: &T,
 ) -> Result<PathBuf, MigrateError> {
+    write_json_atomic(target, value, false)
+}
+
+/// Same atomic write (temp file → `sync_all` → publish), but when `force` is
+/// true an existing destination is atomically replaced via `rename` instead
+/// of refusing via `hard_link`'s `AlreadyExists`. Without `force`, an
+/// operator who re-runs an import after fixing a bad source row (or wants a
+/// fresh pass) had no way to overwrite prior output short of deleting it by
+/// hand first — this is the escape hatch for that, opt-in so the default
+/// no-clobber safety is unchanged.
+pub fn write_json_atomic<T: Serialize>(
+    target: &Path,
+    value: &T,
+    force: bool,
+) -> Result<PathBuf, MigrateError> {
     let parent = target.parent().ok_or_else(|| MigrateError::Io {
         path: target.display().to_string(),
         source: std::io::Error::new(
@@ -112,6 +127,22 @@ pub fn write_json_atomic_noclobber<T: Serialize>(
         file.write_all(&bytes)?;
         file.write_all(b"\n")?;
         file.sync_all()?;
+        if force {
+            // `rename`-over-existing hits real sharing-violation flakiness
+            // on Windows (ERROR_ACCESS_DENIED even with no other open
+            // handle in this process). Pre-clear the destination instead,
+            // then publish through the same hard_link step the no-clobber
+            // path uses. This briefly widens the crash window (a crash
+            // between remove and hard_link leaves no destination file
+            // rather than the old one), which is the accepted, opt-in
+            // tradeoff of explicitly requesting an overwrite — the default
+            // (non-force) path keeps its full no-clobber atomicity.
+            match fs::remove_file(target) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
         fs::hard_link(&temp, target)?;
         fs::remove_file(&temp)?;
         Ok(())

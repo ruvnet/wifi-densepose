@@ -144,18 +144,42 @@ pub struct PairingStoreProvisioning {
     pub setup_code: Option<SetupCode>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredAccessory {
     device_id: String,
     signing_seed: [u8; 32],
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// Manual, redacted impl: `signing_seed` is the accessory's permanent Ed25519
+// identity key, used to sign every Pair-Setup/Pair-Verify transcript for the
+// device's whole lifetime with no rotation mechanism. A derived `Debug` would
+// print it in plaintext the first time anything formats this struct (a log
+// line, a panic message) — same rationale as `SetupCode`'s manual impl below.
+impl std::fmt::Debug for StoredAccessory {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StoredAccessory")
+            .field("device_id", &self.device_id)
+            .field("signing_seed", &"[REDACTED]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredSetup {
     salt: [u8; 16],
     verifier: Vec<u8>,
+}
+
+// Manual, redacted impl: `salt`/`verifier` are the SRP-6a material derived
+// from the setup code. Printing them would hand an attacker exactly what an
+// offline dictionary attack against the (8-digit) setup code needs.
+impl std::fmt::Debug for StoredSetup {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("StoredSetup([REDACTED])")
+    }
 }
 
 impl Drop for StoredAccessory {
@@ -677,6 +701,40 @@ mod tests {
         assert!(SetupCode::parse("123-45-678").is_err());
         let code = SetupCode::parse("518-26-003").unwrap();
         assert_eq!(format!("{code:?}"), "SetupCode([REDACTED])");
+    }
+
+    /// A stray `format!("{store:?}")` (a future debug log line, a panic
+    /// message) must never print the accessory's permanent Ed25519 signing
+    /// seed or the SRP salt/verifier — both are compromise-forever secrets
+    /// with no rotation mechanism.
+    #[test]
+    fn stored_accessory_and_setup_debug_never_print_secret_material() {
+        let accessory = StoredAccessory {
+            device_id: "AA:BB:CC:DD:EE:FF".into(),
+            signing_seed: [0x42; 32],
+        };
+        let rendered = format!("{accessory:?}");
+        assert!(rendered.contains("device_id"));
+        assert!(rendered.contains("AA:BB:CC:DD:EE:FF"));
+        assert!(!rendered.contains("66"), "hex of 0x42 must not leak: {rendered}");
+        assert_eq!(
+            rendered,
+            "StoredAccessory { device_id: \"AA:BB:CC:DD:EE:FF\", signing_seed: \"[REDACTED]\" }"
+        );
+
+        let setup = StoredSetup { salt: [0x7a; 16], verifier: vec![0x13; 8] };
+        assert_eq!(format!("{setup:?}"), "StoredSetup([REDACTED])");
+
+        // The redaction must propagate through every derived-Debug container
+        // that embeds these structs, with no further code changes needed.
+        let state = StoreState {
+            accessory,
+            setup,
+            controllers: std::collections::BTreeMap::new(),
+        };
+        let rendered_state = format!("{state:?}");
+        assert!(!rendered_state.contains("0x42"));
+        assert!(rendered_state.contains("[REDACTED]"));
     }
 
     #[test]
