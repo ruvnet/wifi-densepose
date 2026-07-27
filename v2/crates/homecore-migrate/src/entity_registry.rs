@@ -26,15 +26,17 @@
 //! }
 //! ```
 
-use std::fs::{self, OpenOptions};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use homecore::{registry::DisabledBy, EntityCategory, EntityEntry, EntityId};
 
-use crate::{storage::read_envelope, storage_format::v13, MigrateError};
+use crate::{
+    storage::{read_envelope, write_json_atomic_noclobber},
+    storage_format::v13,
+    MigrateError,
+};
 
 // Key used by `inspect` subcommand when scanning the directory.
 #[allow(dead_code)]
@@ -173,21 +175,7 @@ pub fn write_entity_registry(
     storage_dir: &Path,
     entries: &[EntityEntry],
 ) -> Result<PathBuf, MigrateError> {
-    fs::create_dir_all(storage_dir).map_err(|source| MigrateError::Io {
-        path: storage_dir.display().to_string(),
-        source,
-    })?;
     let target = storage_dir.join(FILE_KEY);
-    if target.exists() {
-        return Err(MigrateError::Io {
-            path: target.display().to_string(),
-            source: std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                "destination exists; refusing to overwrite",
-            ),
-        });
-    }
-    let temp = storage_dir.join(format!(".{FILE_KEY}.{}.tmp", std::process::id()));
     let payload = serde_json::json!({
         "version": 1,
         "minor_version": 13,
@@ -197,29 +185,7 @@ pub fn write_entity_registry(
             "deleted_entities": []
         }
     });
-    let bytes = serde_json::to_vec_pretty(&payload).map_err(|source| MigrateError::JsonParse {
-        path: target.display().to_string(),
-        source,
-    })?;
-
-    let result = (|| {
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temp)?;
-        file.write_all(&bytes)?;
-        file.write_all(b"\n")?;
-        file.sync_all()?;
-        fs::rename(&temp, &target)
-    })();
-    if let Err(source) = result {
-        let _ = fs::remove_file(&temp);
-        return Err(MigrateError::Io {
-            path: target.display().to_string(),
-            source,
-        });
-    }
-    Ok(target)
+    write_json_atomic_noclobber(&target, &payload)
 }
 
 #[cfg(test)]

@@ -37,6 +37,7 @@ use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
 mod gateway;
+mod restore;
 use gateway::{GatewayConfig, GatewayState};
 
 /// Compile-time default location of the HOMECORE-UI assets (ADR-131).
@@ -82,6 +83,18 @@ struct Cli {
     /// SQLite recorder DB path. Use `:memory:` for an ephemeral run.
     #[arg(long, env = "HOMECORE_DB", default_value = "sqlite://homecore.db")]
     db: String,
+
+    /// HOMECORE registry storage directory restored at startup.
+    #[arg(
+        long,
+        env = "HOMECORE_STORAGE_DIR",
+        default_value = ".homecore/storage"
+    )]
+    storage_dir: std::path::PathBuf,
+
+    /// Maximum registry rows and latest entity states restored at startup.
+    #[arg(long, env = "HOMECORE_RESTORE_LIMIT", default_value_t = 100_000)]
+    restore_limit: usize,
 
     /// Friendly location name surfaced via `/api/config`.
     #[arg(long, env = "HOMECORE_LOCATION", default_value = "Home")]
@@ -140,6 +153,30 @@ async fn main() -> Result<()> {
     let hc = HomeCore::new();
     info!("HomeCore state machine + event bus + service registry online");
 
+    let recorder = if cli.no_recorder {
+        None
+    } else {
+        match open_recorder(&cli.db).await {
+            Ok(recorder) => Some(recorder),
+            Err(error) => {
+                warn!("Recorder failed to open ({error}) — continuing without persistence");
+                None
+            }
+        }
+    };
+    let restored =
+        restore::restore_startup(&hc, recorder.as_ref(), &cli.storage_dir, cli.restore_limit).await;
+    info!(
+        entities = restored.entity_entries,
+        devices = restored.device_entries,
+        states = restored.states,
+        truncated = restored.truncated,
+        "Startup restoration complete"
+    );
+    for warning in restored.warnings {
+        warn!("{warning}");
+    }
+
     // Seed a representative set of built-in services so the web UI
     // and HA-wire-compat clients see a populated /api/services on
     // first boot. These are no-op handlers (they just echo back the
@@ -158,21 +195,14 @@ async fn main() -> Result<()> {
     }
 
     // ── 2. Recorder (optional) ──────────────────────────────────────
-    if !cli.no_recorder {
-        match open_recorder(&cli.db).await {
-            Ok(recorder) => {
-                let _recorder_task = RecorderListener::new(hc.states(), recorder).spawn();
-                info!(
-                    "Recorder open at {} — state_changed events being persisted",
-                    cli.db
-                );
-            }
-            Err(e) => {
-                warn!("Recorder failed to open ({e}) — continuing without persistence");
-            }
-        }
+    if let Some(recorder) = recorder {
+        let _recorder_task = RecorderListener::new(hc.states(), recorder).spawn();
+        info!(
+            "Recorder open at {} — state_changed events being persisted",
+            cli.db
+        );
     } else {
-        info!("Recorder disabled by --no-recorder");
+        info!("Recorder unavailable or disabled");
     }
 
     // ── 3. Plugin runtime ───────────────────────────────────────────

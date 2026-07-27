@@ -15,11 +15,16 @@
 //! left as `serde_json::Value` — version-specific parsers in `storage_format`
 //! are responsible for further deserialization.
 
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
 use crate::MigrateError;
+
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Points to a HA `.storage/` directory.
 #[derive(Clone, Debug)]
@@ -64,6 +69,70 @@ pub fn read_envelope(path: &Path) -> Result<HaStorageEnvelope, MigrateError> {
         path: path.display().to_string(),
         source: e,
     })
+}
+
+/// Durably publish JSON at `target` without ever replacing an existing file.
+///
+/// Bytes are synced in a same-directory temporary file, then exposed with an
+/// atomic hard-link create. `hard_link` fails with `AlreadyExists` if another
+/// process won the destination race, unlike a POSIX rename which would replace
+/// the destination after a check-then-rename sequence.
+pub fn write_json_atomic_noclobber<T: Serialize>(
+    target: &Path,
+    value: &T,
+) -> Result<PathBuf, MigrateError> {
+    let parent = target.parent().ok_or_else(|| MigrateError::Io {
+        path: target.display().to_string(),
+        source: std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "destination has no parent directory",
+        ),
+    })?;
+    fs::create_dir_all(parent).map_err(|source| MigrateError::Io {
+        path: parent.display().to_string(),
+        source,
+    })?;
+
+    let bytes = serde_json::to_vec_pretty(value).map_err(|source| MigrateError::JsonParse {
+        path: target.display().to_string(),
+        source,
+    })?;
+    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let name = target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("storage");
+    let temp = parent.join(format!(".{name}.{}.{}.tmp", std::process::id(), sequence));
+
+    let result = (|| -> std::io::Result<()> {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp)?;
+        file.write_all(&bytes)?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        fs::hard_link(&temp, target)?;
+        fs::remove_file(&temp)?;
+        Ok(())
+    })();
+
+    if let Err(source) = result {
+        let _ = fs::remove_file(&temp);
+        let source = if source.kind() == std::io::ErrorKind::AlreadyExists {
+            std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "destination exists; refusing to overwrite",
+            )
+        } else {
+            source
+        };
+        return Err(MigrateError::Io {
+            path: target.display().to_string(),
+            source,
+        });
+    }
+    Ok(target.to_path_buf())
 }
 
 #[cfg(test)]

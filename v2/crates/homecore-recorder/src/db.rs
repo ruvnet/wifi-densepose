@@ -20,7 +20,8 @@ use tokio::sync::RwLock;
 use tracing::debug;
 
 use homecore::entity::{EntityId, State};
-use homecore::event::{DomainEvent, StateChangedEvent};
+use homecore::event::{Context, DomainEvent, StateChangedEvent};
+use homecore::StateMachine;
 
 use crate::dedup::fnv64a_hash;
 use crate::schema::ALL_DDL;
@@ -45,6 +46,8 @@ type HistoryStateRecord = (i64, String, Option<String>, f64, f64, Option<String>
 /// history-graph query, small enough to bound the worst case. Callers needing a
 /// wider span page by narrowing the window.
 pub const MAX_HISTORY_ROWS: i64 = 1_000_000;
+/// Absolute cap for one startup restore query.
+pub const MAX_RESTORE_STATES: usize = 100_000;
 
 /// Errors returned by `Recorder` operations.
 #[derive(Error, Debug)]
@@ -302,7 +305,7 @@ impl Recorder {
         let pattern = format!("%{escaped}%");
 
         let rows: Vec<SearchStateRecord> = sqlx::query_as(
-                "SELECT s.state_id, s.entity_id, s.state, sa.shared_attrs, \
+            "SELECT s.state_id, s.entity_id, s.state, sa.shared_attrs, \
                         s.last_changed_ts, s.last_updated_ts, s.context_id \
                  FROM states s \
                  LEFT JOIN state_attributes sa ON s.attributes_id = sa.attributes_id \
@@ -312,47 +315,57 @@ impl Recorder {
                     OR sa.shared_attrs LIKE ?2 ESCAPE '\\' \
                  ORDER BY s.last_updated_ts DESC \
                  LIMIT ?3",
-            )
-            .bind(query)
-            .bind(&pattern)
-            .bind(k as i64)
-            .fetch_all(&self.pool)
-            .await?;
+        )
+        .bind(query)
+        .bind(&pattern)
+        .bind(k as i64)
+        .fetch_all(&self.pool)
+        .await?;
 
         rows.into_iter()
-            .map(|(state_id, entity_id, state, shared_attrs, last_changed_ts, last_updated_ts, context_id)| {
-                let eid = EntityId::parse(&entity_id)
-                    .unwrap_or_else(|_| EntityId::parse("unknown.unknown").unwrap());
-                let attributes = shared_attrs
-                    .as_deref()
-                    .map(serde_json::from_str)
-                    .transpose()?
-                    .unwrap_or(serde_json::Value::Object(Default::default()));
-                Ok(StateRow {
+            .map(
+                |(
                     state_id,
-                    entity_id: eid,
+                    entity_id,
                     state,
-                    attributes,
+                    shared_attrs,
                     last_changed_ts,
                     last_updated_ts,
                     context_id,
-                })
-            })
+                )| {
+                    let eid = EntityId::parse(&entity_id)
+                        .unwrap_or_else(|_| EntityId::parse("unknown.unknown").unwrap());
+                    let attributes = shared_attrs
+                        .as_deref()
+                        .map(serde_json::from_str)
+                        .transpose()?
+                        .unwrap_or(serde_json::Value::Object(Default::default()));
+                    Ok(StateRow {
+                        state_id,
+                        entity_id: eid,
+                        state,
+                        attributes,
+                        last_changed_ts,
+                        last_updated_ts,
+                        context_id,
+                    })
+                },
+            )
             .collect()
     }
 
     /// Fetch a single `StateRow` by its `state_id`, joining attributes.
     async fn fetch_state_row(&self, state_id: i64) -> Result<Option<StateRow>, RecorderError> {
         let row: Option<StateRecord> = sqlx::query_as(
-                "SELECT s.entity_id, s.state, sa.shared_attrs, \
+            "SELECT s.entity_id, s.state, sa.shared_attrs, \
                          s.last_changed_ts, s.last_updated_ts, s.context_id \
                  FROM states s \
                  LEFT JOIN state_attributes sa ON s.attributes_id = sa.attributes_id \
                  WHERE s.state_id = ?",
-            )
-            .bind(state_id)
-            .fetch_optional(&self.pool)
-            .await?;
+        )
+        .bind(state_id)
+        .fetch_optional(&self.pool)
+        .await?;
 
         let Some((entity_id, state, shared_attrs, last_changed_ts, last_updated_ts, context_id)) =
             row
@@ -438,24 +451,182 @@ impl Recorder {
         .await?;
 
         rows.into_iter()
-            .map(|(state_id, state, shared_attrs, last_changed_ts, last_updated_ts, context_id)| {
-                let attributes = shared_attrs
-                    .as_deref()
-                    .map(serde_json::from_str)
-                    .transpose()?
-                    .unwrap_or(serde_json::Value::Object(Default::default()));
+            .map(
+                |(state_id, state, shared_attrs, last_changed_ts, last_updated_ts, context_id)| {
+                    let attributes = shared_attrs
+                        .as_deref()
+                        .map(serde_json::from_str)
+                        .transpose()?
+                        .unwrap_or(serde_json::Value::Object(Default::default()));
 
-                Ok(StateRow {
-                    state_id,
-                    entity_id: entity_id.clone(),
-                    state,
-                    attributes,
-                    last_changed_ts,
-                    last_updated_ts,
-                    context_id,
-                })
-            })
+                    Ok(StateRow {
+                        state_id,
+                        entity_id: entity_id.clone(),
+                        state,
+                        attributes,
+                        last_changed_ts,
+                        last_updated_ts,
+                        context_id,
+                    })
+                },
+            )
             .collect()
+    }
+
+    /// Read the newest row for each entity in deterministic entity-id order.
+    ///
+    /// The query is bounded and uses `(last_updated_ts, state_id)` as a stable
+    /// newest-row tie-break. Malformed rows are reported and skipped
+    /// individually so one corrupt entity cannot prevent the rest from
+    /// starting.
+    pub async fn latest_states(
+        &self,
+        requested_limit: usize,
+    ) -> Result<LatestStates, RecorderError> {
+        let limit = requested_limit.min(MAX_RESTORE_STATES);
+        if limit == 0 {
+            return Ok(LatestStates::default());
+        }
+        type RawRestoreRow = (
+            i64,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<f64>,
+            Option<f64>,
+            Option<String>,
+        );
+        let rows: Vec<RawRestoreRow> = sqlx::query_as(
+            "SELECT state_id, entity_id, state, shared_attrs, \
+                    last_changed_ts, last_updated_ts, context_id \
+             FROM ( \
+               SELECT s.state_id, s.entity_id, s.state, sa.shared_attrs, \
+                      s.last_changed_ts, s.last_updated_ts, s.context_id, \
+                      ROW_NUMBER() OVER ( \
+                        PARTITION BY s.entity_id \
+                        ORDER BY s.last_updated_ts DESC, s.state_id DESC \
+                      ) AS newest \
+               FROM states s \
+               LEFT JOIN state_attributes sa ON s.attributes_id = sa.attributes_id \
+             ) \
+             WHERE newest = 1 \
+             ORDER BY entity_id ASC \
+             LIMIT ?",
+        )
+        .bind((limit + 1) as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let truncated = rows.len() > limit;
+        let mut states = Vec::with_capacity(rows.len().min(limit));
+        let mut warnings = Vec::new();
+        for (
+            state_id,
+            raw_entity_id,
+            raw_state,
+            raw_attributes,
+            last_changed_ts,
+            last_updated_ts,
+            context_id,
+        ) in rows.into_iter().take(limit)
+        {
+            let entity_id = match EntityId::parse(&raw_entity_id) {
+                Ok(value) => value,
+                Err(error) => {
+                    warnings.push(RestoreWarning::MalformedEntityId {
+                        state_id,
+                        entity_id: raw_entity_id,
+                        reason: error.to_string(),
+                    });
+                    continue;
+                }
+            };
+            let Some(state) = raw_state else {
+                warnings.push(RestoreWarning::MissingState {
+                    state_id,
+                    entity_id: raw_entity_id,
+                });
+                continue;
+            };
+            let attributes = match raw_attributes {
+                Some(value) => match serde_json::from_str(&value) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        warnings.push(RestoreWarning::MalformedAttributes {
+                            state_id,
+                            entity_id: raw_entity_id,
+                            reason: error.to_string(),
+                        });
+                        continue;
+                    }
+                },
+                None => serde_json::json!({}),
+            };
+            let Some(last_changed) = last_changed_ts.and_then(timestamp_from_seconds) else {
+                warnings.push(RestoreWarning::MalformedTimestamp {
+                    state_id,
+                    entity_id: raw_entity_id,
+                    field: "last_changed_ts",
+                });
+                continue;
+            };
+            let Some(last_updated) = last_updated_ts.and_then(timestamp_from_seconds) else {
+                warnings.push(RestoreWarning::MalformedTimestamp {
+                    state_id,
+                    entity_id: raw_entity_id,
+                    field: "last_updated_ts",
+                });
+                continue;
+            };
+            let parent_id = match context_id {
+                Some(value) => match value.parse() {
+                    Ok(value) => Some(value),
+                    Err(_) => {
+                        warnings.push(RestoreWarning::MalformedContext {
+                            state_id,
+                            entity_id: raw_entity_id.clone(),
+                        });
+                        None
+                    }
+                },
+                None => None,
+            };
+            states.push(State {
+                entity_id,
+                state,
+                attributes,
+                last_changed,
+                last_updated,
+                context: Context::restoration(parent_id),
+            });
+        }
+        Ok(LatestStates {
+            states,
+            warnings,
+            truncated,
+        })
+    }
+
+    /// Load latest durable snapshots into a state machine without producing
+    /// fresh recorder events.
+    pub async fn restore_latest(
+        &self,
+        states: &StateMachine,
+        limit: usize,
+    ) -> Result<RestoreReport, RecorderError> {
+        let batch = self.latest_states(limit).await?;
+        let mut restored = 0;
+        for state in batch.states {
+            // latest_states constructs the required restoration marker.
+            if states.restore(state).is_ok() {
+                restored += 1;
+            }
+        }
+        Ok(RestoreReport {
+            restored,
+            warnings: batch.warnings,
+            truncated: batch.truncated,
+        })
     }
 
     /// Purge history older than `older_than`, returning a [`PurgeStats`] summary.
@@ -521,6 +692,58 @@ impl Recorder {
     }
 }
 
+fn timestamp_from_seconds(value: f64) -> Option<DateTime<Utc>> {
+    if !value.is_finite() {
+        return None;
+    }
+    let micros = (value * 1_000_000.0).round();
+    if micros < i64::MIN as f64 || micros > i64::MAX as f64 {
+        return None;
+    }
+    DateTime::from_timestamp_micros(micros as i64)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RestoreWarning {
+    MalformedEntityId {
+        state_id: i64,
+        entity_id: String,
+        reason: String,
+    },
+    MissingState {
+        state_id: i64,
+        entity_id: String,
+    },
+    MalformedAttributes {
+        state_id: i64,
+        entity_id: String,
+        reason: String,
+    },
+    MalformedTimestamp {
+        state_id: i64,
+        entity_id: String,
+        field: &'static str,
+    },
+    MalformedContext {
+        state_id: i64,
+        entity_id: String,
+    },
+}
+
+#[derive(Debug, Default)]
+pub struct LatestStates {
+    pub states: Vec<State>,
+    pub warnings: Vec<RestoreWarning>,
+    pub truncated: bool,
+}
+
+#[derive(Debug)]
+pub struct RestoreReport {
+    pub restored: usize,
+    pub warnings: Vec<RestoreWarning>,
+    pub truncated: bool,
+}
+
 /// Summary of a [`Recorder::purge`] run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PurgeStats {
@@ -564,14 +787,20 @@ mod tests {
     use super::*;
 
     async fn open_memory() -> Recorder {
-        Recorder::open("sqlite::memory:").await.expect("open in-memory DB")
+        Recorder::open("sqlite::memory:")
+            .await
+            .expect("open in-memory DB")
     }
 
     fn entity(s: &str) -> EntityId {
         EntityId::parse(s).unwrap()
     }
 
-    fn make_state_event(entity_id: &str, state_val: &str, attrs: serde_json::Value) -> StateChangedEvent {
+    fn make_state_event(
+        entity_id: &str,
+        state_val: &str,
+        attrs: serde_json::Value,
+    ) -> StateChangedEvent {
         let eid = entity(entity_id);
         let ctx = Context::new();
         let s = Arc::new(State::new(eid.clone(), state_val, attrs, ctx));
@@ -595,7 +824,10 @@ mod tests {
                 .await
                 .unwrap();
         let names: Vec<&str> = tables.iter().map(|(n,)| n.as_str()).collect();
-        assert!(names.contains(&"state_attributes"), "missing state_attributes");
+        assert!(
+            names.contains(&"state_attributes"),
+            "missing state_attributes"
+        );
         assert!(names.contains(&"states"), "missing states");
         assert!(names.contains(&"events"), "missing events");
         assert!(names.contains(&"recorder_runs"), "missing recorder_runs");
@@ -605,7 +837,10 @@ mod tests {
     async fn schema_idempotent_double_open() {
         // Applying schema twice (on the same pool) must not panic or error.
         let recorder = open_memory().await;
-        recorder.apply_schema().await.expect("second apply_schema must be a no-op");
+        recorder
+            .apply_schema()
+            .await
+            .expect("second apply_schema must be a no-op");
     }
 
     // ── record_state ──────────────────────────────────────────────────────────
@@ -613,7 +848,11 @@ mod tests {
     #[tokio::test]
     async fn record_state_inserts_row() {
         let recorder = open_memory().await;
-        let event = make_state_event("light.kitchen", "on", serde_json::json!({"brightness": 200}));
+        let event = make_state_event(
+            "light.kitchen",
+            "on",
+            serde_json::json!({"brightness": 200}),
+        );
 
         let state_id = recorder.record_state(&event).await.unwrap();
         assert!(state_id.is_some(), "expected a state_id");
@@ -652,19 +891,20 @@ mod tests {
         recorder.record_state(&e1).await.unwrap();
         recorder.record_state(&e2).await.unwrap();
 
-        let attr_count: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM state_attributes")
-                .fetch_one(&recorder.pool)
-                .await
-                .unwrap();
+        let attr_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM state_attributes")
+            .fetch_one(&recorder.pool)
+            .await
+            .unwrap();
         // Both events share identical attrs → only one state_attributes row.
-        assert_eq!(attr_count.0, 1, "identical attrs must share one state_attributes row");
+        assert_eq!(
+            attr_count.0, 1,
+            "identical attrs must share one state_attributes row"
+        );
 
-        let state_count: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM states")
-                .fetch_one(&recorder.pool)
-                .await
-                .unwrap();
+        let state_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM states")
+            .fetch_one(&recorder.pool)
+            .await
+            .unwrap();
         assert_eq!(state_count.0, 2, "two states rows expected");
     }
 
@@ -677,11 +917,10 @@ mod tests {
         recorder.record_state(&e1).await.unwrap();
         recorder.record_state(&e2).await.unwrap();
 
-        let attr_count: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM state_attributes")
-                .fetch_one(&recorder.pool)
-                .await
-                .unwrap();
+        let attr_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM state_attributes")
+            .fetch_one(&recorder.pool)
+            .await
+            .unwrap();
         assert_eq!(attr_count.0, 2);
     }
 
@@ -701,7 +940,10 @@ mod tests {
 
         let since = Utc::now() - chrono::Duration::seconds(10);
         let until = Utc::now() + chrono::Duration::seconds(10);
-        let rows = recorder.get_state_history(&eid, since, until).await.unwrap();
+        let rows = recorder
+            .get_state_history(&eid, since, until)
+            .await
+            .unwrap();
 
         assert_eq!(rows.len(), 3, "expected 3 history rows");
         // Verify ascending order by last_updated_ts.
@@ -749,11 +991,19 @@ mod tests {
         // FAILS against the old always-empty path: asserts real rows come back.
         let recorder = open_memory().await;
         recorder
-            .record_state(&make_state_event("light.kitchen", "on", serde_json::json!({})))
+            .record_state(&make_state_event(
+                "light.kitchen",
+                "on",
+                serde_json::json!({}),
+            ))
             .await
             .unwrap();
         recorder
-            .record_state(&make_state_event("light.bedroom", "off", serde_json::json!({})))
+            .record_state(&make_state_event(
+                "light.bedroom",
+                "off",
+                serde_json::json!({}),
+            ))
             .await
             .unwrap();
         recorder
@@ -789,7 +1039,10 @@ mod tests {
             ))
             .await
             .unwrap();
-        let rows = recorder.search_states_by_text("portland", 10).await.unwrap();
+        let rows = recorder
+            .search_states_by_text("portland", 10)
+            .await
+            .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].entity_id.as_str(), "sensor.weather");
         assert_eq!(rows[0].attributes["location"], "portland");
@@ -816,7 +1069,11 @@ mod tests {
     async fn text_search_no_match_returns_empty() {
         let recorder = open_memory().await;
         recorder
-            .record_state(&make_state_event("light.kitchen", "on", serde_json::json!({})))
+            .record_state(&make_state_event(
+                "light.kitchen",
+                "on",
+                serde_json::json!({}),
+            ))
             .await
             .unwrap();
         let rows = recorder
@@ -839,7 +1096,11 @@ mod tests {
         // EntityId::parse permits this, so it reaches the bind path as data.
         let evil = "light.x_drop_table_states_select";
         recorder
-            .record_state(&make_state_event(evil, "'; DROP TABLE states; --", serde_json::json!({})))
+            .record_state(&make_state_event(
+                evil,
+                "'; DROP TABLE states; --",
+                serde_json::json!({}),
+            ))
             .await
             .unwrap();
 
@@ -897,7 +1158,11 @@ mod tests {
         let recorder = open_memory().await;
         for v in &["1", "2", "3", "4", "5"] {
             recorder
-                .record_state(&make_state_event("sensor.bounded", v, serde_json::json!({})))
+                .record_state(&make_state_event(
+                    "sensor.bounded",
+                    v,
+                    serde_json::json!({}),
+                ))
                 .await
                 .unwrap();
             tokio::time::sleep(std::time::Duration::from_millis(2)).await;
@@ -914,12 +1179,20 @@ mod tests {
         .fetch_all(&recorder.pool)
         .await
         .unwrap();
-        assert_eq!(capped.len(), 2, "LIMIT term effectively bounds the result set");
+        assert_eq!(
+            capped.len(),
+            2,
+            "LIMIT term effectively bounds the result set"
+        );
 
         // And the real method returns all rows when under the cap.
         let eid = entity("sensor.bounded");
         let rows = recorder
-            .get_state_history(&eid, Utc::now() - chrono::Duration::seconds(10), Utc::now() + chrono::Duration::seconds(10))
+            .get_state_history(
+                &eid,
+                Utc::now() - chrono::Duration::seconds(10),
+                Utc::now() + chrono::Duration::seconds(10),
+            )
             .await
             .unwrap();
         assert_eq!(rows.len(), 5, "all rows under the cap return");
@@ -947,7 +1220,10 @@ mod tests {
         // Read back the actual timestamps so the cutoff is exact.
         let since = Utc::now() - chrono::Duration::seconds(60);
         let until = Utc::now() + chrono::Duration::seconds(60);
-        let all = recorder.get_state_history(&eid, since, until).await.unwrap();
+        let all = recorder
+            .get_state_history(&eid, since, until)
+            .await
+            .unwrap();
         assert_eq!(all.len(), 3);
         // Cut off exactly at the middle row's timestamp.
         let mid_ts = all[1].last_updated_ts;
@@ -956,8 +1232,15 @@ mod tests {
         let stats = recorder.purge(cutoff).await.unwrap();
         assert_eq!(stats.states_deleted, 1, "only the strictly-older 'old' row");
 
-        let remaining = recorder.get_state_history(&eid, since, until).await.unwrap();
-        assert_eq!(remaining.len(), 2, "boundary 'mid' row is KEPT (exclusive cutoff)");
+        let remaining = recorder
+            .get_state_history(&eid, since, until)
+            .await
+            .unwrap();
+        assert_eq!(
+            remaining.len(),
+            2,
+            "boundary 'mid' row is KEPT (exclusive cutoff)"
+        );
         assert_eq!(remaining[0].state, "mid");
         assert_eq!(remaining[1].state, "new");
     }
@@ -995,18 +1278,28 @@ mod tests {
         // referenced by sensor.b, so it must survive.
         let eid_b = entity("sensor.b");
         let rows_b = recorder
-            .get_state_history(&eid_b, Utc::now() - chrono::Duration::seconds(60), Utc::now() + chrono::Duration::seconds(60))
+            .get_state_history(
+                &eid_b,
+                Utc::now() - chrono::Duration::seconds(60),
+                Utc::now() + chrono::Duration::seconds(60),
+            )
             .await
             .unwrap();
         let b_ts = rows_b[0].last_updated_ts;
         let cutoff = DateTime::<Utc>::from_timestamp_micros((b_ts * 1_000_000.0) as i64).unwrap();
         let stats = recorder.purge(cutoff).await.unwrap();
         assert_eq!(stats.states_deleted, 1, "sensor.a purged");
-        assert_eq!(stats.attributes_deleted, 0, "shared blob still referenced — kept");
+        assert_eq!(
+            stats.attributes_deleted, 0,
+            "shared blob still referenced — kept"
+        );
         assert_eq!(attr_count(&recorder).await, 1, "blob survives");
 
         // Now purge everything → sensor.b gone, blob orphaned → GC'd.
-        let stats2 = recorder.purge(Utc::now() + chrono::Duration::seconds(120)).await.unwrap();
+        let stats2 = recorder
+            .purge(Utc::now() + chrono::Duration::seconds(120))
+            .await
+            .unwrap();
         assert_eq!(stats2.states_deleted, 1, "sensor.b purged");
         assert_eq!(stats2.attributes_deleted, 1, "now-orphaned blob GC'd");
         assert_eq!(attr_count(&recorder).await, 0, "no blobs remain");
@@ -1017,7 +1310,11 @@ mod tests {
         let recorder = open_memory().await;
         let ctx = Context::new();
         recorder
-            .record_event(&DomainEvent::new("call_service", serde_json::json!({}), ctx))
+            .record_event(&DomainEvent::new(
+                "call_service",
+                serde_json::json!({}),
+                ctx,
+            ))
             .await
             .unwrap();
         // Purge with a far-future cutoff removes the event.
@@ -1039,11 +1336,95 @@ mod tests {
         // real rows via the text fallback — proving it's no longer always-empty.
         let recorder = open_memory().await;
         recorder
-            .record_state(&make_state_event("light.kitchen", "on", serde_json::json!({})))
+            .record_state(&make_state_event(
+                "light.kitchen",
+                "on",
+                serde_json::json!({}),
+            ))
             .await
             .unwrap();
         let rows = recorder.search_semantic("kitchen", 5).await.unwrap();
         assert_eq!(rows.len(), 1, "fallback must surface the kitchen row");
         assert_eq!(rows[0].entity_id.as_str(), "light.kitchen");
+    }
+
+    #[tokio::test]
+    async fn latest_states_is_deterministic_newest_per_entity() {
+        let recorder = open_memory().await;
+        recorder
+            .record_state(&make_state_event("sensor.z", "old", serde_json::json!({})))
+            .await
+            .unwrap();
+        recorder
+            .record_state(&make_state_event("sensor.a", "only", serde_json::json!({})))
+            .await
+            .unwrap();
+        recorder
+            .record_state(&make_state_event("sensor.z", "new", serde_json::json!({})))
+            .await
+            .unwrap();
+
+        let batch = recorder.latest_states(10).await.unwrap();
+        assert_eq!(batch.states.len(), 2);
+        assert_eq!(batch.states[0].entity_id.as_str(), "sensor.a");
+        assert_eq!(batch.states[1].entity_id.as_str(), "sensor.z");
+        assert_eq!(batch.states[1].state, "new");
+        assert!(batch
+            .states
+            .iter()
+            .all(|state| state.context.is_restoration()));
+    }
+
+    #[tokio::test]
+    async fn latest_states_isolates_malformed_rows_and_honours_bound() {
+        let recorder = open_memory().await;
+        recorder
+            .record_state(&make_state_event(
+                "sensor.good",
+                "ok",
+                serde_json::json!({"x": 1}),
+            ))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO states \
+             (entity_id, state, attributes_id, last_changed_ts, last_updated_ts, context_id) \
+             VALUES ('INVALID', 'bad', NULL, 1.0, 2.0, NULL)",
+        )
+        .execute(&recorder.pool)
+        .await
+        .unwrap();
+        let attrs_id = sqlx::query(
+            "INSERT INTO state_attributes (shared_attrs, hash) VALUES ('not-json', 424242)",
+        )
+        .execute(&recorder.pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+        sqlx::query(
+            "INSERT INTO states \
+             (entity_id, state, attributes_id, last_changed_ts, last_updated_ts, context_id) \
+             VALUES ('sensor.badattrs', 'bad', ?, 1.0, 2.0, NULL)",
+        )
+        .bind(attrs_id)
+        .execute(&recorder.pool)
+        .await
+        .unwrap();
+
+        let batch = recorder.latest_states(10).await.unwrap();
+        assert_eq!(batch.states.len(), 1);
+        assert_eq!(batch.warnings.len(), 2);
+        assert!(batch
+            .warnings
+            .iter()
+            .any(|warning| matches!(warning, RestoreWarning::MalformedEntityId { .. })));
+        assert!(batch
+            .warnings
+            .iter()
+            .any(|warning| matches!(warning, RestoreWarning::MalformedAttributes { .. })));
+
+        let bounded = recorder.latest_states(1).await.unwrap();
+        assert!(bounded.truncated);
+        assert!(bounded.states.len() <= 1);
     }
 }

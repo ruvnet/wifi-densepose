@@ -47,6 +47,9 @@ pub struct Context {
 }
 
 impl Context {
+    /// Marker stored on snapshots loaded from durable state at startup.
+    pub const RESTORE_USER_ID: &'static str = "homecore.restore";
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -65,6 +68,20 @@ impl Context {
             user_id: parent.user_id.clone(),
             parent_id: Some(parent.id),
         }
+    }
+
+    /// Create a fresh context that identifies a startup restoration. The
+    /// persisted context, when valid, is retained as the causal parent.
+    pub fn restoration(parent_id: Option<Uuid>) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            user_id: Some(Self::RESTORE_USER_ID.to_owned()),
+            parent_id,
+        }
+    }
+
+    pub fn is_restoration(&self) -> bool {
+        self.user_id.as_deref() == Some(Self::RESTORE_USER_ID)
     }
 }
 

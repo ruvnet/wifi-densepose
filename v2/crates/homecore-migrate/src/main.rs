@@ -2,6 +2,21 @@
 
 use clap::Parser;
 use homecore_migrate::cli::{Cli, Command};
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct ImportSummary {
+    kind: &'static str,
+    imported: usize,
+    warning_count: usize,
+    warnings: Vec<serde_json::Value>,
+    destination: std::path::PathBuf,
+}
+
+fn print_summary(summary: &ImportSummary) -> anyhow::Result<()> {
+    println!("{}", serde_json::to_string(summary)?);
+    Ok(())
+}
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -9,7 +24,10 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Inspect(args) => {
-            println!("Inspecting HA .storage directory: {}", args.storage.display());
+            println!(
+                "Inspecting HA .storage directory: {}",
+                args.storage.display()
+            );
             // Probe entity_registry
             let entity_path = args.storage.join("core.entity_registry");
             if entity_path.exists() {
@@ -42,38 +60,62 @@ fn main() -> anyhow::Result<()> {
 
         Command::ImportEntities(args) => {
             let entity_path = args.storage.join("core.entity_registry");
-            let entries =
-                homecore_migrate::entity_registry::read_entity_registry(&entity_path)?;
+            let entries = homecore_migrate::entity_registry::read_entity_registry(&entity_path)?;
             let destination =
                 homecore_migrate::entity_registry::write_entity_registry(&args.to, &entries)?;
-            println!("Imported {} entity entries", entries.len());
-            println!("  Destination: {}", destination.display());
-            for e in &entries {
-                println!(
-                    "  {} ({}{})",
-                    e.entity_id.as_str(),
-                    e.platform,
-                    if e.disabled_by.is_some() { " DISABLED" } else { "" }
-                );
-            }
+            print_summary(&ImportSummary {
+                kind: "entity_registry",
+                imported: entries.len(),
+                warning_count: 0,
+                warnings: vec![],
+                destination,
+            })?;
         }
 
         Command::ImportDevices(args) => {
             let device_path = args.storage.join("core.device_registry");
-            let devices =
-                homecore_migrate::device_registry::read_device_registry(&device_path)?;
-            println!("Parsed {} device entries (P1: staging only, wiring to HOMECORE is P2)", devices.len());
+            let devices = homecore_migrate::device_registry::read_device_registry(&device_path)?;
+            let destination =
+                homecore_migrate::device_registry::write_device_registry(&args.to, &devices)?;
+            print_summary(&ImportSummary {
+                kind: "device_registry",
+                imported: devices.len(),
+                warning_count: 0,
+                warnings: vec![],
+                destination,
+            })?;
         }
 
         Command::InspectConfigEntries(args) => {
             let ce_path = args.storage.join("core.config_entries");
-            let summary =
-                homecore_migrate::config_entries::inspect_config_entries(&ce_path)?;
+            let summary = homecore_migrate::config_entries::inspect_config_entries(&ce_path)?;
             println!(
                 "config_entries: {} total, domains: {}",
                 summary.count,
                 summary.domains.join(", ")
             );
+        }
+
+        Command::ImportConfigEntries(args) => {
+            let source = args.storage.join("core.config_entries");
+            let converted = homecore_migrate::config_entries::convert_config_entries(&source)?;
+            let imported = converted.data.entries.len();
+            let warning_count = converted.data.warnings.len();
+            let warnings = converted
+                .data
+                .warnings
+                .iter()
+                .map(serde_json::to_value)
+                .collect::<Result<Vec<_>, _>>()?;
+            let destination =
+                homecore_migrate::config_entries::write_config_entries(&args.to, &converted)?;
+            print_summary(&ImportSummary {
+                kind: "config_entries",
+                imported,
+                warning_count,
+                warnings,
+                destination,
+            })?;
         }
 
         Command::InspectSecrets(args) => {

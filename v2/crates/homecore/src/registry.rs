@@ -1,9 +1,9 @@
-//! In-memory entity registry (P1). Persistence to
-//! `.homecore/storage/core.entity_registry` lands in P2.
+//! In-memory entity and device registries. Durable files are loaded by
+//! `homecore-server` during bounded startup restoration.
 //!
 //! Schema fields mirror HA `core.entity_registry` v13 per ADR-127 §2.4.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -41,6 +41,41 @@ pub struct EntityEntry {
     pub device_id: Option<String>,
     pub entity_category: Option<EntityCategory>,
     pub config_entry_id: Option<String>,
+}
+
+/// Physical-device metadata persisted in `core.device_registry`.
+///
+/// The fields track the HA v13 registry surface used by HOMECORE. Identifier
+/// and connection pairs are sets because their order is not semantically
+/// meaningful in HA.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeviceEntry {
+    pub id: String,
+    #[serde(default)]
+    pub config_entries: HashSet<String>,
+    #[serde(default)]
+    pub identifiers: HashSet<(String, String)>,
+    #[serde(default)]
+    pub connections: HashSet<(String, String)>,
+    pub manufacturer: Option<String>,
+    pub model: Option<String>,
+    pub model_id: Option<String>,
+    pub name: Option<String>,
+    pub name_by_user: Option<String>,
+    pub sw_version: Option<String>,
+    pub hw_version: Option<String>,
+    pub serial_number: Option<String>,
+    pub via_device_id: Option<String>,
+    pub area_id: Option<String>,
+    pub entry_type: Option<String>,
+    pub disabled_by: Option<String>,
+    pub configuration_url: Option<String>,
+    #[serde(default)]
+    pub labels: HashSet<String>,
+    pub primary_config_entry: Option<String>,
+    /// Forward-compatible device fields from newer HA v13-compatible rows.
+    #[serde(default, flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Clone)]
@@ -84,6 +119,45 @@ impl EntityRegistry {
 }
 
 impl Default for EntityRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone)]
+pub struct DeviceRegistry {
+    entries: Arc<RwLock<HashMap<String, DeviceEntry>>>,
+}
+
+impl DeviceRegistry {
+    pub fn new() -> Self {
+        Self {
+            entries: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    pub async fn register(&self, entry: DeviceEntry) {
+        self.entries.write().await.insert(entry.id.clone(), entry);
+    }
+
+    pub async fn get(&self, id: &str) -> Option<DeviceEntry> {
+        self.entries.read().await.get(id).cloned()
+    }
+
+    pub async fn all(&self) -> Vec<DeviceEntry> {
+        self.entries.read().await.values().cloned().collect()
+    }
+
+    pub async fn len(&self) -> usize {
+        self.entries.read().await.len()
+    }
+
+    pub async fn is_empty(&self) -> bool {
+        self.entries.read().await.is_empty()
+    }
+}
+
+impl Default for DeviceRegistry {
     fn default() -> Self {
         Self::new()
     }
