@@ -240,6 +240,12 @@ impl Connection {
 
     async fn handle_cmd(&self, cmd: WsCommand, tx: &tokio::sync::mpsc::Sender<String>) {
         match cmd.kind.as_str() {
+            "supported_features" => {
+                // HOMECORE currently emits individual messages. Accepting the
+                // negotiation command keeps modern HA clients compatible while
+                // deliberately declining optional coalescing.
+                self.ack(tx, cmd.id, true, None);
+            }
             "ping" => {
                 let msg = serde_json::json!({"id": cmd.id, "type": "pong"});
                 let _ = tx.try_send(msg.to_string());
@@ -257,6 +263,11 @@ impl Connection {
                     "state": "RUNNING",
                 });
                 self.ack(tx, cmd.id, true, Some(payload));
+            }
+            "get_panels" => {
+                // Panels are frontend integration resources. An empty map is
+                // the valid shape for a headless server.
+                self.ack(tx, cmd.id, true, Some(serde_json::json!({})));
             }
             "get_services" => {
                 let services = self.state.homecore().services().registered_services().await;

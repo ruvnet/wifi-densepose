@@ -381,6 +381,7 @@ pub async fn compatibility(
             "states_services_config": "implemented",
             "events": "implemented",
             "render_template": "implemented",
+            "feature_negotiation_and_panels": "implemented",
             "registries": "requires_registry_backend",
             "lovelace_media": "integration_dependent"
         }
