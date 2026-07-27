@@ -11,7 +11,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { colors } from '../theme/colors';
 
-type StatusType = 'connected' | 'simulated' | 'disconnected' | 'connecting';
+type StatusType = 'connected' | 'disconnected' | 'connecting';
 
 type StatusDotProps = {
   status: StatusType;

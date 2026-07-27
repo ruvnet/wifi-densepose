@@ -1,4 +1,4 @@
-export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'simulated';
+export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 
 export interface SensingNode {
   node_id: number;

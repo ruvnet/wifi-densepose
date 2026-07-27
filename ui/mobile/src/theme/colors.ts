@@ -12,7 +12,6 @@ export const colors = {
   muted: '#475569',
   border: '#1E293B',
   connected: '#2ED573',
-  simulated: '#FFA502',
   disconnected: '#FF4757',
   signalLow: '#3B82F6',
   signalMid: '#10B981',

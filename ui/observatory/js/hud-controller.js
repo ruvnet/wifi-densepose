@@ -395,8 +395,8 @@ export class HudController {
     const confVal = cls.confidence || 0;
     const targetConf = confVal > 1 ? Math.min(100, Math.round(confVal)) : Math.round(confVal * 100);
 
-    // Smooth lerp transitions (blend 4% per frame toward target — very stable)
-    const lerpFactor = 0.04;
+    // Smooth lerp transitions (blend 12% per frame — filters jitter from phantom detections)
+    const lerpFactor = 0.12;
     this._lerpHr = targetHr > 0 ? lerp(this._lerpHr, targetHr, lerpFactor) : 0;
     this._lerpBr = targetBr > 0 ? lerp(this._lerpBr, targetBr, lerpFactor) : 0;
     this._lerpConf = targetConf > 0 ? lerp(this._lerpConf, targetConf, lerpFactor) : 0;

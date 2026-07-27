@@ -5,7 +5,6 @@ import { BreathingGauge } from './BreathingGauge';
 import { HeartRateGauge } from './HeartRateGauge';
 import { MetricCard } from './MetricCard';
 import { ConnectionBanner } from '@/components/ConnectionBanner';
-import { ModeBadge } from '@/components/ModeBadge';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { SparklineChart } from '@/components/SparklineChart';
@@ -13,7 +12,7 @@ import { usePoseStore } from '@/stores/poseStore';
 import { usePoseStream } from '@/hooks/usePoseStream';
 import { colors } from '@/theme/colors';
 
-type ConnectionBannerState = 'connected' | 'simulated' | 'disconnected';
+type ConnectionBannerState = 'connected' | 'disconnected';
 
 const clampPercent = (value: number) => {
   const normalized = Number.isFinite(value) ? value : 0;
@@ -24,7 +23,6 @@ export default function VitalsScreen() {
   usePoseStream();
 
   const connectionStatus = usePoseStore((state) => state.connectionStatus);
-  const isSimulated = usePoseStore((state) => state.isSimulated);
   const features = usePoseStore((state) => state.features);
   const classification = usePoseStore((state) => state.classification);
   const rssiHistory = usePoseStore((state) => state.rssiHistory);
@@ -32,7 +30,7 @@ export default function VitalsScreen() {
   const confidence = clampPercent(classification?.confidence ?? 0);
   const badgeLabel = (classification?.motion_level ?? 'ABSENT').toUpperCase();
 
-  const bannerStatus: ConnectionBannerState = connectionStatus === 'connected' ? 'connected' : connectionStatus === 'simulated' ? 'simulated' : 'disconnected';
+  const bannerStatus: ConnectionBannerState = connectionStatus === 'connected' ? 'connected' : 'disconnected';
 
   const confidenceProgress = useSharedValue(0);
 
@@ -60,8 +58,6 @@ export default function VitalsScreen() {
       <ConnectionBanner status={bannerStatus} />
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={styles.headerRow}>{isSimulated ? <ModeBadge mode="SIM" /> : null}</View>
-
         <View style={styles.gaugesRow}>
           <View style={styles.gaugeCard}>
             <BreathingGauge />
