@@ -1,121 +1,112 @@
 # homecore-hap
 
-Apple Home HomeKit Accessory Protocol bridge for HOMECORE with HAP-1.1 trait surface and mDNS advertisement (P2).
+`homecore-hap` is the fail-closed network foundation for HOMECORE's Apple
+HomeKit Accessory Protocol bridge (ADR-125). It maps HOMECORE entities to HAP
+services and provides the bounded server, persistence, discovery, and request
+gating needed by a complete HAP implementation.
 
-[![Crates.io](https://img.shields.io/crates/v/homecore-hap.svg)](https://crates.io/crates/homecore-hap)
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![MSRV: 1.89+](https://img.shields.io/badge/MSRV-1.89%2B-purple.svg)
-[![Tests](https://img.shields.io/badge/tests-17%20passing-brightgreen.svg)](https://github.com/ruvnet/RuView)
-[![ADR-125](https://img.shields.io/badge/ADR-125-orange.svg)](../../docs/adr/ADR-125-homecore-apple-home-homekit-bridge.md)
+It does **not currently complete Apple Home pairing**. Pairing requests receive
+a valid TLV8 `Unavailable` error, and accessory/characteristic endpoints return
+HTTP 470 until an authenticated Pair-Verify session exists. There is no
+plaintext header, bearer-token, or test credential bypass.
 
-**P1 scaffold**: trait surface for HAP accessories + characteristics, entity→HAP mapping rules, and bridge ownership. The actual HAP-1.1 TLS server and real mDNS integration are gated behind `--features hap-server` (P2).
+## Implemented
 
-## What this crate does
+- Bounded Tokio TCP lifecycle with connection, header, body, request-time, and
+  shutdown limits.
+- Incremental HTTP/1.1 parsing through `httparse`; duplicate
+  `Content-Length`, transfer encoding, truncated input, and oversized input
+  fail closed.
+- Versioned controller pairing records with bounded parsing, atomic same-
+  directory replacement, Unix `0600` files/`0700` created directories, and
+  refusal to load permissive or symlinked files.
+- Controller identifiers, administrator invariants, and Ed25519 public keys
+  validated through `ed25519-dalek`.
+- Session state machine for Connected, Pair-Setup, Pair-Verify, Authenticated,
+  and Closing. Authentication requires a valid signature from a persisted
+  controller over the Pair-Verify transcript supplied by the future protocol
+  phase.
+- Real `_hap._tcp.local.` advertisement through `mdns-sd` when
+  `hap-server` is enabled. `NullAdvertiser` provides deterministic,
+  network-free tests and deployments.
+- HAP-shaped `/accessories`, `/characteristics`, event subscription, and
+  `EVENT/1.0` flow backed by `HapBridge` snapshots and bounded broadcasts.
+  These handlers are structurally present but network-inaccessible until
+  encrypted Pair-Verify is complete.
 
-`homecore-hap` bridges HOMECORE entity state to Apple HomeKit Accessory Protocol (HAP-1.1), allowing HomeKit-native apps (Home, Control Center, Siri) to control HOMECORE devices. It provides:
+## Deliberately incomplete protocol phases
 
-- **HapAccessoryType enum** — 11 accessory types matching HA's HomeKit integration (`Light`, `Switch`, `Thermostat`, `Lock`, `Door`, etc.)
-- **HapCharacteristic enum** — HAP characteristic types (`On`, `Brightness`, `Temperature`, `TargetLockState`, etc.)
-- **EntityToAccessoryMapper** — bidirectional rules for mapping HOMECORE entities to HAP accessories (e.g., `light.kitchen` → `Light` accessory + `On` + `Brightness` characteristics)
-- **HapBridge** — owns and exposes a collection of mapped accessories over HAP
-- **MdnsAdvertiser trait** — abstraction over mDNS advertisement; P1 ships `NullAdvertiser` (no-op), P2 adds real mDNS via `mdns-sd`
-- **RuViewToHapMapper** — bridges RuView sensing data (temperature, humidity, occupancy) to HAP characteristics
+The following must land together before this crate may claim Apple Home
+interoperability:
 
-The bridge itself is a HAP Accessory Bridge (HAP-1.1 spec §8.3), advertising a single service with characteristic slots for each exposed accessory.
+1. Pair-Setup M1-M6: SRP-6a proof exchange, setup-code policy, accessory
+   Ed25519 identity persistence, HKDF derivation, and ChaCha20-Poly1305
+   encrypted sub-TLVs.
+2. Pair-Verify M1-M4: ephemeral X25519 exchange, accessory/controller Ed25519
+   transcript signatures, HKDF session derivation, and encrypted sub-TLVs.
+3. Encrypted HAP transport: length-prefixed frames, independent read/write
+   ChaCha20-Poly1305 keys and monotonically increasing nonces, with strict
+   frame limits and connection teardown on authentication failure.
+4. Authenticated `/pairings` add/remove/list semantics and live mDNS `sf`
+   updates.
+5. Stable persisted AID/IID allocation and a HOMECORE service-call adapter for
+   writable characteristics. The present endpoint is read/event-only.
+6. Validation against Apple Home or a known-conformant HAP controller,
+   including pair, restart, event delivery, write, unpair, and re-pair.
 
-## Features
+No cryptographic primitive should be implemented locally. The remaining work
+must use reviewed RustCrypto/PAKE crates and protocol test vectors.
 
-- **11 accessory types** — Light, Switch, Thermostat, Door, Lock, Window, Blind, Outlet, Fan, Sensor, SecuritySystem
-- **Bi-directional mapping** — HOMECORE entity state ↔ HAP characteristic values with type-safe enums
-- **HAP-1.1 spec compliance** — characteristic types and permissions match HomeKit's published spec
-- **Trait-based advertisement** — `MdnsAdvertiser` abstraction; swappable implementations (null, real mDNS, etc.)
-- **RuView integration** — maps WiFi sensing data (occupancy, temperature, vital signs) to HomeKit sensor accessories
-- **No TLS server in P1** — bridge compiles and tests pass with `--no-default-features`; real server lands in P2 with `--features hap-server`
-- **Home.app compatible** — exposed accessories appear in Home app on any HomeKit hub (Apple TV, HomePod, HomePod mini)
+## Server integration
 
-## Capabilities
+```rust,no_run
+use std::{net::IpAddr, sync::Arc};
+use homecore_hap::{
+    start_server, HapBridge, HapServerConfig, HapServiceRecord,
+    MdnsSdAdvertiser, PairingStore,
+};
 
-| Capability | Type | Method | Notes |
-|------------|------|--------|-------|
-| Define accessory type | Trait | `HapAccessoryType::Light` etc. (11 variants) | Enum; no instantiation yet (P1) |
-| Define characteristic | Trait | `HapCharacteristic::On`, `Brightness`, etc. | Enum; values encoded as HAP TLV |
-| Map entity to accessory | Mapping | `EntityToAccessoryMapper::map_light()` | Takes `EntityId` + `State`; returns `HapAccessory` |
-| Expose accessory | Bridge | `HapBridge::expose(accessory)` | Adds to the bridge's characteristic list |
-| Advertise bridge | mDNS | `NullAdvertiser::advertise()` (P1) | No-op stub; real mDNS in P2 |
-| Advertise bridge (P2) | mDNS | `mdns_sd::ServiceInstanceBuilder` | Real mDNS via `--features hap-server` |
-| Bridge state query | Bridge | `HapBridge::list_accessories()` | Returns exposed accessories + their characteristics |
-| Characteristic write | Characteristic | HAP `WriteRequest` TLV (P2) | Home.app button press → service call |
-| Characteristic read | Characteristic | HAP `ReadResponse` TLV (P2) | Home.app query → current entity state |
+# async fn run() -> Result<(), Box<dyn std::error::Error>> {
+let record = HapServiceRecord::bridge(
+    "HOMECORE Bridge",
+    51826,
+    "AA:BB:CC:DD:EE:FF",
+);
+let bridge = HapBridge::new(record);
+let pairings = Arc::new(PairingStore::open(
+    "/var/lib/homecore-hap/pairings.json",
+)?);
+let advertiser = Arc::new(MdnsSdAdvertiser::new(
+    "homecore",
+    "192.168.1.50".parse::<IpAddr>()?,
+)?);
 
-## Comparison to Home Assistant
+let server = start_server(
+    HapServerConfig::default(),
+    bridge.clone(),
+    pairings,
+    advertiser,
+).await?;
 
-| Aspect | Home Assistant | homecore-hap |
-|--------|----------------|--------------|
-| Framework | HA's `hap-python` (pure Python) | Rust 1.89+ with HAP trait abstraction |
-| Server type | Python asyncio HAP-1.1 server | TLS server trait (P2); stub in P1 |
-| Accessory types | 30+ (Light, Switch, Thermostat, etc.) | 11 (Light, Switch, Thermostat, Door, Lock, Window, Blind, Outlet, Fan, Sensor, SecuritySystem) |
-| mDNS | mdns-py broadcast via asyncio | Abstraction + real mDNS (P2) or no-op stub (P1) |
-| Entity filtering | YAML `include_domains` + `exclude_entities` | Mapper rules (planned P2) |
-| HomeKit hub requirement | Yes (for remote access) | Yes (same as HomeKit) |
-| Pairing code generation | Automatic (HA web UI) | Manual setup code (P2) |
-| Characteristic persistence | HomeKit cloud only | Paired with homecore state machine |
-
-## Performance
-
-- **Entity→HAP mapping** — < 100 μs per entity (enum lookups + type conversions)
-- **HAP write latency** — ~10 ms (TLS decrypt + characteristic parse + entity state set); bounded by homecore state machine lock contention
-- **mDNS advertisement** (P2) — ~50 ms multicast broadcast; periodic rediscovery on network change
-- **Memory overhead per accessory** — ~500 bytes (enum + characteristic slots + metadata)
-- **No per-crate benchmarks yet** — a follow-up issue tracks baseline measurements
-
-## Usage
-
-Mapping an entity (P1):
-
-```rust
-use homecore_hap::{EntityToAccessoryMapper, HapBridge, HapAccessoryType};
-use homecore::{EntityId, State};
-use std::collections::HashMap;
-
-#[tokio::main]
-async fn main() {
-    let light_id = EntityId::parse("light.kitchen").unwrap();
-    let state = State::new("on", HashMap::new());
-
-    // Map the entity to a HAP Light accessory
-    let mut mapper = EntityToAccessoryMapper::new();
-    if let Ok(accessory) = mapper.map_light(&light_id, &state) {
-        println!("Mapped to HAP: {:?}", accessory.accessory_type);
-
-        // Expose it via the bridge
-        let mut bridge = HapBridge::new();
-        bridge.expose(accessory);
-        println!("Exposed {} accessories", bridge.list_accessories().len());
-    }
-}
+// Feed HOMECORE StateChanged events through bridge.update_accessory(...).
+// On process shutdown:
+server.shutdown().await?;
+# Ok(())
+# }
 ```
 
-Real HAP server (P2, via `--features hap-server`):
+Build and test:
 
 ```bash
-cargo build -p homecore-hap --features hap-server
-# The server will advertise over mDNS and accept HomeKit pairing requests
+cargo test -p homecore-hap --no-default-features
+cargo test -p homecore-hap --features hap-server
 ```
 
-## Relation to other HOMECORE crates
+Real mDNS requires the advertised address to be LAN-routable and the runtime to
+have multicast access. Containers normally need host networking or macvlan.
 
-```
-homecore-hap (HomeKit bridge)
-├─ homecore (state machine; bridge reads entity states)
-├─ homecore-api (exposes HAP state via REST /api for remote debugging)
-├─ homecore-server (starts the bridge on homecore init)
-└─ homecore-automation (can trigger state changes via service calls)
-```
+## Decisions
 
-## References
-
-- [ADR-125: HOMECORE Apple Home / HomeKit Bridge](../../docs/adr/ADR-125-homecore-apple-home-homekit-bridge.md)
-- [ADR-126: HOMECORE Home Assistant Port (master)](../../docs/adr/ADR-126-homecore-home-assistant-port.md)
-- [HomeKit Accessory Protocol Specification (HAP-1.1)](https://developer.apple.com/homekit/)
-- [user-guide-apple-homepod.md](../../docs/user-guide-apple-homepod.md)
-- [README — wifi-densepose](../../../README.md)
+- [ADR-125 — native Apple Home HAP bridge](../../docs/adr/ADR-125-ruview-apple-home-native-hap-bridge.md)
+- [ADR-130 — bounded async REST/WebSocket server patterns](../../docs/adr/ADR-130-homecore-rest-websocket-api.md)
+- [ADR-161 — server-layer security and explicit HAP deferral](../../docs/adr/ADR-161-homecore-server-layer-security.md)

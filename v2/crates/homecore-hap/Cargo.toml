@@ -10,7 +10,7 @@ version = "0.1.0-alpha.0"
 edition = "2021"
 license = "MIT"
 authors = ["rUv <ruv@ruv.net>", "HOMECORE Contributors"]
-description = "Apple Home HomeKit Accessory Protocol bridge — ADR-125 P1 scaffold"
+description = "Fail-closed HomeKit Accessory Protocol network foundation for HOMECORE"
 repository = "https://github.com/ruvnet/wifi-densepose"
 
 [lib]
@@ -19,18 +19,24 @@ path = "src/lib.rs"
 
 [features]
 default = []
-# P2: gates the actual hap = "0.1" crate integration + real mDNS via mdns-sd
-hap-server = []
+# Enables the bounded TCP/HTTP listener and real `_hap._tcp` mDNS advertiser.
+# Pair-Setup, Pair-Verify, and encrypted HAP transport remain deliberately
+# unavailable until their complete cryptographic phases are implemented.
+hap-server = ["dep:httparse", "dep:mdns-sd"]
 
 [dependencies]
 homecore = { path = "../homecore" }
-tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tracing = "0.1"
 async-trait = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
+ed25519-dalek = "2.1"
+tempfile = "3"
+httparse = { version = "1", optional = true }
+mdns-sd = { version = "0.11", optional = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros", "test-util"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time", "test-util"] }
