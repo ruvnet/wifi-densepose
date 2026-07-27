@@ -21,6 +21,14 @@ pub enum PluginError {
     #[error("runtime error: {0}")]
     RuntimeError(String),
 
+    /// Plugin discovery or filesystem layout is invalid.
+    #[error("plugin discovery failed: {0}")]
+    Discovery(String),
+
+    /// A configured manifest, module, or ABI payload exceeds its limit.
+    #[error("plugin resource limit exceeded: {0}")]
+    ResourceLimit(String),
+
     /// The plugin's `setup` hook returned an error.
     #[error("plugin setup failed: {0}")]
     SetupFailed(String),

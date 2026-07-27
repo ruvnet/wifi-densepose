@@ -11,10 +11,11 @@ use async_trait::async_trait;
 use homecore::HomeCore;
 
 use crate::error::PluginError;
+use crate::StateChangedEventJson;
 
 /// Unique identifier for a loaded plugin — mirrors the `domain` field of
 /// the plugin's `PluginManifest` (e.g. `"mqtt"`, `"homecore_lights"`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PluginId(pub String);
 
 impl PluginId {
@@ -51,6 +52,12 @@ pub trait HomeCorePlugin: Send + Sync + 'static {
     /// The plugin receives a reference to the `HomeCore` runtime and should
     /// register its entities, services, and event subscriptions here.
     async fn setup(&self, hc: HomeCore) -> Result<(), PluginError>;
+
+    /// Receive a committed state change. The default is a no-op so built-in
+    /// plugins only opt into event work they need.
+    async fn state_changed(&self, _event: &StateChangedEventJson) -> Result<(), PluginError> {
+        Ok(())
+    }
 
     /// Called when the plugin is being removed from the registry.
     ///

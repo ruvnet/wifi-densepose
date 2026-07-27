@@ -41,6 +41,7 @@
 //! | `wasm3` | off | wasm3 interpreter runtime for constrained hardware (P3) |
 
 pub mod error;
+pub mod discovery;
 pub mod host_abi;
 pub mod manifest;
 pub mod permissions;
@@ -53,6 +54,7 @@ pub mod verify;
 pub mod wasmtime_runtime;
 
 pub use error::PluginError;
+pub use discovery::{discover_plugins, DiscoveredPlugin, DiscoveryLimits};
 pub use host_abi::{ConfigEntryJson, StateChangedEventJson};
 pub use manifest::{IotClass, IntegrationType, PluginManifest};
 pub use permissions::PermissionSet;

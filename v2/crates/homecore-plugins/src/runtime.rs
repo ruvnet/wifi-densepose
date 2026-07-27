@@ -23,6 +23,7 @@ use homecore::HomeCore;
 use crate::error::PluginError;
 use crate::manifest::PluginManifest;
 use crate::plugin::{HomeCorePlugin, PluginId};
+use crate::StateChangedEventJson;
 
 /// A loaded plugin handle — returned by [`PluginRuntime::load`].
 pub struct LoadedPlugin {
@@ -41,6 +42,11 @@ impl LoadedPlugin {
     /// Delegate to the inner plugin's `unload` method.
     pub async fn unload(&self) -> Result<(), PluginError> {
         self.instance.unload().await
+    }
+
+    /// Dispatch a committed state change to this plugin.
+    pub async fn state_changed(&self, event: &StateChangedEventJson) -> Result<(), PluginError> {
+        self.instance.state_changed(event).await
     }
 }
 

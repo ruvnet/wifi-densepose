@@ -5,7 +5,7 @@
 //! the `InProcessRuntime` (P1) for a `WasmtimeRuntime` (P2) without
 //! changing registry code.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use homecore::HomeCore;
@@ -15,6 +15,7 @@ use crate::error::PluginError;
 use crate::manifest::PluginManifest;
 use crate::plugin::{HomeCorePlugin, PluginId};
 use crate::runtime::{LoadedPlugin, PluginRuntime};
+use crate::StateChangedEventJson;
 
 /// Holds all loaded plugins keyed by `PluginId`.
 ///
@@ -22,7 +23,8 @@ use crate::runtime::{LoadedPlugin, PluginRuntime};
 /// unload) take an exclusive lock only while mutating the map.
 pub struct PluginRegistry<R: PluginRuntime> {
     runtime: R,
-    plugins: RwLock<HashMap<PluginId, LoadedPlugin>>,
+    plugins: RwLock<BTreeMap<PluginId, LoadedPlugin>>,
+    loading: RwLock<BTreeSet<PluginId>>,
 }
 
 impl<R: PluginRuntime> PluginRegistry<R> {
@@ -30,7 +32,8 @@ impl<R: PluginRuntime> PluginRegistry<R> {
     pub fn new(runtime: R) -> Self {
         Self {
             runtime,
-            plugins: RwLock::new(HashMap::new()),
+            plugins: RwLock::new(BTreeMap::new()),
+            loading: RwLock::new(BTreeSet::new()),
         }
     }
 
@@ -48,22 +51,31 @@ impl<R: PluginRuntime> PluginRegistry<R> {
 
         {
             let guard = self.plugins.read().await;
-            if guard.contains_key(&id) {
+            let mut loading = self.loading.write().await;
+            if guard.contains_key(&id) || !loading.insert(id.clone()) {
                 return Err(PluginError::AlreadyLoaded(id.to_string()));
             }
         }
 
-        let loaded = self
+        let result = self
             .runtime
             .load(id.clone(), manifest, plugin)
-            .await?;
-
-        loaded
-            .setup(hc)
-            .await
-            .map_err(|e| PluginError::SetupFailed(e.to_string()))?;
-
+            .await;
+        let loaded = match result {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                self.loading.write().await.remove(&id);
+                return Err(error);
+            }
+        };
+        if let Err(error) = loaded.setup(hc).await {
+            // Best-effort rollback for partially initialized plugins.
+            let _ = loaded.unload().await;
+            self.loading.write().await.remove(&id);
+            return Err(PluginError::SetupFailed(error.to_string()));
+        }
         self.plugins.write().await.insert(id.clone(), loaded);
+        self.loading.write().await.remove(&id);
         Ok(id)
     }
 
@@ -78,10 +90,11 @@ impl<R: PluginRuntime> PluginRegistry<R> {
                 .ok_or_else(|| PluginError::NotFound(id.to_string()))?
         };
 
-        loaded
-            .unload()
-            .await
-            .map_err(|e| PluginError::UnloadFailed(e.to_string()))?;
+        if let Err(error) = loaded.unload().await {
+            // Keep the handle reachable so teardown can be retried.
+            self.plugins.write().await.insert(id.clone(), loaded);
+            return Err(PluginError::UnloadFailed(error.to_string()));
+        }
 
         Ok(())
     }
@@ -98,5 +111,30 @@ impl<R: PluginRuntime> PluginRegistry<R> {
     /// Return `true` if a plugin with this ID is loaded.
     pub async fn contains(&self, id: &PluginId) -> bool {
         self.plugins.read().await.contains_key(id)
+    }
+
+    /// Dispatch a state change in stable plugin-domain order.
+    pub async fn state_changed(&self, event: &StateChangedEventJson) -> Vec<(PluginId, PluginError)> {
+        let guard = self.plugins.read().await;
+        let mut errors = Vec::new();
+        for (id, plugin) in guard.iter() {
+            if let Err(error) = plugin.state_changed(event).await {
+                errors.push((id.clone(), error));
+            }
+        }
+        errors
+    }
+
+    /// Tear down all plugins in reverse domain order. Failures are collected
+    /// while remaining plugins still receive teardown.
+    pub async fn shutdown(&self) -> Vec<(PluginId, PluginError)> {
+        let ids: Vec<_> = self.plugins.read().await.keys().cloned().rev().collect();
+        let mut errors = Vec::new();
+        for id in ids {
+            if let Err(error) = self.unload(&id).await {
+                errors.push((id, error));
+            }
+        }
+        errors
     }
 }
