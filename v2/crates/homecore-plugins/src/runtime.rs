@@ -1,8 +1,8 @@
 //! `PluginRuntime` trait + `InProcessRuntime` (P1).
 //!
 //! Abstracts over Wasmtime (P2, `--features wasmtime`) and native in-process
-//! Rust plugins (P1, always-on). A third backend, wasm3 (P3), will provide
-//! interpretation mode for constrained hardware.
+//! Rust plugins (P1, always-on). Constrained builds use the compiled-in native
+//! registry rather than an unaudited interpreter backend.
 //!
 //! # Architecture
 //!
@@ -12,7 +12,6 @@
 //!       ▼
 //! PluginRuntime  ◄─── InProcessRuntime  (P1, native Rust, <1 µs call)
 //!                ◄─── WasmtimeRuntime   (P2, Cranelift JIT, ~5 ms cold start)
-//!                ◄─── Wasm3Runtime      (P3, interpreter, ~50 kB, Pi Zero)
 //! ```
 
 use std::sync::Arc;
