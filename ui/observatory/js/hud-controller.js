@@ -243,8 +243,9 @@ export class HudController {
     dsSel.addEventListener('change', (e) => {
       s.dataSource = e.target.value;
       document.getElementById('ws-url-row').style.display = e.target.value === 'ws' ? 'flex' : 'none';
-      if (e.target.value === 'ws' && s.wsUrl) obs._connectWS(s.wsUrl);
-      else obs._disconnectWS();
+      // Always connect to ws (only option now); use custom URL if provided, else auto-detect
+      if (s.wsUrl) obs._connectWS(s.wsUrl);
+      else obs._connectWS(null);  // null triggers auto-detection in _connectWS
       this.updateSourceBadge(s.dataSource, obs._ws);
       this.saveSettings();
     });
