@@ -44,6 +44,15 @@ pub struct ApiConfig {
     components: Vec<String>,
 }
 
+const LOADED_COMPONENTS: &[&str] = &[
+    "api",
+    "automation",
+    "config",
+    "homecore",
+    "recorder",
+    "websocket_api",
+];
+
 pub async fn get_config(
     headers: HeaderMap,
     State(s): State<SharedState>,
@@ -53,8 +62,24 @@ pub async fn get_config(
         location_name: s.location_name().to_string(),
         version: s.version().to_string(),
         state: "RUNNING",
-        components: vec![],
+        components: LOADED_COMPONENTS
+            .iter()
+            .map(|component| (*component).to_owned())
+            .collect(),
     }))
+}
+
+pub async fn get_components(
+    headers: HeaderMap,
+    State(s): State<SharedState>,
+) -> ApiResult<Json<Vec<String>>> {
+    let _ = BearerAuth::from_headers(&headers, s.tokens()).await?;
+    Ok(Json(
+        LOADED_COMPONENTS
+            .iter()
+            .map(|component| (*component).to_owned())
+            .collect(),
+    ))
 }
 
 #[derive(Serialize)]
@@ -280,10 +305,14 @@ pub async fn fire_event(
     } else {
         body
     };
-    s.homecore()
-        .bus()
-        .fire_domain(homecore::DomainEvent::new(event_type, data, Context::new()));
-    Ok(Json(serde_json::json!({"message": "Event fired."})))
+    s.homecore().bus().fire_domain(homecore::DomainEvent::new(
+        event_type.clone(),
+        data,
+        Context::new(),
+    ));
+    Ok(Json(
+        serde_json::json!({"message": format!("Event {event_type} fired.")}),
+    ))
 }
 
 #[derive(Deserialize)]

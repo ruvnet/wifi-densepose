@@ -27,6 +27,7 @@ pub fn router(state: SharedState) -> Router {
     Router::new()
         .route("/api/", get(rest::api_root))
         .route("/api/config", get(rest::get_config))
+        .route("/api/components", get(rest::get_components))
         .route("/api/states", get(rest::get_states))
         .route(
             "/api/states/:entity_id",
