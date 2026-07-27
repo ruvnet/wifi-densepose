@@ -2,11 +2,10 @@
 //!
 //! # Network foundation scope
 //!
-//! The crate provides persisted controller records, a fail-closed session
-//! state machine, bounded TLV8 parsing, characteristic event flow, and (with
-//! `hap-server`) a bounded TCP/HTTP listener plus real mDNS. It does **not**
-//! yet implement SRP Pair-Setup, X25519/HKDF/ChaCha20-Poly1305 Pair-Verify, or
-//! encrypted HAP framing, so Apple Home pairing is deliberately unavailable.
+//! The crate provides persisted accessory/controller identity, SRP-6a
+//! Pair-Setup, X25519/Ed25519 Pair-Verify, encrypted HAP IP framing, bounded
+//! TLV8/HTTP parsing, characteristic event flow, and (with `hap-server`) a
+//! bounded TCP listener plus real mDNS.
 //!
 //! # Module layout
 //!
@@ -16,7 +15,7 @@
 //! | [`mapping`] | `EntityToAccessoryMapper` — HOMECORE entity → HAP |
 //! | [`bridge`] | `HapBridge` — owns exposed accessories |
 //! | [`mdns`] | `MdnsAdvertiser` trait + `NullAdvertiser` stub |
-//! | [`pairing`] | Atomic controller pairing persistence |
+//! | [`pairing`] | Atomic accessory identity, setup, and pairing persistence |
 //! | [`protocol`] | Bounded TLV8 protocol primitives |
 //! | [`ruview`] | `RuViewToHapMapper` — sensing primitives → HAP |
 //! | [`session`] | Authenticated request-gating state machine |
@@ -25,9 +24,12 @@
 
 pub mod accessory;
 pub mod bridge;
+mod crypto;
 pub mod error;
 pub mod mapping;
 pub mod mdns;
+mod pair_setup;
+mod pair_verify;
 pub mod pairing;
 pub mod protocol;
 pub mod ruview;
@@ -42,7 +44,7 @@ pub use mapping::EntityToAccessoryMapper;
 #[cfg(feature = "hap-server")]
 pub use mdns::MdnsSdAdvertiser;
 pub use mdns::{HapServiceRecord, MdnsAdvertiser, NullAdvertiser};
-pub use pairing::{ControllerPairing, PairingStore};
+pub use pairing::{ControllerPairing, PairingStore, PairingStoreProvisioning, SetupCode};
 pub use ruview::RuViewToHapMapper;
 #[cfg(feature = "hap-server")]
 pub use server::{start_server, HapServerConfig, HapServerHandle};

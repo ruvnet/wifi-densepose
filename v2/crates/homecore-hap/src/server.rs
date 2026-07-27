@@ -1,9 +1,4 @@
-//! Bounded async TCP/HTTP foundation for HAP.
-//!
-//! The listener parses plaintext pairing HTTP and has authenticated accessory
-//! endpoint handlers ready for a future encrypted transport. Because Pair-
-//! Setup, Pair-Verify, and HAP frame encryption are not complete, no network
-//! request can currently transition a session to authenticated.
+//! Bounded HAP IP server with plaintext pairing and encrypted control sessions.
 
 use std::collections::HashSet;
 use std::net::SocketAddr;
@@ -14,16 +9,23 @@ use httparse::Status;
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{oneshot, Semaphore};
+use tokio::sync::{oneshot, Mutex, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{timeout, Instant};
 
 use crate::accessory::{HapAccessoryType, HapCharacteristic, HapCharacteristicValue};
 use crate::bridge::{CharacteristicEvent, ExposedAccessory, HapBridge};
+use crate::crypto::{RecordLayer, RECORD_TAG_BYTES};
 use crate::error::HapError;
-use crate::mdns::MdnsAdvertiser;
-use crate::pairing::PairingStore;
-use crate::protocol::pairing_unavailable_response;
+use crate::mdns::{HapServiceRecord, MdnsAdvertiser};
+use crate::pair_setup::PairSetup;
+use crate::pair_verify::PairVerify;
+use crate::pairing::{ControllerPairing, PairingStore};
+use crate::protocol::{
+    encode_items, error_response as tlv_error_response, Tlv8, TLV_ERROR_AUTHENTICATION,
+    TLV_ERROR_MAX_PEERS, TLV_ERROR_UNKNOWN, TLV_IDENTIFIER, TLV_METHOD, TLV_PERMISSIONS,
+    TLV_PUBLIC_KEY, TLV_SEPARATOR, TLV_STATE,
+};
 use crate::session::Session;
 
 const HAP_JSON: &str = "application/hap+json";
@@ -133,8 +135,19 @@ pub async fn start_server(
 
     let mut record = bridge.service_record.clone();
     record.port = local_addr.port();
+    let persisted_id = pairings.accessory_id()?;
+    if !record.device_id.eq_ignore_ascii_case(&persisted_id) {
+        return Err(HapError::Server(format!(
+            "mDNS device ID {} does not match persisted accessory identity {persisted_id}",
+            record.device_id
+        )));
+    }
     record.paired = pairings.is_paired()?;
     advertiser.advertise(&record).await?;
+    let discovery = Arc::new(DiscoveryState {
+        advertiser,
+        record: Mutex::new(record),
+    });
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let task_config = config.clone();
@@ -143,8 +156,7 @@ pub async fn start_server(
         task_config,
         bridge,
         pairings,
-        advertiser,
-        record.instance_name,
+        discovery,
         shutdown_rx,
     ));
     Ok(HapServerHandle {
@@ -164,8 +176,7 @@ async fn run_listener(
     config: HapServerConfig,
     bridge: HapBridge,
     pairings: Arc<PairingStore>,
-    advertiser: Arc<dyn MdnsAdvertiser>,
-    instance_name: String,
+    discovery: Arc<DiscoveryState>,
     mut shutdown: oneshot::Receiver<()>,
 ) -> Result<(), HapError> {
     let permits = Arc::new(Semaphore::new(config.max_connections));
@@ -189,11 +200,12 @@ async fn run_listener(
             Ok((stream, peer)) => {
                 let bridge = bridge.clone();
                 let pairings = pairings.clone();
+                let discovery = discovery.clone();
                 let limits = config.clone();
                 connections.spawn(async move {
                     let _permit = permit;
                     if let Err(error) =
-                        serve_connection(stream, peer, limits, bridge, pairings).await
+                        serve_connection(stream, peer, limits, bridge, pairings, discovery).await
                     {
                         tracing::debug!(%peer, %error, "HAP connection closed");
                     }
@@ -216,7 +228,32 @@ async fn run_listener(
             break;
         }
     }
-    advertiser.retract(&instance_name).await
+    discovery.retract().await
+}
+
+struct DiscoveryState {
+    advertiser: Arc<dyn MdnsAdvertiser>,
+    record: Mutex<HapServiceRecord>,
+}
+
+impl DiscoveryState {
+    async fn set_paired(&self, paired: bool) -> Result<(), HapError> {
+        let mut record = self.record.lock().await;
+        if record.paired == paired {
+            return Ok(());
+        }
+        self.advertiser.retract(&record.instance_name).await?;
+        let mut next = record.clone();
+        next.paired = paired;
+        self.advertiser.advertise(&next).await?;
+        *record = next;
+        Ok(())
+    }
+
+    async fn retract(&self) -> Result<(), HapError> {
+        let record = self.record.lock().await;
+        self.advertiser.retract(&record.instance_name).await
+    }
 }
 
 async fn serve_connection(
@@ -225,41 +262,62 @@ async fn serve_connection(
     config: HapServerConfig,
     bridge: HapBridge,
     pairings: Arc<PairingStore>,
+    discovery: Arc<DiscoveryState>,
 ) -> Result<(), HapError> {
     let mut buffer = ConnectionBuffer::default();
     let mut session = Session::new();
+    let mut pair_setup = PairSetup::new(pairings.clone());
+    let mut pair_verify = PairVerify::new(pairings.clone());
+    let mut record_layer = None;
     let mut subscriptions = HashSet::new();
     let mut events = bridge.subscribe_events();
+    let mut pairing_changes = pairings.subscribe_changes();
 
     loop {
         tokio::select! {
             request = timeout(
                 config.request_timeout,
-                read_request(&mut stream, &mut buffer, &config),
+                read_request(&mut stream, &mut record_layer, &mut buffer, &config),
             ) => {
                 let request = match request {
                     Ok(Ok(Some(request))) => request,
                     Ok(Ok(None)) => break,
+                    Ok(Err(RequestReadError::Authentication)) => break,
                     Ok(Err(error)) => {
                         let response = error_response(&error);
-                        write_response(&mut stream, response).await?;
+                        write_response(&mut stream, record_layer.as_mut(), response).await?;
                         break;
                     }
                     Err(_) => {
-                        write_response(&mut stream, Response::plain(408, b"request timeout".to_vec())).await?;
+                        write_response(
+                            &mut stream,
+                            record_layer.as_mut(),
+                            Response::plain(408, b"request timeout".to_vec()),
+                        ).await?;
                         break;
                     }
                 };
                 let close = request.connection_close;
-                let response = dispatch_request(
+                let dispatched = dispatch_request(
                     request,
                     &mut session,
+                    (&mut pair_setup, &mut pair_verify),
                     &bridge,
                     &pairings,
+                    &discovery,
                     &mut subscriptions,
-                );
-                write_response(&mut stream, response).await?;
-                if close {
+                ).await;
+                write_response(
+                    &mut stream,
+                    record_layer.as_mut(),
+                    dispatched.response,
+                ).await?;
+                if record_layer.is_none() {
+                    if let Some(keys) = session.take_session_keys() {
+                        record_layer = Some(RecordLayer::accessory(keys));
+                    }
+                }
+                if close || dispatched.close_after_response {
                     break;
                 }
             }
@@ -267,13 +325,27 @@ async fn serve_connection(
                 match event {
                     Ok(event) => {
                         if let Some(payload) = event_payload(&bridge, &event, &subscriptions) {
-                            write_event(&mut stream, payload).await?;
+                            let Some(records) = record_layer.as_mut() else {
+                                break;
+                            };
+                            write_event(&mut stream, records, payload).await?;
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                         // A lagged controller must resynchronize through GET /characteristics.
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            changed = pairing_changes.changed(), if session.state().is_authenticated() => {
+                if changed.is_err() {
+                    break;
+                }
+                let Some(controller_id) = session.controller_id() else {
+                    break;
+                };
+                if pairings.get(controller_id)?.is_none() {
+                    break;
                 }
             }
         }
@@ -297,6 +369,7 @@ struct ConnectionBuffer {
 
 async fn read_request(
     stream: &mut TcpStream,
+    record_layer: &mut Option<RecordLayer>,
     buffer: &mut ConnectionBuffer,
     config: &HapServerConfig,
 ) -> Result<Option<Request>, RequestReadError> {
@@ -307,19 +380,15 @@ async fn read_request(
         if buffer.bytes.len() >= config.max_header_bytes {
             return Err(RequestReadError::HeadersTooLarge);
         }
-        let mut chunk = [0u8; 2048];
-        let read = stream
-            .read(&mut chunk)
-            .await
-            .map_err(RequestReadError::Io)?;
-        if read == 0 {
+        let chunk = read_transport_chunk(stream, record_layer).await?;
+        if chunk.is_empty() {
             return if buffer.bytes.is_empty() {
                 Ok(None)
             } else {
                 Err(RequestReadError::Malformed("truncated HTTP headers"))
             };
         }
-        buffer.bytes.extend_from_slice(&chunk[..read]);
+        buffer.bytes.extend_from_slice(&chunk);
     };
     if header_end > config.max_header_bytes {
         return Err(RequestReadError::HeadersTooLarge);
@@ -381,16 +450,11 @@ async fn read_request(
         .checked_add(content_length)
         .ok_or(RequestReadError::BodyTooLarge)?;
     while buffer.bytes.len() < request_end {
-        let remaining = request_end - buffer.bytes.len();
-        let mut chunk = vec![0u8; remaining.min(8192)];
-        let read = stream
-            .read(&mut chunk)
-            .await
-            .map_err(RequestReadError::Io)?;
-        if read == 0 {
+        let chunk = read_transport_chunk(stream, record_layer).await?;
+        if chunk.is_empty() {
             return Err(RequestReadError::Malformed("truncated HTTP body"));
         }
-        buffer.bytes.extend_from_slice(&chunk[..read]);
+        buffer.bytes.extend_from_slice(&chunk);
     }
     let body = buffer.bytes[header_end..request_end].to_vec();
     buffer.bytes.drain(..request_end);
@@ -400,6 +464,46 @@ async fn read_request(
         body,
         connection_close,
     }))
+}
+
+async fn read_transport_chunk(
+    stream: &mut TcpStream,
+    record_layer: &mut Option<RecordLayer>,
+) -> Result<Vec<u8>, RequestReadError> {
+    let Some(records) = record_layer.as_mut() else {
+        let mut chunk = vec![0u8; 2048];
+        let read = stream
+            .read(&mut chunk)
+            .await
+            .map_err(RequestReadError::Io)?;
+        chunk.truncate(read);
+        return Ok(chunk);
+    };
+
+    let mut length_bytes = [0u8; 2];
+    let first = stream
+        .read(&mut length_bytes[..1])
+        .await
+        .map_err(RequestReadError::Io)?;
+    if first == 0 {
+        return Ok(Vec::new());
+    }
+    stream
+        .read_exact(&mut length_bytes[1..])
+        .await
+        .map_err(|_| RequestReadError::Authentication)?;
+    let length = u16::from_le_bytes(length_bytes) as usize;
+    if length > crate::crypto::MAX_RECORD_PLAINTEXT {
+        return Err(RequestReadError::Authentication);
+    }
+    let mut encrypted = vec![0u8; length + RECORD_TAG_BYTES];
+    stream
+        .read_exact(&mut encrypted)
+        .await
+        .map_err(|_| RequestReadError::Authentication)?;
+    records
+        .decrypt(length_bytes, &encrypted)
+        .map_err(|_| RequestReadError::Authentication)
 }
 
 fn find_header_end(bytes: &[u8]) -> Option<usize> {
@@ -413,6 +517,7 @@ enum RequestReadError {
     MalformedOwned(String),
     HeadersTooLarge,
     BodyTooLarge,
+    Authentication,
 }
 
 impl std::fmt::Display for RequestReadError {
@@ -423,6 +528,7 @@ impl std::fmt::Display for RequestReadError {
             Self::MalformedOwned(message) => formatter.write_str(message),
             Self::HeadersTooLarge => formatter.write_str("HTTP headers too large"),
             Self::BodyTooLarge => formatter.write_str("HTTP body too large"),
+            Self::Authentication => formatter.write_str("encrypted HAP record rejected"),
         }
     }
 }
@@ -459,58 +565,243 @@ impl Response {
     }
 }
 
-fn dispatch_request(
+struct DispatchResult {
+    response: Response,
+    close_after_response: bool,
+}
+
+impl DispatchResult {
+    fn keep(response: Response) -> Self {
+        Self {
+            response,
+            close_after_response: false,
+        }
+    }
+
+    fn close(response: Response) -> Self {
+        Self {
+            response,
+            close_after_response: true,
+        }
+    }
+}
+
+async fn dispatch_request(
     request: Request,
     session: &mut Session,
+    pair_protocols: (&mut PairSetup, &mut PairVerify),
     bridge: &HapBridge,
-    pairings: &PairingStore,
+    pairings: &Arc<PairingStore>,
+    discovery: &DiscoveryState,
     subscriptions: &mut HashSet<(u64, u64)>,
-) -> Response {
+) -> DispatchResult {
+    let (pair_setup, pair_verify) = pair_protocols;
     match (
         request.method.as_str(),
         request.target.split('?').next().unwrap_or(""),
     ) {
         ("POST", "/pair-setup") => {
-            let _ = session.begin_pair_setup(pairings.is_paired().unwrap_or(true));
-            let response = pairing_unavailable_response(&request.body);
-            let _ = session.reset_pairing();
-            match response {
-                Ok(body) => Response {
-                    status: 200,
-                    content_type: HAP_TLV,
-                    body,
-                },
-                Err(error) => Response::plain(400, error.to_string().into_bytes()),
+            if request_state(&request.body) == Some(1) && session.begin_pair_setup().is_err() {
+                return DispatchResult::close(Response::plain(
+                    400,
+                    b"invalid Pair-Setup session transition".to_vec(),
+                ));
+            }
+            match pair_setup.handle(&request.body) {
+                Ok(result) => {
+                    if result.paired {
+                        if let Err(error) = discovery.set_paired(true).await {
+                            tracing::warn!(%error, "paired state persisted but mDNS update failed");
+                        }
+                    }
+                    if result.terminal {
+                        let _ = session.reset_pairing();
+                    }
+                    DispatchResult::keep(Response {
+                        status: 200,
+                        content_type: HAP_TLV,
+                        body: result.body,
+                    })
+                }
+                Err(error) => {
+                    DispatchResult::close(Response::plain(400, error.to_string().into_bytes()))
+                }
             }
         }
         ("POST", "/pair-verify") => {
-            let _ = session.begin_pair_verify();
-            let response = pairing_unavailable_response(&request.body);
-            let _ = session.reset_pairing();
-            match response {
-                Ok(body) => Response {
-                    status: 200,
-                    content_type: HAP_TLV,
-                    body,
-                },
-                Err(error) => Response::plain(400, error.to_string().into_bytes()),
+            if request_state(&request.body) == Some(1) && session.begin_pair_verify().is_err() {
+                return DispatchResult::close(Response::plain(
+                    400,
+                    b"invalid Pair-Verify session transition".to_vec(),
+                ));
+            }
+            match pair_verify.handle(&request.body) {
+                Ok(result) => {
+                    if let Some(authenticated) = result.authenticated {
+                        if let Err(error) = session.authenticate(
+                            authenticated.controller_id,
+                            authenticated.admin,
+                            authenticated.keys,
+                        ) {
+                            return DispatchResult::close(Response::plain(
+                                400,
+                                error.to_string().into_bytes(),
+                            ));
+                        }
+                    } else if result.terminal {
+                        let _ = session.reset_pairing();
+                    }
+                    DispatchResult::keep(Response {
+                        status: 200,
+                        content_type: HAP_TLV,
+                        body: result.body,
+                    })
+                }
+                Err(error) => {
+                    DispatchResult::close(Response::plain(400, error.to_string().into_bytes()))
+                }
             }
         }
-        _ if !session.state().is_authenticated() => Response::json(
+        _ if !session.state().is_authenticated() => DispatchResult::keep(Response::json(
             470,
             json!({"status": -70401, "message": "Connection Authorization Required"}),
-        ),
-        ("GET", "/accessories") => Response::json(200, accessories_json(bridge)),
-        ("GET", "/characteristics") => characteristics_response(&request.target, bridge),
-        ("PUT", "/characteristics") => {
-            characteristic_subscription_response(&request.body, subscriptions)
+        )),
+        ("GET", "/accessories") => {
+            DispatchResult::keep(Response::json(200, accessories_json(bridge)))
         }
-        ("POST", "/pairings") => Response::json(
-            501,
-            json!({"status": -70406, "message": "Pairings management awaits encrypted transport"}),
-        ),
-        _ => Response::plain(404, b"not found".to_vec()),
+        ("GET", "/characteristics") => {
+            DispatchResult::keep(characteristics_response(&request.target, bridge))
+        }
+        ("PUT", "/characteristics") => DispatchResult::keep(characteristic_subscription_response(
+            &request.body,
+            subscriptions,
+        )),
+        ("POST", "/pairings") => {
+            pairings_response(&request.body, session, pairings, discovery).await
+        }
+        _ => DispatchResult::keep(Response::plain(404, b"not found".to_vec())),
     }
+}
+
+fn request_state(body: &[u8]) -> Option<u8> {
+    Tlv8::parse(body).ok()?.byte(TLV_STATE)
+}
+
+async fn pairings_response(
+    body: &[u8],
+    session: &Session,
+    pairings: &PairingStore,
+    discovery: &DiscoveryState,
+) -> DispatchResult {
+    let response = |body| Response {
+        status: 200,
+        content_type: HAP_TLV,
+        body,
+    };
+    let Some(controller_id) = session.controller_id() else {
+        return DispatchResult::close(response(tlv_error_response(2, TLV_ERROR_AUTHENTICATION)));
+    };
+    let authorized = pairings
+        .get(controller_id)
+        .ok()
+        .flatten()
+        .is_some_and(|pairing| pairing.admin);
+    if !authorized {
+        return DispatchResult::keep(response(tlv_error_response(2, TLV_ERROR_AUTHENTICATION)));
+    }
+    let Ok(tlv) = Tlv8::parse(body) else {
+        return DispatchResult::keep(response(tlv_error_response(2, TLV_ERROR_UNKNOWN)));
+    };
+    if tlv.byte(TLV_STATE) != Some(1) {
+        return DispatchResult::keep(response(tlv_error_response(2, TLV_ERROR_UNKNOWN)));
+    }
+
+    match tlv.byte(TLV_METHOD) {
+        Some(3) => {
+            let Some(identifier) = pairing_identifier(&tlv) else {
+                return DispatchResult::keep(response(tlv_error_response(2, TLV_ERROR_UNKNOWN)));
+            };
+            let Some(public_key) = tlv
+                .get(TLV_PUBLIC_KEY)
+                .and_then(|value| <[u8; 32]>::try_from(value).ok())
+            else {
+                return DispatchResult::keep(response(tlv_error_response(2, TLV_ERROR_UNKNOWN)));
+            };
+            let Some(admin) = tlv
+                .byte(TLV_PERMISSIONS)
+                .and_then(|permission| match permission {
+                    0 => Some(false),
+                    1 => Some(true),
+                    _ => None,
+                })
+            else {
+                return DispatchResult::keep(response(tlv_error_response(2, TLV_ERROR_UNKNOWN)));
+            };
+            let pairing = ControllerPairing {
+                controller_id: identifier,
+                public_key,
+                admin,
+            };
+            match pairings.upsert(pairing) {
+                Ok(()) => {
+                    DispatchResult::keep(response(encode_items([(TLV_STATE, [2].as_slice())])))
+                }
+                Err(HapError::PairingCapacity) => {
+                    DispatchResult::keep(response(tlv_error_response(2, TLV_ERROR_MAX_PEERS)))
+                }
+                Err(_) => DispatchResult::keep(response(tlv_error_response(2, TLV_ERROR_UNKNOWN))),
+            }
+        }
+        Some(4) => {
+            let Some(identifier) = pairing_identifier(&tlv) else {
+                return DispatchResult::keep(response(tlv_error_response(2, TLV_ERROR_UNKNOWN)));
+            };
+            if pairings.remove_hap(&identifier).is_err() {
+                return DispatchResult::keep(response(tlv_error_response(2, TLV_ERROR_UNKNOWN)));
+            }
+            let paired = pairings.is_paired().unwrap_or(true);
+            if let Err(error) = discovery.set_paired(paired).await {
+                tracing::warn!(%error, "pairing removal persisted but mDNS update failed");
+            }
+            let removed_current = pairings.get(controller_id).ok().flatten().is_none();
+            let result = response(encode_items([(TLV_STATE, [2].as_slice())]));
+            if removed_current {
+                DispatchResult::close(result)
+            } else {
+                DispatchResult::keep(result)
+            }
+        }
+        Some(5) => {
+            let Ok(records) = pairings.list() else {
+                return DispatchResult::keep(response(tlv_error_response(2, TLV_ERROR_UNKNOWN)));
+            };
+            let mut body = encode_items([(TLV_STATE, [2].as_slice())]);
+            for (index, pairing) in records.iter().enumerate() {
+                if index != 0 {
+                    body.extend_from_slice(&[TLV_SEPARATOR, 0]);
+                }
+                body.extend_from_slice(&encode_items([
+                    (TLV_IDENTIFIER, pairing.controller_id.as_bytes()),
+                    (TLV_PUBLIC_KEY, pairing.public_key.as_slice()),
+                    (TLV_PERMISSIONS, [u8::from(pairing.admin)].as_slice()),
+                ]));
+            }
+            DispatchResult::keep(response(body))
+        }
+        _ => DispatchResult::keep(response(tlv_error_response(2, TLV_ERROR_UNKNOWN))),
+    }
+}
+
+fn pairing_identifier(tlv: &Tlv8) -> Option<String> {
+    let value = tlv.get(TLV_IDENTIFIER)?;
+    if value.is_empty() || value.len() > 64 {
+        return None;
+    }
+    let identifier = std::str::from_utf8(value).ok()?;
+    if identifier.chars().any(char::is_control) {
+        return None;
+    }
+    Some(identifier.to_owned())
 }
 
 fn accessories_json(bridge: &HapBridge) -> Value {
@@ -715,7 +1006,11 @@ fn characteristic_type(kind: HapCharacteristic) -> &'static str {
     }
 }
 
-async fn write_response(stream: &mut TcpStream, response: Response) -> Result<(), HapError> {
+async fn write_response(
+    stream: &mut TcpStream,
+    records: Option<&mut RecordLayer>,
+    response: Response,
+) -> Result<(), HapError> {
     let reason = match response.status {
         200 => "OK",
         204 => "No Content",
@@ -726,47 +1021,60 @@ async fn write_response(stream: &mut TcpStream, response: Response) -> Result<()
         413 => "Payload Too Large",
         431 => "Request Header Fields Too Large",
         470 => "Connection Authorization Required",
-        501 => "Not Implemented",
         _ => "Error",
     };
-    let header = format!(
+    let mut message = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n\r\n",
         response.status,
         reason,
         response.content_type,
         response.body.len()
-    );
-    stream
-        .write_all(header.as_bytes())
-        .await
-        .map_err(|error| HapError::Server(format!("write response header: {error}")))?;
-    stream
-        .write_all(&response.body)
-        .await
-        .map_err(|error| HapError::Server(format!("write response body: {error}")))
+    )
+    .into_bytes();
+    message.extend_from_slice(&response.body);
+    write_transport(stream, records, &message).await
 }
 
-async fn write_event(stream: &mut TcpStream, body: Vec<u8>) -> Result<(), HapError> {
-    let header = format!(
+async fn write_event(
+    stream: &mut TcpStream,
+    records: &mut RecordLayer,
+    body: Vec<u8>,
+) -> Result<(), HapError> {
+    let mut message = format!(
         "EVENT/1.0 200 OK\r\nContent-Type: {HAP_JSON}\r\nContent-Length: {}\r\n\r\n",
         body.len()
-    );
+    )
+    .into_bytes();
+    message.extend_from_slice(&body);
+    write_transport(stream, Some(records), &message).await
+}
+
+async fn write_transport(
+    stream: &mut TcpStream,
+    records: Option<&mut RecordLayer>,
+    plaintext: &[u8],
+) -> Result<(), HapError> {
+    let output = match records {
+        Some(records) => records.encrypt(plaintext)?,
+        None => plaintext.to_vec(),
+    };
     stream
-        .write_all(header.as_bytes())
+        .write_all(&output)
         .await
-        .map_err(|error| HapError::Server(format!("write event header: {error}")))?;
-    stream
-        .write_all(&body)
-        .await
-        .map_err(|error| HapError::Server(format!("write event body: {error}")))
+        .map_err(|error| HapError::Server(format!("write HAP transport: {error}")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::{hkdf_sha512, open_labeled, seal_labeled, SessionKeys};
     use crate::mdns::{HapServiceRecord, NullAdvertiser};
+    use crate::pairing::SetupCode;
+    use crate::protocol::{TLV_ENCRYPTED_DATA, TLV_SIGNATURE};
+    use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
     use homecore::entity::{EntityId, State};
     use homecore::event::Context;
+    use x25519_dalek::{PublicKey, StaticSecret};
 
     fn bridge() -> HapBridge {
         let bridge = HapBridge::new(HapServiceRecord::bridge(
@@ -787,8 +1095,14 @@ mod tests {
 
     async fn server() -> (HapServerHandle, tempfile::TempDir) {
         let directory = tempfile::tempdir().unwrap();
-        let pairings =
-            Arc::new(PairingStore::open(directory.path().join("pairings.json")).unwrap());
+        let pairings = Arc::new(
+            PairingStore::create(
+                directory.path().join("pairings.json"),
+                SetupCode::parse("518-26-003").unwrap(),
+                Some("AA:BB:CC:DD:EE:FF".into()),
+            )
+            .unwrap(),
+        );
         let config = HapServerConfig {
             bind_addr: "127.0.0.1:0".parse().unwrap(),
             request_timeout: Duration::from_secs(1),
@@ -808,6 +1122,96 @@ mod tests {
         let mut response = Vec::new();
         stream.read_to_end(&mut response).await.unwrap();
         response
+    }
+
+    async fn paired_server() -> (HapServerHandle, tempfile::TempDir, SigningKey) {
+        let directory = tempfile::tempdir().unwrap();
+        let pairings = Arc::new(
+            PairingStore::create(
+                directory.path().join("pairings.json"),
+                SetupCode::parse("518-26-003").unwrap(),
+                Some("AA:BB:CC:DD:EE:FF".into()),
+            )
+            .unwrap(),
+        );
+        let controller = SigningKey::from_bytes(&[0x42; 32]);
+        pairings
+            .add_initial(ControllerPairing {
+                controller_id: "network-controller".into(),
+                public_key: controller.verifying_key().to_bytes(),
+                admin: true,
+            })
+            .unwrap();
+        let config = HapServerConfig {
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            request_timeout: Duration::from_secs(1),
+            shutdown_timeout: Duration::from_secs(1),
+            ..HapServerConfig::default()
+        };
+        let handle = start_server(config, bridge(), pairings, Arc::new(NullAdvertiser))
+            .await
+            .unwrap();
+        (handle, directory, controller)
+    }
+
+    async fn post_tlv(stream: &mut TcpStream, path: &str, body: &[u8]) -> Vec<u8> {
+        let request = format!(
+            "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: {HAP_TLV}\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        stream.write_all(body).await.unwrap();
+        read_plain_http(stream).await
+    }
+
+    async fn read_plain_http(stream: &mut TcpStream) -> Vec<u8> {
+        let mut response = Vec::new();
+        while find_header_end(&response).is_none() {
+            let mut byte = [0u8; 1];
+            stream.read_exact(&mut byte).await.unwrap();
+            response.push(byte[0]);
+        }
+        let header_end = find_header_end(&response).unwrap() + 4;
+        let header = std::str::from_utf8(&response[..header_end]).unwrap();
+        let length = header
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("Content-Length: ")
+                    .and_then(|value| value.parse::<usize>().ok())
+            })
+            .unwrap();
+        response.resize(header_end + length, 0);
+        stream
+            .read_exact(&mut response[header_end..])
+            .await
+            .unwrap();
+        response
+    }
+
+    async fn read_encrypted_http(stream: &mut TcpStream, records: &mut RecordLayer) -> Vec<u8> {
+        let mut plaintext = Vec::new();
+        loop {
+            let mut length = [0u8; 2];
+            stream.read_exact(&mut length).await.unwrap();
+            let payload_length = u16::from_le_bytes(length) as usize;
+            let mut encrypted = vec![0u8; payload_length + RECORD_TAG_BYTES];
+            stream.read_exact(&mut encrypted).await.unwrap();
+            plaintext.extend_from_slice(&records.decrypt(length, &encrypted).unwrap());
+            if let Some(header_position) = find_header_end(&plaintext) {
+                let header_end = header_position + 4;
+                let header = std::str::from_utf8(&plaintext[..header_end]).unwrap();
+                let content_length = header
+                    .lines()
+                    .find_map(|line| {
+                        line.strip_prefix("Content-Length: ")
+                            .and_then(|value| value.parse::<usize>().ok())
+                    })
+                    .unwrap();
+                if plaintext.len() >= header_end + content_length {
+                    return plaintext;
+                }
+            }
+        }
     }
 
     #[tokio::test]
@@ -840,15 +1244,108 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pairing_endpoint_returns_explicit_unavailable_tlv() {
+    async fn pair_setup_m1_returns_real_srp_challenge() {
         let (server, _directory) = server().await;
         let response = exchange(
             server.local_addr(),
-            b"POST /pair-setup HTTP/1.1\r\nHost: localhost\r\nContent-Length: 3\r\nConnection: close\r\n\r\n\x06\x01\x01",
+            b"POST /pair-setup HTTP/1.1\r\nHost: localhost\r\nContent-Length: 6\r\nConnection: close\r\n\r\n\x00\x01\x00\x06\x01\x01",
         )
         .await;
         assert!(response.starts_with(b"HTTP/1.1 200"));
-        assert!(response.ends_with(b"\x06\x01\x02\x07\x01\x06"));
+        let body_start = find_header_end(&response).unwrap() + 4;
+        let tlv = Tlv8::parse(&response[body_start..]).unwrap();
+        assert_eq!(tlv.byte(TLV_STATE), Some(2));
+        assert_eq!(tlv.get(crate::protocol::TLV_SALT).unwrap().len(), 16);
+        assert_eq!(tlv.get(TLV_PUBLIC_KEY).unwrap().len(), 384);
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn pair_verify_enables_encrypted_access_and_replay_closes_connection() {
+        let (server, _directory, controller_signing) = paired_server().await;
+        let mut stream = TcpStream::connect(server.local_addr()).await.unwrap();
+        let controller_secret = StaticSecret::from([0x24; 32]);
+        let controller_public = PublicKey::from(&controller_secret).to_bytes();
+        let m1 = encode_items([
+            (TLV_STATE, [1].as_slice()),
+            (TLV_PUBLIC_KEY, controller_public.as_slice()),
+        ]);
+        let m2_http = post_tlv(&mut stream, "/pair-verify", &m1).await;
+        let m2 = Tlv8::parse(&m2_http[find_header_end(&m2_http).unwrap() + 4..]).unwrap();
+        assert_eq!(m2.byte(TLV_STATE), Some(2));
+        let accessory_public: [u8; 32] = m2.get(TLV_PUBLIC_KEY).unwrap().try_into().unwrap();
+        let shared = controller_secret.diffie_hellman(&PublicKey::from(accessory_public));
+        let verify_key = hkdf_sha512(
+            b"Pair-Verify-Encrypt-Salt",
+            shared.as_bytes(),
+            b"Pair-Verify-Encrypt-Info",
+        )
+        .unwrap();
+        let accessory_data = Tlv8::parse(
+            &open_labeled(
+                &verify_key,
+                b"PV-Msg02",
+                m2.get(TLV_ENCRYPTED_DATA).unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let accessory_id = accessory_data.get(TLV_IDENTIFIER).unwrap();
+        let accessory_signature: [u8; 64] = accessory_data
+            .get(TLV_SIGNATURE)
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let mut accessory_info = Vec::new();
+        accessory_info.extend_from_slice(&accessory_public);
+        accessory_info.extend_from_slice(accessory_id);
+        accessory_info.extend_from_slice(&controller_public);
+        let persisted = PairingStore::open(_directory.path().join("pairings.json")).unwrap();
+        VerifyingKey::from_bytes(&persisted.accessory_public_key().unwrap())
+            .unwrap()
+            .verify_strict(
+                &accessory_info,
+                &Signature::from_bytes(&accessory_signature),
+            )
+            .unwrap();
+
+        let controller_id = b"network-controller";
+        let mut controller_info = Vec::new();
+        controller_info.extend_from_slice(&controller_public);
+        controller_info.extend_from_slice(controller_id);
+        controller_info.extend_from_slice(&accessory_public);
+        let signature = controller_signing.sign(&controller_info).to_bytes();
+        let sub_tlv = encode_items([
+            (TLV_IDENTIFIER, controller_id.as_slice()),
+            (TLV_SIGNATURE, signature.as_slice()),
+        ]);
+        let encrypted = seal_labeled(&verify_key, b"PV-Msg03", &sub_tlv).unwrap();
+        let m3 = encode_items([
+            (TLV_STATE, [3].as_slice()),
+            (TLV_ENCRYPTED_DATA, encrypted.as_slice()),
+        ]);
+        let m4_http = post_tlv(&mut stream, "/pair-verify", &m3).await;
+        let m4 = Tlv8::parse(&m4_http[find_header_end(&m4_http).unwrap() + 4..]).unwrap();
+        assert_eq!(m4.byte(TLV_STATE), Some(4));
+
+        let keys = SessionKeys::derive(shared.as_bytes())
+            .unwrap()
+            .controller_view();
+        let mut records = RecordLayer::controller(keys);
+        let request = b"GET /accessories HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n";
+        let encrypted_request = records.encrypt(request).unwrap();
+        stream.write_all(&encrypted_request).await.unwrap();
+        let response = read_encrypted_http(&mut stream, &mut records).await;
+        assert!(response.starts_with(b"HTTP/1.1 200"));
+        assert!(response.windows(11).any(|window| window == b"accessories"));
+
+        stream.write_all(&encrypted_request).await.unwrap();
+        let mut byte = [0u8; 1];
+        let read = timeout(Duration::from_secs(2), stream.read(&mut byte))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read, 0);
         server.shutdown().await.unwrap();
     }
 
@@ -870,12 +1367,32 @@ mod tests {
         server.shutdown().await.unwrap();
     }
 
-    #[test]
-    fn authenticated_internal_dispatch_exposes_accessories_and_events() {
+    #[tokio::test]
+    async fn authenticated_internal_dispatch_exposes_accessories_and_events() {
         let bridge = bridge();
         let directory = tempfile::tempdir().unwrap();
-        let pairings = PairingStore::open(directory.path().join("pairings.json")).unwrap();
+        let pairings = Arc::new(
+            PairingStore::create(
+                directory.path().join("pairings.json"),
+                SetupCode::parse("518-26-003").unwrap(),
+                Some("AA:BB:CC:DD:EE:FF".into()),
+            )
+            .unwrap(),
+        );
+        pairings
+            .add_initial(ControllerPairing {
+                controller_id: "test-controller".into(),
+                public_key: SigningKey::from_bytes(&[7; 32]).verifying_key().to_bytes(),
+                admin: true,
+            })
+            .unwrap();
         let mut session = Session::authenticated_for_test(true);
+        let mut pair_setup = PairSetup::new(pairings.clone());
+        let mut pair_verify = PairVerify::new(pairings.clone());
+        let discovery = DiscoveryState {
+            advertiser: Arc::new(NullAdvertiser),
+            record: Mutex::new(bridge.service_record.clone()),
+        };
         let mut subscriptions = HashSet::new();
         let response = dispatch_request(
             Request {
@@ -885,12 +1402,15 @@ mod tests {
                 connection_close: false,
             },
             &mut session,
+            (&mut pair_setup, &mut pair_verify),
             &bridge,
             &pairings,
+            &discovery,
             &mut subscriptions,
-        );
-        assert_eq!(response.status, 200);
-        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        )
+        .await;
+        assert_eq!(response.response.status, 200);
+        let body: Value = serde_json::from_slice(&response.response.body).unwrap();
         assert_eq!(body["accessories"].as_array().unwrap().len(), 2);
 
         let response = dispatch_request(
@@ -901,11 +1421,95 @@ mod tests {
                 connection_close: false,
             },
             &mut session,
+            (&mut pair_setup, &mut pair_verify),
             &bridge,
             &pairings,
+            &discovery,
             &mut subscriptions,
-        );
-        assert_eq!(response.status, 204);
+        )
+        .await;
+        assert_eq!(response.response.status, 204);
         assert!(subscriptions.contains(&(2, 8)));
+    }
+
+    #[tokio::test]
+    async fn pairing_management_rechecks_admin_and_enforces_last_admin_invariant() {
+        let bridge = bridge();
+        let directory = tempfile::tempdir().unwrap();
+        let pairings = Arc::new(
+            PairingStore::create(
+                directory.path().join("pairings.json"),
+                SetupCode::parse("518-26-003").unwrap(),
+                Some("AA:BB:CC:DD:EE:FF".into()),
+            )
+            .unwrap(),
+        );
+        let admin_key = SigningKey::from_bytes(&[8; 32]);
+        pairings
+            .add_initial(ControllerPairing {
+                controller_id: "test-controller".into(),
+                public_key: admin_key.verifying_key().to_bytes(),
+                admin: true,
+            })
+            .unwrap();
+        let mut session = Session::authenticated_for_test(true);
+        let mut pair_setup = PairSetup::new(pairings.clone());
+        let mut pair_verify = PairVerify::new(pairings.clone());
+        let discovery = DiscoveryState {
+            advertiser: Arc::new(NullAdvertiser),
+            record: Mutex::new(bridge.service_record.clone()),
+        };
+        let mut subscriptions = HashSet::new();
+        let member_key = SigningKey::from_bytes(&[9; 32]).verifying_key().to_bytes();
+        let add = encode_items([
+            (TLV_STATE, [1].as_slice()),
+            (TLV_METHOD, [3].as_slice()),
+            (TLV_IDENTIFIER, b"member".as_slice()),
+            (TLV_PUBLIC_KEY, member_key.as_slice()),
+            (TLV_PERMISSIONS, [0].as_slice()),
+        ]);
+        let result = dispatch_request(
+            Request {
+                method: "POST".into(),
+                target: "/pairings".into(),
+                body: add,
+                connection_close: false,
+            },
+            &mut session,
+            (&mut pair_setup, &mut pair_verify),
+            &bridge,
+            &pairings,
+            &discovery,
+            &mut subscriptions,
+        )
+        .await;
+        assert_eq!(
+            Tlv8::parse(&result.response.body).unwrap().byte(TLV_STATE),
+            Some(2)
+        );
+        assert!(pairings.get("member").unwrap().is_some());
+
+        let remove = encode_items([
+            (TLV_STATE, [1].as_slice()),
+            (TLV_METHOD, [4].as_slice()),
+            (TLV_IDENTIFIER, b"test-controller".as_slice()),
+        ]);
+        let result = dispatch_request(
+            Request {
+                method: "POST".into(),
+                target: "/pairings".into(),
+                body: remove,
+                connection_close: false,
+            },
+            &mut session,
+            (&mut pair_setup, &mut pair_verify),
+            &bridge,
+            &pairings,
+            &discovery,
+            &mut subscriptions,
+        )
+        .await;
+        assert!(result.close_after_response);
+        assert!(pairings.list().unwrap().is_empty());
     }
 }

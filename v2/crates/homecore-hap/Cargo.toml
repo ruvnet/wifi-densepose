@@ -20,8 +20,6 @@ path = "src/lib.rs"
 [features]
 default = []
 # Enables the bounded TCP/HTTP listener and real `_hap._tcp` mDNS advertiser.
-# Pair-Setup, Pair-Verify, and encrypted HAP transport remain deliberately
-# unavailable until their complete cryptographic phases are implemented.
 hap-server = ["dep:httparse", "dep:mdns-sd"]
 
 [dependencies]
@@ -35,6 +33,14 @@ async-trait = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 ed25519-dalek = "2.1"
 tempfile = "3"
+chacha20poly1305 = "0.10"
+getrandom = "0.2"
+hkdf = "0.12"
+sha2 = "0.10"
+sha2_11 = { package = "sha2", version = "0.11" }
+srp = "=0.7.0-rc.3"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+zeroize = { version = "1", features = ["derive"] }
 httparse = { version = "1", optional = true }
 mdns-sd = { version = "0.11", optional = true }
 

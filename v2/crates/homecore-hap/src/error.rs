@@ -33,6 +33,9 @@ pub enum HapError {
     #[error("controller pairing not found: {0}")]
     PairingNotFound(String),
 
+    #[error("maximum controller pairings reached")]
+    PairingCapacity,
+
     #[error("insecure permissions on {path}: mode {mode:o}; expected no group/other access")]
     InsecurePermissions { path: PathBuf, mode: u32 },
 

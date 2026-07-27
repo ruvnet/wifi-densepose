@@ -1,4 +1,4 @@
-//! Bounded HAP TLV8 primitives and fail-closed pairing responses.
+//! Bounded HAP TLV8 primitives.
 
 use std::collections::BTreeMap;
 
@@ -6,12 +6,21 @@ use crate::error::HapError;
 
 pub const TLV_METHOD: u8 = 0x00;
 pub const TLV_IDENTIFIER: u8 = 0x01;
+pub const TLV_SALT: u8 = 0x02;
 pub const TLV_PUBLIC_KEY: u8 = 0x03;
+pub const TLV_PROOF: u8 = 0x04;
+pub const TLV_ENCRYPTED_DATA: u8 = 0x05;
 pub const TLV_STATE: u8 = 0x06;
 pub const TLV_ERROR: u8 = 0x07;
 pub const TLV_SIGNATURE: u8 = 0x0a;
+pub const TLV_PERMISSIONS: u8 = 0x0b;
+pub const TLV_FLAGS: u8 = 0x13;
+pub const TLV_SEPARATOR: u8 = 0xff;
 
+pub const TLV_ERROR_UNKNOWN: u8 = 0x01;
 pub const TLV_ERROR_AUTHENTICATION: u8 = 0x02;
+pub const TLV_ERROR_MAX_PEERS: u8 = 0x04;
+pub const TLV_ERROR_MAX_TRIES: u8 = 0x05;
 pub const TLV_ERROR_UNAVAILABLE: u8 = 0x06;
 pub const TLV_ERROR_BUSY: u8 = 0x07;
 
@@ -68,34 +77,37 @@ impl Tlv8 {
     }
 
     pub fn encode(&self) -> Vec<u8> {
-        let mut encoded = Vec::new();
-        for (&kind, value) in &self.values {
-            if value.is_empty() {
-                encoded.extend_from_slice(&[kind, 0]);
-                continue;
-            }
-            for chunk in value.chunks(u8::MAX as usize) {
-                encoded.push(kind);
-                encoded.push(chunk.len() as u8);
-                encoded.extend_from_slice(chunk);
-            }
-        }
-        encoded
+        encode_items(
+            self.values
+                .iter()
+                .map(|(&kind, value)| (kind, value.as_slice())),
+        )
     }
 }
 
-/// Standards-shaped response used while cryptographic pairing phases are
-/// unavailable. It is a real TLV8 error, never a success-shaped placeholder.
-pub fn pairing_unavailable_response(request: &[u8]) -> Result<Vec<u8>, HapError> {
-    let request = Tlv8::parse(request)?;
-    let request_state = request
-        .byte(TLV_STATE)
-        .ok_or_else(|| HapError::Protocol("pairing request lacks one-byte State".into()))?;
-    let response_state = request_state.saturating_add(1);
-    let mut response = Tlv8::default();
-    response.insert(TLV_STATE, vec![response_state]);
-    response.insert(TLV_ERROR, vec![TLV_ERROR_UNAVAILABLE]);
-    Ok(response.encode())
+/// Encode ordered TLV8 items, including repeated items separated by a
+/// zero-length `Separator` for `/pairings` list responses.
+pub fn encode_items<'a>(items: impl IntoIterator<Item = (u8, &'a [u8])>) -> Vec<u8> {
+    let mut encoded = Vec::new();
+    for (kind, value) in items {
+        if value.is_empty() {
+            encoded.extend_from_slice(&[kind, 0]);
+            continue;
+        }
+        for chunk in value.chunks(u8::MAX as usize) {
+            encoded.push(kind);
+            encoded.push(chunk.len() as u8);
+            encoded.extend_from_slice(chunk);
+        }
+    }
+    encoded
+}
+
+pub fn error_response(state: u8, error: u8) -> Vec<u8> {
+    encode_items([
+        (TLV_STATE, [state].as_slice()),
+        (TLV_ERROR, [error].as_slice()),
+    ])
 }
 
 #[cfg(test)]
@@ -120,8 +132,8 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_pairing_is_an_explicit_error_not_success() {
-        let response = pairing_unavailable_response(&[TLV_STATE, 1, 1]).unwrap();
+    fn error_response_is_not_success_shaped() {
+        let response = error_response(2, TLV_ERROR_UNAVAILABLE);
         let decoded = Tlv8::parse(&response).unwrap();
         assert_eq!(decoded.byte(TLV_STATE), Some(2));
         assert_eq!(decoded.byte(TLV_ERROR), Some(TLV_ERROR_UNAVAILABLE));

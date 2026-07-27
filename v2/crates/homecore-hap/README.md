@@ -1,63 +1,41 @@
 # homecore-hap
 
-`homecore-hap` is the fail-closed network foundation for HOMECORE's Apple
-HomeKit Accessory Protocol bridge (ADR-125). It maps HOMECORE entities to HAP
-services and provides the bounded server, persistence, discovery, and request
-gating needed by a complete HAP implementation.
+`homecore-hap` is HOMECORE's bounded, fail-closed HAP IP accessory server
+(ADR-125). It implements the HAP R2 cryptographic pairing and transport
+boundary without relying on the broken `hap` 0.1 pre-release crate.
 
-It does **not currently complete Apple Home pairing**. Pairing requests receive
-a valid TLV8 `Unavailable` error, and accessory/characteristic endpoints return
-HTTP 470 until an authenticated Pair-Verify session exists. There is no
-plaintext header, bearer-token, or test credential bypass.
+## Security and protocol coverage
 
-## Implemented
+- Pair-Setup M1-M6 uses the RFC 5054 3072-bit group with SHA-512, the HAP
+  compatibility proof construction, HKDF-SHA512, ChaCha20-Poly1305, and
+  Ed25519 long-term keys.
+- Pair-Verify M1-M4 uses ephemeral X25519, strict Ed25519 transcript
+  verification, HKDF-SHA512, and authenticated encrypted sub-TLVs.
+- After successful M4, all HTTP and `EVENT/1.0` traffic uses HAP records:
+  two-byte little-endian authenticated lengths, at most 1024 plaintext bytes,
+  independent directional keys, and monotonic 64-bit nonces. Authentication,
+  replay, truncation, and oversize failures close the connection without an
+  oracle response.
+- `/accessories`, `/characteristics`, and `/pairings` are inaccessible until
+  Pair-Verify succeeds on that TCP connection. Pairings add/remove/list is
+  restricted to a currently persisted administrator.
+- Accessory identity, Ed25519 seed, SRP salt/verifier, and controller records
+  are stored in a versioned file using same-directory atomic replacement.
+  Created Unix directories use mode `0700`, files use `0600`, and permissive,
+  oversized, symlinked, legacy, or malformed stores fail closed.
+- The raw setup code is returned only during first provisioning. Only its SRP
+  verifier is persisted; `SetupCode` redacts `Debug` output and zeroizes on
+  drop.
+- Removing the last administrator atomically clears every pairing. Live
+  sessions observe pairing revisions and are revoked, while the removal
+  response is delivered before the requesting session closes.
 
-- Bounded Tokio TCP lifecycle with connection, header, body, request-time, and
-  shutdown limits.
-- Incremental HTTP/1.1 parsing through `httparse`; duplicate
-  `Content-Length`, transfer encoding, truncated input, and oversized input
-  fail closed.
-- Versioned controller pairing records with bounded parsing, atomic same-
-  directory replacement, Unix `0600` files/`0700` created directories, and
-  refusal to load permissive or symlinked files.
-- Controller identifiers, administrator invariants, and Ed25519 public keys
-  validated through `ed25519-dalek`.
-- Session state machine for Connected, Pair-Setup, Pair-Verify, Authenticated,
-  and Closing. Authentication requires a valid signature from a persisted
-  controller over the Pair-Verify transcript supplied by the future protocol
-  phase.
-- Real `_hap._tcp.local.` advertisement through `mdns-sd` when
-  `hap-server` is enabled. `NullAdvertiser` provides deterministic,
-  network-free tests and deployments.
-- HAP-shaped `/accessories`, `/characteristics`, event subscription, and
-  `EVENT/1.0` flow backed by `HapBridge` snapshots and bounded broadcasts.
-  These handlers are structurally present but network-inaccessible until
-  encrypted Pair-Verify is complete.
+The server also bounds connections, headers, bodies, request time, shutdown,
+TLV sizes, controller counts, setup attempts, and concurrent Pair-Setup.
+mDNS advertises the persisted accessory identifier and updates `sf` after
+pairing or unpairing.
 
-## Deliberately incomplete protocol phases
-
-The following must land together before this crate may claim Apple Home
-interoperability:
-
-1. Pair-Setup M1-M6: SRP-6a proof exchange, setup-code policy, accessory
-   Ed25519 identity persistence, HKDF derivation, and ChaCha20-Poly1305
-   encrypted sub-TLVs.
-2. Pair-Verify M1-M4: ephemeral X25519 exchange, accessory/controller Ed25519
-   transcript signatures, HKDF session derivation, and encrypted sub-TLVs.
-3. Encrypted HAP transport: length-prefixed frames, independent read/write
-   ChaCha20-Poly1305 keys and monotonically increasing nonces, with strict
-   frame limits and connection teardown on authentication failure.
-4. Authenticated `/pairings` add/remove/list semantics and live mDNS `sf`
-   updates.
-5. Stable persisted AID/IID allocation and a HOMECORE service-call adapter for
-   writable characteristics. The present endpoint is read/event-only.
-6. Validation against Apple Home or a known-conformant HAP controller,
-   including pair, restart, event delivery, write, unpair, and re-pair.
-
-No cryptographic primitive should be implemented locally. The remaining work
-must use reviewed RustCrypto/PAKE crates and protocol test vectors.
-
-## Server integration
+## Provisioning and server integration
 
 ```rust,no_run
 use std::{net::IpAddr, sync::Arc};
@@ -67,15 +45,20 @@ use homecore_hap::{
 };
 
 # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+let provisioned = PairingStore::load_or_create(
+    "/var/lib/homecore-hap/security.json",
+)?;
+if let Some(setup_code) = provisioned.setup_code.as_ref() {
+    // Send this once to a trusted local display or provisioning boundary.
+    println!("HAP setup code: {}", setup_code.expose());
+}
+let pairings = Arc::new(provisioned.store);
 let record = HapServiceRecord::bridge(
     "HOMECORE Bridge",
     51826,
-    "AA:BB:CC:DD:EE:FF",
+    pairings.accessory_id()?,
 );
 let bridge = HapBridge::new(record);
-let pairings = Arc::new(PairingStore::open(
-    "/var/lib/homecore-hap/pairings.json",
-)?);
 let advertiser = Arc::new(MdnsSdAdvertiser::new(
     "homecore",
     "192.168.1.50".parse::<IpAddr>()?,
@@ -89,24 +72,43 @@ let server = start_server(
 ).await?;
 
 // Feed HOMECORE StateChanged events through bridge.update_accessory(...).
-// On process shutdown:
 server.shutdown().await?;
 # Ok(())
 # }
 ```
+
+The mDNS device ID must equal the persisted accessory ID; startup rejects a
+mismatch. Real mDNS also requires a LAN-routable advertised address and
+multicast access.
+
+## Validation and remaining interoperability limits
+
+The deterministic suite covers the HAP SRP session-key vector, complete
+Pair-Setup and Pair-Verify ceremonies, transcript tampering, wrong proofs,
+malformed/replayed/oversized records, atomic restart, last-admin removal, and
+a real TCP lifecycle from Pair-Verify through encrypted `/accessories`.
+
+This is protocol-level HAP R2 coverage, not a claim of Apple certification:
+
+- It has not yet been exercised against a current Apple Home controller or
+  the current commercial MFi specification.
+- Transient and split Pair-Setup flags are rejected as `Unavailable`.
+- Writable characteristic service calls, timed writes, resource endpoints,
+  and stable persisted AID/IID allocation are not implemented. The present
+  characteristic surface is read and event subscription only.
+- Operational hardening still depends on protecting the host and the
+  `0600` security file; no hardware-backed key store is integrated.
 
 Build and test:
 
 ```bash
 cargo test -p homecore-hap --no-default-features
 cargo test -p homecore-hap --features hap-server
+cargo clippy -p homecore-hap --all-targets --features hap-server -- -D warnings
 ```
-
-Real mDNS requires the advertised address to be LAN-routable and the runtime to
-have multicast access. Containers normally need host networking or macvlan.
 
 ## Decisions
 
-- [ADR-125 — native Apple Home HAP bridge](../../docs/adr/ADR-125-ruview-apple-home-native-hap-bridge.md)
-- [ADR-130 — bounded async REST/WebSocket server patterns](../../docs/adr/ADR-130-homecore-rest-websocket-api.md)
-- [ADR-161 — server-layer security and explicit HAP deferral](../../docs/adr/ADR-161-homecore-server-layer-security.md)
+- [ADR-125 — native Apple Home HAP bridge](../../../docs/adr/ADR-125-ruview-apple-home-native-hap-bridge.md)
+- [ADR-130 — bounded async REST/WebSocket server patterns](../../../docs/adr/ADR-130-homecore-rest-websocket-api.md)
+- [ADR-161 — server-layer security and honest labeling](../../../docs/adr/ADR-161-homecore-server-layer-security.md)

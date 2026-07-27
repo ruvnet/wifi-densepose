@@ -1,15 +1,8 @@
 //! Per-connection HAP authentication state.
-//!
-//! The transition to [`SessionState::Authenticated`] requires an Ed25519
-//! signature from a persisted controller. The caller is responsible for
-//! supplying the exact Pair-Verify transcript once X25519/HKDF/ChaCha20-
-//! Poly1305 transport is implemented; this crate never substitutes a bearer
-//! token or plaintext shortcut.
+#![cfg_attr(not(feature = "hap-server"), allow(dead_code))]
 
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-
+use crate::crypto::SessionKeys;
 use crate::error::HapError;
-use crate::pairing::PairingStore;
 
 /// Authentication phase of one TCP connection.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,17 +25,15 @@ impl SessionState {
         }
     }
 
-    /// Whether accessory, characteristic, event, and pairing-management
-    /// endpoints may be processed.
     pub fn is_authenticated(&self) -> bool {
         matches!(self, Self::Authenticated { .. })
     }
 }
 
 /// Fail-closed state machine for one HAP connection.
-#[derive(Debug, Clone)]
 pub struct Session {
     state: SessionState,
+    pending_keys: Option<SessionKeys>,
 }
 
 impl Default for Session {
@@ -55,6 +46,7 @@ impl Session {
     pub fn new() -> Self {
         Self {
             state: SessionState::Connected,
+            pending_keys: None,
         }
     }
 
@@ -62,12 +54,7 @@ impl Session {
         &self.state
     }
 
-    pub fn begin_pair_setup(&mut self, already_paired: bool) -> Result<(), HapError> {
-        if already_paired {
-            return Err(HapError::Protocol(
-                "Pair-Setup is unavailable after a controller is paired".into(),
-            ));
-        }
+    pub fn begin_pair_setup(&mut self) -> Result<(), HapError> {
         self.transition(SessionState::PairSetup)
     }
 
@@ -75,17 +62,11 @@ impl Session {
         self.transition(SessionState::PairVerify)
     }
 
-    /// Authenticate a completed Pair-Verify transcript with the controller's
-    /// persisted Ed25519 long-term public key.
-    ///
-    /// This method is intentionally not called by the current network server:
-    /// the encrypted Pair-Verify transcript is not implemented yet.
-    pub fn authenticate_pair_verify(
+    pub(crate) fn authenticate(
         &mut self,
-        controller_id: &str,
-        signed_transcript: &[u8],
-        signature: &[u8; 64],
-        pairings: &PairingStore,
+        controller_id: String,
+        admin: bool,
+        keys: SessionKeys,
     ) -> Result<(), HapError> {
         if !matches!(self.state, SessionState::PairVerify) {
             return Err(HapError::InvalidSessionTransition {
@@ -93,25 +74,23 @@ impl Session {
                 to: "authenticated",
             });
         }
-        let pairing = pairings
-            .get(controller_id)?
-            .ok_or_else(|| HapError::PairingNotFound(controller_id.to_owned()))?;
-        let key = VerifyingKey::from_bytes(&pairing.public_key)
-            .map_err(|_| HapError::InvalidPairingRecord("invalid Ed25519 public key".into()))?;
-        let signature = Signature::from_bytes(signature);
-        key.verify(signed_transcript, &signature)
-            .map_err(|_| HapError::Protocol("Pair-Verify controller signature rejected".into()))?;
         self.state = SessionState::Authenticated {
-            controller_id: pairing.controller_id,
-            admin: pairing.admin,
+            controller_id,
+            admin,
         };
+        self.pending_keys = Some(keys);
         Ok(())
+    }
+
+    pub(crate) fn take_session_keys(&mut self) -> Option<SessionKeys> {
+        self.pending_keys.take()
     }
 
     pub fn reset_pairing(&mut self) -> Result<(), HapError> {
         match self.state {
             SessionState::PairSetup | SessionState::PairVerify => {
                 self.state = SessionState::Connected;
+                self.pending_keys = None;
                 Ok(())
             }
             _ => Err(HapError::InvalidSessionTransition {
@@ -122,7 +101,15 @@ impl Session {
     }
 
     pub fn close(&mut self) {
+        self.pending_keys = None;
         self.state = SessionState::Closing;
+    }
+
+    pub(crate) fn controller_id(&self) -> Option<&str> {
+        match &self.state {
+            SessionState::Authenticated { controller_id, .. } => Some(controller_id),
+            _ => None,
+        }
     }
 
     #[cfg(all(test, feature = "hap-server"))]
@@ -132,6 +119,7 @@ impl Session {
                 controller_id: "test-controller".into(),
                 admin,
             },
+            pending_keys: None,
         }
     }
 
@@ -151,60 +139,31 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pairing::ControllerPairing;
-    use ed25519_dalek::{Signer, SigningKey};
 
     #[test]
-    fn authenticated_transition_requires_persisted_valid_signature() {
-        let directory = tempfile::tempdir().unwrap();
-        let store = PairingStore::open(directory.path().join("pairings.json")).unwrap();
-        let signing_key = SigningKey::from_bytes(&[42; 32]);
-        store
-            .add(ControllerPairing {
-                controller_id: "controller".into(),
-                public_key: signing_key.verifying_key().to_bytes(),
-                admin: true,
-            })
-            .unwrap();
-
-        let transcript = b"pair-verify transcript supplied by protocol implementation";
-        let signature = signing_key.sign(transcript).to_bytes();
+    fn authentication_requires_pair_verify_and_yields_keys_once() {
         let mut session = Session::new();
+        let keys = SessionKeys::derive(&[7; 32]).unwrap();
+        assert!(session
+            .authenticate("controller".into(), true, keys)
+            .is_err());
         session.begin_pair_verify().unwrap();
         session
-            .authenticate_pair_verify("controller", transcript, &signature, &store)
+            .authenticate(
+                "controller".into(),
+                true,
+                SessionKeys::derive(&[7; 32]).unwrap(),
+            )
             .unwrap();
         assert!(session.state().is_authenticated());
-    }
-
-    #[test]
-    fn bad_signature_and_skipped_verify_fail_closed() {
-        let directory = tempfile::tempdir().unwrap();
-        let store = PairingStore::open(directory.path().join("pairings.json")).unwrap();
-        let signing_key = SigningKey::from_bytes(&[9; 32]);
-        store
-            .add(ControllerPairing {
-                controller_id: "controller".into(),
-                public_key: signing_key.verifying_key().to_bytes(),
-                admin: true,
-            })
-            .unwrap();
-
-        let mut session = Session::new();
-        assert!(session
-            .authenticate_pair_verify("controller", b"x", &[0; 64], &store)
-            .is_err());
-        session.begin_pair_verify().unwrap();
-        assert!(session
-            .authenticate_pair_verify("controller", b"x", &[0; 64], &store)
-            .is_err());
-        assert!(!session.state().is_authenticated());
+        assert!(session.take_session_keys().is_some());
+        assert!(session.take_session_keys().is_none());
     }
 
     #[test]
     fn pairing_phases_cannot_overlap() {
         let mut session = Session::new();
-        session.begin_pair_setup(false).unwrap();
+        session.begin_pair_setup().unwrap();
         assert!(session.begin_pair_verify().is_err());
         session.reset_pairing().unwrap();
         session.begin_pair_verify().unwrap();
