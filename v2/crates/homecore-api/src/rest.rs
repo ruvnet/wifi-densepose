@@ -227,6 +227,176 @@ fn history_timestamp(seconds: f64) -> String {
         .to_rfc3339()
 }
 
+#[derive(Debug, Deserialize)]
+pub struct LogbookQuery {
+    end_time: Option<String>,
+    entity: Option<String>,
+}
+
+pub async fn get_logbook(
+    headers: HeaderMap,
+    State(s): State<SharedState>,
+    Query(query): Query<LogbookQuery>,
+) -> ApiResult<Json<Vec<serde_json::Value>>> {
+    logbook_response(headers, s, None, query).await
+}
+
+pub async fn get_logbook_period(
+    headers: HeaderMap,
+    State(s): State<SharedState>,
+    Path(start_time): Path<String>,
+    Query(query): Query<LogbookQuery>,
+) -> ApiResult<Json<Vec<serde_json::Value>>> {
+    logbook_response(headers, s, Some(start_time), query).await
+}
+
+async fn logbook_response(
+    headers: HeaderMap,
+    state: SharedState,
+    start_time: Option<String>,
+    query: LogbookQuery,
+) -> ApiResult<Json<Vec<serde_json::Value>>> {
+    let _ = BearerAuth::from_headers(&headers, state.tokens()).await?;
+    let recorder = state
+        .recorder()
+        .ok_or_else(|| ApiError::Unavailable("recorder is disabled".into()))?;
+    let now = chrono::Utc::now();
+    let start = match start_time {
+        Some(value) => parse_history_time(&value)?,
+        None => now - chrono::Duration::days(1),
+    };
+    let end = match query.end_time.as_deref() {
+        Some(value) => parse_history_time(value)?,
+        None => now,
+    };
+    if end < start {
+        return Err(ApiError::BadRequest(
+            "end_time must not precede start_time".into(),
+        ));
+    }
+    let entity_ids = match query.entity.as_deref() {
+        Some(raw) => raw
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                EntityId::parse(value)
+                    .map_err(|error| ApiError::BadRequest(format!("invalid entity_id: {error}")))
+            })
+            .collect::<ApiResult<Vec<_>>>()?,
+        None => state
+            .homecore()
+            .states()
+            .all()
+            .into_iter()
+            .map(|snapshot| snapshot.entity_id.clone())
+            .collect(),
+    };
+    if entity_ids.len() > MAX_HISTORY_ENTITIES {
+        return Err(ApiError::BadRequest(format!(
+            "logbook queries are limited to {MAX_HISTORY_ENTITIES} entities"
+        )));
+    }
+    let mut entries = Vec::new();
+    for entity_id in entity_ids {
+        let rows = recorder
+            .get_state_history(&entity_id, start, end)
+            .await
+            .map_err(|error| ApiError::Internal(format!("logbook query failed: {error}")))?;
+        for row in rows {
+            entries.push(serde_json::json!({
+                "when": history_timestamp(row.last_updated_ts),
+                "name": row.entity_id.as_str(),
+                "state": row.state,
+                "entity_id": row.entity_id.as_str(),
+                "context_id": row.context_id
+            }));
+        }
+    }
+    entries.sort_by(|left, right| {
+        left["when"]
+            .as_str()
+            .cmp(&right["when"].as_str())
+            .then_with(|| left["entity_id"].as_str().cmp(&right["entity_id"].as_str()))
+    });
+    Ok(Json(entries))
+}
+
+#[derive(Serialize)]
+pub struct CalendarView {
+    entity_id: String,
+    name: String,
+}
+
+pub async fn get_calendars(
+    headers: HeaderMap,
+    State(s): State<SharedState>,
+) -> ApiResult<Json<Vec<CalendarView>>> {
+    let _ = BearerAuth::from_headers(&headers, s.tokens()).await?;
+    let calendars = s
+        .homecore()
+        .states()
+        .all_by_domain("calendar")
+        .into_iter()
+        .map(|state| CalendarView {
+            entity_id: state.entity_id.as_str().to_owned(),
+            name: state
+                .attributes
+                .get("friendly_name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(state.entity_id.as_str())
+                .to_owned(),
+        })
+        .collect();
+    Ok(Json(calendars))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CalendarQuery {
+    start: String,
+    end: String,
+}
+
+pub async fn get_calendar_events(
+    headers: HeaderMap,
+    State(s): State<SharedState>,
+    Path(entity_id): Path<String>,
+    Query(query): Query<CalendarQuery>,
+) -> ApiResult<Json<Vec<serde_json::Value>>> {
+    let _ = BearerAuth::from_headers(&headers, s.tokens()).await?;
+    let id =
+        EntityId::parse(&entity_id).map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    if id.domain() != "calendar" || s.homecore().states().get(&id).is_none() {
+        return Err(ApiError::NotFound(entity_id));
+    }
+    let start = parse_history_time(&query.start)?;
+    let end = parse_history_time(&query.end)?;
+    if end < start {
+        return Err(ApiError::BadRequest(
+            "end must not precede start".to_owned(),
+        ));
+    }
+    // Calendar integrations may expose their current entity without an event
+    // provider. An empty list is the valid response for that interval.
+    Ok(Json(Vec::new()))
+}
+
+pub async fn get_camera_proxy(
+    headers: HeaderMap,
+    State(s): State<SharedState>,
+    Path(entity_id): Path<String>,
+) -> ApiResult<StatusCode> {
+    let _ = BearerAuth::from_headers(&headers, s.tokens()).await?;
+    let id =
+        EntityId::parse(&entity_id).map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    if id.domain() != "camera" || s.homecore().states().get(&id).is_none() {
+        return Err(ApiError::NotFound(entity_id));
+    }
+    Err(ApiError::Unavailable(
+        "camera integration has no image provider".into(),
+    ))
+}
+
 #[derive(Serialize)]
 pub struct ContextView {
     pub id: String,
@@ -509,7 +679,10 @@ pub async fn compatibility(
             "check_config": "implemented",
             "error_log": "implemented",
             "history": "implemented_when_recorder_enabled",
-            "camera_calendar_media": "integration_dependent"
+            "logbook": "implemented_when_recorder_enabled",
+            "calendar": "implemented_with_integration_supplied_events",
+            "camera": "implemented_with_integration_supplied_images",
+            "media": "integration_dependent"
         },
         "websocket": {
             "auth": "implemented",

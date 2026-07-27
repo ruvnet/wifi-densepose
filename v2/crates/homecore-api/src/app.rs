@@ -47,6 +47,11 @@ pub fn router(state: SharedState) -> Router {
             "/api/history/period/:start_time",
             get(rest::get_history_period),
         )
+        .route("/api/logbook", get(rest::get_logbook))
+        .route("/api/logbook/:start_time", get(rest::get_logbook_period))
+        .route("/api/calendars", get(rest::get_calendars))
+        .route("/api/calendars/:entity_id", get(rest::get_calendar_events))
+        .route("/api/camera_proxy/:entity_id", get(rest::get_camera_proxy))
         .route("/api/homecore/compatibility", get(rest::compatibility))
         .route("/api/websocket", get(ws::websocket_handler))
         .layer(cors)
