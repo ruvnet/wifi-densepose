@@ -5899,9 +5899,22 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     // Cross-node fusion: combine features from all active nodes.
                     let fused_features = fuse_multi_node_features(&features, &s.node_states);
 
+                    // Derive `presence` from the label rather than reading
+                    // `vitals.presence` directly, so the three classification
+                    // fields cannot contradict each other. `motion_level` above
+                    // reports "present_moving" whenever `vitals.motion` is set,
+                    // without consulting `vitals.presence` — a frame carrying
+                    // motion=1/presence=0 previously emitted
+                    // `{presence: false, motion_level: "present_moving"}`, and
+                    // every UI gates visibility on the boolean, so a moving
+                    // person rendered as an empty room. Motion implies presence.
+                    //
+                    // This matches the convention already used elsewhere:
+                    // `smooth_and_classify_node` (main.rs) and `csi.rs` both
+                    // derive presence as `label != "absent"`.
                     let mut classification = ClassificationInfo {
                         motion_level: motion_level.to_string(),
-                        presence: vitals.presence,
+                        presence: motion_level != "absent",
                         confidence: vitals.presence_score as f64,
                     };
 
