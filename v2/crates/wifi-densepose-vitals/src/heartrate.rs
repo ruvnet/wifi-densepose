@@ -98,7 +98,17 @@ impl HeartRateExtractor {
     /// Returns a `VitalEstimate` with heart rate in BPM, or `None`
     /// if insufficient data or too few subcarriers.
     pub fn extract(&mut self, residuals: &[f64], phases: &[f64]) -> Option<VitalEstimate> {
-        let n = residuals.len().min(self.n_subcarriers).min(phases.len());
+        // `n` is driven by `residuals` (and the subcarrier cap) only, NOT by
+        // `phases.len()`. Before this fix, a missing/short `phases` slice
+        // (e.g. `phases=[]`, documented as meaning "equal weighting", mirroring
+        // `BreathingExtractor`'s `weights=[]`) truncated `n` down to
+        // `phases.len()`, so `phases=[]` forced `n == 0` and `extract()`
+        // silently returned `None` for every frame (issue #1423). Missing
+        // phase entries are now treated by `compute_phase_coherence_signal`
+        // as "no coherence information available" and fused with equal
+        // weight, exactly like `breathing::fuse_weighted_residuals`'s
+        // uniform-weight fallback for a missing/partial `weights` slice.
+        let n = residuals.len().min(self.n_subcarriers);
         if n == 0 {
             return None;
         }
@@ -249,29 +259,44 @@ impl HeartRateExtractor {
 /// Combines amplitude residuals with inter-subcarrier phase coherence
 /// to enhance the cardiac signal. Subcarriers with similar phase
 /// derivatives are likely sensing the same body surface.
+///
+/// `phases` may be shorter than `n` (including empty). Missing entries mean
+/// the caller has no per-subcarrier phase measurement to weight by, so that
+/// subcarrier is fused with full coherence (weight 1.0) instead of being
+/// excluded -- i.e. `phases=[]` degrades gracefully to equal weighting
+/// across all `n` residuals, exactly like `breathing::fuse_weighted_residuals`
+/// falling back to a uniform weight for a missing/partial `weights` slice
+/// (issue #1423; `phases=[]` is documented as meaning equal weights, the
+/// same as `BreathingExtractor`'s `weights=[]`).
 fn compute_phase_coherence_signal(residuals: &[f64], phases: &[f64], n: usize) -> f64 {
     if n <= 1 {
         return residuals.first().copied().unwrap_or(0.0);
     }
 
+    let phase_at = |i: usize| phases.get(i).copied();
+
     // Compute inter-subcarrier phase differences as coherence weights.
     // Adjacent subcarriers with small phase differences are more coherent.
+    // If either phase value needed for a pair is missing, treat the pair as
+    // fully coherent (weight 1.0) rather than panicking or excluding it.
     let mut weighted_sum = 0.0;
     let mut weight_total = 0.0;
 
-    for i in 0..n {
-        let coherence = if i + 1 < n {
-            let phase_diff = (phases[i + 1] - phases[i]).abs();
-            // Higher coherence when phase difference is small
-            (-phase_diff).exp()
+    for (i, &r) in residuals.iter().enumerate().take(n) {
+        let neighbor = if i + 1 < n {
+            Some(i + 1)
         } else if i > 0 {
-            let phase_diff = (phases[i] - phases[i - 1]).abs();
-            (-phase_diff).exp()
+            Some(i - 1)
         } else {
-            1.0
+            None
         };
 
-        weighted_sum += residuals[i] * coherence;
+        let coherence = match neighbor.and_then(|j| phase_at(i).zip(phase_at(j))) {
+            Some((a, b)) => (-(b - a).abs()).exp(),
+            None => 1.0,
+        };
+
+        weighted_sum += r * coherence;
         weight_total += coherence;
     }
 
@@ -560,5 +585,96 @@ mod tests {
         for (i, &v) in ext.filtered_history.iter().enumerate() {
             assert!(v.is_finite(), "filtered_history[{i}] must be finite, got {v}");
         }
+    }
+
+    /// Issue #1423 bug-catching test.
+    ///
+    /// Reproduces the exact GH-issue repro: 56 subcarriers @ 100 Hz (ESP32
+    /// defaults), a noiseless 1.2 Hz (72 BPM) sine identical across every
+    /// subcarrier, fed frame-by-frame with an **empty** `phases` slice.
+    ///
+    /// Before the fix, `extract()`'s `n` was
+    /// `residuals.len().min(n_subcarriers).min(phases.len())`, so
+    /// `phases = []` forced `n == 0` and every single frame returned `None`
+    /// (0/4000 estimates) even though the identical call with
+    /// `phases = [1.0; 56]` produced thousands of valid estimates. `phases=[]`
+    /// must mean "no coherence weighting available", i.e. equal weighting --
+    /// the same documented fallback `BreathingExtractor` already honors for
+    /// `weights=[]` -- not "invalid input, refuse everything".
+    #[test]
+    fn issue_1423_empty_phases_yields_equal_weighting_not_silent_none() {
+        let n = 56usize;
+        let sample_rate = 100.0;
+        let heart_freq = 1.2; // 72 BPM
+
+        let mut ext = HeartRateExtractor::esp32_default();
+        let mut estimates_with_empty_phases = 0usize;
+        for i in 0..4000usize {
+            let t = i as f64 / sample_rate;
+            let base = (2.0 * std::f64::consts::PI * heart_freq * t).sin();
+            let residuals = vec![base; n];
+            if ext.extract(&residuals, &[]).is_some() {
+                estimates_with_empty_phases += 1;
+            }
+        }
+
+        assert!(
+            estimates_with_empty_phases > 0,
+            "HeartRateExtractor::extract() with phases=[] must not silently return None for \
+             every frame of a clean 72 BPM signal (issue #1423); got 0/4000 estimates",
+        );
+
+        // Sanity check against the issue's own comparison point: an
+        // equivalent uniform, non-empty `phases` slice (all subcarriers at
+        // the same phase, i.e. zero pairwise difference => full coherence,
+        // exactly what the equal-weighting fallback now produces for the
+        // empty case too) must yield a comparable number of estimates --
+        // the two should behave the same, not `0` vs `thousands`.
+        let mut ext2 = HeartRateExtractor::esp32_default();
+        let uniform_phases = vec![1.0_f64; n];
+        let mut estimates_with_uniform_phases = 0usize;
+        for i in 0..4000usize {
+            let t = i as f64 / sample_rate;
+            let base = (2.0 * std::f64::consts::PI * heart_freq * t).sin();
+            let residuals = vec![base; n];
+            if ext2.extract(&residuals, &uniform_phases).is_some() {
+                estimates_with_uniform_phases += 1;
+            }
+        }
+
+        assert_eq!(
+            estimates_with_empty_phases, estimates_with_uniform_phases,
+            "phases=[] (equal-weight fallback) must behave identically to a uniform, \
+             non-empty phases slice of the same length -- both represent 'no differential \
+             coherence information', got {estimates_with_empty_phases} vs \
+             {estimates_with_uniform_phases}",
+        );
+    }
+
+    /// Issue #1423 companion: a `phases` slice *shorter* than `residuals`
+    /// (partial coverage) must fall back to equal weighting for the missing
+    /// tail rather than truncating the whole fusion down to the phases that
+    /// happen to be present -- mirrors
+    /// `breathing::partial_weights_are_renormalized_not_scale_mixed`.
+    #[test]
+    fn partial_phases_do_not_truncate_subcarrier_count() {
+        // 8 residuals, only 2 phase values supplied.
+        let residuals = [1.0_f64; 8];
+        let phases = [0.0_f64, 0.0];
+        let fused = compute_phase_coherence_signal(&residuals, &phases, 8);
+
+        // All residuals are identical (1.0), so regardless of how coherence
+        // weights are distributed the fused value must still be 1.0 -- but
+        // this only holds if all 8 residuals are actually used. Before the
+        // fix, `n` would have been truncated to `phases.len() == 2`, so the
+        // caller-facing `extract()` never even reached this function with
+        // `n == 8`; this test pins `compute_phase_coherence_signal` itself
+        // to handle a short `phases` slice safely and correctly when called
+        // with the full `n`.
+        assert!(
+            (fused - 1.0).abs() < 1e-12,
+            "fusion with a partial phases slice must still average all {} residuals, got {fused}",
+            residuals.len(),
+        );
     }
 }
