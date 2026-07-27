@@ -130,6 +130,10 @@ struct WsCommand {
     service: Option<String>,
     #[serde(default)]
     service_data: Option<serde_json::Value>,
+    #[serde(default)]
+    event_data: Option<serde_json::Value>,
+    #[serde(default)]
+    template: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -290,6 +294,50 @@ impl Connection {
                     Err(e) => self.err(tx, cmd.id, "service_error", &e.to_string()),
                 }
             }
+            "fire_event" => {
+                let Some(event_type) = cmd.event_type.clone() else {
+                    self.err(tx, cmd.id, "invalid_format", "event_type is required");
+                    return;
+                };
+                if event_type.is_empty()
+                    || event_type.len() > 255
+                    || !event_type
+                        .chars()
+                        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+                {
+                    self.err(tx, cmd.id, "invalid_format", "invalid event_type");
+                    return;
+                }
+                let event_data = cmd.event_data.unwrap_or_else(|| serde_json::json!({}));
+                if !event_data.is_object() {
+                    self.err(tx, cmd.id, "invalid_format", "event_data must be an object");
+                    return;
+                }
+                self.state
+                    .homecore()
+                    .bus()
+                    .fire_domain(homecore::DomainEvent::new(
+                        event_type,
+                        event_data,
+                        Context::new(),
+                    ));
+                self.ack(tx, cmd.id, true, None);
+            }
+            "render_template" => {
+                let Some(template) = cmd.template.as_deref() else {
+                    self.err(tx, cmd.id, "invalid_format", "template is required");
+                    return;
+                };
+                let environment = homecore_automation::TemplateEnvironment::new(Arc::new(
+                    self.state.homecore().states().clone(),
+                ));
+                match environment.render(template) {
+                    Ok(rendered) => {
+                        self.ack(tx, cmd.id, true, Some(serde_json::Value::String(rendered)))
+                    }
+                    Err(error) => self.err(tx, cmd.id, "template_error", &error.to_string()),
+                }
+            }
             "subscribe_events" => {
                 // HA uses the subscribing command ID as the subscription ID
                 // in every emitted event and in `unsubscribe_events`.
@@ -369,6 +417,7 @@ impl Connection {
                                                 "data": de.event_data,
                                                 "origin": format!("{:?}", de.origin).to_uppercase(),
                                                 "time_fired": de.fired_at.to_rfc3339(),
+                                                "context": de.context,
                                             }
                                         });
                                         if tx_clone.try_send(payload.to_string()).is_err() { break; }

@@ -17,6 +17,7 @@ path = "src/bin/server.rs"
 
 [dependencies]
 homecore = { path = "../homecore", version = "0.1.0-alpha.0" }
+homecore-automation = { path = "../homecore-automation", version = "0.1.0-alpha.0" }
 
 axum = { version = "0.7", features = ["ws", "json", "macros"] }
 tokio = { version = "1", features = ["full"] }

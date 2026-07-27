@@ -3550,6 +3550,7 @@ dependencies = [
  "dashmap",
  "futures-util",
  "homecore",
+ "homecore-automation",
  "http-body-util",
  "hyper 1.8.1",
  "serde",
