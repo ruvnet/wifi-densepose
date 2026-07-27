@@ -4370,17 +4370,9 @@ fn derive_pose_from_sensing(update: &SensingUpdate) -> Vec<PersonDetection> {
     // Use estimated_persons if set by the tick loop; otherwise default to 1.
     let person_count = update.estimated_persons.unwrap_or(1).max(1);
 
-    let mut persons: Vec<PersonDetection> = (0..person_count)
+    (0..person_count)
         .map(|idx| derive_single_person_pose(update, idx, person_count))
-        .collect();
-
-    // Filter out ghost detections (where all keypoints have zero confidence).
-    // These are false positives from the pose inference pipeline.
-    persons.retain(|person| {
-        person.keypoints.iter().any(|kp| kp.confidence > 0.0)
-    });
-
-    persons
+        .collect()
 }
 
 // ── RuVector Phase 2: Temporal EMA smoothing for keypoints ──────────────────
