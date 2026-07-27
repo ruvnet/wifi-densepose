@@ -382,7 +382,12 @@ pub async fn compatibility(
             "events": "implemented",
             "render_template": "implemented",
             "feature_negotiation_and_panels": "implemented",
-            "registries": "requires_registry_backend",
+            "registry_lists": {
+                "entity": "implemented",
+                "device": "implemented",
+                "area": "implemented_empty",
+                "mutations": "requires_persistent_registry_backend"
+            },
             "lovelace_media": "integration_dependent"
         }
     })))

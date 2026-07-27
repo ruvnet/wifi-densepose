@@ -29,6 +29,7 @@ homecore-recorder  = { path = "../homecore-recorder",  version = "0.1.0-alpha.0"
 homecore-migrate   = { path = "../homecore-migrate",   version = "0.1.0-alpha.0" }
 homecore-automation = { path = "../homecore-automation", version = "0.1.0-alpha.0" }
 homecore-assist    = { path = "../homecore-assist",    version = "0.1.0-alpha.0" }
+homecore-hap       = { path = "../homecore-hap",       version = "0.1.0-alpha.0", optional = true }
 
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
@@ -66,3 +67,5 @@ default = []
 ruvector = ["homecore-recorder/ruvector"]
 # Pull in real Wasmtime plugin runtime (vs InProcessRuntime).
 wasmtime = ["homecore-plugins/wasmtime"]
+# Bind the HAP TCP listener and publish `_hap._tcp` over mDNS.
+hap-server = ["dep:homecore-hap", "homecore-hap/hap-server"]

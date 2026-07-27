@@ -284,6 +284,24 @@ impl Connection {
                 let payload = serde_json::to_value(by_domain).unwrap();
                 self.ack(tx, cmd.id, true, Some(payload));
             }
+            "config/entity_registry/list" | "get_entity_registry" => {
+                let entries = self.state.homecore().entities().all().await;
+                let payload =
+                    serde_json::to_value(entries).unwrap_or_else(|_| serde_json::json!([]));
+                self.ack(tx, cmd.id, true, Some(payload));
+            }
+            "config/device_registry/list" | "get_device_registry" => {
+                let entries = self.state.homecore().devices().all().await;
+                let payload =
+                    serde_json::to_value(entries).unwrap_or_else(|_| serde_json::json!([]));
+                self.ack(tx, cmd.id, true, Some(payload));
+            }
+            "config/area_registry/list" | "get_area_registry" => {
+                // HOMECORE does not yet model named areas. Returning the valid
+                // empty-list shape lets clients distinguish that from an
+                // unsupported command.
+                self.ack(tx, cmd.id, true, Some(serde_json::json!([])));
+            }
             "call_service" => {
                 let (Some(domain), Some(service)) = (cmd.domain.clone(), cmd.service.clone())
                 else {

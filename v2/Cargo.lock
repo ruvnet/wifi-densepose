@@ -3681,6 +3681,7 @@ dependencies = [
  "homecore-api",
  "homecore-assist",
  "homecore-automation",
+ "homecore-hap",
  "homecore-migrate",
  "homecore-plugins",
  "homecore-recorder",

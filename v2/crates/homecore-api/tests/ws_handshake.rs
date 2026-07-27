@@ -338,3 +338,52 @@ async fn real_state_change_uses_client_subscription_id() {
     assert_eq!(unsub["id"], 42);
     assert_eq!(unsub["success"], true);
 }
+
+#[tokio::test]
+async fn registry_list_commands_return_ha_result_shapes() {
+    use homecore::{EntityEntry, EntityId};
+
+    let (addr, hc) = spawn_server_returning_homecore("good_token_abc").await;
+    hc.entities()
+        .register(EntityEntry {
+            entity_id: EntityId::parse("light.registry_probe").unwrap(),
+            unique_id: Some("probe-1".into()),
+            platform: "test".into(),
+            name: Some("Registry probe".into()),
+            disabled_by: None,
+            area_id: None,
+            device_id: None,
+            entity_category: None,
+            config_entry_id: None,
+        })
+        .await;
+
+    let url = format!("ws://{addr}/api/websocket");
+    let (mut ws, _response) = connect_async(&url).await.unwrap();
+    let _ = next_json(&mut ws).await;
+    ws.send(Message::Text(
+        serde_json::json!({"type":"auth","access_token":"good_token_abc"}).to_string(),
+    ))
+    .await
+    .unwrap();
+    let _ = next_json(&mut ws).await;
+
+    for (id, command) in [
+        (71, "config/entity_registry/list"),
+        (72, "config/device_registry/list"),
+        (73, "config/area_registry/list"),
+    ] {
+        ws.send(Message::Text(
+            serde_json::json!({"id": id, "type": command}).to_string(),
+        ))
+        .await
+        .unwrap();
+        let reply = next_json(&mut ws).await;
+        assert_eq!(reply["id"], id);
+        assert_eq!(reply["success"], true);
+        assert!(reply["result"].is_array());
+        if command == "config/entity_registry/list" {
+            assert_eq!(reply["result"][0]["entity_id"], "light.registry_probe");
+        }
+    }
+}

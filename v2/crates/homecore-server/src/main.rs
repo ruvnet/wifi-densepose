@@ -37,6 +37,7 @@ use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
 mod gateway;
+mod hap;
 mod plugins;
 mod restore;
 use gateway::{GatewayConfig, GatewayState};
@@ -137,6 +138,40 @@ struct Cli {
     /// Permit unsigned WebAssembly plugins. Unsafe; development only.
     #[arg(long, env = "HOMECORE_PLUGIN_ALLOW_UNSIGNED", default_value_t = false)]
     plugin_allow_unsigned: bool,
+
+    /// Bind address for the optional HomeKit Accessory Protocol server.
+    /// The server remains disabled unless this option is supplied.
+    #[arg(long, env = "HOMECORE_HAP_BIND")]
+    hap_bind: Option<SocketAddr>,
+
+    /// Stable six-octet HAP accessory identifier (for example
+    /// `AA:BB:CC:DD:EE:FF`). Required when HAP is enabled.
+    #[arg(long, env = "HOMECORE_HAP_DEVICE_ID")]
+    hap_device_id: Option<String>,
+
+    /// LAN address published in the HAP mDNS record. Required when HAP is enabled.
+    #[arg(long, env = "HOMECORE_HAP_ADVERTISE_ADDR")]
+    hap_advertise_addr: Option<std::net::IpAddr>,
+
+    /// DNS hostname published by mDNS for the HAP bridge.
+    #[arg(long, env = "HOMECORE_HAP_HOSTNAME", default_value = "homecore")]
+    hap_hostname: String,
+
+    /// HAP discovery instance shown to controller applications.
+    #[arg(
+        long,
+        env = "HOMECORE_HAP_INSTANCE_NAME",
+        default_value = "HOMECORE Bridge"
+    )]
+    hap_instance_name: String,
+
+    /// Durable controller pairing database.
+    #[arg(
+        long,
+        env = "HOMECORE_HAP_PAIRING_STORE",
+        default_value = ".homecore/hap/pairings.json"
+    )]
+    hap_pairing_store: std::path::PathBuf,
 }
 
 #[tokio::main]
@@ -284,6 +319,18 @@ async fn main() -> Result<()> {
         "Assist intent endpoint ready with {} handlers",
         assist.handler_count()
     );
+    let hap_runtime = hap::start(
+        &hc,
+        hap::HapRuntimeConfig {
+            bind_addr: cli.hap_bind,
+            device_id: cli.hap_device_id.clone(),
+            advertise_addr: cli.hap_advertise_addr,
+            hostname: cli.hap_hostname.clone(),
+            instance_name: cli.hap_instance_name.clone(),
+            pairing_store: cli.hap_pairing_store.clone(),
+        },
+    )
+    .await?;
     let gw = GatewayState::with_assist(
         api_state.clone(),
         GatewayConfig {
@@ -334,6 +381,7 @@ async fn main() -> Result<()> {
             info!("Shutdown requested; draining active HTTP connections");
         })
         .await?;
+    hap_runtime.shutdown().await?;
     server_plugins.shutdown().await;
     Ok(())
 }
