@@ -429,6 +429,24 @@ impl Recorder {
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<StateRow>, RecorderError> {
+        self.get_state_history_limited(entity_id, since, until, MAX_HISTORY_ROWS as usize)
+            .await
+    }
+
+    /// Query state history with a caller-selected limit capped by
+    /// [`MAX_HISTORY_ROWS`]. The bound is applied in SQL, before rows are
+    /// materialized.
+    pub async fn get_state_history_limited(
+        &self,
+        entity_id: &EntityId,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
+        requested_limit: usize,
+    ) -> Result<Vec<StateRow>, RecorderError> {
+        let limit = requested_limit.min(MAX_HISTORY_ROWS as usize);
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         let since_ts = since.timestamp_micros() as f64 / 1_000_000.0;
         let until_ts = until.timestamp_micros() as f64 / 1_000_000.0;
 
@@ -446,7 +464,7 @@ impl Recorder {
         .bind(entity_id.as_str())
         .bind(since_ts)
         .bind(until_ts)
-        .bind(MAX_HISTORY_ROWS)
+        .bind(limit as i64)
         .fetch_all(&self.pool)
         .await?;
 
@@ -955,6 +973,36 @@ mod tests {
         }
         assert_eq!(rows[0].state, "20.0");
         assert_eq!(rows[2].state, "22.0");
+    }
+
+    #[tokio::test]
+    async fn history_caller_limit_is_applied_before_materialization() {
+        let recorder = open_memory().await;
+        let eid = entity("sensor.bounded");
+        for value in ["1", "2", "3"] {
+            recorder
+                .record_state(&make_state_event(
+                    "sensor.bounded",
+                    value,
+                    serde_json::json!({}),
+                ))
+                .await
+                .unwrap();
+        }
+        let since = Utc::now() - chrono::Duration::seconds(10);
+        let until = Utc::now() + chrono::Duration::seconds(10);
+        let rows = recorder
+            .get_state_history_limited(&eid, since, until, 2)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].state, "1");
+        assert_eq!(rows[1].state, "2");
+        assert!(recorder
+            .get_state_history_limited(&eid, since, until, 0)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     // ── record_event ──────────────────────────────────────────────────────────

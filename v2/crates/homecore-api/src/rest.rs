@@ -105,6 +105,7 @@ pub struct HistoryQuery {
 }
 
 const MAX_HISTORY_ENTITIES: usize = 32;
+const MAX_API_HISTORY_ROWS: usize = 100_000;
 
 pub async fn get_history(
     headers: HeaderMap,
@@ -173,11 +174,13 @@ async fn history_response(
     }
 
     let mut result = Vec::with_capacity(entity_ids.len());
+    let mut remaining = MAX_API_HISTORY_ROWS;
     for entity_id in entity_ids {
         let rows = recorder
-            .get_state_history(&entity_id, start, end)
+            .get_state_history_limited(&entity_id, start, end, remaining)
             .await
             .map_err(|error| ApiError::Internal(format!("history query failed: {error}")))?;
+        remaining = remaining.saturating_sub(rows.len());
         let mut previous_state: Option<String> = None;
         let states = rows
             .into_iter()
@@ -298,11 +301,13 @@ async fn logbook_response(
         )));
     }
     let mut entries = Vec::new();
+    let mut remaining = MAX_API_HISTORY_ROWS;
     for entity_id in entity_ids {
         let rows = recorder
-            .get_state_history(&entity_id, start, end)
+            .get_state_history_limited(&entity_id, start, end, remaining)
             .await
             .map_err(|error| ApiError::Internal(format!("logbook query failed: {error}")))?;
+        remaining = remaining.saturating_sub(rows.len());
         for row in rows {
             entries.push(serde_json::json!({
                 "when": history_timestamp(row.last_updated_ts),
