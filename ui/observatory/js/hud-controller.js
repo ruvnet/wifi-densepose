@@ -25,7 +25,7 @@ export const DEFAULTS = {
   wireColor: '#00d878', jointColor: '#ff4060', aura: 0.02,
   field: 0.45, waves: 0.4, ambient: 0.7, reflect: 0.2,
   fov: 50, orbitSpeed: 0.15, grid: true, room: true,
-  scenario: 'auto', cycle: 30, dataSource: 'demo', wsUrl: '',
+  scenario: 'auto', cycle: 30, dataSource: 'ws', wsUrl: '',
 };
 
 export const SETTINGS_VERSION = '6';
@@ -390,7 +390,9 @@ export class HudController {
 
     const targetHr = vs.heart_rate_bpm || 0;
     const targetBr = vs.breathing_rate_bpm || 0;
-    const targetConf = Math.round((cls.confidence || 0) * 100);
+    // Normalize confidence to 0-100 range (0-1 from backend, but guard against already-scaled values)
+    const confVal = cls.confidence || 0;
+    const targetConf = confVal > 1 ? Math.min(100, Math.round(confVal)) : Math.round(confVal * 100);
 
     // Smooth lerp transitions (blend 4% per frame toward target — very stable)
     const lerpFactor = 0.04;
