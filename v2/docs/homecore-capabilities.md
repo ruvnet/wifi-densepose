@@ -68,11 +68,12 @@ registry currently returns a valid empty list.
   native plugins must be linked into the binary and registered in code.
 - HAP is disabled by default. Enabling it requires an explicit bind address,
   stable six-octet device identifier, advertised LAN address, hostname, and
-  durable pairing-store path.
-- The HAP listener fails closed for cryptographic phases that are unavailable
-  in the selected build. Do not claim Apple Home interoperability unless the
-  Pair-Setup, Pair-Verify, and encrypted transport conformance tests for that
-  build pass.
+  durable pairing-store path. First provisioning also requires an explicit
+  non-trivial `XXX-XX-XXX` setup code; only its SRP verifier is persisted.
+- The HAP listener implements SRP-6a Pair-Setup, X25519/Ed25519 Pair-Verify,
+  ChaCha20-Poly1305 HAP IP records, controller administration, and paired-state
+  mDNS updates. Internal protocol/tamper/replay tests pass; external Apple Home
+  certification is not claimed.
 - STT and TTS are provider contracts; a deployment must supply real providers.
   The built-in disabled providers return typed errors rather than fabricated
   speech results.

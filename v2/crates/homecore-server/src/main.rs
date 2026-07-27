@@ -149,6 +149,11 @@ struct Cli {
     #[arg(long, env = "HOMECORE_HAP_DEVICE_ID")]
     hap_device_id: Option<String>,
 
+    /// HAP setup code in `XXX-XX-XXX` form. Required only when creating a
+    /// pairing store for the first time and never persisted in plaintext.
+    #[arg(long, env = "HOMECORE_HAP_SETUP_CODE", hide_env_values = true)]
+    hap_setup_code: Option<String>,
+
     /// LAN address published in the HAP mDNS record. Required when HAP is enabled.
     #[arg(long, env = "HOMECORE_HAP_ADVERTISE_ADDR")]
     hap_advertise_addr: Option<std::net::IpAddr>,
@@ -177,7 +182,7 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
     let has_tokens = std::env::var("HOMECORE_TOKENS")
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
@@ -325,6 +330,7 @@ async fn main() -> Result<()> {
         hap::HapRuntimeConfig {
             bind_addr: cli.hap_bind,
             device_id: cli.hap_device_id.clone(),
+            setup_code: cli.hap_setup_code.take(),
             advertise_addr: cli.hap_advertise_addr,
             hostname: cli.hap_hostname.clone(),
             instance_name: cli.hap_instance_name.clone(),

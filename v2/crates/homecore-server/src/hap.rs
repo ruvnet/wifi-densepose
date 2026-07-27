@@ -11,6 +11,7 @@ use homecore::HomeCore;
 pub(crate) struct HapRuntimeConfig {
     pub bind_addr: Option<SocketAddr>,
     pub device_id: Option<String>,
+    pub setup_code: Option<String>,
     pub advertise_addr: Option<IpAddr>,
     pub hostname: String,
     pub instance_name: String,
@@ -84,7 +85,24 @@ pub(crate) async fn start(hc: &HomeCore, config: HapRuntimeConfig) -> Result<Hap
             config.hostname.clone(),
             advertise_addr,
         )?);
-        let pairings = Arc::new(PairingStore::open(&config.pairing_store)?);
+        let pairings = if config.pairing_store.exists() {
+            if config.setup_code.is_some() {
+                tracing::warn!(
+                    "ignoring --hap-setup-code because the pairing store already exists"
+                );
+            }
+            PairingStore::open(&config.pairing_store)?
+        } else {
+            let setup_code = config.setup_code.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("--hap-setup-code is required when creating a HAP pairing store")
+            })?;
+            PairingStore::create(
+                &config.pairing_store,
+                homecore_hap::SetupCode::parse(setup_code)?,
+                Some(device_id.to_owned()),
+            )?
+        };
+        let pairings = Arc::new(pairings);
         let record =
             HapServiceRecord::bridge(config.instance_name.clone(), bind_addr.port(), device_id);
         let bridge = HapBridge::new(record);
