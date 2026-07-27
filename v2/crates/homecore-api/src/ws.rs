@@ -20,7 +20,6 @@
 //! drains the response channel onto the socket (HC-WS-02 closed the prior
 //! reply-theater where responses were logged and discarded).
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -28,6 +27,10 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
+
+/// Per-connection outbound queue. A bounded queue prevents a client that
+/// stops reading from turning event fan-out into unbounded process memory.
+const OUTBOUND_QUEUE_CAPACITY: usize = 256;
 use tracing::warn;
 
 use homecore::{Context, ServiceCall, ServiceName, SystemEvent};
@@ -49,7 +52,11 @@ async fn handle_socket(mut socket: WebSocket, state: SharedState) {
         "type": "auth_required",
         "ha_version": state.version(),
     });
-    if socket.send(Message::Text(auth_req.to_string())).await.is_err() {
+    if socket
+        .send(Message::Text(auth_req.to_string()))
+        .await
+        .is_err()
+    {
         return;
     }
 
@@ -59,7 +66,8 @@ async fn handle_socket(mut socket: WebSocket, state: SharedState) {
             _ => {
                 let _ = socket
                     .send(Message::Text(
-                        serde_json::json!({"type":"auth_invalid","message":"expected auth"}).to_string(),
+                        serde_json::json!({"type":"auth_invalid","message":"expected auth"})
+                            .to_string(),
                     ))
                     .await;
                 return;
@@ -85,7 +93,11 @@ async fn handle_socket(mut socket: WebSocket, state: SharedState) {
         return;
     }
     let auth_ok = serde_json::json!({"type":"auth_ok","ha_version": state.version()});
-    if socket.send(Message::Text(auth_ok.to_string())).await.is_err() {
+    if socket
+        .send(Message::Text(auth_ok.to_string()))
+        .await
+        .is_err()
+    {
         return;
     }
 
@@ -140,7 +152,6 @@ struct ErrorView<'a> {
 
 struct Connection {
     state: SharedState,
-    next_sub_id: AtomicU64,
     subs: Arc<dashmap::DashMap<u64, SubscriptionHandle>>,
 }
 
@@ -152,7 +163,6 @@ impl Connection {
     fn new(state: SharedState) -> Self {
         Self {
             state,
-            next_sub_id: AtomicU64::new(1),
             subs: Arc::new(dashmap::DashMap::new()),
         }
     }
@@ -168,7 +178,7 @@ impl Connection {
         // DISCARDED every message — so no `result`/`pong`/`event` ever
         // reached the client. Now `rx` feeds `socket.send`.
         let (mut sink, mut stream) = socket.split();
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(OUTBOUND_QUEUE_CAPACITY);
 
         // Writer task: drain replies onto the socket. A `__pong:<n>`
         // sentinel maps to a binary Pong control frame; everything else
@@ -205,7 +215,7 @@ impl Connection {
                         conn.handle_cmd(cmd, &reader_tx).await;
                     }
                     Ok(Message::Ping(p)) => {
-                        let _ = reader_tx.send(format!("__pong:{}", p.len()));
+                        let _ = reader_tx.try_send(format!("__pong:{}", p.len()));
                     }
                     Ok(Message::Close(_)) | Err(_) => break,
                     _ => {}
@@ -224,15 +234,16 @@ impl Connection {
         let _ = writer_task.await;
     }
 
-    async fn handle_cmd(&self, cmd: WsCommand, tx: &tokio::sync::mpsc::UnboundedSender<String>) {
+    async fn handle_cmd(&self, cmd: WsCommand, tx: &tokio::sync::mpsc::Sender<String>) {
         match cmd.kind.as_str() {
             "ping" => {
                 let msg = serde_json::json!({"id": cmd.id, "type": "pong"});
-                let _ = tx.send(msg.to_string());
+                let _ = tx.try_send(msg.to_string());
             }
             "get_states" => {
                 let snapshots = self.state.homecore().states().all();
-                let views: Vec<StateView> = snapshots.iter().map(|s| StateView::from_state(s)).collect();
+                let views: Vec<StateView> =
+                    snapshots.iter().map(|s| StateView::from_state(s)).collect();
                 self.ack(tx, cmd.id, true, Some(serde_json::to_value(views).unwrap()));
             }
             "get_config" => {
@@ -245,17 +256,28 @@ impl Connection {
             }
             "get_services" => {
                 let services = self.state.homecore().services().registered_services().await;
-                let mut by_domain: std::collections::HashMap<String, serde_json::Map<String, serde_json::Value>> =
-                    std::collections::HashMap::new();
+                let mut by_domain: std::collections::HashMap<
+                    String,
+                    serde_json::Map<String, serde_json::Value>,
+                > = std::collections::HashMap::new();
                 for s in services {
-                    by_domain.entry(s.domain).or_default().insert(s.service, serde_json::json!({}));
+                    by_domain
+                        .entry(s.domain)
+                        .or_default()
+                        .insert(s.service, serde_json::json!({}));
                 }
                 let payload = serde_json::to_value(by_domain).unwrap();
                 self.ack(tx, cmd.id, true, Some(payload));
             }
             "call_service" => {
-                let (Some(domain), Some(service)) = (cmd.domain.clone(), cmd.service.clone()) else {
-                    self.err(tx, cmd.id, "missing_domain_service", "domain and service are required");
+                let (Some(domain), Some(service)) = (cmd.domain.clone(), cmd.service.clone())
+                else {
+                    self.err(
+                        tx,
+                        cmd.id,
+                        "missing_domain_service",
+                        "domain and service are required",
+                    );
                     return;
                 };
                 let call = ServiceCall {
@@ -269,7 +291,13 @@ impl Connection {
                 }
             }
             "subscribe_events" => {
-                let sub_id = self.next_sub_id.fetch_add(1, Ordering::Relaxed);
+                // HA uses the subscribing command ID as the subscription ID
+                // in every emitted event and in `unsubscribe_events`.
+                let sub_id = cmd.id;
+                if self.subs.contains_key(&sub_id) {
+                    self.err(tx, cmd.id, "id_reused", "subscription id is already active");
+                    return;
+                }
                 let filter = cmd.event_type.clone();
                 let tx_clone = tx.clone();
                 let mut domain_rx = self.state.homecore().bus().subscribe_domain();
@@ -294,7 +322,27 @@ impl Connection {
                                                 "time_fired": sc.fired_at.to_rfc3339(),
                                             }
                                         });
-                                        if tx_clone.send(payload.to_string()).is_err() { break; }
+                                        if tx_clone.try_send(payload.to_string()).is_err() { break; }
+                                    }
+                                }
+                                Ok(SystemEvent::ServiceCalled { domain, service, data, context }) => {
+                                    if filter.as_deref() == Some("call_service") || filter.is_none() {
+                                        let payload = serde_json::json!({
+                                            "id": sub_id,
+                                            "type": "event",
+                                            "event": {
+                                                "event_type": "call_service",
+                                                "data": {
+                                                    "domain": domain,
+                                                    "service": service,
+                                                    "service_data": data,
+                                                },
+                                                "origin": "LOCAL",
+                                                "time_fired": chrono::Utc::now().to_rfc3339(),
+                                                "context": context,
+                                            }
+                                        });
+                                        if tx_clone.try_send(payload.to_string()).is_err() { break; }
                                     }
                                 }
                                 Ok(_) => {}
@@ -323,7 +371,7 @@ impl Connection {
                                                 "time_fired": de.fired_at.to_rfc3339(),
                                             }
                                         });
-                                        if tx_clone.send(payload.to_string()).is_err() { break; }
+                                        if tx_clone.try_send(payload.to_string()).is_err() { break; }
                                     }
                                 }
                                 // Same recoverable-lag handling as the system arm
@@ -353,11 +401,21 @@ impl Connection {
                         self.err(tx, cmd.id, "not_found", "subscription_id not found");
                     }
                 } else {
-                    self.err(tx, cmd.id, "missing_subscription", "subscription is required");
+                    self.err(
+                        tx,
+                        cmd.id,
+                        "missing_subscription",
+                        "subscription is required",
+                    );
                 }
             }
             other => {
-                self.err(tx, cmd.id, "unknown_command", &format!("unknown ws command: {other}"));
+                self.err(
+                    tx,
+                    cmd.id,
+                    "unknown_command",
+                    &format!("unknown ws command: {other}"),
+                );
             }
         }
         // entity_id is reserved for future per-entity subscribes
@@ -366,7 +424,7 @@ impl Connection {
 
     fn ack(
         &self,
-        tx: &tokio::sync::mpsc::UnboundedSender<String>,
+        tx: &tokio::sync::mpsc::Sender<String>,
         id: u64,
         success: bool,
         result: Option<serde_json::Value>,
@@ -378,10 +436,16 @@ impl Connection {
             result,
             error: None,
         };
-        let _ = tx.send(serde_json::to_string(&msg).unwrap());
+        let _ = tx.try_send(serde_json::to_string(&msg).unwrap());
     }
 
-    fn err(&self, tx: &tokio::sync::mpsc::UnboundedSender<String>, id: u64, code: &'static str, message: &str) {
+    fn err(
+        &self,
+        tx: &tokio::sync::mpsc::Sender<String>,
+        id: u64,
+        code: &'static str,
+        message: &str,
+    ) {
         let msg = ResultMessage {
             id,
             kind: "result",
@@ -389,7 +453,7 @@ impl Connection {
             result: None,
             error: Some(ErrorView { code, message }),
         };
-        let _ = tx.send(serde_json::to_string(&msg).unwrap());
+        let _ = tx.try_send(serde_json::to_string(&msg).unwrap());
     }
 }
 

@@ -93,7 +93,7 @@ pub async fn get_state(
 ) -> ApiResult<Json<StateView>> {
     let _ = BearerAuth::from_headers(&headers, s.tokens()).await?;
     let id = EntityId::parse(entity_id.clone()).map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    let st = s.homecore().states().get(&id).ok_or_else(|| ApiError::NotFound(entity_id))?;
+    let st = s.homecore().states().get(&id).ok_or(ApiError::NotFound(entity_id))?;
     Ok(Json(StateView::from_state(&st)))
 }
 

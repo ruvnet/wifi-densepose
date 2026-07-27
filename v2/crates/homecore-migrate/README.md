@@ -26,7 +26,8 @@ The tool enforces version schema compatibility: unknown HA schema versions are r
 
 ## Features
 
-- **Entity registry import** — `core.entity_registry` → HOMECORE entity definitions (ready for import)
+- **Entity registry import** — `core.entity_registry` → an atomically written,
+  HA-compatible HOMECORE registry file; existing destinations are not overwritten
 - **Device registry inspection** — read HA device metadata; full conversion deferred to P2
 - **Config entries analysis** — list active integrations by domain (enables gap analysis)
 - **Secrets extraction** — read `secrets.yaml` references for annotation (resolution in P2)

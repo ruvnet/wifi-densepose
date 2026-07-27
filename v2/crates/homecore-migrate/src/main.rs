@@ -44,8 +44,10 @@ fn main() -> anyhow::Result<()> {
             let entity_path = args.storage.join("core.entity_registry");
             let entries =
                 homecore_migrate::entity_registry::read_entity_registry(&entity_path)?;
-            println!("Imported {} entity entries (P1: in-memory only)", entries.len());
-            println!("  Destination: {} (P2 persistence)", args.to.display());
+            let destination =
+                homecore_migrate::entity_registry::write_entity_registry(&args.to, &entries)?;
+            println!("Imported {} entity entries", entries.len());
+            println!("  Destination: {}", destination.display());
             for e in &entries {
                 println!(
                     "  {} ({}{})",

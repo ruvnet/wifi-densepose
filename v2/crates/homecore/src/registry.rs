@@ -56,7 +56,10 @@ impl EntityRegistry {
     }
 
     pub async fn register(&self, entry: EntityEntry) {
-        self.entries.write().await.insert(entry.entity_id.clone(), entry);
+        self.entries
+            .write()
+            .await
+            .insert(entry.entity_id.clone(), entry);
     }
 
     pub async fn get(&self, entity_id: &EntityId) -> Option<EntityEntry> {
@@ -73,6 +76,10 @@ impl EntityRegistry {
 
     pub async fn len(&self) -> usize {
         self.entries.read().await.len()
+    }
+
+    pub async fn is_empty(&self) -> bool {
+        self.entries.read().await.is_empty()
     }
 }
 

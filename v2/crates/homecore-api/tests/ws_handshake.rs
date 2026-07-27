@@ -80,7 +80,10 @@ async fn wrong_token_is_rejected() {
         resp["type"], "auth_invalid",
         "wrong token must be rejected with auth_invalid, got: {resp}"
     );
-    assert_ne!(resp["type"], "auth_ok", "wrong token must NOT receive auth_ok");
+    assert_ne!(
+        resp["type"], "auth_ok",
+        "wrong token must NOT receive auth_ok"
+    );
 }
 
 #[tokio::test]
@@ -99,7 +102,10 @@ async fn correct_token_is_accepted() {
     .unwrap();
 
     let resp = next_json(&mut ws).await;
-    assert_eq!(resp["type"], "auth_ok", "correct token should be accepted, got: {resp}");
+    assert_eq!(
+        resp["type"], "auth_ok",
+        "correct token should be accepted, got: {resp}"
+    );
 }
 
 #[tokio::test]
@@ -133,7 +139,10 @@ async fn result_reply_is_received() {
     let reply = tokio::time::timeout(std::time::Duration::from_secs(5), next_json(&mut ws))
         .await
         .expect("did not receive a reply within 5s — reply theater (HC-WS-02)");
-    assert_eq!(reply["type"], "result", "expected a result reply, got: {reply}");
+    assert_eq!(
+        reply["type"], "result",
+        "expected a result reply, got: {reply}"
+    );
     assert_eq!(reply["id"], 1);
     assert_eq!(reply["success"], true);
 }
@@ -262,4 +271,70 @@ async fn subscription_survives_broadcast_lag() {
          as fatal (HC-WS-LAG-01)",
     );
     assert_eq!(got["event"]["data"]["marker"], "post-lag");
+}
+
+#[tokio::test]
+async fn real_state_change_uses_client_subscription_id() {
+    use homecore::{Context, EntityId};
+
+    let (addr, hc) = spawn_server_returning_homecore("good_token_abc").await;
+    let url = format!("ws://{addr}/api/websocket");
+    let (mut ws, _resp) = connect_async(&url).await.unwrap();
+
+    let _ = next_json(&mut ws).await;
+    ws.send(Message::Text(
+        serde_json::json!({"type":"auth","access_token":"good_token_abc"}).to_string(),
+    ))
+    .await
+    .unwrap();
+    let _ = next_json(&mut ws).await;
+
+    ws.send(Message::Text(
+        serde_json::json!({
+            "id": 41,
+            "type": "subscribe_events",
+            "event_type": "state_changed"
+        })
+        .to_string(),
+    ))
+    .await
+    .unwrap();
+    let ack = next_json(&mut ws).await;
+    assert_eq!(ack["id"], 41);
+    assert_eq!(ack["success"], true);
+
+    hc.states().set(
+        EntityId::parse("light.integration_probe").unwrap(),
+        "on",
+        serde_json::json!({"source":"test"}),
+        Context::new(),
+    );
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), next_json(&mut ws))
+        .await
+        .expect("state change was not bridged to the WebSocket system-event subscription");
+    assert_eq!(
+        event["id"], 41,
+        "HA events must use the subscribe command id"
+    );
+    assert_eq!(event["type"], "event");
+    assert_eq!(event["event"]["event_type"], "state_changed");
+    assert_eq!(
+        event["event"]["data"]["entity_id"],
+        "light.integration_probe"
+    );
+
+    ws.send(Message::Text(
+        serde_json::json!({
+            "id": 42,
+            "type": "unsubscribe_events",
+            "subscription": 41
+        })
+        .to_string(),
+    ))
+    .await
+    .unwrap();
+    let unsub = next_json(&mut ws).await;
+    assert_eq!(unsub["id"], 42);
+    assert_eq!(unsub["success"], true);
 }

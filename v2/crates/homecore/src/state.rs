@@ -22,8 +22,9 @@ use chrono::Utc;
 use dashmap::DashMap;
 use tokio::sync::broadcast;
 
+use crate::bus::EventBus;
 use crate::entity::{EntityId, State};
-use crate::event::{Context, StateChangedEvent};
+use crate::event::{Context, StateChangedEvent, SystemEvent};
 
 /// Broadcast channel capacity for state-changed events. 4,096 events
 /// at 20 Hz per entity covers ~3 minutes of backlog for a single hot
@@ -40,15 +41,28 @@ pub struct StateMachine {
 struct StateMachineInner {
     states: DashMap<EntityId, Arc<State>>,
     tx: broadcast::Sender<StateChangedEvent>,
+    bus: Option<EventBus>,
 }
 
 impl StateMachine {
     pub fn new() -> Self {
+        Self::new_inner(None)
+    }
+
+    /// Create a state machine that also publishes every committed change on
+    /// the shared HOMECORE system event bus. Standalone state machines retain
+    /// their lightweight private broadcast channel via [`StateMachine::new`].
+    pub fn with_event_bus(bus: EventBus) -> Self {
+        Self::new_inner(Some(bus))
+    }
+
+    fn new_inner(bus: Option<EventBus>) -> Self {
         let (tx, _) = broadcast::channel(STATE_CHANGED_CHANNEL_CAPACITY);
         Self {
             inner: Arc::new(StateMachineInner {
                 states: DashMap::with_capacity(256),
                 tx,
+                bus,
             }),
         }
     }
@@ -135,7 +149,10 @@ impl StateMachine {
                 fired_at: Utc::now(),
             };
             // err = no receivers; that's fine, write still committed.
-            let _ = self.inner.tx.send(event);
+            let _ = self.inner.tx.send(event.clone());
+            if let Some(bus) = &self.inner.bus {
+                bus.fire_system(SystemEvent::StateChanged(event));
+            }
         }
         // `_guard` (and the shard lock) drops here, after the event is sent.
         next
@@ -151,7 +168,10 @@ impl StateMachine {
                 new_state: None,
                 fired_at: Utc::now(),
             };
-            let _ = self.inner.tx.send(event);
+            let _ = self.inner.tx.send(event.clone());
+            if let Some(bus) = &self.inner.bus {
+                bus.fire_system(SystemEvent::StateChanged(event));
+            }
         }
         removed
     }
@@ -159,7 +179,11 @@ impl StateMachine {
     /// Snapshot all current states. Allocates a new Vec — useful for
     /// the REST GET /api/states path (ADR-130).
     pub fn all(&self) -> Vec<Arc<State>> {
-        self.inner.states.iter().map(|r| Arc::clone(r.value())).collect()
+        self.inner
+            .states
+            .iter()
+            .map(|r| Arc::clone(r.value()))
+            .collect()
     }
 
     /// Snapshot all states whose entity_id matches a domain prefix.
@@ -201,7 +225,12 @@ mod tests {
     async fn set_writes_and_fires() {
         let sm = StateMachine::new();
         let mut rx = sm.subscribe();
-        sm.set(id("light.kitchen"), "on", serde_json::json!({"brightness": 200}), Context::new());
+        sm.set(
+            id("light.kitchen"),
+            "on",
+            serde_json::json!({"brightness": 200}),
+            Context::new(),
+        );
         let evt = rx.recv().await.unwrap();
         assert_eq!(evt.entity_id.as_str(), "light.kitchen");
         assert!(evt.old_state.is_none());
@@ -222,9 +251,19 @@ mod tests {
     #[tokio::test]
     async fn attribute_only_change_fires_but_preserves_last_changed() {
         let sm = StateMachine::new();
-        let s1 = sm.set(id("sensor.t"), "20", serde_json::json!({"unit": "C"}), Context::new());
+        let s1 = sm.set(
+            id("sensor.t"),
+            "20",
+            serde_json::json!({"unit": "C"}),
+            Context::new(),
+        );
         tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-        let s2 = sm.set(id("sensor.t"), "20", serde_json::json!({"unit": "F"}), Context::new());
+        let s2 = sm.set(
+            id("sensor.t"),
+            "20",
+            serde_json::json!({"unit": "F"}),
+            Context::new(),
+        );
         assert_eq!(s1.last_changed, s2.last_changed);
         assert!(s2.last_updated > s1.last_updated);
     }
@@ -367,10 +406,7 @@ mod tests {
             drainer.join().unwrap();
 
             let log = log.lock().unwrap();
-            let dup = log
-                .windows(2)
-                .filter(|w| w[0] == w[1])
-                .count();
+            let dup = log.windows(2).filter(|w| w[0] == w[1]).count();
             assert_eq!(
                 dup, 0,
                 "{dup} consecutive fired state_changed events carried an \
