@@ -37,6 +37,9 @@ use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
 mod gateway;
+mod hap;
+mod plugins;
+mod restore;
 use gateway::{GatewayConfig, GatewayState};
 
 /// Compile-time default location of the HOMECORE-UI assets (ADR-131).
@@ -83,6 +86,18 @@ struct Cli {
     #[arg(long, env = "HOMECORE_DB", default_value = "sqlite://homecore.db")]
     db: String,
 
+    /// HOMECORE registry storage directory restored at startup.
+    #[arg(
+        long,
+        env = "HOMECORE_STORAGE_DIR",
+        default_value = ".homecore/storage"
+    )]
+    storage_dir: std::path::PathBuf,
+
+    /// Maximum registry rows and latest entity states restored at startup.
+    #[arg(long, env = "HOMECORE_RESTORE_LIMIT", default_value_t = 100_000)]
+    restore_limit: usize,
+
     /// Friendly location name surfaced via `/api/config`.
     #[arg(long, env = "HOMECORE_LOCATION", default_value = "Home")]
     location_name: String,
@@ -103,12 +118,71 @@ struct Cli {
     /// Optional Home Assistant-style automations YAML file to load at boot.
     #[arg(long, env = "HOMECORE_AUTOMATIONS")]
     automations: Option<std::path::PathBuf>,
+
+    /// Explicit directories containing packaged WebAssembly plugins.
+    #[arg(
+        long = "plugin-dir",
+        env = "HOMECORE_PLUGIN_DIRS",
+        value_delimiter = ','
+    )]
+    plugin_dirs: Vec<std::path::PathBuf>,
+
+    /// Base64 Ed25519 publisher keys trusted to sign WebAssembly packages.
+    #[arg(
+        long = "plugin-trusted-publisher",
+        env = "HOMECORE_PLUGIN_TRUSTED_PUBLISHERS",
+        value_delimiter = ','
+    )]
+    plugin_trusted_publishers: Vec<String>,
+
+    /// Permit unsigned WebAssembly plugins. Unsafe; development only.
+    #[arg(long, env = "HOMECORE_PLUGIN_ALLOW_UNSIGNED", default_value_t = false)]
+    plugin_allow_unsigned: bool,
+
+    /// Bind address for the optional HomeKit Accessory Protocol server.
+    /// The server remains disabled unless this option is supplied.
+    #[arg(long, env = "HOMECORE_HAP_BIND")]
+    hap_bind: Option<SocketAddr>,
+
+    /// Stable six-octet HAP accessory identifier (for example
+    /// `AA:BB:CC:DD:EE:FF`). Required when HAP is enabled.
+    #[arg(long, env = "HOMECORE_HAP_DEVICE_ID")]
+    hap_device_id: Option<String>,
+
+    /// HAP setup code in `XXX-XX-XXX` form. Required only when creating a
+    /// pairing store for the first time and never persisted in plaintext.
+    #[arg(long, env = "HOMECORE_HAP_SETUP_CODE", hide_env_values = true)]
+    hap_setup_code: Option<String>,
+
+    /// LAN address published in the HAP mDNS record. Required when HAP is enabled.
+    #[arg(long, env = "HOMECORE_HAP_ADVERTISE_ADDR")]
+    hap_advertise_addr: Option<std::net::IpAddr>,
+
+    /// DNS hostname published by mDNS for the HAP bridge.
+    #[arg(long, env = "HOMECORE_HAP_HOSTNAME", default_value = "homecore")]
+    hap_hostname: String,
+
+    /// HAP discovery instance shown to controller applications.
+    #[arg(
+        long,
+        env = "HOMECORE_HAP_INSTANCE_NAME",
+        default_value = "HOMECORE Bridge"
+    )]
+    hap_instance_name: String,
+
+    /// Durable controller pairing database.
+    #[arg(
+        long,
+        env = "HOMECORE_HAP_PAIRING_STORE",
+        default_value = ".homecore/hap/pairings.json"
+    )]
+    hap_pairing_store: std::path::PathBuf,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
     let has_tokens = std::env::var("HOMECORE_TOKENS")
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
@@ -140,6 +214,30 @@ async fn main() -> Result<()> {
     let hc = HomeCore::new();
     info!("HomeCore state machine + event bus + service registry online");
 
+    let recorder = if cli.no_recorder {
+        None
+    } else {
+        match open_recorder(&cli.db).await {
+            Ok(recorder) => Some(recorder),
+            Err(error) => {
+                warn!("Recorder failed to open ({error}) — continuing without persistence");
+                None
+            }
+        }
+    };
+    let restored =
+        restore::restore_startup(&hc, recorder.as_ref(), &cli.storage_dir, cli.restore_limit).await;
+    info!(
+        entities = restored.entity_entries,
+        devices = restored.device_entries,
+        states = restored.states,
+        truncated = restored.truncated,
+        "Startup restoration complete"
+    );
+    for warning in restored.warnings {
+        warn!("{warning}");
+    }
+
     // Seed a representative set of built-in services so the web UI
     // and HA-wire-compat clients see a populated /api/services on
     // first boot. These are no-op handlers (they just echo back the
@@ -158,24 +256,28 @@ async fn main() -> Result<()> {
     }
 
     // ── 2. Recorder (optional) ──────────────────────────────────────
-    if !cli.no_recorder {
-        match open_recorder(&cli.db).await {
-            Ok(recorder) => {
-                let _recorder_task = RecorderListener::new(hc.states(), recorder).spawn();
-                info!(
-                    "Recorder open at {} — state_changed events being persisted",
-                    cli.db
-                );
-            }
-            Err(e) => {
-                warn!("Recorder failed to open ({e}) — continuing without persistence");
-            }
-        }
+    if let Some(recorder) = recorder.clone() {
+        let _recorder_task = RecorderListener::new(hc.states(), recorder).spawn();
+        info!(
+            "Recorder open at {} — state_changed events being persisted",
+            cli.db
+        );
     } else {
-        info!("Recorder disabled by --no-recorder");
+        info!("Recorder unavailable or disabled");
     }
 
     // ── 3. Plugin runtime ───────────────────────────────────────────
+    let server_plugins = plugins::ServerPlugins::start(
+        hc.clone(),
+        plugins::PluginConfig {
+            directories: cli.plugin_dirs.clone(),
+            trusted_publishers: cli.plugin_trusted_publishers.clone(),
+            allow_unsigned: cli.plugin_allow_unsigned,
+            limits: homecore_plugins::DiscoveryLimits::default(),
+        },
+    )
+    .await?;
+
     // ── 4. Automation engine ────────────────────────────────────────
     // Construct AND start the engine (HC-WS-03, ADR-161). `start()`
     // spawns the state-change event loop + the 1 Hz wall-clock timer
@@ -213,7 +315,8 @@ async fn main() -> Result<()> {
         cli.location_name,
         env!("CARGO_PKG_VERSION"),
         tokens,
-    );
+    )
+    .with_recorder(recorder);
     // BFF gateway (ADR-131 §11): single-origin aggregation of the
     // calibration API + SEED/appliance tiers. Shares the same token store
     // for auth; upstream credentials stay server-side.
@@ -222,6 +325,19 @@ async fn main() -> Result<()> {
         "Assist intent endpoint ready with {} handlers",
         assist.handler_count()
     );
+    let hap_runtime = hap::start(
+        &hc,
+        hap::HapRuntimeConfig {
+            bind_addr: cli.hap_bind,
+            device_id: cli.hap_device_id.clone(),
+            setup_code: cli.hap_setup_code.take(),
+            advertise_addr: cli.hap_advertise_addr,
+            hostname: cli.hap_hostname.clone(),
+            instance_name: cli.hap_instance_name.clone(),
+            pairing_store: cli.hap_pairing_store.clone(),
+        },
+    )
+    .await?;
     let gw = GatewayState::with_assist(
         api_state.clone(),
         GatewayConfig {
@@ -272,6 +388,8 @@ async fn main() -> Result<()> {
             info!("Shutdown requested; draining active HTTP connections");
         })
         .await?;
+    hap_runtime.shutdown().await?;
+    server_plugins.shutdown().await;
     Ok(())
 }
 

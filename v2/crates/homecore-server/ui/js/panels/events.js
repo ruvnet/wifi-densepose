@@ -1,6 +1,6 @@
 // §4.8 Event Bus & Automation Feed — ADR-131 / ADR-129.
 //
-// Live event stream (seeded from /api/events, then prepended live from
+// Live event stream (seeded from /api/homecore/events, then prepended live from
 // the shared WS bus — never polled, §2/§4.4), a context-causality
 // breadcrumb on row expand (Context.id → parent_id → grandparent_id),
 // and a trigger→condition→action automation builder (ADR-129 scope:
@@ -50,7 +50,7 @@ export default {
 
     root.appendChild(sectionHeader('Event Bus & Automation', 'Live entity events + causality + automation builder (ADR-131 §4.8, ADR-129)'));
     if (api.isDemo('events')) {
-      root.appendChild(banner('DEMO — event history is contract-conformant mock data until the live /api/events feed lands (§7.1). New rows still arrive over the WS bus.', 'amber'));
+      root.appendChild(banner('DEMO — event history is contract-conformant mock data until the live /api/homecore/events feed lands (§7.1). New rows still arrive over the WS bus.', 'amber'));
     }
 
     // ── live lag indicator (top, fed by the shared WS bus) ──────────

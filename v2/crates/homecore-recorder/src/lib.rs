@@ -30,7 +30,10 @@ pub mod schema;
 pub mod semantic;
 
 // Re-export the primary public API surface.
-pub use db::{PurgeStats, Recorder, RecorderError, SemanticIndex, StateRow, MAX_HISTORY_ROWS};
+pub use db::{
+    LatestStates, PurgeStats, Recorder, RecorderError, RestoreReport, RestoreWarning,
+    SemanticIndex, StateRow, MAX_HISTORY_ROWS, MAX_RESTORE_STATES,
+};
 pub use listener::RecorderListener;
 
 /// Null semantic index used when the `ruvector` feature is off.

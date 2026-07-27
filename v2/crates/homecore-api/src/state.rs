@@ -1,4 +1,5 @@
 use homecore::HomeCore;
+use homecore_recorder::Recorder;
 use std::sync::Arc;
 
 use crate::tokens::LongLivedTokenStore;
@@ -13,6 +14,7 @@ struct SharedStateInner {
     pub homecore_version: String,
     pub location_name: String,
     pub tokens: LongLivedTokenStore,
+    pub recorder: Option<Recorder>,
 }
 
 impl SharedState {
@@ -50,6 +52,19 @@ impl SharedState {
                 homecore_version: homecore_version.into(),
                 location_name: location_name.into(),
                 tokens,
+                recorder: None,
+            }),
+        }
+    }
+
+    pub fn with_recorder(self, recorder: Option<Recorder>) -> Self {
+        Self {
+            inner: Arc::new(SharedStateInner {
+                homecore: self.inner.homecore.clone(),
+                homecore_version: self.inner.homecore_version.clone(),
+                location_name: self.inner.location_name.clone(),
+                tokens: self.inner.tokens.clone(),
+                recorder,
             }),
         }
     }
@@ -65,5 +80,8 @@ impl SharedState {
     }
     pub fn tokens(&self) -> &LongLivedTokenStore {
         &self.inner.tokens
+    }
+    pub fn recorder(&self) -> Option<&Recorder> {
+        self.inner.recorder.as_ref()
     }
 }

@@ -14,7 +14,6 @@
 //!
 //! - `async_set_internal` schema validation
 //! - Bulk delete of an entire domain (`async_remove_domain`)
-//! - Restore-state on startup from the recorder (ADR-132)
 
 use std::sync::Arc;
 
@@ -158,6 +157,19 @@ impl StateMachine {
         next
     }
 
+    /// Install a durable snapshot during startup without emitting a new
+    /// state-change event. Callers must mark the snapshot context as a
+    /// restoration; this prevents accidental use as a silent runtime write.
+    pub fn restore(&self, snapshot: State) -> Result<Arc<State>, RestoreStateError> {
+        if !snapshot.context.is_restoration() {
+            return Err(RestoreStateError::UnmarkedContext);
+        }
+        let entity_id = snapshot.entity_id.clone();
+        let snapshot = Arc::new(snapshot);
+        self.inner.states.insert(entity_id, Arc::clone(&snapshot));
+        Ok(snapshot)
+    }
+
     /// Remove a state. Fires `state_changed` with `new_state = None`.
     pub fn remove(&self, entity_id: &EntityId) -> Option<Arc<State>> {
         let removed = self.inner.states.remove(entity_id).map(|(_, s)| s);
@@ -211,6 +223,12 @@ impl Default for StateMachine {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum RestoreStateError {
+    #[error("restored state context is not marked as a restoration")]
+    UnmarkedContext,
 }
 
 #[cfg(test)]

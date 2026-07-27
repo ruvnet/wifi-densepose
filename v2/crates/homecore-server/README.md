@@ -26,6 +26,11 @@ a default token. Configure allowed browser origins with
 ## Runtime behavior
 
 - SQLite recording is enabled by default at `sqlite://homecore.db`.
+- Entity/device registries are restored from `.homecore/storage` before
+  recorder states, listeners, automations, and API startup.
+- The latest recorder state for each entity is restored deterministically.
+  Restored snapshots retain their timestamps and carry a `homecore.restore`
+  context marker; malformed rows are logged and isolated.
 - Synthetic entities are disabled by default; opt in with
   `--seed-demo-entities`.
 - Automations can be loaded with `--automations <file>` or
@@ -67,6 +72,8 @@ unregistered and return an error rather than a false acknowledgement.
 |---|---|---|
 | `--bind` | `HOMECORE_BIND` | `0.0.0.0:8123` |
 | `--db` | `HOMECORE_DB` | `sqlite://homecore.db` |
+| `--storage-dir` | `HOMECORE_STORAGE_DIR` | `.homecore/storage` |
+| `--restore-limit` | `HOMECORE_RESTORE_LIMIT` | `100000` |
 | `--location-name` | `HOMECORE_LOCATION` | `Home` |
 | `--automations` | `HOMECORE_AUTOMATIONS` | unset |
 | `--insecure-dev-auth` | `HOMECORE_INSECURE_DEV_AUTH` | `false` |

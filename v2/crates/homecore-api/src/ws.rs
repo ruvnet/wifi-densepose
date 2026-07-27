@@ -130,6 +130,10 @@ struct WsCommand {
     service: Option<String>,
     #[serde(default)]
     service_data: Option<serde_json::Value>,
+    #[serde(default)]
+    event_data: Option<serde_json::Value>,
+    #[serde(default)]
+    template: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -236,6 +240,12 @@ impl Connection {
 
     async fn handle_cmd(&self, cmd: WsCommand, tx: &tokio::sync::mpsc::Sender<String>) {
         match cmd.kind.as_str() {
+            "supported_features" => {
+                // HOMECORE currently emits individual messages. Accepting the
+                // negotiation command keeps modern HA clients compatible while
+                // deliberately declining optional coalescing.
+                self.ack(tx, cmd.id, true, None);
+            }
             "ping" => {
                 let msg = serde_json::json!({"id": cmd.id, "type": "pong"});
                 let _ = tx.try_send(msg.to_string());
@@ -254,6 +264,11 @@ impl Connection {
                 });
                 self.ack(tx, cmd.id, true, Some(payload));
             }
+            "get_panels" => {
+                // Panels are frontend integration resources. An empty map is
+                // the valid shape for a headless server.
+                self.ack(tx, cmd.id, true, Some(serde_json::json!({})));
+            }
             "get_services" => {
                 let services = self.state.homecore().services().registered_services().await;
                 let mut by_domain: std::collections::HashMap<
@@ -268,6 +283,24 @@ impl Connection {
                 }
                 let payload = serde_json::to_value(by_domain).unwrap();
                 self.ack(tx, cmd.id, true, Some(payload));
+            }
+            "config/entity_registry/list" | "get_entity_registry" => {
+                let entries = self.state.homecore().entities().all().await;
+                let payload =
+                    serde_json::to_value(entries).unwrap_or_else(|_| serde_json::json!([]));
+                self.ack(tx, cmd.id, true, Some(payload));
+            }
+            "config/device_registry/list" | "get_device_registry" => {
+                let entries = self.state.homecore().devices().all().await;
+                let payload =
+                    serde_json::to_value(entries).unwrap_or_else(|_| serde_json::json!([]));
+                self.ack(tx, cmd.id, true, Some(payload));
+            }
+            "config/area_registry/list" | "get_area_registry" => {
+                // HOMECORE does not yet model named areas. Returning the valid
+                // empty-list shape lets clients distinguish that from an
+                // unsupported command.
+                self.ack(tx, cmd.id, true, Some(serde_json::json!([])));
             }
             "call_service" => {
                 let (Some(domain), Some(service)) = (cmd.domain.clone(), cmd.service.clone())
@@ -288,6 +321,50 @@ impl Connection {
                 match self.state.homecore().services().call(call).await {
                     Ok(v) => self.ack(tx, cmd.id, true, Some(v)),
                     Err(e) => self.err(tx, cmd.id, "service_error", &e.to_string()),
+                }
+            }
+            "fire_event" => {
+                let Some(event_type) = cmd.event_type.clone() else {
+                    self.err(tx, cmd.id, "invalid_format", "event_type is required");
+                    return;
+                };
+                if event_type.is_empty()
+                    || event_type.len() > 255
+                    || !event_type
+                        .chars()
+                        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+                {
+                    self.err(tx, cmd.id, "invalid_format", "invalid event_type");
+                    return;
+                }
+                let event_data = cmd.event_data.unwrap_or_else(|| serde_json::json!({}));
+                if !event_data.is_object() {
+                    self.err(tx, cmd.id, "invalid_format", "event_data must be an object");
+                    return;
+                }
+                self.state
+                    .homecore()
+                    .bus()
+                    .fire_domain(homecore::DomainEvent::new(
+                        event_type,
+                        event_data,
+                        Context::new(),
+                    ));
+                self.ack(tx, cmd.id, true, None);
+            }
+            "render_template" => {
+                let Some(template) = cmd.template.as_deref() else {
+                    self.err(tx, cmd.id, "invalid_format", "template is required");
+                    return;
+                };
+                let environment = homecore_automation::TemplateEnvironment::new(Arc::new(
+                    self.state.homecore().states().clone(),
+                ));
+                match environment.render(template) {
+                    Ok(rendered) => {
+                        self.ack(tx, cmd.id, true, Some(serde_json::Value::String(rendered)))
+                    }
+                    Err(error) => self.err(tx, cmd.id, "template_error", &error.to_string()),
                 }
             }
             "subscribe_events" => {
@@ -369,6 +446,7 @@ impl Connection {
                                                 "data": de.event_data,
                                                 "origin": format!("{:?}", de.origin).to_uppercase(),
                                                 "time_fired": de.fired_at.to_rfc3339(),
+                                                "context": de.context,
                                             }
                                         });
                                         if tx_clone.try_send(payload.to_string()).is_err() { break; }

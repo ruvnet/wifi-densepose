@@ -76,7 +76,7 @@ export const api = {
   async callService(domain, service, data) { return this._post(`/api/services/${domain}/${service}`, data); },
   async setState(entityId, state, attributes) { return this._post(`/api/states/${entityId}`, { state, attributes: attributes || {} }); },
 
-  // ── gateway /api/homecore/* + /api/events (§11.2) ─────────────────
+  // ── gateway /api/homecore/* (§11.2) ───────────────────────────────
   async appliance() { return this._data('appliance', '/api/homecore/appliance', (m) => m.applianceHealth()); },
   async seeds() { return this._data('fleet', '/api/homecore/seeds', (m) => m.seeds()); },
   async seed(id) { return this._data('fleet', '/api/homecore/seeds/' + encodeURIComponent(id), (m) => m.seed(id)); },
@@ -93,7 +93,7 @@ export const api = {
   async witnessLog(page = 0, size = 12) { return this._data('audit', `/api/homecore/witness?page=${page}&size=${size}`, (m) => m.witnessLog(page, size)); },
   async privacyModes() { return this._data('audit', '/api/homecore/privacy', (m) => m.privacyModes()); },
   async setPrivacy(seed, modeValue) { if (demoMode()) return { seed, mode: modeValue }; return this._post('/api/homecore/privacy', { seed, mode: modeValue }); },
-  async eventHistory(n = 40) { return this._data('events', `/api/events?limit=${n}`, (m) => m.recentEvents(n)); },
+  async eventHistory(n = 40) { return this._data('events', `/api/homecore/events?limit=${n}`, (m) => m.recentEvents(n)); },
   recentEvents(n) { return this.eventHistory(n); }, // back-compat alias (async)
   async settings() { return this._data('settings', '/api/homecore/settings', (m) => m.settings()); },
   async automations() { return this._data('automations', '/api/homecore/automations', () => []); },

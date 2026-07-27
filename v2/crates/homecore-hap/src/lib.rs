@@ -1,12 +1,11 @@
 //! `homecore-hap` — Apple Home HomeKit Accessory Protocol bridge (ADR-125).
 //!
-//! # P1 scope
+//! # Network foundation scope
 //!
-//! Ships the trait surface and type definitions needed to map HOMECORE entity
-//! states onto HAP accessory / characteristic values. The actual HAP-1.1 TLS
-//! server and real mDNS advertisement are gated behind the `hap-server`
-//! feature (P2). P1 ships `NullAdvertiser` (no-op) so the bridge compiles and
-//! all tests pass with `--no-default-features`.
+//! The crate provides persisted accessory/controller identity, SRP-6a
+//! Pair-Setup, X25519/Ed25519 Pair-Verify, encrypted HAP IP framing, bounded
+//! TLV8/HTTP parsing, characteristic event flow, and (with `hap-server`) a
+//! bounded TCP listener plus real mDNS.
 //!
 //! # Module layout
 //!
@@ -16,19 +15,37 @@
 //! | [`mapping`] | `EntityToAccessoryMapper` — HOMECORE entity → HAP |
 //! | [`bridge`] | `HapBridge` — owns exposed accessories |
 //! | [`mdns`] | `MdnsAdvertiser` trait + `NullAdvertiser` stub |
+//! | [`pairing`] | Atomic accessory identity, setup, and pairing persistence |
+//! | [`protocol`] | Bounded TLV8 protocol primitives |
 //! | [`ruview`] | `RuViewToHapMapper` — sensing primitives → HAP |
+//! | [`session`] | Authenticated request-gating state machine |
+//! | `server` | Feature-gated bounded TCP/HTTP lifecycle |
 //! | [`error`] | Unified `HapError` type |
 
 pub mod accessory;
 pub mod bridge;
+mod crypto;
 pub mod error;
 pub mod mapping;
 pub mod mdns;
+mod pair_setup;
+mod pair_verify;
+pub mod pairing;
+pub mod protocol;
 pub mod ruview;
+#[cfg(feature = "hap-server")]
+pub mod server;
+pub mod session;
 
 pub use accessory::{HapAccessoryType, HapCharacteristic, HapCharacteristicValue};
-pub use bridge::{ExposedAccessory, HapBridge};
+pub use bridge::{CharacteristicEvent, ExposedAccessory, HapBridge};
 pub use error::HapError;
 pub use mapping::EntityToAccessoryMapper;
-pub use mdns::{MdnsAdvertiser, NullAdvertiser};
+#[cfg(feature = "hap-server")]
+pub use mdns::MdnsSdAdvertiser;
+pub use mdns::{HapServiceRecord, MdnsAdvertiser, NullAdvertiser};
+pub use pairing::{ControllerPairing, PairingStore, PairingStoreProvisioning, SetupCode};
 pub use ruview::RuViewToHapMapper;
+#[cfg(feature = "hap-server")]
+pub use server::{start_server, HapServerConfig, HapServerHandle};
+pub use session::{Session, SessionState};

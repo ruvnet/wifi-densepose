@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use crate::bus::EventBus;
-use crate::registry::EntityRegistry;
+use crate::registry::{DeviceRegistry, EntityRegistry};
 use crate::service::ServiceRegistry;
 use crate::state::StateMachine;
 
@@ -20,6 +20,7 @@ struct HomeCoreInner {
     pub states: StateMachine,
     pub services: ServiceRegistry,
     pub entities: EntityRegistry,
+    pub devices: DeviceRegistry,
 }
 
 impl HomeCore {
@@ -31,6 +32,7 @@ impl HomeCore {
                 services: ServiceRegistry::with_event_bus(bus.clone()),
                 bus,
                 entities: EntityRegistry::new(),
+                devices: DeviceRegistry::new(),
             }),
         }
     }
@@ -49,6 +51,10 @@ impl HomeCore {
 
     pub fn entities(&self) -> &EntityRegistry {
         &self.inner.entities
+    }
+
+    pub fn devices(&self) -> &DeviceRegistry {
+        &self.inner.devices
     }
 }
 
