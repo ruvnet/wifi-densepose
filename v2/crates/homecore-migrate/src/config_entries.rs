@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    storage::{read_envelope, write_json_atomic_noclobber, HaStorageEnvelope},
+    storage::{read_envelope, write_json_atomic, HaStorageEnvelope},
     MigrateError,
 };
 
@@ -184,8 +184,19 @@ pub fn write_config_entries(
     storage_dir: &Path,
     envelope: &HomeCoreConfigEnvelope,
 ) -> Result<PathBuf, MigrateError> {
+    write_config_entries_with(storage_dir, envelope, false)
+}
+
+/// As [`write_config_entries`], but `force = true` atomically replaces an
+/// existing destination instead of refusing — the escape hatch for
+/// re-running an import after fixing a bad source row.
+pub fn write_config_entries_with(
+    storage_dir: &Path,
+    envelope: &HomeCoreConfigEnvelope,
+    force: bool,
+) -> Result<PathBuf, MigrateError> {
     let target = storage_dir.join(DESTINATION_KEY);
-    write_json_atomic_noclobber(&target, envelope)
+    write_json_atomic(&target, envelope, force)
 }
 
 pub fn read_homecore_config_entries(path: &Path) -> Result<HomeCoreConfigEnvelope, MigrateError> {
