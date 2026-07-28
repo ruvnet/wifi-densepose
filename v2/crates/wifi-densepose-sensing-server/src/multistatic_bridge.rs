@@ -36,7 +36,17 @@ static NORMALIZER: LazyLock<HardwareNormalizer> = LazyLock::new(HardwareNormaliz
 ///
 /// Returns `None` when the node has no frame history or no recorded
 /// `last_frame_time`.
-pub fn node_frame_from_state(node_id: u8, ns: &NodeState) -> Option<MultiBandCsiFrame> {
+///
+/// `use_mesh_aligned` must be decided once for the whole batch (see
+/// [`node_frames_from_states`]) — mixing a mesh-aligned timestamp for one
+/// node with the server-arrival-time fallback for another would compare two
+/// unrelated numeric references and make `guard_interval_us` spurious rather
+/// than meaningful.
+pub fn node_frame_from_state(
+    node_id: u8,
+    ns: &NodeState,
+    use_mesh_aligned: bool,
+) -> Option<MultiBandCsiFrame> {
     let last_time = ns.last_frame_time.as_ref()?;
     let latest = ns.frame_history.back()?;
     if latest.is_empty() {
@@ -54,10 +64,19 @@ pub fn node_frame_from_state(node_id: u8, ns: &NodeState) -> Option<MultiBandCsi
     let n_sub = amplitude.len();
     let phase = vec![0.0_f32; n_sub];
 
-    // Monotonic timestamp: microseconds since a shared process-local epoch.
-    // All nodes use the same reference so the fuser's guard_interval_us check
-    // compares apples to apples. No wall-clock mixing (immune to NTP jumps).
-    let timestamp_us = last_time.duration_since(*EPOCH).as_micros() as u64;
+    // Prefer the ADR-110 mesh-aligned timestamp (recovered from this node's
+    // latest SyncPacket, paired against the frame's own sequence number) so
+    // the fuser's guard_interval_us check is actually comparing device-clock
+    // alignment across nodes, per the mesh-sync design. Only used when the
+    // whole batch agreed to it (see `use_mesh_aligned` doc); otherwise falls
+    // back to the server's own arrival-time reference — microseconds since a
+    // shared process-local epoch, immune to NTP jumps.
+    let mesh_aligned = use_mesh_aligned
+        .then(|| ns.last_frame_sequence)
+        .flatten()
+        .and_then(|seq| ns.mesh_aligned_us_for_csi_frame(seq));
+    let timestamp_us =
+        mesh_aligned.unwrap_or_else(|| last_time.duration_since(*EPOCH).as_micros() as u64);
 
     let canonical = CanonicalCsiFrame {
         amplitude,
@@ -80,24 +99,34 @@ pub fn node_frame_from_state(node_id: u8, ns: &NodeState) -> Option<MultiBandCsi
 /// [`STALE_THRESHOLD`] of `now`.
 pub fn node_frames_from_states(node_states: &HashMap<u8, NodeState>) -> Vec<MultiBandCsiFrame> {
     let now = Instant::now();
-    let mut frames = Vec::with_capacity(node_states.len());
 
-    for (&node_id, ns) in node_states {
-        // Skip stale nodes
-        if let Some(ref t) = ns.last_frame_time {
-            if now.duration_since(*t) > STALE_THRESHOLD {
-                continue;
-            }
-        } else {
-            continue;
-        }
+    let active: Vec<(u8, &NodeState)> = node_states
+        .iter()
+        .filter(|(_, ns)| {
+            ns.last_frame_time
+                .is_some_and(|t| now.duration_since(t) <= STALE_THRESHOLD)
+        })
+        .map(|(&node_id, ns)| (node_id, ns))
+        .collect();
 
-        if let Some(frame) = node_frame_from_state(node_id, ns) {
-            frames.push(frame);
-        }
-    }
+    // Mesh-aligned timestamps are only trustworthy for this cycle if EVERY
+    // active node has fresh ADR-110 sync right now — a single node falling
+    // back to server-arrival-time while its peers use mesh-aligned epochs
+    // would compare two unrelated numeric references and spuriously trip
+    // (or spuriously pass) `guard_interval_us`. Below the full-coverage bar,
+    // all nodes use the server-arrival-time reference together, same as
+    // before this change.
+    let use_mesh_aligned = !active.is_empty()
+        && active.iter().all(|(_, ns)| {
+            ns.last_frame_sequence
+                .and_then(|seq| ns.mesh_aligned_us_for_csi_frame(seq))
+                .is_some()
+        });
 
-    frames
+    active
+        .into_iter()
+        .filter_map(|(node_id, ns)| node_frame_from_state(node_id, ns, use_mesh_aligned))
+        .collect()
 }
 
 /// Attempt multistatic fusion; fall back to max per-node person count on failure.
@@ -191,7 +220,7 @@ mod tests {
     #[test]
     fn test_node_frame_from_empty_state() {
         let ns = make_node_state(VecDeque::new(), Some(Instant::now()), 0);
-        assert!(node_frame_from_state(1, &ns).is_none());
+        assert!(node_frame_from_state(1, &ns, false).is_none());
     }
 
     #[test]
@@ -199,7 +228,7 @@ mod tests {
         let mut history = VecDeque::new();
         history.push_back(vec![1.0, 2.0, 3.0]);
         let ns = make_node_state(history, None, 0);
-        assert!(node_frame_from_state(1, &ns).is_none());
+        assert!(node_frame_from_state(1, &ns, false).is_none());
     }
 
     #[test]
@@ -208,7 +237,7 @@ mod tests {
         history.push_back(vec![10.0, 20.0, 30.5]);
         let ns = make_node_state(history, Some(Instant::now()), 0);
 
-        let frame = node_frame_from_state(42, &ns).expect("should produce a frame");
+        let frame = node_frame_from_state(42, &ns, false).expect("should produce a frame");
         assert_eq!(frame.node_id, 42);
         assert_eq!(frame.channel_frames.len(), 1);
 

@@ -524,6 +524,11 @@ struct NodeState {
     vital_detector: VitalSignDetector,
     latest_vitals: VitalSigns,
     pub(crate) last_frame_time: Option<std::time::Instant>,
+    /// ADR-110 §A0.12: sequence number of the most recently accepted CSI
+    /// frame, paired against `latest_sync.sequence` by
+    /// `mesh_aligned_us_for_csi_frame` to recover a mesh-aligned timestamp
+    /// for this frame instead of the server's own arrival time.
+    pub(crate) last_frame_sequence: Option<u32>,
     edge_vitals: Option<Esp32VitalsPacket>,
     /// ADR-110 §A0.12: Latest sync packet received from this node. When a
     /// CSI frame arrives with byte 19 bit 4 set (`adr018_flags.ieee802154_sync_valid`),
@@ -760,6 +765,21 @@ impl NodeState {
     }
 
     pub(crate) fn observe_csi_frame_arrival(&mut self, now: std::time::Instant) {
+        self.observe_csi_frame_arrival_seq(now, None);
+    }
+
+    /// Same as [`Self::observe_csi_frame_arrival`], but also records the
+    /// frame's ADR-018 sequence number (when known) so
+    /// `mesh_aligned_us_for_csi_frame` can pair it against the latest
+    /// `SyncPacket` later. `sequence = None` preserves the old behavior for
+    /// callers that don't have a parsed frame (grid-rejected arrivals still
+    /// count for fps/liveness, but a frame that isn't going to fusion is not
+    /// worth mesh-aligning).
+    pub(crate) fn observe_csi_frame_arrival_seq(
+        &mut self,
+        now: std::time::Instant,
+        sequence: Option<u32>,
+    ) {
         if let Some(prev) = self.last_frame_time {
             let dt = now.duration_since(prev).as_secs_f64();
             // Burst arrivals (sub-floor dt, issue #1180): do NOT re-anchor on
@@ -777,6 +797,9 @@ impl NodeState {
             }
         }
         self.last_frame_time = Some(now);
+        if sequence.is_some() {
+            self.last_frame_sequence = sequence;
+        }
     }
 
     pub(crate) fn new() -> Self {
@@ -800,6 +823,7 @@ impl NodeState {
             vital_detector: VitalSignDetector::new(10.0),
             latest_vitals: VitalSigns::default(),
             last_frame_time: None,
+            last_frame_sequence: None,
             edge_vitals: None,
             latest_sync: None,
             latest_sync_at: None,
@@ -6216,7 +6240,10 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     // ADR-110 iter 19 — feed the per-node fps EMA from real
                     // CSI arrivals. The helper sets `last_frame_time` as a
                     // side effect, so the previous bare assignment is gone.
-                    ns.observe_csi_frame_arrival(std::time::Instant::now());
+                    // Also records `frame.sequence` so `node_frame_from_state`
+                    // can recover a mesh-aligned timestamp via the latest
+                    // `SyncPacket` instead of falling back to arrival time.
+                    ns.observe_csi_frame_arrival_seq(std::time::Instant::now(), Some(frame.sequence));
 
                     // ADR-084 Pass 3: cluster-Pi novelty sensor.
                     // Score this frame's feature vector against the per-node
