@@ -1,15 +1,15 @@
 //! `HapBridge` — owns the set of HOMECORE entities exposed as HAP accessories.
 //!
-//! P1 does not start a real HAP-1.1 server; it ships the API surface so other
-//! crates (and P2's `hap-server` feature) can register accessories and query
-//! their current mapping. The actual mDNS + HAP pairing is gated to P2.
+//! The bridge owns mappings and their event stream. The feature-gated network
+//! lifecycle is started separately with `start_server`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use homecore::entity::EntityId;
+use tokio::sync::broadcast;
 
-use crate::accessory::HapAccessoryType;
+use crate::accessory::{HapAccessoryType, HapCharacteristic, HapCharacteristicValue};
 use crate::error::HapError;
 use crate::mapping::{AccessoryMapping, EntityToAccessoryMapper};
 use crate::mdns::{HapServiceRecord, MdnsAdvertiser, NullAdvertiser};
@@ -22,37 +22,49 @@ pub struct ExposedAccessory {
     pub mapping: AccessoryMapping,
 }
 
+/// A characteristic snapshot emitted after a registered entity changes.
+#[derive(Debug, Clone)]
+pub struct CharacteristicEvent {
+    pub entity_id: EntityId,
+    pub accessory_type: HapAccessoryType,
+    pub characteristics: Vec<(HapCharacteristic, HapCharacteristicValue)>,
+}
+
 struct BridgeInner {
     accessories: HashMap<EntityId, ExposedAccessory>,
 }
 
-/// The P1 HAP bridge.
+/// HOMECORE-to-HAP accessory bridge state.
 ///
 /// Call [`HapBridge::add_accessory`] to register entities and
 /// [`HapBridge::running_accessories`] to read back what is currently
-/// registered. In P2, `start()` will spawn the `hap` server task.
+/// registered. Use `start_server` for the bounded TCP lifecycle.
 #[derive(Clone)]
 pub struct HapBridge {
     inner: Arc<RwLock<BridgeInner>>,
     advertiser: Arc<dyn MdnsAdvertiser>,
+    events: broadcast::Sender<CharacteristicEvent>,
     pub service_record: HapServiceRecord,
 }
 
 impl HapBridge {
-    /// Create a bridge with the given service record and a `NullAdvertiser`
-    /// (P1 default — real mDNS lands in P2).
+    /// Create a bridge with the given service record and a `NullAdvertiser`.
     pub fn new(service_record: HapServiceRecord) -> Self {
         Self::with_advertiser(service_record, Arc::new(NullAdvertiser))
     }
 
-    /// Create a bridge with a custom `MdnsAdvertiser` (used in tests and P2).
+    /// Create a bridge with a custom `MdnsAdvertiser`.
     pub fn with_advertiser(
         service_record: HapServiceRecord,
         advertiser: Arc<dyn MdnsAdvertiser>,
     ) -> Self {
+        let (events, _) = broadcast::channel(128);
         Self {
-            inner: Arc::new(RwLock::new(BridgeInner { accessories: HashMap::new() })),
+            inner: Arc::new(RwLock::new(BridgeInner {
+                accessories: HashMap::new(),
+            })),
             advertiser,
+            events,
             service_record,
         }
     }
@@ -97,9 +109,46 @@ impl HapBridge {
         Ok(())
     }
 
+    /// Refresh a registered accessory and notify event subscribers.
+    pub fn update_accessory(
+        &self,
+        entity_id: &EntityId,
+        state: &homecore::entity::State,
+    ) -> Result<(), HapError> {
+        let mapping = EntityToAccessoryMapper::map(entity_id, state)?;
+        let accessory_type = mapping.accessory_type;
+        {
+            let mut inner = self.inner.write().unwrap();
+            let accessory = inner
+                .accessories
+                .get_mut(entity_id)
+                .ok_or_else(|| HapError::EntityNotFound(entity_id.as_str().to_owned()))?;
+            accessory.accessory_type = accessory_type;
+            accessory.mapping = mapping.clone();
+        }
+        let _ = self.events.send(CharacteristicEvent {
+            entity_id: entity_id.clone(),
+            accessory_type,
+            characteristics: mapping.characteristics,
+        });
+        Ok(())
+    }
+
+    /// Subscribe to bounded characteristic updates. Lagging receivers receive
+    /// Tokio's explicit `Lagged` error and must resynchronize from a snapshot.
+    pub fn subscribe_events(&self) -> broadcast::Receiver<CharacteristicEvent> {
+        self.events.subscribe()
+    }
+
     /// Snapshot all currently registered accessories.
     pub fn running_accessories(&self) -> Vec<ExposedAccessory> {
-        self.inner.read().unwrap().accessories.values().cloned().collect()
+        self.inner
+            .read()
+            .unwrap()
+            .accessories
+            .values()
+            .cloned()
+            .collect()
     }
 
     /// Number of registered accessories.
@@ -111,21 +160,25 @@ impl HapBridge {
         self.len() == 0
     }
 
-    /// P2 stub — will start the HAP-1.1 server + mDNS advertisement.
-    /// In P1 this only fires the null advertiser.
+    /// Start advertisement only.
+    ///
+    /// This legacy lifecycle does not bind a TCP listener. New integrations
+    /// should call `start_server`, which advertises only after binding.
     pub async fn start(&self) -> Result<(), HapError> {
         self.advertiser.advertise(&self.service_record).await?;
         tracing::info!(
             instance = %self.service_record.instance_name,
             port = self.service_record.port,
-            "HapBridge started (P1 — no real HAP server; mDNS stub only)"
+            "HAP advertisement started without a TCP server"
         );
         Ok(())
     }
 
     /// Graceful shutdown — retracts mDNS advertisement.
     pub async fn stop(&self) -> Result<(), HapError> {
-        self.advertiser.retract(&self.service_record.instance_name).await?;
+        self.advertiser
+            .retract(&self.service_record.instance_name)
+            .await?;
         Ok(())
     }
 }
@@ -137,18 +190,22 @@ mod tests {
     use homecore::event::Context;
 
     fn make_bridge() -> HapBridge {
-        HapBridge::new(HapServiceRecord {
-            instance_name: "RuView Sense".into(),
-            port: 51826,
-            setup_code: "111-22-333".into(),
-            device_id: "AA:BB:CC:DD:EE:FF".into(),
-        })
+        HapBridge::new(HapServiceRecord::bridge(
+            "RuView Sense",
+            51826,
+            "AA:BB:CC:DD:EE:FF",
+        ))
     }
 
     fn light_state(name: &str, on: bool, brightness: u8) -> (EntityId, State) {
-        let eid = EntityId::parse(&format!("light.{name}")).unwrap();
+        let eid = EntityId::parse(format!("light.{name}")).unwrap();
         let attrs = serde_json::json!({"brightness": brightness});
-        let s = State::new(eid.clone(), if on { "on" } else { "off" }, attrs, Context::default());
+        let s = State::new(
+            eid.clone(),
+            if on { "on" } else { "off" },
+            attrs,
+            Context::default(),
+        );
         (eid, s)
     }
 
@@ -185,6 +242,22 @@ mod tests {
         let eid = EntityId::parse("light.ghost").unwrap();
         let err = bridge.remove_accessory(&eid).unwrap_err();
         assert!(matches!(err, HapError::EntityNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn update_emits_characteristic_event() {
+        let bridge = make_bridge();
+        let (eid, initial) = light_state("kitchen", false, 10);
+        bridge.add_accessory(&eid, &initial).unwrap();
+        let mut events = bridge.subscribe_events();
+        let (_, updated) = light_state("kitchen", true, 200);
+        bridge.update_accessory(&eid, &updated).unwrap();
+
+        let event = events.recv().await.unwrap();
+        assert_eq!(event.entity_id, eid);
+        assert!(event
+            .characteristics
+            .contains(&(HapCharacteristic::On, HapCharacteristicValue::Bool(true))));
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 [package]
 name = "wifi-densepose-wifiscan"
-version = "0.3.1"
+version = "0.3.2"
 edition.workspace = true
 description = "Multi-BSSID WiFi scanning domain layer for enhanced Windows WiFi DensePose sensing (ADR-022)"
 license.workspace = true

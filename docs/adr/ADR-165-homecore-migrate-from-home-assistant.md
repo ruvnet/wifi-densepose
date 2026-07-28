@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Accepted — P1 scaffold (full conversion deferred to P2) |
+| **Status** | Accepted — registry/config persistence implemented |
 | **Date** | 2026-05-25 |
 | **Deciders** | ruv |
 | **Codename** | **HOMECORE-MIGRATE** |
@@ -44,8 +44,8 @@ files are read, how schema versions are validated, and what happens on an unknow
 ## 2. Decision
 
 Ship `homecore-migrate` as a CLI + library that reads an existing HA filesystem and imports
-its configuration into HOMECORE. P1 is a **scaffold**: it parses and inspects everything and
-converts the entity registry; full conversion of the remaining artifacts is deferred to P2.
+its configuration into HOMECORE. Registry and config-entry conversion are durable; automation
+conversion and secret-reference resolution remain deferred.
 
 ### 2.1 Storage reader + versioned format gate (P1, shipped)
 
@@ -57,22 +57,25 @@ converts the entity registry; full conversion of the remaining artifacts is defe
   unknown `minor_version` is a **hard error** (`MigrateError::UnsupportedSchemaVersion`),
   never a silent best-effort parse. Better to refuse than to corrupt.
 
-### 2.2 Per-artifact parsers (P1, shipped)
+### 2.2 Per-artifact conversion (shipped)
 
 - `entity_registry::load()` — `core.entity_registry` → `Vec<homecore::EntityEntry>`
   (ready for import).
-- `device_registry::load()` — `core.device_registry` → `Vec<DeviceImport>` (P1 diagnostic;
-  full conversion P2).
-- `config_entries::load()` — `core.config_entries` → domain counts + integration names
-  (the format is undocumented per §6 Q5; treated diagnostically).
+- `device_registry::read_device_registry()` converts the supported v13 device fields into
+  `homecore::DeviceEntry`; `write_device_registry()` emits an HA-compatible v13 envelope.
+- `config_entries::convert_config_entries()` emits versioned `homecore.config_entries`
+  storage. Original rows are retained verbatim, while unsupported domains and fields produce
+  typed warnings instead of being discarded.
 - `secrets::load_secrets()` — `secrets.yaml` → `HashMap<String, String>` (resolution P2).
 - `automations::load()` — `automations.yaml` → count + ID/alias list (conversion P2).
 
-### 2.3 CLI (P1, shipped)
+### 2.3 CLI
 
 - `homecore-migrate inspect <ha-dir>` previews what will be migrated (entity/device/config
   counts, redacted secret/automation lists) (`src/cli.rs`, `src/main.rs`).
-- `import-entities` and `export-for-sidecar` are declared but their full behaviour is P2.
+- `import-entities`, `import-devices`, and `import-config-entries` write destination files and
+  emit one-line JSON summaries. Writes use synced same-directory temporary files and atomic
+  no-clobber publication; an existing destination is never implicitly replaced.
 
 ### 2.4 Structured errors (P1, shipped)
 
@@ -88,27 +91,25 @@ converts the entity registry; full conversion of the remaining artifacts is defe
   file path and a coarse location (`serde_yaml::Error::location()`), never the scalar content.
   Pinned by `secrets::tests::malformed_secrets_error_never_contains_secret_value` (asserts the
   rendered error **and its full `#[source]` chain** never contain the secret value).
-  **Review dimensions confirmed clean with evidence:** source is never mutated (no
-  `fs::write`/`remove`/`create` anywhere — P1 reads source, writes nothing); paths are
+  **Review dimensions confirmed clean with evidence:** source is never mutated; destination
+  writes are explicit `--to` paths and no-clobber; paths are
   user-supplied dirs joined with fixed filenames (no `..`/absolute traversal beyond the
   user's own privileges); malformed/typed/truncated `.storage` JSON and YAML **error, never
   panic** (every production `unwrap`/`expect` is test-only); unknown schema `minor_version`
-  hard-errors fail-closed; no SQL/shell/path injection surface (the tool emits diagnostics
-  only, persists nothing in P1).
+  hard-errors fail-closed; no SQL/shell injection surface.
 
 ### 2.5 Deferred to P2+ (NOT built — honestly labelled)
 
-- Convert `config_entries` → HOMECORE plugin manifests.
+- Execute imported config entries (a matching HOMECORE plugin must claim the preserved domain).
 - Convert `automations.yaml` → `homecore-automation` YAML.
 - Side-by-side runtime mode (requires `homecore-recorder`, ADR-132; behind the `recorder`
   Cargo feature, currently a no-op stub).
 - `!secret` reference resolution in non-secrets YAML files.
 
-### 2.6 Test evidence (as shipped)
+### 2.6 Test evidence
 
-- 21 tests (`cargo test -p homecore-migrate`) — 19 as originally shipped plus 2 added by the
-  2026-06 security review (`secrets::tests::malformed_secrets_error_never_contains_secret_value`,
-  `malformed_secrets_error_reports_location`).
+- Targeted tests cover registry round trips, unknown versions, lossless unsupported config
+  fields/domains, malformed input, and crash-safe/no-overwrite destination behaviour.
 
 ## 3. Consequences
 
@@ -118,13 +119,12 @@ converts the entity registry; full conversion of the remaining artifacts is defe
   schema drift fails loudly instead of corrupting an imported home.
 - Reusing HA's own `.storage` and YAML formats means no intermediate export step; the tool
   reads a live HA install directly.
-- P1 `inspect` gives users a no-risk dry run before any write.
+- `inspect` gives users a no-risk dry run before any write.
 
 **Negative / honest limits.**
 
-- P1 is a **scaffold**: only the entity registry is conversion-ready. Device registry,
-  config-entry→plugin, automation, and secret-resolution conversions are P2 and **not yet
-  built** — the Status field and crate docs say so.
+- Imported config entries are durable but do not install or execute Python HA integrations.
+- Automation conversion and secret-reference resolution are not built.
 - The side-by-side recorder export depends on ADR-132 and is currently a feature-gated
   no-op.
 - Performance figures in the README (envelope parse < 5 ms, 1 000-entity load < 50 ms) are

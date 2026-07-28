@@ -35,27 +35,41 @@
 //!   honest path until it ships.
 //! - STT/TTS bridge and satellite protocol (P3).
 
-pub mod intent;
-pub mod recognizer;
-pub mod semantic_recognizer;
+pub mod audio;
 pub mod handler;
-pub mod runner;
+pub mod intent;
 pub mod pipeline;
+pub mod recognizer;
+pub mod runner;
+pub mod satellite;
+pub mod semantic_recognizer;
+pub mod speech;
+pub mod voice;
 
 /// Deterministic text embedding used by [`semantic_recognizer::SemanticIntentRecognizer`].
 #[cfg(feature = "semantic")]
 pub mod embedding;
 
-pub use intent::{Card, Intent, IntentName, IntentResponse};
-pub use recognizer::{
-    IntentRecognizer, RecognizerError, RegexIntentRecognizer, MAX_UTTERANCE_BYTES,
-};
-pub use semantic_recognizer::{SemanticIntentRecognizer, DEFAULT_SIMILARITY_THRESHOLD};
+pub use audio::{AudioChunk, AudioCodec, AudioError, AudioFormat};
 pub use handler::{
     HandlerError, HassCancelAll, HassLightSet, HassNevermind, HassTurnOff, HassTurnOn,
     IntentHandler,
 };
+pub use intent::{Card, Intent, IntentName, IntentResponse};
+pub use pipeline::AssistPipeline;
+pub use recognizer::{
+    IntentRecognizer, RecognizerError, RegexIntentRecognizer, MAX_UTTERANCE_BYTES,
+};
 pub use runner::{
     AssistError, LocalRunner, NoopRunner, RufloResponse, RufloRunner, RufloRunnerOpts,
 };
-pub use pipeline::AssistPipeline;
+pub use satellite::{
+    SatelliteClientMessage, SatelliteError, SatelliteServerMessage, SatelliteSession,
+    SatelliteState, SATELLITE_PROTOCOL_VERSION,
+};
+pub use semantic_recognizer::{SemanticIntentRecognizer, DEFAULT_SIMILARITY_THRESHOLD};
+pub use speech::{
+    DisabledStt, DisabledTts, SpeechError, SpeechToText, SynthesizedSpeech, TextToSpeech,
+    Transcript,
+};
+pub use voice::{VoiceError, VoicePipeline, VoiceResponse, DEFAULT_VOICE_TIMEOUT};

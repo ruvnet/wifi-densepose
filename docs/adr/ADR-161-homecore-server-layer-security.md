@@ -224,8 +224,9 @@ touched:
   SHA-256-checks the module, Ed25519-verifies the signature against
   `publisher_key`, and enforces a `PluginPolicy` trust allowlist
   (secure-default rejects unsigned/untrusted/tampered modules).
-- **HAP real pairing (P2)** — SRP/HKDF pairing + encrypted sessions; current
-  bridge is an accessory-mapping surface. **ACCEPTED-FUTURE (honestly stubbed).**
+- **HAP real pairing (P2)** — **DONE (2026-07-27 addendum below).** SRP/HKDF
+  Pair-Setup, transcript-authenticated Pair-Verify, encrypted sessions, and
+  administrator-only pairing management now land as one fail-closed boundary.
 - **`RunMode::Queued`/`Restart`/`max` ordering** — ~~`Single`/`Parallel` are
   honored; bounded queueing, restart-kill, and `max` concurrency are not yet
   wired (every non-Single mode is parallel).~~ **DONE — ADR-162 §A5.** Restart
@@ -336,3 +337,35 @@ is still delivered (old code: 5s-timeout panic).
 +1 api-root accept-guard, +1 WS lag-survival), 0 failed. Workspace green.
 Python deterministic proof unchanged (homecore-api is off the signal proof
 path).
+
+## Addendum — HAP cryptographic boundary completed (2026-07-27)
+
+The P2 HAP deferral recorded above is closed as a single security boundary in
+`homecore-hap`; it was not replaced with a success-shaped partial protocol.
+
+- Pair-Setup M1-M6 uses RustCrypto SRP-6a with the RFC 5054 3072-bit group,
+  SHA-512 and HAP proof compatibility, followed by the specified
+  HKDF-SHA512, ChaCha20-Poly1305, and Ed25519 transcript construction.
+- Pair-Verify M1-M4 uses ephemeral X25519, strict Ed25519 transcript
+  verification, and separately derived directional control keys.
+- The TCP server changes to authenticated HAP record framing only after the
+  plaintext M4 response is written. Record lengths are authenticated, plaintext
+  is capped at 1024 bytes, counters are independent and monotonic, and any
+  authentication/replay/framing failure closes without an oracle response.
+- Accessory identity, signing seed, SRP verifier, and controller pairings share
+  one versioned, bounded, permission-checked, atomically replaced store. The raw
+  setup code is disclosed only on first provisioning and is not persisted.
+- Protected endpoints require an encrypted Pair-Verify session. Pairing
+  management rechecks current persisted administrator authority, handles the
+  last-admin invariant, updates mDNS paired state, and revokes live sessions.
+
+Evidence includes a deterministic HAP SRP vector, complete in-process
+Pair-Setup and Pair-Verify ceremonies, malformed/proof/transcript tests, record
+tamper/replay/oversize tests, persistence lifecycle tests, and a real TCP test
+that verifies Pair-Verify, accesses `/accessories` over encrypted records, then
+proves replay closes the connection.
+
+This closes the cryptographic implementation item, not the entire Apple Home
+product surface. Current-Apple/MFi interoperability has not been certified;
+transient/split Pair-Setup, writable/timed characteristics, resource endpoints,
+and persisted AID/IID allocation remain explicitly unsupported.
