@@ -108,14 +108,16 @@ pub async fn start_server(
         cmd.args(["--log-level", log_level]);
     }
 
-    // Default to explicit "simulated" demo mode when the desktop user hasn't
-    // chosen a source — this is the *Tauri demo* app, not a production
-    // sensing endpoint, so the demo default is correct here. Critically, the
-    // value passed downstream is the **explicit** "simulated", not "auto",
-    // which means the sensing-server will tag the data as synthetic in its
-    // API responses rather than silently fall back (issue #937 fix in
-    // sensing-server's `auto` handler).
-    let source = config.source.as_deref().unwrap_or("simulated");
+    // Default to "auto" when the desktop user hasn't chosen a source.
+    // If hardware is available, it will be detected and used; if not,
+    // the server will report "waiting_for_hardware" (issue #1125:
+    // no simulator fallback). Users can explicitly select "esp32" or "wifi"
+    // if they need to lock to a specific source.
+    // Normalize invalid sources (e.g., old configs with "simulate") to "auto".
+    let source = match config.source.as_deref() {
+        Some("auto") | Some("esp32") | Some("wifi") => config.source.as_deref().unwrap(),
+        _ => "auto", // Fallback for invalid/missing values (including removed "simulate")
+    };
     cmd.args(["--source", source]);
 
     // Redirect stdout/stderr to pipes for monitoring
@@ -323,7 +325,7 @@ pub async fn restart_server(
             log_level: None,
             bind_address: None,
             server_path: None,
-            source: None, // Falls through to explicit "simulated" — Tauri demo default.
+            source: None, // Falls through to "auto" — tries hardware, then waits.
         }
     };
 
@@ -362,7 +364,7 @@ pub struct ServerConfig {
     pub log_level: Option<String>,
     pub bind_address: Option<String>,
     pub server_path: Option<String>,
-    /// Data source: "auto", "wifi", "esp32", "simulate"
+    /// Data source: "auto", "wifi", or "esp32"
     pub source: Option<String>,
 }
 
@@ -406,7 +408,7 @@ mod tests {
             log_level: None,
             bind_address: None,
             server_path: None,
-            source: Some("simulate".to_string()),
+            source: Some("auto".to_string()),
         };
 
         assert_eq!(config.http_port, Some(8080));

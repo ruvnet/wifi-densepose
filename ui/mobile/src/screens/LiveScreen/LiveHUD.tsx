@@ -21,14 +21,12 @@ type LiveHUDProps = {
 
 const statusTextMap: Record<ConnectionStatus, string> = {
   connected: 'Connected',
-  simulated: 'Simulated',
   connecting: 'Connecting',
   disconnected: 'Disconnected',
 };
 
-const statusDotStatusMap: Record<ConnectionStatus, 'connected' | 'simulated' | 'disconnected' | 'connecting'> = {
+const statusDotStatusMap: Record<ConnectionStatus, 'connected' | 'disconnected' | 'connecting'> = {
   connected: 'connected',
-  simulated: 'simulated',
   connecting: 'connecting',
   disconnected: 'disconnected',
 };

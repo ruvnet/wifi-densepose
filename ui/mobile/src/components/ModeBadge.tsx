@@ -2,7 +2,7 @@ import { StyleSheet } from 'react-native';
 import { ThemedText } from './ThemedText';
 import { colors } from '../theme/colors';
 
-type Mode = 'CSI' | 'RSSI' | 'SIM' | 'LIVE';
+type Mode = 'CSI' | 'RSSI' | 'LIVE';
 
 const modeStyle: Record<
   Mode,
@@ -21,11 +21,6 @@ const modeStyle: Record<
     background: 'rgba(255, 165, 2, 0.2)',
     border: colors.warn,
     color: colors.warn,
-  },
-  SIM: {
-    background: 'rgba(255, 71, 87, 0.18)',
-    border: colors.simulated,
-    color: colors.simulated,
   },
   LIVE: {
     background: 'rgba(46, 213, 115, 0.18)',

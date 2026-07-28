@@ -56,7 +56,7 @@ use axum::{
     routing::{delete, get, post},
     Extension, Router,
 };
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
 use axum::http::HeaderValue;
 use serde::{Deserialize, Serialize};
@@ -80,6 +80,18 @@ use wifi_densepose_signal::ruvsense::multistatic::{MultistaticConfig, Multistati
 use wifi_densepose_signal::ruvsense::pose_tracker::PoseTracker;
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
+
+/// Data source selection: auto-detect, ESP32 hardware, or Windows WiFi.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum SourceArg {
+    /// Auto-detect the best available source (ESP32 or WiFi).
+    /// If no hardware is available at startup, waits for hardware to arrive.
+    Auto,
+    /// Expect ESP32 CSI frames on UDP port.
+    Esp32,
+    /// Use Windows WiFi (netsh WLAN interface) on Windows.
+    Wifi,
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "sensing-server", about = "WiFi-DensePose sensing server")]
@@ -130,9 +142,9 @@ struct Args {
     #[command(flatten)]
     mqtt_opts: wifi_densepose_sensing_server::cli::MqttArgs,
 
-    /// Data source: auto, wifi, esp32, simulate
-    #[arg(long, default_value = "auto")]
-    source: String,
+    /// Data source: auto, esp32, or wifi
+    #[arg(long, value_enum, default_value = "auto")]
+    source: SourceArg,
 
     /// Run vital sign detection benchmark (1000 frames) and exit
     #[arg(long)]
@@ -1274,11 +1286,19 @@ impl AppStateInner {
     }
 
     fn effective_source(&self) -> String {
+        // If waiting for hardware, stay honest until a real frame lands.
+        if self.source == "waiting_for_hardware" {
+            return self.source.clone();
+        }
+
         if self.source == "esp32" {
             if let Some(last) = self.last_esp32_frame {
                 if last.elapsed() > ESP32_OFFLINE_TIMEOUT {
                     return "esp32:offline".to_string();
                 }
+            } else {
+                // No frame has landed yet; stay in waiting state
+                return "waiting_for_hardware".to_string();
             }
         }
         if self.source.starts_with("realtek") {
@@ -1286,6 +1306,8 @@ impl AppStateInner {
                 if last.elapsed() > ESP32_OFFLINE_TIMEOUT {
                     return format!("{}:offline", self.source);
                 }
+            } else {
+                return "waiting_for_hardware".to_string();
             }
         }
         if self.source.starts_with("mediatek") {
@@ -1293,6 +1315,8 @@ impl AppStateInner {
                 if last.elapsed() > ESP32_OFFLINE_TIMEOUT {
                     return format!("{}:offline", self.source);
                 }
+            } else {
+                return "waiting_for_hardware".to_string();
             }
         }
         if self.source.starts_with("qualcomm") {
@@ -1300,6 +1324,8 @@ impl AppStateInner {
                 if last.elapsed() > ESP32_OFFLINE_TIMEOUT {
                     return format!("{}:offline", self.source);
                 }
+            } else {
+                return "waiting_for_hardware".to_string();
             }
         }
         self.source.clone()
@@ -3045,180 +3071,147 @@ async fn probe_esp32(port: u16) -> bool {
 /// live; the data was fake. This is the exact "where's the real data?" failure
 /// class the project fights.
 ///
-/// The robust resolution: in `auto` mode **always bind the UDP receiver**
-/// regardless of the boot probe. If no real source is up yet, serve simulated
-/// data *and* keep the UDP receiver listening; the receiver promotes
-/// `source` → `esp32` the instant the first real frame lands (see
-/// `udp_receiver_task`, which sets `s.source = "esp32"`), mirroring the inverse
-/// `esp32 → esp32:offline` reversion already in `effective_source()`.
-///
-/// Explicit `--source simulated` is a hard override for offline demos: it does
-/// NOT bind UDP, so no promotion ever happens.
+/// Issue #1125: the entire simulator fallback was removed. When no hardware is
+/// present at startup, the server now reports `source: "waiting_for_hardware"`
+/// and waits honestly for real CSI to arrive. The UDP :5005 receiver is always
+/// bound in `auto` and `esp32` modes so real frames can arrive after startup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SourcePlan {
     /// The `AppStateInner.source` value to start with.
     initial_source: String,
-    /// Bind the UDP :5005 receiver (and thus allow simulate→esp32 promotion).
+    /// Bind the UDP :5005 receiver.
     bind_udp: bool,
-    /// Run the simulated-data generator (serves poses until a real frame arrives).
-    run_simulator: bool,
     /// Run the Windows WiFi capture task.
     run_wifi: bool,
 }
 
 /// Pure decision function — fully unit-testable without binding sockets.
 ///
-/// `requested` is the normalized `--source` value. `esp32_detected` /
-/// `wifi_detected` are the boot-probe results (only consulted in `auto` mode).
-/// Returns `None` for an unknown source that names neither a real source nor a
-/// simulate alias (the caller maps that to its own pass-through/exit policy).
-fn plan_source(requested: &str, esp32_detected: bool, wifi_detected: bool) -> SourcePlan {
+/// `requested` is the `SourceArg` value. `esp32_detected` / `wifi_detected` are
+/// the boot-probe results (only consulted in `auto` mode). No simulator fallback:
+/// when no hardware is detected, `initial_source` is `"waiting_for_hardware"`.
+fn plan_source(requested: SourceArg, esp32_detected: bool, wifi_detected: bool) -> SourcePlan {
     match requested {
-        "auto" => {
+        SourceArg::Auto => {
             if esp32_detected {
-                // Real CSI already flowing — bind UDP, no simulator.
+                // Real CSI already flowing — bind UDP.
                 SourcePlan {
                     initial_source: "esp32".to_string(),
                     bind_udp: true,
-                    run_simulator: false,
                     run_wifi: false,
                 }
             } else if wifi_detected {
                 SourcePlan {
                     initial_source: "wifi".to_string(),
                     bind_udp: false,
-                    run_simulator: false,
                     run_wifi: true,
                 }
             } else {
-                // No real source *yet*. Serve simulated data, but ALSO bind UDP
-                // so the receiver can promote to esp32 when the first real
-                // frame arrives (issue #1004). Never latch on simulate.
+                // No real source at boot. Wait honestly for hardware, bind UDP
+                // so real CSI can be received after startup (issue #1004).
+                // No simulator fallback (issue #1125).
                 SourcePlan {
-                    initial_source: "simulated".to_string(),
+                    initial_source: "waiting_for_hardware".to_string(),
                     bind_udp: true,
-                    run_simulator: true,
                     run_wifi: false,
                 }
             }
         }
-        // Explicit overrides. "simulate" is a back-compat alias for "simulated".
-        "simulate" | "simulated" => SourcePlan {
-            initial_source: "simulated".to_string(),
-            bind_udp: false, // hard override: offline demo, no live promotion
-            run_simulator: true,
-            run_wifi: false,
-        },
-        "esp32" => SourcePlan {
+        SourceArg::Esp32 => SourcePlan {
             initial_source: "esp32".to_string(),
             bind_udp: true,
-            run_simulator: false,
             run_wifi: false,
         },
-        "wifi" => SourcePlan {
+        SourceArg::Wifi => SourcePlan {
             initial_source: "wifi".to_string(),
             bind_udp: false,
-            run_simulator: false,
             run_wifi: true,
-        },
-        // Unknown source — preserve it verbatim, no tasks (caller's policy).
-        other => SourcePlan {
-            initial_source: other.to_string(),
-            bind_udp: false,
-            run_simulator: false,
-            run_wifi: false,
         },
     }
 }
 
 #[cfg(test)]
-mod issue_1004_source_plan_tests {
-    //! Issue #1004 — `--source auto` must NOT latch on `simulate` forever.
-    //!
-    //! Old behavior: a one-shot boot probe resolved the source once. With no CSI
-    //! flowing at boot (the normal case), the server either latched on simulate
-    //! (never binding UDP :5005, so later real CSI was silently ignored) or
-    //! hard-exited (#937), never picking up CSI that started after launch.
-    //!
-    //! New behavior (`plan_source`): in `auto` the UDP receiver is ALWAYS bound,
-    //! simulated data is served only until the first real frame, then
-    //! `udp_receiver_task` promotes `source` → "esp32". These tests pin the
-    //! resolution/promotion state machine directly (no sockets bound).
+mod issue_1125_no_fallback_tests {
+    //! Issue #1125 — no simulated-data fallback. The server must report
+    //! `source: "waiting_for_hardware"` honestly when no hardware is available,
+    //! never falling back to synthetic data that might mislead users.
     use super::*;
 
-    // FAILS ON OLD CODE: the old `auto`-with-no-source path bound no UDP
-    // receiver (it spawned only `simulated_data_task`, or exited). This asserts
-    // UDP IS bound even when the boot probe finds no source.
     #[test]
-    fn auto_with_no_boot_source_still_binds_udp_and_simulates() {
-        let plan = plan_source("auto", false, false);
-        assert!(plan.bind_udp, "auto must bind UDP :5005 even with no boot source (#1004)");
-        assert!(plan.run_simulator, "auto must serve simulated data until real CSI arrives");
-        assert!(!plan.run_wifi);
-        assert_eq!(plan.initial_source, "simulated");
+    fn source_arg_enum_has_exactly_three_variants() {
+        // Ensure we have not accidentally reintroduced `simulate` / `simulated`.
+        // (This is a value-enum, so clap will error at parse time if someone
+        // passes `--source simulate`, but the test is belt-and-suspenders.)
+        let variants = vec![
+            SourceArg::Auto,
+            SourceArg::Esp32,
+            SourceArg::Wifi,
+        ];
+        assert_eq!(variants.len(), 3, "SourceArg must have exactly 3 variants");
     }
 
     #[test]
-    fn auto_with_esp32_detected_binds_udp_no_simulator() {
-        let plan = plan_source("auto", true, false);
+    fn auto_with_no_boot_source_waits_for_hardware() {
+        let plan = plan_source(SourceArg::Auto, false, false);
+        assert!(plan.bind_udp, "auto must bind UDP :5005 even with no boot source");
+        assert!(!plan.run_wifi);
+        assert_eq!(
+            plan.initial_source, "waiting_for_hardware",
+            "auto with no source must wait honestly, not simulate"
+        );
+    }
+
+    #[test]
+    fn auto_with_esp32_detected() {
+        let plan = plan_source(SourceArg::Auto, true, false);
         assert!(plan.bind_udp);
-        assert!(!plan.run_simulator, "real CSI present → no synthetic frames");
+        assert!(!plan.run_wifi);
         assert_eq!(plan.initial_source, "esp32");
     }
 
     #[test]
-    fn auto_with_wifi_detected_runs_wifi_no_udp() {
-        let plan = plan_source("auto", false, true);
+    fn auto_with_wifi_detected() {
+        let plan = plan_source(SourceArg::Auto, false, true);
         assert!(plan.run_wifi);
         assert!(!plan.bind_udp);
-        assert!(!plan.run_simulator);
         assert_eq!(plan.initial_source, "wifi");
-    }
-
-    // Explicit `--source simulated` is a hard offline override: it must NOT bind
-    // UDP (so it can never be promoted to live), distinguishing it from
-    // auto-mode simulate.
-    #[test]
-    fn explicit_simulated_is_offline_override_no_udp() {
-        for s in ["simulated", "simulate"] {
-            let plan = plan_source(s, false, false);
-            assert!(!plan.bind_udp, "{s}: explicit simulate must not bind UDP (offline demo)");
-            assert!(plan.run_simulator);
-            assert_eq!(plan.initial_source, "simulated");
-        }
     }
 
     #[test]
     fn explicit_esp32_binds_udp() {
-        let plan = plan_source("esp32", false, false);
+        let plan = plan_source(SourceArg::Esp32, false, false);
         assert!(plan.bind_udp);
-        assert!(!plan.run_simulator);
+        assert!(!plan.run_wifi);
         assert_eq!(plan.initial_source, "esp32");
     }
 
-    // Promotion check: the runtime promotes by setting `AppStateInner.source`
-    // to "esp32" on the first real frame; `effective_source()` then reports it
-    // (and reverts to "esp32:offline" after a 5 s gap). This asserts the
-    // promotion direction the simulator/receiver rely on, without binding a
-    // socket — it exercises the same `source` field the UDP task writes.
     #[test]
-    fn effective_source_promotes_from_simulated_to_esp32_on_real_frame() {
-        // Start as the auto/simulate plan would: source = "simulated".
-        let mut src = "simulated".to_string();
-        // effective_source() logic for the simulate state: stays "simulated".
-        assert_eq!(promote_view(&src, None), "simulated");
-        // First real frame arrives → udp_receiver_task sets source = "esp32".
-        src = "esp32".to_string();
-        let fresh = Some(std::time::Duration::from_millis(10));
-        assert_eq!(promote_view(&src, fresh), "esp32", "fresh esp32 frame ⇒ live");
-        // After a >5 s gap it reverts to offline (inverse machinery, #1004).
-        let stale = Some(ESP32_OFFLINE_TIMEOUT + std::time::Duration::from_secs(1));
-        assert_eq!(promote_view(&src, stale), "esp32:offline");
+    fn explicit_wifi_runs_wifi_task() {
+        let plan = plan_source(SourceArg::Wifi, false, false);
+        assert!(plan.run_wifi);
+        assert!(!plan.bind_udp);
+        assert_eq!(plan.initial_source, "wifi");
     }
 
-    /// Mirror of `AppStateInner::effective_source` over just (source, age) so the
-    /// promotion/reversion logic is testable without constructing full state.
-    fn promote_view(source: &str, last_frame_age: Option<std::time::Duration>) -> String {
+    #[test]
+    fn effective_source_reports_waiting_until_real_frame_arrives() {
+        // When source is "waiting_for_hardware" and no frame has landed,
+        // effective_source() stays honest (doesn't fabricate a state).
+        let mut src = "waiting_for_hardware".to_string();
+        assert_eq!(check_effective_source(&src, None), "waiting_for_hardware");
+
+        // Once a real esp32 frame arrives, source is promoted (by udp_receiver_task).
+        src = "esp32".to_string();
+        let fresh = Some(std::time::Duration::from_millis(10));
+        assert_eq!(check_effective_source(&src, fresh), "esp32");
+
+        // After 5+ seconds of silence, it reverts to offline.
+        let stale = Some(ESP32_OFFLINE_TIMEOUT + std::time::Duration::from_secs(1));
+        assert_eq!(check_effective_source(&src, stale), "esp32:offline");
+    }
+
+    /// Mirror of `AppStateInner::effective_source` logic over just (source, age).
+    fn check_effective_source(source: &str, last_frame_age: Option<std::time::Duration>) -> String {
         if source == "esp32" {
             if let Some(age) = last_frame_age {
                 if age > ESP32_OFFLINE_TIMEOUT {
@@ -3227,36 +3220,6 @@ mod issue_1004_source_plan_tests {
             }
         }
         source.to_string()
-    }
-}
-
-// ── Simulated data generator ─────────────────────────────────────────────────
-
-fn generate_simulated_frame(tick: u64) -> Esp32Frame {
-    let t = tick as f64 * 0.1;
-    let n_sub = 56usize;
-    let mut amplitudes = Vec::with_capacity(n_sub);
-    let mut phases = Vec::with_capacity(n_sub);
-
-    for i in 0..n_sub {
-        let base = 15.0 + 5.0 * (i as f64 * 0.1 + t * 0.3).sin();
-        let noise = (i as f64 * 7.3 + t * 13.7).sin() * 2.0;
-        amplitudes.push((base + noise).max(0.1));
-        phases.push((i as f64 * 0.2 + t * 0.5).sin() * std::f64::consts::PI);
-    }
-
-    Esp32Frame {
-        magic: 0xC511_0001,
-        node_id: 1,
-        n_antennas: 1,
-        n_subcarriers: n_sub as u16,
-        freq_mhz: 2437,
-        sequence: tick as u32,
-        rssi: (-40.0 + 5.0 * (t * 0.2).sin()) as i8,
-        noise_floor: -90,
-        ppdu_type: wifi_densepose_hardware::PpduType::HtLegacy,
-        amplitudes,
-        phases,
     }
 }
 
@@ -6510,159 +6473,6 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
     }
 }
 
-// ── Simulated data task ──────────────────────────────────────────────────────
-
-async fn simulated_data_task(state: SharedState, tick_ms: u64) {
-    let mut interval = tokio::time::interval(Duration::from_millis(tick_ms));
-    info!("Simulated data source active (tick={}ms)", tick_ms);
-
-    loop {
-        interval.tick().await;
-
-        let mut s = state.write().await;
-
-        // Issue #1004: in `auto` mode this task runs alongside `udp_receiver_task`.
-        // Once a real frame promotes `source` → "esp32", stop emitting synthetic
-        // frames so we never clobber live CSI with simulated poses. (For an
-        // explicit `--source simulated` demo, `source` stays "simulated" and the
-        // simulator keeps running — that path never binds UDP, so it is never
-        // promoted.) The task stays alive so it can resume serving if the real
-        // source later ages out to "esp32:offline".
-        if s.effective_source() == "esp32" {
-            continue;
-        }
-
-        s.tick += 1;
-        let tick = s.tick;
-
-        let frame = generate_simulated_frame(tick);
-
-        // Append current amplitudes to history before feature extraction.
-        s.frame_history.push_back(frame.amplitudes.clone());
-        if s.frame_history.len() > FRAME_HISTORY_CAPACITY {
-            s.frame_history.pop_front();
-        }
-
-        let sample_rate_hz = 1000.0 / tick_ms as f64;
-        let (features, mut classification, breathing_rate_hz, sub_variances, raw_motion) =
-            extract_features_from_frame(&frame, &s.frame_history, sample_rate_hz);
-        smooth_and_classify(&mut s, &mut classification, raw_motion);
-        adaptive_override(&s, &features, &mut classification);
-
-        s.rssi_history.push_back(features.mean_rssi);
-        if s.rssi_history.len() > 60 {
-            s.rssi_history.pop_front();
-        }
-
-        let motion_score = if classification.motion_level == "active" {
-            0.8
-        } else if classification.motion_level == "present_still" {
-            0.3
-        } else {
-            0.05
-        };
-
-        let raw_vitals = s
-            .vital_detector
-            .process_frame(&frame.amplitudes, &frame.phases);
-        let vitals = smooth_vitals(&mut s, &raw_vitals);
-        s.latest_vitals = vitals.clone();
-
-        let frame_amplitudes = frame.amplitudes.clone();
-        let frame_n_sub = frame.n_subcarriers;
-
-        // ADR-044 §5.2: feed raw features into rolling-P95 estimators before scoring.
-        s.p95_variance.push(features.variance);
-        s.p95_motion_band_power.push(features.motion_band_power);
-        s.p95_spectral_power.push(features.spectral_power);
-
-        // Multi-person estimation with temporal smoothing (EMA α=0.10).
-        let raw_score = compute_person_score(&s, &features);
-        s.smoothed_person_score = s.smoothed_person_score * 0.90 + raw_score * 0.10;
-        let est_persons = if classification.presence {
-            let count = s.person_count();
-            s.prev_person_count = count;
-            count
-        } else {
-            s.prev_person_count = 0;
-            0
-        };
-
-        let mut update = SensingUpdate {
-            msg_type: "sensing_update".to_string(),
-            timestamp: chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
-            source: "simulated".to_string(),
-            tick,
-            nodes: vec![NodeInfo {
-                node_id: 1,
-                rssi_dbm: features.mean_rssi,
-                position: [2.0, 0.0, 1.5],
-                amplitude: frame_amplitudes,
-                subcarrier_count: frame_n_sub as usize,
-                sync: None,  // simulated frame path — no mesh peer
-            }],
-            features: features.clone(),
-            classification,
-            signal_field: generate_signal_field(
-                features.mean_rssi,
-                motion_score,
-                breathing_rate_hz,
-                features.variance.min(1.0),
-                &sub_variances,
-            ),
-            vital_signs: Some(vitals),
-            enhanced_motion: None,
-            enhanced_breathing: None,
-            posture: None,
-            signal_quality_score: None,
-            quality_verdict: None,
-            bssid_count: None,
-            pose_keypoints: None,
-            model_status: if s.model_loaded {
-                Some(serde_json::json!({
-                    "loaded": true,
-                    "layers": s.progressive_loader.as_ref()
-                        .map(|l| { let (a,b,c) = l.layer_status(); a as u8 + b as u8 + c as u8 })
-                        .unwrap_or(0),
-                    "sona_profile": s.active_sona_profile.as_deref().unwrap_or("default"),
-                }))
-            } else {
-                None
-            },
-            persons: None,
-            estimated_persons: if est_persons > 0 {
-                Some(est_persons)
-            } else {
-                None
-            },
-            node_features: None,
-        };
-
-        // Populate persons from the sensing update (Kalman-smoothed via tracker).
-        let raw_persons = derive_pose_from_sensing(&update);
-        let mut last_tracker_instant = s.last_tracker_instant.take();
-        let tracked = tracker_bridge::tracker_update(
-            &mut s.pose_tracker,
-            &mut last_tracker_instant,
-            raw_persons,
-        );
-        s.last_tracker_instant = last_tracker_instant;
-        if !tracked.is_empty() {
-            update.persons = Some(tracked);
-        }
-        // #1050: attach real signal_field-peak positions to each person.
-        attach_field_positions(&mut update);
-
-        if update.classification.presence {
-            s.total_detections += 1;
-        }
-        if let Ok(json) = serde_json::to_string(&update) {
-            let _ = s.tx.send(json);
-        }
-        s.latest_update = Some(update);
-    }
-}
-
 // ── Broadcast tick task (for ESP32 mode, sends buffered state) ───────────────
 
 async fn broadcast_tick_task(state: SharedState, tick_ms: u64) {
@@ -7622,49 +7432,41 @@ async fn main() {
     info!("  WebSocket: ws://localhost:{}/ws/sensing", args.ws_port);
     info!("  UDP:       0.0.0.0:{} (ESP32 CSI)", args.udp_port);
     info!("  UI path:   {}", args.ui_path.display());
-    info!("  Source:    {}", args.source);
+    info!("  Source:    {:?}", args.source);
 
-    // Resolve the data source into a concrete task plan (issue #1004).
+    // Resolve the data source into a concrete task plan (issue #1125).
     //
-    // Issue #937 (prior fix): `auto` must never serve fake CSI *tagged as
-    // production telemetry*. We keep that guarantee — in the gap before real
-    // CSI arrives, `source` is the honest string "simulated" (downstream
-    // `/api/v1/sensing/latest`, `/ws/sensing` see `source: "simulated"`, not a
-    // production tag). What #937's hard-exit got wrong: at boot the firmware and
-    // server race, so CSI usually is NOT flowing during the 2 s probe. Exiting
-    // (or latching on simulate) meant the server could never pick up CSI that
-    // started seconds later. The robust resolution (see `plan_source`): in
-    // `auto` always bind the UDP :5005 receiver; serve simulated until the first
-    // real frame; then `udp_receiver_task` promotes `source` → "esp32". Explicit
-    // `--source simulated` stays a hard, UDP-free override for offline demos.
-    let normalized = if args.source == "simulate" { "simulated" } else { args.source.as_str() };
-    let plan = if normalized == "auto" {
-        info!("Auto-detecting data source (UDP :{} bound either way)...", args.udp_port);
-        let esp32 = probe_esp32(args.udp_port).await;
-        let wifi = if esp32 { false } else { probe_windows_wifi().await };
-        if esp32 {
-            info!("  ESP32 CSI detected on UDP :{}", args.udp_port);
-        } else if wifi {
-            info!("  Windows WiFi detected");
-        } else {
-            warn!(
-                "No real CSI source at boot — serving SIMULATED data (tagged as \
-                 'simulated', not production) while the UDP :{} receiver stays bound. \
-                 The server promotes to live the instant a real frame arrives (issue \
-                 #1004). For an offline demo with no live promotion, pass \
-                 --source simulated explicitly.",
-                args.udp_port
-            );
+    // No simulator fallback: when no hardware is available at startup, the server
+    // reports `source: "waiting_for_hardware"` and waits honestly for real CSI.
+    // The UDP receiver is always bound in `auto` and `esp32` modes so real frames
+    // can be received after startup.
+    let plan = match args.source {
+        SourceArg::Auto => {
+            info!("Auto-detecting data source (UDP :{} bound either way)...", args.udp_port);
+            let esp32 = probe_esp32(args.udp_port).await;
+            let wifi = if esp32 { false } else { probe_windows_wifi().await };
+            if esp32 {
+                info!("  ESP32 CSI detected on UDP :{}", args.udp_port);
+            } else if wifi {
+                info!("  Windows WiFi detected");
+            } else {
+                warn!(
+                    "No real CSI source at boot — server will report \
+                     'waiting_for_hardware' (not production data) while the UDP :{} \
+                     receiver stays bound. When real CSI arrives (from ESP32 or WiFi), \
+                     the source is promoted to 'esp32' or 'wifi' (issue #1125).",
+                    args.udp_port
+                );
+            }
+            plan_source(SourceArg::Auto, esp32, wifi)
         }
-        plan_source("auto", esp32, wifi)
-    } else {
-        plan_source(normalized, false, false)
+        _ => plan_source(args.source, false, false),
     };
     let source: &str = plan.initial_source.as_str();
 
     info!(
-        "Data source: {source} (udp_receiver={}, simulator={}, wifi={})",
-        plan.bind_udp, plan.run_simulator, plan.run_wifi
+        "Data source: {source} (udp_receiver={}, wifi={})",
+        plan.bind_udp, plan.run_wifi
     );
 
     // Shared state
@@ -7990,22 +7792,18 @@ async fn main() {
         field_surface: field_surface.clone(),
     }));
 
-    // Start background tasks from the resolved plan (issue #1004).
+    // Start background tasks from the resolved plan (issue #1125).
     //
-    // In `auto` mode with no boot source, `bind_udp` AND `run_simulator` are
-    // both true: the UDP receiver is bound so real CSI can promote the source,
-    // and the simulator serves poses in the meantime (it self-suspends once
-    // promoted — see `simulated_data_task`). Explicit `--source simulated` has
-    // `bind_udp = false`, so it serves simulated data only, with no live binding.
+    // No simulator fallback: when no hardware is available, the server reports
+    // "waiting_for_hardware" and waits honestly for real CSI to arrive.
+    // The UDP receiver is bound in `auto` and `esp32` modes so real frames
+    // can be received after startup.
     if plan.bind_udp {
         tokio::spawn(udp_receiver_task(state.clone(), args.udp_port));
         tokio::spawn(broadcast_tick_task(state.clone(), args.tick_ms));
     }
     if plan.run_wifi {
         tokio::spawn(windows_wifi_task(state.clone(), args.tick_ms));
-    }
-    if plan.run_simulator {
-        tokio::spawn(simulated_data_task(state.clone(), args.tick_ms));
     }
 
     // ADR-166: Parse bind address once, use for all listeners

@@ -4,7 +4,6 @@ import type { Classification, ConnectionStatus, FeatureSet, SensingFrame, Signal
 
 export interface PoseState {
   connectionStatus: ConnectionStatus;
-  isSimulated: boolean;
   lastFrame: SensingFrame | null;
   rssiHistory: number[];
   features: FeatureSet | null;
@@ -22,7 +21,6 @@ const rssiHistory = new RingBuffer<number>(MAX_RSSI_HISTORY, (a, b) => a - b);
 
 export const usePoseStore = create<PoseState>((set) => ({
   connectionStatus: 'disconnected',
-  isSimulated: false,
   lastFrame: null,
   rssiHistory: [],
   features: null,
@@ -50,7 +48,6 @@ export const usePoseStore = create<PoseState>((set) => ({
   setConnectionStatus: (status: ConnectionStatus) => {
     set({
       connectionStatus: status,
-      isSimulated: status === 'simulated',
     });
   },
 
@@ -58,7 +55,6 @@ export const usePoseStore = create<PoseState>((set) => ({
     rssiHistory.clear();
     set({
       connectionStatus: 'disconnected',
-      isSimulated: false,
       lastFrame: null,
       rssiHistory: [],
       features: null,

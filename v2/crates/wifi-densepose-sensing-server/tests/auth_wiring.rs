@@ -66,6 +66,32 @@ impl Server {
     /// test in the suite that observes real wiring disarmed itself exactly when
     /// it mattered; a boot-time panic in the auth path would have shipped green.
     fn start(env: &[(&str, &str)]) -> Self {
+        let (http, ws, udp) = (free_port(), free_port(), free_port());
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_sensing-server"));
+        cmd.args([
+            "--http-port", &http.to_string(),
+            "--ws-port", &ws.to_string(),
+            "--udp-port", &udp.to_string(),
+            "--bind-addr", "127.0.0.1",
+            "--no-edge-registry",
+            "--source", "esp32",
+        ])
+        // Inherit nothing auth-related from the developer's shell, or a local
+        // RUVIEW_* export would silently change what this test proves.
+        .env_remove("RUVIEW_API_TOKEN")
+        .env_remove("RUVIEW_OAUTH_ISSUER")
+        .env_remove("RUVIEW_WS_LEGACY_UNAUTHENTICATED")
+        .stdout(Stdio::null())
+        // Captured, not discarded: if the server dies at boot, its stderr is the
+        // only thing that says why, and the panic below reproduces it.
+        .stderr(Stdio::piped());
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let mut child = cmd.spawn().expect("spawn sensing-server");
+        let http_port = http;
+        let ws_port = ws;
+        if !await_ready(http_port, ws_port) {
         // `free_port()` releases the port before the child binds it, so under
         // parallel `cargo test` execution another test's server can grab the
         // same ephemeral port first (observed as `Os { code: 10048/98, kind:

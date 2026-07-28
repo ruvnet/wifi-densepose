@@ -4,7 +4,6 @@ import type { SensingFrame } from '@/types/sensing';
 const makeFrame = (overrides: Partial<SensingFrame> = {}): SensingFrame => ({
   type: 'sensing_update',
   timestamp: Date.now(),
-  source: 'simulated',
   nodes: [{ node_id: 1, rssi_dbm: -45, position: [0, 0, 0] }],
   features: {
     mean_rssi: -45,
@@ -33,10 +32,6 @@ describe('usePoseStore', () => {
   describe('initial state', () => {
     it('has disconnected connectionStatus', () => {
       expect(usePoseStore.getState().connectionStatus).toBe('disconnected');
-    });
-
-    it('has isSimulated false', () => {
-      expect(usePoseStore.getState().isSimulated).toBe(false);
     });
 
     it('has null lastFrame', () => {
@@ -121,30 +116,6 @@ describe('usePoseStore', () => {
     });
   });
 
-  describe('setConnectionStatus', () => {
-    it('updates connectionStatus', () => {
-      usePoseStore.getState().setConnectionStatus('connected');
-      expect(usePoseStore.getState().connectionStatus).toBe('connected');
-    });
-
-    it('sets isSimulated true for simulated status', () => {
-      usePoseStore.getState().setConnectionStatus('simulated');
-      expect(usePoseStore.getState().isSimulated).toBe(true);
-    });
-
-    it('sets isSimulated false for connected status', () => {
-      usePoseStore.getState().setConnectionStatus('simulated');
-      usePoseStore.getState().setConnectionStatus('connected');
-      expect(usePoseStore.getState().isSimulated).toBe(false);
-    });
-
-    it('sets isSimulated false for disconnected status', () => {
-      usePoseStore.getState().setConnectionStatus('simulated');
-      usePoseStore.getState().setConnectionStatus('disconnected');
-      expect(usePoseStore.getState().isSimulated).toBe(false);
-    });
-  });
-
   describe('reset', () => {
     it('clears everything back to initial state', () => {
       usePoseStore.getState().setConnectionStatus('connected');
@@ -155,7 +126,6 @@ describe('usePoseStore', () => {
 
       const state = usePoseStore.getState();
       expect(state.connectionStatus).toBe('disconnected');
-      expect(state.isSimulated).toBe(false);
       expect(state.lastFrame).toBeNull();
       expect(state.rssiHistory).toEqual([]);
       expect(state.features).toBeNull();

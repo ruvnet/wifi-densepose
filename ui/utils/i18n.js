@@ -67,7 +67,6 @@ const translations = {
     'conn.offline': 'Offline',
     'conn.reconnecting': 'Reconnecting...',
     'conn.live': 'Live',
-    'conn.simulated': 'Simulated',
 
     // Misc
     'misc.loading': 'Loading...',
@@ -145,7 +144,6 @@ const translations = {
     'conn.offline': 'Offline',
     'conn.reconnecting': 'Ponowne laczenie...',
     'conn.live': 'Na zywo',
-    'conn.simulated': 'Symulacja',
 
     // Misc
     'misc.loading': 'Ladowanie...',

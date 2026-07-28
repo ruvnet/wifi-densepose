@@ -129,7 +129,7 @@ jobs:
           docker run --rm --entrypoint sh "$IMAGE" -c 'ls -d /app/ui/observatory /app/ui/pose-fusion >/dev/null'
 
           docker run -d --name sm -p 3000:3000 \
-            -e CSI_SOURCE=simulated \
+            -e CSI_SOURCE=auto \
             -e RUVIEW_ALLOW_UNAUTHENTICATED=1 \
             "$IMAGE"
           # Wait up to 30 s for /health.
@@ -149,7 +149,7 @@ jobs:
           IMAGE="ghcr.io/ruvnet/wifi-densepose:sha-${GITHUB_SHA::7}"
           docker run -d --name auth \
             -p 3000:3000 \
-            -e CSI_SOURCE=simulated \
+            -e CSI_SOURCE=auto \
             -e RUVIEW_API_TOKEN=smoke-test-token-do-not-use \
             "$IMAGE"
           for _ in $(seq 1 30); do

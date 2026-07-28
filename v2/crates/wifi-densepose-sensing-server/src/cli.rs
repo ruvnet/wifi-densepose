@@ -114,7 +114,7 @@ pub struct Args {
     #[arg(long, default_value = "127.0.0.1", env = "SENSING_BIND_ADDR")]
     pub bind_addr: String,
 
-    /// Data source: auto, wifi, esp32, simulate
+    /// Data source: auto, wifi, esp32 (simulate removed per issue #1125)
     #[arg(long, default_value = "auto")]
     pub source: String,
 
