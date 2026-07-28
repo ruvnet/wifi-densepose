@@ -5,6 +5,7 @@
 //! and PluginError variants.
 
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use std::sync::Arc;
 
@@ -144,7 +145,10 @@ mod tests {
             .expect("load should succeed");
 
         assert_eq!(id.as_str(), "lights");
-        assert!(*plugin.setup_called.lock().await, "setup should have been called");
+        assert!(
+            *plugin.setup_called.lock().await,
+            "setup should have been called"
+        );
 
         let listing = registry.list().await;
         assert_eq!(listing.len(), 1);
@@ -163,7 +167,10 @@ mod tests {
             .expect("load should succeed");
 
         registry.unload(&id).await.expect("unload should succeed");
-        assert!(*plugin.unload_called.lock().await, "unload should have been called");
+        assert!(
+            *plugin.unload_called.lock().await,
+            "unload should have been called"
+        );
         assert_eq!(registry.list().await.len(), 0);
     }
 

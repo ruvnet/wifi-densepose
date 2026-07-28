@@ -11,7 +11,7 @@
 //! - [`state`] — `StateMachine`: DashMap-backed concurrent state store
 //! - [`bus`] — `EventBus`: tokio broadcast wiring for system + domain events
 //! - [`service`] — `ServiceRegistry` (stub; full mpsc dispatch lands in P2)
-//! - [`registry`] — `EntityRegistry` (in-memory P1; persistence lands in P2)
+//! - [`registry`] — in-memory entity and device registries, restored by the server
 //! - [`homecore`] — `HomeCore` runtime coordinator: holds bus + states + services
 //!
 //! ## Threading model
@@ -23,31 +23,30 @@
 //!
 //! ## What's NOT here yet (deferred to P2+)
 //!
-//! - Persistence of entity registry to `.homecore/storage/core.entity_registry`
+//! - Automatic persistence of registry mutations (startup restoration exists)
 //! - Schema validation (`schemas` module from §3 stub)
 //! - Service handler mpsc dispatch (`service::ServiceRegistry::call`)
-//! - Device registry (mirror of HA's `core.device_registry`)
 //! - Witness chain integration (ADR-028)
 //!
 //! Each is marked `// TODO P2:` at the relevant call site.
 
+pub mod bus;
 pub mod entity;
 pub mod event;
-pub mod state;
-pub mod bus;
-pub mod service;
 pub mod registry;
+pub mod service;
+pub mod state;
 
 mod homecore;
 
 pub use homecore::HomeCore;
 
+pub use bus::EventBus;
 pub use entity::{EntityId, EntityIdError, State};
 pub use event::{Context, DomainEvent, EventType, StateChangedEvent, SystemEvent};
-pub use state::StateMachine;
-pub use bus::EventBus;
+pub use registry::{DeviceEntry, DeviceRegistry, EntityCategory, EntityEntry, EntityRegistry};
 pub use service::{ServiceCall, ServiceError, ServiceName, ServiceRegistry};
-pub use registry::{EntityCategory, EntityEntry, EntityRegistry};
+pub use state::StateMachine;
 
 /// HOMECORE protocol/data-model version. Bumped when the public surface
 /// or on-disk persistence schema changes in a backwards-incompatible way.

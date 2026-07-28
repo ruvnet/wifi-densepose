@@ -14,14 +14,12 @@
 //! - [`registry`] — `PluginRegistry<R>`: load / unload / list plugins.
 //! - [`error`] — `PluginError` typed error enum.
 //!
-//! ## What's NOT here yet (deferred)
+//! ## Runtime scope
 //!
-//! - `WasmtimeRuntime` (P2, `--features wasmtime`): Cranelift JIT sandbox on
-//!   Pi 5 / x86_64. The runtime-selection question (Wasmtime vs wasm3) is still
-//!   open (ADR-128 §8) and will be resolved in Q2 before P2 begins.
-//! - Host ABI wiring: `hc_state_get`, `hc_state_set`, `hc_event_fire`, etc.
-//!   (P2 — requires ADR-127 state machine API freeze first).
-//! - Config entry lifecycle + hot-load (P3).
+//! - `WasmtimeRuntime` (`--features wasmtime`) provides the Cranelift sandbox.
+//! - Native Rust plugins are compiled into the server; arbitrary native
+//!   dynamic libraries are not loaded.
+//! - The host ABI is deliberately narrow and resource-bounded.
 //!
 //! ## Now enforced (ADR-162)
 //!
@@ -38,9 +36,9 @@
 //! | Feature | Default | Description |
 //! |---------|---------|-------------|
 //! | `wasmtime` | off | Wasmtime Cranelift JIT runtime (P2) |
-//! | `wasm3` | off | wasm3 interpreter runtime for constrained hardware (P3) |
 
 pub mod error;
+pub mod discovery;
 pub mod host_abi;
 pub mod manifest;
 pub mod permissions;
@@ -53,6 +51,7 @@ pub mod verify;
 pub mod wasmtime_runtime;
 
 pub use error::PluginError;
+pub use discovery::{discover_plugins, DiscoveredPlugin, DiscoveryLimits};
 pub use host_abi::{ConfigEntryJson, StateChangedEventJson};
 pub use manifest::{IotClass, IntegrationType, PluginManifest};
 pub use permissions::PermissionSet;

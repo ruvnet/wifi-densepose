@@ -47,7 +47,28 @@ pub struct BreathingExtractor {
     freq_high: f64,
     /// IIR filter state.
     filter_state: IirState,
+    /// Count of consecutive `extract()` calls that rejected the estimated
+    /// frequency as out of the breathing band (i.e. "no periodic signal
+    /// detected"), since the last accepted estimate or reset.
+    ///
+    /// Without this, a subject leaving mid-lock only clears via the
+    /// `filtered_history` ring buffer passively flushing over the full
+    /// `window_secs` (up to 30s) — during which a stale, decreasingly
+    /// accurate estimate keeps being emitted, and any *new* subject
+    /// arriving mid-flush gets fused with leftover stale samples instead
+    /// of starting from a clean window (issue #1422). Once
+    /// `consecutive_rejections` reaches `STALE_RESET_REJECTIONS`, `reset()`
+    /// is called so the next accepted estimate is built from fresh data
+    /// only, instead of waiting out the old window.
+    consecutive_rejections: usize,
 }
+
+/// Number of consecutive out-of-band rejections after which the sliding
+/// window and filter state are cleared (ADR-157-adjacent fix, issue #1422).
+/// One rejection is enough: once the estimated frequency has left the
+/// breathing band, the same rejected estimate must never be echoed again as
+/// a stale "lock" while the window slowly flushes over up to `window_secs`.
+const STALE_RESET_REJECTIONS: usize = 1;
 
 impl BreathingExtractor {
     /// Create a new breathing extractor.
@@ -67,6 +88,7 @@ impl BreathingExtractor {
             freq_low: 0.1,
             freq_high: 0.5,
             filter_state: IirState::default(),
+            consecutive_rejections: 0,
         }
     }
 
@@ -127,10 +149,29 @@ impl BreathingExtractor {
         let duration_s = history.len() as f64 / self.sample_rate;
         let frequency_hz = crossings as f64 / (2.0 * duration_s);
 
-        // Validate frequency is within the breathing band
+        // Validate frequency is within the breathing band. An out-of-band
+        // estimate means no periodic breathing signal was found in the
+        // current window (e.g. the subject left, or noise dominates).
+        //
+        // Without an active reset here, the stale `filtered_history` window
+        // only clears by passively flushing over the full `window_secs`
+        // (up to 30s) as new samples evict old ones. During that flush a
+        // transiently *accepted* estimate can keep climbing toward
+        // `freq_high` before the frequency finally leaves the band (issue
+        // #1422) — and once rejected, any real signal that resumes would
+        // otherwise have to wait out the rest of that stale window before
+        // it can dominate a fresh, accurate estimate again. Resetting on
+        // rejection makes both directions fast: reject-and-forget instead
+        // of reject-then-linger, and reacquire-from-scratch instead of
+        // reacquire-diluted-by-ghosts.
         if frequency_hz < self.freq_low || frequency_hz > self.freq_high {
+            self.consecutive_rejections += 1;
+            if self.consecutive_rejections >= STALE_RESET_REJECTIONS {
+                self.reset();
+            }
             return None;
         }
+        self.consecutive_rejections = 0;
 
         let bpm = frequency_hz * 60.0;
         let confidence = compute_confidence(history);
@@ -200,6 +241,7 @@ impl BreathingExtractor {
     pub fn reset(&mut self) {
         self.filtered_history.clear();
         self.filter_state = IirState::default();
+        self.consecutive_rejections = 0;
     }
 
     /// Current number of samples in the history buffer.
@@ -479,6 +521,197 @@ mod tests {
         );
     }
 
+    /// Deterministic small PRNG (LCG) for reproducible synthetic-signal
+    /// tests -- mirrors the style already used in
+    /// `heartrate::tests::pure_noise_is_never_reported_valid`. Returns a
+    /// value in roughly `[-1, 1)`.
+    fn lcg_next(seed: &mut u64) -> f64 {
+        *seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        ((*seed >> 33) as f64 / (1u64 << 31) as f64) - 1.0
+    }
+
+    /// Issue #1422 bug-catching test.
+    ///
+    /// Reproduces the reported scenario at ESP32 defaults (56 subcarriers,
+    /// 100 Hz, 30s window): 60s of a real 0.25 Hz (15 BPM) signal with
+    /// per-subcarrier gain/phase (lock-on), then broadband noise-floor-only
+    /// residuals (the "empty room").
+    ///
+    /// `extract()` already returned `None` once the estimated frequency left
+    /// the breathing band (that part was not silently broken) -- the actual
+    /// defect was that the 30s `filtered_history` window only cleared by
+    /// *passively* flushing sample-by-sample, so a locked-on extractor kept
+    /// re-fusing whatever noise trickled in with a shrinking-but-still-large
+    /// fraction of stale real signal, letting a decreasingly-accurate
+    /// estimate keep being accepted right up to the range ceiling (30 BPM --
+    /// the exact value from the GH issue) before it finally rejected. Once
+    /// rejected, the *next* real subject would then have to wait out the
+    /// rest of that same stale window before a fresh, undiluted estimate
+    /// could dominate again (see `issue_1422_recovery_after_dropout_is_fast`
+    /// for that half of the regression).
+    ///
+    /// This test pins the fix at its source: the very first out-of-band
+    /// rejection after a real signal disappears must actively clear
+    /// `filtered_history` (not wait for it to passively drain), so no
+    /// stale majority-real-signal window can ever linger and re-validate a
+    /// ghost estimate near the ceiling.
+    #[test]
+    fn issue_1422_stale_lock_does_not_persist_after_subject_leaves() {
+        let n = 56usize;
+        let fs = 100.0;
+        let weights = vec![1.0f64; n];
+        let mut seed: u64 = 0x1422_1422;
+        let gain: Vec<f64> = (0..n).map(|_| 0.4 + 0.6 * lcg_next(&mut seed).abs()).collect();
+        let phase: Vec<f64> = (0..n)
+            .map(|_| lcg_next(&mut seed).abs() * 2.0 * std::f64::consts::PI)
+            .collect();
+        let mut ext = BreathingExtractor::esp32_default();
+
+        // 60s of a strong, real 15 BPM (0.25 Hz) breathing signal -- lock on.
+        let mut got_valid_lock = false;
+        for i in 0..6000usize {
+            let t = i as f64 / fs;
+            let residuals: Vec<f64> = (0..n)
+                .map(|c| {
+                    0.6 * gain[c] * (2.0 * std::f64::consts::PI * 0.25 * t + phase[c]).sin()
+                        + lcg_next(&mut seed) * 0.05
+                })
+                .collect();
+            if let Some(est) = ext.extract(&residuals, &weights) {
+                assert!(
+                    (est.value_bpm - 15.0).abs() < 5.0,
+                    "should track ~15 BPM while the subject is present, got {}",
+                    est.value_bpm
+                );
+                got_valid_lock = true;
+            }
+        }
+        assert!(got_valid_lock, "extractor must lock onto the real breathing signal first");
+        assert!(
+            ext.history_len() > 0,
+            "a locked-on extractor must carry a non-empty window into the empty-room phase"
+        );
+
+        // Empty room: feed noise-floor-only residuals one at a time until the
+        // *first* rejection (the first `None` here can only come from the
+        // frequency-band check, never "insufficient history", since the
+        // window is already far past `min_samples` from the lock-on phase).
+        let mut first_reject_at: Option<usize> = None;
+        let mut history_len_at_reject: Option<usize> = None;
+        for i in 0..12000usize {
+            let residuals: Vec<f64> = (0..n).map(|_| lcg_next(&mut seed) * 0.05).collect();
+            let outcome = ext.extract(&residuals, &weights);
+            if outcome.is_none() {
+                first_reject_at = Some(i);
+                history_len_at_reject = Some(ext.history_len());
+                break;
+            }
+        }
+        let first_reject_at =
+            first_reject_at.expect("pure noise must eventually be rejected as out of band");
+
+        // The fix: the window must be actively cleared in the *same* call
+        // that rejected the frequency -- not left to drain passively over
+        // the remaining ~30s - first_reject_at samples. Before the fix,
+        // `history_len()` here was still the full ~3000-sample stale window.
+        assert_eq!(
+            history_len_at_reject,
+            Some(0),
+            "the first out-of-band rejection (at sample {first_reject_at}) must reset the \
+             history window immediately, not leave the stale lock-on window in place \
+             (issue #1422)",
+        );
+
+        // And the window must not be allowed to silently regrow back into a
+        // large, majority-noise "lock" while noise keeps arriving: each
+        // rebuild-to-`min_samples` cycle must itself reject and reset, so
+        // `history_len()` never creeps back up toward the full window.
+        let min_samples = (fs * 10.0) as usize;
+        let mut max_history_len_after_reject = 0usize;
+        for _ in 0..(12000 - first_reject_at - 1) {
+            let residuals: Vec<f64> = (0..n).map(|_| lcg_next(&mut seed) * 0.05).collect();
+            ext.extract(&residuals, &weights);
+            max_history_len_after_reject = max_history_len_after_reject.max(ext.history_len());
+        }
+        assert!(
+            max_history_len_after_reject <= min_samples,
+            "history window regrew to {max_history_len_after_reject} samples while fed pure \
+             noise -- a stale majority-noise window should never be allowed to accumulate \
+             past the minimum warm-up size without being rejected and reset (issue #1422)",
+        );
+
+        // Finally: the extractor must be silent at the very end of the long
+        // empty-room period, not just momentarily quiet.
+        let final_residuals: Vec<f64> = (0..n).map(|_| lcg_next(&mut seed) * 0.05).collect();
+        assert!(
+            ext.extract(&final_residuals, &weights).is_none(),
+            "BreathingExtractor must report no signal at the end of a long empty-room period",
+        );
+    }
+
+    /// Issue #1422 companion regression: once the subject leaves (and the
+    /// extractor has rejected/reset), a *returning* subject must be
+    /// reacquired quickly -- not have to wait out the full stale 30s window
+    /// passively flushing via FIFO eviction, which is what produced the
+    /// reported "stayed at 30.0 BPM for roughly another 30s before starting
+    /// to track again" secondary symptom.
+    #[test]
+    fn issue_1422_recovery_after_dropout_is_fast() {
+        let n = 56usize;
+        let fs = 100.0;
+        let weights = vec![1.0f64; n];
+        let mut seed: u64 = 0xFEED_1422;
+        let gain: Vec<f64> = (0..n).map(|_| 0.4 + 0.6 * lcg_next(&mut seed).abs()).collect();
+        let phase: Vec<f64> = (0..n)
+            .map(|_| lcg_next(&mut seed).abs() * 2.0 * std::f64::consts::PI)
+            .collect();
+        let mut ext = BreathingExtractor::esp32_default();
+
+        let signal_residuals = |t: f64, seed: &mut u64| -> Vec<f64> {
+            (0..n)
+                .map(|c| {
+                    0.6 * gain[c] * (2.0 * std::f64::consts::PI * 0.25 * t + phase[c]).sin()
+                        + lcg_next(seed) * 0.05
+                })
+                .collect()
+        };
+        let noise_residuals = |seed: &mut u64| -> Vec<f64> {
+            (0..n).map(|_| lcg_next(seed) * 0.05).collect()
+        };
+
+        // Lock on.
+        for i in 0..6000usize {
+            ext.extract(&signal_residuals(i as f64 / fs, &mut seed), &weights);
+        }
+        // Long empty-room period.
+        for _ in 0..6000usize {
+            ext.extract(&noise_residuals(&mut seed), &weights);
+        }
+        // Subject returns.
+        let mut recovered_at = None;
+        for i in 0..6000usize {
+            let t = (12000 + i) as f64 / fs;
+            if ext.extract(&signal_residuals(t, &mut seed), &weights).is_some() {
+                recovered_at = Some(i);
+                break;
+            }
+        }
+
+        let recovered_at = recovered_at.expect("extractor must reacquire the returning subject");
+        // A passive-flush-only window (pre-fix) needs on the order of the
+        // full 30s window to dilute stale noise (measured ~29s); the active
+        // reset-on-rejection fix reacquires close to the 10s minimum warm-up
+        // instead (measured ~6s). Generous bound: well under half the window.
+        assert!(
+            recovered_at < 1500,
+            "recovery after a dropout took {recovered_at} samples (~{:.1}s) -- expected fast \
+             reacquisition (issue #1422 secondary symptom: slow recovery after a transient)",
+            recovered_at as f64 / fs,
+        );
+    }
+
     /// ADR-157 §A3 bug-catching test. Divergence needs the pole magnitude
     /// `|r| >= 1`, i.e. `bw >= 4`. At `fs = 0.5` Hz with the band widened to
     /// 0.1-0.9 Hz, `bw = 2*pi*(0.9-0.1)/0.5 = 10.05`, so the OLD pole radius
@@ -493,12 +726,28 @@ mod tests {
         ext.freq_high = 0.9;
         // Feed a unit step for 600 frames — enough for the un-clamped resonator
         // to overflow to inf.
+        //
+        // A constant unit step has essentially no periodic content once the
+        // resonator settles, so with the issue #1422 reset-on-rejection fix
+        // this can legitimately cycle `filtered_history` back to empty
+        // between checks (build up to `min_samples`, get rejected as
+        // out-of-band, reset, rebuild...). That's an intentional, separate
+        // behavior change -- this test's actual purpose (ADR-157 §A3) is the
+        // *filter's* numerical stability under extreme parameters, so it
+        // tracks the max history length reached and checks finiteness on
+        // every iteration instead of asserting a nonzero count only at the
+        // very end.
+        let mut max_history_len = 0usize;
         for _ in 0..600 {
             ext.extract(&[1.0, 1.0, 1.0, 1.0], &[0.25, 0.25, 0.25, 0.25]);
+            max_history_len = max_history_len.max(ext.history_len());
+            for (i, &v) in ext.filtered_history.iter().enumerate() {
+                assert!(v.is_finite(), "filtered_history[{i}] must be finite, got {v}");
+            }
         }
-        assert!(ext.history_len() > 0, "history should accumulate");
-        for (i, &v) in ext.filtered_history.iter().enumerate() {
-            assert!(v.is_finite(), "filtered_history[{i}] must be finite, got {v}");
-        }
+        assert!(
+            max_history_len > 0,
+            "history should have accumulated samples at some point during the run"
+        );
     }
 }

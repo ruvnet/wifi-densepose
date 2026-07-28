@@ -27,6 +27,7 @@ pub fn router(state: SharedState) -> Router {
     Router::new()
         .route("/api/", get(rest::api_root))
         .route("/api/config", get(rest::get_config))
+        .route("/api/components", get(rest::get_components))
         .route("/api/states", get(rest::get_states))
         .route(
             "/api/states/:entity_id",
@@ -36,6 +37,22 @@ pub fn router(state: SharedState) -> Router {
         )
         .route("/api/services", get(rest::get_services))
         .route("/api/services/:domain/:service", post(rest::call_service))
+        .route("/api/events", get(rest::get_events))
+        .route("/api/events/:event_type", post(rest::fire_event))
+        .route("/api/template", post(rest::render_template))
+        .route("/api/config/core/check_config", post(rest::check_config))
+        .route("/api/error_log", get(rest::error_log))
+        .route("/api/history/period", get(rest::get_history))
+        .route(
+            "/api/history/period/:start_time",
+            get(rest::get_history_period),
+        )
+        .route("/api/logbook", get(rest::get_logbook))
+        .route("/api/logbook/:start_time", get(rest::get_logbook_period))
+        .route("/api/calendars", get(rest::get_calendars))
+        .route("/api/calendars/:entity_id", get(rest::get_calendar_events))
+        .route("/api/camera_proxy/:entity_id", get(rest::get_camera_proxy))
+        .route("/api/homecore/compatibility", get(rest::compatibility))
         .route("/api/websocket", get(ws::websocket_handler))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
@@ -58,11 +75,7 @@ pub fn build_cors_layer() -> CorsLayer {
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(origins))
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS, Method::DELETE])
-        .allow_headers([
-            header::AUTHORIZATION,
-            header::CONTENT_TYPE,
-            header::ACCEPT,
-        ])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::ACCEPT])
         .allow_credentials(false)
 }
 
@@ -108,7 +121,10 @@ mod tests {
     #[test]
     fn env_override_via_homecore_cors_origins() {
         let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        std::env::set_var("HOMECORE_CORS_ORIGINS", "https://example.com,https://other.example.com");
+        std::env::set_var(
+            "HOMECORE_CORS_ORIGINS",
+            "https://example.com,https://other.example.com",
+        );
         // build_cors_layer() returns a CorsLayer which doesn't expose
         // its origin list; we test the parse path indirectly by
         // confirming no panic + at least one origin would parse.

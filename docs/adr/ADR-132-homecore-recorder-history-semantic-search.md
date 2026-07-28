@@ -148,6 +148,12 @@ correctness, fail-closed write integrity, semantic-store NaN poisoning, and PII 
 - **Memory-DoS — `get_state_history` was unbounded.** No `LIMIT`, so a wide time window over a
   high-frequency entity loaded an unbounded row set into memory. Now capped at
   `MAX_HISTORY_ROWS` (1,000,000); sibling search paths were already `k`-bounded.
+- **Startup state restoration.** `latest_states(limit)` selects one newest row
+  per entity with `(last_updated_ts, state_id)` tie-breaking, orders results by
+  entity ID, and caps requests at 100,000. Malformed rows are skipped with
+  typed warnings. `restore_latest` preserves recorded timestamps and installs
+  snapshots with a `homecore.restore` context before the recorder listener and
+  automation engine start.
 - **Disk-DoS / documented-but-missing `purge`.** The README advertised `Recorder::purge`, but
   no retention path existed → unbounded disk growth. Added a **transactional** `purge(older_than)`
   with an **exclusive** cutoff (idempotent, no off-by-one) that deletes old `states`/`events` and

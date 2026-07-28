@@ -4,20 +4,21 @@
 //! (HOMECORE-MIGRATE; ADR-126 §4 series map labels the role "ADR-134 HOMECORE-MIGRATE",
 //! but on-disk ADR-134 is CIR — the migrate decision was renumbered to ADR-165. See ADR-164).
 //!
-//! ## P1 scope
+//! ## Implemented scope
 //!
 //! - [`storage`] — `HaStorageDir`, `HaStorageEnvelope`; `read_envelope(path)`
 //! - [`storage_format`] — versioned format parsers (`v13`); unknown minor_version → hard error
 //! - [`entity_registry`] — `core.entity_registry` → `Vec<homecore::EntityEntry>`
-//! - [`device_registry`] — `core.device_registry` → `Vec<DeviceImport>` (P1 stub)
-//! - [`config_entries`] — `core.config_entries` diagnostic (count + domain list; P2 converts)
+//! - [`device_registry`] — full supported HA v13 device fields → `homecore::DeviceEntry`
+//! - [`config_entries`] — lossless, versioned HOMECORE representation + typed warnings
 //! - [`secrets`] — `secrets.yaml` → `HashMap<String, String>`
 //! - [`automations`] — `automations.yaml` count + ID list (P2 converts)
 //! - [`cli`] — `clap`-derived subcommand types shared between `src/main.rs` and tests
 //!
-//! ## What is NOT here yet (deferred to P2+)
+//! ## Remaining limitations
 //!
-//! - Conversion of `config_entries` to HOMECORE plugin manifests
+//! - Imported config entries are durable but do not make an HA integration executable;
+//!   a matching HOMECORE plugin must consume the preserved source payload.
 //! - Conversion of `automations.yaml` to `homecore-automation` YAML
 //! - Side-by-side runtime mode (requires `homecore-recorder`, ADR-132)
 //! - `!secret` reference resolution in non-secrets YAML files
@@ -86,6 +87,13 @@ pub enum MigrateError {
         file: String,
         version: u32,
         minor_version: u32,
+    },
+
+    #[error("unexpected storage key in {path}: expected {expected}, got {actual}")]
+    UnexpectedStorageKey {
+        path: String,
+        expected: String,
+        actual: String,
     },
 
     #[error("missing required field '{field}' in {context}")]

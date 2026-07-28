@@ -14,6 +14,8 @@ pub enum ApiError {
     Unauthorized,
     #[error("service not registered: {domain}.{service}")]
     ServiceNotRegistered { domain: String, service: String },
+    #[error("service unavailable: {0}")]
+    Unavailable(String),
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -21,7 +23,9 @@ pub enum ApiError {
 pub type ApiResult<T> = Result<T, ApiError>;
 
 #[derive(Serialize)]
-struct ErrorPayload { message: String }
+struct ErrorPayload {
+    message: String,
+}
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
@@ -30,6 +34,7 @@ impl IntoResponse for ApiError {
             Self::BadRequest(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             Self::Unauthorized => (StatusCode::UNAUTHORIZED, self.to_string()),
             Self::ServiceNotRegistered { .. } => (StatusCode::BAD_REQUEST, self.to_string()),
+            Self::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, self.to_string()),
             Self::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
         (status, Json(ErrorPayload { message })).into_response()

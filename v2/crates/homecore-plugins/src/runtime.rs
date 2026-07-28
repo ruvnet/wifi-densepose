@@ -1,8 +1,8 @@
 //! `PluginRuntime` trait + `InProcessRuntime` (P1).
 //!
 //! Abstracts over Wasmtime (P2, `--features wasmtime`) and native in-process
-//! Rust plugins (P1, always-on). A third backend, wasm3 (P3), will provide
-//! interpretation mode for constrained hardware.
+//! Rust plugins (P1, always-on). Constrained builds use the compiled-in native
+//! registry rather than an unaudited interpreter backend.
 //!
 //! # Architecture
 //!
@@ -12,7 +12,6 @@
 //!       ▼
 //! PluginRuntime  ◄─── InProcessRuntime  (P1, native Rust, <1 µs call)
 //!                ◄─── WasmtimeRuntime   (P2, Cranelift JIT, ~5 ms cold start)
-//!                ◄─── Wasm3Runtime      (P3, interpreter, ~50 kB, Pi Zero)
 //! ```
 
 use std::sync::Arc;
@@ -23,6 +22,7 @@ use homecore::HomeCore;
 use crate::error::PluginError;
 use crate::manifest::PluginManifest;
 use crate::plugin::{HomeCorePlugin, PluginId};
+use crate::StateChangedEventJson;
 
 /// A loaded plugin handle — returned by [`PluginRuntime::load`].
 pub struct LoadedPlugin {
@@ -41,6 +41,11 @@ impl LoadedPlugin {
     /// Delegate to the inner plugin's `unload` method.
     pub async fn unload(&self) -> Result<(), PluginError> {
         self.instance.unload().await
+    }
+
+    /// Dispatch a committed state change to this plugin.
+    pub async fn state_changed(&self, event: &StateChangedEventJson) -> Result<(), PluginError> {
+        self.instance.state_changed(event).await
     }
 }
 

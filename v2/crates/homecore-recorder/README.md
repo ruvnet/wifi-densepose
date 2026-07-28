@@ -30,6 +30,8 @@ Data persists in `.homecore/home.db` (by default; configurable). Queries work vi
 - **Attribute persistence** — JSON attributes for entities stored in separate table (HA pattern)
 - **Automatic deduplication** — skip writes when state hasn't changed (detect via hash)
 - **Recorder runs table** — track purge cycles and migration events (HA `recorder_runs` equivalent)
+- **Startup restoration** — deterministic newest row per entity, bounded at
+  100,000 rows, with malformed rows isolated as typed warnings
 - **Semantic search** (P2, `--features ruvector`) — embed state attributes + query by meaning
 - **HNSW index** (P2) — k-NN search for "all warm rooms" via ruvector
 - **No data export overhead** — SQLite is queryable directly; no proprietary format
@@ -41,6 +43,7 @@ Data persists in `.homecore/home.db` (by default; configurable). Queries work vi
 | Record state change | Listener | `RecorderListener::on_state_changed(event)` | Fires on homecore event bus; writes to SQLite |
 | Query state history | SQL | `SELECT * FROM states WHERE entity_id = ? ORDER BY last_changed DESC` | Standard SQLite; can be queried from anywhere |
 | Purge old states | Maintenance | `Recorder::purge(older_than)` | Deletes states older than specified timestamp |
+| Restore latest states | Startup | `Recorder::restore_latest(states, limit)` | Entity-id ordered, bounded, malformed-row isolation |
 | Deduplicate write | Dedup | `DedupEngine::should_record(old_state, new_state)` | Skip if state hash unchanged |
 | Create semantic index | Index | `SemanticIndex::index_state(entity_id, state)` (P2, opt-in) | Hash-based embeddings; real embeddings in P3 |
 | Search by meaning | Search | `SemanticIndex::search(query, k)` (P2, opt-in) | "warm rooms" → k-NN search in ruvector HNSW |

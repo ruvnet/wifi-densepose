@@ -21,10 +21,12 @@ pub enum Command {
     Inspect(InspectArgs),
     /// Import entity registry from HA into a HOMECORE storage directory.
     ImportEntities(ImportEntitiesArgs),
-    /// Import device registry (P1: parses and reports; wiring to HOMECORE P2).
+    /// Import the device registry into HOMECORE storage.
     ImportDevices(ImportDevicesArgs),
-    /// Inspect config entries (P1: count + domain list; conversion is P2).
+    /// Inspect config entries without writing.
     InspectConfigEntries(InspectConfigEntriesArgs),
+    /// Import config entries losslessly into versioned HOMECORE storage.
+    ImportConfigEntries(ImportConfigEntriesArgs),
     /// Parse secrets.yaml and report secret names (values redacted).
     InspectSecrets(InspectSecretsArgs),
     /// Count and list automations from automations.yaml (conversion is P2).
@@ -46,6 +48,11 @@ pub struct ImportEntitiesArgs {
     /// Path to the HOMECORE storage directory (destination).
     #[arg(long)]
     pub to: PathBuf,
+    /// Overwrite an existing destination file instead of refusing. Use this
+    /// to re-run an import after fixing a bad source row, or to re-import
+    /// after further changes on the HA side.
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Debug, clap::Args)]
@@ -53,6 +60,29 @@ pub struct ImportDevicesArgs {
     /// Path to the HA `.storage/` directory.
     #[arg(long)]
     pub storage: PathBuf,
+    /// Path to the HOMECORE storage directory (destination).
+    #[arg(long)]
+    pub to: PathBuf,
+    /// Overwrite an existing destination file instead of refusing. Use this
+    /// to re-run an import after fixing a bad source row, or to re-import
+    /// after further changes on the HA side.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct ImportConfigEntriesArgs {
+    /// Path to the HA `.storage/` directory.
+    #[arg(long)]
+    pub storage: PathBuf,
+    /// Path to the HOMECORE storage directory (destination).
+    #[arg(long)]
+    pub to: PathBuf,
+    /// Overwrite an existing destination file instead of refusing. Use this
+    /// to re-run an import after fixing a bad source row, or to re-import
+    /// after further changes on the HA side.
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Debug, clap::Args)]
