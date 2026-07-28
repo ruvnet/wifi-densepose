@@ -79,6 +79,7 @@ CONFIG_VALUE_CHECKS = [
     ("zone", lambda value: value is not None),
     ("swarm_hb", lambda value: value is not None),
     ("swarm_ingest", lambda value: value is not None),
+    ("ota_psk", lambda value: value is not None),
 ]
 
 
@@ -108,6 +109,7 @@ MERGEABLE_ATTRS = [
     "channel", "filter_mac",
     "hop_channels", "hop_dwell",
     "seed_url", "seed_token", "zone", "swarm_hb", "swarm_ingest",
+    "ota_psk",
 ]
 
 
@@ -234,6 +236,13 @@ def build_nvs_csv(args):
         writer.writerow(["swarm_hb", "data", "u16", str(args.swarm_hb)])
     if args.swarm_ingest is not None:
         writer.writerow(["swarm_ingest", "data", "u16", str(args.swarm_ingest)])
+    # ADR-050: OTA pre-shared key + remote-sleep auth. Separate namespace from
+    # csi_cfg (ota_update.c reads NVS_NAMESPACE "security", key "ota_psk") --
+    # an NVS CSV can define multiple namespaces in one file, each starting
+    # with its own "namespace" row.
+    if args.ota_psk is not None:
+        writer.writerow(["security", "namespace", "", ""])
+        writer.writerow(["ota_psk", "data", "string", args.ota_psk])
     return buf.getvalue()
 
 
@@ -352,6 +361,12 @@ def main():
     parser.add_argument("--zone", type=str, help="Zone name for this node (e.g. lobby, hallway)")
     parser.add_argument("--swarm-hb", type=int, help="Swarm heartbeat interval in seconds (default 30)")
     parser.add_argument("--swarm-ingest", type=int, help="Swarm vector ingest interval in seconds (default 5)")
+    # ADR-050: OTA / remote-sleep pre-shared key
+    parser.add_argument("--ota-psk", type=str, help="Pre-shared key (hex string) authenticating the "
+                        "OTA upload endpoint (POST /ota) and the remote-sleep endpoint "
+                        "(POST /system/sleep) on port 8032. Both are fail-closed until this is "
+                        "set -- generate one yourself, e.g.: "
+                        "python -c \"import secrets; print(secrets.token_hex(32))\"")
     parser.add_argument("--dry-run", action="store_true", help="Generate NVS binary but don't flash")
     parser.add_argument("--force-partial", action="store_true",
                         help="[deprecated since #391/#574] Suppress the missing-WiFi-trio "
@@ -476,6 +491,8 @@ def main():
         print(f"  Swarm HB:      {args.swarm_hb}s")
     if args.swarm_ingest is not None:
         print(f"  Swarm Ingest:  {args.swarm_ingest}s")
+    if args.ota_psk is not None:
+        print(f"  OTA/Sleep PSK: (set, {len(args.ota_psk)} chars)")
 
     csv_content = build_nvs_csv(args)
 
