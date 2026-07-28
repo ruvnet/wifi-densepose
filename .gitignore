@@ -298,3 +298,4 @@ v2/data/session-secret
 # snapshots + the generated session-secret) — never tracked
 v2/crates/wifi-densepose-sensing-server/data/
 *.proptest-regressions
+.claude/settings.local.json
