@@ -1,7 +1,7 @@
 [package]
 name = "wifi-densepose-core"
 description = "Core types, traits, and utilities for WiFi-DensePose pose estimation system"
-version = "0.3.1"  # ADR-136: ComplexSample/CanonicalFrame/provenance + blake3
+version = "0.3.2"  # ADR-136: ComplexSample/CanonicalFrame/provenance + blake3
 edition.workspace = true
 authors.workspace = true
 license.workspace = true

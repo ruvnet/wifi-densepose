@@ -252,8 +252,9 @@ impl PyBreathingExtractor {
 /// hr = HeartRateExtractor.esp32_default()  # 56 subcarriers, 100 Hz, 15s window
 ///
 /// # Feed residuals and matching unwrapped phases from your preprocessor.
-/// # Unlike BreathingExtractor weights, phases=[] is invalid for heart-rate
-/// # extraction because the Rust core requires phase data for each subcarrier.
+/// # Like BreathingExtractor's weights, phases=[] means "no per-subcarrier
+/// # coherence information available" and falls back to equal weighting
+/// # across all subcarriers -- it does NOT silently drop every frame.
 /// est = hr.extract(residuals=[0.01, -0.02, …], phases=[0.0, 0.01, …])
 /// if est is not None:
 ///     print(est.value_bpm, est.confidence)
@@ -281,9 +282,11 @@ impl PyHeartRateExtractor {
     }
 
     /// Extract heart rate from per-subcarrier residuals and matching
-    /// per-subcarrier unwrapped phases (radians). Empty phases are invalid
-    /// and return `None` because the Rust extractor requires phase data.
-    /// GIL released during DSP.
+    /// per-subcarrier unwrapped phases (radians). A short or empty `phases`
+    /// slice falls back to equal weighting for any subcarrier missing phase
+    /// data (issue #1423) -- it does not truncate the number of subcarriers
+    /// fused, and does not silently return `None` for every frame. GIL
+    /// released during DSP.
     fn extract(
         &mut self,
         py: Python<'_>,

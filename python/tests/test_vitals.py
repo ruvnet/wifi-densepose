@@ -223,6 +223,38 @@ def test_heart_rate_extract_with_synthetic_signal_and_phases() -> None:
     )
 
 
+def test_heart_rate_extract_with_empty_phases_produces_estimates() -> None:
+    """Issue #1423 regression: `phases=[]` must fall back to equal
+    weighting (mirroring `BreathingExtractor`'s `weights=[]`), not silently
+    return `None` for every frame.
+
+    Reproduces the GH-issue repro: a noiseless 1.2 Hz (72 BPM) sine
+    identical across all 56 subcarriers, fed frame-by-frame with an empty
+    `phases` list. Before the fix this produced 0/4000 estimates; the same
+    signal with `phases=[1.0] * 56` already produced thousands.
+    """
+    hr = HeartRateExtractor.esp32_default()
+    sample_rate = 100.0
+    target_freq = 1.2  # 72 BPM
+    n_samples = 4000
+
+    produced = 0
+    for i in range(n_samples):
+        t = i / sample_rate
+        base = math.sin(2.0 * math.pi * target_freq * t)
+        residuals = [base] * 56
+        est = hr.extract(residuals=residuals, phases=[])
+        if est is not None:
+            produced += 1
+            assert math.isfinite(est.value_bpm)
+            assert 0.0 <= est.confidence <= 1.0
+
+    assert produced > 0, (
+        "HeartRateExtractor.extract(residuals=..., phases=[]) must not silently "
+        "return None for every frame of a clean 72 BPM signal (issue #1423)"
+    )
+
+
 # ─── Build feature flag ──────────────────────────────────────────────
 
 

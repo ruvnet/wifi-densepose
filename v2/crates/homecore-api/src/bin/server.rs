@@ -40,13 +40,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Token provisioning (HC-WS-08). Prefer the HOMECORE_TOKENS env
     // whitelist; fall back to DEV mode (warn-logged) only when unset.
-    let tokens = if std::env::var("HOMECORE_TOKENS")
+    let has_tokens = std::env::var("HOMECORE_TOKENS")
         .map(|v| !v.trim().is_empty())
-        .unwrap_or(false)
-    {
+        .unwrap_or(false);
+    let insecure_dev_auth = std::env::var("HOMECORE_INSECURE_DEV_AUTH").as_deref() == Ok("1");
+    if !has_tokens && !insecure_dev_auth {
+        return Err(
+            "HOMECORE_TOKENS is required (or set HOMECORE_INSECURE_DEV_AUTH=1 for loopback-only development)"
+                .into(),
+        );
+    }
+    let tokens = if has_tokens {
         let s = LongLivedTokenStore::from_env();
         let n = s.len().await;
-        tracing::info!("LongLivedTokenStore provisioned with {n} bearer token(s) from HOMECORE_TOKENS");
+        tracing::info!(
+            "LongLivedTokenStore provisioned with {n} bearer token(s) from HOMECORE_TOKENS"
+        );
         s
     } else {
         tracing::warn!(

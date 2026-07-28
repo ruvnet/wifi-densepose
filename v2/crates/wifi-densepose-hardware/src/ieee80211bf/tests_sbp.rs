@@ -268,8 +268,10 @@ fn sbp_validation_shares_setup_chain_with_one_to_one_status_mapping() {
 
     // Incompatible profile now surfaces as its own status (the old
     // duplicated SBP chain folded it into RejectedUnsupportedParams).
-    let mut cfg = SessionConfig::default();
-    cfg.profile = SpecProfile::VendorExtension("acme".into());
+    let cfg = SessionConfig {
+        profile: SpecProfile::VendorExtension("acme".into()),
+        ..SessionConfig::default()
+    };
     let mut proxy = SensingSession::new_responder(cfg);
     let actions = proxy
         .handle(SessionEvent::SbpRequestReceived(sbp_request(41)))

@@ -1,5 +1,6 @@
 //! Unified error type for `homecore-hap`.
 
+use std::path::PathBuf;
 use thiserror::Error;
 
 /// Errors produced by the HAP bridge and its sub-components.
@@ -19,4 +20,34 @@ pub enum HapError {
 
     #[error("bridge not running")]
     NotRunning,
+
+    #[error("pairing store error: {0}")]
+    PairingStore(String),
+
+    #[error("invalid pairing record: {0}")]
+    InvalidPairingRecord(String),
+
+    #[error("controller pairing already exists: {0}")]
+    PairingAlreadyExists(String),
+
+    #[error("controller pairing not found: {0}")]
+    PairingNotFound(String),
+
+    #[error("maximum controller pairings reached")]
+    PairingCapacity,
+
+    #[error("insecure permissions on {path}: mode {mode:o}; expected no group/other access")]
+    InsecurePermissions { path: PathBuf, mode: u32 },
+
+    #[error("invalid HAP session transition from {from} to {to}")]
+    InvalidSessionTransition {
+        from: &'static str,
+        to: &'static str,
+    },
+
+    #[error("HAP protocol error: {0}")]
+    Protocol(String),
+
+    #[error("HAP server error: {0}")]
+    Server(String),
 }

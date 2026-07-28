@@ -1,0 +1,49 @@
+[package]
+name = "ruview-unified"
+description = "Unified RF spatial world model (ADR-273): canonical RF tensor + hardware adapters, universal RF foundation encoder, RF-aware Gaussian spatial memory, physics-guided synthetic RF worlds, and the edge sensing control plane"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+documentation.workspace = true
+keywords = ["wifi", "csi", "rf-sensing", "gaussian-splatting", "world-model"]
+categories = ["science", "simulation"]
+
+# `ruview-unified` is deliberately a *thin-dependency* crate: pure-Rust math,
+# deterministic ChaCha20 randomness (nvsim pattern — same seed ⇒ byte-identical
+# output on every machine), and a single internal dependency on
+# `wifi-densepose-core` so the WiFi adapter consumes the real `CsiFrame`
+# boundary type instead of a parallel invention. No GPU, no ONNX, no tokio.
+[dependencies]
+wifi-densepose-core = { workspace = true }
+ndarray = { workspace = true }
+num-complex = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+# Deterministic PRNG for domain randomization + weight init (see nvsim §Pass 4
+# for the rationale: default features off drops the getrandom OS-entropy path,
+# keeping the crate WASM-ready and reproducible).
+rand = { version = "0.8", default-features = false }
+rand_chacha = { version = "0.3", default-features = false }
+
+[dev-dependencies]
+criterion = { workspace = true }
+proptest = { workspace = true }
+# Dev-only: bridges real ESP32 ADR-018 UDP captures (wifi-densepose-hardware's
+# already-proven Esp32CsiParser) into wifi_densepose_core::CsiFrame for the
+# `esp32_live_hardware_test` example. Does not affect the published dependency
+# graph — the crate's real dependency stays thin-dependency (see above).
+wifi-densepose-hardware = { workspace = true }
+
+[[bench]]
+name = "unified_bench"
+harness = false
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"
