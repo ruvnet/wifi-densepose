@@ -47,7 +47,7 @@ class SensingService {
     //   "waiting_for_hardware"  — server is running but no real hardware detected
     //   "reconnecting"          — WebSocket disconnected, retrying
     this._dataSource = 'reconnecting';
-    // The raw source string from the server (e.g. "esp32", "simulated", "simulate")
+    // The raw source string from the server (e.g. "esp32", "auto", "wifi")
     this._serverSource = null;
     this._lastMessage = null;
 
@@ -58,7 +58,7 @@ class SensingService {
 
   // ---- Public API --------------------------------------------------------
 
-  /** Start the service (connect or simulate). */
+  /** Start the service (connect to the sensing server). */
   start() {
     void this._connect();
   }
@@ -244,7 +244,7 @@ class SensingService {
     }
   }
 
-  /** @return {string|null} Raw server source (e.g. "esp32", "simulated") */
+  /** @return {string|null} Raw server source (e.g. "esp32", "auto", "wifi") */
   get serverSource() {
     return this._serverSource;
   }
@@ -255,7 +255,7 @@ class SensingService {
     this._lastMessage = data;
 
     // Track the server's source field from each frame so the UI
-    // can react if the server switches between esp32 ↔ simulated at runtime.
+    // can react if the server switches between esp32 ↔ auto ↔ wifi at runtime.
     if (data.source && this._state === 'connected') {
       const raw = data.source;
       if (raw !== this._serverSource) {

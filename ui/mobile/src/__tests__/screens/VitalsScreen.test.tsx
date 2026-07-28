@@ -4,9 +4,8 @@ import { ThemeProvider } from '@/theme/ThemeContext';
 
 jest.mock('@/hooks/usePoseStream', () => ({
   usePoseStream: () => ({
-    connectionStatus: 'simulated' as const,
+    connectionStatus: 'connected' as const,
     lastFrame: null,
-    isSimulated: true,
   }),
 }));
 
@@ -70,6 +69,6 @@ describe('VitalsScreen', () => {
         <VitalsScreen />
       </ThemeProvider>,
     );
-    expect(screen.getByText('SIMULATED DATA')).toBeTruthy();
+    expect(screen.getByText('LIVE STREAM')).toBeTruthy();
   });
 });

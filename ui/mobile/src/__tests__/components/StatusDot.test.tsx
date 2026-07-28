@@ -17,11 +17,6 @@ describe('StatusDot', () => {
     expect(toJSON()).not.toBeNull();
   });
 
-  it('renders without crashing for simulated status', () => {
-    const { toJSON } = renderWithTheme(<StatusDot status="simulated" />);
-    expect(toJSON()).not.toBeNull();
-  });
-
   it('renders without crashing for connecting status', () => {
     const { toJSON } = renderWithTheme(<StatusDot status="connecting" />);
     expect(toJSON()).not.toBeNull();
@@ -35,9 +30,8 @@ describe('StatusDot', () => {
   });
 
   it('renders all statuses without error', () => {
-    const statuses: Array<'connected' | 'simulated' | 'disconnected' | 'connecting'> = [
+    const statuses: Array<'connected' | 'disconnected' | 'connecting'> = [
       'connected',
-      'simulated',
       'disconnected',
       'connecting',
     ];
