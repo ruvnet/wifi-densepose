@@ -110,8 +110,22 @@ rand = "0.8"
 # uses rustls).
 rumqttc   = { version = "0.24", default-features = false, features = ["use-rustls"], optional = true }
 
+# `otel` feature — OTLP log export (`telemetry` module). Same gating
+# principle as `mqtt`: the heavy exporter stack (opentelemetry SDK +
+# tonic) stays out of the default binary; with the feature built,
+# export still only activates when OTEL_EXPORTER_OTLP_ENDPOINT is set.
+# Curated event names / attribute keys live in `src/semconv.rs`,
+# generated from the repo-root `semconv/registry/` by weaver.
+opentelemetry_sdk = { version = "0.32", default-features = false, features = ["logs", "rt-tokio"], optional = true }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["logs", "grpc-tonic", "tls", "tls-roots"], optional = true }
+opentelemetry-appender-tracing = { version = "0.32", default-features = false, optional = true }
+
 [features]
 default = []
+# Enables OTLP log export from the `telemetry` module (dogfooding into an
+# OTLP-native log backend). Without this feature the module falls back to
+# the plain stderr fmt subscriber.
+otel = ["dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-appender-tracing"]
 # Enables the ADR-115 §2 MQTT auto-discovery publisher. Without this feature
 # all `--mqtt-*` CLI flags still parse (cli.rs declares them unconditionally),
 # but enabling `--mqtt` at runtime logs a `WARN` and the publisher is a no-op.
