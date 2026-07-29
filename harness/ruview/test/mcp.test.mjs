@@ -50,7 +50,7 @@ test('MCP handshake: initialize reports the package.json version; list endpoints
 
     s.send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
     const tools = (await s.next(2)).result.tools;
-    assert.equal(tools.length, 6);
+    assert.equal(tools.length, 7);
     for (const t of tools) assert.match(t.name, /^[a-zA-Z0-9_-]{1,64}$/, `advertised name not host-safe: ${t.name}`);
 
     s.send({ jsonrpc: '2.0', id: 3, method: 'resources/list' });
@@ -123,6 +123,43 @@ test('tools/call executions are serialized — two slow calls run sequentially',
     assert.equal(JSON.parse(ra.result.content[0].text).verdict, 'PASS');
     assert.equal(JSON.parse(rb.result.content[0].text).verdict, 'PASS');
     assert.ok(elapsed > 1400, `two 0.8 s tool calls finished in ${elapsed} ms — they overlapped instead of serializing`);
+  } finally {
+    s.close();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('MCP bounds oversized input and its tool queue, and cancels queued calls', { skip: !which('python') && !which('python3') ? 'python not on PATH' : false }, async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'ruview-mcp-bounds-'));
+  const proofDir = join(repo, 'archive', 'v1', 'data', 'proof');
+  mkdirSync(proofDir, { recursive: true });
+  writeFileSync(join(proofDir, 'verify.py'), 'import time\ntime.sleep(2)\nprint("VERDICT: PASS")\n');
+
+  const s = startServer();
+  try {
+    // A request above the 256 KiB bound is discarded without taking down the server.
+    s.send({ jsonrpc: '2.0', id: 90, method: 'initialize', params: { padding: 'x'.repeat(300_000) } });
+    const pinged = s.next(91);
+    s.send({ jsonrpc: '2.0', id: 91, method: 'ping' });
+    assert.deepEqual((await pinged).result, {});
+
+    // The first call remains in flight while the second waits, so cancellation
+    // must prevent the queued request from ever reaching the tool implementation.
+    s.send({ jsonrpc: '2.0', id: 100, method: 'tools/call', params: { name: 'ruview_verify', arguments: { repo } } });
+    const cancelled = s.next(101);
+    s.send({ jsonrpc: '2.0', id: 101, method: 'tools/call', params: { name: 'ruview_verify', arguments: { repo } } });
+    s.send({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 101 } });
+
+    // The 20-call bound includes the in-flight request. Fill the remaining
+    // slots and assert the next request fails immediately rather than growing
+    // memory without limit.
+    for (let id = 102; id < 120; id += 1) {
+      s.send({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'ruview_verify', arguments: { repo } } });
+    }
+    const full = s.next(120);
+    s.send({ jsonrpc: '2.0', id: 120, method: 'tools/call', params: { name: 'ruview_verify', arguments: { repo } } });
+    assert.equal((await full).error.code, -32000);
+    assert.equal((await cancelled).error.code, -32800);
   } finally {
     s.close();
     rmSync(repo, { recursive: true, force: true });

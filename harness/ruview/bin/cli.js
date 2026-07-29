@@ -3,16 +3,17 @@
 // `npx ruview` — the RuView WiFi-sensing operator harness (minted via metaharness,
 // hardened per ADR-182). Plain ESM, no build step: ships and runs as-is.
 //
-// The `ruview.*` tools (onboard/verify/claim-check/…) are PURE Node and run with
-// zero deps. The kernel + host adapter are only touched by `doctor`/`install`
-// (the harness-into-a-repo story), so the operator tools never block on a wasm load.
+// The `ruview.*` tools (onboard/verify/claim-check/…) and local host adapters are
+// pure Node and run with zero runtime dependencies.
 
 import { fileURLToPath } from 'node:url';
 import { realpathSync, existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { argv } from 'node:process';
-import { TOOLS, runTool, listTools } from '../src/tools.js';
+import { TOOLS, runTool, listTools, findRepoRoot, which } from '../src/tools.js';
 import { claimCheck, summarize } from '../src/guardrails.js';
+import { getHost } from '../src/hosts/index.js';
+import { makeProposal, searchBrain, verifyBrain } from '../src/brain.js';
 
 const NAME = 'ruview';
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -44,23 +45,15 @@ async function doctor() {
   checks.push(['claim_check passes a tagged MEASURED claim',
     claimCheck('Held-out PCK@20 59.5% (MEASURED vs mean-pose baseline, verify.py).').ok]);
   checks.push(['skills present', listSkills().length > 0]);
-  // Kernel + host adapter (optional — only needed to install into a repo).
-  let kernelLine = 'kernel/host: not installed (ok — operator tools run without them)';
-  try {
-    const { loadKernel } = await import('@metaharness/kernel');
-    const adapter = (await import('@metaharness/host-claude-code')).default;
-    const k = await loadKernel();
-    const info = k.kernelInfo();
-    checks.push(['kernel loads + reports version', typeof info.version === 'string' && info.version.length > 0]);
-    checks.push(['kernel backend is native|wasm|js', ['native', 'wasm', 'js'].includes(k.backend)]);
-    checks.push(['host adapter resolves', typeof adapter?.name === 'string']);
-    kernelLine = `kernel ${info.version} (${k.backend}) · host ${adapter.name}`;
-  } catch {
-    /* kernel not installed — fine for the tools-only path */
-  }
+  checks.push(['Claude Code adapter resolves', getHost('claude-code').name === 'claude-code']);
+  checks.push(['Codex adapter resolves', getHost('codex').name === 'codex']);
+  const localHosts = [
+    which('claude') ? 'claude -p' : null,
+    which('codex') ? 'codex exec' : null,
+  ].filter(Boolean);
   let ok = true;
   for (const [label, pass] of checks) { console.log(`${pass ? 'PASS' : 'FAIL'} ${label}`); if (!pass) ok = false; }
-  console.log(`\n${NAME}: ${ok ? 'all checks passed' : 'doctor found problems'} — ${kernelLine}`);
+  console.log(`\n${NAME}: ${ok ? 'all checks passed' : 'doctor found problems'} — local hosts: ${localHosts.join(', ') || 'none on PATH (optional)'}`);
   return ok ? 0 : 1;
 }
 
@@ -76,14 +69,16 @@ Operator tools:
   flash --port COM8 --variant s3-8mb [--confirm]        build+flash firmware (Windows/ESP-IDF)
 
 Harness:
-  doctor                 verify the install (tools + optional kernel/host)
+  doctor                 verify tools, adapters, and local CLI discovery
   skills                 list bundled skills
   skill <name>           print a skill playbook
   mcp start              run the ruview.* MCP server (stdio)
   install --host <h>     project the harness config into the current repo
+  agent run --host claude-code|codex --prompt "..." [--repo <dir>]
+  brain search --query "..." | verify | propose
   --version | --help
 
-Hosts: claude-code, codex, opencode, copilot, pi-dev, hermes, rvm, github-actions`);
+Hosts implemented and tested locally: claude-code (-p), codex (exec)`);
   return 0;
 }
 
@@ -111,7 +106,10 @@ export async function run(args) {
   if (VERB_TO_TOOL[cmd]) {
     const toolArgs = { ...flags };
     if (cmd === 'claim-check') {
-      if (flags.file) toolArgs.text = readFileSync(flags.file, 'utf8');
+      if (flags.file) {
+        toolArgs.text = readFileSync(flags.file, 'utf8');
+        delete toolArgs.file;
+      }
       // Fail closed (ADR-263 O1): an honesty gate must never PASS on no input.
       if (typeof toolArgs.text !== 'string' || toolArgs.text.trim().length === 0) {
         console.error('claim-check: no input — pass --text "..." or --file <path> (empty input is an error, not a PASS).');
@@ -146,16 +144,57 @@ export async function run(args) {
       }
       console.error('Usage: ruview mcp start'); return 2;
     }
+    case 'agent': {
+      if (rest[0] !== 'run') { console.error('Usage: ruview agent run --host claude-code|codex --prompt "..." [--repo <dir>]'); return 2; }
+      const hostName = String(flags.host || 'codex');
+      const prompt = String(flags.prompt || '');
+      const repo = flags.repo ? resolve(flags.repo) : findRepoRoot();
+      if (!repo) { console.error('agent run: trusted RuView repo not found; pass --repo <root>.'); return 2; }
+      if (!prompt.trim()) { console.error('agent run: --prompt is required.'); return 2; }
+      const allowWrite = flags['allow-write'] === true;
+      if (allowWrite && flags.confirm !== true) { console.error('agent run: --allow-write also requires --confirm.'); return 2; }
+      try {
+        const result = await getHost(hostName).run({
+          prompt, repoRoot: repo, trustedRoot: repo, allowWrite, confirm: flags.confirm === true,
+        });
+        pjson({ ok: true, host: hostName, mode: allowWrite ? 'workspace-write' : 'read-only', stdout: result.stdout, stderr: result.stderr });
+        return 0;
+      } catch (error) {
+        pjson({ ok: false, host: hostName, error: error.message });
+        return 1;
+      }
+    }
+    case 'brain': {
+      const action = rest[0] || 'search';
+      if (action === 'search') {
+        const query = String(flags.query || '');
+        if (!query.trim()) { console.error('brain search: --query is required.'); return 2; }
+        pjson({ ok: true, results: searchBrain(query, { limit: flags.limit }) }); return 0;
+      }
+      if (action === 'verify') {
+        const repo = flags.repo ? resolve(flags.repo) : findRepoRoot();
+        if (!repo) { console.error('brain verify: RuView repo not found.'); return 2; }
+        const result = verifyBrain({ repo }); pjson(result); return result.ok ? 0 : 1;
+      }
+      if (action === 'propose') {
+        const result = makeProposal(flags); pjson(result); return result.ok ? 0 : 1;
+      }
+      console.error('Usage: ruview brain search|verify|propose'); return 2;
+    }
     case 'install': {
       const host = flags.host || 'claude-code';
+      if (!['claude-code', 'codex'].includes(host)) {
+        console.error(`Host "${host}" is not implemented. Supported: claude-code, codex.`);
+        return 2;
+      }
       try {
-        const adapter = (await import('@metaharness/host-claude-code')).default;
+        const adapter = getHost(host);
         console.log(`Projecting RuView harness for host "${host}" via ${adapter.name}.`);
         console.log('Add to your host config — MCP server command: npx -y ruview mcp start');
         console.log('Skills:', listSkills().join(', '));
         return 0;
       } catch {
-        console.error('Host adapter not installed. `npm i @metaharness/host-claude-code` or use the bundled .claude/ config.');
+        console.error(`Host adapter "${host}" is unavailable.`);
         return 1;
       }
     }

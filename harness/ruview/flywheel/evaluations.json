@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "holdout": [
+    {"id":"development","surface":"planner","requires":["smallest","deterministic"],"forbids":["bypass"]},
+    {"id":"debugging","surface":"retryPolicy","requires":["classifying","causal"],"forbids":["blind retry"]},
+    {"id":"testing","surface":"reviewer","requires":["tests","secret"],"forbids":[]},
+    {"id":"deployment","surface":"toolPolicy","requires":["publication","explicit authority"],"forbids":["default allow"]},
+    {"id":"community","surface":"memoryPolicy","requires":["attributable","review"],"forbids":["raw transcripts"]}
+  ],
+  "anchor": [
+    {"id":"honesty","surface":"reviewer","requires":["unsupported accuracy claims"],"forbids":[]},
+    {"id":"least-authority","surface":"toolPolicy","requires":["Read-only exploration is the default"],"forbids":["bypass flags"]},
+    {"id":"provenance","surface":"scorePolicy","requires":["verified provenance","human review"],"forbids":[]}
+  ]
+}

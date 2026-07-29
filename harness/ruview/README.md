@@ -15,15 +15,14 @@ against a baseline — that rule is enforced in code (`ruview_claim_check`).
 npx @ruvnet/ruview                       # onboard — pick a setup path
 npx @ruvnet/ruview claim-check --file REPORT.md   # the honesty guardrail (non-zero exit on untagged claims)
 npx @ruvnet/ruview verify                # run the deterministic proof (VERDICT: PASS)
-npx @ruvnet/ruview doctor                # self-check (tools + optional kernel/host)
+npx @ruvnet/ruview doctor                # self-check (tools, adapters, local CLIs)
 npx @ruvnet/ruview --help
 ```
 
-The operator tools are pure Node and run with **zero install weight** — the
-package has no dependencies at all (ADR-263 O3). `doctor` / `install` can
-additionally use `@metaharness/kernel` + a host adapter if you install them
-(`npm i @metaharness/kernel @metaharness/host-claude-code`); everything else
-runs without them.
+The operator tools are pure Node and the published package has no runtime
+dependencies (ADR-263 O3). MetaHarness, Darwin and Flywheel are exact-pinned
+development dependencies used only for scoring, evolution proposals and
+replay verification.
 
 ## Tools (`ruview_*`)
 
@@ -54,8 +53,58 @@ The bundled `.claude/settings.json` registers the `ruview` MCP server
 
 ## Hosts
 
-claude-code (bundled), and via metaharness host adapters: codex, opencode, copilot,
-pi-dev, hermes, rvm, github-actions.
+Claude Code and Codex are implemented directly and tested with the local,
+non-interactive CLIs:
+
+```bash
+npx @ruvnet/ruview agent run --host claude-code --repo . --prompt "Map the sensing-server startup path"
+npx @ruvnet/ruview agent run --host codex --repo . --prompt "Find the nearest tests for HomeCore restore state"
+```
+
+Prompts travel over stdin, never through a shell. Both adapters are read-only by
+default (`claude -p --safe-mode` in plan mode; `codex exec` in its read-only
+sandbox with user config and exec rules ignored), use a scrubbed environment,
+bound output/time, redact secrets, and require a trusted RuView checkout.
+Workspace writes require both `--allow-write` and `--confirm`; dangerous bypass
+flags are never emitted.
+
+## Shared contributor brain
+
+The committed `brain/corpus/core.jsonl` is a small, reviewable source of
+repository facts. Every record has a source citation, evidence tier, tags, and
+review state:
+
+```bash
+npx @ruvnet/ruview brain search --query "darwin community memory"
+npx @ruvnet/ruview brain verify --repo .
+npx @ruvnet/ruview brain propose --id finding-id --title "Finding" \
+  --content "Source-bound observation" --sourcePath README.md --sourceLine 1 \
+  --tags onboarding,docs --contributor github-user
+```
+
+Proposals are unreviewed JSONL for a normal pull request. Local vector indexes,
+private overlays, raw agent transcripts, CSI/person data, and credentials are
+never part of the shared corpus. Retrieved text is quoted evidence, not an
+instruction or authority grant.
+
+## Ruflo + Darwin/Flywheel
+
+Development tooling is exact-pinned in `devDependencies`: `metaharness@0.4.1`,
+`@metaharness/darwin@0.8.0`, and `@metaharness/flywheel@0.1.7`. Ruflo remains an
+optional contributor coordinator rather than cold-start weight for the
+dependency-free published MCP server:
+
+```bash
+claude mcp add --scope project ruflo -- npx -y ruflo@3.32.26 mcp start
+codex mcp add ruflo -- npx -y ruflo@3.32.26 mcp start
+```
+
+`npm run flywheel:plan` is read-only. Darwin execution is human-triggered with
+`node flywheel/run.mjs --confirm`; it writes only an untrusted
+`.metaharness/` proposal archive. The protected gate requires frozen-anchor
+retention, holdout lift, security and legacy-test success, verified provenance,
+and human approval. No contributor run can directly replace or publish the
+champion.
 
 ## License
 

@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "policy": {
+    "default": "deny",
+    "readOnlyTools": [
+      "ruview_onboard",
+      "ruview_claim_check",
+      "ruview_verify",
+      "ruview_node_monitor",
+      "ruview_memory_search"
+    ],
+    "grants": {
+      "workspace-write": {
+        "tools": ["ruview_calibrate"],
+        "requiresConfirmation": true
+      },
+      "hardware-write": {
+        "tools": ["ruview_node_flash"],
+        "requiresConfirmation": true
+      }
+    },
+    "agentHosts": {
+      "defaultMode": "read-only",
+      "writeRequires": ["allow-write", "confirm"],
+      "forbiddenFlags": ["dangerously-skip-permissions", "dangerously-bypass-approvals-and-sandbox"]
+    }
+  }
+}

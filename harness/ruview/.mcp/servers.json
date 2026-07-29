@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "ruview": {
+      "command": "node",
+      "args": ["./bin/cli.js", "mcp", "start"],
+      "capabilities": ["read", "execute"],
+      "defaultGrants": []
+    }
+  }
+}

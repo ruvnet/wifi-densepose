@@ -1,0 +1,66 @@
+name: RuView harness flywheel
+
+on:
+  pull_request:
+    paths:
+      - 'harness/ruview/**'
+      - '.github/workflows/ruview-harness-flywheel.yml'
+  workflow_dispatch:
+    inputs:
+      run_darwin:
+        description: 'Generate an untrusted Darwin proposal archive (never promotes)'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: harness/ruview
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: harness/ruview/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm audit --omit=optional
+      - run: npm test
+      - run: npm run brain:verify
+      - run: npm run flywheel:plan
+      - run: npm run flywheel:verify
+      - run: npm run manifest:verify
+      - run: npm pack --dry-run
+
+  darwin-proposal:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_darwin
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: harness/ruview
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+      - run: npm ci --ignore-scripts
+      - run: node flywheel/run.mjs --confirm
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: untrusted-darwin-proposal-${{ github.run_id }}
+          path: harness/ruview/.metaharness/
+          if-no-files-found: error
+          retention-days: 7

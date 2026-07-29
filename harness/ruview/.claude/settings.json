@@ -1,7 +1,6 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx ruview*)",
       "mcp__ruview__*"
     ],
     "deny": [
@@ -12,7 +11,7 @@
   "mcpServers": {
     "ruview": {
       "command": "npx",
-      "args": ["-y", "@ruvnet/ruview", "mcp", "start"]
+      "args": ["-y", "@ruvnet/ruview@0.3.0", "mcp", "start"]
     }
   }
 }

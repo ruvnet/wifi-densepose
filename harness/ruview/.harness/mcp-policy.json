@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "architecture": "ADR-150 removable augmentation; RuView tools remain independently operable",
+  "defaultDeny": true,
+  "auditLog": true,
+  "requireApprovalForDangerous": true,
+  "toolTimeoutMs": 600000,
+  "maxToolCallsPerTurn": 20,
+  "readOnlyTools": [
+    "ruview_onboard",
+    "ruview_claim_check",
+    "ruview_verify",
+    "ruview_node_monitor",
+    "ruview_memory_search"
+  ],
+  "dangerousTools": {
+    "ruview_calibrate": {
+      "grant": "workspace-write",
+      "confirm": true
+    },
+    "ruview_node_flash": {
+      "grant": "hardware-write",
+      "confirm": true
+    }
+  }
+}
