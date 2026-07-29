@@ -1,6 +1,6 @@
 {
   "name": "@ruvnet/ruview",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "RuView WiFi-sensing operator agent harness — onboard, calibrate, train, and verify camera-free WiFi-CSI sensing, with the project's MEASURED-vs-CLAIMED honesty guardrail enforced. Minted via metaharness (ADR-182).",
   "type": "module",
   "bin": {
@@ -8,25 +8,37 @@
   },
   "exports": {
     ".": "./src/tools.js",
-    "./guardrails": "./src/guardrails.js"
+    "./guardrails": "./src/guardrails.js",
+    "./brain": "./src/brain.js",
+    "./hosts": "./src/hosts/index.js"
   },
   "files": [
     "bin/",
     "src/",
     "skills/",
     ".claude/",
+    ".mcp/",
     ".harness/",
+    "brain/",
+    "flywheel/",
+    "scripts/",
     "CLAUDE.md",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs",
+    "test:security": "node --test test/hosts.test.mjs test/brain.test.mjs test/policy.test.mjs",
     "doctor": "node ./bin/cli.js doctor",
     "mcp": "node ./bin/cli.js mcp start",
+    "brain:verify": "node ./bin/cli.js brain verify",
+    "flywheel:plan": "node ./flywheel/run.mjs --dry-run",
+    "flywheel:verify": "node ./flywheel/replay.mjs --self-test",
     "sync-skills": "node ./scripts/sync-skills.mjs",
-    "prepack": "node ./scripts/sync-skills.mjs",
-    "prepublishOnly": "npm test"
+    "manifest:update": "node ./scripts/update-manifest.mjs",
+    "manifest:verify": "node ./scripts/verify-manifest.mjs",
+    "prepack": "node ./scripts/sync-skills.mjs && node ./scripts/update-manifest.mjs --quiet && node ./scripts/verify-manifest.mjs --quiet",
+    "prepublishOnly": "npm test && node ./scripts/verify-manifest.mjs"
   },
   "keywords": [
     "wifi-sensing",
@@ -49,6 +61,11 @@
   },
   "license": "MIT",
   "author": "ruvnet",
+  "devDependencies": {
+    "@metaharness/darwin": "0.8.0",
+    "@metaharness/flywheel": "0.1.7",
+    "metaharness": "0.4.1"
+  },
   "homepage": "https://github.com/ruvnet/RuView#readme",
   "repository": {
     "type": "git",

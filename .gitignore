@@ -285,7 +285,9 @@ examples/through-wall/model/
 harness/**/node_modules/
 harness/**/*.tgz
 harness/**/package-lock.json
+!harness/ruview/package-lock.json
 harness/**/.claude-flow/
+harness/**/.metaharness/
 harness/**/ruvector.db
 
 # ruvector runtime/hook DB — never tracked (any depth)

@@ -38,8 +38,8 @@ jobs:
           - dir: harness/ruview
             build: false
             publishable: true
-            # ADR-263: dependency-free harness; budget guards against dep creep.
-            unpacked_budget: 65536
+            # ADR-283: brain + local hosts + replay assets; still runtime-dependency-free.
+            unpacked_budget: 131072
           - dir: tools/ruview-mcp
             build: true
             publishable: true
@@ -53,14 +53,14 @@ jobs:
       run:
         working-directory: ${{ matrix.package.dir }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ matrix.node }}
 
-      # Repo policy gitignores lockfiles under harness/ (the harness is
-      # dependency-free anyway); the TS packages commit theirs.
+      # Packages with development dependencies commit lockfiles; runtime
+      # dependency freedom is checked from the packed tarball.
       - name: Install
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm install --no-fund --no-audit; fi

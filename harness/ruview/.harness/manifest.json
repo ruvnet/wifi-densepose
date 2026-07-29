@@ -1,39 +1,66 @@
 {
-  "schema": 1,
-  "generator": "metaharness 0.1.15 + ADR-182 hardening",
+  "schema": 2,
+  "generator": "RuView metaharness provenance v2",
   "template": "vertical:ruview",
   "name": "@ruvnet/ruview",
-  "vars": {
-    "name": "@ruvnet/ruview",
-    "description": "RuView WiFi-sensing operator agent harness",
-    "host": "claude-code"
-  },
+  "version": "0.3.0",
   "hosts": [
-    "claude-code"
+    "claude-code",
+    "codex"
   ],
+  "toolPolicy": "default-deny-mutations",
   "files": {
-    ".claude/settings.json": "b0ea971383716f18b89db73010b8f0ea0f1b16bdec4cd1068245772ba1c27bdd",
+    ".claude/settings.json": "19c76e2250c3f8eb9eeb60f04af9362be5d3513392b9591a312afb92178c067e",
     ".claude/skills/calibrate-room/SKILL.md": "4b29c7c331f47acad3c0f51b3d3d8f5b5573e316e081bae71dbe21a47fa95240",
     ".claude/skills/onboard/SKILL.md": "97ee71f0aa985cfc03bb8e764789bb55c4f9fd5dae10a116c1071eab85b5893f",
     ".claude/skills/provision-node/SKILL.md": "5f73823794ed5f0b25c102aa8b1bf2dd534a1ec468173d8330c2af0ca24f239c",
     ".claude/skills/train-pose/SKILL.md": "92aebd4423470eb10eabaee642ec3493284d98b7ae9785e0f34378c709746e65",
     ".claude/skills/verify/SKILL.md": "2d38d240e9810a7827e2ebd3717dc0f85c646cc92e46c3812fe77c5b9eb40b76",
+    ".harness/claims.json": "eaa44c5154ba1833c2289e5f46b98c53b38285aa75cf1ba3f725f3806ba69aa1",
+    ".harness/mcp-policy.json": "19c266b061a8de579fb6dec4843f48761ddd8ea0806ee5d8ca848fd7e8cd428e",
+    ".mcp/servers.json": "fec6075400f8350d8075beac8306690355c4b015425bfd0e5f52966234e9d66f",
     "CLAUDE.md": "1d7af0c310dd8093b4ae6c9c94a1c0cc9ff02ac9c8d5b45caba5363c3af99475",
     "LICENSE": "631f94984f626818d42ecf717aa6e8e0afd4f9f355ca706bd2effafbd1416d06",
-    "README.md": "ac35157d66243a5f9eba262bdf2d593e978d935b3dde6e455b7acf650768eac6",
-    "bin/cli.js": "85d8394375edb1e967418451452e68bdbe26e69fc6877ed4936894f6101e1a12",
-    "package.json": "4509b68bb4211217f1e9f3f95f3134b326ee23a2322aef8d19b99a4b1d415b08",
+    "README.md": "a38c64a947989246107a48b8181078c7ba4361ab5bdb49a57439b9cab6fe737d",
+    "bin/cli.js": "6713e8a36e1304f0c25eecc06e07e53240465a25c036469112a09de4a00cec57",
+    "brain/corpus/core.jsonl": "4bbb5f86dd1c13f26d19f911a33c7b382203ddb70b00ce3c7dbe7cbc4b96f9a8",
+    "flywheel/evaluations.json": "ac4ff1f897a2444870cd2b8ae8aee8b1578e61467aeca4db57893f41be98a572",
+    "flywheel/fixture.mjs": "de71be88753d0da4695d91011b54380c994a018986fafba36cb13739307a9bce",
+    "flywheel/gate.mjs": "4a0d68ec80a9b4a66f9e13a5d96c0f189af44f28763c456baadf931ac91c3bf8",
+    "flywheel/genome.json": "32c937ccf4431409c1bd7892b4afba6097c539d8c76d41aa968091c9a83d8f99",
+    "flywheel/replay.mjs": "0670ca0b03701f4afe0b4bca8a3d58d481676b61a94a5b98c6a425aefb1159ab",
+    "flywheel/run.mjs": "6d4f97db16900c45367b6538848cbe1915af999e663720dfc51f2bb1698f1cd0",
+    "package.json": "a83b8b2f903ba1bc31daf98e37a2ab69b7e30c5ae8b6415b3193487dc75b398b",
+    "scripts/sync-skills.mjs": "43715dab61e204dc91bbd61755810e8fdb2f66e2b0c0bd791b4bf48a2e293565",
+    "scripts/update-manifest.mjs": "8f56764b8f70aed55da0c7e2417ae875b0d58d781d839b6db7f115f08af61e6b",
+    "scripts/verify-manifest.mjs": "6491a221762efcfeb3e749ecab243b204f17fd5bc871f3d4025597f31b8f0f10",
     "skills/calibrate-room.md": "4b29c7c331f47acad3c0f51b3d3d8f5b5573e316e081bae71dbe21a47fa95240",
     "skills/onboard.md": "97ee71f0aa985cfc03bb8e764789bb55c4f9fd5dae10a116c1071eab85b5893f",
     "skills/provision-node.md": "5f73823794ed5f0b25c102aa8b1bf2dd534a1ec468173d8330c2af0ca24f239c",
     "skills/train-pose.md": "92aebd4423470eb10eabaee642ec3493284d98b7ae9785e0f34378c709746e65",
     "skills/verify.md": "2d38d240e9810a7827e2ebd3717dc0f85c646cc92e46c3812fe77c5b9eb40b76",
-    "src/guardrails.js": "66407b00d31c4f7939b75ee3e29598855c36a4154ccf1436655a4e52b0d7c034",
-    "src/mcp-server.js": "ad0f21be65a37237b9c2aad69e6e75166e5f101d902cb986377043545a7a80fb",
-    "src/tools.js": "1d72377ae53ad2b0c6dc03eb66f584422d8a60e442cb0d4f08355590f3edf031"
+    "src/brain.js": "0f16a75aea943acdacc430ff11d5df7ecdec9cca2ab497795ff6f33eaebdfab6",
+    "src/guardrails.js": "aacc8fa6088f7f1ccea3a0b02171a5c516b95d3416ee3ba87add3879a1d6aaad",
+    "src/hosts/claude-code.js": "2212bc39b49822018800dfe33a471e56bbb4c5233d716bfa7aa4fff77aa23edb",
+    "src/hosts/codex.js": "d41ecd132ce2db7b47aad9cebbc020d70e6810d48c3554858d099ff2e8f6608b",
+    "src/hosts/index.js": "ab276c41ab722bcdf72c2d1649cecbb760ae05c41c1372aae4c2447aa7c11539",
+    "src/mcp-server.js": "8c44b0f5e2ee0c386e5315b5927483620cd32ab978055b9f540259c65d4da5fc",
+    "src/policy.js": "9731e534a2d9b9b4fe841f1f50ff4a133728ad48bea8fd629aa880790f345e8f",
+    "src/process-runner.js": "49533b038044dfb8bc76ed01c030d06a9856ead0836157fb693e2a7d40f786d6",
+    "src/redact.js": "ebf1afff46341078706b0401838c53db043603586e280d51ece5cf1feba35189",
+    "src/repo-trust.js": "06e2a94d7113ed936f208a12b7fcc785801c215a3e2c5e7418f6238d991a289c",
+    "src/tools.js": "ba897110ed5565930f0df1c72cf406d2319ad493c081fecc9d111f1be9f5ebf1"
+  },
+  "filesDigest": "a665538c692ab6fdc48e888712dfb1cb9d9588d72a4a9c5477a3ee33481dfa0e",
+  "brainDigest": "4bbb5f86dd1c13f26d19f911a33c7b382203ddb70b00ce3c7dbe7cbc4b96f9a8",
+  "gateFingerprint": "6e53c784eee38310188948fc75fb49e6b4ebc04e247d01b903fa8c8a92d67bdd",
+  "developmentPins": {
+    "@metaharness/darwin": "0.8.0",
+    "@metaharness/flywheel": "0.1.7",
+    "metaharness": "0.4.1"
   },
   "meta": {
-    "surface": "cli+mcp",
-    "adr": "ADR-182"
+    "surface": "cli+mcp+brain+flywheel",
+    "adr": "ADR-182/263"
   }
 }

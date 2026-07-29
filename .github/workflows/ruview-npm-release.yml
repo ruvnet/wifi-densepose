@@ -37,9 +37,9 @@ jobs:
       run:
         working-directory: ${{ inputs.package }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
@@ -76,8 +76,8 @@ jobs:
         run: |
           set -euo pipefail
           case "${{ inputs.package }}" in
-            # ADR-263: dependency-free harness; budget guards against dep creep.
-            harness/ruview) export UNPACKED_BUDGET=65536 ;;
+            # ADR-283: brain + local hosts + replay assets; no runtime deps.
+            harness/ruview) export UNPACKED_BUDGET=131072 ;;
             # ADR-264 O2: map-free tarball (was 188 kB with maps).
             tools/ruview-mcp) export UNPACKED_BUDGET=140000 ;;
             *) echo "Unknown package '${{ inputs.package }}' — no budget defined"; exit 1 ;;

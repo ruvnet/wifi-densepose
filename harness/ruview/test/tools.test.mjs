@@ -128,7 +128,7 @@ test('ruview_claim_check fails closed on empty/missing text', async () => {
   assert.equal(empty.reason, 'empty_text');
   const missing = await runTool('ruview_claim_check', {});
   assert.equal(missing.ok, false);
-  assert.equal(missing.reason, 'empty_text');
+  assert.equal(missing.reason, 'invalid_arguments');
 });
 
 test('unknown tool fails closed', async () => {
