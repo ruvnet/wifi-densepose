@@ -110,11 +110,14 @@ jobs:
             harness/ruview)
               ./node_modules/.bin/ruview --version
               ./node_modules/.bin/ruview doctor
+              ./node_modules/.bin/ruview guidance --topic homecore --query restore --limit 1 \
+                | grep -q '"homecore-runtime-restore"'
               # the honesty gate must fail closed on empty input (ADR-263 F1)
               if ./node_modules/.bin/ruview claim-check; then
                 echo 'claim-check passed with no input — fail-open regression'; exit 1
               fi
               node --input-type=module -e "const m = await import('@ruvnet/ruview'); if (!m.TOOLS) process.exit(1);"
+              node --input-type=module -e "const m = await import('@ruvnet/ruview/guidance'); if (typeof m.getGuidance !== 'function') process.exit(1);"
               ;;
             tools/ruview-mcp)
               # initialize over stdio; server must answer and exit 0 on EOF

@@ -35,9 +35,10 @@ Prefer the published, pinned harness instead of hand-assembling `codex exec`
 flags:
 
 ```bash
-npx @ruvnet/ruview@0.3.0 agent run \
+npx @ruvnet/ruview@0.3.1 guidance --topic architecture --query "requested subsystem"
+npx @ruvnet/ruview@0.3.1 agent run \
   --host codex --repo . --prompt "Map the requested subsystem and cite files"
-npx @ruvnet/ruview@0.3.0 brain search --query "relevant repository concept"
+npx @ruvnet/ruview@0.3.1 brain search --query "relevant repository concept"
 ```
 
 The adapter uses stdin, a trusted `-C` root, read-only sandboxing, ephemeral
@@ -61,6 +62,6 @@ When changing prompts:
 
 1. compare every command/path with current source and workflows;
 2. run the nearest prompt/plugin checks;
-3. run `npx @ruvnet/ruview@0.3.0 claim-check --file <changed-file>`;
+3. run `npx @ruvnet/ruview@0.3.1 claim-check --file <changed-file>`;
 4. inspect the diff for secrets, bypasses, unsupported claims, stale counts,
    machine-specific values, and unrelated edits.

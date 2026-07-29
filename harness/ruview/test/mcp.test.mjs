@@ -50,8 +50,11 @@ test('MCP handshake: initialize reports the package.json version; list endpoints
 
     s.send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
     const tools = (await s.next(2)).result.tools;
-    assert.equal(tools.length, 7);
+    assert.equal(tools.length, 8);
     for (const t of tools) assert.match(t.name, /^[a-zA-Z0-9_-]{1,64}$/, `advertised name not host-safe: ${t.name}`);
+    const guidance = tools.find((tool) => tool.name === 'ruview_guidance');
+    assert.ok(guidance);
+    assert.equal(guidance.annotations.readOnlyHint, true);
 
     s.send({ jsonrpc: '2.0', id: 3, method: 'resources/list' });
     assert.deepEqual((await s.next(3)).result, { resources: [] });
@@ -62,6 +65,12 @@ test('MCP handshake: initialize reports the package.json version; list endpoints
     s.send({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'ruview.onboard', arguments: {} } });
     const call = await s.next(5);
     assert.equal(call.result.isError, false);
+
+    s.send({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'ruview_guidance', arguments: { topic: 'homecore', query: 'restore state', limit: 2 } } });
+    const guided = JSON.parse((await s.next(6)).result.content[0].text);
+    assert.equal(guided.ok, true);
+    assert.equal(guided.topic, 'homecore');
+    assert.ok(guided.capabilities.some(({ id }) => id === 'homecore-runtime-restore'));
   } finally {
     s.close();
   }

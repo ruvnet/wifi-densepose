@@ -1,6 +1,6 @@
 {
   "name": "@ruvnet/ruview",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "RuView WiFi-sensing operator agent harness — onboard, calibrate, train, and verify camera-free WiFi-CSI sensing, with the project's MEASURED-vs-CLAIMED honesty guardrail enforced. Minted via metaharness (ADR-182).",
   "type": "module",
   "bin": {
@@ -10,6 +10,7 @@
     ".": "./src/tools.js",
     "./guardrails": "./src/guardrails.js",
     "./brain": "./src/brain.js",
+    "./guidance": "./src/guidance.js",
     "./hosts": "./src/hosts/index.js"
   },
   "files": [

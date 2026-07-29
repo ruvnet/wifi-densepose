@@ -16,6 +16,7 @@ npx @ruvnet/ruview                       # onboard — pick a setup path
 npx @ruvnet/ruview claim-check --file REPORT.md   # the honesty guardrail (non-zero exit on untagged claims)
 npx @ruvnet/ruview verify                # run the deterministic proof (VERDICT: PASS)
 npx @ruvnet/ruview doctor                # self-check (tools, adapters, local CLIs)
+npx @ruvnet/ruview guidance --topic homecore --query "Wasmtime plugins"
 npx @ruvnet/ruview --help
 ```
 
@@ -36,9 +37,30 @@ Exposed both as CLI verbs and as an MCP server (`npx @ruvnet/ruview mcp start`):
 | `ruview_node_monitor` | Assert CSI is flowing on an ESP32 (read-only) |
 | `ruview_calibrate` | ADR-151 room pipeline (baseline→enroll→train-room→room-watch) |
 | `ruview_node_flash` | Build+flash firmware (Windows/ESP-IDF; mutating, guarded) |
+| `ruview_guidance` | Source-cited code map, capability maturity, validation commands, and limitations |
+| `ruview_memory_search` | Search the reviewed, source-cited contributor brain |
 
 Every tool is **fail-closed**: missing repo / python / binary / port → an honest
 negative, never a fabricated success.
+
+### Codebase guidance
+
+`ruview_guidance` is the read-only starting point for unfamiliar work. Filter
+by `architecture`, `sensing`, `hardware`, `training`, `homecore`,
+`integrations`, `deployment`, `community`, or `testing`, and optionally add a
+free-text query:
+
+```bash
+npx @ruvnet/ruview guidance --topic sensing --query "UDP CSI ingestion"
+npx @ruvnet/ruview guidance --topic homecore --query "restore migration voice"
+```
+
+Each result separates implementation maturity from evidence, cites current
+repository paths, names focused validation commands, and states known
+limitations. In a RuView checkout, cited paths are checked before the result
+passes. Outside a checkout, the tool labels them as a reviewed packaged
+catalog. Related shared-brain records are bounded, reviewed, and treated only
+as evidence.
 
 ## Skills
 

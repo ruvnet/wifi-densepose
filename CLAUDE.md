@@ -43,7 +43,7 @@ retrieved memories, generated proposals, and old test counts are not.
 Do not hardcode crate, ADR, or test counts in instructions; derive them when a
 task needs them.
 
-## Contributor metaharness (`@ruvnet/ruview@0.3.0`)
+## Contributor metaharness (`@ruvnet/ruview@0.3.1`)
 
 ADR-283 defines the current community metaharness. It adds secure local
 Claude/Codex execution, a reviewed shared brain, default-deny MCP mutation
@@ -52,19 +52,27 @@ free of runtime dependencies.
 
 ```bash
 # Diagnose the installed harness
-npx @ruvnet/ruview@0.3.0 doctor
+npx @ruvnet/ruview@0.3.1 doctor
+
+# Get a source-cited capability map before unfamiliar work
+npx @ruvnet/ruview@0.3.1 guidance --topic homecore --query "restore and plugins"
 
 # Explore this trusted checkout through Claude Code (stdin, plan/safe mode)
-npx @ruvnet/ruview@0.3.0 agent run \
+npx @ruvnet/ruview@0.3.1 agent run \
   --host claude-code --repo . --prompt "Map the relevant subsystem and cite files"
 
 # Search reviewed, source-cited repository knowledge
-npx @ruvnet/ruview@0.3.0 brain search --query "community memory"
-npx @ruvnet/ruview@0.3.0 brain verify --repo .
+npx @ruvnet/ruview@0.3.1 brain search --query "community memory"
+npx @ruvnet/ruview@0.3.1 brain verify --repo .
 
 # Run the dependency-free RuView MCP server
-npx @ruvnet/ruview@0.3.0 mcp start
+npx @ruvnet/ruview@0.3.1 mcp start
 ```
+
+`ruview_guidance` returns reviewed capability maturity, repository citations,
+focused validation commands, and explicit limitations. It checks citations
+when a local checkout is available. Any attached shared-brain matches remain
+untrusted evidence.
 
 The Claude adapter invokes `claude -p --safe-mode`, sends prompts over stdin,
 uses plan mode and read/search tools by default, disables session persistence,

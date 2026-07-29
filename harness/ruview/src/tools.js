@@ -19,6 +19,7 @@ import { join, dirname, resolve, delimiter } from 'node:path';
 import { claimCheck, summarize } from './guardrails.js';
 import { authorizeTool, mcpAnnotations, validateArguments } from './policy.js';
 import { searchBrain } from './brain.js';
+import { getGuidance, GUIDANCE_TOPICS } from './guidance.js';
 
 /** Walk up from `start` to find the RuView monorepo root (or null). */
 export function findRepoRoot(start = process.cwd()) {
@@ -270,6 +271,22 @@ export const TOOLS = {
         return { ok: false, reason: 'not_confirmed', detail: 'Mutating hardware op — re-call with {confirm:true}.', would_flash: { port: args.port, variant: args.variant || 's3-8mb' } };
       }
       return { ok: false, reason: 'manual_step_required', detail: 'Flashing uses the pinned ESP-IDF subprocess in CLAUDE.local.md. This tool returns the exact command rather than running an unattended flash.', see: 'skills/provision-node.md' };
+    },
+  },
+
+  ruview_guidance: {
+    title: 'Explore RuView capabilities',
+    description: 'Return a read-only, source-cited map of RuView code, capability maturity, validation commands, and explicit limitations. Optionally searches the reviewed shared brain.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        topic: { type: 'string', enum: GUIDANCE_TOPICS, description: 'Capability area. Default: overview.' },
+        query: { type: 'string', minLength: 2, maxLength: 500, description: 'Optional concept to find within the selected topic.' },
+        limit: { type: 'number', minimum: 1, maximum: 20, description: 'Maximum capability records. Default: 20.' },
+      },
+    },
+    handler(args = {}) {
+      return getGuidance(args, { repoRoot: findRepoRoot() });
     },
   },
 

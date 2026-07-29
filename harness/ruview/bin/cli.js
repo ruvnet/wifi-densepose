@@ -27,6 +27,7 @@ const VERB_TO_TOOL = {
   calibrate: 'ruview_calibrate',
   monitor: 'ruview_node_monitor',
   flash: 'ruview_node_flash',
+  guidance: 'ruview_guidance',
 };
 
 function pjson(o) { console.log(JSON.stringify(o, null, 2)); }
@@ -67,6 +68,7 @@ Operator tools:
   calibrate --step baseline|enroll|train-room|room-watch
   monitor --port COM8 [--seconds 12]                    assert CSI is flowing on a node
   flash --port COM8 --variant s3-8mb [--confirm]        build+flash firmware (Windows/ESP-IDF)
+  guidance [--topic homecore] [--query "Wasmtime"]      source-cited code/capability map
 
 Harness:
   doctor                 verify tools, adapters, and local CLI discovery
@@ -120,6 +122,7 @@ export async function run(args) {
       return res.ok ? 0 : 1;
     }
     if (cmd === 'monitor' && flags.seconds) toolArgs.seconds = Number(flags.seconds);
+    if (cmd === 'guidance' && flags.limit) toolArgs.limit = Number(flags.limit);
     if (cmd === 'calibrate' && typeof flags.args === 'string') toolArgs.args = flags.args.split(',');
     const res = await runTool(VERB_TO_TOOL[cmd], toolArgs);
     pjson(res);
