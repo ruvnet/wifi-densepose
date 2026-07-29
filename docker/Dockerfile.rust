@@ -29,7 +29,12 @@ COPY vendor/rufield/ /vendor/rufield/
 #   - homecore-server, the ADRs-126-134 HOMECORE native Rust port of
 #     Home Assistant (HA-wire-compat REST + WebSocket on :8123,
 #     SQLite + ruvector recorder, automation, assist, plugins, HAP)
-RUN cargo build --release -p wifi-densepose-sensing-server --features mqtt 2>&1 \
+#
+# SENSING_FEATURES lets a compose file extend the sensing-server feature
+# set (docker/otel-compose.yml builds with `mqtt,otel` for OTLP log
+# export) without forking this Dockerfile.
+ARG SENSING_FEATURES=mqtt
+RUN cargo build --release -p wifi-densepose-sensing-server --features "${SENSING_FEATURES}" 2>&1 \
  && cargo build --release -p cog-ha-matter 2>&1 \
  && cargo build --release -p homecore-server 2>&1 \
  && strip target/release/sensing-server target/release/cog-ha-matter target/release/homecore-server

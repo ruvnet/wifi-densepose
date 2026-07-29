@@ -28,6 +28,8 @@ pub mod semantic;
 pub mod rufield_surface;
 pub mod rvf_container;
 pub mod rvf_pipeline;
+pub mod semconv;
+pub mod telemetry;
 #[allow(dead_code)]
 pub mod trainer;
 pub mod vital_signs;

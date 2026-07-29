@@ -1,0 +1,26 @@
+# OpenTelemetry Collector config for the RuView observability stack
+# (docker/otel-compose.yml): receive OTLP from the sensing server, export
+# OTLP to the Ourios log backend. See docs/observability.md.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  otlp/ourios:
+    endpoint: ourios:4317
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/ourios]

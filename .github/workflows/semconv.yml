@@ -1,0 +1,69 @@
+# Semantic-conventions gate: validates `semconv/registry/` with OpenTelemetry
+# weaver and verifies the generated constants module
+# (`v2/crates/wifi-densepose-sensing-server/src/semconv.rs`) is in sync with
+# it (`weaver registry generate` + a no-diff check) — keeping RuView's
+# telemetry names spec-adherent and drift-free.
+name: semconv
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'semconv/**'
+      - 'templates/**'
+      - 'v2/crates/wifi-densepose-sensing-server/src/semconv.rs'
+      - '.github/workflows/semconv.yml'
+  pull_request:
+    paths:
+      - 'semconv/**'
+      - 'templates/**'
+      - 'v2/crates/wifi-densepose-sensing-server/src/semconv.rs'
+      - '.github/workflows/semconv.yml'
+  workflow_dispatch:
+
+jobs:
+  semconv:
+    name: semconv (weaver)
+    runs-on: ubuntu-latest
+    env:
+      WEAVER_VERSION: v0.23.0
+      # sha256 of weaver-x86_64-unknown-linux-gnu.tar.xz for WEAVER_VERSION
+      # (open-telemetry/weaver release asset). Bump both together.
+      WEAVER_SHA256: a9822c712d6871bd89d6530f18c5df5cea3821f642e7b8e5e49e985917f7d12d
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Install weaver
+        run: |
+          set -euo pipefail
+          tarball="weaver-x86_64-unknown-linux-gnu.tar.xz"
+          curl -fsSL -o "$RUNNER_TEMP/$tarball" \
+            "https://github.com/open-telemetry/weaver/releases/download/${WEAVER_VERSION}/${tarball}"
+          echo "${WEAVER_SHA256}  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar xJf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/weaver-x86_64-unknown-linux-gnu" >> "$GITHUB_PATH"
+      - run: weaver registry check -r semconv/registry --future
+      # Codegen no-diff: regenerate the semconv constants module from the
+      # registry and fail if the checked-in file drifts (the generated
+      # module is "do not hand-edit"; the registry is the source).
+      - name: Regenerate semconv constants
+        run: |
+          set -euo pipefail
+          weaver registry generate rust v2/crates/wifi-densepose-sensing-server/src \
+            -t templates -r semconv/registry --future
+          rustfmt --edition 2021 v2/crates/wifi-densepose-sensing-server/src/semconv.rs
+      - name: Verify generated constants are in sync
+        run: |
+          set -euo pipefail
+          changes="$(git status --porcelain -- v2/crates/wifi-densepose-sensing-server/src/semconv.rs)"
+          if [ -n "$changes" ]; then
+            echo "::error::semconv.rs is out of sync with semconv/registry/. Regenerate (see the module header) and commit."
+            echo "$changes"
+            git diff -- v2/crates/wifi-densepose-sensing-server/src/semconv.rs
+            exit 1
+          fi

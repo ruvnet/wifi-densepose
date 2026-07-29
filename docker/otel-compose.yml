@@ -1,0 +1,67 @@
+# RuView → OpenTelemetry Collector → Ourios log backend.
+#
+#   docker compose -f docker/otel-compose.yml up
+#
+# Brings up an OTLP pipeline for the sensing server's logs: the server
+# (built with `--features otel` and pointed at the collector via
+# OTEL_EXPORTER_OTLP_ENDPOINT) exports every tracing event as an OTel
+# log record; the collector forwards them to Ourios, a Parquet +
+# template-mining log backend that is OTLP-native on ingest. Query the
+# logs at http://localhost:4319/v1/query — see docs/observability.md.
+services:
+  sensing-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.rust
+      args:
+        # The otel feature compiles the OTLP exporter in; export still
+        # only activates when OTEL_EXPORTER_OTLP_ENDPOINT is set.
+        SENSING_FEATURES: mqtt,otel
+    image: ruvnet/wifi-densepose:otel
+    ports:
+      - "3000:3000"     # REST API
+      - "3001:3001"     # WebSocket
+      - "5005:5005/udp" # ESP32 CSI (see docker-compose.yml for Windows notes)
+    environment:
+      - RUST_LOG=info
+      # Demo default: synthetic CSI so the pipeline produces events with
+      # no hardware attached. Set CSI_SOURCE=esp32 for live nodes.
+      - CSI_SOURCE=${CSI_SOURCE:-simulated}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+    depends_on:
+      - otel-collector
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.116.0@sha256:70217a89d27c678ead44f196d80aa8c2717cb68d0301dbdc40331dbec0a3e605
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC (also reachable from the host)
+      - "4318:4318"   # OTLP HTTP
+    depends_on:
+      - ourios
+
+  # Ourios — OTLP-native log backend (Parquet + Drain-derived template
+  # mining + DataFusion). Local-disk storage; the tenant derives from the
+  # exported resource's service.name, so RuView's logs land in tenant
+  # "ruview".
+  ourios:
+    image: ghcr.io/jensholdgaard/ourios:0.4.0@sha256:9c88badb2089fe78dcdef317f28babba1cdd23984409439d4c4792f64a737ef0
+    environment:
+      - OURIOS_BUCKET_ROOT=/data
+      - OURIOS_WAL_ROOT=/wal
+      - OURIOS_RECEIVER_ENABLED=1
+      - OURIOS_RECEIVER_GRPC_ADDR=0.0.0.0:4317
+      - OURIOS_RECEIVER_HTTP_ADDR=0.0.0.0:4318
+      - OURIOS_QUERIER_ENABLED=1
+      - OURIOS_QUERIER_HTTP_ADDR=0.0.0.0:4319
+    ports:
+      - "4319:4319"   # query endpoint (http://localhost:4319/v1/query)
+    volumes:
+      - ourios-data:/data
+      - ourios-wal:/wal
+
+volumes:
+  ourios-data:
+  ourios-wal:
