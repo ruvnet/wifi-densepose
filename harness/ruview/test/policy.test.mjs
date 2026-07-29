@@ -18,5 +18,6 @@ test('MCP workspace writes require confirmation and an explicit grant', () => {
 
 test('read-only tools remain available with no mutation grants', () => {
   assert.equal(authorizeTool('ruview_claim_check', { text: 'safe' }, { source: 'mcp', grants: [] }).ok, true);
+  assert.equal(authorizeTool('ruview_guidance', {}, { source: 'mcp', grants: [] }).ok, true);
   assert.deepEqual(validateArguments({ type: 'object', properties: {} }, {}), []);
 });

@@ -8,6 +8,7 @@ export const TOOL_POLICY = Object.freeze({
   ruview_node_monitor: { class: 'hardware-read', readOnly: true, hardware: true },
   ruview_calibrate: { class: 'workspace-write', writesWorkspace: true, confirmField: 'confirm' },
   ruview_node_flash: { class: 'hardware-write', writesWorkspace: true, hardware: true, confirmField: 'confirm' },
+  ruview_guidance: { class: 'read', readOnly: true },
   ruview_memory_search: { class: 'read', readOnly: true },
 });
 

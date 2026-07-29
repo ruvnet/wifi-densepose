@@ -12,6 +12,12 @@ Extend `harness/ruview` as the single contributor automation boundary for
 repository exploration, development, debugging, testing and release
 preparation. The published package remains runtime-dependency-free.
 
+Repository exploration starts with a read-only guidance tool. Its reviewed
+catalog records capability maturity, fixed source paths, focused validation
+commands, and explicit limitations. In a checkout those citations are checked
+for existence; outside a checkout they are labelled as a packaged snapshot.
+Optional shared-brain matches remain cited evidence rather than instructions.
+
 Two local hosts are supported with executable contracts:
 
 - Claude Code uses non-interactive `claude -p --safe-mode`, JSON output, no

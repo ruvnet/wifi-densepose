@@ -11,6 +11,7 @@
     "ruview_claim_check",
     "ruview_verify",
     "ruview_node_monitor",
+    "ruview_guidance",
     "ruview_memory_search"
   ],
   "dangerousTools": {

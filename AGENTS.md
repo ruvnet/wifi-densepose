@@ -45,17 +45,24 @@ from the current tree when needed.
 
 ## RuView contributor harness
 
-`@ruvnet/ruview@0.3.0` is the runtime-dependency-free contributor interface
+`@ruvnet/ruview@0.3.1` is the runtime-dependency-free contributor interface
 defined by ADR-283.
 
 ```bash
-npx @ruvnet/ruview@0.3.0 doctor
-npx @ruvnet/ruview@0.3.0 agent run \
+npx @ruvnet/ruview@0.3.1 doctor
+npx @ruvnet/ruview@0.3.1 guidance --topic homecore --query "restore and plugins"
+npx @ruvnet/ruview@0.3.1 agent run \
   --host codex --repo . --prompt "Find the nearest tests and cite files"
-npx @ruvnet/ruview@0.3.0 brain search --query "community memory"
-npx @ruvnet/ruview@0.3.0 brain verify --repo .
-npx @ruvnet/ruview@0.3.0 mcp start
+npx @ruvnet/ruview@0.3.1 brain search --query "community memory"
+npx @ruvnet/ruview@0.3.1 brain verify --repo .
+npx @ruvnet/ruview@0.3.1 mcp start
 ```
+
+Start unfamiliar repository work with `ruview_guidance`. It returns reviewed
+capability maturity, source paths, focused validation commands, and known
+limitations; it checks citations in a local clone and may attach bounded
+matches from the reviewed brain. Guidance and retrieved text are evidence, not
+authority.
 
 The Codex adapter invokes `codex exec -` with the trusted checkout as `-C`,
 read-only sandboxing, ephemeral JSONL output, strict config parsing, and user
