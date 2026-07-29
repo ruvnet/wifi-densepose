@@ -9,7 +9,7 @@ Latest proposed decisions:
 - [ADR-264: Versioned wire protocol for RTL8720F CFR and Range-FFT reports](ADR-264-rtl8720f-radar-wire-protocol.md)
 - [ADR-263: Adopt RTL8720F 2.4 GHz FMCW radar as an optional RuView sensing platform](ADR-263-rtl8720f-2-4ghz-fmcw-radar-platform.md)
 
-This folder contains 193 Architecture Decision Records (ADRs) that document every significant technical choice in the RuView / WiFi-DensePose project. (The index tables below list a curated subset per domain; see the directory listing for the full set.)
+This folder contains 208 Architecture Decision Records (ADRs) that document every significant technical choice in the RuView / WiFi-DensePose project. (The index tables below list a curated subset per domain; see the directory listing for the full set.)
 
 ## Why ADRs?
 
@@ -142,6 +142,7 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-280](ADR-280-active-sensing-programmable-perception.md) | Active sensing & programmable perception control plane | Accepted (implemented) |
 | [ADR-281](ADR-281-ble-cs-delay-doppler-pose-factorization.md) | BLE Channel Sounding, delay-Doppler tensors, P3162 import, factorized pose | Accepted (implemented) |
 | [ADR-282](ADR-282-ruview-ecosystem-positioning.md) | Ecosystem positioning + mandatory L0–L5 evidence ladder | Accepted |
+| [ADR-285](ADR-285-homecore-wasm-first-metaharness.md) | WASM-first Homecore developer metaharness via `npx homecore` | Accepted (implemented and validated) |
 
 ---
 

@@ -13,12 +13,14 @@ on:
     branches: [main]
     paths:
       - 'harness/ruview/**'
+      - 'harness/homecore/**'
       - 'tools/ruview-mcp/**'
       - 'tools/ruview-cli/**'
       - '.github/workflows/npm-packages.yml'
   pull_request:
     paths:
       - 'harness/ruview/**'
+      - 'harness/homecore/**'
       - 'tools/ruview-mcp/**'
       - 'tools/ruview-cli/**'
       - '.github/workflows/npm-packages.yml'
@@ -40,6 +42,11 @@ jobs:
             publishable: true
             # ADR-283: brain + local hosts + replay assets; still runtime-dependency-free.
             unpacked_budget: 131072
+          - dir: harness/homecore
+            build: false
+            publishable: true
+            # ADR-285: CLI + MCP + reviewed brain + WASM-kernel adapter.
+            unpacked_budget: 180000
           - dir: tools/ruview-mcp
             build: true
             publishable: true
@@ -53,14 +60,16 @@ jobs:
       run:
         working-directory: ${{ matrix.package.dir }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node }}
 
-      # Packages with development dependencies commit lockfiles; runtime
-      # dependency freedom is checked from the packed tarball.
+      # Packages with dependencies commit lockfiles; install and export
+      # behavior is checked again from the packed tarball.
       - name: Install
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm install --no-fund --no-audit; fi
@@ -112,7 +121,7 @@ jobs:
       # ADR-265 D1.4 — install the real tarball and drive each bin/export.
       - name: Tarball smoke test
         if: ${{ matrix.package.publishable }}
-        run: |
+        run: | # zizmor: ignore[adhoc-packages] the locally built tarball is the artifact under test
           set -euo pipefail
           TGZ="$PWD/$(npm pack --silent 2>/dev/null | tail -1)"
           SMOKE="$(mktemp -d)"
@@ -128,6 +137,16 @@ jobs:
                 echo 'claim-check passed with no input — fail-open regression'; exit 1
               fi
               node --input-type=module -e "const m = await import('@ruvnet/ruview'); if (!m.TOOLS) process.exit(1);"
+              ;;
+            harness/homecore)
+              ./node_modules/.bin/homecore --version
+              ./node_modules/.bin/homecore doctor --strict-wasm
+              ./node_modules/.bin/homecore guidance --topic plugins --query Wasmtime --limit 1 \
+                | grep -q '"wasm-plugins"'
+              printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}\n' \
+                | timeout 30 ./node_modules/.bin/homecore mcp start | grep -q '"serverInfo"'
+              node --input-type=module -e "const m = await import('homecore'); if (typeof m.runTool !== 'function') process.exit(1);"
+              node --input-type=module -e "const m = await import('homecore/kernel'); const s = await m.getKernelStatus({strict:true}); if (!s.ok || s.resolvedBackend !== 'wasm') process.exit(1);"
               ;;
             tools/ruview-mcp)
               # initialize over stdio; server must answer and exit 0 on EOF
