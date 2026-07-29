@@ -10,6 +10,7 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const quiet = process.argv.includes('--quiet');
 const INCLUDE = ['package.json', 'bin', 'src', 'skills', '.claude', '.mcp', '.harness/claims.json', '.harness/mcp-policy.json', 'brain', 'flywheel', 'scripts', 'CLAUDE.md', 'README.md', 'LICENSE'];
 const sha = (value) => createHash('sha256').update(value).digest('hex');
+const canonicalFile = (path) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
 const files = [];
 function walk(path) {
   const stat = statSync(path);
@@ -18,7 +19,7 @@ function walk(path) {
   } else files.push(path);
 }
 for (const entry of INCLUDE) walk(join(ROOT, entry));
-const hashes = Object.fromEntries(files.sort().map((path) => [relative(ROOT, path).replaceAll('\\', '/'), sha(readFileSync(path))]));
+const hashes = Object.fromEntries(files.sort().map((path) => [relative(ROOT, path).replaceAll('\\', '/'), sha(canonicalFile(path))]));
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
 const manifest = {
   schema: 2,
