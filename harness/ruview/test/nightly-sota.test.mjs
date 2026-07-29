@@ -437,8 +437,13 @@ test('nightly workflow keeps model and publication authority split and is PR-tes
   );
   assert.match(workflow, /\n  schedule:/);
   assert.match(workflow, /\n  workflow_dispatch:/);
+  assert.match(workflow, /\n  NODE_VERSION: '22'/);
   assert.doesNotMatch(workflow, /pull_request_target|workflow_run|\/v1\/evolve|--confirm/);
   assert.doesNotMatch(workflow, /actions\/workflows\/ci\.yml/);
+  assert.doesNotMatch(
+    workflow,
+    /11d5960a326750d5838078e36cf38b85af677262|49933ea5288caeca8642d1e84afbd3f7d6820020|ea165f8d65b6e75b540449e92b4886f43607fa02|d3f86a106a0bac45b974a628896c90dbdf5c8093/,
+  );
   for (const match of workflow.matchAll(/^\s*-\s+uses:\s*[^@\s]+@([^\s#]+)/gm)) {
     assert.match(match[1], /^[a-f0-9]{40}$/);
   }
@@ -456,6 +461,7 @@ test('nightly workflow keeps model and publication authority split and is PR-tes
   const verifier = await readFile(path.join(repoRoot, '.github/workflows/ruview-harness-flywheel.yml'), 'utf8');
   assert.match(verifier, /\.github\/scripts\/nightly-sota\/\*\*/);
   assert.match(verifier, /\.github\/workflows\/nightly-sota-agent\.yml/);
+  assert.match(verifier, /node-version: 22/);
   const agentSource = await readFile(path.join(repoRoot, '.github/scripts/nightly-sota/agent.mjs'), 'utf8');
   assert.doesNotMatch(agentSource, /actions\/workflows\/ci\.yml/);
   assert.match(agentSource, /actions\/workflows\/ruview-harness-flywheel\.yml/);
