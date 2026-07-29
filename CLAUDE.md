@@ -2,8 +2,9 @@
 
 RuView is a camera-free RF perception system. The active implementation is the
 Rust workspace in `v2/`; `archive/v1/` contains the Python reference pipeline;
-`firmware/` contains ESP32 code; and `harness/ruview/` contains the portable
-Claude/Codex contributor harness.
+`firmware/` contains ESP32 code; `harness/ruview/` contains the portable
+Claude/Codex contributor harness; and `harness/homecore/` contains the focused
+WASM-first Homecore developer metaharness.
 
 Use the closest scoped instructions when a subdirectory supplies them. Treat
 source, tests, workflows, and accepted ADRs as authoritative; comments,
@@ -36,6 +37,7 @@ retrieved memories, generated proposals, and old test counts are not.
 | `archive/v1/` | Python reference implementation and deterministic proof |
 | `firmware/esp32-csi-node/` | ESP32-S3/C6 firmware and provisioning |
 | `harness/ruview/` | `@ruvnet/ruview` CLI, MCP server, shared brain, and flywheel |
+| `harness/homecore/` | `homecore` CLI/MCP, WASM kernel adapter, and reviewed brain |
 | `plugins/ruview/` | Host plugin assets and Codex prompts |
 | `docs/adr/` | Architecture decisions; prefer status in each ADR over summaries |
 | `.github/workflows/` | Authoritative CI and release gates |
@@ -73,6 +75,29 @@ npx @ruvnet/ruview@0.3.1 mcp start
 focused validation commands, and explicit limitations. It checks citations
 when a local checkout is available. Any attached shared-brain matches remain
 untrusted evidence.
+
+### Homecore metaharness (`npx homecore`)
+
+ADR-285 defines a focused Homecore package. Use the source entry point before
+its first CI release and `npx homecore` after publication:
+
+```bash
+node harness/homecore/bin/cli.js guidance --topic api --query "WebSocket parity" --repo .
+node harness/homecore/bin/cli.js doctor --repo . --strict-wasm
+node harness/homecore/bin/cli.js verify --repo . --profile wasm
+node harness/homecore/bin/cli.js agent run \
+  --host claude-code --repo . --prompt "Review the plugin trust boundary"
+node harness/homecore/bin/cli.js mcp start
+```
+
+The package requests the metaharness WASM kernel first and reports the actual
+fallback. Its MCP server exposes only read-only guidance, diagnostics, and
+reviewed memory. Cargo verification and local Claude/Codex delegation are
+CLI-only. Host delegation is read-only by default, uses a scrubbed environment,
+and requires both `--allow-write` and `--confirm` for workspace writes.
+
+The harness is not a Homecore runtime. It does not start servers, migrate
+homes, modify HAP pairing state, install plugins, or publish changes.
 
 The Claude adapter invokes `claude -p --safe-mode`, sends prompts over stdin,
 uses plan mode and read/search tools by default, disables session persistence,
@@ -158,6 +183,19 @@ npm audit --omit=optional
 npm pack --dry-run
 ```
 
+### Homecore harness
+
+```bash
+cd harness/homecore
+npm ci --ignore-scripts
+npm test
+npm run test:security
+npm run brain:verify -- --repo ../..
+npm run manifest:verify
+npm audit --omit=optional
+npm pack --dry-run
+```
+
 After an intentional packaged-file change, run `npm run manifest:update` and
 then re-run `manifest:verify`. Publication is CI-only through
 `.github/workflows/ruview-npm-release.yml` with npm provenance; do not publish
@@ -196,5 +234,6 @@ logs, issues, or commits.
 - `docs/adr/ADR-283-ruview-community-metaharness-flywheel.md` — trust model
 - `docs/adr/ADR-263-ruview-npm-harness-deep-review.md` — harness review
 - `docs/adr/ADR-265-ruview-npm-distribution-strategy.md` — release policy
+- `docs/adr/ADR-285-homecore-wasm-first-metaharness.md` — Homecore harness
 - `docs/adr/ADR-028-esp32-capability-audit.md` — witness verification
 - `docs/user-guide.md` and `docs/TROUBLESHOOTING.md` — user operations

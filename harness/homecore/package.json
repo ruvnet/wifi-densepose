@@ -1,0 +1,74 @@
+{
+  "name": "homecore",
+  "version": "0.1.0",
+  "description": "WASM-first Homecore developer metaharness with source-cited guidance, MCP tools, and guarded Claude Code and Codex adapters.",
+  "type": "module",
+  "bin": {
+    "homecore": "bin/cli.js"
+  },
+  "exports": {
+    ".": "./src/tools.js",
+    "./brain": "./src/brain.js",
+    "./guidance": "./src/guidance.js",
+    "./hosts": "./src/hosts/index.js",
+    "./kernel": "./src/kernel.js"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "skills/",
+    ".claude/settings.json",
+    ".claude/skills/",
+    ".codex/",
+    ".mcp/",
+    ".harness/",
+    "brain/corpus/core.jsonl",
+    "scripts/",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "test:security": "node --test test/brain.test.mjs test/cli.test.mjs test/hosts.test.mjs test/kernel.test.mjs test/mcp.test.mjs test/policy.test.mjs",
+    "doctor": "node ./bin/cli.js doctor",
+    "mcp": "node ./bin/cli.js mcp start",
+    "brain:verify": "node ./bin/cli.js brain verify",
+    "manifest:update": "node ./scripts/update-manifest.mjs",
+    "manifest:verify": "node ./scripts/verify-manifest.mjs",
+    "prepack": "node ./scripts/verify-manifest.mjs --quiet",
+    "prepublishOnly": "npm test && node ./scripts/verify-manifest.mjs"
+  },
+  "keywords": [
+    "homecore",
+    "home-assistant",
+    "agent-harness",
+    "metaharness",
+    "webassembly",
+    "wasmtime",
+    "mcp",
+    "claude-code",
+    "codex"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "license": "MIT",
+  "author": "ruvnet",
+  "dependencies": {
+    "@metaharness/kernel": "0.1.2"
+  },
+  "homepage": "https://github.com/ruvnet/RuView#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ruvnet/RuView.git",
+    "directory": "harness/homecore"
+  },
+  "bugs": {
+    "url": "https://github.com/ruvnet/RuView/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

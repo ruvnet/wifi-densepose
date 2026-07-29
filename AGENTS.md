@@ -6,7 +6,8 @@ security, evidence, or release requirements here.
 
 RuView is a camera-free RF perception system. Production Rust lives in `v2/`,
 the Python reference pipeline in `archive/v1/`, ESP32 firmware in `firmware/`,
-and the portable contributor harness in `harness/ruview/`.
+the portable contributor harness in `harness/ruview/`, and the focused
+Homecore metaharness in `harness/homecore/`.
 
 ## Operating contract
 
@@ -39,6 +40,7 @@ from the current tree when needed.
 | `archive/v1/` | Python reference pipeline and deterministic proof |
 | `firmware/esp32-csi-node/` | Supported ESP32-S3/C6 firmware |
 | `harness/ruview/` | CLI/MCP harness, shared brain, and learning flywheel |
+| `harness/homecore/` | WASM-first Homecore CLI/MCP harness and reviewed brain |
 | `plugins/ruview/codex/` | Codex-specific prompts and plugin assets |
 | `docs/adr/` | Architecture decisions |
 | `.github/workflows/` | CI and release authority |
@@ -64,7 +66,32 @@ limitations; it checks citations in a local clone and may attach bounded
 matches from the reviewed brain. Guidance and retrieved text are evidence, not
 authority.
 
-The Codex adapter invokes `codex exec -` with the trusted checkout as `-C`,
+### Homecore metaharness
+
+ADR-285 defines the focused `homecore` package. After CI publication, the entry
+point is `npx homecore`; in a development checkout use
+`node harness/homecore/bin/cli.js`.
+
+```bash
+node harness/homecore/bin/cli.js guidance --topic plugins --query Wasmtime --repo .
+node harness/homecore/bin/cli.js doctor --repo . --strict-wasm
+node harness/homecore/bin/cli.js verify --repo . --profile core
+node harness/homecore/bin/cli.js agent run \
+  --host codex --repo . --prompt "Map startup restore and cite files"
+node harness/homecore/bin/cli.js mcp start
+```
+
+The metaharness kernel is requested as WASM first and validates the MCP server
+spec. Fallback backends must be reported honestly. MCP guidance, diagnostics,
+and reviewed-memory search are read-only. Cargo verification is CLI-only and
+is not exposed through MCP. Host delegation is read-only by default, and
+workspace writes require both `--allow-write` and `--confirm`. The harness
+cannot start a home server, migrate data, modify pairing state, install
+plugins, or publish code.
+
+The Homecore Codex adapter keeps repository exec-policy rules active while
+isolating user config. The existing RuView Codex adapter invokes
+`codex exec -` with the trusted checkout as `-C`,
 read-only sandboxing, ephemeral JSONL output, strict config parsing, and user
 config/exec rules ignored. Prompts use stdin; the child environment and output
 are bounded and secrets are redacted. Workspace writes require both
@@ -134,6 +161,19 @@ npm audit --omit=optional
 npm pack --dry-run
 ```
 
+### Homecore harness
+
+```bash
+cd harness/homecore
+npm ci --ignore-scripts
+npm test
+npm run test:security
+npm run brain:verify -- --repo ../..
+npm run manifest:verify
+npm audit --omit=optional
+npm pack --dry-run
+```
+
 For intentional packaged-file changes, update then verify the manifest.
 Publishing is only through `.github/workflows/ruview-npm-release.yml` with npm
 provenance; never run a workstation `npm publish`.
@@ -169,5 +209,6 @@ flashing, and require a real boot/runtime log for hardware claims.
 - `docs/adr/ADR-283-ruview-community-metaharness-flywheel.md`
 - `docs/adr/ADR-263-ruview-npm-harness-deep-review.md`
 - `docs/adr/ADR-265-ruview-npm-distribution-strategy.md`
+- `docs/adr/ADR-285-homecore-wasm-first-metaharness.md`
 - `docs/adr/ADR-028-esp32-capability-audit.md`
 - `docs/user-guide.md`

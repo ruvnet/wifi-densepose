@@ -7,6 +7,8 @@
 #
 # Requires: NPM_TOKEN repo secret (an npm automation token), or npm Trusted
 # Publishing configured for the package (in which case the token is unused).
+# Configure the `npm-release` environment for selected branch `main`, required
+# review, and prevention of self-review; the job also rejects non-main refs.
 
 name: ruview npm release
 
@@ -19,6 +21,7 @@ on:
         type: choice
         options:
           - harness/ruview
+          - harness/homecore
           - tools/ruview-mcp
       dist_tag:
         description: 'npm dist-tag'
@@ -32,17 +35,42 @@ permissions:
 
 jobs:
   publish:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    environment:
+      name: npm-release
+    concurrency:
+      group: npm-release
+      cancel-in-progress: false
     defaults:
       run:
         working-directory: ${{ inputs.package }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: '20'
+          persist-credentials: false
+          ref: refs/heads/main
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+
+      - name: Verify trusted-publishing runtime
+        run: |
+          node -e "
+            const [major, minor] = process.versions.node.split('.').map(Number);
+            if (major < 22 || (major === 22 && minor < 14)) {
+              throw new Error('npm trusted publishing requires Node >=22.14.0');
+            }
+          "
+          node -e "
+            const { execFileSync } = require('node:child_process');
+            const [major, minor, patch] = execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim().split('.').map(Number);
+            if (major < 11 || (major === 11 && (minor < 5 || (minor === 5 && patch < 1)))) {
+              throw new Error('npm trusted publishing requires npm >=11.5.1');
+            }
+          "
 
       - name: Install
         run: |
@@ -78,6 +106,8 @@ jobs:
           case "${{ inputs.package }}" in
             # ADR-283: brain + local hosts + replay assets; no runtime deps.
             harness/ruview) export UNPACKED_BUDGET=131072 ;;
+            # ADR-285: CLI + MCP + reviewed brain + WASM-kernel adapter.
+            harness/homecore) export UNPACKED_BUDGET=180000 ;;
             # ADR-264 O2: map-free tarball (was 188 kB with maps).
             tools/ruview-mcp) export UNPACKED_BUDGET=140000 ;;
             *) echo "Unknown package '${{ inputs.package }}' — no budget defined"; exit 1 ;;
@@ -99,9 +129,11 @@ jobs:
 
       # ADR-265 D1.4 — install the real tarball and drive each bin/export.
       - name: Tarball smoke test
-        run: |
+        run: | # zizmor: ignore[adhoc-packages] the locally built tarball is the artifact under test
           set -euo pipefail
           TGZ="$PWD/$(npm pack --silent 2>/dev/null | tail -1)"
+          SHA512="$(sha512sum "$TGZ" | cut -d' ' -f1)"
+          printf 'PACKAGE_TARBALL=%s\nPACKAGE_TARBALL_SHA512=%s\n' "$TGZ" "$SHA512" >> "$GITHUB_ENV"
           SMOKE="$(mktemp -d)"
           cd "$SMOKE"
           npm init -y > /dev/null
@@ -119,6 +151,16 @@ jobs:
               node --input-type=module -e "const m = await import('@ruvnet/ruview'); if (!m.TOOLS) process.exit(1);"
               node --input-type=module -e "const m = await import('@ruvnet/ruview/guidance'); if (typeof m.getGuidance !== 'function') process.exit(1);"
               ;;
+            harness/homecore)
+              ./node_modules/.bin/homecore --version
+              ./node_modules/.bin/homecore doctor --strict-wasm
+              ./node_modules/.bin/homecore guidance --topic plugins --query Wasmtime --limit 1 \
+                | grep -q '"wasm-plugins"'
+              printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}\n' \
+                | timeout 30 ./node_modules/.bin/homecore mcp start | grep -q '"serverInfo"'
+              node --input-type=module -e "const m = await import('homecore'); if (typeof m.runTool !== 'function') process.exit(1);"
+              node --input-type=module -e "const m = await import('homecore/kernel'); const s = await m.getKernelStatus({strict:true}); if (!s.ok || s.resolvedBackend !== 'wasm') process.exit(1);"
+              ;;
             tools/ruview-mcp)
               # initialize over stdio; server must answer and exit 0 on EOF
               printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}\n' \
@@ -135,6 +177,9 @@ jobs:
           fi
 
       - name: Publish (with provenance)
-        run: npm publish --provenance --access public --tag "${{ inputs.dist_tag }}"
+        run: |
+          printf '%s  %s\n' "$PACKAGE_TARBALL_SHA512" "$PACKAGE_TARBALL" | sha512sum --check -
+          npm publish "$PACKAGE_TARBALL" --provenance --access public --tag "$NPM_DIST_TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_DIST_TAG: ${{ inputs.dist_tag }}

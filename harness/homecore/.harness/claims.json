@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "claims": [
+    {
+      "id": "wasm-first-kernel",
+      "evidence": "REPOSITORY",
+      "claim": "The CLI requests the packaged metaharness WASM backend first and reports any fallback."
+    },
+    {
+      "id": "homecore-capability-catalog",
+      "evidence": "REPOSITORY",
+      "claim": "Guidance records cite Homecore source paths, validation commands, and explicit limitations."
+    },
+    {
+      "id": "host-least-authority",
+      "evidence": "POLICY",
+      "claim": "Local Claude Code and Codex adapters are read-only by default and require two write opt-ins."
+    }
+  ]
+}

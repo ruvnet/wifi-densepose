@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "architecture": "ADR-285 WASM-first, removable metaharness augmentation",
+  "defaultDeny": true,
+  "auditLog": true,
+  "requireApprovalForDangerous": true,
+  "toolTimeoutMs": 120000,
+  "maxToolCallsPerTurn": 20,
+  "maxQueuedToolCalls": 16,
+  "maxRequestBytes": 262144,
+  "readOnlyTools": [
+    "homecore_guidance",
+    "homecore_wasm_status",
+    "homecore_doctor",
+    "homecore_memory_search"
+  ],
+  "cliOnlyTools": [
+    "homecore_verify"
+  ]
+}
