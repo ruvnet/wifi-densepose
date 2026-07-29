@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  NODE_VERSION: '20'
+  NODE_VERSION: '22'
 
 jobs:
   collect:
@@ -35,18 +35,18 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           submodules: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Collect bounded public evidence
         run: >-
           node --disable-proto=throw .github/scripts/nightly-sota/agent.mjs collect
           --out "${RUNNER_TEMP}/nightly-sota/evidence.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: nightly-sota-evidence-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/evidence.json
@@ -67,14 +67,14 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           submodules: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nightly-sota-evidence-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/collect
@@ -87,7 +87,7 @@ jobs:
           --repo-root "${GITHUB_WORKSPACE}"
           --proposal-out "${RUNNER_TEMP}/nightly-sota/propose/proposal.json"
           --receipt-out "${RUNNER_TEMP}/nightly-sota/propose/cognitum-receipt.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: nightly-sota-proposal-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/propose/
@@ -102,18 +102,18 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           submodules: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nightly-sota-evidence-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/collect
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nightly-sota-proposal-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/propose
@@ -131,7 +131,7 @@ jobs:
           --repo-root "${GITHUB_WORKSPACE}"
           --score-out "${RUNNER_TEMP}/nightly-sota/score/score.json"
           --replay-out "${RUNNER_TEMP}/nightly-sota/score/replay.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: nightly-sota-score-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/score/
@@ -151,22 +151,22 @@ jobs:
       should_implement: ${{ steps.triage.outputs.should_implement }}
       issue_number: ${{ steps.triage.outputs.issue_number }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           submodules: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nightly-sota-evidence-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/collect
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nightly-sota-proposal-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/propose
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nightly-sota-score-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/score
@@ -183,7 +183,7 @@ jobs:
           --replay "${RUNNER_TEMP}/nightly-sota/score/replay.json"
           --repo-root "${GITHUB_WORKSPACE}"
           --out "${RUNNER_TEMP}/nightly-sota/issue/issue.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: nightly-sota-issue-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/issue/
@@ -199,18 +199,18 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           submodules: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nightly-sota-evidence-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/collect
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nightly-sota-proposal-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/propose
@@ -224,7 +224,7 @@ jobs:
           --repo-root "${GITHUB_WORKSPACE}"
           --bundle-out "${RUNNER_TEMP}/nightly-sota/implement/bundle.json"
           --receipt-out "${RUNNER_TEMP}/nightly-sota/implement/cognitum-receipt.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: nightly-sota-implementation-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/implement/
@@ -239,26 +239,26 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           submodules: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nightly-sota-evidence-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/collect
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nightly-sota-proposal-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/propose
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nightly-sota-score-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/score
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nightly-sota-implementation-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/implement
@@ -277,7 +277,7 @@ jobs:
           --implementation-receipt "${RUNNER_TEMP}/nightly-sota/implement/cognitum-receipt.json"
           --repo-root "${GITHUB_WORKSPACE}"
           --out "${RUNNER_TEMP}/nightly-sota/validate/validation.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: nightly-sota-validation-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/validate/
@@ -295,36 +295,36 @@ jobs:
       issues: write # Label the draft PR and link it from the issue.
       pull-requests: write # Create a draft PR; the script has no approve or merge path.
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: true
           submodules: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nightly-sota-evidence-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/collect
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nightly-sota-proposal-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/propose
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nightly-sota-score-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/score
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nightly-sota-issue-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/issue
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nightly-sota-implementation-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/implement
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: nightly-sota-validation-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-sota/validate
