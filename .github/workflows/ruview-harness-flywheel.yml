@@ -4,7 +4,10 @@ on:
   pull_request:
     paths:
       - 'harness/ruview/**'
+      - '.github/scripts/nightly-sota/**'
+      - '.github/workflows/nightly-sota-agent.yml'
       - '.github/workflows/ruview-harness-flywheel.yml'
+      - 'docs/adr/ADR-284-bounded-nightly-sota-agent.md'
   workflow_dispatch:
     inputs:
       run_darwin:
@@ -16,8 +19,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ruview-harness-flywheel-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   verify:
+    name: Verify contributor harness
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -41,6 +49,7 @@ jobs:
       - run: npm pack --dry-run
 
   darwin-proposal:
+    name: Generate untrusted Darwin proposal
     if: github.event_name == 'workflow_dispatch' && inputs.run_darwin
     needs: verify
     runs-on: ubuntu-latest
