@@ -1,0 +1,345 @@
+name: Nightly SOTA research agent
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'dry-run collects evidence only; live may create one issue and one draft prototype PR'
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - live
+
+permissions: {}
+
+concurrency:
+  group: nightly-sota-agent
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  collect:
+    name: Collect public evidence
+    if: >-
+      github.repository == 'ruvnet/RuView' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' || vars.RUVIEW_NIGHTLY_SOTA_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          submodules: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Collect bounded public evidence
+        run: >-
+          node --disable-proto=throw .github/scripts/nightly-sota/agent.mjs collect
+          --out "${RUNNER_TEMP}/nightly-sota/evidence.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nightly-sota-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/evidence.json
+          if-no-files-found: error
+          retention-days: 7
+
+  propose:
+    name: Synthesize bounded proposal
+    if: >-
+      needs.collect.result == 'success' &&
+      (
+        github.event_name == 'schedule' ||
+        (inputs.mode == 'live' && github.actor == github.repository_owner)
+      )
+    needs: collect
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          submodules: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nightly-sota-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/collect
+      - name: Synthesize one proposal with Cognitum
+        env:
+          COGNITUM_NIGHTLY_API_KEY: ${{ secrets.COGNITUM_NIGHTLY_API_KEY }}
+        run: >-
+          node --disable-proto=throw .github/scripts/nightly-sota/agent.mjs propose
+          --evidence "${RUNNER_TEMP}/nightly-sota/collect/evidence.json"
+          --repo-root "${GITHUB_WORKSPACE}"
+          --proposal-out "${RUNNER_TEMP}/nightly-sota/propose/proposal.json"
+          --receipt-out "${RUNNER_TEMP}/nightly-sota/propose/cognitum-receipt.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nightly-sota-proposal-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/propose/
+          if-no-files-found: error
+          retention-days: 7
+
+  score:
+    name: Verify frozen Darwin and Flywheel score
+    needs: propose
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          submodules: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nightly-sota-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/collect
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nightly-sota-proposal-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/propose
+      - name: Install exact-pinned Flywheel development dependencies
+        working-directory: harness/ruview
+        run: npm ci --ignore-scripts --omit=optional
+      - name: Audit Flywheel dependency graph
+        working-directory: harness/ruview
+        run: npm audit --omit=optional
+      - name: Score with frozen Darwin policy and honest-null Flywheel replay
+        run: >-
+          node --disable-proto=throw .github/scripts/nightly-sota/agent.mjs score
+          --evidence "${RUNNER_TEMP}/nightly-sota/collect/evidence.json"
+          --proposal "${RUNNER_TEMP}/nightly-sota/propose/proposal.json"
+          --repo-root "${GITHUB_WORKSPACE}"
+          --score-out "${RUNNER_TEMP}/nightly-sota/score/score.json"
+          --replay-out "${RUNNER_TEMP}/nightly-sota/score/replay.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nightly-sota-score-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/score/
+          if-no-files-found: error
+          retention-days: 7
+
+  issue:
+    name: Deduplicate and create issue
+    needs: score
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write # Create the single labelled research issue.
+      pull-requests: read # Stop before spending on a fingerprint with an existing bot PR.
+    outputs:
+      should_implement: ${{ steps.triage.outputs.should_implement }}
+      issue_number: ${{ steps.triage.outputs.issue_number }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          submodules: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nightly-sota-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/collect
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nightly-sota-proposal-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/propose
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nightly-sota-score-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/score
+      - name: Deduplicate or create one issue
+        id: triage
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          node --disable-proto=throw .github/scripts/nightly-sota/agent.mjs issue
+          --evidence "${RUNNER_TEMP}/nightly-sota/collect/evidence.json"
+          --proposal "${RUNNER_TEMP}/nightly-sota/propose/proposal.json"
+          --proposal-receipt "${RUNNER_TEMP}/nightly-sota/propose/cognitum-receipt.json"
+          --score "${RUNNER_TEMP}/nightly-sota/score/score.json"
+          --replay "${RUNNER_TEMP}/nightly-sota/score/replay.json"
+          --repo-root "${GITHUB_WORKSPACE}"
+          --out "${RUNNER_TEMP}/nightly-sota/issue/issue.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nightly-sota-issue-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/issue/
+          if-no-files-found: error
+          retention-days: 7
+
+  implement:
+    name: Generate offline prototype bundle
+    if: needs.issue.outputs.should_implement == 'true'
+    needs: issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          submodules: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nightly-sota-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/collect
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nightly-sota-proposal-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/propose
+      - name: Generate a bounded offline prototype with Cognitum
+        env:
+          COGNITUM_NIGHTLY_API_KEY: ${{ secrets.COGNITUM_NIGHTLY_API_KEY }}
+        run: >-
+          node --disable-proto=throw .github/scripts/nightly-sota/agent.mjs implement
+          --evidence "${RUNNER_TEMP}/nightly-sota/collect/evidence.json"
+          --proposal "${RUNNER_TEMP}/nightly-sota/propose/proposal.json"
+          --repo-root "${GITHUB_WORKSPACE}"
+          --bundle-out "${RUNNER_TEMP}/nightly-sota/implement/bundle.json"
+          --receipt-out "${RUNNER_TEMP}/nightly-sota/implement/cognitum-receipt.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nightly-sota-implementation-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/implement/
+          if-no-files-found: error
+          retention-days: 7
+
+  validate:
+    name: Validate without external credentials
+    needs: [score, implement]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          submodules: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nightly-sota-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/collect
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nightly-sota-proposal-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/propose
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nightly-sota-score-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/score
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nightly-sota-implementation-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/implement
+      - name: Install exact-pinned Flywheel verification dependency
+        working-directory: harness/ruview
+        run: npm ci --ignore-scripts --omit=optional
+      - name: Validate without model or GitHub write credentials
+        run: >-
+          node --disable-proto=throw .github/scripts/nightly-sota/agent.mjs validate
+          --evidence "${RUNNER_TEMP}/nightly-sota/collect/evidence.json"
+          --proposal "${RUNNER_TEMP}/nightly-sota/propose/proposal.json"
+          --proposal-receipt "${RUNNER_TEMP}/nightly-sota/propose/cognitum-receipt.json"
+          --score "${RUNNER_TEMP}/nightly-sota/score/score.json"
+          --replay "${RUNNER_TEMP}/nightly-sota/score/replay.json"
+          --bundle "${RUNNER_TEMP}/nightly-sota/implement/bundle.json"
+          --implementation-receipt "${RUNNER_TEMP}/nightly-sota/implement/cognitum-receipt.json"
+          --repo-root "${GITHUB_WORKSPACE}"
+          --out "${RUNNER_TEMP}/nightly-sota/validate/validation.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nightly-sota-validation-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/validate/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish draft prototype PR
+    needs: [issue, validate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write # Dispatch the read-only contributor-harness verifier for the generated branch.
+      contents: write # Push the one new prototype-only branch.
+      issues: write # Label the draft PR and link it from the issue.
+      pull-requests: write # Create a draft PR; the script has no approve or merge path.
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: true
+          submodules: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nightly-sota-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/collect
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nightly-sota-proposal-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/propose
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nightly-sota-score-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/score
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nightly-sota-issue-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/issue
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nightly-sota-implementation-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/implement
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nightly-sota-validation-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-sota/validate
+      - name: Publish one draft PR and dispatch the read-only verifier
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          node --disable-proto=throw .github/scripts/nightly-sota/agent.mjs publish
+          --evidence "${RUNNER_TEMP}/nightly-sota/collect/evidence.json"
+          --proposal "${RUNNER_TEMP}/nightly-sota/propose/proposal.json"
+          --proposal-receipt "${RUNNER_TEMP}/nightly-sota/propose/cognitum-receipt.json"
+          --score "${RUNNER_TEMP}/nightly-sota/score/score.json"
+          --replay "${RUNNER_TEMP}/nightly-sota/score/replay.json"
+          --issue "${RUNNER_TEMP}/nightly-sota/issue/issue.json"
+          --bundle "${RUNNER_TEMP}/nightly-sota/implement/bundle.json"
+          --implementation-receipt "${RUNNER_TEMP}/nightly-sota/implement/cognitum-receipt.json"
+          --validation "${RUNNER_TEMP}/nightly-sota/validate/validation.json"
+          --repo-root "${GITHUB_WORKSPACE}"
