@@ -99,7 +99,7 @@ jobs:
           - boundary-min
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -215,7 +215,7 @@ jobs:
     name: Fuzz Testing (ADR-061 Layer 6)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -266,7 +266,7 @@ jobs:
     name: NVS Matrix Generation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -322,7 +322,7 @@ jobs:
       image: espressif/idf:v5.4
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 

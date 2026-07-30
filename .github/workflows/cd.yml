@@ -44,7 +44,7 @@ jobs:
       image_tag: ${{ steps.determine-tag.outputs.tag }}
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         ref: ${{ github.event.workflow_run.head_sha || github.sha }}
         submodules: recursive
@@ -96,7 +96,7 @@ jobs:
       url: https://staging.wifi-densepose.com
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         submodules: recursive
 
@@ -147,7 +147,7 @@ jobs:
       url: https://wifi-densepose.com
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         submodules: recursive
 
