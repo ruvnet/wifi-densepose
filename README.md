@@ -74,6 +74,55 @@ RuView turns ordinary WiFi into a contactless sensor. A $9 ESP32 board reads the
 >
 > 🤗 **Pretrained weights**: download from [`ruvnet/wifi-densepose-pretrained`](https://huggingface.co/ruvnet/wifi-densepose-pretrained) — see [Loading the pretrained model](#loading-the-pretrained-model) below for one-command setup.
 
+## 🗺️ Quick Start Setup Flow
+
+Choose your path to get started with RuView:
+
+```mermaid
+graph TD
+    classDef default fill:#1e1e2e,stroke:#cdd6f4,stroke-width:1px,color:#cdd6f4;
+    classDef highlight fill:#f9e2af,stroke:#f9e2af,stroke-width:2px,color:#11111b;
+    classDef action fill:#a6e3a1,stroke:#a6e3a1,stroke-width:1px,color:#11111b;
+
+    Start([Start: Choose Your Goal]):::highlight
+    Start --> Goal{What is your goal?}
+
+    %% Goal paths
+    Goal -->|"Evaluation / Testing"| Docker["Option 1: Docker Simulation"]
+    Goal -->|"Python Library Integration"| Python["Option 4: Python PyPI Package"]
+    Goal -->|"Live WiFi Sensing"| SelectHW["Option 2/3: Live WiFi Sensing"]
+
+    %% Docker path
+    Docker --> DockRun["Run: docker run -p 3000:3000 ruvnet/wifi-densepose:latest"]:::action
+    DockRun --> ViewSim["View simulated data at http://localhost:3000"]:::action
+
+    %% Python path
+    Python --> PyInstall["Run: pip install ruview"]:::action
+    PyInstall --> PyCode["Integrate Breathing/HeartRate extractors in your code"]:::action
+    PyCode --> ViewOutput["Analyze/visualize CSI features"]:::action
+
+    %% Live Sensing / HW path
+    SelectHW --> HWChoice{Choose ESP32 Chip}
+    HWChoice -->|ESP32-S3| S3Node["Option 2a: ESP32-S3 Node"]
+    HWChoice -->|ESP32-C6| C6Node["Option 2b: ESP32-C6 WiFi 6 Node"]
+
+    S3Node --> Flash["Flash Firmware (esptool / idf.py)"]:::action
+    C6Node --> Flash
+
+    Flash --> Prov["Provision WiFi (provision.py)"]:::action
+    Prov --> SeedChoice{Do you have a Cognitum Seed?}
+
+    %% Seed choice
+    SeedChoice -->|Yes| Seed["Option 3: Full Cognitum System"]
+    SeedChoice -->|No| Mesh["ESP32 Mesh Mode"]
+
+    Seed --> SeedProc["Run: node scripts/rf-scan.js / processors"]:::action
+    SeedProc --> ViewUI["View live pose & vitals in RuView UI"]:::action
+
+    Mesh --> MeshDirect["Connect ESP32 directly to sensing-server / browser"]:::action
+    MeshDirect --> ViewUI
+```
+
 ```bash
 # Option 1: Docker (simulated data, no hardware needed)
 docker pull ruvnet/wifi-densepose:latest
