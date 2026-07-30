@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "generator": "0.1.0",
+  "template": "vertical:coding",
+  "template_version": "0.0.0",
+  "vars": {
+    "name": "wifi-densepose-sar-harness",
+    "description": "Harness for wifi-densepose-sar",
+    "host": "claude-code"
+  },
+  "hosts": [
+    "claude-code"
+  ],
+  "files": {
+    ".claude/commands/doctor.md": "2f1475fa0ed34729cb2ed9d6cecf29e99781da0a56afef133361e3ff0a17bb52",
+    ".claude/commands/review-diff.md": "2ab52f01487bfe67335f4de5193d7a6fb0f72f646411114613d8fa5da071ef2b",
+    ".claude/settings.json": "ea983de8f425d313ee42848a7da58ce98e05713a06dc2f45a5119f421a311e07",
+    ".claude/skills/plan-change/SKILL.md": "84e1c44ca264b999ebf80cd8fa0e5ebf554275bbd8023b1530ad053a44482e30",
+    ".claude-plugin/plugin.json": "f716a379f3e077b47dae884b5ca0d4a077e9a1ab1f091afa8f0f031ead1008e5",
+    "bin/cli.js": "78bd27074b3ce22bff63729995032c7b262a414ebfc8d75345fc82b40a4a84ee",
+    "CLAUDE.md": "4e9e11558e124605fd1a5de4be116c2b8d9dc15a3bc7c8f6789a7eec23dac19d",
+    "package.json": "a9f103fc452b5497a41333d2e80c834de07972e951be1701f25f98a5acaaea9d",
+    "README.md": "0efc949a11c20a8179261887d44afac60fb6e28af1ee0cf13451bd665b1cfbd4",
+    "src/agents/architect.ts": "b146bb8ad7729d7738f6c07d7770fecb6a13cf7683019c8b8afaec7c13806515",
+    "src/agents/implementer.ts": "55898d303ae87574348821ef2c270eceeec733278bb94041d767308b3a509291",
+    "src/agents/reviewer.ts": "ef5ab428ea799be7caeb05e761723122c52ab35d9ef4a18b618647ff72549ad8",
+    "src/agents/test-writer.ts": "f966a4d3a97a02b98606aac104f6fcbcf294c0186c15d7a809aa7555b20c0b5f",
+    "src/init.ts": "e19b1dbe6e4c3b7282a102bf068c20630e8cb0323d8abefa477d0f2dbbc68ce2",
+    "tsconfig.json": "8b4e730a1aa39162ac574455d7a98e1881f5313ca80ffe503b9652dcf0c76b9d",
+    "vitest.config.ts": "e9e94875611ab1cd602c1f6923902c2dab7953a75ac022962973639d1937587a",
+    "__tests__/smoke.test.ts": "e38dfc1389b8b419841f2c6513854dbb291e957be0c1c325c507dc58ef3d8c5e",
+    "LICENSE": "0580604803a2c38a1e4fe2c86d5e2f6d213cc3317cd5bc050691e484c523aedc",
+    ".claude/skills/evolve/SKILL.md": "05965b34edd9bbea83391ae20c5c22bf2653396e7b54557cfcf395fd7d11294a"
+  },
+  "generated_at": "2026-07-30T22:39:05.579Z",
+  "meta": {
+    "surface": "cli"
+  }
+}
