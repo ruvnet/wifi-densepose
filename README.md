@@ -178,9 +178,9 @@ huggingface-cli download ruvnet/wifi-densepose-pretrained --local-dir models/wif
 |----------|-------------|--------|
 | Python training / evaluation / embedding extraction | `model.safetensors` | ✅ Works — load with `safetensors.torch.load_file` |
 | Inspect / re-export the bundle | `model.rvf.jsonl` (line-by-line JSON) | ✅ Works — plain JSONL |
-| Sensing-server `--model <PATH>` flag | binary RVF (`RVFS` magic) | ⚠️ Loader does not yet accept the JSONL container |
+| Sensing-server `--model <PATH>` flag | binary RVF (`RVFS` magic) or JSONL container | ✅ Works — loader sniffs the input and maps JSONL lines onto in-memory binary segments |
 
-**Known gap:** the HF model ships in JSONL RVF format, but `v2/crates/wifi-densepose-sensing-server/src/rvf_container.rs` only parses the binary RVF segment format. Pointing `--model` at `model.rvf.jsonl` currently errors with `invalid magic at offset 0: expected 0x52564653, got 0x7974227B` and the live pipeline degrades to null output rather than falling back to heuristic mode — so for the live sensing-server, run **without** `--model` until a JSONL adapter lands (or the model is re-published as binary RVF). Use the weights from Python / training in the meantime.
+**JSONL loader:** `RvfReader::from_bytes` (and `from_file`) in `v2/crates/wifi-densepose-sensing-server/src/rvf_container.rs` sniff the leading byte and dispatch to a JSONL parser when the file starts with `{`. The parser maps `metadata` lines onto a synthetic manifest segment (so `ProgressiveLoader::load_layer_a` reports the real model id and version), `quantization` lines onto a `SEG_QUANT` segment, and everything else (`encoder`, `lora`, `ewc`, `wiflow`, …) into a `SEG_META` payload preserved verbatim. Unrecognised inputs return an explicit error rather than degrading to null output. Note that the JSONL bundle deliberately does **not** carry the f32 weight matrix — those ship separately as `model.safetensors` / `model-qN.bin` — so the live inference path still needs one of those companion files when convolution weights are required.
 
 **Quantization choices** (all in the HF repo): `model-q2.bin` (4 KB) · `model-q4.bin` ⭐ recommended (8 KB) · `model-q8.bin` (16 KB) · `model.safetensors` full (48 KB)
 
