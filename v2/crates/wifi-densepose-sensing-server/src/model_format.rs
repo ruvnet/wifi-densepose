@@ -209,7 +209,18 @@ pub fn safetensors_to_rvf(data: &[u8], model_id: &str) -> Result<Vec<u8>, ModelL
         .filter(|&e| e <= data.len())
         .ok_or_else(|| fail(format!("declared header length {header_len} exceeds file size")))?;
 
-    let header: serde_json::Value = serde_json::from_slice(&data[header_start..header_end])
+    // The reference safetensors format pads the header to an 8-byte boundary
+    // with NUL bytes after the closing brace; a strict single-shot parse over
+    // the full declared-length slice rejects that padding. Trim trailing NUL
+    // (and whitespace) before parsing — every published HF safetensors file
+    // exercises this padding.
+    let raw_header = &data[header_start..header_end];
+    let trimmed_end = raw_header
+        .iter()
+        .rposition(|&b| b != 0 && !b.is_ascii_whitespace())
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let header: serde_json::Value = serde_json::from_slice(&raw_header[..trimmed_end])
         .map_err(|e| fail(format!("safetensors header is not valid JSON: {e}")))?;
     let obj = header
         .as_object()
@@ -425,6 +436,43 @@ mod tests {
         // RVFS magic ("RVFS" LE) -> Rvf.
         let rvfs = RVFS_MAGIC.to_le_bytes();
         assert_eq!(detect_format(&rvfs, "model.rvf"), ModelFormat::Rvf);
+    }
+
+    /// Build a safetensors buffer with the header padded to an 8-byte boundary
+    /// with NUL bytes, matching the reference format and the published
+    /// `model.safetensors` (issue #1480).
+    fn make_safetensors_nul_padded(weights: &[f32]) -> Vec<u8> {
+        let n = weights.len();
+        let header = serde_json::json!({
+            "weight": {
+                "dtype": "F32",
+                "shape": [n],
+                "data_offsets": [0, n * 4],
+            }
+        });
+        let mut header_bytes = serde_json::to_vec(&header).unwrap();
+        let padded_len = (header_bytes.len() + 7) & !7;
+        header_bytes.resize(padded_len, 0);
+        let mut out = Vec::new();
+        out.extend_from_slice(&(header_bytes.len() as u64).to_le_bytes());
+        out.extend_from_slice(&header_bytes);
+        for &w in weights {
+            out.extend_from_slice(&w.to_le_bytes());
+        }
+        out
+    }
+
+    /// REGRESSION #1480: a NUL-padded header (the reference safetensors format,
+    /// and what the published `model.safetensors` actually ships) must convert,
+    /// not fail with "safetensors header is not valid JSON: trailing characters".
+    #[test]
+    fn safetensors_nul_padded_header_converts() {
+        let st = make_safetensors_nul_padded(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        let rvf = safetensors_to_rvf(&st, "wifi-densepose-pretrained")
+            .expect("NUL-padded header must convert");
+        let mut loader = ProgressiveLoader::new(&rvf).expect("converted RVF must load");
+        let lc = loader.load_layer_c().expect("Layer C");
+        assert_eq!(lc.all_weights, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
     }
 
     /// CORE #894 PROOF: the published safetensors converts to a container the

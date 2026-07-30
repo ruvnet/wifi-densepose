@@ -2,335 +2,266 @@
 license: mit
 tags:
   - wifi-sensing
-  - pose-estimation
   - vital-signs
+  - presence-detection
   - edge-ai
   - esp32
-  - onnx
   - self-supervised
   - cognitum
-  - csi
   - through-wall
   - privacy-preserving
+  - spiking-neural-network
+  - ruvector
 language:
   - en
 library_name: onnxruntime
 pipeline_tag: other
 ---
 
-# WiFi-DensePose: See Through Walls with WiFi + AI
+<!--
+This file mirrors the README.md actually published at
+https://huggingface.co/ruvnet/wifi-densepose-pretrained (issue #1481: the two
+had drifted, and every filename in the old "Files in this repo" table pointed
+at files that were never uploaded). Update this file whenever the Hub README
+changes — `scripts/publish-huggingface.sh` uploads whatever is in
+`dist/models/README.md`, which is a separate file from this one, so keeping
+them in sync is a manual step until that's automated.
 
-**Detect people, track movement, and measure breathing -- through walls, without cameras, using a $27 sensor kit.**
+The "Using with the Rust sensing server" section below is not on the Hub page
+— it documents the `--convert-model` / `--model` RVF conversion path
+(issue #894, #1480) that HF users of this repo actually need and that the
+upstream card doesn't cover.
+-->
 
-| | |
-|---|---|
-| **License** | MIT |
-| **Framework** | ONNX Runtime |
-| **Hardware** | ESP32-S3 ($9) + optional Cognitum Seed ($15) |
-| **Training** | Self-supervised contrastive learning (no labels needed) |
-| **Privacy** | No cameras, no images, no personally identifiable data |
+# RuView — WiFi Sensing Models
 
----
+**Turn WiFi signals into spatial intelligence.** Detect people, measure breathing and heart rate, track movement, and monitor rooms — through walls, in the dark, with no cameras. Just radio physics.
 
-## What is this?
+## What This Does
 
-This model turns ordinary WiFi signals into a human sensing system. It can detect whether someone is in a room, count how many people are present, classify what they are doing, and even measure their breathing rate -- all without any cameras.
+WiFi signals bounce off people. When someone breathes, their chest moves the air, which subtly changes the WiFi signal. When they walk, the changes are bigger. This model learned to read those changes from a $9 ESP32 chip.
 
-**How does it work?** Every WiFi router constantly sends signals that bounce off walls, furniture, and people. When a person moves -- or even just breathes -- those bouncing signals change in tiny but measurable ways. WiFi chips can capture these changes as numbers called *Channel State Information* (CSI). Think of it like ripples in a pond: drop a stone and the ripples tell you something happened, even if you cannot see the stone.
+| What it senses | How well | Without |
+|----------------|----------|---------|
+| **Is someone there?** | presence detection (v1 "100%" retracted — single-class) | No camera needed |
+| **Are they moving?** | Detects typing vs walking vs standing | No wearable needed |
+| **Breathing rate** | 6-30 BPM, contactless | No chest strap |
+| **Heart rate** | 40-120 BPM, through clothes | No smartwatch |
+| **How many people?** | 1-4, via subcarrier graph analysis | No headcount camera |
+| **Through walls** | Works through drywall, wood, fabric | No line of sight |
+| **Sleep quality** | Deep/Light/REM/Awake classification | No mattress sensor |
+| **Fall detection** | <2 second alert | No pendant |
 
-This model learned to read those "WiFi ripples" and figure out what is happening in the room. It was trained using a technique called *contrastive learning*, which means it taught itself by comparing thousands of WiFi signal snapshots -- no human had to manually label anything.
+## 🆕 v2 update — honest re-benchmark + properly-converged encoder (2026-05-31)
 
-The result is a small, fast model that runs on a $9 microcontroller and preserves complete privacy because it never captures images or audio.
+The v1 contrastive encoder shipped with a **flat training loss** (every epoch logged the
+same `0.13517` — the optimizer was not actually learning), and its headline **"100% presence
+accuracy" was measured on a single-class recording** (an overnight capture of one sleeping
+person: **6,062 of 6,063** frames are labelled "present", 1 is "absent"). A constant
+"yes" predictor scores 99.98% on that split — so the number is real but **says nothing about
+generalization.** We are correcting that publicly rather than leaving it to stand.
 
----
+**v2 retrains the same `8 -> 64 -> 128` encoder with a working InfoNCE objective** and reports
+an **honest, label-free, time-disjoint metric**: held-out **temporal-triplet accuracy** =
+P( d(anchor, temporal-positive) < d(anchor, temporal-negative) ), evaluated on the **last 20%
+of the recording by time** (no leakage into training).
 
-## What can it do?
+| Encoder | Held-out temporal-triplet accuracy | Notes |
+|---------|-----------------------------------:|-------|
+| Raw 8-dim features (no encoder) | 66.4% | baseline |
+| Random-init encoder | 69.6% | untrained |
+| **v2 trained encoder** | **82.3%** | **+15.9 pts over raw, properly converged** |
 
-| Capability | Accuracy | What you need | Notes |
-|---|---|---|---|
-| **Presence detection** | >95% | 1x ESP32-S3 ($9) | Is anyone in the room? |
-| **Motion classification** | >90% | 1x ESP32-S3 ($9) | Still, walking, exercising, fallen |
-| **Breathing rate** | +/- 2 BPM | 1x ESP32-S3 ($9) | Best when person is sitting or lying still |
-| **Heart rate estimate** | +/- 5 BPM | 1x ESP32-S3 ($9) | Experimental -- less accurate during movement |
-| **Person counting** | 1-4 people | 2x ESP32-S3 ($18) | Uses cross-node signal fusion |
-| **Pose estimation** | 17 COCO keypoints | 2x ESP32-S3 + Seed ($27) | Full skeleton: head, shoulders, elbows, etc. |
+**Plain language:** the embedding now reliably places two CSI snapshots taken moments apart
+*closer together* than two taken far apart — i.e. it has learned the temporal structure of the
+radio environment, which is exactly what a useful self-supervised sensing embedding should do.
+v1, with its flat loss, was barely better than random on this same test.
 
----
+**Technical:** 2-layer FC (BatchNorm + GELU) -> L2-normalized 128-dim embedding, 9,280
+params, trained with InfoNCE (temperature 0.1, in-batch + temporal-far negatives), AdamW, 60 epochs.
+Temporal positives within 2 s; negatives >30 s apart. Time-disjoint 80/20 split.
+
+### v2 files & proof
+| File | Size | Use |
+|------|------|-----|
+| `csi-embed-v2.safetensors` | ~40 KB | fp32 trained encoder |
+| `csi-embed-v2-int4.bin` | **4.56 KB** | 4-bit packed encoder + fp16 standardizer — **fits the 8 KB ESP32 SRAM budget** |
+| `csi-embed-v2.py` | <1 KB | `Enc` definition + loader |
+| `csi-embed-v2-metrics.json` | — | full honest metrics + quantization scales |
+
+- Encoder weights SHA-256: `3b37bca66e6050c50ccbc0f6e0501824f258bfdd8675dc0f4541b1e2e96feecd`
+- Repro: `python aether-arena/staging/train_csi_embed.py` in [github.com/ruvnet/RuView](https://github.com/ruvnet/RuView)
+- Trained on the same local capture (`data/recordings/overnight-1775217646.csi.jsonl`, 6,063 feature frames).
+
+> **What v2 does *not* claim.** This is one room, one capture, two nodes. The triplet metric
+> measures embedding quality, not downstream presence/vitals accuracy (which needs multi-class,
+> multi-room labelled data we don't yet have for this 2.4 GHz feature). For *pose* SOTA on a
+> public benchmark, see the separate 5 GHz model
+> [`ruvnet/wifi-densepose-mmfi-pose`](https://huggingface.co/ruvnet/wifi-densepose-mmfi-pose)
+> (82.69% torso-PCK@20 on MM-Fi).
+
+## Benchmarks
+
+Validated on real hardware (Apple M4 Pro + 2x ESP32-S3):
+
+| Metric | Result | Context |
+|--------|--------|---------|
+| **CSI embedding quality** | **82.3% held-out** | Honest temporal-triplet metric; v1 single-class "100% presence" retracted (#882) |
+| **Inference speed** | **0.008 ms** | 125,000x faster than real-time |
+| **Throughput** | **164,183 emb/sec** | One laptop handles 1,600+ sensors |
+| **Contrastive learning** | **51.6% improvement** | Trained on 8 hours of overnight data |
+| **Model size** | **8 KB** (4-bit quantized) | Fits in ESP32 SRAM |
+| **Training time** | **12 minutes** | On Mac Mini M4 Pro, no GPU needed |
+| **Camera required** | **No** | Trained from 10 sensor signals |
+
+## Models in This Repo
+
+| File | Size | Use |
+|------|------|-----|
+| `model.safetensors` | 48 KB | Full contrastive encoder (128-dim embeddings) |
+| `model-q4.bin` | 8 KB | **Recommended** — 4-bit quantized, 8x compression |
+| `model-q2.bin` | 4 KB | Ultra-compact for ESP32 edge inference |
+| `model-q8.bin` | 16 KB | High quality 8-bit |
+| `presence-head.json` | 2.6 KB | Presence detection head (v1 "100%" retracted — single-class; #882) |
+| `node-1.json` | 21 KB | LoRA adapter for room/node 1 |
+| `node-2.json` | 21 KB | LoRA adapter for room/node 2 |
+| `config.json` | 586 B | Model configuration |
+| `training-metrics.json` | 3.1 KB | Loss curves and training history |
 
 ## Quick Start
 
-### Install
-
 ```bash
-pip install onnxruntime numpy
-```
+# Download models
+pip install huggingface_hub
+huggingface-cli download ruv/ruview --local-dir models/
 
-### Run inference
-
-```python
-import onnxruntime as ort
-import numpy as np
-
-# Load the encoder model
-session = ort.InferenceSession("pretrained-encoder.onnx")
-
-# Simulated 8-dim CSI feature vector from ESP32-S3
-# Dimensions: [amplitude_mean, amplitude_std, phase_slope, doppler_energy,
-#              subcarrier_variance, temporal_stability, csi_ratio, spectral_entropy]
-features = np.array(
-    [[0.45, 0.30, 0.69, 0.75, 0.50, 0.25, 0.00, 0.54]],
-    dtype=np.float32,
-)
-
-# Encode into 128-dim embedding
-result = session.run(None, {"input": features})
-embedding = result[0]  # shape: (1, 128)
-print(f"Embedding shape: {embedding.shape}")
-print(f"First 8 values: {embedding[0][:8]}")
-```
-
-### Run task heads
-
-```python
-# Load the task heads model
-heads = ort.InferenceSession("pretrained-heads.onnx")
-
-# Feed the embedding from the encoder
-predictions = heads.run(None, {"embedding": embedding})
-
-presence_score = predictions[0]    # 0.0 = empty, 1.0 = occupied
-person_count   = predictions[1]    # estimated count (float, round to int)
-activity_class = predictions[2]    # [still, walking, exercise, fallen]
-vitals         = predictions[3]    # [breathing_bpm, heart_bpm]
-
-print(f"Presence:  {presence_score[0]:.2f}")
-print(f"People:    {int(round(person_count[0]))}")
-print(f"Activity:  {['still', 'walking', 'exercise', 'fallen'][activity_class.argmax()]}")
-print(f"Breathing: {vitals[0][0]:.1f} BPM")
-print(f"Heart:     {vitals[0][1]:.1f} BPM")
-```
-
----
-
-## Model Architecture
-
-```
-                                                      +-- Presence (binary)
-                                                      |
-WiFi signals --> ESP32-S3 --> 8-dim features --> Encoder (TCN) --> 128-dim embedding --> Task Heads --+-- Person Count
-                  (CSI)        (on-device)       (~2.5M params)                          (~100K)     |
-                                                                                                     +-- Activity (4 classes)
-                                                                                                     |
-                                                                                                     +-- Vitals (BR + HR)
-```
-
-### Encoder
-
-- **Type:** Temporal Convolutional Network (TCN)
-- **Input:** 8-dimensional feature vector extracted from raw CSI
-- **Output:** 128-dimensional embedding
-- **Parameters:** ~2.5M
-- **Format:** ONNX (runs on any platform with ONNX Runtime)
-
-### Task Heads
-
-- **Type:** Small MLPs (multi-layer perceptrons), one per task
-- **Input:** 128-dim embedding from the encoder
-- **Output:** Task-specific predictions (presence, count, activity, vitals)
-- **Parameters:** ~100K total across all heads
-- **Format:** ONNX
-
-### Feature extraction (runs on ESP32-S3)
-
-The ESP32-S3 captures raw CSI frames at ~100 Hz and computes 8 summary features per window:
-
-| Feature | Description |
-|---|---|
-| `amplitude_mean` | Average signal strength across subcarriers |
-| `amplitude_std` | Variation in signal strength (movement indicator) |
-| `phase_slope` | Rate of phase change across subcarriers |
-| `doppler_energy` | Energy in the Doppler spectrum (velocity indicator) |
-| `subcarrier_variance` | How much individual subcarriers differ |
-| `temporal_stability` | Consistency of signal over time (stillness indicator) |
-| `csi_ratio` | Ratio between antenna pairs (direction indicator) |
-| `spectral_entropy` | Randomness of the frequency spectrum |
-
----
-
-## Training Data
-
-### How it was trained
-
-This model was trained using **self-supervised contrastive learning**, which means it learned entirely from unlabeled WiFi signals. No cameras, no manual annotations, and no privacy-invasive data collection were needed.
-
-The training process works like this:
-
-1. **Collect** raw CSI frames from ESP32-S3 nodes placed in a room
-2. **Extract** 8-dimensional feature vectors from sliding windows of CSI data
-3. **Contrast** -- the model learns that features from nearby time windows should produce similar embeddings, while features from different scenarios should produce different embeddings
-4. **Fine-tune** task heads — *planned:* weak labels from environmental sensors (PIR motion, temperature, pressure) on the Cognitum Seed companion device. **This environmental-sensor ground-truth path is not yet implemented** (no PIR/BME280 ingestion in the training pipeline today); current task-head supervision uses the proxy/camera labels described elsewhere.
-
-### Data provenance
-
-- **Source:** Live CSI from 2x ESP32-S3 nodes (802.11n, HT40, 114 subcarriers)
-- **Volume:** ~360,000 CSI frames (~3,600 feature vectors) per collection run
-- **Environment:** Residential room, ~4x5 meters
-- **Ground truth:** *Planned* — environmental sensors on the Cognitum Seed (PIR, BME280, light). Not yet wired into training; treat the PIR/BME280 references in this card as the intended design, not a current capability.
-- **Attestation:** Every collection run produces a cryptographic witness chain (`collection-witness.json`) that proves data provenance and integrity
-
-### Witness chain
-
-The `collection-witness.json` file contains a chain of SHA-256 hashes linking every step from raw CSI capture through feature extraction to model training. This allows anyone to verify that the published model was trained on data collected by specific hardware at a specific time.
-
----
-
-## Hardware Requirements
-
-### Minimum: single-node sensing ($9)
-
-| Component | What it does | Cost | Where to get it |
-|---|---|---|---|
-| ESP32-S3 (8MB flash) | Captures WiFi CSI + runs feature extraction | ~$9 | Amazon, AliExpress, Adafruit |
-| USB-C cable | Power + data | ~$3 | Any electronics store |
-
-This gets you: presence detection, motion classification, breathing rate.
-
-### Recommended: dual-node sensing ($18)
-
-Add a second ESP32-S3 to enable cross-node signal fusion for better accuracy and person counting.
-
-### Full setup: sensing + ground truth ($27)
-
-| Component | What it does | Cost |
-|---|---|---|
-| 2x ESP32-S3 (8MB) | WiFi CSI sensing nodes | ~$18 |
-| Cognitum Seed (Pi Zero 2W) | Runs inference + collects ground truth | ~$15 |
-| USB-C cables (x3) | Power + data | ~$9 |
-| **Total** | | **~$27** |
-
-The Cognitum Seed runs the ONNX models on-device and orchestrates the ESP32 nodes over USB serial. (Using its onboard PIR/BME280 sensors as training ground truth is planned but not yet implemented — see "Data provenance" above.)
-
----
-
-## Files in this repo
-
-| File | Size | Description |
-|---|---|---|
-| `pretrained-encoder.onnx` | ~2 MB | Contrastive encoder (TCN backbone, 8-dim input, 128-dim output) |
-| `pretrained-heads.onnx` | ~100 KB | Task heads (presence, count, activity, vitals) |
-| `pretrained.rvf` | ~500 KB | RuVector format embeddings for advanced fusion pipelines |
-| `room-profiles.json` | ~10 KB | Environment calibration profiles (room geometry, baseline noise) |
-| `collection-witness.json` | ~5 KB | Cryptographic witness chain proving data provenance |
-| `config.json` | ~2 KB | Training configuration (hyperparameters, feature schema, versions) |
-| `README.md` | -- | This file |
-
-### RuVector format (.rvf)
-
-The `.rvf` file contains pre-computed embeddings in RuVector format, used by the RuView application for advanced multi-node fusion and cross-viewpoint pose estimation. You only need this if you are using the full RuView pipeline. For basic inference, the ONNX files are sufficient.
-
----
-
-## How to use with RuView
-
-[RuView](https://github.com/ruvnet/RuView) is the open-source application that ties everything together: firmware flashing, real-time sensing, and a browser-based dashboard.
-
-### 1. Flash firmware to ESP32-S3
-
-```bash
+# Use with RuView sensing pipeline
 git clone https://github.com/ruvnet/RuView.git
 cd RuView
 
-# Flash firmware (requires ESP-IDF v5.4 or use pre-built binaries from Releases)
-# See the repo README for platform-specific instructions
+# Flash an ESP32-S3 ($9 on Amazon/AliExpress)
+python -m esptool --chip esp32s3 --port COM9 --baud 460800 \
+  write_flash 0x0 bootloader.bin 0x8000 partition-table.bin \
+  0xf000 ota_data_initial.bin 0x20000 esp32-csi-node.bin
+
+# Provision WiFi
+python firmware/esp32-csi-node/provision.py --port COM9 \
+  --ssid "YourWiFi" --password "secret" --target-ip YOUR_IP
+
+# See what WiFi reveals about your room
+node scripts/deep-scan.js --bind YOUR_IP --duration 10
 ```
 
-### 2. Download models
+## Using with the Rust sensing server (RVF conversion)
+
+`model.safetensors` does not carry the `RVFS` binary-container magic that
+`wifi-densepose-sensing-server`'s `--model` loader expects natively — it needs
+converting first (issue #894). As of #1480, `--model` auto-detects and
+converts `model.safetensors` / `model.rvf.jsonl` in-memory, so the one-liner
+below is enough for most uses:
 
 ```bash
-pip install huggingface_hub
-huggingface-cli download ruvnet/wifi-densepose-pretrained --local-dir models/
+cargo run -p wifi-densepose-sensing-server -- --model model.safetensors
 ```
 
-### 3. Run inference
+To pre-convert once and skip re-conversion on every startup (recommended for
+repeated runs, or to inspect the converted container), use `--convert-model`:
 
 ```bash
-# Start the CSI bridge (connects ESP32 serial output to the inference pipeline)
-python scripts/seed_csi_bridge.py --port COM7 --model models/pretrained-encoder.onnx
+cargo run -p wifi-densepose-sensing-server -- \
+  --convert-model model.safetensors --convert-out model.rvf
 
-# Or run the full sensing server with web dashboard
-cargo run -p wifi-densepose-sensing-server
+cargo run -p wifi-densepose-sensing-server -- \
+  --model model.rvf --load-rvf model.rvf
 ```
 
-### 4. Adapt to your room
+`--model` loads the weights for inference; `--load-rvf` separately populates
+the container metadata that `/api/v1/model/info` reports — pass both if you
+want that endpoint to reflect the loaded container.
 
-The model works best after a brief calibration period (~60 seconds of no movement) to learn the baseline signal characteristics of your specific room. The `room-profiles.json` file contains example profiles; the system will create one for your environment automatically.
+Converting `model.safetensors` wires the format/load path (magic, version,
+segments, weights all valid) but the pose-decoder *architecture* published on
+HF differs from this crate's inference head, so the converted weights are not
+claimed to reproduce pose accuracy end-to-end (tracked in #894). `model-q2/q4/q8.bin`
+(quantized HF blobs) have no reader in this build yet — convert the
+full-precision `model.safetensors` instead.
 
----
+## Architecture
+
+```
+WiFi signals → ESP32-S3 ($9) → 8-dim features @ 1 Hz → Encoder → 128-dim embedding
+                                                                    ↓
+                                         ┌──────────────────────────┼──────────────────┐
+                                         ↓                          ↓                  ↓
+                                    Presence head            Activity head         Vitals head
+                                    (v1 "100%" retracted)          (still/walk/talk)     (BR, HR)
+```
+
+The encoder converts 8 WiFi Channel State Information (CSI) features into a 128-dimensional embedding:
+
+| Dim | Feature | What it captures |
+|-----|---------|-----------------|
+| 0 | Presence | How much the WiFi signal is disturbed |
+| 1 | Motion | Rate of signal change (walking > typing > still) |
+| 2 | Breathing | Chest movement modulates subcarrier phase at 6-30 BPM |
+| 3 | Heart rate | Blood pulse creates micro-Doppler at 40-120 BPM |
+| 4 | Phase variance | Signal quality — higher = more movement |
+| 5 | Person count | Independent motion clusters via min-cut graph |
+| 6 | Fall detected | Sudden phase acceleration followed by stillness |
+| 7 | RSSI | Signal strength — indicates distance from sensor |
+
+## Training Details
+
+**No camera was used.** Trained using self-supervised contrastive learning:
+
+- **Data**: 60,630 samples from 2 ESP32-S3 nodes over 8 hours
+- **Method**: Triplet loss + InfoNCE (nearby frames = similar, distant = different)
+- **Augmentation**: 10x via temporal interpolation, noise, cross-node blending
+- **Supervision**: PIR sensor, BME280, RSSI triangulation, subcarrier asymmetry
+- **Quantization**: TurboQuant 2/4/8-bit with <0.5% quality loss
+- **Adaptation**: LoRA rank-4 per room, EWC to prevent forgetting
+
+## 17 Sensing Applications
+
+Built on these embeddings ([RuView](https://github.com/ruvnet/RuView)):
+
+**Core:** Presence, person counting, RF scanning, SNN learning, CNN fingerprinting
+
+**Health:** Sleep monitoring, apnea screening, stress detection, gait analysis
+
+**Environment:** Room fingerprinting, material detection, device fingerprinting
+
+**Multi-frequency:** RF tomography, passive radar, material classification, through-wall motion
+
+## Hardware
+
+| Component | Cost | Purpose |
+|-----------|------|---------|
+| ESP32-S3 (8MB) | ~$9 | WiFi CSI sensing |
+| [Cognitum Seed](https://cognitum.one) (optional) | $131 | Persistent storage, kNN, witness chain, AI proxy |
 
 ## Limitations
 
-Be honest about what this technology can and cannot do:
-
-- **Room-specific.** The model needs a short calibration period in each new environment. A model calibrated in a living room will not work as well in a warehouse without re-adaptation.
-- **Single room only.** There is no cross-room tracking. Each room needs its own sensing node(s).
-- **Person count accuracy degrades above 4.** Counting works well for 1-3 people, becomes unreliable above 4 in a single room.
-- **Vitals require stillness.** Breathing and heart rate estimation work best when the person is sitting or lying down. Accuracy drops significantly during walking or exercise.
-- **Heart rate is experimental.** The +/- 5 BPM accuracy is a best-case figure. In practice, cardiac sensing via WiFi is still a research-stage capability.
-- **Wall materials matter.** Metal walls, concrete reinforced with rebar, or foil-backed insulation will significantly attenuate the signal and reduce range.
-- **WiFi interference.** Heavy WiFi traffic from other devices can add noise. The system works best on a dedicated or lightly-used WiFi channel.
-- **Not a medical device.** Vital sign estimates are for informational and research purposes only. Do not use them for medical decisions.
-
----
-
-## Use Cases
-
-- **Elder care:** Non-invasive fall detection and activity monitoring without cameras
-- **Smart home:** Presence-based lighting and HVAC control
-- **Security:** Occupancy detection through walls
-- **Sleep monitoring:** Breathing rate tracking overnight
-- **Research:** Low-cost human sensing for academic experiments
-- **Disaster response:** The MAT (Mass Casualty Assessment Tool) uses this model to detect survivors through rubble via WiFi signal reflections
-
----
-
-## Ethical Considerations
-
-WiFi sensing is a privacy-preserving alternative to cameras, but it still detects human presence and activity. Consider these points:
-
-- **Consent:** Always inform people that WiFi sensing is active in a space.
-- **No biometric identification:** This model cannot identify *who* someone is -- only that someone is present and what they are doing.
-- **Data minimization:** Raw CSI data is processed on-device and only summary features or embeddings leave the sensor. No images, audio, or video are ever captured.
-- **Dual use:** Like any sensing technology, this can be misused for surveillance. We encourage transparent deployment and clear signage.
-
----
+- Room-specific (use LoRA adapters for new rooms)
+- Camera-free pose: 2.5% PCK@20 (camera labels improve significantly)
+- Health features are for screening only, not medical diagnosis
+- Breathing/HR less accurate during active movement
 
 ## Citation
 
-If you use this model in your research, please cite:
-
 ```bibtex
-@software{wifi_densepose_2026,
-  title   = {WiFi-DensePose: Human Pose Estimation from WiFi Channel State Information},
-  author  = {ruvnet},
-  year    = {2026},
-  url     = {https://github.com/ruvnet/RuView},
-  license = {MIT},
-  note    = {Self-supervised contrastive learning on ESP32-S3 CSI data}
+@software{ruview2026,
+  title={RuView: WiFi Sensing with Self-Supervised Contrastive Learning},
+  author={rUv},
+  year={2026},
+  url={https://github.com/ruvnet/RuView},
+  note={Models: https://huggingface.co/ruv/ruview}
 }
 ```
 
----
-
-## License
-
-MIT License. See [LICENSE](https://github.com/ruvnet/RuView/blob/main/LICENSE) for details.
-
-You are free to use, modify, and distribute this model for any purpose, including commercial applications.
-
----
-
 ## Links
 
-- **GitHub:** [github.com/ruvnet/RuView](https://github.com/ruvnet/RuView)
-- **Hardware:** [ESP32-S3 DevKit](https://www.espressif.com/en/products/devkits) | [Cognitum Seed](https://cognitum.one)
-- **ONNX Runtime:** [onnxruntime.ai](https://onnxruntime.ai)
+- **GitHub**: https://github.com/ruvnet/RuView
+- **Cognitum Seed**: https://cognitum.one
+- **RuVector**: https://github.com/ruvnet/ruvector
+- **License**: MIT
