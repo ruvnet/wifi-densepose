@@ -1,0 +1,42 @@
+[package]
+name = "wifi-densepose-sar"
+description = "Coherent wideband RF tomography research crate (ADR-283): synthetic stepped-frequency multi-position measurement simulation + delay-and-sum backprojection reconstruction. SYNTHETIC/L0 only -- no wideband RF hardware backs this crate."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+documentation.workspace = true
+keywords = ["radar", "sar", "backprojection", "rf-tomography", "simulation"]
+categories = ["science", "simulation"]
+readme = "README.md"
+
+# `wifi-densepose-sar` is a standalone leaf crate (the nvsim / ruview-unified
+# pattern): pure-Rust math, deterministic ChaCha20 randomness (same seed =>
+# byte-identical output on every machine), zero coupling to any hardware
+# ingestion path. It has NO internal RuView dependency -- see the crate-level
+# doc comment in `src/lib.rs` for why (ADR-283 §2): this validates the
+# reconstruction *algorithm* against synthetic ground truth before any
+# question of wiring it into `ruview-unified`'s `FmcwRadarCube` adapter or
+# `GaussianMap` is in scope.
+[dependencies]
+num-complex = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+rand = { version = "0.8", default-features = false }
+rand_chacha = { version = "0.3", default-features = false }
+rayon = "1.10"
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "backprojection_bench"
+harness = false
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"
