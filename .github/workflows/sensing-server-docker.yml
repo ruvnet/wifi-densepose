@@ -58,7 +58,7 @@ jobs:
       # by the runner, not built on a separate arm64 host).
       - uses: docker/setup-qemu-action@v3
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Log in to Docker Hub
         # Bypassing docker/login-action@v3: the action kept emitting
