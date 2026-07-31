@@ -46,11 +46,13 @@ jobs:
       WEAVER_SHA256: a9822c712d6871bd89d6530f18c5df5cea3821f642e7b8e5e49e985917f7d12d
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master (channel: stable via input)
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: v2
       - name: Install weaver
@@ -172,7 +174,7 @@ jobs:
           echo "live-check: $entities entities, $curated_seen curated ruview.* signals, 0 curated violations"
       - name: Upload live-check report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: live-check-report
           path: ${{ runner.temp }}/live-check/report/
