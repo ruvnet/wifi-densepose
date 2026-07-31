@@ -42,7 +42,7 @@ cargo bench -p wifi-densepose-sar
 `tests/physics_validation.rs` checks the reconstruction's actual behavior
 against the closed-form formulas in `resolution.rs` (range resolution,
 cross-range/synthetic-aperture resolution, and the antenna-pose coherence
-budget) rather than merely asserting them: 24 tests (21 unit + 3
+budget) rather than merely asserting them: 25 tests (22 unit + 3
 integration), 0 failed, clippy-clean.
 
 ## Performance (MEASURED)
@@ -53,10 +53,22 @@ machine, release profile:
 
 | Voxels | Median time | Throughput |
 |-------:|------------:|-----------:|
-| 512    | 1.47 ms     | ~348,000 voxels/s |
-| 4,096  | 10.4 ms     | ~394,000 voxels/s |
-| 32,768 | 73.5 ms     | ~446,000 voxels/s |
+| 512    | 300 µs      | ~1.71M voxels/s |
+| 4,096  | 1.97 ms     | ~2.08M voxels/s |
+| 32,768 | 14.5 ms     | ~2.26M voxels/s |
 
 Scales as expected: each voxel's cost is independent (`O(poses × freqs)`
 per voxel, embarrassingly parallel), so throughput is roughly constant
 across grid sizes and total time scales linearly with voxel count.
+
+**Optimization (MEASURED, criterion regression detection, p < 0.001): ~4.4-4.5x
+faster** than the first-shipped implementation, across all three grid
+sizes. Frequencies in a [`FrequencySweep`](src/measurement.rs) are evenly
+spaced by construction, so the per-(pose, frequency) phase term is an
+arithmetic progression; `focus_at_point` now evaluates the phasor once per
+pose and advances it by a fixed complex-multiply step per frequency,
+instead of one `sin`/`cos` pair (`Complex64::from_polar`) per frequency —
+K trig evaluations become 2. Proven equivalent (not just faster) to an
+independently-reimplemented direct per-frequency reference in
+`reconstruct::tests::backprojection_incremental_rotation_matches_direct_per_frequency_computation`,
+across several sweep sizes and both on-target and off-target points.

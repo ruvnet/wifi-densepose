@@ -120,8 +120,7 @@ pub fn backproject(
     grid: &VoxelGrid,
 ) -> ReflectivityImage {
     assert_eq!(poses.len(), measurement.n_poses, "pose count must match measurement");
-    let freqs = sweep.frequencies();
-    assert_eq!(freqs.len(), measurement.n_freqs, "frequency count must match measurement");
+    assert_eq!(sweep.n_steps, measurement.n_freqs, "frequency count must match measurement");
 
     let n = grid.len();
 
@@ -130,7 +129,7 @@ pub fn backproject(
         .map(|linear| {
             let (i, j, k) = grid.unflatten(linear);
             let voxel = grid.voxel_center(i, j, k);
-            focus_at_point(measurement, poses, &freqs, &voxel)
+            focus_at_point(measurement, poses, sweep, &voxel)
         })
         .collect();
 
@@ -143,11 +142,30 @@ pub fn backproject(
 /// (and tests) can measure focus quality exactly at a location of
 /// interest -- e.g. a known target position -- rather than only at
 /// whatever grid points happen to be sampled.
-pub fn focus_at_point(measurement: &Measurement, poses: &[AntennaPose], freqs: &[f64], point: &Point3) -> f64 {
+///
+/// Takes `sweep` rather than a raw frequency slice specifically so the
+/// evenly-spaced-frequencies guarantee ([`FrequencySweep::frequencies`])
+/// is a type-level invariant, not a caller-observed precondition: the
+/// implementation below relies on it (see the comment inside the pose
+/// loop). Passing an arbitrary non-uniform frequency list is not possible
+/// through this signature.
+pub fn focus_at_point(measurement: &Measurement, poses: &[AntennaPose], sweep: &FrequencySweep, point: &Point3) -> f64 {
     assert_eq!(poses.len(), measurement.n_poses, "pose count must match measurement");
-    assert_eq!(freqs.len(), measurement.n_freqs, "frequency count must match measurement");
+    assert_eq!(sweep.n_steps, measurement.n_freqs, "frequency count must match measurement");
 
     let n_terms = (measurement.n_poses * measurement.n_freqs) as f64;
+    let k = sweep.n_steps;
+    // Frequencies are evenly spaced by construction: f_kf = start_hz + kf *
+    // delta_f. That makes the per-term phase phase_kf = 4*pi*f_kf*r/c an
+    // arithmetic progression in kf, so instead of K trig evaluations
+    // (Complex64::from_polar per frequency step) the phasor is evaluated
+    // once and advanced by a fixed per-step rotation -- one complex
+    // multiply per step instead of a sin/cos pair. Proven equivalent to
+    // the direct per-frequency computation (independently reimplemented,
+    // not reusing this code) in
+    // `backprojection_incremental_rotation_matches_direct_per_frequency_computation`.
+    let delta_f = if k > 1 { (sweep.stop_hz - sweep.start_hz) / (k - 1) as f64 } else { 0.0 };
+
     let mut acc = Complex64::new(0.0, 0.0);
     for (m, pose) in poses.iter().enumerate() {
         let r = pose.position.distance(point);
@@ -155,9 +173,15 @@ pub fn focus_at_point(measurement: &Measurement, poses: &[AntennaPose], freqs: &
             continue;
         }
         let gain_compensation = r * r;
-        for (kf, &f) in freqs.iter().enumerate() {
-            let phase = 4.0 * PI * f * r / SPEED_OF_LIGHT_M_PER_S;
-            acc += measurement.get(m, kf) * gain_compensation * Complex64::from_polar(1.0, phase);
+        let base_phase = 4.0 * PI * sweep.start_hz * r / SPEED_OF_LIGHT_M_PER_S;
+        let step_phase = 4.0 * PI * delta_f * r / SPEED_OF_LIGHT_M_PER_S;
+        let step = Complex64::from_polar(1.0, step_phase);
+        let mut rot = Complex64::from_polar(1.0, base_phase);
+        for kf in 0..k {
+            acc += measurement.get(m, kf) * gain_compensation * rot;
+            if kf + 1 < k {
+                rot *= step;
+            }
         }
     }
     acc.norm() / n_terms
@@ -210,5 +234,66 @@ mod tests {
         let mean_mag: f64 = image.magnitude.iter().sum::<f64>() / image.magnitude.len() as f64;
 
         assert!(peak_mag > mean_mag * 5.0, "coherent focus at the target must dominate the incoherent background: peak={peak_mag}, mean={mean_mag}");
+    }
+
+    /// Independent reference: the direct per-frequency computation
+    /// `focus_at_point` used before the incremental-phasor-rotation
+    /// optimization (one `Complex64::from_polar` per (pose, frequency)
+    /// term, no recurrence). Deliberately reimplemented here rather than
+    /// calling any shared helper, so this test cannot pass by construction.
+    fn focus_at_point_direct_reference(
+        measurement: &Measurement,
+        poses: &[AntennaPose],
+        sweep: &FrequencySweep,
+        point: &Point3,
+    ) -> f64 {
+        let freqs = sweep.frequencies();
+        let n_terms = (measurement.n_poses * measurement.n_freqs) as f64;
+        let mut acc = Complex64::new(0.0, 0.0);
+        for (m, pose) in poses.iter().enumerate() {
+            let r = pose.position.distance(point);
+            if r < 1e-6 {
+                continue;
+            }
+            let gain_compensation = r * r;
+            for (kf, &f) in freqs.iter().enumerate() {
+                let phase = 4.0 * PI * f * r / SPEED_OF_LIGHT_M_PER_S;
+                acc += measurement.get(m, kf) * gain_compensation * Complex64::from_polar(1.0, phase);
+            }
+        }
+        acc.norm() / n_terms
+    }
+
+    /// PERF PROOF: the incremental-phasor-rotation `focus_at_point` (2
+    /// trig evaluations/pose instead of K) matches the direct
+    /// per-frequency reference to within f64 rounding, across several
+    /// sweep sizes, ranges, and off-axis points (not just the on-target
+    /// case, where errors could cancel).
+    #[test]
+    fn backprojection_incremental_rotation_matches_direct_per_frequency_computation() {
+        let poses = linear_aperture(Point3::new(-0.7, 0.0, 0.0), Point3::new(0.6, 0.1, 0.0), 17);
+        let targets = vec![
+            ScatteringTarget::new(Point3::new(0.1, 2.3, -0.2), 1.0),
+            ScatteringTarget::new(Point3::new(-0.4, 1.9, 0.3), 0.6),
+        ];
+        let test_points = [
+            Point3::new(0.1, 2.3, -0.2),  // on a target
+            Point3::new(-0.4, 1.9, 0.3),  // on the other target
+            Point3::new(0.0, 2.0, 0.0),   // off-target
+            Point3::new(-0.55, 2.6, 0.4), // off-target, far corner
+        ];
+        for &(n_steps, start_hz, stop_hz) in &[(1usize, 3.0e9, 3.0e9), (2, 2.0e9, 6.0e9), (8, 1.0e9, 9.0e9), (64, 2.4e9, 2.5e9)] {
+            let sweep = FrequencySweep::new(start_hz, stop_hz, n_steps);
+            let measurement = simulate_measurement(&poses, &sweep, &targets, 0.0, 42);
+            for point in test_points {
+                let fast = focus_at_point(&measurement, &poses, &sweep, &point);
+                let reference = focus_at_point_direct_reference(&measurement, &poses, &sweep, &point);
+                let scale = reference.max(1e-12);
+                assert!(
+                    (fast - reference).abs() / scale < 1e-9,
+                    "incremental rotation diverged from the direct reference at n_steps={n_steps}, point={point:?}: fast={fast}, reference={reference}"
+                );
+            }
+        }
     }
 }

@@ -179,7 +179,6 @@ fn phase_error_from_pose_jitter_degrades_focus_beyond_pose_budget() {
             .collect()
     };
 
-    let freqs = sweep.frequencies();
     let focus_at_epsilon = |epsilon: f64| -> f64 {
         let true_poses = jittered_poses_at(epsilon);
         // The measurement is recorded at the (jittered) TRUE antenna
@@ -191,7 +190,7 @@ fn phase_error_from_pose_jitter_degrades_focus_beyond_pose_budget() {
         // happens to focus slightly better and mask the coherence loss
         // this test is measuring).
         let measurement = simulate_measurement(&true_poses, &sweep, &[target], 0.0, 1);
-        focus_at_point(&measurement, &nominal_poses, &freqs, &target.position)
+        focus_at_point(&measurement, &nominal_poses, &sweep, &target.position)
     };
 
     let levels = [0.0, 0.5 * budget, budget, 2.0 * budget, 4.0 * budget];
