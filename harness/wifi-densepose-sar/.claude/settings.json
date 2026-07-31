@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx wifi-densepose-sar-harness*)",
+      "mcp__wifi-densepose-sar-harness__*",
+      "mcp__code_index__*",
+      "Bash(npm test*)",
+      "Bash(npm run*)",
+      "Bash(git diff*)",
+      "Bash(git status*)",
+      "Bash(git log*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Bash(git push*)",
+      "Bash(rm -rf*)"
+    ]
+  },
+  "mcpServers": {
+    "wifi-densepose-sar-harness": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "wifi-densepose-sar-harness@latest",
+        "mcp",
+        "start"
+      ]
+    },
+    "code_index": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "wifi-densepose-sar-harness@latest",
+        "mcp",
+        "index"
+      ]
+    }
+  }
+}
