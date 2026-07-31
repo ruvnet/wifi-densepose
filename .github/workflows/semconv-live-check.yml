@@ -49,6 +49,9 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          # The sensing-server workspace pulls vendored crates
+          # (vendor/rufield, …) in as path dependencies.
+          submodules: recursive
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master (channel: stable via input)
         with:
           toolchain: stable
