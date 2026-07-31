@@ -135,7 +135,7 @@ The compiled binary is at `target/release/sensing-server`.
 
 ### From crates.io (Individual Crates)
 
-All 16 crates are published to crates.io at v0.3.0. Add individual crates to your own Rust project:
+The workspace's crates publish independently, so versions vary crate to crate (`wifi-densepose-core` is at 0.3.2, `wifi-densepose-signal` at 0.3.6, etc. as of this writing) — `cargo add` resolves each to its own latest by default, so you don't need to track exact numbers yourself. Add individual crates to your own Rust project:
 
 ```bash
 # Core types and traits
@@ -161,6 +161,11 @@ cargo add wifi-densepose-wasm
 
 # WASM edge runtime (lightweight, for embedded/IoT)
 cargo add wifi-densepose-wasm-edge
+
+# Coherent wideband RF tomography research crate (ADR-287) — synthetic
+# stepped-frequency backprojection reconstruction. SYNTHETIC/L0 evidence
+# only; not wired into any sensing pipeline above. See its own README.
+cargo add wifi-densepose-sar
 ```
 
 See the full crate list and dependency order in [CLAUDE.md](../CLAUDE.md#crate-publishing-order).
