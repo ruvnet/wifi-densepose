@@ -7,11 +7,21 @@
 //! score-based heuristic in `score_to_person_count`.
 
 use std::collections::VecDeque;
+use std::sync::LazyLock;
+use wifi_densepose_signal::hardware_norm::HardwareNormalizer;
 use wifi_densepose_signal::ruvsense::field_model::{
     CalibrationStatus, FieldModel, FieldModelConfig,
 };
 
 use super::score_to_person_count;
+
+/// Length-only canonicalizer for calibration frames (issue #1170 pattern,
+/// shared with `multistatic_bridge`). Raw ESP32 amplitudes arrive at the
+/// hardware's native width (HT20 ≈ 64, HT40 ≈ 128/192); the FieldModel is
+/// configured for the canonical 56-tone grid, and `feed_calibration` rejects
+/// any other width with `DimensionMismatch`. Resampling here (default 56)
+/// lets real HT40 nodes actually calibrate instead of silently feeding nothing.
+static CALIB_NORMALIZER: LazyLock<HardwareNormalizer> = LazyLock::new(HardwareNormalizer::new);
 
 /// Number of recent frames to feed into perturbation extraction.
 const OCCUPANCY_WINDOW: usize = 50;
@@ -99,15 +109,27 @@ pub fn occupancy_or_fallback(
 
 /// Feed the latest frame to the FieldModel during calibration collection.
 ///
-/// Only acts when the model status is `Collecting`. Wraps the latest frame
-/// as a single-link observation (n_links=1) and feeds it.
+/// Acts while the model is `Uncalibrated` or `Collecting`. The first fed frame
+/// flips a freshly-started (`Uncalibrated`) model to `Collecting` inside
+/// `feed_calibration`; without accepting the `Uncalibrated` state here the two
+/// gates deadlock and the frame count never leaves 0 (calibration/start yields
+/// an `Uncalibrated` model that nothing would ever advance). Wraps the latest
+/// frame as a single-link observation (n_links=1) and feeds it.
 pub fn maybe_feed_calibration(field: &mut FieldModel, frame_history: &VecDeque<Vec<f64>>) {
-    if field.status() != CalibrationStatus::Collecting {
+    if !matches!(
+        field.status(),
+        CalibrationStatus::Uncalibrated | CalibrationStatus::Collecting
+    ) {
         return;
     }
     if let Some(latest) = frame_history.back() {
-        // Single-link observation: [1][n_subcarriers]
-        let observations = vec![latest.clone()];
+        // Resample the raw amplitude vector onto the FieldModel's canonical
+        // 56-tone grid before feeding. Real HT40 nodes stream 128-wide frames;
+        // feeding those raw made every `feed_calibration` fail DimensionMismatch
+        // (swallowed at debug level), pinning frame_count at 0 even after the
+        // status-gate deadlock was fixed. Single-link observation: [1][56].
+        let canonical = CALIB_NORMALIZER.resample_to_canonical(latest);
+        let observations = vec![canonical];
         if let Err(e) = field.feed_calibration(&observations) {
             tracing::debug!("FieldModel calibration feed: {e}");
         }
@@ -179,5 +201,66 @@ mod tests {
         let positions = parse_node_positions("1,2;3,4,5");
         assert_eq!(positions.len(), 1);
         assert_eq!(positions[0], [3.0, 4.0, 5.0]);
+    }
+
+    /// Regression: a freshly-started (`Uncalibrated`) field model must begin
+    /// collecting once frames arrive. Before the fix, `maybe_feed_calibration`
+    /// only fed while already `Collecting`, but only `feed_calibration` sets
+    /// `Collecting` — so the first frame was never fed and the count stayed 0.
+    #[test]
+    fn maybe_feed_calibration_advances_uncalibrated_to_collecting() {
+        let mut field = FieldModel::new(single_link_config()).expect("field model");
+        assert_eq!(field.status(), CalibrationStatus::Uncalibrated);
+        assert_eq!(field.calibration_frame_count(), 0);
+
+        // n_subcarriers defaults to 56; one single-link frame of that width.
+        let frame = vec![0.5_f64; 56];
+        let mut history: VecDeque<Vec<f64>> = VecDeque::new();
+        history.push_back(frame);
+
+        maybe_feed_calibration(&mut field, &history);
+
+        assert_eq!(
+            field.status(),
+            CalibrationStatus::Collecting,
+            "first frame must flip Uncalibrated -> Collecting"
+        );
+        assert_eq!(
+            field.calibration_frame_count(),
+            1,
+            "frame count must advance past 0"
+        );
+
+        // Subsequent frames keep accumulating while Collecting.
+        maybe_feed_calibration(&mut field, &history);
+        assert_eq!(field.calibration_frame_count(), 2);
+    }
+
+    /// Regression (#1170 pattern): a real HT40 node streams 128-wide amplitude
+    /// frames, but the FieldModel is a 56-tone grid. Before canonicalization,
+    /// `feed_calibration` rejected every frame with DimensionMismatch (swallowed
+    /// at debug), so frame_count stayed 0 even with the deadlock fixed. The feed
+    /// must resample 128 → 56 and actually accumulate.
+    #[test]
+    fn maybe_feed_calibration_resamples_wide_frames_and_accumulates() {
+        let mut field = FieldModel::new(single_link_config()).expect("field model");
+
+        // 128-wide frame (HT40), NOT the model's 56 — would DimensionMismatch raw.
+        let wide = vec![0.5_f64; 128];
+        let mut history: VecDeque<Vec<f64>> = VecDeque::new();
+        history.push_back(wide);
+
+        maybe_feed_calibration(&mut field, &history);
+
+        assert_eq!(
+            field.status(),
+            CalibrationStatus::Collecting,
+            "128-wide frame must resample to 56 and be accepted"
+        );
+        assert_eq!(
+            field.calibration_frame_count(),
+            1,
+            "wide frame must accumulate, not be silently dropped"
+        );
     }
 }

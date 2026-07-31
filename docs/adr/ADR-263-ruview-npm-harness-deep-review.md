@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Accepted — **implemented** (O1–O9, `@ruvnet/ruview@0.2.0`): fail-closed `claim-check`, async MCP dispatch (ping answered mid-`verify`, pinned by e2e test), zero-dependency install, bounded output tails, argv-passed monitor port, package.json-sourced version, prepack skill sync, memoized `which()`, underscore-canonical tools with dotted aliases, word-boundary guardrail matching. 30/30 tests (MEASURED, `node --test test/*.test.mjs`); CI gate in ADR-265's `npm-packages.yml` |
+| **Status** | Accepted — **implemented** (O1–O9 in `@ruvnet/ruview@0.2.0`; security/community extension in `0.3.0`, ADR-283; source-cited guidance in `0.3.1`): fail-closed schemas and MCP policy, async dispatch, zero runtime dependencies, bounded/redacted local Claude/Codex adapters, reviewed shared brain, source-checked capability guidance, and replay-verified Darwin/Flywheel gate. CI gate: `ruview-harness-flywheel.yml` |
 | **Date** | 2026-07-02 |
 | **Deciders** | ruv |
 | **Codename** | **RUVIEW-NPM-REVIEW-1** |

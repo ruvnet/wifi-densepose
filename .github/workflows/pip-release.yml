@@ -13,14 +13,29 @@
 #   1. cut tag `v1.99.0-pip`  → publishes the tombstone wheel first
 #   2. cut tag `v2.0.0-pip`   → publishes the PyO3 v2 wheel matrix
 #
-# Publishes via the `PYPI_API_TOKEN` GitHub Actions secret. The
-# token-refresh runbook (GCP Secret Manager → gh secret set) lives in
-# docs/integrations/pypi-release.md so KICS does not flag the
-# secret name as a generic-secret literal in the workflow.
+# Publishes via the `PYPI_API_TOKEN` GitHub Actions secret (API-token
+# auth). This is the ACTIVE, working publish path — the token is sourced
+# fresh from GCP Secret Manager per the runbook in
+# docs/integrations/pypi-release.md (GCP Secret Manager → gh secret set),
+# which also keeps KICS from flagging the secret name as a generic-secret
+# literal here.
 #
-# Q3 (witness hash v2 — open in ADR-117 §11.3) MUST be resolved
-# before the first v2.0.0 publish. When v2 lands, add a parallel
-# step that verifies the v2 hash against the Rust pipeline.
+# TODO(ADR-184 P1b): migrate to PyPI OIDC Trusted Publishing to remove
+# this rotatable/expire-able credential. That switch is GATED on a manual
+# pypi.org step no CLI/agent can perform: the repo owner must register a
+# Trusted Publisher on pypi.org for owner=ruvnet / repo=RuView /
+# workflow=pip-release.yml (BOTH the wifi-densepose and ruview projects;
+# ruview as a pending publisher) — see docs/adr/ADR-184-*.md. Do NOT grant
+# the OIDC id-token write permission before that registration exists, or
+# publishing fails with "no trusted publisher configured" — a silent
+# regression the `Verify fix markers` guard `RuView#786-pypi-token-auth`
+# exists to catch (it forbids that permission string in this file). When
+# the owner confirms both entries are live, do the OIDC switch as a
+# dedicated follow-up commit (drop `password:`, add the OIDC id-token
+# permission + `environment: pypi`) so there is no capability gap between.
+#
+# Production publishing fails closed until the ADR-117 §11.3 v2 witness
+# hash exists. TestPyPI remains usable to validate release artifacts.
 
 name: pip-release
 
@@ -67,7 +82,7 @@ jobs:
             arch: x86_64
           - os: ubuntu-latest
             arch: aarch64
-          - os: macos-13          # x86_64 runner
+          - os: macos-15-intel    # x86_64 runner
             arch: x86_64
           - os: macos-14          # arm64 runner
             arch: arm64
@@ -134,6 +149,46 @@ jobs:
         with:
           name: sdist
           path: sdist/*.tar.gz
+          if-no-files-found: error
+
+  build-ruview:
+    name: Build ruview meta-package
+    if: |
+      github.event_name == 'workflow_dispatch' && inputs.target == 'v2-wheels' ||
+      startsWith(github.ref, 'refs/tags/v2.')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Verify lock-step package versions
+        shell: python
+        run: |
+          import pathlib
+          import tomllib
+
+          root = pathlib.Path("python")
+          core = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+          meta = tomllib.loads((root / "ruview-meta" / "pyproject.toml").read_text(encoding="utf-8"))
+          core_version = core["project"]["version"]
+          meta_version = meta["project"]["version"]
+          expected_dependency = f"wifi-densepose=={core_version}"
+          if meta_version != core_version:
+              raise SystemExit(
+                  f"package versions differ: wifi-densepose={core_version}, ruview={meta_version}"
+              )
+          if expected_dependency not in meta["project"]["dependencies"]:
+              raise SystemExit(f"ruview must depend on {expected_dependency}")
+          print(f"lock-step version: {core_version}")
+      - name: Build ruview wheel and sdist
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build python/ruview-meta --outdir ruview-dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ruview
+          path: ruview-dist/*
           if-no-files-found: error
 
   # ────────────────────────────────────────────────────────────────
@@ -220,18 +275,29 @@ jobs:
   # ────────────────────────────────────────────────────────────────
 
   publish-v2:
-    name: Publish v2 wheels
-    needs: [build-wheels, build-sdist]
+    name: Publish wifi-densepose + ruview
+    needs: [build-wheels, build-sdist, build-ruview]
     if: |
       always() &&
       needs.build-wheels.result == 'success' &&
       needs.build-sdist.result == 'success' &&
+      needs.build-ruview.result == 'success' &&
       (
         github.event_name == 'workflow_dispatch' && inputs.target == 'v2-wheels' ||
         startsWith(github.ref, 'refs/tags/v2.')
       )
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - name: Enforce production witness gate
+        if: |
+          startsWith(github.ref, 'refs/tags/v2.') ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish_to == 'pypi')
+        run: |
+          test -s archive/v1/data/proof/expected_features_v2.sha256 || {
+            echo "::error::ADR-117 §11.3 release gate is incomplete: archive/v1/data/proof/expected_features_v2.sha256 is missing or empty"
+            exit 1
+          }
       - name: Gather all artifacts into dist/
         uses: actions/download-artifact@v4
         with:
@@ -241,12 +307,14 @@ jobs:
           mkdir -p dist
           find dist-staging -type f \( -name '*.whl' -o -name '*.tar.gz' \) -exec cp -v {} dist/ \;
           ls -lh dist/
+      # API-token auth (active path). See TODO(ADR-184 P1b) in the header
+      # before replacing `password:` with the OIDC id-token permission.
       - name: Publish to TestPyPI (dry-run target)
         if: github.event_name == 'workflow_dispatch' && inputs.publish_to == 'testpypi'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          password: ${{ secrets.TESTPYPI_API_TOKEN }}
           packages-dir: dist
           skip-existing: true
       - name: Publish to PyPI
@@ -257,6 +325,7 @@ jobs:
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
           packages-dir: dist
+          verbose: true
 
   publish-tombstone:
     name: Publish v1.99 tombstone
@@ -274,12 +343,14 @@ jobs:
         with:
           name: tombstone
           path: dist
+      # API-token auth (active path). See TODO(ADR-184 P1b) in the header
+      # before replacing `password:` with the OIDC id-token permission.
       - name: Publish to TestPyPI (dry-run target)
         if: github.event_name == 'workflow_dispatch' && inputs.publish_to == 'testpypi'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          password: ${{ secrets.TESTPYPI_API_TOKEN }}
           packages-dir: dist
           skip-existing: true
       - name: Publish to PyPI

@@ -425,7 +425,7 @@ pub enum WifiChipset {
     BroadcomBcm43455,
     /// Realtek RTL8822CS via modified rtw88 driver.
     RealtekRtl8822cs,
-    /// MediaTek MT7661 via mt76 driver modification.
+    /// Proposed MediaTek MT7661 research target; no public CSI export is verified.
     MediatekMt7661,
 }
 
@@ -455,7 +455,7 @@ pub struct Esp32CompatFrame {
 ```
 
 **Domain Services:**
-- `CsiExtractionService` — Reads raw CSI from patched driver via Netlink socket (BCM43455), procfs (RTL8822CS), or UDP (MT7661)
+- `CsiExtractionService` — Reads raw CSI from a validated chipset adapter. Nexmon/BCM43455 is the established Linux example; RTL8822CS and MT7661 remain unverified research targets and must not be advertised as working capture paths.
 - `SubcarrierResamplerService` — Resamples chipset-specific subcarrier counts to match ESP32 format (e.g., 256 → 128 via decimation or interpolation)
 - `ProtocolTranslatorService` — Converts `ChipsetCsiFrame` to `Esp32CompatFrame` with ADR-018 binary encoding
 - `CalibrationService` — Compensates for chipset-specific phase offsets, antenna spacing, and gain differences relative to ESP32 CSI
@@ -625,7 +625,7 @@ pub struct EspNodeConnection {
 
 ### ESP32 Protocol ACL (CSI Bridge)
 
-The WiFi CSI Bridge translates chipset-specific CSI formats (Nexmon, rtw88, mt76) into the ESP32 binary protocol (ADR-018). The sensing server never knows whether frames came from a real ESP32 or a TV box WiFi chipset. Virtual node IDs (200-254) prevent collision with physical ESP32 IDs but are otherwise treated identically by the ingestion context.
+The WiFi CSI Bridge translates validated chipset-specific CSI formats into a versioned RuView envelope. Nexmon is the established Linux example; rtw88 and mt76 require a verified complex-CSI export before implementation. Virtual node IDs (200-254) prevent collision with physical ESP32 IDs but are otherwise treated identically by the ingestion context.
 
 ### Armbian Platform ACL
 

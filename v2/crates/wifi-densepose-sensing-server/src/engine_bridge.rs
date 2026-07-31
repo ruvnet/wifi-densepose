@@ -38,6 +38,7 @@ use wifi_densepose_bfld::{PrivacyClass, PrivacyMode};
 use wifi_densepose_engine::{AdapterInfo, EngineError, StreamingEngine, TrustedOutput};
 use wifi_densepose_geo::types::GeoRegistration;
 use wifi_densepose_signal::ruvsense::fusion_quality::CalibrationId;
+use wifi_densepose_signal::ruvsense::multistatic::MultistaticConfig;
 use wifi_densepose_worldgraph::WorldId;
 
 use super::multistatic_bridge::node_frames_from_states;
@@ -79,8 +80,24 @@ pub struct EngineBridge {
 impl EngineBridge {
     /// Build a bridge for one installation. `room_area_id`/`room_name` name the
     /// observation scope; `mode` is the starting privacy mode.
-    pub fn new(mode: PrivacyMode, model_version: u16, room_area_id: &str, room_name: &str) -> Self {
+    ///
+    /// `multistatic_cfg` is `None` on the pure default (60 ms/20 ms guard);
+    /// callers that derive a config from `WDP_TDM_SLOTS`/`WDP_GUARD_INTERVAL_US`
+    /// (see `main.rs::multistatic_guard_config_from_env`) should pass it here
+    /// too — otherwise the governed trust cycle silently keeps using the
+    /// hardcoded default even though the sibling `multistatic_fuser` field on
+    /// `AppState` picked up the override (#1049/#1057).
+    pub fn new(
+        mode: PrivacyMode,
+        model_version: u16,
+        room_area_id: &str,
+        room_name: &str,
+        multistatic_cfg: Option<MultistaticConfig>,
+    ) -> Self {
         let mut engine = StreamingEngine::new(mode, model_version, GeoRegistration::default());
+        if let Some(cfg) = multistatic_cfg {
+            engine.set_multistatic_config(cfg);
+        }
         let room = engine.add_room(room_area_id, room_name);
         Self {
             engine,
@@ -267,7 +284,7 @@ mod tests {
 
     #[test]
     fn empty_states_produce_no_belief() {
-        let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "living_room", "Living Room");
+        let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "living_room", "Living Room", None);
         let out = bridge.process_cycle_from_states(&HashMap::new(), 1_000);
         assert!(out.is_none());
         // No belief published, no sensor wired.
@@ -276,7 +293,7 @@ mod tests {
 
     #[test]
     fn live_cycle_produces_witnessed_belief_with_provenance() {
-        let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "living_room", "Living Room");
+        let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "living_room", "Living Room", None);
         let states = two_node_states();
         let out = bridge
             .process_cycle_from_states(&states, 10_000)
@@ -299,7 +316,7 @@ mod tests {
     fn live_path_is_deterministic() {
         let states = two_node_states_fixed();
         let run = || {
-            let mut b = EngineBridge::new(PrivacyMode::PrivateHome, 1, "r", "R");
+            let mut b = EngineBridge::new(PrivacyMode::PrivateHome, 1, "r", "R", None);
             b.process_cycle_from_states(&states, 5_000).unwrap().unwrap()
         };
         let a = run();
@@ -325,7 +342,7 @@ mod tests {
 
     #[test]
     fn nodes_registered_once_across_cycles() {
-        let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "r", "R");
+        let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "r", "R", None);
         let states = two_node_states();
         bridge.process_cycle_from_states(&states, 1_000);
         bridge.process_cycle_from_states(&states, 2_000);
@@ -336,7 +353,7 @@ mod tests {
 
     #[test]
     fn retention_bounds_world_graph_growth() {
-        let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "r", "R");
+        let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "r", "R", None);
         bridge.set_semantic_retention(5);
         let states = two_node_states();
         for i in 0..20i64 {
@@ -349,7 +366,7 @@ mod tests {
     #[test]
     fn adapter_identity_flows_into_live_witness() {
         let states = two_node_states_fixed();
-        let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "r", "R");
+        let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "r", "R", None);
         let base = bridge
             .process_cycle_from_states(&states, 1_000)
             .unwrap()
@@ -381,7 +398,7 @@ mod tests {
     /// the status endpoint, with a zero error count on the happy path.
     #[test]
     fn observe_cycle_records_trust_state() {
-        let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "r", "R");
+        let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "r", "R", None);
         assert!(bridge.last_trust_witness().is_none());
         assert_eq!(bridge.effective_class(), None);
 
@@ -430,7 +447,7 @@ mod tests {
             m
         }
 
-        let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "r", "R");
+        let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "r", "R", None);
         let mismatched = mismatched_states();
 
         assert!(bridge.observe_cycle(&mismatched, 1_000).is_none());
@@ -461,7 +478,7 @@ mod tests {
     /// mapping bfld's privacy gate applies at `Restricted`.
     #[test]
     fn restricted_class_suppresses_raw_outputs() {
-        let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "r", "R");
+        let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "r", "R", None);
         bridge.set_privacy_mode(PrivacyMode::StrictNoIdentity); // base = Restricted
         bridge
             .observe_cycle(&two_node_states(), 1_000)
@@ -472,7 +489,7 @@ mod tests {
 
     #[test]
     fn identity_strict_mode_is_carried_into_provenance() {
-        let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "r", "R");
+        let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "r", "R", None);
         bridge.set_privacy_mode(PrivacyMode::StrictNoIdentity);
         let out = bridge
             .process_cycle_from_states(&two_node_states(), 7_000)

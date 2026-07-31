@@ -8,6 +8,7 @@ use super::{
     MovementClassifier, MovementClassifierConfig,
 };
 use crate::domain::{ScanZone, VitalSignsReading};
+#[cfg(feature = "ml")]
 use crate::ml::{MlDetectionConfig, MlDetectionPipeline, MlDetectionResult};
 use crate::{DisasterConfig, MatError};
 
@@ -26,9 +27,10 @@ pub struct DetectionConfig {
     pub enable_heartbeat: bool,
     /// Minimum overall confidence to report detection
     pub min_confidence: f64,
-    /// Enable ML-enhanced detection
+    /// Enable ML-enhanced detection (requires the `ml` feature to have any effect)
     pub enable_ml: bool,
     /// ML detection configuration (if enabled)
+    #[cfg(feature = "ml")]
     pub ml_config: Option<MlDetectionConfig>,
 }
 
@@ -42,6 +44,7 @@ impl Default for DetectionConfig {
             enable_heartbeat: false,
             min_confidence: 0.3,
             enable_ml: false,
+            #[cfg(feature = "ml")]
             ml_config: None,
         }
     }
@@ -64,6 +67,7 @@ impl DetectionConfig {
     }
 
     /// Enable ML-enhanced detection with the given configuration
+    #[cfg(feature = "ml")]
     pub fn with_ml(mut self, ml_config: MlDetectionConfig) -> Self {
         self.enable_ml = true;
         self.ml_config = Some(ml_config);
@@ -71,6 +75,7 @@ impl DetectionConfig {
     }
 
     /// Enable ML-enhanced detection with default configuration
+    #[cfg(feature = "ml")]
     pub fn with_default_ml(mut self) -> Self {
         self.enable_ml = true;
         self.ml_config = Some(MlDetectionConfig::default());
@@ -147,12 +152,14 @@ pub struct DetectionPipeline {
     movement_classifier: MovementClassifier,
     data_buffer: parking_lot::RwLock<CsiDataBuffer>,
     /// Optional ML detection pipeline
+    #[cfg(feature = "ml")]
     ml_pipeline: Option<MlDetectionPipeline>,
 }
 
 impl DetectionPipeline {
     /// Create a new detection pipeline
     pub fn new(config: DetectionConfig) -> Self {
+        #[cfg(feature = "ml")]
         let ml_pipeline = if config.enable_ml {
             config.ml_config.clone().map(MlDetectionPipeline::new)
         } else {
@@ -164,12 +171,14 @@ impl DetectionPipeline {
             heartbeat_detector: HeartbeatDetector::new(config.heartbeat.clone()),
             movement_classifier: MovementClassifier::new(config.movement.clone()),
             data_buffer: parking_lot::RwLock::new(CsiDataBuffer::new(config.sample_rate)),
+            #[cfg(feature = "ml")]
             ml_pipeline,
             config,
         }
     }
 
     /// Initialize ML models asynchronously (if enabled)
+    #[cfg(feature = "ml")]
     pub async fn initialize_ml(&mut self) -> Result<(), MatError> {
         if let Some(ref mut ml) = self.ml_pipeline {
             ml.initialize().await.map_err(MatError::from)?;
@@ -178,6 +187,7 @@ impl DetectionPipeline {
     }
 
     /// Check if ML pipeline is ready
+    #[cfg(feature = "ml")]
     pub fn ml_ready(&self) -> bool {
         self.ml_pipeline.as_ref().is_none_or(|ml| ml.is_ready())
     }
@@ -210,13 +220,23 @@ impl DetectionPipeline {
             // `buffer` guard dropped here
         };
 
-        // If ML is enabled and ready, enhance with ML predictions
-        let enhanced_reading = if self.config.enable_ml && self.ml_ready() {
-            // Snapshot the buffer under the lock, then drop the guard before await.
-            let buffer_snapshot = { self.data_buffer.read().clone() };
-            self.enhance_with_ml(reading, &buffer_snapshot).await?
-        } else {
-            reading
+        // If ML is enabled and ready, enhance with ML predictions (only
+        // compiled under the `ml` feature; the base build is signal-only).
+        let enhanced_reading = {
+            #[cfg(feature = "ml")]
+            {
+                if self.config.enable_ml && self.ml_ready() {
+                    // Snapshot the buffer under the lock, then drop the guard before await.
+                    let buffer_snapshot = { self.data_buffer.read().clone() };
+                    self.enhance_with_ml(reading, &buffer_snapshot).await?
+                } else {
+                    reading
+                }
+            }
+            #[cfg(not(feature = "ml"))]
+            {
+                reading
+            }
         };
 
         // Check minimum confidence
@@ -230,6 +250,7 @@ impl DetectionPipeline {
     }
 
     /// Enhance detection results with ML predictions
+    #[cfg(feature = "ml")]
     async fn enhance_with_ml(
         &self,
         traditional_reading: Option<VitalSignsReading>,
@@ -262,6 +283,7 @@ impl DetectionPipeline {
     }
 
     /// Get the latest ML detection results (if ML is enabled)
+    #[cfg(feature = "ml")]
     pub async fn get_ml_results(&self) -> Option<MlDetectionResult> {
         let ml = match &self.ml_pipeline {
             Some(ml) => ml,
@@ -346,6 +368,7 @@ impl DetectionPipeline {
         self.movement_classifier = MovementClassifier::new(config.movement.clone());
 
         // Update ML pipeline if configuration changed
+        #[cfg(feature = "ml")]
         if config.enable_ml != self.config.enable_ml || config.ml_config != self.config.ml_config {
             self.ml_pipeline = if config.enable_ml {
                 config.ml_config.clone().map(MlDetectionPipeline::new)
@@ -358,6 +381,7 @@ impl DetectionPipeline {
     }
 
     /// Get the ML pipeline (if enabled)
+    #[cfg(feature = "ml")]
     pub fn ml_pipeline(&self) -> Option<&MlDetectionPipeline> {
         self.ml_pipeline.as_ref()
     }

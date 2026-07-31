@@ -37,6 +37,13 @@ pub const ANOMALY_OUTLIER_SPREADS: f32 = 2.0;
 /// drives the human-readable label.
 pub const ANOMALY_LABEL_CUTOFF: f32 = 0.5;
 
+/// Fraction by which occupied-anchor variance must exceed the empty-room
+/// baseline for [`PresenceSpecialist`]'s variance channel to be trusted
+/// (issue #1440). Below this margin the channel is disabled rather than
+/// producing a midpoint threshold that can sit below the empty-room
+/// baseline itself.
+pub const VARIANCE_SEPARATION_MARGIN: f32 = 0.05;
+
 /// Which biological signal a specialist estimates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SpecialistKind {
@@ -111,6 +118,16 @@ impl PresenceSpecialist {
     /// Fit from anchors: variance threshold at the midpoint between the empty
     /// variance and the mean occupied variance; mean-shift threshold at half
     /// the empty→occupied mean distance (inert when the means don't separate).
+    ///
+    /// The variance channel is itself inert (never fires) when `occ_var`
+    /// does not genuinely exceed `empty_var` (issue #1440): a midpoint
+    /// threshold assumes occupied windows are noisier than the empty-room
+    /// baseline, but a still/quiet occupant can measure *less* variance
+    /// than an empty room's ambient/interference noise floor. Left
+    /// unguarded, the midpoint then sits *below* the empty-room baseline
+    /// itself, so a genuinely empty room reads "present" on every frame —
+    /// worse than no signal at all. Matches the mean-shift channel, which
+    /// already goes inert (`None`) under the equivalent condition.
     pub fn train(anchors: &[AnchorFeature]) -> Option<Self> {
         let empty = anchors.iter().find(|a| a.label == AnchorLabel::Empty)?;
         let occ: Vec<&Features> = anchors
@@ -129,8 +146,15 @@ impl PresenceSpecialist {
         let mean_dist = (occ_mean - empty_mean).abs();
         let mean_dist_threshold = (mean_dist > 1e-4).then(|| 0.5 * mean_dist);
 
+        let variance_separates = occ_var > empty_var * (1.0 + VARIANCE_SEPARATION_MARGIN);
+        let threshold = if variance_separates {
+            0.5 * (empty_var + occ_var)
+        } else {
+            f32::INFINITY
+        };
+
         Some(Self {
-            threshold: 0.5 * (empty_var + occ_var),
+            threshold,
             occupied_var: occ_var.max(empty_var + 1e-3),
             empty_mean,
             mean_dist_threshold,
@@ -149,8 +173,15 @@ impl Specialist for PresenceSpecialist {
         let present = by_variance || by_mean;
 
         // Confidence: strongest margin among the channels that are enabled.
-        let var_span = (self.occupied_var - self.threshold).max(1e-3);
-        let var_conf = ((f.variance - self.threshold).abs() / var_span).clamp(0.0, 1.0);
+        // An infinite threshold means the variance channel was disabled at
+        // train time (issue #1440) — it must contribute 0, not the spurious
+        // 1.0 that `(x - inf).abs() / span` would otherwise clamp to.
+        let var_conf = if self.threshold.is_finite() {
+            let var_span = (self.occupied_var - self.threshold).max(1e-3);
+            ((f.variance - self.threshold).abs() / var_span).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         let mean_conf = self
             .mean_dist_threshold
             .map(|thr| ((mean_dist - thr).abs() / thr.max(1e-3)).clamp(0.0, 1.0))
@@ -470,6 +501,26 @@ mod tests {
         let p = PresenceSpecialist::train(&anchors).unwrap();
         assert!(p.infer(&feat(12.0, 0.2, 0.0, 0.0)).unwrap().value == 1.0);
         assert!(p.infer(&feat(1.0, 0.1, 0.0, 0.0)).unwrap().value == 0.0);
+    }
+
+    /// Issue #1440: a still/quiet occupant can measure LESS variance than an
+    /// empty room's ambient/interference noise floor. Before the
+    /// `variance_separates` guard, the midpoint threshold would then sit
+    /// below the empty-room baseline itself, so a window matching that
+    /// baseline exactly (empty room) read "present" — the reporter's
+    /// "known-empty room read present 31/31 frames" symptom. The means are
+    /// identical here (no mean-shift channel to fall back on), isolating
+    /// the variance-channel bug.
+    #[test]
+    fn presence_inverted_variance_never_reports_empty_room_as_present() {
+        let anchors = vec![
+            af(AnchorLabel::Empty, 5.0, 0.1),
+            af(AnchorLabel::StandStill, 2.0, 0.15),
+        ];
+        let p = PresenceSpecialist::train(&anchors).unwrap();
+        let r = p.infer(&feat(5.0, 0.1, 0.0, 0.0)).unwrap();
+        assert_eq!(r.value, 0.0, "empty-room-baseline variance must not read present when occ_var < empty_var");
+        assert_eq!(r.confidence, 0.0, "a disabled channel must not report spurious confidence");
     }
 
     /// ADR-152 "variance-only presence" regression: a MOTIONLESS person raises

@@ -1,0 +1,63 @@
+[package]
+name = "ruview-auth"
+version = "0.1.0"
+edition = "2021"
+description = "Cognitum OAuth access-token verification for RuView (ADR-271)"
+publish = false
+
+[dependencies]
+# Same major as the service that ISSUES these tokens
+# (cognitum-one/dashboard `services/identity`, workspace `jsonwebtoken = "9"`).
+# Signature math is delegated to this crate; nothing here hand-rolls crypto.
+jsonwebtoken = "9"
+
+# `ureq`, not `reqwest`: `wifi-densepose-sensing-server` — the first consumer —
+# deliberately chose ureq as "the smallest" HTTP client (see its Cargo.toml).
+# Adding reqwest here would silently reverse that decision for the whole
+# dependency graph. Optional so a caller can supply its own transport via
+# `JwksFetcher` and take no HTTP dependency at all.
+ureq = { version = "2", default-features = false, features = ["tls", "json"], optional = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# --- `login` feature only (ADR-271 phase 2) -------------------------------
+# The login flow is an interactive client concern: a browser, a loopback
+# listener, a token exchange. The sensing server needs none of it and must not
+# pay for it, so every dependency here is optional and off by default. A server
+# built with default features gets the verifier and nothing more.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+tokio = { workspace = true, optional = true }
+rand = { version = "0.8", optional = true }
+sha2 = { workspace = true, optional = true }
+base64 = { version = "0.21", optional = true }
+url = { version = "2", optional = true }
+# Advisory cross-process file lock around the refresh critical section (Unix).
+libc = { version = "0.2", optional = true }
+
+[features]
+default = ["ureq-transport"]
+ureq-transport = ["dep:ureq"]
+# PKCE generation only (RFC 7636). Light: rand + sha2 + base64, no HTTP stack.
+# A resource server that runs its own browser sign-in redirect needs this
+# WITHOUT the client-side login machinery.
+pkce = ["dep:rand", "dep:sha2", "dep:base64"]
+# Interactive OAuth login: PKCE, loopback callback, OOB paste fallback,
+# credential storage, single-flight refresh. Opt in from a CLI or desktop app.
+login = ["pkce", "dep:reqwest", "dep:tokio", "dep:url", "dep:libc"]
+
+[dev-dependencies]
+# Test-only: sign real ES256 tokens so the negative matrix exercises the same
+# code path production does, rather than asserting against hand-built strings.
+jsonwebtoken = "9"
+serde_json = { workspace = true }
+
+# Keypairs are GENERATED AT TEST RUNTIME, never committed. A checked-in
+# `-----BEGIN PRIVATE KEY-----` is inert here but it trains scanners and readers
+# to treat committed key material as normal, and this repo has no such
+# precedent (zero tracked `.pem` files). Generating also makes the matrix
+# self-contained: no fixture can drift out of sync with the JWKS it is served by.
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+base64 = "0.21"

@@ -86,6 +86,21 @@ export class ApiService {
       // Process response through interceptors
       const processedResponse = await this.processResponse(response, url);
 
+      // NOTE: there is deliberately no step-up re-authentication branch here.
+      //
+      // An earlier revision caught the server's RFC 6750 "reauthentication
+      // required" challenge and redirected to /oauth/start. That challenge can
+      // never be issued to a browser: browser sign-in requests `sensing:read`
+      // only and always will (see BROWSER_SIGNIN_SCOPE), so no browser session
+      // holds `sensing:admin`, so the freshness gate the challenge announces is
+      // never reached. Admin work goes through the CLI or a pasted bearer.
+      //
+      // Removed rather than left inert, because it was not merely dead — it
+      // ended in a promise that never settles. If any other 401 ever grew that
+      // header, every caller awaiting this would hang forever with no error.
+      // The server-side guard stays as a fail-closed backstop; the client has
+      // nothing to do about a flow that does not exist.
+
       // Handle errors
       if (!processedResponse.ok) {
         const error = await processedResponse.json().catch(() => ({
@@ -148,3 +163,16 @@ export class ApiService {
 
 // Create singleton instance
 export const apiService = new ApiService();
+
+// Storage key shared with the QuickSettings "API Access" panel.
+export const API_TOKEN_STORAGE_KEY = 'ruview-api-token';
+
+// Apply a previously-saved bearer token at module load — before app init
+// dispatches its first request — so a configured RUVIEW_API_TOKEN works from
+// the very first /api/v1/* call. The server only ever checks the
+// `Authorization: Bearer` header (see bearer_auth.rs) — this intentionally
+// never puts the token in a URL query string.
+try {
+  const storedToken = localStorage.getItem(API_TOKEN_STORAGE_KEY);
+  if (storedToken) apiService.setAuthToken(storedToken);
+} catch { /* storage unavailable (private browsing etc.) */ }

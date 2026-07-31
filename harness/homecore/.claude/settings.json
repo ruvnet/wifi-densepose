@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__homecore__*"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)"
+    ]
+  },
+  "mcpServers": {
+    "homecore": {
+      "command": "homecore",
+      "args": [
+        "mcp",
+        "start"
+      ]
+    }
+  }
+}

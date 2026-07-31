@@ -2,6 +2,7 @@
 
 import { API_CONFIG, buildWsUrl } from '../config/api.config.js';
 import { backendDetector } from '../utils/backend-detector.js';
+import { withWsTicket } from './ws-ticket.js';
 
 export class WebSocketService {
   constructor() {
@@ -115,8 +116,19 @@ export class WebSocketService {
   }
 
   async createWebSocketWithTimeout(url) {
+    // ADR-272: the server gates /ws/* and /api/v1/stream/* behind bearer auth,
+    // and a browser cannot set an Authorization header on an upgrade request.
+    // Exchange the stored bearer for a single-use ?ticket= here — immediately
+    // before the socket opens, on every attempt — so reconnects each get a
+    // fresh ticket. Also strip any long-lived `token` param a caller put in
+    // the URL (e.g. pose.service.js): the bearer itself must never travel in
+    // a query string.
+    const urlObj = new URL(url);
+    urlObj.searchParams.delete('token');
+    const connectUrl = await withWsTicket(urlObj.toString());
+
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(url);
+      const ws = new WebSocket(connectUrl);
       const timeout = setTimeout(() => {
         ws.close();
         reject(new Error(`Connection timeout after ${this.config.connectionTimeout}ms`));

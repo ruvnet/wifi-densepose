@@ -1,0 +1,106 @@
+groups:
+  - id: registry.ruview
+    type: attribute_group
+    display_name: RuView attributes
+    brief: Attributes shared across RuView sensing telemetry.
+    attributes:
+      - id: ruview.node.id
+        type: int
+        stability: development
+        brief: The ESP32 mesh node the event pertains to.
+        note: >-
+          The one-byte node id carried in the ESP32 CSI / edge-vitals
+          frame header. Simulated frames use node id 1.
+        examples: [1, 2]
+      - id: ruview.csi.source
+        type: string
+        stability: development
+        brief: The data source that produced the sensing cycle.
+        note: >-
+          One of the sensing server's source labels: `esp32` (live CSI or
+          edge-vitals frames over UDP), `wifi` (host WiFi RSSI scanning),
+          or `simulated` (the built-in synthetic frame generator).
+        examples: ["esp32", "wifi", "simulated"]
+      - id: ruview.csi.frames_total
+        type: int
+        stability: development
+        brief: Sensing frames processed since process start (the server's tick counter).
+        examples: [100, 42000]
+      - id: ruview.csi.nodes_active
+        type: int
+        stability: development
+        brief: Nodes that delivered a frame within the liveness window.
+        examples: [0, 3]
+      - id: ruview.presence.state
+        type:
+          members:
+            - id: present
+              value: "present"
+              stability: development
+              brief: The classifier reports at least one person present.
+            - id: absent
+              value: "absent"
+              stability: development
+              brief: The classifier reports the space as empty.
+        stability: development
+        brief: The presence classification after smoothing and any adaptive-model override.
+      - id: ruview.motion.level
+        type:
+          members:
+            - id: absent
+              value: "absent"
+              stability: development
+              brief: No presence detected.
+            - id: present_still
+              value: "present_still"
+              stability: development
+              brief: Presence with little or no motion.
+            - id: present_moving
+              value: "present_moving"
+              stability: development
+              brief: Presence with moderate motion.
+            - id: active
+              value: "active"
+              stability: development
+              brief: Presence with high motion energy.
+        stability: development
+        brief: >-
+          The motion-level class attached to a sensing update (the
+          adaptive classifier's class set).
+      - id: ruview.inference.confidence
+        type: double
+        stability: development
+        brief: Confidence of the presence/motion classification, in [0.0, 1.0].
+        examples: [0.7, 0.95]
+      - id: ruview.persons.count
+        type: int
+        stability: development
+        brief: The estimated person count for the sensing cycle.
+        examples: [0, 2]
+      - id: ruview.vitals.breathing_rate_bpm
+        type: double
+        stability: development
+        brief: Estimated breathing rate in breaths per minute.
+        note: "`0.0` when no estimate was produced in this window — check the confidence attribute."
+        examples: [14.5]
+      - id: ruview.vitals.heart_rate_bpm
+        type: double
+        stability: development
+        brief: Estimated heart rate in beats per minute.
+        note: "`0.0` when no estimate was produced in this window — check the confidence attribute."
+        examples: [62.0]
+      - id: ruview.vitals.breathing_confidence
+        type: double
+        stability: development
+        brief: Confidence of the breathing-rate estimate, in [0.0, 1.0].
+        examples: [0.7]
+      - id: ruview.vitals.heartbeat_confidence
+        type: double
+        stability: development
+        brief: Confidence of the heart-rate estimate, in [0.0, 1.0].
+        examples: [0.7]
+      - id: ruview.model.id
+        type: string
+        stability: development
+        brief: The identifier of a loaded inference model.
+        examples: ["wifi-densepose-v1"]

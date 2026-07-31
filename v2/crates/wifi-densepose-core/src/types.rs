@@ -65,6 +65,7 @@ impl ComplexSample {
     /// This is a lossy *view*, never re-serialised as the witness form
     /// (ADR-136 §3.3 risk mitigation — one encoder only).
     #[must_use]
+    #[allow(clippy::cast_possible_truncation)] // f64 -> f32 is the documented lossy narrowing above
     pub fn as_complex32(&self) -> num_complex::Complex32 {
         num_complex::Complex32::new(self.0.re as f32, self.0.im as f32)
     }
@@ -581,7 +582,9 @@ impl crate::traits::CanonicalFrame for CsiFrame {
         b.extend_from_slice(&m.timestamp.seconds.to_le_bytes());
         b.extend_from_slice(&m.timestamp.nanos.to_le_bytes());
         let dev = m.device_id.as_str().as_bytes();
-        b.extend_from_slice(&(dev.len() as u32).to_le_bytes());
+        b.extend_from_slice(
+            &u32::try_from(dev.len()).expect("device_id length fits u32").to_le_bytes(),
+        );
         b.extend_from_slice(dev);
         b.push(match m.frequency_band {
             FrequencyBand::Band2_4GHz => 0,
@@ -592,15 +595,12 @@ impl crate::traits::CanonicalFrame for CsiFrame {
         b.extend_from_slice(&m.bandwidth_mhz.to_le_bytes());
         b.push(m.antenna_config.tx_antennas);
         b.push(m.antenna_config.rx_antennas);
-        match m.antenna_config.spacing_mm {
-            Some(s) => {
-                b.push(1);
-                b.extend_from_slice(&s.to_le_bytes());
-            }
-            None => {
-                b.push(0);
-                b.extend_from_slice(&[0u8; 4]);
-            }
+        if let Some(s) = m.antenna_config.spacing_mm {
+            b.push(1);
+            b.extend_from_slice(&s.to_le_bytes());
+        } else {
+            b.push(0);
+            b.extend_from_slice(&[0u8; 4]);
         }
         b.extend_from_slice(&m.rssi_dbm.to_le_bytes());
         b.extend_from_slice(&m.noise_floor_dbm.to_le_bytes());
@@ -623,8 +623,12 @@ impl crate::traits::CanonicalFrame for CsiFrame {
         b.extend_from_slice(&m.model_version.to_le_bytes());
 
         // Shape, then complex payload stream-major.
-        b.extend_from_slice(&(self.data.nrows() as u32).to_le_bytes());
-        b.extend_from_slice(&(self.data.ncols() as u32).to_le_bytes());
+        b.extend_from_slice(
+            &u32::try_from(self.data.nrows()).expect("stream count fits u32").to_le_bytes(),
+        );
+        b.extend_from_slice(
+            &u32::try_from(self.data.ncols()).expect("subcarrier count fits u32").to_le_bytes(),
+        );
         for sample in self.data_complex_samples() {
             b.extend_from_slice(&sample.to_le_bytes());
         }
@@ -714,7 +718,7 @@ impl<'a> Cursor<'a> {
         Ok(f32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
     fn i8(&mut self) -> Result<i8, CanonicalDecodeError> {
-        Ok(self.take(1)?[0] as i8)
+        Ok(i8::from_le_bytes(self.take(1)?.try_into().unwrap()))
     }
     fn uuid(&mut self) -> Result<Uuid, CanonicalDecodeError> {
         Ok(Uuid::from_bytes(self.take(16)?.try_into().unwrap()))
@@ -1462,7 +1466,7 @@ mod tests {
     fn lcg(state: &mut u64) -> f64 {
         *state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
         // Map high bits into [-1e6, 1e6) for a wide exponent spread.
-        ((*state >> 11) as f64 / (1u64 << 53) as f64) * 2.0e6 - 1.0e6
+        ((*state >> 11) as f64 / (1u64 << 53) as f64).mul_add(2.0e6, -1.0e6)
     }
 
     /// AC1 — `ComplexSample` little-endian round-trip + endianness pin.
@@ -1671,6 +1675,7 @@ mod tests {
     /// unwinding panic (panic-on-adversarial-input = 0). Sweep truncations and a
     /// deterministic fuzz spread.
     #[test]
+    #[allow(clippy::cast_possible_truncation)] // fuzz byte extraction: truncation IS the point
     fn canonical_decode_never_panics_on_arbitrary_bytes() {
         use ndarray::Array2;
         let mut meta = CsiMetadata::new(DeviceId::new("node"), FrequencyBand::Band5GHz, 36);

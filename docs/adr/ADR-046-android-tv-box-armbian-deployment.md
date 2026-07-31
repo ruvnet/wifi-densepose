@@ -83,7 +83,7 @@ This ADR covers Phase 1 (TV box as aggregator) and Phase 2 (custom WiFi firmware
    |---------|--------|-------------|--------------|--------|
    | Broadcom BCM43455 | brcmfmac | **Proven** (Nexmon CSI) | Yes | Low — patches exist |
    | Realtek RTL8822CS | rtw88 | **Moderate** — driver is open-source, CSI hooks need adding | Yes (patched) | Medium |
-   | MediaTek MT7661 | mt76 | **Unknown** — MediaTek has released CSI tools for some chips | Yes | Medium-High |
+   | MediaTek MT7661 | mt76 | **Unverified** — no supported public CSI capture API was found in upstream `mt76` or public MediaTek SDK material | Yes | Research only |
 
 2. **CSI extraction architecture** (Linux kernel driver modification):
 

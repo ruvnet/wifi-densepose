@@ -1,0 +1,82 @@
+//! Generated OpenTelemetry semantic-convention name constants for
+//! RuView's curated telemetry (event names and attribute keys).
+//!
+//! GENERATED from `semconv/registry/` by `weaver registry generate`.
+//! Do not edit by hand: change the registry or the template at
+//! `templates/registry/rust/`, then regenerate (the exact command CI
+//! runs — note `--future`, matching `weaver registry check --future`)
+//! from the repository root and commit the result:
+//!
+//! ```text
+//! weaver registry generate rust v2/crates/wifi-densepose-sensing-server/src \
+//!     -t templates -r semconv/registry --future
+//! cargo fmt -p wifi-densepose-sensing-server
+//! ```
+//!
+//! The CI `semconv` workflow fails if this file drifts from the registry.
+
+/// The semantic-conventions schema URL these constants were generated from —
+/// the registry manifest's `schema_url`, which carries the conventions
+/// version. Attach it to a telemetry resource so consumers can resolve the
+/// schema.
+pub const SCHEMA_URL: &str = "{{ (ctx.groups | first).lineage.provenance.schema_url }}";
+
+// Attribute keys.
+{% for group in ctx.groups | selectattr("type", "equalto", "attribute_group") %}
+{% for attr in group.attributes %}
+/// `{{ attr.name }}` attribute key.
+pub const {{ attr.name | screaming_snake_case }}: &str = "{{ attr.name }}";
+{% endfor %}
+{% endfor %}
+
+/// Every attribute key registered for curated RuView events.
+pub const ATTRIBUTE_KEYS: &[&str] = &[
+{% for group in ctx.groups | selectattr("type", "equalto", "attribute_group") %}
+{% for attr in group.attributes %}
+    {{ attr.name | screaming_snake_case }},
+{% endfor %}
+{% endfor %}
+];
+
+// Log event names (each instrumented `tracing` call site names its event
+// with one of these so the exported Logs signal stays registry-backed).
+{% for group in ctx.groups | selectattr("type", "equalto", "event") %}
+/// `{{ group.name }}` log event name.
+pub const EVENT_{{ group.name | screaming_snake_case }}: &str = "{{ group.name }}";
+{% endfor %}
+
+/// Every curated event name in the generated registry.
+pub const EVENT_NAMES: &[&str] = &[
+{% for group in ctx.groups | selectattr("type", "equalto", "event") %}
+    EVENT_{{ group.name | screaming_snake_case }},
+{% endfor %}
+];
+
+#[cfg(test)]
+mod tests {
+    use super::{ATTRIBUTE_KEYS, EVENT_NAMES};
+
+    #[test]
+    fn instrumentation_uses_only_registered_ruview_literals() {
+        let sources = [
+            include_str!("main.rs"),
+            include_str!("mqtt/publisher.rs"),
+        ];
+
+        for source in sources {
+            let mut rest = source;
+            while let Some(start) = rest.find("\"ruview.") {
+                let value = &rest[start + 1..];
+                let end = value
+                    .find('"')
+                    .expect("ruview string literal must have a closing quote");
+                let literal = &value[..end];
+                assert!(
+                    ATTRIBUTE_KEYS.contains(&literal) || EVENT_NAMES.contains(&literal),
+                    "instrumentation literal `{literal}` is absent from semconv/registry"
+                );
+                rest = &value[end + 1..];
+            }
+        }
+    }
+}

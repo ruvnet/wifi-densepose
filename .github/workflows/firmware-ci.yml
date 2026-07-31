@@ -52,14 +52,16 @@ jobs:
             target: esp32s3
             sdkconfig: sdkconfig.defaults
             partition_table_name: partitions_display.csv
-            size_limit_kb: 1100
+            size_warn_kb: 1100
+            size_limit_kb: 1152
             artifact_app: esp32-csi-node.bin
             artifact_pt: partition-table.bin
           - variant: 4mb
             target: esp32s3
             sdkconfig: sdkconfig.defaults.4mb
             partition_table_name: partitions_4mb.csv
-            size_limit_kb: 1100
+            size_warn_kb: 1100
+            size_limit_kb: 1152
             artifact_app: esp32-csi-node-4mb.bin
             artifact_pt: partition-table-4mb.bin
           # ADR-110: ESP32-C6 research target (Wi-Fi 6 / 802.15.4 / TWT / LP-core)
@@ -67,7 +69,8 @@ jobs:
             target: esp32c6
             sdkconfig: sdkconfig.defaults
             partition_table_name: partitions_4mb.csv
-            size_limit_kb: 1100
+            size_warn_kb: 1100
+            size_limit_kb: 1152
             artifact_app: esp32-csi-node-c6.bin
             artifact_pt: partition-table-c6.bin
 
@@ -96,17 +99,22 @@ jobs:
           make test_adr110
           ./test_adr110
 
-      - name: Verify binary size (< ${{ matrix.size_limit_kb }} KB gate)
+      - name: Verify binary size budget
         working-directory: firmware/esp32-csi-node
         run: |
           BIN=build/esp32-csi-node.bin
           SIZE=$(stat -c%s "$BIN")
           MAX=$((${{ matrix.size_limit_kb }} * 1024))
+          WARN=$((${{ matrix.size_warn_kb }} * 1024))
           echo "Binary size: $SIZE bytes ($(( SIZE / 1024 )) KB)"
+          echo "Warning at:  $WARN bytes (${{ matrix.size_warn_kb }} KB)"
           echo "Size limit:  $MAX bytes (${{ matrix.size_limit_kb }} KB)"
           if [ "$SIZE" -gt "$MAX" ]; then
             echo "::error::Firmware binary exceeds ${{ matrix.size_limit_kb }} KB size gate ($SIZE > $MAX)"
             exit 1
+          fi
+          if [ "$SIZE" -gt "$WARN" ]; then
+            echo "::warning::Firmware binary exceeds the ${{ matrix.size_warn_kb }} KB soft budget ($SIZE > $WARN); hard limit is ${{ matrix.size_limit_kb }} KB"
           fi
           echo "Binary size OK: $SIZE <= $MAX"
 

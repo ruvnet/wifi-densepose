@@ -1,6 +1,15 @@
 # Architecture Decision Records
 
-This folder contains 182 Architecture Decision Records (ADRs) that document every significant technical choice in the RuView / WiFi-DensePose project. (The index tables below list a curated subset per domain; see the directory listing for the full set.)
+Latest proposed decisions:
+
+- [ADR-187: archive/v1 deprecation + model-weights honest labeling](ADR-187-archive-v1-deprecation-honest-labeling.md) (refs #509, #1125)
+- [ADR-186: Training progress API — wire the orphaned in-server trainer to /ws/train/progress](ADR-186-training-progress-api.md) (refs #1233)
+- [ADR-185: Python P6 SOTA bindings — AETHER, MERIDIAN, MAT](ADR-185-python-p6-sota-bindings.md)
+- [ADR-184: ADR-117 completion via PyPI Trusted Publishing](ADR-184-adr117-completion-pypi-trusted-publishing.md) (refs #785)
+- [ADR-264: Versioned wire protocol for RTL8720F CFR and Range-FFT reports](ADR-264-rtl8720f-radar-wire-protocol.md)
+- [ADR-263: Adopt RTL8720F 2.4 GHz FMCW radar as an optional RuView sensing platform](ADR-263-rtl8720f-2-4ghz-fmcw-radar-platform.md)
+
+This folder contains 208 Architecture Decision Records (ADRs) that document every significant technical choice in the RuView / WiFi-DensePose project. (The index tables below list a curated subset per domain; see the directory listing for the full set.)
 
 ## Why ADRs?
 
@@ -123,6 +132,17 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-263](ADR-263-ruview-npm-harness-deep-review.md) | `@ruvnet/ruview` npm harness — deep review + optimization strategy | Proposed |
 | [ADR-264](ADR-264-rvagent-mcp-and-cli-npm-deep-review.md) | `@ruvnet/rvagent` MCP server + `@ruv/ruview-cli` — deep review + optimization strategy | Proposed |
 | [ADR-265](ADR-265-ruview-npm-distribution-strategy.md) | RuView npm distribution strategy — CI gate, provenance, version single-sourcing, namespace | Proposed |
+| [ADR-273](ADR-273-unified-rf-spatial-world-model.md) | Unified RF spatial world model — umbrella, anti-leakage protocol, acceptance gates | Accepted (P1 implemented) |
+| [ADR-274](ADR-274-universal-rf-encoder-adapter-registry.md) | Universal RF foundation encoder + hardware adapter registry | Accepted (P1 implemented) |
+| [ADR-275](ADR-275-rf-aware-gaussian-spatial-memory.md) | RF-aware Gaussian spatial memory | Accepted (P1 implemented) |
+| [ADR-276](ADR-276-physics-guided-synthetic-rf-worlds.md) | Physics-guided synthetic RF world generator | Accepted (P1 implemented) |
+| [ADR-277](ADR-277-edge-sensing-control-plane.md) | Edge sensing control plane (802.11bf / ETSI ISAC aligned) | Accepted (P1 implemented) |
+| [ADR-278](ADR-278-radar-inverse-rendering-research-program.md) | Radar inverse rendering + differentiable RF SLAM research program | Proposed |
+| [ADR-279](ADR-279-native-rf-frame-contract.md) | Native RF frame contract — `RfFrameV2` authoritative, canonical tensor derived | Accepted (implemented) |
+| [ADR-280](ADR-280-active-sensing-programmable-perception.md) | Active sensing & programmable perception control plane | Accepted (implemented) |
+| [ADR-281](ADR-281-ble-cs-delay-doppler-pose-factorization.md) | BLE Channel Sounding, delay-Doppler tensors, P3162 import, factorized pose | Accepted (implemented) |
+| [ADR-282](ADR-282-ruview-ecosystem-positioning.md) | Ecosystem positioning + mandatory L0–L5 evidence ladder | Accepted |
+| [ADR-285](ADR-285-homecore-wasm-first-metaharness.md) | WASM-first Homecore developer metaharness via `npx homecore` | Accepted (implemented and validated) |
 
 ---
 

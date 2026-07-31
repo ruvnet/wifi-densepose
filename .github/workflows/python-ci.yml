@@ -1,0 +1,170 @@
+# Python Package CI — gates the `python/` PyO3+maturin wheel (`wifi-densepose`).
+#
+# ADR-117 (pip modernization) + ADR-185 (SOTA extras). Unlike the frozen
+# `archive/v1/` Python app — which is `continue-on-error: true` in ci.yml
+# because it is reference-only — the `python/` package is an actively-shipped
+# PyPI wheel (published by pip-release.yml). Before this workflow, `python/`
+# had ZERO per-PR coverage: pip-release.yml only fires on release triggers
+# (tags / dispatch), so a PR could break the wheel build, break a native-Rust
+# parity test, or blow the wheel-size budget and nothing in the normal gating
+# CI would notice until release day. This workflow closes that gap.
+#
+# Path-scoped as a DEDICATED workflow rather than a job inside ci.yml. That is
+# this repo's own convention for component-scoped CI (cf. firmware-ci.yml,
+# sensing-server-docker.yml, bfld-mqtt-integration.yml — all separate files
+# with `paths:` triggers). GitHub only supports workflow-level `paths:`, not
+# per-job path filters, and no workflow in this repo uses a change-detection
+# action (dorny/paths-filter, tj-actions/changed-files) — so the idiomatic,
+# no-new-dependency way to scope to `python/**` is a standalone workflow. It
+# simply does not run on unrelated PRs.
+
+name: Python Package CI
+
+on:
+  push:
+    branches:
+      - '**'
+    # NOTE: kept in sync with the pull_request paths below. GitHub Actions
+    # does not reliably support YAML anchors in workflow files, so the two
+    # lists are duplicated deliberately rather than aliased.
+    paths:
+      - 'python/**'
+      - 'v2/crates/wifi-densepose-core/**'
+      - 'v2/crates/wifi-densepose-vitals/**'
+      - 'v2/crates/wifi-densepose-bfld/**'
+      - 'v2/crates/wifi-densepose-aether/**'
+      - 'v2/crates/wifi-densepose-mat/**'
+      - 'v2/crates/wifi-densepose-train/**'
+      - 'v2/crates/wifi-densepose-signal/**'
+      - '.github/workflows/python-ci.yml'
+  pull_request:
+    paths:
+      - 'python/**'
+      - 'v2/crates/wifi-densepose-core/**'
+      - 'v2/crates/wifi-densepose-vitals/**'
+      - 'v2/crates/wifi-densepose-bfld/**'
+      - 'v2/crates/wifi-densepose-aether/**'
+      - 'v2/crates/wifi-densepose-mat/**'
+      - 'v2/crates/wifi-densepose-train/**'
+      - 'v2/crates/wifi-densepose-signal/**'
+      - '.github/workflows/python-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Build the wheel with ALL SOTA features and run the full parity suite.
+  # `--features sota` = aether + meridian + mat, so the compiled feature
+  # submodules (wifi_densepose.aether / .meridian / .mat) exist and their
+  # SHA-256 parity tests against the native-Rust reference actually run
+  # (test_aether.py / test_meridian.py / test_mat.py import those submodules
+  # at collection time — without the features they would error, not skip).
+  parity-tests:
+    name: Wheel + parity tests (features=sota)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The python/ crate path-deps v2/crates/* and (transitively via
+          # train) the vendored ruvector submodule — recursive checkout keeps
+          # those path deps resolvable, matching the rust-tests job in ci.yml.
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo (Swatinem/rust-cache)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            v2
+            python
+
+      # Fast-fail with per-crate attribution BEFORE the heavier maturin build,
+      # so a break in a binding-backing crate is reported as "this crate failed
+      # to build" rather than buried in a maturin link error. These are the
+      # crates the [aether]/[mat]/[meridian] compiled extras link.
+      - name: Build binding-backing crates
+        working-directory: v2
+        env:
+          CARGO_PROFILE_DEV_DEBUG: "0"
+        run: cargo build -p wifi-densepose-aether -p wifi-densepose-mat -p wifi-densepose-train
+
+      # maturin develop needs an active virtualenv; create one and expose it
+      # to the later steps via GITHUB_PATH so `maturin` / `pytest` resolve to
+      # it. Test deps: pytest-asyncio (client tests are async, asyncio_mode
+      # auto), numpy (test_bfld), websockets + paho-mqtt (the [client] extra
+      # used by test_client_*).
+      - name: Create venv + install maturin and test deps
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install "maturin>=1.7,<2.0" pytest pytest-asyncio numpy websockets paho-mqtt
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Build + install wheel (maturin develop --features sota)
+        working-directory: python
+        env:
+          CARGO_PROFILE_DEV_DEBUG: "0"
+        run: maturin develop --features sota
+
+      - name: Run parity + binding tests
+        run: pytest python/tests/ -q
+
+  # Numeric enforcement of the ADR-117 §5.4 default-wheel budget. A fix-marker
+  # can guard the CONFIG that keeps the wheel small (empty default features,
+  # optional SOTA deps, strip=true — see RuView#1387-default-wheel-budget-config
+  # in scripts/fix-markers.json) but it cannot measure bytes. This job builds
+  # the DEFAULT (no-features) wheel and fails if it exceeds the budget — the
+  # real guard against a dependency silently ballooning the shipped wheel.
+  wheel-size-budget:
+    name: Default wheel <= 5 MiB (ADR-117 §5.4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo (Swatinem/rust-cache)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: python
+
+      - name: Install maturin
+        run: python -m pip install --upgrade pip "maturin>=1.7,<2.0"
+
+      - name: Build default wheel and assert size budget
+        working-directory: python
+        run: |
+          set -euo pipefail
+          maturin build --release --out dist
+          whl="$(ls dist/*.whl | head -1)"
+          bytes="$(stat -c%s "$whl")"
+          limit=$((5 * 1024 * 1024))   # ADR-117 §5.4: 5 MiB
+          printf 'Default wheel: %s = %s bytes (%s MiB); budget = %s bytes\n' \
+            "$whl" "$bytes" "$((bytes / 1024 / 1024))" "$limit"
+          if [ "$bytes" -gt "$limit" ]; then
+            echo "::error::default wheel is $bytes bytes, over the ADR-117 §5.4 $limit-byte (5 MiB) budget"
+            exit 1
+          fi
+          echo "Default wheel is within the 5 MiB budget."

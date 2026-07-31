@@ -154,7 +154,14 @@ export default class TrainingPanel {
       };
       await trainingService[method](payload);
       await this.refresh();
-    } catch (e) { this._set({ loading: false, error: `Training failed: ${e.message}` }); }
+    } catch (e) {
+      // Start was rejected (e.g. server training disabled → HTTP 409). Tear down
+      // the progress socket we opened optimistically and refresh so the button
+      // reflects the real (possibly disabled) state instead of a silent no-op.
+      trainingService.disconnectProgressStream();
+      this._set({ loading: false, error: `Training failed: ${e.message}` });
+      this.refresh();
+    }
   }
 
   async _stopTraining() {
@@ -272,13 +279,29 @@ export default class TrainingPanel {
     form.appendChild(ir('LoRA Profile (opt.)', 'text', this.config.lora_profile_name, v => { this.config.lora_profile_name = v; }));
     s.appendChild(form);
 
+    // ADR-186 P5: if the server reports in-server training disabled
+    // (enabled:false), the Start buttons must be disabled with a CLI tooltip —
+    // never a silent no-op. Enablement is surfaced on the status payload.
+    const ts = this.state.trainingStatus;
+    const disabled = ts && ts.enabled === false;
+    const cli = (ts && ts.cli) || 'wifi-densepose train-room';
+    if (disabled) {
+      const note = this._el('div', 'tp-empty',
+        `In-server training is disabled on this build. Train from the CLI:  ${cli}`);
+      s.appendChild(note);
+    }
+
     const acts = this._el('div', 'tp-train-actions');
     const btns = [
       this._btn('Start Training', 'tp-btn tp-btn-success', () => this._launchTraining('startTraining', { patience: this.config.patience, base_model: this.config.base_model || undefined })),
       this._btn('Pretrain', 'tp-btn tp-btn-secondary', () => this._launchTraining('startPretraining')),
       this._btn('LoRA', 'tp-btn tp-btn-secondary', () => this._launchTraining('startLoraTraining', { base_model: this.config.base_model || undefined, profile_name: this.config.lora_profile_name || 'default' }))
     ];
-    btns.forEach(b => { b.disabled = this.state.loading; acts.appendChild(b); });
+    btns.forEach(b => {
+      b.disabled = this.state.loading || disabled;
+      if (disabled) b.title = `In-server training disabled — use: ${cli}`;
+      acts.appendChild(b);
+    });
     s.appendChild(acts);
     return s;
   }

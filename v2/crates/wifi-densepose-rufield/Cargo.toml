@@ -15,10 +15,10 @@ repository.workspace = true
 # (serde / serde_json / toml / sha2 / ed25519-dalek only — no tch / openblas /
 # ndarray / candle), so they build under `--no-default-features`.
 [dependencies]
-rufield-core = { path = "../../../vendor/rufield/crates/rufield-core" }
-rufield-provenance = { path = "../../../vendor/rufield/crates/rufield-provenance" }
-rufield-privacy = { path = "../../../vendor/rufield/crates/rufield-privacy" }
-rufield-fusion = { path = "../../../vendor/rufield/crates/rufield-fusion" }
+rufield-core = { version = "0.1.0", path = "../../../vendor/rufield/crates/rufield-core" }
+rufield-provenance = { version = "0.1.0", path = "../../../vendor/rufield/crates/rufield-provenance" }
+rufield-privacy = { version = "0.1.0", path = "../../../vendor/rufield/crates/rufield-privacy" }
+rufield-fusion = { version = "0.1.0", path = "../../../vendor/rufield/crates/rufield-fusion" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

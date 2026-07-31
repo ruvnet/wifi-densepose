@@ -93,8 +93,10 @@ fn fsm_full_cycle_setup_measure_report_terminate() {
 
 #[test]
 fn responder_rejects_unsupported_bandwidth_and_initiator_resets() {
-    let mut cfg = SessionConfig::default();
-    cfg.capabilities = SensingCapabilities::esp32_opportunistic(); // max 40 MHz
+    let cfg = SessionConfig {
+        capabilities: SensingCapabilities::esp32_opportunistic(), // max 40 MHz
+        ..SessionConfig::default()
+    };
     let mut responder = SensingSession::new_responder(cfg);
     let mut initiator = SensingSession::new_initiator(SessionConfig::default());
 
@@ -204,8 +206,10 @@ fn capacity_and_policy_and_profile_rejections() {
     ));
 
     // Incompatible profile
-    let mut cfg = SessionConfig::default();
-    cfg.profile = SpecProfile::VendorExtension("acme".into());
+    let cfg = SessionConfig {
+        profile: SpecProfile::VendorExtension("acme".into()),
+        ..SessionConfig::default()
+    };
     let mut responder = SensingSession::new_responder(cfg);
     let actions = responder
         .handle(SessionEvent::SetupRequestReceived(setup_request(6)))

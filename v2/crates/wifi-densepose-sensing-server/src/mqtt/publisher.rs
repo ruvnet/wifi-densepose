@@ -35,6 +35,26 @@ use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 
+macro_rules! otel_error {
+    ($($arg:tt)*) => {
+        if crate::telemetry::curated_events_enabled() {
+            error!(name: crate::semconv::EVENT_RUVIEW_MQTT_ERROR, $($arg)*);
+        } else {
+            error!($($arg)*);
+        }
+    };
+}
+
+macro_rules! otel_warn {
+    ($($arg:tt)*) => {
+        if crate::telemetry::curated_events_enabled() {
+            warn!(name: crate::semconv::EVENT_RUVIEW_MQTT_ERROR, $($arg)*);
+        } else {
+            warn!($($arg)*);
+        }
+    };
+}
+
 use super::config::{MqttConfig, TlsConfig};
 use super::discovery::{DiscoveryBuilder, EntityKind};
 use super::state::{RateLimiter, StateEncoder, StateMessage, VitalsSnapshot};
@@ -184,7 +204,7 @@ async fn run(
                 match ev {
                     Ok(_) => {}
                     Err(e) => {
-                        error!("[mqtt] event loop error, will reconnect: {e}");
+                        otel_error!("[mqtt] event loop error, will reconnect: {e}");
                         rate_limiter.reset();
                         // Brief backoff before next poll attempt.
                         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -197,7 +217,7 @@ async fn run(
                 if last_heartbeat.elapsed() >= AVAILABILITY_HEARTBEAT {
                     for (_, na) in nodes.values() {
                         if let Err(e) = publish_availability(&client, na, "online").await {
-                            warn!("[mqtt] heartbeat publish failed: {e}");
+                            otel_warn!("[mqtt] heartbeat publish failed: {e}");
                         }
                     }
                     last_heartbeat = Instant::now();
@@ -207,7 +227,7 @@ async fn run(
                         if let Err(e) =
                             publish_all_discovery(&client, &nb.as_borrowed(), &entities).await
                         {
-                            warn!("[mqtt] discovery refresh failed: {e}");
+                            otel_warn!("[mqtt] discovery refresh failed: {e}");
                         }
                     }
                     last_refresh = Instant::now();
@@ -228,11 +248,11 @@ async fn run(
                             if let Err(e) =
                                 publish_all_discovery(&client, &borrowed, &entities).await
                             {
-                                warn!("[mqtt] node {} discovery failed: {e}", snap.node_id);
+                                otel_warn!("[mqtt] node {} discovery failed: {e}", snap.node_id);
                             }
                             let na = NodeAvailability::for_builder(&borrowed, &entities);
                             if let Err(e) = publish_availability(&client, &na, "online").await {
-                                warn!("[mqtt] node {} availability failed: {e}", snap.node_id);
+                                otel_warn!("[mqtt] node {} availability failed: {e}", snap.node_id);
                             }
                             nodes.insert(snap.node_id.clone(), (nb, na));
                         }

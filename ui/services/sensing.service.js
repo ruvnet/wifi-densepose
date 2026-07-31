@@ -1,3 +1,4 @@
+import { withWsTicket } from './ws-ticket.js';
 /**
  * Sensing WebSocket Service
  *
@@ -65,7 +66,7 @@ class SensingService {
 
   /** Start the service (connect or simulate). */
   start() {
-    this._connect();
+    void this._connect();
   }
 
   /** Stop the service entirely. */
@@ -120,13 +121,26 @@ class SensingService {
 
   // ---- Connection --------------------------------------------------------
 
-  _connect() {
+  // async because the server gates `/ws/sensing` (ADR-272) and a browser
+  // cannot set an Authorization header on an upgrade — so we mint a
+  // single-use ticket first. Minted per connect attempt, never cached: a
+  // ticket is valid once and expires in seconds, so reusing one across
+  // reconnects would fail on the second attempt.
+  async _connect() {
     if (this._ws && this._ws.readyState <= WebSocket.OPEN) return;
 
     this._setState('connecting');
 
+    let url = SENSING_WS_URL;
     try {
-      this._ws = new WebSocket(SENSING_WS_URL);
+      url = await withWsTicket(SENSING_WS_URL);
+    } catch {
+      // Ticket minting is best-effort: against a server with auth off, or one
+      // predating ADR-272, connecting without a ticket is correct.
+    }
+
+    try {
+      this._ws = new WebSocket(url);
     } catch (err) {
       console.warn('[Sensing] WebSocket constructor failed:', err.message);
       this._fallbackToSimulation();
@@ -184,7 +198,7 @@ class SensingService {
 
     this._reconnectTimer = setTimeout(() => {
       this._reconnectTimer = null;
-      this._connect();
+      void this._connect();
     }, delay);
 
     // Only start simulation after several failed attempts so a brief hiccup

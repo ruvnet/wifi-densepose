@@ -23,6 +23,27 @@ name = "wifi_densepose_native"
 crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
+# ADR-185 §3.1 — optional pip extras map to Cargo features so the
+# default wheel links none of the SOTA subsystems. P1 wires `aether`.
+[features]
+default = []
+# ADR-185 P1 — AETHER contrastive CSI embeddings. Binds the std-only
+# `wifi-densepose-aether` leaf crate (the pure-compute stack hoisted out of
+# `wifi-densepose-sensing-server` per §13), so this extra links no server tree.
+aether = ["dep:wifi-densepose-aether"]
+# ADR-185 P2 — MERIDIAN domain generalization. Binds the tch-free
+# inference/adaptation path only (see the wheel-size note on the deps
+# below). `wifi-densepose-train` is depended on WITHOUT `tch-backend`,
+# so no libtorch is linked.
+meridian = ["dep:wifi-densepose-train", "dep:wifi-densepose-signal"]
+# ADR-185 P3 — MAT disaster-survivor detection. Mirrors the upstream
+# disaster/ML gating: bound only under this extra so the default wheel
+# never carries the detection stack. `tokio`/`geo` are pulled to drive a
+# single-shot scan (see the wheel-size note on the deps below).
+mat = ["dep:wifi-densepose-mat", "dep:tokio", "dep:geo"]
+# ADR-185 §3 — convenience superset: all three SOTA subsystems.
+sota = ["aether", "meridian", "mat"]
+
 [dependencies]
 # PyO3 with abi3-py310 — one compiled binary covers Python 3.10, 3.11,
 # 3.12, 3.13, and any future 3.x that keeps the stable ABI (ADR-117 §5.4).
@@ -50,6 +71,52 @@ wifi-densepose-bfld = { version = "0.3.0", path = "../v2/crates/wifi-densepose-b
 # the future P3 CsiFrame numpy round-trip.
 numpy = "0.22"
 
+# ADR-185 P1 — AETHER backing crate (contrastive `embedding` +
+# `graph_transformer`/`sona`/`sparse_inference`, ADR-024). Optional +
+# gated behind the `aether` feature.
+#
+# WHEEL-SIZE FIX LANDED (ADR-185 §13): this is now the std-only
+# `wifi-densepose-aether` leaf crate — zero external deps, no tokio/axum/
+# worldgraph/ruvector — hoisted out of `wifi-densepose-sensing-server`
+# (which re-exports it, so the server is unchanged). The `[aether]` wheel
+# therefore links only pure compute and stays within the ADR-117 §5.4
+# ≤5 MB budget.
+wifi-densepose-aether = { version = "0.3.0", path = "../v2/crates/wifi-densepose-aether", optional = true }
+
+# ADR-185 P2 — MERIDIAN backing crates (optional, `meridian`-gated).
+#
+# HONEST WHEEL-SIZE NOTE (ADR-185 §9 / §1.2): unlike AETHER, the libtorch
+# risk is AVOIDED here — `wifi-densepose-train`'s `tch` dep is properly
+# optional (feature `tch-backend`, OFF by default), so no libtorch links.
+# BUT `wifi-densepose-train` still carries NON-optional deps: `tokio` (rt
+# subset), the five `ruvector-*` crates, `wifi-densepose-nn`, petgraph,
+# memmap2, indicatif, ndarray-npy, csv, toml, clap. So a `[meridian]`
+# wheel is heavier than the ≤5 MB ADR-117 §5.4 budget (though far lighter
+# than AETHER's axum/tokio server tree). The clean fix is the same
+# leaf-crate hoist: move the pure inference modules (geometry,
+# rapid_adapt, eval, hardware_norm) into a tch/tokio-free leaf crate.
+# `wifi-densepose-signal` is depended on `default-features = false` to
+# drop the optional ndarray-linalg/BLAS chain (Windows-friendly).
+wifi-densepose-train = { version = "0.3.0", path = "../v2/crates/wifi-densepose-train", optional = true, default-features = false }
+wifi-densepose-signal = { version = "0.3.0", path = "../v2/crates/wifi-densepose-signal", optional = true, default-features = false }
+
+# ADR-185 P3 — MAT backing crate + the tokio/geo needed to drive one scan.
+#
+# HONEST WHEEL-SIZE NOTE (ADR-185 §9 / §1.3): `default-features = false`
+# drops MAT's `api` (axum) and `ruvector` features from the wheel, but MAT
+# still carries NON-optional `tokio` (rt/sync/time), `wifi-densepose-nn`
+# (which pulls `ort` / ONNX Runtime + reqwest/hyper), `rustfft`, `geo`,
+# and `ndarray`. So a `[mat]` wheel exceeds the ADR-117 §5.4 ≤5 MB budget
+# — same leaf-crate-hoist story as AETHER/MERIDIAN, gated the same way so
+# the DEFAULT wheel is untouched. `tokio` (rt+time) and `geo` are depended
+# on directly (version-matched to MAT) to build the single-shot scan
+# runtime and construct the event `geo::Point` in the binding.
+wifi-densepose-mat = { version = "0.3.0", path = "../v2/crates/wifi-densepose-mat", optional = true, default-features = false, features = ["std"] }
+tokio = { version = "1.35", features = ["rt", "time"], optional = true }
+geo = { version = "0.27", optional = true }
+
 [dev-dependencies]
-# Doc-test infrastructure for the Python-facing examples in the bound
-# Rust functions. Lands properly in P2 once #[pyfunction]s exist to test.
+# ADR-185 §4.1 parity harness — SHA-256 the native-Rust reference
+# embedding and read the committed golden fixture.
+sha2 = "0.10"
+serde_json = "1"

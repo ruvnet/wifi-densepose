@@ -20,6 +20,7 @@ members = [
     "crates/wifi-densepose-mat",
     "crates/wifi-densepose-train",
     "crates/wifi-densepose-sensing-server",
+    "crates/wifi-densepose-aether",    # ADR-185 §13 — AETHER pure-compute leaf (std-only)
     "crates/wifi-densepose-wifiscan",
     "crates/wifi-densepose-vitals",
     "crates/wifi-densepose-ruvector",
@@ -28,6 +29,12 @@ members = [
     # geo + worldgraph extracted to ruvnet/worldgraph submodule (see crates/worldgraph)
     "crates/wifi-densepose-engine",      # ADR-135..146 integration/composition layer
     "crates/wifi-densepose-calibration", # ADR-151 — per-room calibration & specialist training
+    # ADR-271 — Cognitum OAuth access-token verification. RuView as an OAuth
+    # RESOURCE SERVER: offline ES256/JWKS verification of tokens issued by
+    # auth.cognitum.one, so a user signs in to their own sensing server with
+    # their Cognitum identity instead of a shared static bearer. No login flow
+    # and no outbound Cognitum API calls live here — verification only.
+    "crates/ruview-auth",
     "crates/nvsim",
     "crates/nvsim-server",
     "crates/homecore",                 # ADR-127 — HOMECORE state machine
@@ -71,6 +78,11 @@ members = [
     "crates/homecore-assist",      # ADR-133 — HOMECORE voice assistant + ruflo bridge
     "crates/homecore-server",      # iter-9 — HOMECORE integration binary (all 8 crates wired together)
     "crates/ruview-swarm",                         # ADR-148 — drone swarm control system
+    # ADR-273..277 — unified RF spatial world model: canonical RF tensor +
+    # hardware adapters, universal foundation encoder (masked-reconstruction
+    # pretraining, ≤1% task adapters), RF-aware Gaussian spatial memory,
+    # physics-guided synthetic RF worlds, edge sensing control plane.
+    "crates/ruview-unified",
     # ADR-262 P1 — anti-corruption bridge converting RuView WiFi-CSI sensing
     # output into signed RuField FieldEvents. Path-deps the `vendor/rufield`
     # submodule crates (rufield-core/-provenance/-privacy/-fusion); single
@@ -91,7 +103,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 authors = ["rUv <ruv@ruv.net>", "WiFi-DensePose Contributors"]
 license = "MIT OR Apache-2.0"
