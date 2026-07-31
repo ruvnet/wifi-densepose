@@ -1,6 +1,6 @@
 # wifi-densepose-sar-harness
 
-Harness for wifi-densepose-sar
+Harness for [wifi-densepose-sar](https://crates.io/crates/wifi-densepose-sar) (ADR-287) — the coherent wideband RF tomography research crate this harness assists development on. Both are published: the crate on crates.io, this harness itself as [`wifi-densepose-sar-harness`](https://www.npmjs.com/package/wifi-densepose-sar-harness) on npm.
 
 > Advanced Coding harness · domain: `software-engineering`. Generated with [create-agent-harness](https://github.com/ruvnet/agent-harness-generator).
 
@@ -24,6 +24,8 @@ Harness for wifi-densepose-sar
 - `/evolve` — Run Darwin Mode (`npm run evolve` / `evolve:dry`) to self-mutate the harness's own operating policy and keep only measurable improvements.
 
 ## Commands
+
+Each command below has a matching `.claude/commands/<name>.md` guidance file — the MCP tool listing (`mcp__wifi-densepose-sar-harness__*`) is derived from these, so a new CLI subcommand isn't fully wired up until it has one too.
 
 - `doctor` — Health-check the harness: kernel load, MCP wiring, memory backend, host adapter.
 - `review-diff` — Review the current working diff for correctness, security, and reuse.
