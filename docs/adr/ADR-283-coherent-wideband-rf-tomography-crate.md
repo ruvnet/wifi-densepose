@@ -2,10 +2,11 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Accepted — implemented (P1) |
+| **Status** | Accepted — implemented (P1), **published** |
 | **Date** | 2026-07-30 |
 | **Parent** | ADR-278 (radar inverse rendering research program), ADR-282 (mandatory L0–L5 evidence ladder) |
-| **Relates to** | ADR-273/274 (`ruview-unified`'s `FmcwRadarCube` adapter, the eventual integration point), ADR-275 (`GaussianMap`, ditto) |
+| **Relates to** | ADR-273/274 (`ruview-unified`'s `FmcwRadarCube` adapter, the eventual integration point), ADR-275 (`GaussianMap`, ditto), ADR-286 (`wifi-densepose-sar-harness`, the MetaHarness minted for this crate) |
+| **Published** | [`wifi-densepose-sar` v0.3.1](https://crates.io/crates/wifi-densepose-sar) on crates.io (2026-07-31) |
 
 ## 0. PROOF discipline
 
@@ -60,3 +61,7 @@ This is deliberately scoped **one level below** ADR-278's RISE/DiffRadar/GeRaF r
 `focus_at_point` originally called `Complex64::from_polar` (one `sin`/`cos` pair) per (pose, frequency) term. Since [`FrequencySweep::frequencies`](../../v2/crates/wifi-densepose-sar/src/measurement.rs) produces evenly-spaced frequencies by construction, the per-term phase is an arithmetic progression in the frequency index — so the phasor can be evaluated once per pose and advanced by a fixed complex-multiply step per frequency, replacing K trig evaluations with 2. `focus_at_point`'s signature changed from a raw `&[f64]` frequency slice to `&FrequencySweep`, making the evenly-spaced-frequencies precondition this optimization depends on a type-level invariant rather than a caller-observed one.
 
 **MEASURED (criterion regression detection, p < 0.001): ~4.4-4.5x faster** across 512/4096/32768-voxel grids. **Proven equivalent**, not just faster: `reconstruct::tests::backprojection_incremental_rotation_matches_direct_per_frequency_computation` checks the optimized path against an independently reimplemented direct per-frequency reference, across four sweep sizes (including the `n_steps=1` degenerate case) and both on-target and off-target evaluation points, to <1e-9 relative error.
+
+## 8. Published (2026-07-31)
+
+`wifi-densepose-sar` v0.3.1 is live on [crates.io](https://crates.io/crates/wifi-densepose-sar) — `cargo add wifi-densepose-sar` resolves it from any Rust project. A MetaHarness minted for this crate (ADR-286, `wifi-densepose-sar-harness`) is published to npm alongside it. Publishing happened after this ADR's implementation and §7 optimization landed; no code changed as part of publishing itself.
