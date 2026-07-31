@@ -1,6 +1,6 @@
 # wifi-densepose-sar
 
-Coherent wideband RF tomography research crate (ADR-283): synthetic
+Coherent wideband RF tomography research crate (ADR-287): synthetic
 stepped-frequency multi-position measurement simulation + delay-and-sum
 backprojection reconstruction of a 3D reflectivity field.
 

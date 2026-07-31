@@ -1,6 +1,6 @@
 //! Forward measurement model: simulate the complex, stepped-frequency
 //! returns a monostatic synthetic-aperture radar would record from a set
-//! of point scatterers (ADR-283 §2).
+//! of point scatterers (ADR-287 §2).
 //!
 //! ```text
 //! y_{m,k} = sum_j  sigma_j / R_{m,j}^2 * exp(-i * 4*pi * f_k * R_{m,j} / c)  +  noise

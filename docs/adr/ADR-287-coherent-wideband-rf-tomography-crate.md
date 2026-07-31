@@ -1,4 +1,4 @@
-# ADR-283: `wifi-densepose-sar` — coherent wideband RF tomography research crate
+# ADR-287: `wifi-densepose-sar` — coherent wideband RF tomography research crate
 
 | Field | Value |
 |-------|-------|

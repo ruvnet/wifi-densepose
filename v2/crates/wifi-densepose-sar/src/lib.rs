@@ -1,4 +1,4 @@
-//! # wifi-densepose-sar — Coherent Wideband RF Tomography (ADR-283)
+//! # wifi-densepose-sar — Coherent Wideband RF Tomography (ADR-287)
 //!
 //! A research crate implementing the reconstruction primitive that a
 //! handheld through-wall RF imaging device (the class of product exemplified
@@ -20,7 +20,7 @@
 //!   behavior in `tests/physics_validation.rs` rather than merely asserted.
 //! - [`geometry`]: antenna poses and synthetic-aperture trajectories.
 //!
-//! ## What this crate is NOT (ADR-283 §1, honesty boundary)
+//! ## What this crate is NOT (ADR-287 §1, honesty boundary)
 //!
 //! - **Not a hardware driver.** There is no VNA, SDR, or wideband RF
 //!   front-end integration here, and none of `wifi-densepose-hardware`'s

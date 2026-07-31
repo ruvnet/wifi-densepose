@@ -1,6 +1,6 @@
 //! Checks the reconstruction's *actual* behavior against the closed-form
 //! predictions in `wifi_densepose_sar::resolution`, rather than merely
-//! asserting the formulas in documentation (ADR-283 §3, the
+//! asserting the formulas in documentation (ADR-287 §3, the
 //! ruview-unified "proven, not asserted" discipline).
 //!
 //! Three physical claims are validated end-to-end (forward-simulate ->

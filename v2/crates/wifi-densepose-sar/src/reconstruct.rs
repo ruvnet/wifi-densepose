@@ -1,4 +1,4 @@
-//! Delay-and-sum backprojection reconstruction (ADR-283 §2).
+//! Delay-and-sum backprojection reconstruction (ADR-287 §2).
 //!
 //! Given a [`crate::measurement::Measurement`] recorded from known antenna
 //! [`AntennaPose`]s across a known [`FrequencySweep`], reconstruct a 3D

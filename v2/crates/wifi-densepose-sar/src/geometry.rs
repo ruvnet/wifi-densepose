@@ -53,7 +53,7 @@ impl Point3 {
 
 /// A single antenna position along a synthetic-aperture trajectory.
 ///
-/// Only position is modeled (an isotropic-antenna approximation, ADR-283
+/// Only position is modeled (an isotropic-antenna approximation, ADR-287
 /// §4) -- no antenna gain pattern / boresight direction is applied to the
 /// forward measurement model.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

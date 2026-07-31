@@ -1,6 +1,6 @@
 # Coherent Wideband RF Tomography: Simulating and Reconstructing with `wifi-densepose-sar`
 
-A walkthrough of the `wifi-densepose-sar` crate (ADR-283): simulating
+A walkthrough of the `wifi-densepose-sar` crate (ADR-287): simulating
 synthetic-aperture radar (SAR) style measurements and reconstructing a 3D
 reflectivity image from them via delay-and-sum backprojection.
 
@@ -41,7 +41,7 @@ radar-imaging research.
 This crate exists because of a real question: could this repo build
 something like [Applied Electrodynamics' WaveSight](https://www.ae-dyn.com/)
 — a handheld device that images through walls using radio waves? The
-honest answer, worked out in ADR-283, is **no, not as a hardware product**
+honest answer, worked out in ADR-287, is **no, not as a hardware product**
 — that needs a custom coherent RF front end, a calibrated antenna array,
 and real-time reconstruction hardware, which is an 18–36 month, high
 six-to-seven-figure hardware engineering program, not a software change.
@@ -256,7 +256,7 @@ for p in &points {
 `extract_point_cloud` does threshold + 6-connected local-maximum
 extraction — a real blob will still yield one point, not one per voxel
 inside it. There is deliberately no clustering, material classification,
-or confidence calibration here (ADR-283 §5): that needs real data to
+or confidence calibration here (ADR-287 §5): that needs real data to
 calibrate against, which this crate does not have.
 
 ## 9. Benchmarking Your Own Scenario
@@ -273,7 +273,7 @@ recorded MEASURED numbers on the reference machine.
 
 ## 10. Where This Could Go Next
 
-This crate deliberately stops short of several things (ADR-283 §5):
+This crate deliberately stops short of several things (ADR-287 §5):
 
 - It's monostatic (one antenna, both TX and RX) — real handheld SAR/MIMO
   devices often use multiple simultaneous antenna elements.
@@ -284,7 +284,7 @@ This crate deliberately stops short of several things (ADR-283 §5):
   `GaussianMap` — ADR-278 names that as the eventual integration point,
   once (and if) a reconstruction system is ready for it.
 
-If you're picking this up to extend it, start with ADR-283's "Follow-up"
+If you're picking this up to extend it, start with ADR-287's "Follow-up"
 section rather than guessing at scope.
 
 ## 11. Troubleshooting

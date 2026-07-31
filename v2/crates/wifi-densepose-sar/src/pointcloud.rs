@@ -5,7 +5,7 @@
 //! `GaussianMap`, downstream fusion) want a short list of "here is
 //! something" points, not every voxel. This module does simple
 //! threshold + local-maximum extraction: no clustering, no material
-//! classification, no confidence calibration against real data (ADR-283
+//! classification, no confidence calibration against real data (ADR-287
 //! §5 -- explicitly out of scope for this crate).
 
 use crate::geometry::Point3;

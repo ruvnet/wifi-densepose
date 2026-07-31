@@ -88,7 +88,7 @@ members = [
     # submodule crates (rufield-core/-provenance/-privacy/-fusion); single
     # coupling point between RuView and the standalone RuField MFS spec.
     "crates/wifi-densepose-rufield",
-    # ADR-283 — coherent wideband RF tomography research crate: synthetic
+    # ADR-287 — coherent wideband RF tomography research crate: synthetic
     # stepped-frequency multi-position measurement simulation + delay-and-sum
     # backprojection reconstruction. Standalone leaf (nvsim pattern), zero
     # hardware coupling, every number SYNTHETIC/L0 until real wideband RF

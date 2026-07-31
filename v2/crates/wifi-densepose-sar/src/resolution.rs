@@ -1,4 +1,4 @@
-//! Closed-form resolution and coherence-budget formulas (ADR-283 §3).
+//! Closed-form resolution and coherence-budget formulas (ADR-287 §3).
 //!
 //! These are textbook radar-imaging identities (see e.g. Skolnik, *Radar
 //! Handbook*, and the standard stripmap-SAR cross-range formula). They are
