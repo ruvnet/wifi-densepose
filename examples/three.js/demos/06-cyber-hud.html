@@ -773,8 +773,13 @@ function slog(tag, msg){
   const t = new Date().toTimeString().slice(0, 8);
   const ln = document.createElement('div');
   ln.className = 'ln';
-  ln.innerHTML = `<span class="t">${t}</span> <span class="tag ${tag}">[${
-    {sys:'SYS_INT', sim:'SIM_ENV', trk:'TRK', edt:'LAYOUT'}[tag] || tag}]</span> ${msg}`;
+  // PR #1298 fix #1: `msg` can carry network-derived text (a MAC) — build with
+  // textContent, never innerHTML, so markup in it can't execute. `tag` is one
+  // of our own controlled keys, safe as a class name.
+  const ts = document.createElement('span'); ts.className = 't'; ts.textContent = t;
+  const tg = document.createElement('span'); tg.className = 'tag ' + tag;
+  tg.textContent = '[' + ({sys:'SYS_INT', sim:'SIM_ENV', trk:'TRK', edt:'LAYOUT'}[tag] || tag) + ']';
+  ln.append(ts, document.createTextNode(' '), tg, document.createTextNode(' ' + msg));
   feed.prepend(ln);
   while (feed.children.length > LOG_MAX) feed.lastChild.remove();
 }
@@ -793,6 +798,11 @@ let rosterDirty = true;                   // rebuild roster rows on membership c
 
 // [MTGT-BEGIN]
 // (pure helpers — extracted + Node-tested)
+// Defense-in-depth ID guard (PR #1298 fix #1): on top of textContent rendering,
+// reject any id outside a safe charset. Allows canonical MACs, 'TARGET_01',
+// 'SIM:AA:00:01'; blocks anything containing < > " ' ( ) space etc.
+const SAFE_ID = /^[\w:.\-]{1,64}$/;
+function validMac(mac){ return typeof mac === 'string' && SAFE_ID.test(mac); }
 function macHue(mac){                      // deterministic hue from MAC string
   let h = 0; for (let i=0;i<mac.length;i++) h = (h*31 + mac.charCodeAt(i)) >>> 0;
   return h % 360;
@@ -848,6 +858,7 @@ function primaryTrack(){
 /* Ingest a list of {mac, ranges?|xy?, truth?} into the registry. */
 function ingestTargets(items, now, nodesById){
   for (const it of items){
+    if (!validMac(it.mac)) continue;       // PR #1298 fix #1: reject unsafe ids
     let raw = null, nodesUsed = 0, residual = 0;
     if (it.xy && isFinite(it.xy.x)){ raw = { x:it.xy.x, y:it.xy.y }; nodesUsed = it.nodesUsed || 0; }
     else if (it.ranges){
@@ -902,16 +913,22 @@ function refreshRoster(){
       rosterDirty = false; return;
     }
     for (const [mac, t] of activeTargets){
+      // PR #1298 fix #1: build the row from elements + textContent; the MAC
+      // never touches innerHTML. `t.hue` is a number, not remote text.
       const row = document.createElement('div'); row.className = 'rrow';
-      row.innerHTML =
-        `<span class="sw" style="background:hsl(${t.hue} 75% 60%)"></span>`+
-        `<span class="mac">${shortMac(mac)}</span>`+
-        `<span class="xy"></span><span class="vel"></span>`+
-        `<button class="foc" data-mac="${mac}">◎</button>`;
-      row.querySelector('.foc').addEventListener('click', ()=>{
+      const sw = document.createElement('span'); sw.className = 'sw';
+      sw.style.background = `hsl(${t.hue} 75% 60%)`;
+      const macEl = document.createElement('span'); macEl.className = 'mac';
+      macEl.textContent = shortMac(mac);
+      const xy = document.createElement('span'); xy.className = 'xy';
+      const vel = document.createElement('span'); vel.className = 'vel';
+      const btn = document.createElement('button'); btn.className = 'foc';
+      btn.dataset.mac = mac; btn.textContent = '◎';   // dataset is not an HTML sink
+      btn.addEventListener('click', ()=>{
         focusMac = (focusMac === mac) ? null : mac; rosterDirty = true;
         slog('sys', focusMac ? `camera focus → ${shortMac(mac)}` : 'camera focus cleared');
       });
+      row.append(sw, macEl, xy, vel, btn);
       t.rowEl = row; body.appendChild(row);
     }
     document.getElementById('roster-count').textContent = activeTargets.size;
