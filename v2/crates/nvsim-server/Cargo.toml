@@ -14,7 +14,7 @@ name = "nvsim-server"
 path = "src/main.rs"
 
 [dependencies]
-nvsim = { path = "../nvsim" }
+nvsim = { path = "../nvsim", version = "0.3.1" }
 axum = { workspace = true }
 tokio = { workspace = true }
 tower = { workspace = true }
