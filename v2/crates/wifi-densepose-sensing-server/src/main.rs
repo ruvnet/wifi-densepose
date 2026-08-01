@@ -338,6 +338,10 @@ struct NodeInfo {
 struct NodeSyncSnapshot {
     /// Smoothed local-vs-mesh offset in µs (negative when this node's clock
     /// is behind the leader's — see §A0.10's measured -1.16 s on the bench).
+    /// NOTE: this is the *node-reported* ESP-NOW mesh offset and is unreliable
+    /// when leader election doesn't converge (issue #503) — it reflects boot
+    /// deltas, not fusion alignment. The mesh endpoint's `arrival_lag_us` /
+    /// `server_skew_us` (host arrival-time spread) is the real alignment.
     offset_us: i64,
     /// True when this node is the elected mesh leader.
     is_leader: bool,
@@ -523,6 +527,12 @@ const NOVELTY_HISTORY_CAPACITY: usize = 64;
 /// subcarrier ordering / normalisation so banks reject stale data.
 const NOVELTY_SKETCH_VERSION: u16 = 1;
 
+/// Fix #503 — a node's last CSI frame is "active" (part of the live fusion
+/// set) if it arrived within this window. Mirrors `multistatic_bridge`'s
+/// `STALE_THRESHOLD` so the mesh card's sync verdict matches what the fuser
+/// actually feeds on.
+const ARRIVAL_ACTIVE_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// ADR-110 iter 18 — EMA update for per-node CSI fps tracking.
 ///
 /// Returns the new EMA value, or `None` if the delta is implausible
@@ -539,6 +549,45 @@ pub(crate) fn update_csi_fps_ema(prev_fps: f64, dt_sec: f64) -> Option<f64> {
     let instantaneous = 1.0 / dt_sec;
     // y[n] = y[n-1] + (x - y[n-1]) / 8
     Some(prev_fps + (instantaneous - prev_fps) / 8.0)
+}
+
+/// Fix #503 — fleet arrival-time skew: `max − min` of the per-node ages
+/// (µs since each node's last CSI frame reached the host). The multistatic
+/// fuser stamps every node frame with its HOST ARRIVAL time
+/// (`multistatic_bridge`), never the node's own clock, so this spread — not
+/// any node-reported ESP-NOW offset — is exactly what the fusion guard
+/// checks. Small spread = the fleet is aligned = "in sync", independent of
+/// boot order or whether the mesh ever elects a leader. `None` with fewer
+/// than two active nodes (nothing to compare).
+///
+/// Pure + free for testability (same pattern as [`update_csi_fps_ema`]).
+pub(crate) fn arrival_skew_us(ages_us: &[u64]) -> Option<u64> {
+    if ages_us.len() < 2 {
+        return None;
+    }
+    let lo = ages_us.iter().copied().min().unwrap();
+    let hi = ages_us.iter().copied().max().unwrap();
+    Some(hi - lo)
+}
+
+#[cfg(test)]
+mod arrival_skew_tests {
+    use super::arrival_skew_us;
+
+    #[test]
+    fn skew_is_spread_of_frame_ages() {
+        // Freshest frame 20 ms ago, oldest 95 ms ago → 75 ms spread. This is
+        // the real fusion-relevant skew, and stays tiny even when the nodes
+        // booted seconds/minutes apart (which is why the ESP-NOW offset was
+        // the wrong signal in #503).
+        assert_eq!(arrival_skew_us(&[20_000, 95_000, 40_000]), Some(75_000));
+    }
+
+    #[test]
+    fn fewer_than_two_active_nodes_has_no_skew() {
+        assert_eq!(arrival_skew_us(&[]), None);
+        assert_eq!(arrival_skew_us(&[12_000]), None);
+    }
 }
 
 #[cfg(test)]
@@ -5398,6 +5447,24 @@ async fn mesh_metrics_endpoint(State(state): State<SharedState>) -> impl IntoRes
     let _ = writeln!(body, "wifi_densepose_mesh_node_total{{state=\"follower\"}} {followers}");
     let _ = writeln!(body, "wifi_densepose_mesh_node_total{{state=\"no_sync\"}} {no_sync}");
 
+    // Fix #503 — fleet alignment from host arrival-time spread (what the fuser
+    // guards on), the single number an operator watches: small skew = the
+    // fleet is in sync regardless of ESP-NOW leader state.
+    let now = std::time::Instant::now();
+    let ages: Vec<u64> = s.node_states.values()
+        .filter_map(|ns| ns.last_frame_time)
+        .filter_map(|t| {
+            let age = now.duration_since(t);
+            (age <= ARRIVAL_ACTIVE_WINDOW).then(|| age.as_micros() as u64)
+        })
+        .collect();
+    if let Some(skew) = arrival_skew_us(&ages) {
+        let _ = writeln!(body,
+            "# HELP wifi_densepose_server_skew_us Fix #503: host arrival-time spread across active nodes, microseconds");
+        let _ = writeln!(body, "# TYPE wifi_densepose_server_skew_us gauge");
+        let _ = writeln!(body, "wifi_densepose_server_skew_us {skew}");
+    }
+
     for (name, help, kind) in metrics {
         let _ = writeln!(body, "# HELP {name} {help}");
         let _ = writeln!(body, "# TYPE {name} {kind}");
@@ -5432,16 +5499,51 @@ pub(crate) fn fleet_role_counts(snaps: &[(u8, NodeSyncSnapshot)]) -> (u64, u64) 
 
 async fn mesh_endpoint(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
+    let now = std::time::Instant::now();
+    // Fix #503 — collect each node's frame age (µs since its last CSI frame
+    // reached the host). Only "active" nodes (fresh within ARRIVAL_ACTIVE_WINDOW)
+    // count toward alignment — a silent/offline node is handled by its own
+    // staleness, not by dragging the skew.
+    let mut ages: std::collections::HashMap<u8, u64> = std::collections::HashMap::new();
+    for (&id, ns) in s.node_states.iter() {
+        if let Some(t) = ns.last_frame_time {
+            let age = now.duration_since(t);
+            if age <= ARRIVAL_ACTIVE_WINDOW {
+                ages.insert(id, age.as_micros() as u64);
+            }
+        }
+    }
+    let min_age = ages.values().copied().min();
+
     let mut nodes = serde_json::Map::new();
     for (&id, ns) in s.node_states.iter() {
         if let Some(snap) = ns.sync_snapshot() {
-            nodes.insert(id.to_string(), serde_json::to_value(snap).unwrap());
+            let mut v = serde_json::to_value(&snap).unwrap();
+            // Fix #503 — per-node arrival lag: how far this node's latest frame
+            // trailed the freshest node's, i.e. its contribution to the fusion
+            // skew. This is the meaningful "offset" now that frames are
+            // arrival-anchored — the mesh `offset_us` is boot-delta noise.
+            if let (Some(obj), Some(min), Some(&age)) = (v.as_object_mut(), min_age, ages.get(&id)) {
+                obj.insert("arrival_lag_us".to_string(), serde_json::json!(age.saturating_sub(min)));
+            }
+            nodes.insert(id.to_string(), v);
         }
     }
     let total = nodes.len();
+    // Fix #503 — fleet alignment from host arrival times (what the fuser guards
+    // on), NOT the ESP-NOW clock offset. `synced` = the spread is inside the
+    // fusion guard window, so the fleet fuses regardless of leader election.
+    let age_vec: Vec<u64> = ages.values().copied().collect();
+    let server_skew_us = arrival_skew_us(&age_vec);
+    let guard_us = multistatic_guard_config_from_env().guard_interval_us;
+    let synced = server_skew_us.map(|sk| sk <= guard_us);
     Json(serde_json::json!({
         "nodes": serde_json::Value::Object(nodes),
         "total": total,
+        "server_skew_us": server_skew_us,
+        "active_nodes": age_vec.len(),
+        "guard_interval_us": guard_us,
+        "synced": synced,
     }))
 }
 
@@ -8103,7 +8205,7 @@ mod node_sync_snapshot_serialization_tests {
     fn sync_present_serializes_all_seven_fields() {
         let v = serde_json::to_value(sample_node(Some(sample_sync()))).unwrap();
         let s = v.get("sync").expect("sync key must be present");
-        // All eight contract fields named exactly as iter 23/34 documented.
+        // All contract fields named exactly as iter 23/34 documented.
         for key in ["offset_us", "is_leader", "is_valid", "smoothed",
                     "sequence", "csi_fps_ema", "csi_fps_samples",
                     "staleness_ms"] {
@@ -8266,8 +8368,8 @@ mod sync_snapshot_helper_tests {
         // Local fixture rather than reaching across test modules.
         fn snap(is_leader: bool) -> NodeSyncSnapshot {
             NodeSyncSnapshot {
-                offset_us: 0, is_leader, is_valid: true, smoothed: true,
-                sequence: 0, csi_fps_ema: 10.0, csi_fps_samples: 10,
+                offset_us: 0, is_leader, is_valid: true,
+                smoothed: true, sequence: 0, csi_fps_ema: 10.0, csi_fps_samples: 10,
                 staleness_ms: Some(0),
             }
         }
@@ -8277,6 +8379,7 @@ mod sync_snapshot_helper_tests {
         // Edge: all leaders (election would prevent this but gauge math must hold).
         assert_eq!(super::fleet_role_counts(&[(1u8, snap(true)), (2, snap(true))]), (2, 0));
     }
+
 
     #[test]
     fn bool_metric_returns_zero_or_one_as_text() {
