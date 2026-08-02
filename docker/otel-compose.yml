@@ -18,9 +18,11 @@ services:
         # only activates when OTEL_EXPORTER_OTLP_ENDPOINT is set.
         SENSING_FEATURES: mqtt,otel
     image: ruvnet/wifi-densepose:otel
+    # ESP32 CSI must accept LAN UDP; TCP APIs below remain loopback-only.
+    # kics-scan ignore-line
     ports:
-      - "3000:3000"     # REST API
-      - "3001:3001"     # WebSocket
+      - "127.0.0.1:3000:3000"     # REST API
+      - "127.0.0.1:3001:3001"     # WebSocket
       - "5005:5005/udp" # ESP32 CSI (see docker-compose.yml for Windows notes)
     environment:
       - RUST_LOG=info
@@ -30,6 +32,20 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
     depends_on:
       - otel-collector
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.116.0@sha256:70217a89d27c678ead44f196d80aa8c2717cb68d0301dbdc40331dbec0a3e605
@@ -37,10 +53,24 @@ services:
     volumes:
       - ./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
     ports:
-      - "4317:4317"   # OTLP gRPC (also reachable from the host)
-      - "4318:4318"   # OTLP HTTP
+      - "127.0.0.1:4317:4317"   # OTLP gRPC (also reachable from the host)
+      - "127.0.0.1:4318:4318"   # OTLP HTTP
     depends_on:
       - ourios
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
 
   # Ourios — OTLP-native log backend (Parquet + Drain-derived template
   # mining + DataFusion). Local-disk storage; the tenant derives from the
@@ -57,10 +87,24 @@ services:
       - OURIOS_QUERIER_ENABLED=1
       - OURIOS_QUERIER_HTTP_ADDR=0.0.0.0:4319
     ports:
-      - "4319:4319"   # query endpoint (http://localhost:4319/v1/query)
+      - "127.0.0.1:4319:4319"   # query endpoint (http://localhost:4319/v1/query)
     volumes:
       - ourios-data:/data
       - ourios-wal:/wal
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
 
 volumes:
   ourios-data:

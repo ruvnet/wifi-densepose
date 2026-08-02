@@ -34,7 +34,7 @@ jobs:
     steps:
       - name: Cache QEMU build
         id: cache-qemu
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: /opt/qemu-esp32
           # Include date component so cache refreshes monthly when branch updates
@@ -73,7 +73,7 @@ jobs:
           echo "QEMU binary size: $(file_size /opt/qemu-esp32/bin/qemu-system-xtensa) bytes"
 
       - name: Upload QEMU artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: qemu-esp32
           path: /opt/qemu-esp32/
@@ -99,12 +99,12 @@ jobs:
           - boundary-min
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           submodules: recursive
 
       - name: Download QEMU artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: qemu-esp32
           path: /opt/qemu-esp32
@@ -203,7 +203,7 @@ jobs:
 
       - name: Upload test logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: qemu-logs-${{ matrix.nvs_config }}
           path: |
@@ -215,7 +215,7 @@ jobs:
     name: Fuzz Testing (ADR-061 Layer 6)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           submodules: recursive
 
@@ -253,7 +253,7 @@ jobs:
 
       - name: Upload fuzz artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: fuzz-crashes
           path: |
@@ -266,7 +266,7 @@ jobs:
     name: NVS Matrix Generation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           submodules: recursive
 
@@ -322,12 +322,12 @@ jobs:
       image: espressif/idf:v5.4
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           submodules: recursive
 
       - name: Download QEMU artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: qemu-esp32
           path: /opt/qemu-esp32
@@ -370,7 +370,7 @@ jobs:
 
       - name: Upload swarm results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: swarm-results
           path: |

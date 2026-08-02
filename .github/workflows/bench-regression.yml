@@ -71,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (recursive — wifi-densepose-rufield path-deps vendor/rufield)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           # The workspace includes `wifi-densepose-rufield`, which path-deps the
           # `vendor/rufield` submodule crates. Without a recursive checkout the
@@ -100,10 +100,10 @@ jobs:
             pkg-config
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
       - name: Cache cargo (Swatinem/rust-cache)
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           workspaces: v2
           # Distinct cache scope from ci.yml's rust-tests so the bench profile
@@ -150,15 +150,15 @@ jobs:
     needs: [bench-compile]
     steps:
       - name: Checkout (recursive)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           submodules: recursive
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
       - name: Cache cargo (Swatinem/rust-cache)
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           workspaces: v2
           key: bench-regression
@@ -192,7 +192,7 @@ jobs:
 
       - name: Upload informational bench logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: bench-fast-run-logs
           path: bench-out/

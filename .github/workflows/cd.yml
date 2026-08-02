@@ -44,7 +44,7 @@ jobs:
       image_tag: ${{ steps.determine-tag.outputs.tag }}
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         ref: ${{ github.event.workflow_run.head_sha || github.sha }}
         submodules: recursive
@@ -96,12 +96,12 @@ jobs:
       url: https://staging.wifi-densepose.com
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         submodules: recursive
 
     - name: Set up kubectl
-      uses: azure/setup-kubectl@v3
+      uses: azure/setup-kubectl@901a10e89ea615cf61f57ac05cecdf23e7de06d8
       with:
         version: 'v1.28.0'
 
@@ -147,12 +147,12 @@ jobs:
       url: https://wifi-densepose.com
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         submodules: recursive
 
     - name: Set up kubectl
-      uses: azure/setup-kubectl@v3
+      uses: azure/setup-kubectl@901a10e89ea615cf61f57ac05cecdf23e7de06d8
       with:
         version: 'v1.28.0'
 
@@ -222,7 +222,7 @@ jobs:
         # kubectl scale rs -n wifi-densepose -l app=wifi-densepose,version!=green --replicas=0
 
     - name: Upload deployment artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: production-deployment-${{ github.run_number }}
         path: |
@@ -239,7 +239,7 @@ jobs:
       name: ${{ needs.pre-deployment.outputs.deploy_env }}
     steps:
     - name: Set up kubectl
-      uses: azure/setup-kubectl@v3
+      uses: azure/setup-kubectl@901a10e89ea615cf61f57ac05cecdf23e7de06d8
       with:
         version: 'v1.28.0'
 
@@ -293,7 +293,7 @@ jobs:
         done
 
     - name: Update deployment status
-      uses: actions/github-script@v7
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
       with:
         script: |
           const deployEnv = '${{ needs.pre-deployment.outputs.deploy_env }}';
@@ -317,7 +317,7 @@ jobs:
     steps:
     - name: Notify Slack on success
       if: needs.deploy-production.result == 'success' || needs.deploy-staging.result == 'success'
-      uses: 8398a7/action-slack@v3
+      uses: 8398a7/action-slack@77eaa4f1c608a7d68b38af4e3f739dcd8cba273e
       with:
         status: success
         channel: '#deployments'
@@ -331,7 +331,7 @@ jobs:
 
     - name: Notify Slack on failure
       if: needs.deploy-production.result == 'failure' || needs.deploy-staging.result == 'failure'
-      uses: 8398a7/action-slack@v3
+      uses: 8398a7/action-slack@77eaa4f1c608a7d68b38af4e3f739dcd8cba273e
       with:
         status: failure
         channel: '#deployments'
@@ -344,7 +344,7 @@ jobs:
 
     - name: Create deployment issue on failure
       if: needs.deploy-production.result == 'failure'
-      uses: actions/github-script@v7
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
       with:
         script: |
           github.rest.issues.create({

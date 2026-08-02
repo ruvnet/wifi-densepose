@@ -112,8 +112,10 @@ static void wifi_init_sta(void)
     };
 
     /* Copy runtime SSID/password from NVS config */
-    strncpy((char *)wifi_config.sta.ssid, g_nvs_config.wifi_ssid, sizeof(wifi_config.sta.ssid) - 1);
-    strncpy((char *)wifi_config.sta.password, g_nvs_config.wifi_password, sizeof(wifi_config.sta.password) - 1);
+    strlcpy((char *)wifi_config.sta.ssid, g_nvs_config.wifi_ssid,
+            sizeof(wifi_config.sta.ssid));
+    strlcpy((char *)wifi_config.sta.password, g_nvs_config.wifi_password,
+            sizeof(wifi_config.sta.password));
 
     /* If password is empty, use open auth */
     if (strlen((char *)wifi_config.sta.password) == 0) {
@@ -431,9 +433,12 @@ void app_main(void)
             .ingest_sec    = g_nvs_config.swarm_ingest_sec,
             .enabled       = 1,
         };
-        strncpy(swarm_cfg.seed_url, g_nvs_config.seed_url, sizeof(swarm_cfg.seed_url) - 1);
-        strncpy(swarm_cfg.seed_token, g_nvs_config.seed_token, sizeof(swarm_cfg.seed_token) - 1);
-        strncpy(swarm_cfg.zone_name, g_nvs_config.zone_name, sizeof(swarm_cfg.zone_name) - 1);
+        strlcpy(swarm_cfg.seed_url, g_nvs_config.seed_url,
+                sizeof(swarm_cfg.seed_url));
+        strlcpy(swarm_cfg.seed_token, g_nvs_config.seed_token,
+                sizeof(swarm_cfg.seed_token));
+        strlcpy(swarm_cfg.zone_name, g_nvs_config.zone_name,
+                sizeof(swarm_cfg.zone_name));
         swarm_ret = swarm_bridge_init(&swarm_cfg, csi_collector_get_node_id());
         if (swarm_ret != ESP_OK) {
             ESP_LOGW(TAG, "Swarm bridge init failed: %s", esp_err_to_name(swarm_ret));

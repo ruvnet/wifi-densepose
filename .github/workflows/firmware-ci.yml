@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref_type == 'tag'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           submodules: recursive
       - name: Check firmware version.txt == tag
@@ -75,7 +75,7 @@ jobs:
             artifact_pt: partition-table-c6.bin
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           submodules: recursive
 
@@ -175,7 +175,7 @@ jobs:
           echo "See: https://github.com/espressif/qemu/wiki"
 
       - name: Upload firmware artifact (${{ matrix.variant }})
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: esp32-csi-node-firmware-${{ matrix.variant }}
           path: firmware/esp32-csi-node/release-staging/

@@ -27,14 +27,14 @@ jobs:
     steps:
     - name: Checkout code
       continue-on-error: true
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         submodules: recursive
         fetch-depth: 0
 
     - name: Set up Python
       continue-on-error: true
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
       with:
         python-version: ${{ env.PYTHON_VERSION }}
         cache: 'pip'
@@ -68,7 +68,7 @@ jobs:
 
     - name: Upload security reports
       continue-on-error: true
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       if: always()
       with:
         name: security-reports
@@ -82,7 +82,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         submodules: recursive
       # ADR-262 P1: `wifi-densepose-rufield` path-deps the `vendor/rufield`
@@ -112,7 +112,7 @@ jobs:
           pkg-config
 
     - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
     # Swatinem/rust-cache replaces a naive `actions/cache` of the whole
     # `v2/target`. That manual cache of a 38-crate target dir (multi-GB) was an
@@ -123,7 +123,7 @@ jobs:
     # reliably (and faster) on large workspaces. `workspaces: v2` points it at
     # the v2/ cargo workspace (keys on v2/Cargo.lock, caches v2/target).
     - name: Cache cargo (Swatinem/rust-cache)
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
       with:
         workspaces: v2
 
@@ -196,10 +196,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
     - name: Set up Node
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
       with:
         node-version: '22'
 
@@ -222,6 +222,8 @@ jobs:
       postgres:
         image: postgres:15
         env:
+          # Ephemeral CI-only credential; this service is isolated to the job.
+          # kics-scan ignore-line
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: test_wifi_densepose
         options: >-
@@ -245,13 +247,13 @@ jobs:
     steps:
     - name: Checkout code
       continue-on-error: true
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         submodules: recursive
 
     - name: Set up Python ${{ matrix.python-version }}
       continue-on-error: true
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
       with:
         python-version: ${{ matrix.python-version }}
         cache: 'pip'
@@ -266,6 +268,8 @@ jobs:
     - name: Run unit tests
       continue-on-error: true
       env:
+        # Ephemeral CI-only service URL; never used outside this job.
+        # kics-scan ignore-line
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_wifi_densepose
         REDIS_URL: redis://localhost:6379/0
         ENVIRONMENT: test
@@ -275,6 +279,8 @@ jobs:
     - name: Run integration tests
       continue-on-error: true
       env:
+        # Ephemeral CI-only service URL; never used outside this job.
+        # kics-scan ignore-line
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_wifi_densepose
         REDIS_URL: redis://localhost:6379/0
         ENVIRONMENT: test
@@ -283,7 +289,7 @@ jobs:
 
     - name: Upload coverage reports
       continue-on-error: true
-      uses: codecov/codecov-action@v6
+      uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f
       with:
         files: ./coverage.xml
         flags: unittests
@@ -291,7 +297,7 @@ jobs:
 
     - name: Upload test results
       continue-on-error: true
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       if: always()
       with:
         name: test-results-${{ matrix.python-version }}
@@ -312,12 +318,12 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         submodules: recursive
 
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
       with:
         python-version: ${{ env.PYTHON_VERSION }}
         cache: 'pip'
@@ -361,7 +367,7 @@ jobs:
 
     - name: Upload performance results
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: performance-results
         path: archive/v1/perf-junit.xml
@@ -382,17 +388,17 @@ jobs:
     steps:
     - name: Checkout code
       continue-on-error: true
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         submodules: recursive
 
     - name: Set up Docker Buildx
       continue-on-error: true
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
 
     - name: Log in to Container Registry
       continue-on-error: true
-      uses: docker/login-action@v3
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
       with:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
@@ -401,7 +407,7 @@ jobs:
     - name: Extract metadata
       continue-on-error: true
       id: meta
-      uses: docker/metadata-action@v6
+      uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         tags: |
@@ -412,7 +418,7 @@ jobs:
 
     - name: Build and push Docker image
       continue-on-error: true
-      uses: docker/build-push-action@v7
+      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
       with:
         context: .
         target: production
@@ -441,7 +447,7 @@ jobs:
 
     - name: Upload Trivy scan results
       continue-on-error: true
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@a2983b8bed1923f44751c5c43237f479442827b3
       if: always()
       with:
         sarif_file: 'trivy-results.sarif'
@@ -456,12 +462,12 @@ jobs:
       contents: write   # gh-pages deploy needs write (GITHUB_TOKEN is read-only by default -> 403)
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         submodules: recursive
 
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
       with:
         python-version: ${{ env.PYTHON_VERSION }}
         cache: 'pip'
@@ -484,7 +490,7 @@ jobs:
         "
 
     - name: Deploy to GitHub Pages
-      uses: peaceiris/actions-gh-pages@v4
+      uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453
       continue-on-error: true   # openapi generation above is the real validation; deploy is best-effort (Pages may be disabled)
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -507,7 +513,7 @@ jobs:
     steps:
     - name: Notify Slack on success
       if: ${{ env.SLACK_WEBHOOK_URL != '' && needs.code-quality.result == 'success' && needs.test.result == 'success' && needs.docker-build.result == 'success' }}
-      uses: 8398a7/action-slack@v3
+      uses: 8398a7/action-slack@77eaa4f1c608a7d68b38af4e3f739dcd8cba273e
       with:
         status: success
         channel: '#ci-cd'
@@ -515,7 +521,7 @@ jobs:
 
     - name: Notify Slack on failure
       if: ${{ env.SLACK_WEBHOOK_URL != '' && (needs.code-quality.result == 'failure' || needs.test.result == 'failure' || needs.docker-build.result == 'failure') }}
-      uses: 8398a7/action-slack@v3
+      uses: 8398a7/action-slack@77eaa4f1c608a7d68b38af4e3f739dcd8cba273e
       with:
         status: failure
         channel: '#ci-cd'
@@ -523,7 +529,7 @@ jobs:
 
     - name: Create GitHub Release
       if: github.ref == 'refs/heads/main' && needs.docker-build.result == 'success'
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
       with:
         tag_name: v${{ github.run_number }}
         name: Release v${{ github.run_number }}

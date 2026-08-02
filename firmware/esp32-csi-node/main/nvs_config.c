@@ -24,18 +24,16 @@ void nvs_config_load(nvs_config_t *cfg)
     }
 
     /* Start with Kconfig compiled defaults */
-    strncpy(cfg->wifi_ssid, CONFIG_CSI_WIFI_SSID, NVS_CFG_SSID_MAX - 1);
-    cfg->wifi_ssid[NVS_CFG_SSID_MAX - 1] = '\0';
+    strlcpy(cfg->wifi_ssid, CONFIG_CSI_WIFI_SSID, sizeof(cfg->wifi_ssid));
 
 #ifdef CONFIG_CSI_WIFI_PASSWORD
-    strncpy(cfg->wifi_password, CONFIG_CSI_WIFI_PASSWORD, NVS_CFG_PASS_MAX - 1);
-    cfg->wifi_password[NVS_CFG_PASS_MAX - 1] = '\0';
+    strlcpy(cfg->wifi_password, CONFIG_CSI_WIFI_PASSWORD,
+            sizeof(cfg->wifi_password));
 #else
     cfg->wifi_password[0] = '\0';
 #endif
 
-    strncpy(cfg->target_ip, CONFIG_CSI_TARGET_IP, NVS_CFG_IP_MAX - 1);
-    cfg->target_ip[NVS_CFG_IP_MAX - 1] = '\0';
+    strlcpy(cfg->target_ip, CONFIG_CSI_TARGET_IP, sizeof(cfg->target_ip));
 
     cfg->target_port = (uint16_t)CONFIG_CSI_TARGET_PORT;
     cfg->node_id     = (uint8_t)CONFIG_CSI_NODE_ID;
@@ -110,24 +108,21 @@ void nvs_config_load(nvs_config_t *cfg)
     /* WiFi SSID */
     len = sizeof(buf);
     if (nvs_get_str(handle, "ssid", buf, &len) == ESP_OK && len > 1) {
-        strncpy(cfg->wifi_ssid, buf, NVS_CFG_SSID_MAX - 1);
-        cfg->wifi_ssid[NVS_CFG_SSID_MAX - 1] = '\0';
+        strlcpy(cfg->wifi_ssid, buf, sizeof(cfg->wifi_ssid));
         ESP_LOGI(TAG, "NVS override: ssid=%s", cfg->wifi_ssid);
     }
 
     /* WiFi password */
     len = sizeof(buf);
     if (nvs_get_str(handle, "password", buf, &len) == ESP_OK) {
-        strncpy(cfg->wifi_password, buf, NVS_CFG_PASS_MAX - 1);
-        cfg->wifi_password[NVS_CFG_PASS_MAX - 1] = '\0';
+        strlcpy(cfg->wifi_password, buf, sizeof(cfg->wifi_password));
         ESP_LOGI(TAG, "NVS override: password=***");
     }
 
     /* Target IP */
     len = sizeof(buf);
     if (nvs_get_str(handle, "target_ip", buf, &len) == ESP_OK && len > 1) {
-        strncpy(cfg->target_ip, buf, NVS_CFG_IP_MAX - 1);
-        cfg->target_ip[NVS_CFG_IP_MAX - 1] = '\0';
+        strlcpy(cfg->target_ip, buf, sizeof(cfg->target_ip));
         ESP_LOGI(TAG, "NVS override: target_ip=%s", cfg->target_ip);
     }
 
@@ -313,7 +308,7 @@ void nvs_config_load(nvs_config_t *cfg)
     }
     len = sizeof(cfg->zone_name);
     if (nvs_get_str(handle, "zone_name", cfg->zone_name, &len) != ESP_OK) {
-        strncpy(cfg->zone_name, "default", sizeof(cfg->zone_name) - 1);
+        strlcpy(cfg->zone_name, "default", sizeof(cfg->zone_name));
     }
     if (nvs_get_u16(handle, "swarm_hb", &cfg->swarm_heartbeat_sec) != ESP_OK) {
         cfg->swarm_heartbeat_sec = 30;

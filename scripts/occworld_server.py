@@ -198,7 +198,8 @@ def load_model(checkpoint_path: str | None = None) -> Any:
 
     if checkpoint_path and os.path.isfile(checkpoint_path):
         log.info("Loading checkpoint: %s", checkpoint_path)
-        ckpt = torch.load(checkpoint_path, map_location="cpu")
+        # OccWorld checkpoints contain tensors/state dictionaries only.
+        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         state = ckpt.get("state_dict", ckpt)
         # Strip common "model." prefix from distributed training saves
         state = {k.removeprefix("model."): v for k, v in state.items()}
