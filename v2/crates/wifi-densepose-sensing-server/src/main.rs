@@ -7013,11 +7013,12 @@ fn diagnose_model_load_error(path: &std::path::Path, data: &[u8], err: &str) -> 
 /// HuggingFace formats when the native RVF loader rejects them (issue #894).
 ///
 /// Order of operations:
-/// 1. Try the native RVF `ProgressiveLoader` (the only format with `RVFS` magic).
-/// 2. On failure, **auto-detect** the format. If it is convertible
+/// 1. **Detect the format before constructing the lazy progressive loader.**
+/// 2. Load native RVF directly (the only format with `RVFS` magic).
+/// 3. If the format is convertible
 ///    (`safetensors` / `model.rvf.jsonl`), convert it in-memory to RVF and load
 ///    that — so the published `model.safetensors` becomes loadable here.
-/// 3. If it is a non-convertible format (quantized blob / unknown), return the
+/// 4. If it is a non-convertible format (quantized blob / unknown), return the
 ///    typed, actionable [`model_format::ModelLoadError`] message — never the
 ///    opaque "invalid magic …" string.
 ///
@@ -7027,11 +7028,6 @@ fn load_or_convert_model(
     data: &[u8],
 ) -> Result<ProgressiveLoader, String> {
     use model_format::{convert_to_rvf, detect_format, ModelFormat};
-
-    // 1. Native RVF.
-    if let Ok(loader) = ProgressiveLoader::new(data) {
-        return Ok(loader);
-    }
 
     let name = path
         .file_name()
@@ -7044,7 +7040,13 @@ fn load_or_convert_model(
         .unwrap_or("converted-model");
 
     match detect_format(data, &name) {
-        // 2. Convertible formats: convert in-memory, then load.
+        // Native RVF is the only format passed straight to the lazy loader.
+        // Detect first: ProgressiveLoader::new intentionally defers parsing and
+        // can otherwise accept JSONL as an empty container until a later layer.
+        ModelFormat::Rvf => ProgressiveLoader::new(data).map_err(|e| {
+            model_format::classify_load_failure(data, &name, &e).to_string()
+        }),
+        // Convertible formats: convert in-memory, then load.
         ModelFormat::Safetensors | ModelFormat::JsonlManifest => {
             match convert_to_rvf(data, &name, model_id) {
                 Ok(rvf_bytes) => {
@@ -9098,8 +9100,18 @@ mod mqtt_bridge_tests {
 
 #[cfg(test)]
 mod model_load_diagnostic_tests {
-    use super::diagnose_model_load_error;
+    use super::{diagnose_model_load_error, load_or_convert_model};
     use std::path::Path;
+
+    #[test]
+    fn jsonl_model_loads_through_model_flag_path() {
+        let data = b"{\"model_id\":\"published\"}\n{\"weights\":[1.0,2.0]}\n";
+        let mut loader = load_or_convert_model(Path::new("model.rvf.jsonl"), data)
+            .expect("--model must auto-convert JSONL");
+        loader.load_layer_a().expect("Layer A");
+        let layer_c = loader.load_layer_c().expect("Layer C");
+        assert_eq!(layer_c.all_weights, vec![1.0, 2.0]);
+    }
 
     #[test]
     fn safetensors_is_named_and_points_at_894() {

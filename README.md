@@ -37,6 +37,43 @@ Every WiFi router already fills your space with radio waves. When people move, b
 - **Environment mapping** — RF fingerprinting identifies rooms, detects moved furniture, spots new objects
 - **Sleep quality** — overnight monitoring with sleep stage classification and apnea screening
 
+**Also included:**
+
+- **Camera-free pose** — estimate 17 body keypoints from WiFi CSI
+- **Built-in model workflow** — record CSI, train models, load RVF files, and switch LoRA profiles
+- **Local automation** — HOMECORE provides state, history, automations, signed Wasm plugins, voice hooks, and HomeKit support
+- **Unified RF world model** — combine WiFi CSI, radar, UWB, and cellular sensing in one privacy-bounded scene model; accuracy is still synthetic until real-data validation
+- **Governed evidence** — attach privacy policy, uncertainty, provenance, and witness records to sensing events
+- **RuView MetaHarness** — use an AI operator to onboard, calibrate, train, verify, and check sensing claims
+
+<details>
+<summary><strong>RuView MetaHarness</strong> — guided operation for humans and AI agents</summary>
+
+The RuView-specific metaharness we created is published as [`@ruvnet/ruview`](harness/ruview/README.md). It provides source-cited guidance, guarded Claude Code/Codex agents, deterministic verification, and an honesty check for accuracy claims.
+
+```bash
+# Check the local setup and get source-cited guidance
+npx @ruvnet/ruview@0.3.1 doctor
+npx @ruvnet/ruview@0.3.1 guidance --topic sensing --query "model loading"
+
+# Run a read-only RuView agent through Codex
+npx @ruvnet/ruview@0.3.1 agent run --host codex --repo . \
+  --prompt "Find the nearest tests and cite the source files"
+
+# Search or verify the reviewed contributor brain
+npx @ruvnet/ruview@0.3.1 brain search --query "calibration"
+npx @ruvnet/ruview@0.3.1 brain verify --repo .
+
+# Check claims, replay the deterministic proof, or expose the MCP server
+npx @ruvnet/ruview@0.3.1 claim-check --file REPORT.md
+npx @ruvnet/ruview@0.3.1 verify
+npx @ruvnet/ruview@0.3.1 mcp start
+```
+
+Agent runs are read-only by default. Workspace writes require both `--allow-write` and `--confirm`; retrieved brain content is evidence, not authority.
+
+</details>
+
 Built on [RuVector](https://github.com/ruvnet/ruvector/) and [Cognitum Seed](https://cognitum.one), RuView runs entirely on edge hardware — an ESP32 mesh (as low as $9 per node) paired with a Cognitum Seed for persistent memory, cryptographic attestation, and AI integration. No cloud, no cameras, no internet required.
 
 The system learns each environment locally using spiking neural networks that adapt in under 30 seconds, with multi-frequency mesh scanning across 6 WiFi channels that uses your neighbors' routers as free radar illuminators. Every measurement is cryptographically attested via an Ed25519 witness chain.
@@ -78,6 +115,9 @@ RuView turns ordinary WiFi into a contactless sensor. A $9 ESP32 board reads the
 > Browse the full 105-module catalog (with practical descriptions, sizes, and difficulty) below in [🧩 Edge Module Catalog](#-edge-module-catalog), or visit [seed.cognitum.one/store](https://seed.cognitum.one/store).
 >
 > 🤗 **Pretrained weights**: download from [`ruvnet/wifi-densepose-pretrained`](https://huggingface.co/ruvnet/wifi-densepose-pretrained) — see [Loading the pretrained model](#loading-the-pretrained-model) below for one-command setup.
+
+<details>
+<summary><strong>Quick start options</strong> — Docker, ESP32-S3/C6, Cognitum Seed, and Python</summary>
 
 ```bash
 # Option 1: Docker (simulated data, no hardware needed)
@@ -124,6 +164,8 @@ pip install "ruview[client]"              # or: pip install "wifi-densepose[clie
 # from ruview.client import SensingClient, RuViewMqttClient
 ```
 
+</details>
+
 [![PyPI ruview](https://img.shields.io/pypi/v/ruview?label=ruview)](https://pypi.org/project/ruview/) [![PyPI wifi-densepose](https://img.shields.io/pypi/v/wifi-densepose?label=wifi-densepose)](https://pypi.org/project/wifi-densepose/)
 
 > [!NOTE]
@@ -135,7 +177,7 @@ pip install "ruview[client]"              # or: pip install "wifi-densepose[clie
 > |--------|----------|------|----------|-------------|
 > | **ESP32 + Cognitum Seed** (recommended) | ESP32-S3 + [Cognitum Seed](https://cognitum.one) | ~$140 | Yes | Presence, motion, breathing, heart rate, fall detection, multi-person counting, 17-keypoint pose (signed Cog binary — first-cut on-device model, see [Model weights: what's real, what's not](#model-weights-whats-real-whats-not)), 105-cog catalog, persistent vector store, kNN search, witness chain, MCP proxy |
 > | **ESP32 Mesh** | 3-6× ESP32-S3 + WiFi router | ~$54 | Yes | Same capabilities as above without the persistent-memory features |
-> | **ESP32-C6 research node** ([ADR-110](docs/adr/ADR-110-esp32-c6-firmware-extension.md), [witness](docs/WITNESS-LOG-110.md), [reviewer guide](docs/ADR-110-REVIEW-GUIDE.md), [firmware v0.7.0](https://github.com/ruvnet/RuView/releases/tag/v0.7.0-esp32)) | ESP32-C6-DevKit ($6–10) | ~$10 | Yes (Wi-Fi 6 capable) | Same CSI pipeline as S3 with the dual-target firmware. **Firmware-side ADR-110 substrate now closed** (v0.7.0): ESP-NOW cross-board mesh quantified at **99.56 % match / 104 µs smoothed offset stdev / 3.95× EMA suppression** over a 5-min two-board soak (witness §A0.10), 32-byte UDP sync packet with operator-tunable cadence (§A0.12), ADR-018 byte 19 bit 4 wire-fix sourced from the working ESP-NOW path (§A0.13). Wire format ready for HE-LTF PPDU tagging in ADR-018 bytes 18-19 (firmware encoder + Rust + Python decoders verified end-to-end across 23 unit tests). LP-core motion-gate RISC-V program and Wi-Fi 6 soft-AP with TWT Responder both ship as opt-in code paths (default off). **Hardware-gated for measurement**: HE-LTF live subcarrier capture needs an 11ax AP (IDF v5.4 doesn't expose AP-side HE config — §A0.6); ~5 µA LP-core hibernation needs an INA meter to capture; 802.15.4 raw RX is broken in IDF v5.4 (workaround: ESP-NOW transport, shipped + measured). See witness log for the empirical / claimed split. |
+> | **ESP32-C6 research node** ([ADR-110](docs/adr/ADR-110-esp32-c6-firmware-extension.md), [witness](docs/WITNESS-LOG-110.md), [reviewer guide](docs/ADR-110-REVIEW-GUIDE.md), [firmware v0.7.0](https://github.com/ruvnet/RuView/releases/tag/v0.7.0-esp32)) | ESP32-C6-DevKit ($6–10) | ~$10 | Yes (Wi-Fi 6 capable) | Dual-target CSI with **99.56% measured ESP-NOW sync match** and measured HE-LTF capture on IDF 5.5.2. TWT and ~5 µA operation still need hardware validation. |
 > | **Research NIC** | Intel 5300 / Atheros AR9580 | ~$50-100 | Yes | Full CSI with 3x3 MIMO |
 > | **Qualcomm CSI beta** ([ADR-268](docs/adr/ADR-268-qualcomm-atheros-csi-platform.md)) | QCA9300 now; QCN9074/QCN9274 experimental | ~$30-200 | Simulator now; hardware adapter gated | Rust `QCS1` codec, deterministic replay, UDP/API integration; modern ath11k/ath12k profiles do not claim public CSI export |
 > | **Vendor provider beta** ([ADR-270](docs/adr/ADR-270-vendor-rf-sensing-integration-program.md)) | Origin, Plume, Mist, NETGEAR, Electric Imp, RF Solutions, Luma, Nest, Linksys, Wifigarden | Varies | Capability-dependent | Bounded Rust adapters and deterministic fixtures; telemetry/network-only/unsupported states cannot masquerade as CSI |
@@ -183,9 +225,9 @@ huggingface-cli download ruvnet/wifi-densepose-pretrained --local-dir models/wif
 |----------|-------------|--------|
 | Python training / evaluation / embedding extraction | `model.safetensors` | ✅ Works — load with `safetensors.torch.load_file` |
 | Inspect / re-export the bundle | `model.rvf.jsonl` (line-by-line JSON) | ✅ Works — plain JSONL |
-| Sensing-server `--model <PATH>` flag | binary RVF (`RVFS` magic) | ⚠️ Loader does not yet accept the JSONL container |
+| Sensing-server `--model <PATH>` flag | native RVF, `model.safetensors`, or `model.rvf.jsonl` | ✅ Native RVF loads directly; safetensors and JSONL auto-convert in memory |
 
-**Known gap:** the HF model ships in JSONL RVF format, but `v2/crates/wifi-densepose-sensing-server/src/rvf_container.rs` only parses the binary RVF segment format. Pointing `--model` at `model.rvf.jsonl` currently errors with `invalid magic at offset 0: expected 0x52564653, got 0x7974227B` and the live pipeline degrades to null output rather than falling back to heuristic mode — so for the live sensing-server, run **without** `--model` until a JSONL adapter lands (or the model is re-published as binary RVF). Use the weights from Python / training in the meantime.
+**Loader scope:** `--model` now accepts native RVF and auto-converts the published safetensors or JSONL files. The quantized `model-q*.bin` files still need a compatible reader, and loading weights does not supply the matching pose-decoder architecture or establish end-to-end pose accuracy.
 
 **Quantization choices** (all in the HF repo): `model-q2.bin` (4 KB) · `model-q4.bin` ⭐ recommended (8 KB) · `model-q8.bin` (16 KB) · `model.safetensors` full (48 KB)
 
