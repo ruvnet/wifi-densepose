@@ -6,8 +6,13 @@
   </a>
 </p>
 <p align="center">
-  <a href="https://cognitum.one/marketplace/musica">
+  <a href="https://cognitum.one/marketplace">
     <img src="assets/musica-promo.png" alt="Cognitum Musica" width="100%">
+  </a>
+</p>
+<p align="center">
+  <a href="https://github.com/ruvnet/RuCelium">
+    <img src="assets/rucelium-hero.png" alt="RuCelium — environmental intelligence" width="100%">
   </a>
 </p>
 
