@@ -31,6 +31,7 @@ NVS_PARTITION_SIZE = 0x6000  # 24 KiB
 
 
 def build_nvs_csv(ssid, password, target_ip, target_port, node_id,
+                   ext_antenna=None,
                    edge_tier=None, pres_thresh=None, fall_thresh=None,
                    vital_window=None, vital_interval_ms=None, subk_count=None,
                    wasm_verify=None, wasm_pubkey=None):
@@ -49,6 +50,9 @@ def build_nvs_csv(ssid, password, target_ip, target_port, node_id,
         writer.writerow(["target_port", "data", "u16", str(target_port)])
     if node_id is not None:
         writer.writerow(["node_id", "data", "u8", str(node_id)])
+    # XIAO ESP32-C6 external u.FL antenna (1 = external, 0 = on-board).
+    if ext_antenna is not None:
+        writer.writerow(["ext_ant", "data", "u8", str(1 if ext_antenna else 0)])
     # ADR-039: Edge intelligence configuration.
     if edge_tier is not None:
         writer.writerow(["edge_tier", "data", "u8", str(edge_tier)])

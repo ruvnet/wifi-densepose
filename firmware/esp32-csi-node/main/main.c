@@ -214,16 +214,20 @@ void app_main(void)
     /* Seeed XIAO ESP32-C6 antenna select — must run BEFORE any radio init so
      * the first RF activity already uses the chosen path. The XIAO-C6 has a
      * software RF switch: GPIO3 powers it, GPIO14 selects on-board (LOW) vs the
-     * external u.FL/IPEX socket (HIGH). Off by default (stock C6 dev boards have
-     * no such switch); enable with CONFIG_RV_XIAO_C6_EXT_ANTENNA on a XIAO-C6.
-     * Only helps with an antenna actually attached to the u.FL connector. */
-#if CONFIG_RV_XIAO_C6_EXT_ANTENNA
-    gpio_set_direction(GPIO_NUM_3, GPIO_MODE_OUTPUT);
-    gpio_set_level(GPIO_NUM_3, 0);                 /* power/enable the RF switch */
-    vTaskDelay(pdMS_TO_TICKS(100));
-    gpio_set_direction(GPIO_NUM_14, GPIO_MODE_OUTPUT);
-    gpio_set_level(GPIO_NUM_14, 1);                /* 1 = external u.FL antenna  */
-    ESP_LOGI(TAG, "XIAO ESP32-C6: external u.FL antenna selected");
+     * external u.FL/IPEX socket (HIGH). Choice comes from NVS (cfg->ext_antenna,
+     * set by the flasher's "external u.FL antenna" checkbox; Kconfig sets the
+     * default). Compiled only on ESP32-C6; a no-op on S3. Note: external only
+     * helps with an antenna actually attached to the u.FL connector. */
+#if defined(CONFIG_IDF_TARGET_ESP32C6)
+    {
+        const bool ext_ant = g_nvs_config.ext_antenna != 0;
+        gpio_set_direction(GPIO_NUM_3, GPIO_MODE_OUTPUT);
+        gpio_set_level(GPIO_NUM_3, 0);                     /* power/enable the RF switch */
+        vTaskDelay(pdMS_TO_TICKS(100));
+        gpio_set_direction(GPIO_NUM_14, GPIO_MODE_OUTPUT);
+        gpio_set_level(GPIO_NUM_14, ext_ant ? 1 : 0);      /* 1 = external u.FL, 0 = on-board */
+        ESP_LOGI(TAG, "XIAO ESP32-C6 antenna: %s", ext_ant ? "external u.FL" : "on-board");
+    }
 #endif
 
     const esp_app_desc_t *app_desc = esp_app_get_description();
