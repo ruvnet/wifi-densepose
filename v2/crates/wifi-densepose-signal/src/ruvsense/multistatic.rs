@@ -193,6 +193,10 @@ pub struct MultistaticFuser {
     config: MultistaticConfig,
     /// Node positions in 3D space (meters).
     node_positions: Vec<[f32; 3]>,
+    /// Explicit node-id keyed positions. Preferred by live multi-node paths;
+    /// the vector above remains for backwards compatibility with callers that
+    /// only have positional sensor indices.
+    node_positions_by_id: std::collections::HashMap<u8, [f32; 3]>,
     /// Optional shared CIR estimator (ADR-134).  `None` = legacy path only.
     cir_estimator: Option<Arc<CirEstimator>>,
 }
@@ -213,6 +217,7 @@ impl MultistaticFuser {
         Self {
             config: MultistaticConfig::default(),
             node_positions: Vec::new(),
+            node_positions_by_id: std::collections::HashMap::new(),
             cir_estimator: None,
         }
     }
@@ -222,6 +227,7 @@ impl MultistaticFuser {
         Self {
             config,
             node_positions: Vec::new(),
+            node_positions_by_id: std::collections::HashMap::new(),
             cir_estimator: None,
         }
     }
@@ -270,6 +276,14 @@ impl MultistaticFuser {
     /// Set node positions for geometric diversity computations.
     pub fn set_node_positions(&mut self, positions: Vec<[f32; 3]>) {
         self.node_positions = positions;
+    }
+
+    /// Set node positions by stable wire-level node id.
+    pub fn set_node_positions_by_id(
+        &mut self,
+        positions: std::collections::HashMap<u8, [f32; 3]>,
+    ) {
+        self.node_positions_by_id = positions;
     }
 
     /// Return the current node positions.
@@ -350,11 +364,14 @@ impl MultistaticFuser {
         let timestamp_us = timestamps[timestamps.len() / 2];
 
         // Build node positions list, filling with origin for unknown nodes
-        let positions: Vec<[f32; 3]> = (0..n_nodes)
-            .map(|i| {
-                self.node_positions
-                    .get(i)
+        let positions: Vec<[f32; 3]> = node_frames
+            .iter()
+            .enumerate()
+            .map(|(i, frame)| {
+                self.node_positions_by_id
+                    .get(&frame.node_id)
                     .copied()
+                    .or_else(|| self.node_positions.get(i).copied())
                     .unwrap_or([0.0, 0.0, 0.0])
             })
             .collect();
@@ -1057,6 +1074,23 @@ mod tests {
         let positions = vec![[0.0, 0.0, 1.0], [3.0, 0.0, 1.0]];
         fuser.set_node_positions(positions.clone());
         assert_eq!(fuser.node_positions(), &positions[..]);
+    }
+
+    #[test]
+    fn node_id_positions_ignore_input_frame_order() {
+        let mut fuser = MultistaticFuser::new();
+        fuser.set_node_positions_by_id(std::collections::HashMap::from([
+            (1, [1.0, 0.0, 0.0]),
+            (2, [2.0, 0.0, 0.0]),
+            (3, [3.0, 0.0, 0.0]),
+        ]));
+        let frames = vec![
+            make_node_frame(3, 1_000, 8, 1.0),
+            make_node_frame(1, 1_001, 8, 1.0),
+            make_node_frame(2, 1_002, 8, 1.0),
+        ];
+        let fused = fuser.fuse(&frames).unwrap();
+        assert_eq!(fused.node_positions, vec![[3.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]);
     }
 
     #[test]

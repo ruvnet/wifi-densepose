@@ -170,6 +170,30 @@ pub fn parse_node_positions(input: &str) -> Vec<[f32; 3]> {
         .collect()
 }
 
+/// Parse the legacy ordered position list into stable one-based node ids.
+/// The deployed ESP32 convention is node 1 for the first entry, node 2 for
+/// the second, and so on. Malformed entries retain their ordinal gap so a bad
+/// node-2 entry can never shift node 3 onto node 2's coordinates.
+pub fn parse_node_positions_by_id(input: &str) -> std::collections::HashMap<u8, [f32; 3]> {
+    input
+        .split(';')
+        .enumerate()
+        .filter_map(|(idx, triplet)| {
+            let node_id = u8::try_from(idx + 1).ok()?;
+            let mut parts = triplet.split(',');
+            let position = [
+                parts.next()?.trim().parse().ok()?,
+                parts.next()?.trim().parse().ok()?,
+                parts.next()?.trim().parse().ok()?,
+            ];
+            if parts.next().is_some() {
+                return None;
+            }
+            Some((node_id, position))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,6 +225,14 @@ mod tests {
         let positions = parse_node_positions("1,2;3,4,5");
         assert_eq!(positions.len(), 1);
         assert_eq!(positions[0], [3.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn positions_by_id_do_not_shift_after_malformed_entry() {
+        let positions = parse_node_positions_by_id("1,2,3;bad;7,8,9");
+        assert_eq!(positions.get(&1), Some(&[1.0, 2.0, 3.0]));
+        assert!(!positions.contains_key(&2));
+        assert_eq!(positions.get(&3), Some(&[7.0, 8.0, 9.0]));
     }
 
     /// Regression: a freshly-started (`Uncalibrated`) field model must begin

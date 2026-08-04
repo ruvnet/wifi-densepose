@@ -340,6 +340,24 @@ struct NodeInfo {
     /// `NodeState::latest_sync` and the iter 18 fps EMA.
     #[serde(skip_serializing_if = "Option::is_none")]
     sync: Option<NodeSyncSnapshot>,
+    /// Host-side lifecycle diagnostics for this node.
+    lifecycle: NodeLifecycleSnapshot,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct NodeLifecycleSnapshot {
+    source: Option<String>,
+    last_received_unix_ms: Option<u64>,
+    last_seen_ms: u64,
+    frame_sequence: Option<u32>,
+    mesh_timestamp_us: Option<u64>,
+    tdm_slot: Option<u8>,
+    csi_fps: f64,
+    sync_valid: bool,
+    sync_offset_us: Option<i64>,
+    sync_staleness_ms: Option<u64>,
+    fusion_eligible: bool,
+    decision: String,
 }
 
 /// ADR-110 iter 23 — per-node mesh-sync snapshot embedded in NodeInfo.
@@ -561,6 +579,11 @@ struct NodeState {
     /// the two symbol grids in `frame_history` corrupts variance/baseline
     /// statistics. See [`NodeState::accept_grid`].
     active_grid: Option<(u16, wifi_densepose_hardware::PpduType)>,
+    source_addr: Option<SocketAddr>,
+    last_received_unix_ms: Option<u64>,
+    last_sequence: Option<u32>,
+    last_mesh_timestamp_us: Option<u64>,
+    last_decision: String,
 }
 
 /// Default EMA alpha for temporal keypoint smoothing (RuVector Phase 2).
@@ -682,6 +705,47 @@ mod fps_ema_tests {
 }
 
 impl NodeState {
+    fn lifecycle_snapshot(&self, now: std::time::Instant) -> NodeLifecycleSnapshot {
+        let last_seen_ms = self.last_frame_time
+            .map(|t| now.saturating_duration_since(t).as_millis() as u64)
+            .unwrap_or(u64::MAX);
+        let sync = self.sync_snapshot();
+        let (fusion_eligible, decision) = if self.last_frame_time.is_none() {
+            (false, "excluded:no_sensing_frame")
+        } else if last_seen_ms > 10_000 {
+            (false, "excluded:stale_over_10s")
+        } else if self.frame_history.back().is_none_or(|f| f.is_empty()) {
+            (false, "excluded:no_csi_history")
+        } else {
+            (true, self.last_decision.as_str())
+        };
+        NodeLifecycleSnapshot {
+            source: self.source_addr.map(|v| v.to_string()),
+            last_received_unix_ms: self.last_received_unix_ms,
+            last_seen_ms,
+            frame_sequence: self.last_sequence,
+            mesh_timestamp_us: self.last_mesh_timestamp_us,
+            tdm_slot: None,
+            csi_fps: if self.csi_fps_samples >= 5 { self.csi_fps_ema } else { 20.0 },
+            sync_valid: sync.as_ref().is_some_and(|s| s.is_valid),
+            sync_offset_us: sync.as_ref().map(|s| s.offset_us),
+            sync_staleness_ms: sync.as_ref().and_then(|s| s.staleness_ms),
+            fusion_eligible,
+            decision: decision.to_string(),
+        }
+    }
+
+    fn record_datagram(&mut self, src: SocketAddr, sequence: Option<u32>) {
+        self.source_addr = Some(src);
+        self.last_received_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).ok()
+            .map(|d| d.as_millis() as u64);
+        if let Some(sequence) = sequence {
+            self.last_sequence = Some(sequence);
+            self.last_mesh_timestamp_us = self.mesh_aligned_us_for_csi_frame(sequence);
+        }
+        self.last_decision = "included:active_csi".to_string();
+    }
     /// ADR-110 §A0.12 timestamp recovery: given a CSI frame's node-local
     /// `esp_timer_get_time()` snapshot, return the mesh-aligned epoch
     /// computed from this node's most recent sync packet — or `None`
@@ -824,6 +888,11 @@ impl NodeState {
             ),
             last_novelty_score: None,
             active_grid: None,
+            source_addr: None,
+            last_received_unix_ms: None,
+            last_sequence: None,
+            last_mesh_timestamp_us: None,
+            last_decision: "excluded:no_sensing_frame".to_string(),
         }
     }
 
@@ -1088,6 +1157,47 @@ pub(crate) fn save_runtime_config(data_dir: &std::path::Path, config: &RuntimeCo
     }
 }
 
+const FIELD_MODEL_FILE: &str = "field-model-v1.json";
+
+fn load_field_model(data_dir: &std::path::Path) -> Option<FieldModel> {
+    let path = data_dir.join(FIELD_MODEL_FILE);
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            warn!("Failed to read persisted field model {}: {e}", path.display());
+            return None;
+        }
+    };
+    match FieldModel::from_persisted_json(&bytes) {
+        Ok(model) => {
+            info!("Loaded persisted field model from {}", path.display());
+            Some(model)
+        }
+        Err(e) => {
+            warn!("Ignoring invalid persisted field model {}: {e}", path.display());
+            None
+        }
+    }
+}
+
+fn save_field_model(data_dir: &std::path::Path, model: &FieldModel) -> Result<(), String> {
+    std::fs::create_dir_all(data_dir).map_err(|e| e.to_string())?;
+    let bytes = model.to_persisted_json().map_err(|e| e.to_string())?;
+    let path = data_dir.join(FIELD_MODEL_FILE);
+    let tmp = data_dir.join(format!(".{FIELD_MODEL_FILE}.tmp"));
+    std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
+    if let Err(first) = std::fs::rename(&tmp, &path) {
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+            std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+        } else {
+            return Err(first.to_string());
+        }
+    }
+    Ok(())
+}
+
 /// Shared application state
 struct AppStateInner {
     latest_update: Option<SensingUpdate>,
@@ -1202,6 +1312,8 @@ struct AppStateInner {
     /// Per-node sensing state for multi-node deployments.
     /// Keyed by `node_id` from the ESP32 frame header.
     node_states: HashMap<u8, NodeState>,
+    /// Stable geometry keyed by ESP32 wire-level node id.
+    node_positions: HashMap<u8, [f32; 3]>,
     // ── Accuracy sprint: Kalman tracker, multistatic fusion, eigenvalue counting ──
     /// Global Kalman-based pose tracker for stable person IDs and smoothed keypoints.
     pose_tracker: PoseTracker,
@@ -1378,6 +1490,7 @@ impl AppStateInner {
             training_progress_tx: broadcast::channel::<String>(256).0,
             adaptive_model: None,
             node_states: HashMap::new(),
+            node_positions: HashMap::new(),
             pose_tracker: PoseTracker::new(),
             last_tracker_instant: None,
             multistatic_fuser: MultistaticFuser::new(),
@@ -2801,6 +2914,7 @@ async fn windows_wifi_task(state: SharedState, tick_ms: u64) {
                 amplitude: multi_ap_frame.amplitudes,
                 subcarrier_count: obs_count,
                 sync: None,  // multi-BSSID scan path — no mesh peer
+                lifecycle: NodeLifecycleSnapshot::default(),
             }],
             features,
             classification,
@@ -2961,6 +3075,7 @@ async fn windows_wifi_fallback_tick(state: &SharedState, seq: u32) {
             amplitude: vec![signal_pct],
             subcarrier_count: 1,
             sync: None,  // synthetic-RSSI fallback path — no mesh peer
+            lifecycle: NodeLifecycleSnapshot::default(),
         }],
         features,
         classification,
@@ -5251,6 +5366,7 @@ async fn calibration_start(State(state): State<SharedState>) -> Json<serde_json:
 
 async fn calibration_stop(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let mut s = state.write().await;
+    let data_dir = s.data_dir.clone();
     if let Some(ref mut fm) = s.field_model {
         // Guard: finalizing before enough empty-room frames have accumulated
         // is a client-side sequencing error, not a server fault. Return a
@@ -5272,6 +5388,13 @@ async fn calibration_stop(State(state): State<SharedState>) -> Json<serde_json::
                 let baseline = modes.baseline_eigenvalue_count;
                 let variance_explained = modes.variance_explained;
                 info!("Field model calibrated: baseline_eigenvalues={baseline}, variance_explained={variance_explained:.2}");
+                if let Err(e) = save_field_model(&data_dir, fm) {
+                    error!("Field model calibrated but persistence failed: {e}");
+                    return Json(serde_json::json!({
+                        "success": false,
+                        "error": "Calibration completed in memory but could not be persisted.",
+                    }));
+                }
                 Json(serde_json::json!({
                     "success": true,
                     "baseline_eigenvalue_count": baseline,
@@ -5667,6 +5790,9 @@ async fn nodes_endpoint(State(state): State<SharedState>) -> Json<serde_json::Va
             let stale = elapsed_ms > 5000;
             let status = if stale { "stale" } else { "active" };
             let rssi = ns.rssi_history.back().copied().unwrap_or(-90.0);
+            let lifecycle = ns.lifecycle_snapshot(now);
+            let position = s.node_positions.get(&id).copied()
+                .map(|p| p.map(f64::from));
             serde_json::json!({
                 "node_id": id,
                 "status": status,
@@ -5674,6 +5800,8 @@ async fn nodes_endpoint(State(state): State<SharedState>) -> Json<serde_json::Va
                 "rssi_dbm": rssi,
                 "motion_level": &ns.current_motion_level,
                 "person_count": ns.prev_person_count,
+                "position": position,
+                "lifecycle": lifecycle,
             })
         })
         .collect();
@@ -5836,6 +5964,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     // ── Per-node state for edge vitals (issue #249) ──────
                     let node_id = vitals.node_id;
                     let ns = s.node_states.entry(node_id).or_insert_with(NodeState::new);
+                    ns.record_datagram(src, None);
                     let first_sensing_frame = ns.last_frame_time.is_none();
                     ns.last_frame_time = Some(std::time::Instant::now());
                     if first_sensing_frame && telemetry::curated_events_enabled() {
@@ -5944,12 +6073,14 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         .map(|(&id, n)| NodeInfo {
                             node_id: id,
                             rssi_dbm: n.rssi_history.back().copied().unwrap_or(0.0),
-                            position: [2.0, 0.0, 1.5],
+                            position: s.node_positions.get(&id).copied()
+                                .map(|p| p.map(f64::from)).unwrap_or([0.0, 0.0, 0.0]),
                             amplitude: vec![],
                             subcarrier_count: 0,
                             // Vitals-only path; still expose the sync snapshot
                             // if the node also speaks ESP-NOW.
                             sync: n.sync_snapshot(),
+                            lifecycle: n.lifecycle_snapshot(now),
                         })
                         .collect();
 
@@ -6085,6 +6216,10 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                                 let node_id = sync.node_id;
                                 let ns = s.node_states.entry(node_id)
                                     .or_insert_with(NodeState::new);
+                                ns.source_addr = Some(src);
+                                ns.last_received_unix_ms = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH).ok()
+                                    .map(|d| d.as_millis() as u64);
                                 ns.apply_sync_packet(sync, std::time::Instant::now());
                                 continue;
                             }
@@ -6242,6 +6377,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     // side effect, so the previous bare assignment is gone.
                     let first_sensing_frame =
                         ns.observe_csi_frame_arrival(std::time::Instant::now());
+                    ns.record_datagram(src, Some(frame.sequence));
                     if first_sensing_frame && telemetry::curated_events_enabled() {
                         info!(name: semconv::EVENT_RUVIEW_NODE_ONLINE, { "ruview.node.id" = node_id }, "node {node_id} online (CSI)");
                     }
@@ -6423,7 +6559,8 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         .map(|(&id, n)| NodeInfo {
                             node_id: id,
                             rssi_dbm: n.rssi_history.back().copied().unwrap_or(0.0),
-                            position: [2.0, 0.0, 1.5],
+                            position: s.node_positions.get(&id).copied()
+                                .map(|p| p.map(f64::from)).unwrap_or([0.0, 0.0, 0.0]),
                             amplitude: if suppress_raw {
                                 vec![]
                             } else {
@@ -6439,6 +6576,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                             },
                             // ADR-110 iter 23 / iter 30 — single source of truth.
                             sync: n.sync_snapshot(),
+                            lifecycle: n.lifecycle_snapshot(now),
                         })
                         .collect();
 
@@ -6525,6 +6663,12 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                             .map(|(&id, _)| id)
                             .collect();
                         for id in &stale_ids {
+                            if let Some(ns) = s.node_states.get(id) {
+                                let age_ms = ns.last_frame_time
+                                    .map(|t| now.saturating_duration_since(t).as_millis())
+                                    .unwrap_or(u128::MAX);
+                                info!("Evicting node {id}: reason=no_sensing_frame_for_60s age_ms={age_ms}");
+                            }
                             s.node_states.remove(id);
                             if telemetry::curated_events_enabled() {
                                 info!(name: semconv::EVENT_RUVIEW_NODE_OFFLINE, { "ruview.node.id" = *id }, "node {id} offline (no frames for 60s)");
@@ -6699,6 +6843,7 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
                 amplitude: frame_amplitudes,
                 subcarrier_count: frame_n_sub as usize,
                 sync: None,  // simulated frame path — no mesh peer
+                lifecycle: NodeLifecycleSnapshot::default(),
             }],
             features: features.clone(),
             classification,
@@ -7967,6 +8112,9 @@ async fn main() {
     // threaded into `engine_bridge` so both fusion paths honor the same
     // WDP_TDM_SLOTS/WDP_GUARD_INTERVAL_US-derived guard (#1049/#1057).
     let mut engine_bridge_multistatic_cfg: Option<MultistaticConfig> = None;
+    let configured_node_positions = args.node_positions.as_deref()
+        .map(field_bridge::parse_node_positions_by_id)
+        .unwrap_or_default();
 
     let state: SharedState = Arc::new(RwLock::new(AppStateInner {
         latest_update: None,
@@ -8033,6 +8181,7 @@ async fn main() {
                     );
                 }),
         node_states: HashMap::new(),
+        node_positions: configured_node_positions.clone(),
         // Accuracy sprint
         pose_tracker: PoseTracker::new(),
         last_tracker_instant: None,
@@ -8061,6 +8210,7 @@ async fn main() {
                     fuser.set_node_positions(positions);
                 }
             }
+            fuser.set_node_positions_by_id(configured_node_positions.clone());
             engine_bridge_multistatic_cfg = Some(MultistaticConfig {
                 min_nodes: 1,
                 ..cfg
@@ -8074,12 +8224,14 @@ async fn main() {
             "Default Room",
             engine_bridge_multistatic_cfg,
         ),
-        field_model: if args.calibrate {
-            info!("Field model calibration enabled — room should be empty during startup");
-            FieldModel::new(field_bridge::single_link_config()).ok()
-        } else {
-            None
-        },
+        field_model: load_field_model(&data_dir).or_else(|| {
+            if args.calibrate {
+                info!("Field model calibration enabled — room should be empty during startup");
+                FieldModel::new(field_bridge::single_link_config()).ok()
+            } else {
+                None
+            }
+        }),
         // ADR-044 §5.2: rolling-P95 over ~30 s at 20 Hz; warm-up after 60 samples.
         p95_variance: RollingP95::new(600, 60),
         p95_motion_band_power: RollingP95::new(600, 60),
@@ -8526,6 +8678,7 @@ mod node_sync_snapshot_serialization_tests {
             amplitude: vec![],
             subcarrier_count: 0,
             sync,
+            lifecycle: NodeLifecycleSnapshot::default(),
         }
     }
 

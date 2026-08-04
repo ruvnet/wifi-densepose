@@ -18,6 +18,7 @@
 //! - ADR-030: RuvSense Persistent Field Model
 
 use ndarray::Array2;
+use serde::{Deserialize, Serialize};
 #[cfg(feature = "eigenvalue")]
 use ndarray_linalg::Eigh;
 #[cfg(feature = "eigenvalue")]
@@ -236,7 +237,7 @@ impl LinkBaselineStats {
 // ---------------------------------------------------------------------------
 
 /// Configuration for field model calibration and runtime.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldModelConfig {
     /// Number of links in the mesh.
     pub n_links: usize,
@@ -267,7 +268,7 @@ impl Default for FieldModelConfig {
 /// Learned from SVD on the covariance of CSI amplitudes during
 /// empty-room calibration. The top-K modes capture environmental
 /// variation (temperature, humidity, time-of-day effects).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldNormalMode {
     /// Per-link baseline mean: `[n_links][n_subcarriers]`.
     pub baseline: Vec<Vec<f64>>,
@@ -347,6 +348,14 @@ pub struct FieldModel {
     covariance_count: u64,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct FieldModelSnapshot {
+    version: u32,
+    config: FieldModelConfig,
+    modes: FieldNormalMode,
+    last_calibration_us: u64,
+}
+
 /// Diagonal variance fallback for when full covariance SVD is unavailable.
 ///
 /// Returns `(mode_energies, environmental_modes, baseline_eigenvalue_count)`.
@@ -401,6 +410,40 @@ fn diagonal_fallback(
 }
 
 impl FieldModel {
+    /// Serialize a completed calibration without transient collection buffers.
+    pub fn to_persisted_json(&self) -> Result<Vec<u8>, FieldModelError> {
+        let modes = self.modes.clone().ok_or(FieldModelError::NotCalibrated)?;
+        serde_json::to_vec_pretty(&FieldModelSnapshot {
+            version: 1,
+            config: self.config.clone(),
+            modes,
+            last_calibration_us: self.last_calibration_us,
+        }).map_err(|e| FieldModelError::InvalidConfig(format!("serialize calibration: {e}")))
+    }
+
+    /// Restore a completed calibration from the versioned persistence format.
+    pub fn from_persisted_json(bytes: &[u8]) -> Result<Self, FieldModelError> {
+        let snapshot: FieldModelSnapshot = serde_json::from_slice(bytes)
+            .map_err(|e| FieldModelError::InvalidConfig(format!("parse calibration: {e}")))?;
+        if snapshot.version != 1 {
+            return Err(FieldModelError::InvalidConfig(format!(
+                "unsupported calibration version {}", snapshot.version
+            )));
+        }
+        let mut model = Self::new(snapshot.config)?;
+        if snapshot.modes.baseline.len() != model.config.n_links
+            || snapshot.modes.baseline.iter().any(|v| v.len() != model.config.n_subcarriers)
+            || snapshot.modes.environmental_modes.iter().any(|v| v.len() != model.config.n_subcarriers)
+        {
+            return Err(FieldModelError::InvalidConfig(
+                "persisted calibration dimensions do not match config".into(),
+            ));
+        }
+        model.modes = Some(snapshot.modes);
+        model.last_calibration_us = snapshot.last_calibration_us;
+        model.status = CalibrationStatus::Fresh;
+        Ok(model)
+    }
     /// Create a new field model for the given configuration.
     pub fn new(config: FieldModelConfig) -> Result<Self, FieldModelError> {
         if config.n_links == 0 {
@@ -1246,6 +1289,25 @@ mod tests {
         assert!(model.modes().is_none());
         assert_eq!(model.status(), CalibrationStatus::Uncalibrated);
         assert_eq!(model.calibration_frame_count(), 0);
+    }
+
+    #[test]
+    fn completed_calibration_round_trips_persistence() {
+        let mut model = FieldModel::new(make_config(1, 4, 3)).unwrap();
+        for i in 0..4 {
+            model.feed_calibration(&vec![vec![1.0 + i as f64, 2.0, 3.0, 4.0]]).unwrap();
+        }
+        model.finalize_calibration(123_000_000, 77).unwrap();
+        let bytes = model.to_persisted_json().unwrap();
+        let restored = FieldModel::from_persisted_json(&bytes).unwrap();
+        assert_eq!(restored.status(), CalibrationStatus::Fresh);
+        assert_eq!(restored.modes().unwrap().geometry_hash, 77);
+        assert_eq!(restored.modes().unwrap().baseline, model.modes().unwrap().baseline);
+    }
+
+    #[test]
+    fn corrupted_persisted_calibration_is_rejected() {
+        assert!(FieldModel::from_persisted_json(b"not-json").is_err());
     }
 
     #[test]
