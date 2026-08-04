@@ -1,5 +1,17 @@
 menu "CSI Node Configuration"
 
+    config RV_XIAO_C6_EXT_ANTENNA
+        bool "Use external u.FL antenna (Seeed XIAO ESP32-C6)"
+        default n
+        depends on IDF_TARGET_ESP32C6
+        help
+            The Seeed XIAO ESP32-C6 has a software RF switch feeding either the
+            on-board ceramic antenna or the external u.FL/IPEX socket. Enable to
+            drive that switch to the EXTERNAL antenna at boot (GPIO3 powers the
+            switch, GPIO14 selects the path). Leave off for stock ESP32-C6 dev
+            boards, which have no such switch. Only helps with an antenna
+            actually attached to the u.FL connector.
+
     config CSI_NODE_ID
         int "Node ID (0-255)"
         default 1

@@ -1,0 +1,12 @@
+# Seeed Studio XIAO ESP32-C6 — headless CSI sensor node.
+# Overlay on sdkconfig.defaults + sdkconfig.defaults.esp32c6. Build:
+#   idf.py -B build_c6_xiao -D SDKCONFIG=build_c6_xiao/sdkconfig \
+#     -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.esp32c6;sdkconfig.defaults.c6-xiao" \
+#     set-target esp32c6 build
+#
+# Identical to the stock ESP32-C6 profile except it drives the XIAO-C6's
+# software RF switch to the EXTERNAL u.FL/IPEX antenna at boot (GPIO3 powers
+# the switch, GPIO14 selects the path — see app_main). Only helps with an
+# antenna actually attached to the u.FL connector.
+CONFIG_IDF_TARGET="esp32c6"
+CONFIG_RV_XIAO_C6_EXT_ANTENNA=y

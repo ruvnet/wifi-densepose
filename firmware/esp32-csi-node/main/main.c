@@ -19,6 +19,7 @@
 #include "esp_app_desc.h"
 #include "sdkconfig.h"
 #include "led_strip.h"
+#include "driver/gpio.h"
 
 #include "csi_collector.h"
 #include "stream_sender.h"
@@ -209,6 +210,21 @@ void app_main(void)
      * g_nvs_config. See #232/#375/#390: WiFi driver init clobbers the struct
      * on some devices, reverting node_id to the Kconfig default of 1. */
     csi_collector_set_node_id(g_nvs_config.node_id);
+
+    /* Seeed XIAO ESP32-C6 antenna select — must run BEFORE any radio init so
+     * the first RF activity already uses the chosen path. The XIAO-C6 has a
+     * software RF switch: GPIO3 powers it, GPIO14 selects on-board (LOW) vs the
+     * external u.FL/IPEX socket (HIGH). Off by default (stock C6 dev boards have
+     * no such switch); enable with CONFIG_RV_XIAO_C6_EXT_ANTENNA on a XIAO-C6.
+     * Only helps with an antenna actually attached to the u.FL connector. */
+#if CONFIG_RV_XIAO_C6_EXT_ANTENNA
+    gpio_set_direction(GPIO_NUM_3, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_3, 0);                 /* power/enable the RF switch */
+    vTaskDelay(pdMS_TO_TICKS(100));
+    gpio_set_direction(GPIO_NUM_14, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_14, 1);                /* 1 = external u.FL antenna  */
+    ESP_LOGI(TAG, "XIAO ESP32-C6: external u.FL antenna selected");
+#endif
 
     const esp_app_desc_t *app_desc = esp_app_get_description();
 #if defined(CONFIG_IDF_TARGET_ESP32C6)
