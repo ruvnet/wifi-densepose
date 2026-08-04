@@ -107,6 +107,43 @@ ESP32 ──UDP:5005──> [ CSI Receiver ]
 Browser <──WS:8765── [ Axum Server :8080 ] ──> Static UI files
 ```
 
+## Live snapshot and spatial semantics
+
+`GET /api/v1/nodes` is the current host-side node registry. A node is reported
+`active` while its last sensing frame is at most five seconds old. Each entry
+includes additive lifecycle diagnostics such as source address, host receive
+time, frame sequence, reconstructed mesh timestamp, measured CSI rate, sync
+validity, staleness, and the current fusion eligibility decision.
+
+`GET /api/v1/sensing/latest` and `/ws/sensing` carry the most recently produced
+`SensingUpdate`. They are cycle snapshots, not joins against the current node
+registry. The WebSocket may repeat the last snapshot between CSI arrivals.
+
+The current `signal_field` is a heuristic visualization derived from measured
+subcarrier variance, motion and signal quality. It is not geometric
+multistatic localization or a measured point cloud. Person positions derived
+from its strongest cells inherit that limitation.
+
+## Persistent Docker deployment
+
+Runtime configuration, completed field-model calibration
+(`field-model-v1.json`), models and recordings live below `/app/data`. Build a
+repository-local image from the repository root and mount that directory:
+
+```bash
+docker build -f docker/Dockerfile.rust -t ruvnet/wifi-densepose:local .
+docker run --network host --restart unless-stopped \
+  --env-file /path/to/existing.env \
+  -v /opt/ruview/data:/app/data \
+  ruvnet/wifi-densepose:local \
+  --node-positions '0.05,1.72,0.85;3.37,2.67,0.76;2.40,4.72,0.72'
+```
+
+On restart the server loads `config.json`, `field-model-v1.json`, models below
+`models/`, recordings below `recordings/`, and the adaptive classifier when
+present. Invalid calibration snapshots are logged and ignored rather than
+preventing startup.
+
 ## Related Crates
 
 | Crate | Role |
