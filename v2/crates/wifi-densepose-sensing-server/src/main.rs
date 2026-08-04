@@ -4795,9 +4795,8 @@ async fn get_active_model(State(state): State<SharedState>) -> Json<serde_json::
                 .discovered_models
                 .iter()
                 .find(|m| m.get("id").and_then(|v| v.as_str()) == Some(id.as_str()));
-            Json(serde_json::json!({
-                "active": model.cloned().unwrap_or_else(|| serde_json::json!({ "id": id })),
-            }))
+            let model = model.cloned().unwrap_or_else(|| serde_json::json!({ "id": id }));
+            Json(serde_json::json!({ "active": model, "model_id": id }))
         }
         None => Json(serde_json::json!({ "active": serde_json::Value::Null })),
     }
@@ -4817,7 +4816,29 @@ async fn load_model(
     if model_id.is_empty() {
         return Json(serde_json::json!({ "error": "missing 'id' field", "success": false }));
     }
+    let safe_id = std::path::Path::new(&model_id)
+        .file_name().and_then(|v| v.to_str()).filter(|v| *v == model_id).unwrap_or("");
+    if safe_id.is_empty() {
+        return Json(serde_json::json!({ "error": "invalid model id", "success": false }));
+    }
+    let discovered = scan_model_files();
+    let Some(info) = discovered.iter().find(|m| m.get("id").and_then(|v| v.as_str()) == Some(safe_id)) else {
+        return Json(serde_json::json!({ "error": "model not found", "success": false }));
+    };
+    let format = info.get("format").and_then(|v| v.as_str()).unwrap_or("");
+    let loaded_pose = if format == "mmfi_pose_npz" {
+        let path = effective_models_dir().join(format!("{safe_id}.npz"));
+        match mmfi_pose::MmfiPoseModel::load(&path) {
+            Ok(model) => Some(model),
+            Err(e) => {
+                error!("MM-Fi pose model NOT loaded from model manager: {e}");
+                return Json(serde_json::json!({ "error": "model load failed", "success": false }));
+            }
+        }
+    } else { None };
     let mut s = state.write().await;
+    if let Some(model) = loaded_pose { s.pose_model = Some(model); }
+    s.discovered_models = discovered;
     s.active_model_id = Some(model_id.clone());
     s.model_loaded = true;
     if telemetry::curated_events_enabled() {
@@ -4832,6 +4853,7 @@ async fn load_model(
 async fn unload_model(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let mut s = state.write().await;
     let prev = s.active_model_id.take();
+    s.pose_model = None;
     s.model_loaded = false;
     info!("Model unloaded (was: {:?})", prev);
     Json(serde_json::json!({ "success": true, "previous": prev }))
@@ -4850,8 +4872,10 @@ async fn delete_model(
     if safe_id.is_empty() || safe_id != id {
         return Json(serde_json::json!({ "error": "invalid model id", "success": false }));
     }
-    let path = effective_models_dir().join(format!("{}.rvf", safe_id));
-    if path.exists() {
+    let dir = effective_models_dir();
+    let path = [dir.join(format!("{}.rvf", safe_id)), dir.join(format!("{}.npz", safe_id))]
+        .into_iter().find(|p| p.exists());
+    if let Some(path) = path {
         if let Err(e) = std::fs::remove_file(&path) {
             // ADR-080 #2: log the OS error (incl. path) server-side only; the
             // client gets a generic body + correlation id, no leaked path.
@@ -4862,6 +4886,7 @@ async fn delete_model(
         if s.active_model_id.as_deref() == Some(id.as_str()) {
             s.active_model_id = None;
             s.model_loaded = false;
+            s.pose_model = None;
         }
         s.discovered_models
             .retain(|m| m.get("id").and_then(|v| v.as_str()) != Some(id.as_str()));
@@ -4900,7 +4925,7 @@ fn effective_models_dir() -> PathBuf {
     PathBuf::from(std::env::var("MODELS_DIR").unwrap_or_else(|_| "data/models".to_string()))
 }
 
-/// Scan the models directory for `.rvf` files and return metadata.
+/// Scan the models directory for RVF and safe F32 MM-Fi pose NPZ files.
 /// Respects the `MODELS_DIR` environment variable.
 fn scan_model_files() -> Vec<serde_json::Value> {
     let dir = effective_models_dir();
@@ -4908,7 +4933,8 @@ fn scan_model_files() -> Vec<serde_json::Value> {
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("rvf") {
+            let extension = path.extension().and_then(|e| e.to_str());
+            if matches!(extension, Some("rvf") | Some("npz")) {
                 let name = path
                     .file_stem()
                     .and_then(|s| s.to_str())
@@ -4922,12 +4948,13 @@ fn scan_model_files() -> Vec<serde_json::Value> {
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
+                let format = if extension == Some("npz") { "mmfi_pose_npz" } else { "rvf" };
                 models.push(serde_json::json!({
                     "id": name,
                     "name": name,
                     "path": path.display().to_string(),
                     "size_bytes": size,
-                    "format": "rvf",
+                    "format": format,
                     "modified_epoch": modified,
                 }));
             }
@@ -7904,6 +7931,9 @@ async fn main() {
             Err(e) => { error!("MM-Fi pose model NOT loaded: {e}"); None }
         }
     });
+    let active_pose_model_id = pose_model.as_ref().and_then(|_| {
+        args.pose_model.as_ref()?.file_stem()?.to_str().map(str::to_string)
+    });
 
     // Ensure data directories exist for models and recordings
     let models_dir = effective_models_dir();
@@ -8069,7 +8099,7 @@ async fn main() {
         latest_wasm_events: None,
         // Model management
         discovered_models: initial_models,
-        active_model_id: None,
+        active_model_id: active_pose_model_id,
         // Recording
         recordings: initial_recordings,
         recording_active: false,
