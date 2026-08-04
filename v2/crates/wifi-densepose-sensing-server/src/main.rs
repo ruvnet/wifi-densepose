@@ -16,6 +16,7 @@ mod engine_bridge;
 mod field_bridge;
 mod field_localize;
 mod model_format;
+mod mmfi_pose;
 mod multistatic_bridge;
 mod mediatek_csi;
 mod qualcomm_csi;
@@ -150,6 +151,11 @@ struct Args {
     /// Load a trained .rvf model for inference
     #[arg(long, value_name = "PATH")]
     model: Option<PathBuf>,
+
+    /// Load the published MM-Fi Micro pose checkpoint converted to safe F32 NPZ.
+    /// Output is experimental for live ESP32 input until room validation passes.
+    #[arg(long, value_name = "PATH")]
+    pose_model: Option<PathBuf>,
 
     /// Enable progressive loading (Layer A instant start)
     #[arg(long)]
@@ -1136,6 +1142,8 @@ struct AppStateInner {
     active_sona_profile: Option<String>,
     /// Whether a trained model is loaded.
     model_loaded: bool,
+    /// Native MM-Fi Micro pose decoder (experimental live-domain adapter).
+    pose_model: Option<mmfi_pose::MmfiPoseModel>,
     /// Smoothed person count (EMA) for hysteresis — prevents frame-to-frame jumping.
     smoothed_person_score: f64,
     /// Previous person count for hysteresis (asymmetric up/down thresholds).
@@ -1351,6 +1359,7 @@ impl AppStateInner {
             progressive_loader: None,
             active_sona_profile: None,
             model_loaded: false,
+            pose_model: None,
             smoothed_person_score: 0.0,
             prev_person_count: 0,
             smoothed_motion: 0.0,
@@ -4468,12 +4477,47 @@ fn derive_pose_from_sensing(update: &SensingUpdate) -> Vec<PersonDetection> {
         return vec![];
     }
 
+    // A real decoder result takes precedence over the legacy visualisation skeleton.
+    if let Some(kps) = update.pose_keypoints.as_ref().filter(|v| v.len() == 17) {
+        let names = ["nose", "left_eye", "right_eye", "left_ear", "right_ear",
+            "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+            "left_wrist", "right_wrist", "left_hip", "right_hip", "left_knee",
+            "right_knee", "left_ankle", "right_ankle"];
+        let keypoints: Vec<PoseKeypoint> = kps.iter().zip(names).map(|(p, name)| PoseKeypoint {
+            name: name.to_string(), x: p[0] * 640.0, y: p[1] * 480.0,
+            z: p[2], confidence: p[3],
+        }).collect();
+        let min_x = keypoints.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
+        let max_x = keypoints.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max);
+        let min_y = keypoints.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
+        let max_y = keypoints.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+        return vec![PersonDetection { id: 1, confidence: cls.confidence, keypoints,
+            bbox: BoundingBox { x: min_x, y: min_y, width: (max_x-min_x).max(1.0),
+                height: (max_y-min_y).max(1.0) }, zone: "experimental_mmfi".into(),
+            position: [0.0; 3], motion_score: 0.0, pose: None }];
+    }
+
     // Use estimated_persons if set by the tick loop; otherwise default to 1.
     let person_count = update.estimated_persons.unwrap_or(1).max(1);
 
     (0..person_count)
         .map(|idx| derive_single_person_pose(update, idx, person_count))
         .collect()
+}
+
+fn infer_mmfi_pose(model: Option<&mmfi_pose::MmfiPoseModel>, nodes: &HashMap<u8, NodeState>,
+    now: std::time::Instant) -> Option<Vec<[f64; 4]>> {
+    let model = model?;
+    let mut active: Vec<_> = nodes.iter().filter(|(_, n)| n.frame_history.len() >= 10
+        && n.last_frame_time.is_some_and(|t| now.duration_since(t).as_secs() < 2)).collect();
+    active.sort_by_key(|(id, _)| **id);
+    if active.len() != 3 { return None; }
+    let input: Vec<Vec<Vec<f64>>> = active.into_iter()
+        .map(|(_, n)| n.frame_history.iter().cloned().collect()).collect();
+    match model.infer(&input) {
+        Ok(kps) => Some(kps.into_iter().map(|p| [p[0] as f64, p[1] as f64, 0.0, 0.5]).collect()),
+        Err(e) => { debug!("MM-Fi pose inference skipped: {e}"); None }
+    }
 }
 
 // ── RuVector Phase 2: Temporal EMA smoothing for keypoints ──────────────────
@@ -6043,6 +6087,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         node_features: build_node_features(&s.node_states, now),
                     };
 
+                    update.pose_keypoints = infer_mmfi_pose(s.pose_model.as_ref(), &s.node_states, now);
                     let raw_persons = derive_pose_from_sensing(&update);
                     let mut last_tracker_instant = s.last_tracker_instant.take();
                     let tracked = tracker_bridge::tracker_update(
@@ -6480,6 +6525,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         node_features: build_node_features(&s.node_states, now),
                     };
 
+                    update.pose_keypoints = infer_mmfi_pose(s.pose_model.as_ref(), &s.node_states, now);
                     let raw_persons = derive_pose_from_sensing(&update);
                     let mut last_tracker_instant = s.last_tracker_instant.take();
                     let tracked = tracker_bridge::tracker_update(
@@ -7849,6 +7895,16 @@ async fn main() {
         }
     }
 
+    let pose_model = args.pose_model.as_ref().and_then(|path| {
+        match mmfi_pose::MmfiPoseModel::load(path) {
+            Ok(model) => {
+                info!("Loaded experimental MM-Fi Micro pose decoder from {}", path.display());
+                Some(model)
+            }
+            Err(e) => { error!("MM-Fi pose model NOT loaded: {e}"); None }
+        }
+    });
+
     // Ensure data directories exist for models and recordings
     let models_dir = effective_models_dir();
     let _ = std::fs::create_dir_all(&models_dir);
@@ -7994,6 +8050,7 @@ async fn main() {
         progressive_loader,
         active_sona_profile: None,
         model_loaded,
+        pose_model,
         smoothed_person_score: 0.0,
         prev_person_count: 0,
         smoothed_motion: 0.0,

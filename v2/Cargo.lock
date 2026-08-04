@@ -11654,6 +11654,8 @@ dependencies = [
  "jsonwebtoken",
  "midstreamer-attractor",
  "midstreamer-temporal-compare",
+ "ndarray 0.17.2",
+ "ndarray-npy",
  "opentelemetry-appender-tracing",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
