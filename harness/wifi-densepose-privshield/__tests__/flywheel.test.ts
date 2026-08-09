@@ -21,6 +21,6 @@ describe('wifi-densepose-privshield-harness — flywheel (SYNTHETIC)', () => {
 
   it('stamps the run as SYNTHETIC provenance', async () => {
     const result = await runVeilFlywheelDemo(2);
-    expect(result.dataSource).toBe('SYNTHETIC');
+    expect(result.replayBundle.data_source).toBe('SYNTHETIC');
   });
 });
