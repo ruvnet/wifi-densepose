@@ -23,3 +23,10 @@ readme = "README.md"
 [lib]
 name = "wifi_densepose_privshield"
 path = "src/lib.rs"
+
+# `veil` — the custom, dependency-free terminal harness + TUI (ADR-288 §harness).
+# Native counterpart to the npm metaharness. Std-only; builds without any extra
+# deps. Excluded from the wasm leaf story (that stays `--lib`).
+[[bin]]
+name = "veil"
+path = "src/bin/veil.rs"

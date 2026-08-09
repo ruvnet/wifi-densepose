@@ -66,6 +66,40 @@ anything.
 cargo test -p wifi-densepose-privshield --no-default-features
 ```
 
+## `veil` — terminal harness & TUI
+
+A custom, **dependency-free** native harness ships with the crate (the in-repo
+counterpart to the npm metaharness). It drives the same model the tests use — an
+interactive ANSI dashboard plus scriptable subcommands, std-only (no
+`crossterm`/`ratatui`), so it runs in any terminal, pipe, or CI.
+
+```bash
+cargo run -p wifi-densepose-privshield --bin veil            # interactive TUI (or a one-shot report when piped)
+cargo run -p wifi-densepose-privshield --bin veil -- sweep   # re-ID vs passes + throughput vs bits
+cargo run -p wifi-densepose-privshield --bin veil -- optimize
+cargo run -p wifi-densepose-privshield --bin veil -- doctor  # self-check, exit 0 = healthy
+```
+
+```text
+┌──────────────────────────────────────────────────────────
+│  VEIL · wifi-sensing privacy shield        ● PROTECTED
+│
+│  re-ID off   100.0%     re-ID on    4.7%   (chance 6.25%)
+│  throughput   97.6%     emission  1.000×   · not jamming
+│
+│  collapse  ████▇▆▅▂▂▂▁▂   passes 2→112 · op 96
+│
+│  config   passes 96 · bits 5 · N 16 · snr 20dB · euclid
+│  verdict  ✓ PASS — re-ID at chance · throughput ≥95% · compliant
+└──────────────────────────────────────────────────────────
+```
+
+In the TUI, type commands to steer the shield live: `on`/`off`, `passes <n>`,
+`bits <n>`, `n <k>`, `snr <db>`, `metric euclid|cosine`,
+`preset scif|board|ward|hotel`, `optimize`, `proof`, `quit`. All readouts are
+**SYNTHETIC / L0**. (A graphical VEIL Console web dashboard mirrors this same
+instrument; `veil` is the terminal-native version.)
+
 ## Modules
 
 | Module | Purpose |

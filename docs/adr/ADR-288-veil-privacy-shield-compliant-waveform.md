@@ -139,6 +139,17 @@ better on **both** privacy (re-ID 0.047 vs 0.078) and throughput (0.976 vs 0.974
 and is now verified rather than assumed. See
 `docs/research/privacy-shield/08-optimization.md`.
 
+### harness. Native terminal harness + TUI (`src/bin/veil.rs`)
+
+A custom, dependency-free binary (`veil`) ships with the crate — the in-repo,
+native counterpart to the npm metaharness (ADR-289). It drives the same public
+API the tests use, as an interactive ANSI dashboard plus scriptable subcommands
+(`report`, `sweep`, `optimize`, `adaptive <N>`, `proof`, `doctor`, `tui`).
+Std-only (no `crossterm`/`ratatui`): the TUI is a command-driven redraw loop, so
+it runs in any terminal, pipe, or CI and keeps the crate a pure leaf. It reports
+only SYNTHETIC/L0 numbers and never relabels them. The wasm leaf story is
+unchanged (validated with `--lib`; the bin is native-only).
+
 ## 3. What this explicitly is NOT
 
 - **Not a radio driver.** No RF frontend, no transmit path, no
