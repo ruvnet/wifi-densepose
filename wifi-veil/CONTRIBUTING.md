@@ -31,6 +31,19 @@ cd firmware/core && make test     # portable C core host test
 node harness/bin/cli.js guidance --topic overview   # harness (dependency-free)
 ```
 
+Run the honesty / anti-slop guard before pushing (CI runs it too):
+
+```bash
+bash scripts/ci-guard.sh
+```
+
+It statically enforces the invariants that keep this project honest: no
+telemetry / build artifacts / lockfile / scratch files committed; no debug or
+mock-probe markers in source; the `SYNTHETIC` evidence label present on every
+firmware provider README; the "never jamming" compliance disclaimer present; no
+dishonest hardware-validation claims (honest negated/`TODO(hw)` mentions are
+fine); and no stale monorepo identifiers in the code surface.
+
 CI (`.github/workflows/ci.yml`) runs the same gates. Keep changes the smallest
 coherent unit, read before editing, and never commit telemetry (`.claude-flow/`),
 build artifacts, credentials, or CSI/person data.

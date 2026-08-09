@@ -10,6 +10,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  guard:
+    name: Honesty / anti-slop guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce honesty / anti-slop invariants
+        run: bash scripts/ci-guard.sh
+
   rust:
     name: Rust (test + lint + wasm)
     runs-on: ubuntu-latest
