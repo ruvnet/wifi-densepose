@@ -1,0 +1,44 @@
+name: Pages
+
+# Publish the WiFi Veil Console (ui/veil-console.html) to GitHub Pages.
+# The console is a single self-contained file (inline CSS/JS, no network), so the
+# "build" is just staging it as the site's index.html. Enable once under
+# Settings → Pages → Source: "GitHub Actions".
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ui/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment; don't cancel an in-progress one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage the console as the site
+        run: |
+          mkdir -p _site
+          cp ui/veil-console.html _site/index.html
+          cp ui/veil-console.html _site/veil-console.html
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
