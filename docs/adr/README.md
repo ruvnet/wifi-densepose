@@ -147,6 +147,7 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-286](ADR-286-wifi-densepose-sar-harness-via-metaharness.md) | `wifi-densepose-sar-harness` — MetaHarness with darwin/router/flywheel | Accepted (implemented, published) |
 | [ADR-288](ADR-288-veil-privacy-shield-compliant-waveform.md) | VEIL — compliant-waveform privacy shield against unauthorized WiFi sensing (`wifi-densepose-privshield`) | Proposed (implemented, P1 reference) |
 | [ADR-289](ADR-289-wifi-densepose-privshield-harness-via-metaharness.md) | `wifi-densepose-privshield-harness` — npm MetaHarness for the VEIL crate (guidance/router/flywheel) | Proposed (implemented, P1) |
+| [ADR-290](ADR-290-veil-e2e-hardware-implementation-program.md) | VEIL end-to-end hardware implementation program — portable C core + multi-provider firmware scaffolds (openwifi/openwrt/nexmon/esp32) | Proposed (P4 scaffolding; C core host-validated) |
 
 ---
 
