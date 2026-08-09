@@ -20,6 +20,45 @@ contributor harness lives at
 [`harness/wifi-densepose-privshield/`](../../../harness/wifi-densepose-privshield)
 (ADR-289): `npx wifi-densepose-privshield-harness guidance --topic overview`.
 
+## How this protects you from unauthorized WiFi surveillance
+
+**The threat — silent, device-free identification.** Since WiFi 5, your device
+tells the router how to aim its signal by sending back *beamforming feedback* —
+and it goes out **unencrypted**. Anyone within radio range can passively capture
+those reports and, from the tiny stable details in them, **tell individual
+people apart by their radio "fingerprint"** — through walls, with no camera, no
+app, and nothing you have to be carrying. Published research re-identifies
+individuals, counts occupancy through walls, and even reads activity this way,
+and the 2025 sensing standard (802.11bf) added the capability but **no privacy
+protection**. Because the attacker only listens, you get no indication it is
+happening.
+
+**The defense — scramble the fingerprint, keep the link.** VEIL adds a secret,
+**per-session "twist"** to your own outgoing feedback, built from the same
+rotation math (Givens rotations) the report already uses:
+
+- Your **own router shares the key** and undoes the twist instantly, so it
+  decodes normally — **your WiFi keeps ~98% of its speed.**
+- An **outside listener sees a *different* twist every session** and cannot
+  average many captures back into one stable fingerprint. Its guess of *who is
+  in the room* **collapses to chance** — no better than a random guess among the
+  possible people.
+- The twist only **reshapes your own, standards-legal signal** — it preserves
+  the signal's energy exactly (`energy in = energy out`), so it is **compliant,
+  never jamming.** It never floods the air or blocks anyone else.
+
+**What it does *not* do (kept honest).** VEIL defends against a *third-party
+sniffer*, not the access point you are connected to (that party holds the key —
+protecting against a malicious AP is BFLD's detection job). It targets identity
+re-identification; coarse motion obfuscation is future work. And every figure in
+this crate is **SYNTHETIC / evidence-level L0** — it describes the reference
+model and is *not* a measured guarantee on real hardware until validated with a
+captured hardware log.
+
+> **In one line:** it makes the room's WiFi stop leaking *who you are* to
+> outside listeners, while your network keeps working and without breaking any
+> radio rules.
+
 ## The idea
 
 Identity leaks through the **fine** cross-subcarrier phase structure of a

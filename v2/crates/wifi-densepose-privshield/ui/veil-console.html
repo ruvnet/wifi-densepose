@@ -245,6 +245,23 @@
   .compliance-meter { display: flex; align-items: center; gap: 10px; font-family: var(--mono); }
   .cm-bar { flex: 1; height: 34px; border-radius: 8px; border: 1px dashed color-mix(in srgb, var(--good) 45%, var(--line)); background: color-mix(in srgb, var(--good) 8%, var(--surface)); display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--good); font-weight: 650; letter-spacing: .06em; }
 
+  /* ---- "how it protects you" explainer ---- */
+  .how-grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
+  @media (min-width: 680px) { .how-grid { grid-template-columns: repeat(3, 1fr); } }
+  .how-step { display: flex; flex-direction: column; gap: 8px; }
+  .how-step .ic { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; border: 1px solid var(--line); background: var(--surface-2); }
+  .how-step .ic svg { width: 18px; height: 18px; }
+  .how-step h3 { font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
+  .how-step .eyebrow { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; }
+  .how-step p { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.55; }
+  .how-step p b { color: var(--ink); font-weight: 600; }
+  .how-threat .ic { border-color: color-mix(in srgb, var(--threat) 45%, var(--line)); background: var(--threat-soft); }
+  .how-threat .eyebrow { color: var(--threat); }
+  .how-shield .ic { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: var(--accent-soft); }
+  .how-shield .eyebrow { color: var(--accent-2); }
+  .how-honest .ic { border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
+  .how-honest .eyebrow { color: var(--good); }
+
   /* ---- info buttons ---- */
   .head-r { display: flex; align-items: center; gap: 9px; }
   .info-btn {
@@ -388,6 +405,28 @@
       <div class="kpi goodstrip"><span class="strip"></span><div class="label">Re-ID · on</div><div class="v" id="kOn">4.7<small>%</small></div><div class="foot" id="kChance">chance 6.25%</div></div>
       <div class="kpi"><span class="strip"></span><div class="label">Throughput</div><div class="v" id="kTput">97.6<small>%</small></div><div class="foot">of baseline link</div></div>
       <div class="kpi goodstrip"><span class="strip"></span><div class="label">Emission</div><div class="v mono" id="kEnergy" style="font-size:22px">1.000<small>×</small></div><div class="foot"><span class="tag good">not jamming</span></div></div>
+    </section>
+
+    <!-- HOW IT PROTECTS YOU -->
+    <section class="card col-span" style="animation-delay:.04s; margin:0">
+      <div class="head"><h2>How this protects you</h2><div class="head-r"><span class="sub">plain language</span><button class="info-btn" data-explain="protect" aria-label="More detail on how it protects you">?</button></div></div>
+      <div class="how-grid">
+        <div class="how-step how-threat">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--threat)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></span>
+          <span class="eyebrow">The threat</span>
+          <p>Your Wi-Fi constantly sends the router fine signal details — <b>in the clear</b>. A stranger nearby can capture them and recognise <b>individual people by their radio "fingerprint"</b>: through walls, with no camera, and nothing on you.</p>
+        </div>
+        <div class="how-step how-shield">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--accent-2)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6l7-3z"/><path d="M8.5 12.2l2.2 2.2 4.8-4.8"/></svg></span>
+          <span class="eyebrow">The shield</span>
+          <p>VEIL <b>scrambles that fingerprint</b> on every report with a secret twist only your own router can undo. An outside listener sees a <b>different scramble each time</b> and can't tie it to a person — their guess of "who's here" drops to <b>pure chance</b>.</p>
+        </div>
+        <div class="how-step how-honest">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--good)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M12 3l7 3v5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6l7-3z"/></svg></span>
+          <span class="eyebrow">Kept honest</span>
+          <p>It shapes <b>only your own signal — it never jams</b>, and your Wi-Fi speed stays ~98%. It stops <b>outside snoops</b>, not the router you connect to. Figures here are <b>simulated (L0)</b>, pending real-hardware tests.</p>
+        </div>
+      </div>
     </section>
 
     <!-- COLLAPSE CURVE -->
@@ -849,6 +888,13 @@
   function openWelcome(){ openModal(welcomeHTML()); markSeen(); }
 
   const EXPLAIN={
+    protect:{t:"How this protects you",p:"Unauthorized Wi-Fi surveillance, and what VEIL does about it — in plain terms.",pts:[
+      ["What can spy on you","Since Wi-Fi 5, your device tells the router how to aim its signal by sending back “beamforming feedback” — sent unencrypted. Anyone in range can capture it passively and, from the tiny stable details, tell people apart (published work re-identifies individuals, detects occupancy through walls, even reads activity)."],
+      ["Why you can't tell","There's no light, no app, no device on you, and the snoop only listens — so this happens silently. The Wi-Fi standard (802.11bf, 2025) added the sensing feature but no privacy protection."],
+      ["What VEIL changes","Your router already reshapes its signal legitimately. VEIL adds a secret, per-session “twist” to that feedback (built from the same math the report already uses). Your own router shares the key and undoes it instantly; an outside listener sees a fresh random twist every session and can't average it into a stable fingerprint."],
+      ["The result","Across sessions the snoop's identity guess collapses to chance (~1-in-N, no better than guessing), while your link keeps ~98% of its speed — because the twist preserves the signal's energy and the data beam is untouched."],
+      ["Not jamming","VEIL only shapes your own, standards-legal transmissions. It never floods the air or blocks anyone (that would be illegal jamming). The energy in = energy out meter proves it."],
+      ["Honest limits","It defends against outside snoops — not the router you're connected to (that party holds the key). It doesn't yet hide coarse motion, and every number here is simulated (evidence level L0) until validated on real hardware."]]},
     kpis:{t:"Your live scorecard",p:"Four numbers that update the moment you change a setting.",pts:[
       ["Re-ID · off","How often an eavesdropper picks the right person with no shield. 100% = they always win."],
       ["Re-ID · on","The same attacker with the shield running. You want this down at “chance” — pure guessing."],
