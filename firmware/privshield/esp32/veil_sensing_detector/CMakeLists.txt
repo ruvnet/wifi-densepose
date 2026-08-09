@@ -15,5 +15,5 @@ idf_component_register(
     # The MQTT and ESP-NOW trigger backends are optional; they are only
     # referenced under CONFIG_ guards so the core build stays minimal.
     REQUIRES esp_wifi esp_event esp_timer esp_driver_gpio
-    PRIV_REQUIRES esp_mqtt
+    PRIV_REQUIRES mqtt
 )

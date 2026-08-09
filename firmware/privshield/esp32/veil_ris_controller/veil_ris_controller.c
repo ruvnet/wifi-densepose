@@ -128,7 +128,7 @@ esp_err_t veil_ris_controller_init(const veil_ris_controller_cfg_t *cfg)
 
     s_inited = true;
     ESP_LOGI(TAG, "init (SYNTHETIC/L0): %u elements, dwell=%uus, keyed schedule",
-             (unsigned)s_cfg.n_elements, s_cfg.dwell_us);
+             (unsigned)s_cfg.n_elements, (unsigned)s_cfg.dwell_us);
     return ESP_OK;
 }
 

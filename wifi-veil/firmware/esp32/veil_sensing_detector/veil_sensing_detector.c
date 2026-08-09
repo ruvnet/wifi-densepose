@@ -166,7 +166,7 @@ esp_err_t veil_sensing_detector_start(const veil_sensing_detector_cfg_t *cfg)
 
     s_running = true;
     ESP_LOGI(TAG, "started (SYNTHETIC/L0): window=%ums engage>=%.1fHz",
-             s_cfg.window_ms, s_cfg.trigger_rate_hz);
+             (unsigned)s_cfg.window_ms, s_cfg.trigger_rate_hz);
     return ESP_OK;
 }
 

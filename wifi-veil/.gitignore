@@ -9,6 +9,13 @@ Cargo.lock
 firmware/**/*.o
 firmware/core/test_veil_shield
 
+# ESP-IDF example build output
+firmware/esp32/examples/*/build/
+firmware/esp32/examples/*/managed_components/
+firmware/esp32/examples/*/sdkconfig
+firmware/esp32/examples/*/sdkconfig.old
+firmware/esp32/examples/*/dependencies.lock
+
 # Node / harness
 node_modules/
 harness/dist/
