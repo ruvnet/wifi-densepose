@@ -20,7 +20,7 @@ pub struct Proof;
 impl Proof {
     /// Pinned witness over the reference experiment. Re-derived by
     /// [`Proof::witness`]; asserted by the test below.
-    pub const EXPECTED_WITNESS: u64 = 0xD098_C38D_B7C6_BCA9;
+    pub const EXPECTED_WITNESS: u64 = 0x350D_7CDF_95D9_F448;
 
     /// The reference configuration. Uses every default so the proof tracks the
     /// shipped behavior of the crate.

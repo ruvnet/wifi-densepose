@@ -29,13 +29,20 @@ from — over the *fine* subspace only:
 | **Keyed per session** | The legitimate AP inverts it ⇒ throughput preserved |
 | **Fresh each session** | A sniffer sees a different rotation every time and can't average it back ⇒ re-identification collapses to chance |
 
-## Result (default synthetic scene, N = 16 identities)
+## Result (hyper-optimized default scene, N = 16 identities)
 
 | Metric | Shield off | Shield on |
 |---|---|---|
-| Passive re-ID accuracy | **100%** | **7.8%** (chance = 6.25%) |
-| Link throughput ratio | 100% | **98.0%** |
+| Passive re-ID accuracy | **100%** | **4.7%** (chance = 6.25%) |
+| Link throughput ratio | 100% | **97.6%** |
 | Emission energy ratio | — | **1.000000** (compliant) |
+
+The shipped shield config is not hand-picked — it is the output of the
+`optimize` module (ADR-288 §opt): **96 Givens passes** (2× the proven-minimum
+48 for robust collapse across both attacker metrics and N∈{16,32}; extra passes
+are free because the keyed rotation is never signaled) at **5-bit** feedback
+resolution (the throughput-best value in the 802.11 {5,7,9} set). The
+unconstrained model optimum is 3-bit, matching the DySPAN-2026 finding.
 
 ## Threat model & scope (stated plainly)
 
@@ -62,8 +69,9 @@ cargo test -p wifi-densepose-privshield --no-default-features
 | `linalg` | Givens-rotation vector algebra |
 | `identity` | SYNTHETIC two-subspace beamforming-feedback model |
 | `protector` | The compliant waveform controls (the shield) |
-| `attacker` | Passive re-identification adversary |
-| `throughput` | Link-throughput model |
+| `attacker` | Passive re-identification adversary (Euclidean + Cosine metrics) |
+| `throughput` | Link-throughput model (residual + feedback-airtime + sounding) |
 | `compliance` | Machine-checkable "not jamming" audit |
 | `experiment` | Attacker-vs-protector head-to-head |
+| `optimize` | Finds the optimal shield config (feedback bits, min passes, Pareto frontier) |
 | `proof` | Byte-stable deterministic witness |

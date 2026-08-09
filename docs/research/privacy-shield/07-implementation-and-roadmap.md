@@ -7,8 +7,9 @@
 - **Reference crate** `v2/crates/wifi-densepose-privshield` (VEIL): a
   deterministic, dependency-free, WASM-ready pure-compute leaf implementing the
   full attacker-vs-protector experiment, the four compliant controls, the
-  throughput model, the compliance audit, and a byte-stable proof. 29 tests +
-  doctest pass; builds for `wasm32-unknown-unknown`; clippy-clean.
+  throughput model, the compliance audit, the `optimize` hyper-optimizer, and a
+  byte-stable proof. 35 tests + doctest pass; builds for
+  `wasm32-unknown-unknown`; clippy-clean.
 - **This research bundle** (`docs/research/privacy-shield/`).
 - **[ADR-288](../../adr/ADR-288-veil-privacy-shield-compliant-waveform.md)** — the
   formal decision record.

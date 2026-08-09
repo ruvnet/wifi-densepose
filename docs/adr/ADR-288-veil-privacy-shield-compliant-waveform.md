@@ -9,7 +9,7 @@
 | **Codebase target** | new leaf crate `v2/crates/wifi-densepose-privshield` |
 | **Parent** | ADR-118 (BFLD — the detection layer VEIL is the countermeasure to), ADR-282 (mandatory L0–L5 evidence ladder) |
 | **Relates to** | ADR-120/121 (BFLD privacy class + identity-risk scoring — the trigger source), ADR-141 (privacy control plane / runtime attestation — the audit consumer), ADR-280 (active sensing / governed actuation — VEIL is a defensive sensing action), ADR-185 §13 (`wifi-densepose-aether` — the pure-compute leaf pattern this crate follows) |
-| **Research bundle** | [`docs/research/privacy-shield/`](../research/privacy-shield/) (8 files) |
+| **Research bundle** | [`docs/research/privacy-shield/`](../research/privacy-shield/) (9 files) |
 | **Tracking issue** | TBD |
 
 ## 0. PROOF discipline
@@ -77,18 +77,22 @@ WASM-ready, zero coupling to any radio or ingestion path), implementing:
    quantization/dither, sounding-cadence randomization, and a `SensingDetector`
    that engages the shield only when sensing activity is observed.
 3. **The adversary** (`attacker.rs`): a passive nearest-centroid re-identifier
-   modeling the BFId threat.
-4. **A throughput model** (`throughput.rs`): `(1 − overhead) · C(SNR·(1−ρ))/C(SNR)`,
-   where the beamforming residual `ρ` comes from finite feedback resolution
-   (negligible at 7+ bits, since the legitimate receiver inverts the keyed
-   rotation).
+   modeling the BFId threat, with selectable Euclidean/Cosine metrics.
+4. **A throughput model** (`throughput.rs`):
+   `(1 − sounding − feedback_airtime) · C(SNR·(1−ρ))/C(SNR)`, where the residual
+   `ρ` falls with feedback bits and the feedback airtime rises with them — giving
+   a genuine interior throughput optimum in feedback resolution.
 5. **A compliance audit** (`compliance.rs`): the rotation is orthogonal ⇒
    energy-preserving ⇒ adds no interfering energy ⇒ **not jamming**, turned into a
    checked `ComplianceReport` (energy ratio ≈ 1.0).
 6. **The experiment** (`experiment.rs`): runs the attacker against unprotected and
    protected traffic and reports both accuracies vs. chance, plus throughput and
    compliance, with a single `passed()` verdict.
-7. **A deterministic proof** (`proof.rs`): a pinned FNV-1a witness over the
+7. **The hyper-optimizer** (`optimize.rs`): derives the shipped shield config
+   rather than hand-picking it — the throughput-optimal feedback resolution and
+   the minimum rotation-mixing budget that collapses re-ID robustly (across both
+   attacker metrics and N∈{16,32}), plus a Pareto frontier.
+8. **A deterministic proof** (`proof.rs`): a pinned FNV-1a witness over the
    reference experiment (the `nvsim`/`verify.py` discipline).
 
 ### 2.1 Why the keyed Givens rotation
@@ -103,16 +107,37 @@ precoding idea (cf. MIMOCrypt) specialized to the identity-bearing subspace.
 
 ### 2.2 Measured behavior (SYNTHETIC / L0)
 
-Reference experiment (default scene, N=16 identities, `cargo test`):
+Reference experiment at the hyper-optimized operating point (§opt), default
+scene, N=16 identities, `cargo test`:
 
 | Metric | Shield off | Shield on |
 |---|---|---|
-| Passive re-ID accuracy | 100.0% | **7.8%** (chance 6.25%) |
-| Link throughput ratio | 100% | **98.0%** |
+| Passive re-ID accuracy | 100.0% | **4.7%** (chance 6.25%) |
+| Link throughput ratio | 100% | **97.6%** |
 | Emission energy ratio | — | **1.000000** (compliant) |
 
-All 29 unit/proof tests + doctest pass; the crate builds for
+All 35 unit/proof tests + doctest pass; the crate builds for
 `wasm32-unknown-unknown` and is clippy-clean.
+
+### opt. Hyper-optimization (`optimize.rs`)
+
+The shipped shield config is the optimizer's output, not a guess, and
+`ShieldConfig::default()` is asserted equal to it:
+
+- **Feedback resolution = 5 bits.** Throughput has an interior optimum in
+  feedback bits (residual falls, feedback airtime rises); the unconstrained
+  optimum is 3 bits (matching DySPAN-2026), and 5 is the throughput-best value in
+  the spec-allowed 802.11 {5,7,9} set.
+- **Givens passes = 96.** The proven minimum for robust collapse — across both
+  attacker metrics *and* N∈{16,32} — is **48**; the shipped 96 is a free 2×
+  privacy margin, since the keyed rotation is derived from the shared secret and
+  never signaled (extra passes cost compute, not airtime). The original
+  hand-picked 112 was 2.3× over-provisioned.
+
+Net vs. the original hand-picked (112 passes / 7 bits): the optimum is strictly
+better on **both** privacy (re-ID 0.047 vs 0.078) and throughput (0.976 vs 0.974),
+and is now verified rather than assumed. See
+`docs/research/privacy-shield/08-optimization.md`.
 
 ## 3. What this explicitly is NOT
 

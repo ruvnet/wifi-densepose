@@ -13,7 +13,7 @@
 //! 2. throughput stays above 95% of the unshielded baseline;
 //! 3. the control is compliant (energy-preserving, non-jamming).
 
-use crate::attacker::NearestCentroidAttacker;
+use crate::attacker::{Metric, NearestCentroidAttacker};
 use crate::compliance::ComplianceReport;
 use crate::identity::{Channel, SceneConfig};
 use crate::prng::derive_key;
@@ -40,6 +40,8 @@ pub struct ExperimentConfig {
     pub chance_margin: f32,
     /// Minimum acceptable throughput ratio.
     pub min_throughput_ratio: f64,
+    /// Metric the passive attacker uses.
+    pub attacker_metric: Metric,
 }
 
 impl Default for ExperimentConfig {
@@ -53,6 +55,7 @@ impl Default for ExperimentConfig {
             chance_multiple: 2.0,
             chance_margin: 0.03,
             min_throughput_ratio: 0.95,
+            attacker_metric: Metric::Euclidean,
         }
     }
 }
@@ -110,8 +113,12 @@ impl ExperimentReport {
 /// Build the enroll/test capture sets for a given shield, then measure attacker
 /// accuracy. `shield_on` selects whether the protector is applied to every
 /// captured frame (the attacker only ever sees what is transmitted).
-fn measure_accuracy(cfg: &ExperimentConfig, protector: &Protector, shield_on: bool) -> f32 {
-    let ch = Channel::new(cfg.scene.clone());
+fn measure_accuracy(
+    cfg: &ExperimentConfig,
+    ch: &Channel,
+    protector: &Protector,
+    shield_on: bool,
+) -> f32 {
     let mut enroll = Vec::new();
     let mut test = Vec::new();
 
@@ -143,7 +150,7 @@ fn measure_accuracy(cfg: &ExperimentConfig, protector: &Protector, shield_on: bo
         }
     }
 
-    let mut atk = NearestCentroidAttacker::new();
+    let mut atk = NearestCentroidAttacker::with_metric(cfg.attacker_metric);
     atk.enroll(&enroll);
     atk.accuracy(&test)
 }
@@ -152,14 +159,14 @@ fn measure_accuracy(cfg: &ExperimentConfig, protector: &Protector, shield_on: bo
 #[must_use]
 pub fn run(cfg: &ExperimentConfig) -> ExperimentReport {
     let protector = Protector::new(cfg.shield.clone());
+    let ch = Channel::new(cfg.scene.clone());
 
-    let accuracy_shield_off = measure_accuracy(cfg, &protector, false);
-    let accuracy_shield_on = measure_accuracy(cfg, &protector, true);
+    let accuracy_shield_off = measure_accuracy(cfg, &ch, &protector, false);
+    let accuracy_shield_on = measure_accuracy(cfg, &ch, &protector, true);
 
     let throughput_ratio = cfg.link.throughput_ratio(&cfg.shield);
 
     // Representative compliance audit: one protected frame vs its clean form.
-    let ch = Channel::new(cfg.scene.clone());
     let clean = ch.observe(0, b"test", 0);
     let protected = protector.protect(&clean, derive_key(cfg.scene.seed, b"rot-test", 0, 0));
     let compliance = ComplianceReport::audit(&clean, &protected);

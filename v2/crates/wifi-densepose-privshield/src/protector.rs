@@ -40,8 +40,10 @@ pub struct ShieldConfig {
     /// (used to model the "shield off" baseline).
     pub enabled: bool,
     /// Number of keyed Givens rotations composed per session. Enough passes
-    /// (≈ `2 × fine_dims`) approximate a Haar-random rotation of the fine
-    /// block, which is what drives the attacker to chance.
+    /// approximate a Haar-random rotation of the fine block, which is what
+    /// drives the attacker to chance. The optimal value is found by
+    /// [`crate::optimize`] (not hand-tuned); more passes cost compute but no
+    /// throughput, since the rotation is keyed rather than signaled.
     pub givens_passes: usize,
     /// Bits used to quantize each reported angle (802.11 uses 5–9). Higher
     /// resolution ⇒ smaller uncompensated residual at the legitimate receiver
@@ -54,10 +56,16 @@ pub struct ShieldConfig {
 
 impl Default for ShieldConfig {
     fn default() -> Self {
+        // These values are the output of `optimize::hyper_optimize` on the
+        // default scene (ADR-288 §opt), not hand-picked: 96 = 2× the proven-
+        // minimum 48 robust passes (free margin, since mixing is keyed not
+        // signaled), and 5 = the throughput-best resolution in the 802.11
+        // {5,7,9} set. `optimize::shipped_default_equals_optimizer_output`
+        // guards against drift.
         Self {
             enabled: true,
-            givens_passes: 112, // 2 × 56 fine dims at the default scene
-            feedback_bits: 7,
+            givens_passes: 96,
+            feedback_bits: 5,
             sounding_overhead: 0.02,
         }
     }

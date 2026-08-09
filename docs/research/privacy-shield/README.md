@@ -27,6 +27,7 @@ transmission (the statutory definition of jamming, 47 U.S.C. §333/§302a).
 | [05-experiment-protocol.md](05-experiment-protocol.md) | The attacker-vs-protector experiment: metrics, acceptance bar, reproducer, and results |
 | [06-market-and-buyers.md](06-market-and-buyers.md) | First buyers, procurement drivers, competitive landscape, and the standards-body gap |
 | [07-implementation-and-roadmap.md](07-implementation-and-roadmap.md) | Crate layout, reuse map, hardware path, phased rollout, and open problems |
+| [08-optimization.md](08-optimization.md) | Hyper-optimization: throughput-optimal feedback resolution, minimum robust mixing budget, Pareto frontier, and the adopted config |
 
 Formal decision: [ADR-288](../../adr/ADR-288-veil-privacy-shield-compliant-waveform.md).
 Reference implementation: [`v2/crates/wifi-densepose-privshield`](../../../v2/crates/wifi-densepose-privshield).
@@ -66,11 +67,15 @@ Reference implementation: [`v2/crates/wifi-densepose-privshield`](../../../v2/cr
    legitimate receiver inverts it ⇒ throughput preserved), and *fresh each
    session* (a sniffer cannot average it back ⇒ re-ID collapses to chance).
 
-5. **Measured on the reference model (SYNTHETIC).** On the default synthetic
-   scene (16 candidate identities), a passive nearest-centroid re-identifier
-   scores **100% with the shield off** and **7.8% with it on** (chance = 6.25%),
-   while modeled link throughput stays at **98.0%** of baseline and the emission
-   energy ratio is **1.000000** (compliant). Reproduce:
+5. **Measured on the reference model (SYNTHETIC), at the hyper-optimized
+   operating point.** On the default synthetic scene (16 candidate identities),
+   a passive re-identifier scores **100% with the shield off** and **4.7% with
+   it on** (chance = 6.25%), while modeled link throughput stays at **97.6%** of
+   baseline and the emission energy ratio is **1.000000** (compliant). The shield
+   config is chosen by the `optimize` module — 96 Givens passes (2× the proven-
+   minimum 48 for robust collapse across both attacker metrics and N∈{16,32}) at
+   5-bit feedback resolution — not hand-picked (see
+   [08-optimization.md](08-optimization.md)). Reproduce:
    `cargo test -p wifi-densepose-privshield`.
 
 6. **Scope, honestly.** VEIL defends against a *third-party passive sniffer*. It

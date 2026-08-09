@@ -17,20 +17,45 @@
 //! strength is not the lever; signature stability is.
 
 use crate::identity::BfiSample;
-use crate::linalg::dist_sq;
+use crate::linalg::{dist_sq, dot, norm};
+
+/// Similarity metric the attacker uses to match a capture to a centroid.
+///
+/// Sweeping the metric is how [`crate::optimize`] checks that the shield's
+/// collapse is a property of the *signal* (a rotated signature carries no
+/// stable identity), not an artifact of one classifier's geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Metric {
+    /// Euclidean nearest-centroid (default). Sensitive to magnitude.
+    #[default]
+    Euclidean,
+    /// Cosine nearest-centroid. Scale-invariant; a natural stronger attacker
+    /// against energy-preserving perturbations, since it ignores magnitude.
+    Cosine,
+}
 
 /// A nearest-centroid re-identification attacker.
 #[derive(Debug, Clone, Default)]
 pub struct NearestCentroidAttacker {
     centroids: Vec<Vec<f32>>,
     ids: Vec<usize>,
+    metric: Metric,
 }
 
 impl NearestCentroidAttacker {
-    /// Build an empty attacker.
+    /// Build an empty attacker using the Euclidean metric.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Build an empty attacker using the given metric.
+    #[must_use]
+    pub fn with_metric(metric: Metric) -> Self {
+        Self {
+            metric,
+            ..Self::default()
+        }
     }
 
     /// Enroll from labeled captures: one centroid per identity, the mean of
@@ -68,9 +93,24 @@ impl NearestCentroidAttacker {
     /// predicted identity, or `None` if the attacker has not enrolled.
     #[must_use]
     pub fn classify(&self, sample: &BfiSample) -> Option<usize> {
+        // Score is "lower is better" for both metrics: Euclidean uses squared
+        // distance; Cosine uses the negated similarity.
+        let score = |c: &[f32]| -> f32 {
+            match self.metric {
+                Metric::Euclidean => dist_sq(c, &sample.values),
+                Metric::Cosine => {
+                    let denom = norm(c) * norm(&sample.values);
+                    if denom > 1e-12 {
+                        -dot(c, &sample.values) / denom
+                    } else {
+                        0.0
+                    }
+                }
+            }
+        };
         let mut best: Option<(usize, f32)> = None;
         for (id, c) in self.ids.iter().zip(&self.centroids) {
-            let d = dist_sq(c, &sample.values);
+            let d = score(c);
             if best.is_none_or(|(_, bd)| d < bd) {
                 best = Some((*id, d));
             }

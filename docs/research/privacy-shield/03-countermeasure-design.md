@@ -57,7 +57,9 @@ fine block. This choice gives three properties at once:
    the per-session key, derives the identical rotation schedule, and applies the
    inverse (negated angles, reversed order) to recover the true precoder. It pays
    only the tiny residual from quantizing the extra angles at `feedback_bits`
-   resolution — negligible at 7+ bits — plus the sounding overhead.
+   resolution — negligible across the 802.11 5–9-bit range — plus the sounding
+   overhead. (The throughput-optimal resolution is derived in
+   [08-optimization.md](08-optimization.md).)
 3. **Fresh per session ⇒ unlinkable.** A different rotation each session means an
    A1 sniffer sees `R_e · signature` for a new random `R_e` every time. Averaging
    over sessions (the natural enrollment attack) drives
@@ -89,25 +91,31 @@ saves the (already small) overhead when no sensing is present.
 | Givens algebra, energy conservation | `linalg` | `apply_givens`, `norm`, `dist_sq` |
 | SYNTHETIC two-subspace BFI model | `identity` | `SceneConfig`, `Channel`, `BfiSample` (`comm()`/`fine()`) |
 | The four controls (shield) | `protector` | `ShieldConfig`, `Protector::protect`/`recover`, `SensingDetector` |
-| Passive re-ID adversary | `attacker` | `NearestCentroidAttacker` |
-| Privacy–throughput tradeoff | `throughput` | `LinkModel::throughput_ratio`, `beamforming_residual` |
+| Passive re-ID adversary | `attacker` | `NearestCentroidAttacker`, `Metric` |
+| Privacy–throughput tradeoff | `throughput` | `LinkModel::throughput_ratio`, `beamforming_residual`, `feedback_airtime` |
 | "Not jamming" audit | `compliance` | `ComplianceReport::audit`/`is_compliant` |
 | Attacker-vs-protector head-to-head | `experiment` | `ExperimentConfig`, `run`, `ExperimentReport` |
+| Config hyper-optimization | `optimize` | `hyper_optimize`, `min_givens_passes`, `pareto_frontier` |
 | Byte-stable deterministic witness | `proof` | `Proof::EXPECTED_WITNESS`, `Proof::witness` |
 
 ---
 
-## 6. The privacy–throughput knob
+## 6. The privacy–throughput knobs (and which the optimizer turns)
 
-The design exposes one honest tuning knob, matching the literature:
+- **`feedback_bits`:** the only knob with a genuine throughput tradeoff —
+  residual falls with bits, feedback airtime rises with them, so there is an
+  interior optimum (3 bits unconstrained; 5 bits within the 802.11-allowed set).
+  Privacy is unaffected by bits (the rotation is fresh regardless).
+- **`givens_passes`:** the privacy/robustness knob. More mixing lowers re-ID at
+  **no throughput cost** (the keyed rotation is never signaled), so it trades
+  only compute. The optimizer finds the minimum for robust collapse and ships a
+  free 2× margin.
+- **`sounding_overhead`:** a flat throughput cost from cadence randomization;
+  trades motion-obfuscation strength against airtime (outside the re-ID metric).
 
-- **`feedback_bits` high (7–9):** the legitimate receiver's residual is ~1e-5 →
-  throughput ≈ baseline; privacy is full (rotation is fresh regardless of bits).
-  This is VEIL's operating point.
-- **`feedback_bits` low (≤3) or extra additive dither:** more robustness to a
-  key-recovery-adjacent attacker, at measurable throughput cost.
-- **`sounding_overhead`:** the dominant (small) throughput cost, from cadence
-  randomization; trades motion-obfuscation strength against airtime.
+The `optimize` module turns these knobs deterministically — see
+[08-optimization.md](08-optimization.md). It is what replaced the original
+hand-picked config.
 
 The `throughput` module computes the ratio from these, so the tradeoff is
 inspectable rather than asserted (`cargo test throughput`).

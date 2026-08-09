@@ -43,10 +43,12 @@ Overall `passed()` requires all four.
 
 ---
 
-## 3. Results (SYNTHETIC, default configuration)
+## 3. Results (SYNTHETIC, hyper-optimized default configuration)
 
-Reproduce with `cargo test -p wifi-densepose-privshield` (all 29 tests + doctest
-pass). Salient values from the reference run:
+Reproduce with `cargo test -p wifi-densepose-privshield` (all 35 tests + doctest
+pass). The default shield config is the `optimize` module's output — 96 Givens
+passes at 5-bit feedback resolution (see
+[08-optimization.md](08-optimization.md)). Salient values from the reference run:
 
 | Metric | Value |
 |---|---|
@@ -54,15 +56,18 @@ pass). Salient values from the reference run:
 | Chance level | 6.25% |
 | Chance band (acceptance) | ≤ 15.5% |
 | **Re-ID accuracy, shield OFF** | **100.0%** |
-| **Re-ID accuracy, shield ON** | **7.8%** |
-| **Throughput ratio** | **97.9997%** |
+| **Re-ID accuracy, shield ON** | **4.7%** |
+| **Throughput ratio** | **97.60%** |
 | Emission energy ratio | 1.000000 |
 | Overall verdict | **PASS** |
 
 Reading the result: the attacker is a *perfect* re-identifier without protection
-(the synthetic signatures are cleanly separable), and VEIL drives it to within
-1.6 points of the ideal chance floor — while the modeled link keeps 98% of its
-throughput and the emission conserves energy exactly (compliant, not jamming).
+(the synthetic signatures are cleanly separable), and VEIL drives it *to the
+chance floor* (4.7% sits just below the ideal 6.25%, i.e. no better than
+guessing) — while the modeled link keeps 97.6% of its throughput and the
+emission conserves energy exactly (compliant, not jamming). The same collapse
+holds under a Cosine-metric attacker and at N=32, confirming it is a property of
+the signal, not the classifier.
 
 ---
 

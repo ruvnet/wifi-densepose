@@ -69,14 +69,17 @@ pub mod compliance;
 pub mod experiment;
 pub mod identity;
 pub mod linalg;
+pub mod optimize;
 pub mod prng;
 pub mod proof;
 pub mod protector;
 pub mod throughput;
 
+pub use attacker::{Metric, NearestCentroidAttacker};
 pub use compliance::ComplianceReport;
 pub use experiment::{run, ExperimentConfig, ExperimentReport};
 pub use identity::{BfiSample, Channel, SceneConfig};
+pub use optimize::{hyper_optimize, HyperOptimized};
 pub use proof::Proof;
 pub use protector::{Protector, SensingDetector, ShieldConfig};
 pub use throughput::LinkModel;
