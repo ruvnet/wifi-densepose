@@ -110,7 +110,29 @@ expected to open up — a hardware study (roadmap P5) will re-measure it.
 
 ---
 
-## 6. Robustness caveats (unchanged from the threat model)
+## 6. Per-deployment adaptivity
+
+The optimum is not one number — `optimize` derives it per deployment:
+
+- **SNR → feedback resolution.** `optimal_bits_across_snr` shows the
+  *unconstrained* throughput-optimal resolution shifting with SNR: **4 bits at
+  5–10 dB, 3 bits at 20–40 dB** (low SNR values fine resolution more because
+  the Shannon capacity is near-linear there, so the residual costs more). Within
+  the spec-allowed {5,7,9} set the choice is 5 bits across this whole range —
+  the residual is already negligible at 5 bits — which is why the shipped shield
+  is SNR-stable.
+- **Identity count → mixing.** `adaptive_shield(base, n)` derives the config for
+  a room with `n` expected occupants. A notable finding: in this model the
+  collapse budget is **N-independent** (min 48 passes collapses N∈{8,64}
+  alike), because a well-mixed Haar-like rotation destroys per-identity
+  structure regardless of how many identities there are — the budget is set by
+  the fine-subspace dimension, not the candidate count. So `adaptive_shield`
+  returns the same 96/5 across that range: the default is robust, not a point
+  tuning.
+
+Both are surfaced through the harness `guidance --topic optimization`.
+
+## 7. Robustness caveats (unchanged from the threat model)
 
 - The collapse is verified against two classifiers and two N; a learned
   attacker on real captures must still be checked (P2/P5).

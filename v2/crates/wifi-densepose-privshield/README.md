@@ -13,7 +13,10 @@ experiment** — not a radio driver. It never emits RF. Every number it prints i
 `SYNTHETIC`, reproduced by `cargo test -p wifi-densepose-privshield`.
 
 See [ADR-288](../../../docs/adr/ADR-288-veil-privacy-shield-compliant-waveform.md)
-and the [research bundle](../../../docs/research/privacy-shield/).
+and the [research bundle](../../../docs/research/privacy-shield/). A per-crate npm
+contributor harness lives at
+[`harness/wifi-densepose-privshield/`](../../../harness/wifi-densepose-privshield)
+(ADR-289): `npx wifi-densepose-privshield-harness guidance --topic overview`.
 
 ## The idea
 

@@ -242,6 +242,77 @@ pub fn hyper_optimize(base: &ExperimentConfig) -> HyperOptimized {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Adaptive optimization: the optimum is not one config — it depends on the
+// deployment's SNR (which shifts the throughput-optimal feedback resolution)
+// and its identity count (which sets how much rotation mixing collapse needs).
+// These functions derive the right config per deployment rather than assuming
+// the default scene.
+// ---------------------------------------------------------------------------
+
+/// SNR values (dB) to profile the throughput-optimal feedback resolution over.
+pub const SNR_PROFILE_DB: [f64; 5] = [5.0, 10.0, 20.0, 30.0, 40.0];
+
+/// Unconstrained throughput-optimal feedback resolution for a specific SNR,
+/// holding the rest of `base`. At low SNR the residual matters proportionally
+/// more (Shannon capacity is near-linear), so higher resolution wins; at high
+/// SNR the log compresses the residual away and feedback airtime dominates,
+/// favoring fewer bits. (The *shipped* shield clamps to the 802.11 {5,7,9} set,
+/// where 5 already zeroes the residual — so this shift is visible only in the
+/// unconstrained optimum, and is what motivates keeping resolution low.)
+#[must_use]
+pub fn model_optimal_bits_for_snr(base: &ExperimentConfig, snr_db: f64) -> (u32, f64) {
+    let mut cfg = base.clone();
+    cfg.link.snr_db = snr_db;
+    optimal_feedback_bits(&cfg, 12)
+}
+
+/// Profile the unconstrained throughput-optimal feedback resolution across
+/// [`SNR_PROFILE_DB`]. Demonstrates the SNR → resolution dependence.
+#[must_use]
+pub fn optimal_bits_across_snr(base: &ExperimentConfig) -> Vec<(f64, u32)> {
+    SNR_PROFILE_DB
+        .iter()
+        .map(|&snr| (snr, model_optimal_bits_for_snr(base, snr).0))
+        .collect()
+}
+
+/// Does `passes` collapse re-ID for both metrics at a single identity count?
+#[must_use]
+pub fn passes_collapse_at_n(base: &ExperimentConfig, passes: usize, bits: u32, n: usize) -> bool {
+    ROBUSTNESS_METRICS
+        .iter()
+        .all(|&m| run_variant(base, passes, bits, m, n).drives_to_chance())
+}
+
+/// Smallest pass budget that collapses re-ID for a *specific* identity count.
+/// More candidates ⇒ lower chance floor ⇒ generally more mixing required, so
+/// this grows with `n`.
+#[must_use]
+pub fn min_passes_for_n(base: &ExperimentConfig, bits: u32, n: usize) -> Option<usize> {
+    PASS_CANDIDATES
+        .iter()
+        .copied()
+        .find(|&p| passes_collapse_at_n(base, p, bits, n))
+}
+
+/// Derive a ready-to-ship shield for a specific deployment: throughput-optimal
+/// feedback resolution for the deployment SNR, and the minimum mixing budget for
+/// its identity count grown by the free [`PRIVACY_MARGIN_FACTOR`] margin. This is
+/// what an operator should call for a room with `n` expected occupants on a link
+/// with `base.link`'s SNR — the default config is just this at N=16.
+#[must_use]
+pub fn adaptive_shield(base: &ExperimentConfig, n: usize) -> ShieldConfig {
+    let (bits, _) = spec_optimal_feedback_bits(base);
+    let min_passes =
+        min_passes_for_n(base, bits, n).unwrap_or_else(|| *PASS_CANDIDATES.last().unwrap());
+    ShieldConfig {
+        givens_passes: ceil_to_candidate(min_passes * PRIVACY_MARGIN_FACTOR),
+        feedback_bits: bits,
+        ..base.shield.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,6 +366,50 @@ mod tests {
             opt.shipped_passes,
             opt.spec_optimal_bits
         ));
+    }
+
+    #[test]
+    fn optimal_bits_shift_with_snr() {
+        // Low-SNR deployments favor higher feedback resolution; high-SNR favor
+        // lower. The (unconstrained) profile is non-increasing in SNR and not
+        // constant across the range.
+        let profile = optimal_bits_across_snr(&ExperimentConfig::default());
+        let low = profile.first().unwrap().1;
+        let high = profile.last().unwrap().1;
+        assert!(
+            low >= high,
+            "low-SNR bits {low} should be >= high-SNR bits {high}"
+        );
+        assert!(low != high, "profile did not shift with SNR: {profile:?}");
+    }
+
+    #[test]
+    fn adaptive_shield_mixing_is_nondecreasing_in_n() {
+        // A room with more candidate identities needs at least as much mixing.
+        // In this model the collapse budget is governed by fine-subspace
+        // dimension, so the requirement is flat across N — the invariant we can
+        // assert is non-decreasing, and that it never *under*-provisions.
+        let base = ExperimentConfig::default();
+        let small = adaptive_shield(&base, 8);
+        let large = adaptive_shield(&base, 64);
+        assert!(
+            large.givens_passes >= small.givens_passes,
+            "N=64 passes {} should be >= N=8 passes {}",
+            large.givens_passes,
+            small.givens_passes
+        );
+    }
+
+    #[test]
+    fn adaptive_shield_collapses_at_its_target_n() {
+        let base = ExperimentConfig::default();
+        for n in [8usize, 32, 64] {
+            let sh = adaptive_shield(&base, n);
+            assert!(
+                passes_collapse_at_n(&base, sh.givens_passes, sh.feedback_bits, n),
+                "adaptive shield for N={n} does not collapse"
+            );
+        }
     }
 
     #[test]

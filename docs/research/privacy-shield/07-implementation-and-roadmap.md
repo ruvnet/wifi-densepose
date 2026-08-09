@@ -13,6 +13,12 @@
 - **This research bundle** (`docs/research/privacy-shield/`).
 - **[ADR-288](../../adr/ADR-288-veil-privacy-shield-compliant-waveform.md)** — the
   formal decision record.
+- **npm metaharness** `harness/wifi-densepose-privshield/`
+  ([ADR-289](../../adr/ADR-289-wifi-densepose-privshield-harness-via-metaharness.md))
+  — a per-crate contributor harness (architect/implementer/reviewer/test-writer,
+  router, flywheel) with a dependency-free `guidance` surface that serves this
+  bundle's capability map. `npx wifi-densepose-privshield-harness guidance
+  --topic optimization`.
 
 The crate is intentionally a **leaf with no internal RuView dependencies**
 (mirrors `wifi-densepose-aether`), so it can be reasoned about, fuzzed, and

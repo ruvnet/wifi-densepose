@@ -146,6 +146,7 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-285](ADR-285-homecore-wasm-first-metaharness.md) | WASM-first Homecore developer metaharness via `npx homecore` | Accepted (implemented and validated) |
 | [ADR-286](ADR-286-wifi-densepose-sar-harness-via-metaharness.md) | `wifi-densepose-sar-harness` — MetaHarness with darwin/router/flywheel | Accepted (implemented, published) |
 | [ADR-288](ADR-288-veil-privacy-shield-compliant-waveform.md) | VEIL — compliant-waveform privacy shield against unauthorized WiFi sensing (`wifi-densepose-privshield`) | Proposed (implemented, P1 reference) |
+| [ADR-289](ADR-289-wifi-densepose-privshield-harness-via-metaharness.md) | `wifi-densepose-privshield-harness` — npm MetaHarness for the VEIL crate (guidance/router/flywheel) | Proposed (implemented, P1) |
 
 ---
 

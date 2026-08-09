@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "generator": "0.1.0",
+  "template": "vertical:coding",
+  "template_version": "0.0.0",
+  "vars": {
+    "name": "wifi-densepose-privshield-harness",
+    "description": "Harness for wifi-densepose-privshield (VEIL privacy shield)",
+    "host": "claude-code"
+  },
+  "hosts": ["claude-code"],
+  "files": {
+    ".claude/settings.json": "fedb60921a0e3c78848f43edddd75f448819594c680d48ff2033ef8f1588da3f",
+    ".claude-plugin/plugin.json": "7831dc3d1b9b5363130a59ce680794bfe0b6ca09c73d77a7ce78aa6ec3921c5a",
+    "bin/cli.js": "1133e7a47accada1c9b2184873776d8ca0d028f9b76dd55f467dfe38bb9ce609",
+    "CLAUDE.md": "c5bd71bfc0699021a284a54ffa70f4784b8238774c6d6fcfedf836f5e37d10f8",
+    "package.json": "e32acd6e5e630b0db9abccc5f5f58f86f291ccfc23b4c8410b380c01024a23df",
+    "README.md": "be5b0a17cd051dafe8cd825ddf778c91971993419f9e33c0898e21140249f72a",
+    "src/init.ts": "f05d6905d8681f45f610ff5b6e9d425dfa66183acdfe7857248e50e3583e13b8",
+    "src/router.ts": "4545b42d1423db21bcfe6ab6bf132b805ba383937d142997cb7256e835c245e4",
+    "src/flywheel.ts": "aab56d82c4f018ddc83923c877a66acdf9c624214307d0a9c4bf930ddb00599a",
+    "tsconfig.json": "8b4e730a1aa39162ac574455d7a98e1881f5313ca80ffe503b9652dcf0c76b9d",
+    "vitest.config.ts": "021b33ec623593effc3d163020479a91a1179329ee4ed1cb25f2dd9388e19820",
+    "__tests__/smoke.test.ts": "8c5a2acc3a956ea48e60c996c9034224684f6f4110cb3c5885741ff8d18bb82d",
+    "__tests__/router.test.ts": "97c29fc0ff718692ec97a9cd81f92e65ebde996fe1a3d8d2182e66598a583fad",
+    "__tests__/flywheel.test.ts": "87b149f7d68b4cf72fe3dcf6c76e4307b280e9f4ab6e6b1f7ee6689340faf5fb",
+    "__tests__/guidance.test.ts": "66b68615d27671d91b9efcf1eee5f2c7a53b0db7f475cc4ddb17ba8b6ddbff7f",
+    "LICENSE": "07b1a7c2aa25991872e3594de2ecb64ff6b4c5d3dc2376dd5b9e9f77c4b258e8"
+  },
+  "generated_at": "2026-08-09T00:00:00.000Z",
+  "meta": { "surface": "cli" }
+}

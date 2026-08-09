@@ -79,7 +79,7 @@ pub use attacker::{Metric, NearestCentroidAttacker};
 pub use compliance::ComplianceReport;
 pub use experiment::{run, ExperimentConfig, ExperimentReport};
 pub use identity::{BfiSample, Channel, SceneConfig};
-pub use optimize::{hyper_optimize, HyperOptimized};
+pub use optimize::{adaptive_shield, hyper_optimize, HyperOptimized};
 pub use proof::Proof;
 pub use protector::{Protector, SensingDetector, ShieldConfig};
 pub use throughput::LinkModel;
