@@ -150,6 +150,38 @@ it runs in any terminal, pipe, or CI and keeps the crate a pure leaf. It reports
 only SYNTHETIC/L0 numbers and never relabels them. The wasm leaf story is
 unchanged (validated with `--lib`; the bin is native-only).
 
+### sota. 2025–2026 evidence update (verified)
+
+A cited, adversarially-verified SOTA sweep
+(`docs/research/privacy-shield/09-sota-update-2026.md`) refines the threat and
+positioning. Load-bearing points for this ADR:
+
+- **Threat is broader and cheaper than §1.1 stated.** A passive, keyless,
+  single-antenna sniffer at ~20 m and *through walls* can identify people
+  (BFId, 99.5%/N=197, `MEASURED`), read **breathing** from stationary occupants
+  and **keystrokes/PINs** (LeakyBeam / WiKI-Eve / SThief, `MEASURED`), and —
+  decisively — **reconstruct full CSI from the sniffed BFI** (BFIAttack,
+  ≥93% single-antenna, `MEASURED`). VEIL's obfuscation must therefore degrade
+  *reconstructed-CSI* utility, not merely raw-BFI feature noise; because VEIL's
+  rotation is a **secret orthogonal** transform, the attacker has no key and no
+  closed-form to invert — this is now a claim to **test**, not assume.
+- **VEIL's family is independently validated.** AP-side per-packet random
+  unitary on the LTF (LeakyBeam defense, 89.7%→~51%, `MEASURED`) and RIS
+  obfuscation (PrivISAC, 93%→~30%, robust to a retrained multi-location
+  attacker, `MEASURED`) confirm standard-permitted beamforming-surface
+  obfuscation works; DP-Givens quantization (`SYNTHETIC`) offers a formal ε knob.
+- **Compliance precedent.** BeamDancer (IEEE TWC 2024, `MEASURED`) argues
+  native-beamforming obfuscation is 802.11-compliant while jamming/geofencing
+  are not — cite it as precedent. (Its ">96% PDR" figure was **refuted** in
+  verification; do not cite it.)
+- **Security honesty.** Obfuscation shields have published counter-attacks
+  ("Defeating CSI obfuscation", SnoopFi), so VEIL's own shield security is
+  `CLAIMED`, not proven-secure, until it withstands learned de-obfuscation.
+- **Governance gap.** No claim on 802.11bf-2025 privacy provisions survived
+  verification; that pillar remains an open question, not an asserted fact.
+
+The derived, prioritized improvement backlog lives in the SOTA-update file (§4).
+
 ## 3. What this explicitly is NOT
 
 - **Not a radio driver.** No RF frontend, no transmit path, no

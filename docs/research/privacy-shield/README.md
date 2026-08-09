@@ -28,6 +28,7 @@ transmission (the statutory definition of jamming, 47 U.S.C. §333/§302a).
 | [06-market-and-buyers.md](06-market-and-buyers.md) | First buyers, procurement drivers, competitive landscape, and the standards-body gap |
 | [07-implementation-and-roadmap.md](07-implementation-and-roadmap.md) | Crate layout, reuse map, hardware path, phased rollout, and open problems |
 | [08-optimization.md](08-optimization.md) | Hyper-optimization: throughput-optimal feedback resolution, minimum robust mixing budget, Pareto frontier, and the adopted config |
+| [09-sota-update-2026.md](09-sota-update-2026.md) | 2025–2026 SOTA update (verified, cited): stronger attacks (BFI→CSI reconstruction, through-wall vitals, keystroke), validated compliant defenses, and the derived VEIL improvement backlog |
 
 Formal decision: [ADR-288](../../adr/ADR-288-veil-privacy-shield-compliant-waveform.md).
 Reference implementation: [`v2/crates/wifi-densepose-privshield`](../../../v2/crates/wifi-densepose-privshield).

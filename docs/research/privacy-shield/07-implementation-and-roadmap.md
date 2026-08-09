@@ -45,12 +45,40 @@ ported independently, and so it can never accidentally acquire a path to a radio
 | **P1 — reference model (this PR)** | Crate + experiment + docs + ADR | SYNTHETIC (cargo test) |
 | **P2 — sensitivity study** | Sweep N, noise, resolution, mixing; add a learned attacker to confirm signal-level collapse | SYNTHETIC |
 | **P3 — BFLD integration** | Wire `identity_risk` → `SensingDetector` → shield engage; emit attestation | SYNTHETIC + integration tests |
-| **P4 — firmware feedback shaping** | Implement keyed fine-subspace rotation + cadence randomization in ESP32/Nexmon feedback path | build + hardware |
-| **P5 — two-node hardware measurement** | Wi-BFI attacker vs. VEIL protector on real silicon; iperf throughput; captured log | **MEASURED** (with witness) |
+| **P4 — firmware feedback shaping** | Implement keyed fine-subspace rotation + cadence randomization in the **beamforming-feedback / spatial-mapping path** — see §3.1 for the (non-trivial) platform reality | build + hardware |
+| **P5 — two-node hardware measurement** | Attacker (Wi-BFI capture) vs. VEIL protector on real silicon; iperf throughput; captured log | **MEASURED** (with witness) |
 | **P6 — deployment profiles** | Per-segment profiles (SCIF, boardroom, ward) with regulatory review | operational |
 
 No defense claim graduates from SYNTHETIC to MEASURED without a captured
 boot/runtime log (CLAUDE.md hardware rule).
+
+### 3.1 Does this need custom WiFi firmware? (yes — and ESP32 is the wrong chip for the protector)
+
+VEIL shapes the **compressed beamforming report** (the Givens φ/ψ angles) or the
+LTF **spatial mapping** as it is transmitted — machinery that lives *below* the
+driver, inside the chip's PHY/MAC firmware. It is **not** reachable from user
+space, so a real deployment is a firmware/driver change, not an app.
+
+- **ESP32 — not viable as the protector.** Its WiFi lower layers are a closed
+  Espressif blob. ESP-IDF exposes CSI *read* (`esp_wifi_set_csi`) — which is why
+  `firmware/esp32-csi-node/` makes a great **attacker/sensor** node — but it does
+  **not** let you rewrite how the chip builds/sends beamforming feedback. ESP32
+  is the *attacker* in a testbed, not the shield.
+- **Realistic protector platforms:** **openwifi** (open 802.11 on SDR/FPGA —
+  full PHY/MAC control incl. the AP-side compensation; the honest end-to-end
+  route; Verilog + a C driver); **Nexmon** (C firmware *patches* for
+  Broadcom/Cypress, e.g. RPi BCM43455 — the commodity path, and the same
+  framework the BFI *attack* tools already use); open drivers (**ath9k/mt76**)
+  for partial control; or **vendor firmware** for a production feature.
+- **Two firmware variants:** the **keyed-reversible** version (VEIL's ~98%
+  throughput) needs changes on **both** ends plus key agreement (cf. the
+  LeakyBeam AP-side `Q_obf` is *client-transparent* — only the AP changes — which
+  is a deployment advantage worth adopting, §09 backlog item 3); the
+  **emitter-only DP dither** version needs only the reporting device but pays the
+  full throughput cost.
+
+The current crate is deliberately a std-only, no-radio leaf and implements none
+of this; P4 is where it meets silicon.
 
 ---
 
