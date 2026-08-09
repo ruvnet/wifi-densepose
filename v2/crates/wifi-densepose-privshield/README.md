@@ -151,9 +151,9 @@ in any browser; no build, no network). `veil` is the terminal-native version.
 | `prng` | Deterministic, WASM-safe PRNG + key derivation |
 | `linalg` | Givens-rotation vector algebra |
 | `identity` | SYNTHETIC two-subspace beamforming-feedback model |
-| `protector` | The compliant waveform controls (the shield) |
-| `attacker` | Passive re-identification adversary (Euclidean + Cosine metrics) |
-| `throughput` | Link-throughput model (residual + feedback-airtime + sounding) |
+| `protector` | The compliant waveform controls: keyed rotation, per-packet unitary (`ObfMode`), ε-DP dither (`dp_epsilon`) |
+| `attacker` | Passive adversaries: nearest-centroid (Euclidean/Cosine), BFI→CSI `Reconstruction`, `AdaptivePooling` |
+| `throughput` | Link-throughput model (quantization residual + feedback-airtime + sounding + ε-DP cost) |
 | `compliance` | Machine-checkable "not jamming" audit |
 | `experiment` | Attacker-vs-protector head-to-head |
 | `optimize` | Finds the optimal shield config (feedback bits, min passes, Pareto frontier) |

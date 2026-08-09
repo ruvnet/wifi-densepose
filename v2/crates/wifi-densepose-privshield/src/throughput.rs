@@ -83,6 +83,21 @@ impl LinkModel {
         self.feedback_overhead_per_bit * f64::from(shield.feedback_bits)
     }
 
+    /// Beamforming-gain residual from the ε-DP angular dither, if enabled.
+    /// Unlike the keyed rotation (which the receiver undoes), the DP noise is
+    /// **not** removed, so it costs gain directly and grows as ε shrinks —
+    /// this is the tunable privacy↔throughput knob. SYNTHETIC.
+    #[must_use]
+    pub fn dp_residual(shield: &ShieldConfig) -> f64 {
+        match shield.dp_epsilon {
+            Some(eps) if shield.enabled => {
+                let e = f64::from(eps).max(1e-3);
+                (DP_GAIN_COST / (e * e)).min(0.5)
+            }
+            _ => 0.0,
+        }
+    }
+
     /// Throughput ratio of the protected link versus the unshielded baseline,
     /// in `[0, 1]`.
     #[must_use]
@@ -90,13 +105,17 @@ impl LinkModel {
         if !shield.enabled {
             return 1.0;
         }
-        let rho = Self::beamforming_residual(shield);
+        let rho = (Self::beamforming_residual(shield) + Self::dp_residual(shield)).min(0.9);
         let snr = self.snr_linear();
         let capacity_ratio = (1.0 + snr * (1.0 - rho)).log2() / self.baseline_capacity();
         let airtime = shield.sounding_overhead + self.feedback_airtime(shield);
         ((1.0 - airtime) * capacity_ratio).clamp(0.0, 1.0)
     }
 }
+
+/// Gain-cost coefficient for the ε-DP dither: residual ≈ `DP_GAIN_COST / ε²`.
+/// Tuned so ε≈1 costs a few points of gain and ε≲0.3 costs a lot. SYNTHETIC.
+const DP_GAIN_COST: f64 = 0.004;
 
 #[cfg(test)]
 mod tests {
@@ -116,6 +135,23 @@ mod tests {
         let ratio = LinkModel::default().throughput_ratio(&ShieldConfig::default());
         assert!(ratio > 0.95, "ratio {ratio}");
         assert!(ratio < 1.0);
+    }
+
+    #[test]
+    fn dp_epsilon_lowers_throughput_as_it_tightens() {
+        // The ε-DP dither is a real, tunable privacy↔throughput knob: smaller ε
+        // (more noise) costs more gain. None (off) is the cheapest.
+        let link = LinkModel::default();
+        let at = |eps: Option<f32>| {
+            link.throughput_ratio(&ShieldConfig {
+                dp_epsilon: eps,
+                ..ShieldConfig::default()
+            })
+        };
+        let off = at(None);
+        let loose = at(Some(2.0));
+        let tight = at(Some(0.3));
+        assert!(off >= loose && loose > tight, "{off} {loose} {tight}");
     }
 
     #[test]

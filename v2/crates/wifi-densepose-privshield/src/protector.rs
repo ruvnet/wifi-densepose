@@ -30,8 +30,31 @@
 //! frames.
 
 use crate::identity::BfiSample;
-use crate::linalg::apply_givens;
+use crate::linalg::{apply_givens, norm, set_norm_inplace};
 use crate::prng::Rng;
+
+/// Per-dimension angular-noise sensitivity for the ε-DP dither. Chosen so ε≈1 is
+/// a mild perturbation and ε≲0.2 is aggressive. SYNTHETIC modeling constant.
+const DP_ANGULAR_SENSITIVITY: f32 = 0.05;
+
+/// How the shield keys its per-transform randomness. Both modes use the same
+/// energy-preserving Givens machinery; the difference is *granularity* and
+/// *who changes* — captured here so the deployment story is explicit (ADR-288
+/// §sota; validated against the SOTA sweep).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ObfMode {
+    /// Secret per-*session* rotation, shared-key-reversible by the associated
+    /// receiver (VEIL's original design). One rotation per sounding interval.
+    #[default]
+    KeyedRotation,
+    /// A fresh random unitary per *packet*, applied AP-side to the transmitted
+    /// report; **client-transparent** — only the AP changes, clients are
+    /// unmodified and unaware. Models the LeakyBeam-family defense (NDSS 2025,
+    /// MEASURED 89.7%→~51%) that rides the 802.11 spatial-mapping mechanism the
+    /// standard marks "not restricted". Even harder to average out than
+    /// per-session, at the cost of no cross-packet reuse.
+    PerPacketUnitary,
+}
 
 /// Configuration of the protector.
 #[derive(Debug, Clone)]
@@ -52,6 +75,16 @@ pub struct ShieldConfig {
     /// Fractional airtime overhead from sounding-cadence randomization
     /// (jittering NDP intervals so an eavesdropper under-samples motion).
     pub sounding_overhead: f64,
+    /// Keying granularity of the obfuscation (see [`ObfMode`]).
+    pub mode: ObfMode,
+    /// Optional ε-DP angular dither budget layered on top of the rotation
+    /// (`None` = off). Smaller ε ⇒ more angular noise ⇒ stronger formal privacy
+    /// on the *raw reported angles* but larger throughput cost. The dithered
+    /// report is renormalized to its original energy, so it stays a valid unit
+    /// precoder and the emission remains energy-preserving (not jamming).
+    /// Models the DP-Givens mechanism (arXiv:2512.18529, SYNTHETIC). Any number
+    /// derived from it is SYNTHETIC.
+    pub dp_epsilon: Option<f32>,
 }
 
 impl Default for ShieldConfig {
@@ -61,12 +94,15 @@ impl Default for ShieldConfig {
         // minimum 48 robust passes (free margin, since mixing is keyed not
         // signaled), and 5 = the throughput-best resolution in the 802.11
         // {5,7,9} set. `optimize::shipped_default_equals_optimizer_output`
-        // guards against drift.
+        // guards against drift. `mode`/`dp_epsilon` default to the original
+        // behavior so the reference witness is unchanged.
         Self {
             enabled: true,
             givens_passes: 96,
             feedback_bits: 5,
             sounding_overhead: 0.02,
+            mode: ObfMode::KeyedRotation,
+            dp_epsilon: None,
         }
     }
 }
@@ -111,6 +147,13 @@ impl Protector {
 
     /// Protect an outgoing report for the given session. When the shield is
     /// disabled this clones the input unchanged.
+    ///
+    /// The keyed Givens rotation runs whenever `givens_passes > 0`; the caller
+    /// chooses `session_key`'s granularity (a per-session key for
+    /// [`ObfMode::KeyedRotation`], a per-packet key for
+    /// [`ObfMode::PerPacketUnitary`]). If `dp_epsilon` is set, an ε-scaled
+    /// angular dither is added afterward and the fine block is renormalized to
+    /// its original energy (so the emission stays energy-preserving).
     #[must_use]
     pub fn protect(&self, sample: &BfiSample, session_key: u64) -> BfiSample {
         let mut out = sample.clone();
@@ -123,7 +166,28 @@ impl Protector {
         for (i, j, theta) in ops {
             apply_givens(fine, i, j, theta);
         }
+        if let Some(eps) = self.cfg.dp_epsilon {
+            Self::dp_dither(fine, eps, session_key);
+        }
         out
+    }
+
+    /// Add an ε-DP angular dither to `fine`, then renormalize to the original
+    /// energy. Noise scale ∝ 1/ε (smaller ε ⇒ more noise ⇒ stronger privacy on
+    /// the raw angles). Renormalization keeps it a valid unit precoder, so the
+    /// step adds no transmit energy. SYNTHETIC.
+    fn dp_dither(fine: &mut [f32], epsilon: f32, key: u64) {
+        let before = norm(fine);
+        if before <= 1e-12 {
+            return;
+        }
+        // Laplace-like scale for an angular budget; bounded so ε→0 saturates.
+        let scale = (DP_ANGULAR_SENSITIVITY / epsilon.max(1e-3)).min(2.0);
+        let mut rng = Rng::new(key ^ 0xD1FF_D1FF_D1FF_D1FF);
+        for v in fine.iter_mut() {
+            *v += scale * rng.next_gaussian();
+        }
+        set_norm_inplace(fine, before);
     }
 
     /// Recover the true report at the legitimate receiver, which shares the

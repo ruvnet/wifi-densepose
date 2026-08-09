@@ -75,11 +75,13 @@ pub mod proof;
 pub mod protector;
 pub mod throughput;
 
-pub use attacker::{Metric, NearestCentroidAttacker};
+pub use attacker::{
+    AdaptivePoolingAttacker, AttackerKind, Metric, NearestCentroidAttacker, ReconstructionAttacker,
+};
 pub use compliance::ComplianceReport;
 pub use experiment::{run, ExperimentConfig, ExperimentReport};
 pub use identity::{BfiSample, Channel, SceneConfig};
 pub use optimize::{adaptive_shield, hyper_optimize, HyperOptimized};
 pub use proof::Proof;
-pub use protector::{Protector, SensingDetector, ShieldConfig};
+pub use protector::{ObfMode, Protector, SensingDetector, ShieldConfig};
 pub use throughput::LinkModel;

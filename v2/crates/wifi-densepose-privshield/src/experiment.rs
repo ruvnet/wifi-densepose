@@ -13,11 +13,13 @@
 //! 2. throughput stays above 95% of the unshielded baseline;
 //! 3. the control is compliant (energy-preserving, non-jamming).
 
-use crate::attacker::{Metric, NearestCentroidAttacker};
+use crate::attacker::{
+    AdaptivePoolingAttacker, AttackerKind, Metric, NearestCentroidAttacker, ReconstructionAttacker,
+};
 use crate::compliance::ComplianceReport;
 use crate::identity::{Channel, SceneConfig};
 use crate::prng::derive_key;
-use crate::protector::{Protector, ShieldConfig};
+use crate::protector::{ObfMode, Protector, ShieldConfig};
 use crate::throughput::LinkModel;
 
 /// Configuration for a full experiment.
@@ -40,8 +42,10 @@ pub struct ExperimentConfig {
     pub chance_margin: f32,
     /// Minimum acceptable throughput ratio.
     pub min_throughput_ratio: f64,
-    /// Metric the passive attacker uses.
+    /// Metric the passive attacker uses (for the nearest-centroid kind).
     pub attacker_metric: Metric,
+    /// Which adversary shape to run.
+    pub attacker_kind: AttackerKind,
 }
 
 impl Default for ExperimentConfig {
@@ -56,6 +60,7 @@ impl Default for ExperimentConfig {
             chance_margin: 0.03,
             min_throughput_ratio: 0.95,
             attacker_metric: Metric::Euclidean,
+            attacker_kind: AttackerKind::NearestCentroid,
         }
     }
 }
@@ -126,13 +131,7 @@ fn measure_accuracy(
         for s in 0..cfg.enroll_sessions {
             let raw = ch.observe(id, b"enroll", s);
             let seen = if shield_on {
-                // Per-session precoder rotation is the SAME for every identity
-                // present in that session (the AP rotates its precoder per
-                // sounding interval, not per person). Keying it on the session
-                // is what lets a legitimate receiver invert it and what makes
-                // the attacker's cross-session average collapse.
-                let key = derive_key(cfg.scene.seed, b"rot-enroll", s, 0);
-                protector.protect(&raw, key)
+                protector.protect(&raw, rotation_key(cfg, b"enroll", s, id))
             } else {
                 raw
             };
@@ -141,8 +140,7 @@ fn measure_accuracy(
         for s in 0..cfg.test_sessions {
             let raw = ch.observe(id, b"test", s);
             let seen = if shield_on {
-                let key = derive_key(cfg.scene.seed, b"rot-test", s, 0);
-                protector.protect(&raw, key)
+                protector.protect(&raw, rotation_key(cfg, b"test", s, id))
             } else {
                 raw
             };
@@ -150,9 +148,53 @@ fn measure_accuracy(
         }
     }
 
-    let mut atk = NearestCentroidAttacker::with_metric(cfg.attacker_metric);
-    atk.enroll(&enroll);
-    atk.accuracy(&test)
+    // Dispatch on the adversary shape (SOTA sweep, ADR-288 §sota).
+    match cfg.attacker_kind {
+        AttackerKind::NearestCentroid => {
+            let mut a = NearestCentroidAttacker::with_metric(cfg.attacker_metric);
+            a.enroll(&enroll);
+            a.accuracy(&test)
+        }
+        AttackerKind::Reconstruction => {
+            let mut a = ReconstructionAttacker::new();
+            a.enroll(&enroll);
+            a.accuracy(&test)
+        }
+        AttackerKind::AdaptivePooling => {
+            let mut a = AdaptivePoolingAttacker::new();
+            a.enroll(&enroll);
+            a.accuracy(&test)
+        }
+    }
+}
+
+/// Derive the rotation key for a capture. In [`ObfMode::KeyedRotation`] the key
+/// is per **session** (same rotation for every identity present in that sounding
+/// interval — the AP rotates its precoder per interval, not per person; this is
+/// what a legitimate receiver inverts and what makes cross-session averaging
+/// collapse). In [`ObfMode::PerPacketUnitary`] it is per **packet** (unique per
+/// capture), modeling the AP-side, client-transparent fresh-unitary defense.
+/// The `KeyedRotation` labels are unchanged from the original so the reference
+/// witness is stable.
+fn rotation_key(cfg: &ExperimentConfig, phase: &[u8], session: u64, id: usize) -> u64 {
+    match cfg.shield.mode {
+        ObfMode::KeyedRotation => {
+            let label: &[u8] = if phase == b"enroll" {
+                b"rot-enroll"
+            } else {
+                b"rot-test"
+            };
+            derive_key(cfg.scene.seed, label, session, 0)
+        }
+        ObfMode::PerPacketUnitary => {
+            let label: &[u8] = if phase == b"enroll" {
+                b"rot-enroll-pkt"
+            } else {
+                b"rot-test-pkt"
+            };
+            derive_key(cfg.scene.seed, label, session, id as u64)
+        }
+    }
 }
 
 /// Run the full attacker-vs-protector experiment.
@@ -232,6 +274,79 @@ mod tests {
         assert_eq!(
             run(&ExperimentConfig::default()),
             run(&ExperimentConfig::default())
+        );
+    }
+
+    // ---- SOTA-driven adversaries and modes (ADR-288 §sota) ----
+
+    #[test]
+    fn reconstruction_attacker_collapses() {
+        // BFIAttack-style: reconstruction recovers the *rotated* CSI direction,
+        // so a secret orthogonal rotation still drives it to chance — but it
+        // works fine on unprotected traffic (sanity that the attacker is real).
+        let cfg = ExperimentConfig {
+            attacker_kind: AttackerKind::Reconstruction,
+            ..ExperimentConfig::default()
+        };
+        let r = run(&cfg);
+        assert!(
+            r.accuracy_shield_off >= 0.5,
+            "recon off {}",
+            r.accuracy_shield_off
+        );
+        assert!(r.drives_to_chance(), "recon on {}", r.accuracy_shield_on);
+    }
+
+    #[test]
+    fn adaptive_pooling_attacker_collapses() {
+        let cfg = ExperimentConfig {
+            attacker_kind: AttackerKind::AdaptivePooling,
+            ..ExperimentConfig::default()
+        };
+        let r = run(&cfg);
+        assert!(
+            r.accuracy_shield_off >= 0.5,
+            "pool off {}",
+            r.accuracy_shield_off
+        );
+        assert!(r.drives_to_chance(), "pool on {}", r.accuracy_shield_on);
+    }
+
+    #[test]
+    fn per_packet_unitary_mode_collapses_and_is_compliant() {
+        let cfg = ExperimentConfig {
+            shield: ShieldConfig {
+                mode: ObfMode::PerPacketUnitary,
+                ..ShieldConfig::default()
+            },
+            ..ExperimentConfig::default()
+        };
+        let r = run(&cfg);
+        assert!(
+            r.drives_to_chance(),
+            "per-packet on {}",
+            r.accuracy_shield_on
+        );
+        assert!(r.compliance.is_compliant());
+    }
+
+    #[test]
+    fn dp_epsilon_still_collapses_and_stays_compliant() {
+        // Layering the ε-DP dither on the rotation keeps the collapse and, thanks
+        // to renormalization, keeps the emission energy-preserving (not jamming).
+        let cfg = ExperimentConfig {
+            shield: ShieldConfig {
+                dp_epsilon: Some(1.0),
+                ..ShieldConfig::default()
+            },
+            ..ExperimentConfig::default()
+        };
+        let r = run(&cfg);
+        assert!(r.drives_to_chance());
+        assert!(
+            r.compliance.is_compliant(),
+            "energy {}",
+            r.compliance.energy_ratio
         );
     }
 }

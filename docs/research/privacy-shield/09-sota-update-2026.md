@@ -68,23 +68,34 @@ claim to *test*, not assume.
 Priority = (verified severity) × (fit to VEIL). `[code]` = crate change,
 `[docs]` = documentation, `[hw]` = hardware path.
 
-1. **`[code]` Reconstruction-aware attacker (decisive).** Add a BFIAttack-style
-   adversary that attempts to invert/reconstruct before classifying, and a test
-   asserting the keyed *orthogonal secret* rotation leaves it at chance (no key →
-   no closed-form). This turns "should resist reconstruction" from assumption
-   into a checked property. *(BFIAttack, MEASURED)*
-2. **`[code]` Adaptive, multi-capture attacker as baseline.** Pool captures
-   across sessions/locations and re-fit (the PrivISAC adaptive attacker). We
-   already model cross-session averaging; make it a first-class attacker variant
-   and assert collapse holds. *(PrivISAC, MEASURED)*
-3. **`[code]` Per-packet random-unitary spatial-mapping mode.** Add the
-   LeakyBeam-style AP-side, client-transparent `Q_obf` control as a first-class
-   compliant mechanism alongside the keyed fine-subspace rotation, with the
-   802.11 "spatial mapping not restricted" citation as its compliance basis.
-   *(LeakyBeam defense, MEASURED)*
-4. **`[code]` DP-Givens knob.** Add an ε-DP quantization mode with a closed-form
-   angular sensitivity bound, exposing ε as a configurable operating point.
-   Label outputs `SYNTHETIC`. *(DP-Givens, SYNTHETIC)*
+1. **`[code]` ✅ implemented — Reconstruction-aware attacker (decisive).** A
+   BFIAttack-style adversary (`attacker::ReconstructionAttacker`,
+   `AttackerKind::Reconstruction`) recovers the direction of the CSI consistent
+   with the *captured* report and classifies it; the test
+   `reconstruction_attacker_collapses` confirms the keyed *orthogonal secret*
+   rotation leaves it at chance (no key → it only ever recovers the rotated
+   direction) while it still wins on unprotected traffic. *(BFIAttack, MEASURED)*
+2. **`[code]` ✅ implemented — Adaptive, multi-capture attacker.**
+   `attacker::AdaptivePoolingAttacker` (`AttackerKind::AdaptivePooling`) pools all
+   captures per identity and whitens by per-dimension std before matching (the
+   PrivISAC adaptive/retraining adversary); `adaptive_pooling_attacker_collapses`
+   confirms collapse still holds. *(PrivISAC, MEASURED)*
+3. **`[code]` ✅ implemented — Per-packet random-unitary mode.**
+   `protector::ObfMode::PerPacketUnitary` applies a fresh unitary per packet,
+   AP-side and **client-transparent** (LeakyBeam family; 802.11 spatial mapping
+   "not restricted" as the compliance basis);
+   `per_packet_unitary_mode_collapses_and_is_compliant` verifies it. *(LeakyBeam
+   defense, MEASURED)*
+4. **`[code]` ✅ implemented — DP-Givens ε knob.** `ShieldConfig.dp_epsilon` adds
+   an ε-scaled angular dither, renormalized to preserve emission energy (still
+   not jamming); `throughput::dp_residual` makes ε a real privacy↔throughput knob
+   (`dp_epsilon_lowers_throughput_as_it_tightens`), and the combined
+   rotation+DP still collapses and stays compliant. Outputs `SYNTHETIC`.
+   *(DP-Givens, SYNTHETIC)*
+
+> Items 1–4 landed with the reference **witness unchanged**
+> (`0x350d…f448`) — the new controls/attackers are opt-in fields; the shipped
+> default config and its numbers are byte-identical.
 5. **`[code/docs]` Privacy–throughput *frontier*, not binary claims.** Report
    attacker-error-vs-privacy and gain/PDR-vs-privacy curves (we already have the
    throughput-vs-bits and reid-vs-passes curves; add the joined frontier).
