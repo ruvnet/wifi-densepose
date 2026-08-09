@@ -1,3 +1,5 @@
+![VEIL Console — the shield engaged, with the room's WiFi identity clusters collapsed to the chance floor (re-ID 4.7%, throughput preserved, compliant)](docs/veil-console.png)
+
 # wifi-densepose-privshield — VEIL
 
 **VEIL** (Verifiable Emission-shaping for Identity-Leakage prevention) is the
