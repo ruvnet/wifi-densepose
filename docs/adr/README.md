@@ -145,6 +145,7 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-287](ADR-287-coherent-wideband-rf-tomography-crate.md) | `wifi-densepose-sar` — coherent wideband RF tomography research crate | Accepted (implemented, published) |
 | [ADR-285](ADR-285-homecore-wasm-first-metaharness.md) | WASM-first Homecore developer metaharness via `npx homecore` | Accepted (implemented and validated) |
 | [ADR-286](ADR-286-wifi-densepose-sar-harness-via-metaharness.md) | `wifi-densepose-sar-harness` — MetaHarness with darwin/router/flywheel | Accepted (implemented, published) |
+| [ADR-288](ADR-288-veil-privacy-shield-compliant-waveform.md) | VEIL — compliant-waveform privacy shield against unauthorized WiFi sensing (`wifi-densepose-privshield`) | Proposed (implemented, P1 reference) |
 
 ---
 
