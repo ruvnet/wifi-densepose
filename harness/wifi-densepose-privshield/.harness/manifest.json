@@ -5,17 +5,17 @@
   "template_version": "0.0.0",
   "vars": {
     "name": "wifi-densepose-privshield-harness",
-    "description": "Harness for wifi-densepose-privshield (VEIL privacy shield)",
+    "description": "Harness for wifi-densepose-privshield (WiFi Veil privacy shield)",
     "host": "claude-code"
   },
   "hosts": ["claude-code"],
   "files": {
     ".claude/settings.json": "fedb60921a0e3c78848f43edddd75f448819594c680d48ff2033ef8f1588da3f",
-    ".claude-plugin/plugin.json": "7831dc3d1b9b5363130a59ce680794bfe0b6ca09c73d77a7ce78aa6ec3921c5a",
+    ".claude-plugin/plugin.json": "8b155a3130d212c88dd8b631d9bd6dd1b4eacb52e5eb282fddbe08576ae23be2",
     "bin/cli.js": "1133e7a47accada1c9b2184873776d8ca0d028f9b76dd55f467dfe38bb9ce609",
-    "CLAUDE.md": "c5bd71bfc0699021a284a54ffa70f4784b8238774c6d6fcfedf836f5e37d10f8",
-    "package.json": "e32acd6e5e630b0db9abccc5f5f58f86f291ccfc23b4c8410b380c01024a23df",
-    "README.md": "be5b0a17cd051dafe8cd825ddf778c91971993419f9e33c0898e21140249f72a",
+    "CLAUDE.md": "f9ccf20c341ff0296b2e64ce692103572d61e856ae0df8a8bc4c35a7ac8b2ff5",
+    "package.json": "1ccedf0e62b0ed884431a2a9192a3865b525a2dad72fa6491569b9001e7dd24f",
+    "README.md": "688e207f95e4f58eeade84f149c38fa8ec048796556a7b1bd75f08ee1945edba",
     "src/init.ts": "f05d6905d8681f45f610ff5b6e9d425dfa66183acdfe7857248e50e3583e13b8",
     "src/router.ts": "4545b42d1423db21bcfe6ab6bf132b805ba383937d142997cb7256e835c245e4",
     "src/flywheel.ts": "aab56d82c4f018ddc83923c877a66acdf9c624214307d0a9c4bf930ddb00599a",

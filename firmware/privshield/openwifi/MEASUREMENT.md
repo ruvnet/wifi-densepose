@@ -1,10 +1,10 @@
-# P5 measurement protocol — openwifi VEIL end-to-end
+# P5 measurement protocol — openwifi WiFi Veil end-to-end
 
 > **STATUS: SYNTHETIC / L0 — this is a PLAN, not a result. No hardware has been
 > run; no capture, log, or number in this repo is real.** This document defines
 > exactly what must be executed and captured to earn the first `MEASURED` claim
 > under CLAUDE.md's hardware-evidence rule. Until the witness artifact below
-> exists, every accuracy/throughput/energy statement about openwifi VEIL is
+> exists, every accuracy/throughput/energy statement about openwifi WiFi Veil is
 > `SYNTHETIC` and must be labelled so. **Compliant waveform controls only —
 > orthogonal, energy-preserving; never jamming.**
 
@@ -47,7 +47,7 @@ per-packet keying uses `(key, packet_counter)` as in `HDL_NOTES.md`.
 
 ## Procedure
 
-Run every condition **twice**: VEIL **OFF** (baseline) and **ON**. Same
+Run every condition **twice**: WiFi Veil **OFF** (baseline) and **ON**. Same
 positions, same MCS, same duration, same seed for the attacker model.
 
 1. **Correctness precondition (not a defense claim).** Confirm on-FPGA

@@ -1,4 +1,4 @@
-# VEIL — OpenWRT / Linux `mac80211` adapter
+# WiFi Veil — OpenWRT / Linux `mac80211` adapter
 
 > **STATUS: `SYNTHETIC / L0` — BUILD-ONLY, UNTESTED ON HARDWARE.**
 > No radio was driven, no CSI captured, no log produced on silicon. Every
@@ -6,7 +6,7 @@
 > adapter uses **compliant waveform controls only** — it never jams and emits
 > no denial energy.
 
-This directory is the OpenWRT/`mac80211` platform adapter for the VEIL privacy
+This directory is the OpenWRT/`mac80211` platform adapter for the WiFi Veil privacy
 shield. It links the validated portable core
 (`../core/veil_shield.{h,c}` — the keyed Givens rotation over the identity-bearing
 "fine" subspace of 802.11 compressed beamforming feedback) and drives the subset
@@ -16,7 +16,7 @@ of controls that Linux userspace/`mac80211` can actually reach on commodity APs.
 
 ## Feasibility grade: **C** (partial — coarse compliant controls only)
 
-**Why C, not higher.** VEIL's defining action is a *per-packet keyed unitary* on
+**Why C, not higher.** WiFi Veil's defining action is a *per-packet keyed unitary* on
 the compressed beamforming-feedback angles (equivalently, a keyed Q on the LTF
 spatial mapping / precoder). On every mainstream OpenWRT AP chipset
 (Qualcomm ath10k/ath11k/ath12k, MediaTek mt76 / mt7915), that report is generated
@@ -25,7 +25,7 @@ open driver never touch the pre-transmit V matrix. So the full keyed-rotation pa
 is **blob-blocked** from OpenWRT. What remains reachable is a set of *coarse*
 compliant knobs that perturb, but do not cryptographically obfuscate, the CSI a
 sensor observes. That is a real, honest defense-in-depth layer — hence C, not D —
-but it is not the full VEIL transform.
+but it is not the full WiFi Veil transform.
 
 **Why not D.** Some controls genuinely work from userspace (TX antenna map;
 hostapd-mediated sounding/beamformer capability), and one chipset family
@@ -38,14 +38,14 @@ A-grade keyed rotation, but those are **separate adapters**, not OpenWRT.
 
 ## What is FEASIBLE vs. BLOB-BLOCKED from OpenWRT
 
-| VEIL control | Reachable from OpenWRT? | Mechanism (real API / knob) | Notes |
+| WiFi Veil control | Reachable from OpenWRT? | Mechanism (real API / knob) | Notes |
 |---|---|---|---|
 | **TX antenna-map perturbation** | ✅ Feasible | `NL80211_CMD_SET_WIPHY` + `NL80211_ATTR_WIPHY_ANTENNA_TX` / `_RX` | Coarse static spatial-mapping change. Many drivers require phy DOWN and symmetric masks. Compliant. |
 | **NDP sounding-cadence jitter** | 🟡 Indirect | hostapd `ctrl_iface` (rewrite `SOUNDING-DIMENSION`, toggle `[SU-BEAMFORMER]`, `RECONFIGURE`) | No `nl80211` "set sounding interval" exists; the per-NDP timer lives in driver/firmware. We can only jitter the *offered* capability. |
 | **Beamformer/beamformee capability toggle** | ✅ Feasible | hostapd `vht_capab` / `he_su_beamformer` etc. | Standards-compliant advertisement. Coarse on/off, not per-packet. |
 | **Spatial-stream → antenna mapping (static Q)** | 🟡 Driver-patch (ath9k only) | ath9k PHY spatial-mapping registers (`AR_PHY_*`) | Open enough to patch on ath9k; opaque/firmware on ath10k+/mt76. Not a stock userspace knob. |
 | **MU-MIMO group shuffling** | ❌ Blob-blocked | would need `NL80211_CMD_VENDOR` subcmd that upstream mt76/ath do **not** expose | Group formation + steering matrices computed in MCU firmware. |
-| **Per-packet keyed unitary on LTF / precoder** | ❌ Blob-blocked | — | The core VEIL transform. Lives in firmware on all commodity AP parts. Requires firmware patch, or use openwifi / Nexmon adapters. |
+| **Per-packet keyed unitary on LTF / precoder** | ❌ Blob-blocked | — | The core WiFi Veil transform. Lives in firmware on all commodity AP parts. Requires firmware patch, or use openwifi / Nexmon adapters. |
 | **Compressed-BF-report angle edit (φ/ψ)** | ❌ Blob-blocked | — | Report is generated in firmware/PHY; not exposed pre-TX on OpenWRT. |
 | **External sensing-solicitation detection (NDPA cadence)** | 🟡 Partial | `NL80211_CMD_FRAME` + `NL80211_CMD_REGISTER_FRAME`, or monitor-mode capture | Commodity drivers do not forward raw NDPA to userspace by default. |
 

@@ -1,4 +1,4 @@
-<title>VEIL Console — WiFi-Sensing Privacy Shield</title>
+<title>WiFi Veil Console — WiFi-Sensing Privacy Shield</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <style>
   /* ---- Theme tokens: light is the bare :root; dark redefined twice ---- */
@@ -358,7 +358,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent-2)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6l7-3z"/><path d="M8.5 12.2l2.2 2.2 4.8-4.8"/></svg>
       </span>
       <span class="brand-txt">
-        <b>VEIL&nbsp;Console</b>
+        <b>WiFi Veil&nbsp;Console</b>
         <span>WiFi-sensing shield</span>
       </span>
     </div>
@@ -419,7 +419,7 @@
         <div class="how-step how-shield">
           <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--accent-2)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6l7-3z"/><path d="M8.5 12.2l2.2 2.2 4.8-4.8"/></svg></span>
           <span class="eyebrow">The shield</span>
-          <p>VEIL <b>scrambles that fingerprint</b> on every report with a secret twist only your own router can undo. An outside listener sees a <b>different scramble each time</b> and can't tie it to a person — their guess of "who's here" drops to <b>pure chance</b>.</p>
+          <p>WiFi Veil <b>scrambles that fingerprint</b> on every report with a secret twist only your own router can undo. An outside listener sees a <b>different scramble each time</b> and can't tie it to a person — their guess of "who's here" drops to <b>pure chance</b>.</p>
         </div>
         <div class="how-step how-honest">
           <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="var(--good)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M12 3l7 3v5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6l7-3z"/></svg></span>
@@ -524,7 +524,7 @@
       identity while the associated receiver, holding the key, decodes normally. All figures are
       <b>SYNTHETIC / evidence-level&nbsp;L0</b> from the reference model — not measured on hardware.
       <div class="foot-links">
-        <a href="#" onclick="return false">ADR-288 · VEIL</a>
+        <a href="#" onclick="return false">ADR-288 · WiFi Veil</a>
         <a href="#" onclick="return false">ADR-289 · harness</a>
         <a href="#" onclick="return false">docs/research/privacy-shield</a>
       </div>
@@ -559,7 +559,7 @@
   const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
   const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
-  /* ---------- VEIL model (mirrors the crate) ---------- */
+  /* ---------- WiFi Veil model (mirrors the crate) ---------- */
   // re-ID collapse vs mixing passes: piecewise-linear over the crate's measured
   // N=16 shield-on points (optimize.rs). Collapse is ~N-independent (finding),
   // so other N just shift by the chance-floor difference (1/N − 1/16).
@@ -876,7 +876,7 @@
     return '<div class="modal-h"><span class="mglyph">'+SHIELD+'</span>'
       +'<div><div class="eyebrow">Welcome</div><h3>Your Wi-Fi privacy shield</h3></div>'
       +'<button class="m-close" data-act="close" aria-label="Close">×</button></div>'
-      +'<p>Ordinary Wi-Fi can quietly <b>recognise who is in a room</b> — no camera, no app, nothing you carry. VEIL scrambles that leak while your Wi-Fi keeps working normally. This console lets you <b>see it, tune it, and prove it</b>.</p>'
+      +'<p>Ordinary Wi-Fi can quietly <b>recognise who is in a room</b> — no camera, no app, nothing you carry. WiFi Veil scrambles that leak while your Wi-Fi keeps working normally. This console lets you <b>see it, tune it, and prove it</b>.</p>'
       +'<ul class="points">'
       +'<li><span class="pi">'+SHIELD+'</span><div><b>Watch it work</b><small>The panel up top shows people as dots. Shield on → they blur together and can\'t be told apart.</small></div></li>'
       +'<li><span class="pi">%</span><div><b>Read the scorecard</b><small>Live numbers for how well you\'re hidden and how much Wi-Fi speed you keep.</small></div></li>'
@@ -888,12 +888,12 @@
   function openWelcome(){ openModal(welcomeHTML()); markSeen(); }
 
   const EXPLAIN={
-    protect:{t:"How this protects you",p:"Unauthorized Wi-Fi surveillance, and what VEIL does about it — in plain terms.",pts:[
+    protect:{t:"How this protects you",p:"Unauthorized Wi-Fi surveillance, and what WiFi Veil does about it — in plain terms.",pts:[
       ["What can spy on you","Since Wi-Fi 5, your device tells the router how to aim its signal by sending back “beamforming feedback” — sent unencrypted. Anyone in range can capture it passively and, from the tiny stable details, tell people apart (published work re-identifies individuals, detects occupancy through walls, even reads activity)."],
       ["Why you can't tell","There's no light, no app, no device on you, and the snoop only listens — so this happens silently. The Wi-Fi standard (802.11bf, 2025) added the sensing feature but no privacy protection."],
-      ["What VEIL changes","Your router already reshapes its signal legitimately. VEIL adds a secret, per-session “twist” to that feedback (built from the same math the report already uses). Your own router shares the key and undoes it instantly; an outside listener sees a fresh random twist every session and can't average it into a stable fingerprint."],
+      ["What WiFi Veil changes","Your router already reshapes its signal legitimately. WiFi Veil adds a secret, per-session “twist” to that feedback (built from the same math the report already uses). Your own router shares the key and undoes it instantly; an outside listener sees a fresh random twist every session and can't average it into a stable fingerprint."],
       ["The result","Across sessions the snoop's identity guess collapses to chance (~1-in-N, no better than guessing), while your link keeps ~98% of its speed — because the twist preserves the signal's energy and the data beam is untouched."],
-      ["Not jamming","VEIL only shapes your own, standards-legal transmissions. It never floods the air or blocks anyone (that would be illegal jamming). The energy in = energy out meter proves it."],
+      ["Not jamming","WiFi Veil only shapes your own, standards-legal transmissions. It never floods the air or blocks anyone (that would be illegal jamming). The energy in = energy out meter proves it."],
       ["Honest limits","It defends against outside snoops — not the router you're connected to (that party holds the key). It doesn't yet hide coarse motion, and every number here is simulated (evidence level L0) until validated on real hardware."]]},
     kpis:{t:"Your live scorecard",p:"Four numbers that update the moment you change a setting.",pts:[
       ["Re-ID · off","How often an eavesdropper picks the right person with no shield. 100% = they always win."],

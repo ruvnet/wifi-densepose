@@ -1,11 +1,11 @@
 # wifi-densepose-privshield-harness
 
 A metaharness (contributor harness) for
-[`wifi-densepose-privshield`](../../v2/crates/wifi-densepose-privshield) — **VEIL**,
+[`wifi-densepose-privshield`](../../v2/crates/wifi-densepose-privshield) — **WiFi Veil**,
 the compliant-waveform WiFi-sensing privacy shield (ADR-288). Defined by ADR-289.
 
 > **Advanced Coding** — architect → implement → review → test, plus a
-> dependency-free VEIL guidance surface. Modeled on `wifi-densepose-sar-harness`
+> dependency-free WiFi Veil guidance surface. Modeled on `wifi-densepose-sar-harness`
 > (ADR-286). Multi-host scaffold with a kernel that resolves native → wasm → js.
 
 ## Install
@@ -27,7 +27,7 @@ npx wifi-densepose-privshield-harness guidance --topic overview
 |---|---|---|
 | `init` | kernel + host | Boot the kernel + host adapter |
 | `doctor` | kernel + host | Verify the install end-to-end |
-| `guidance --topic <t>` | **none** | Read-only VEIL capability map (source-cited, evidence-labelled) |
+| `guidance --topic <t>` | **none** | Read-only WiFi Veil capability map (source-cited, evidence-labelled) |
 | `route <e0..e3>` | router + `npm run build` | Cost-optimal model routing |
 | `flywheel [gens]` | flywheel + `npm run build` | SYNTHETIC self-improvement demo |
 
@@ -35,9 +35,9 @@ npx wifi-densepose-privshield-harness guidance --topic overview
 `optimization`, `experiment`. It needs no dependencies or build step, so it
 works offline and in CI before `npm install`.
 
-## What VEIL is
+## What WiFi Veil is
 
-VEIL shapes a node's **own** beamforming feedback with keyed Givens rotations so
+WiFi Veil shapes a node's **own** beamforming feedback with keyed Givens rotations so
 a third-party passive sniffer cannot re-identify people, while a keyed receiver
 sees an essentially unchanged link. **Compliant waveform controls only — never
 jamming.** Reference results are **SYNTHETIC / evidence level L0** (reproduced by
@@ -59,9 +59,9 @@ for what is real wiring vs. illustrative/synthetic data.
 
 ## Scope
 
-The harness is a **development aid**. It does not run a VEIL radio, does not
+The harness is a **development aid**. It does not run a WiFi Veil radio, does not
 emit RF, and cannot jam. It does not replace the crate's own gates — the
-authoritative check for a VEIL change is `cargo test -p wifi-densepose-privshield`.
+authoritative check for a WiFi Veil change is `cargo test -p wifi-densepose-privshield`.
 
 ## License
 

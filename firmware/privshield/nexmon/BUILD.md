@@ -1,4 +1,4 @@
-# Building the VEIL Nexmon patch — **UNTESTED**
+# Building the WiFi Veil Nexmon patch — **UNTESTED**
 
 > **This procedure has never been run.** It has not been built with the Nexmon
 > toolchain, not flashed, and not captured on air. Addresses/symbols in
@@ -53,7 +53,7 @@ The core is `no_std`-style C99: no malloc, no libc I/O, only `<math.h>`
    - link a small `libm`/`compiler-rt` for `arm-none-eabi`;
    - or replace the trig with a fixed-point / CORDIC Givens rotation
      (`TODO(reverse-engineer)`), which also avoids float on parts without an FPU.
-3. All VEIL working storage is stack-bounded (`VEIL_MAX_FINE`, `CACHE` in the
+3. All WiFi Veil working storage is stack-bounded (`VEIL_MAX_FINE`, `CACHE` in the
    core) — no heap is introduced on-chip.
 
 ## Build

@@ -1,4 +1,4 @@
-# VEIL protector — openwifi (Xilinx Zynq + AD9361, open PHY/MAC)
+# WiFi Veil protector — openwifi (Xilinx Zynq + AD9361, open PHY/MAC)
 
 > **STATUS: SYNTHETIC / L0 — build-only scaffold. No hardware, no flash, no
 > capture. Nothing here has run on silicon.** Per CLAUDE.md, none of this is a
@@ -31,7 +31,7 @@ highest-*effort* path:
    fmcomms2/3 has two DACs) plus a new spatial-mapping RTL stage and a Vivado
    rebuild — days-to-weeks of FPGA work, not a driver patch.
 
-Because of (1), on openwifi VEIL is realized as the **client-transparent
+Because of (1), on openwifi WiFi Veil is realized as the **client-transparent
 per-packet keyed unitary** (LeakyBeam family) applied at the TX spatial-mapping
 stage, with the legitimate STA (a second openwifi node sharing the key)
 inverting it — **not** as obfuscation of a compressed-BF report the hardware

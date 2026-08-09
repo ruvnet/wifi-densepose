@@ -1,6 +1,6 @@
 [package]
 name = "wifi-densepose-privshield"
-description = "VEIL privacy shield (ADR-288): compliant-waveform countermeasure against unauthorized WiFi sensing. Deterministic attacker-vs-protector experiment that drives beamforming-feedback identity inference toward chance while preserving link throughput. Std-only pure-compute leaf, no async/server/RF-hardware deps; SYNTHETIC data only."
+description = "WiFi Veil privacy shield (ADR-288): compliant-waveform countermeasure against unauthorized WiFi sensing. Deterministic attacker-vs-protector experiment that drives beamforming-feedback identity inference toward chance while preserving link throughput. Std-only pure-compute leaf, no async/server/RF-hardware deps; SYNTHETIC data only."
 version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
@@ -12,7 +12,7 @@ categories.workspace = true
 readme = "README.md"
 
 # Intentionally dependency-free (mirrors `wifi-densepose-aether`, ADR-185 §13).
-# VEIL is a pure-compute experiment/reference: no `rand` (its own deterministic
+# WiFi Veil is a pure-compute experiment/reference: no `rand` (its own deterministic
 # PRNG), no `std::time`/`std::fs`/`std::env`/threads, so it builds unchanged for
 # `wasm32-unknown-unknown` and can never emit RF or touch a radio. The shield
 # *models* compliant waveform controls; it does not drive hardware.

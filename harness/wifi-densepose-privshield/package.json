@@ -1,7 +1,7 @@
 {
   "name": "wifi-densepose-privshield-harness",
   "version": "0.1.0",
-  "description": "Harness for wifi-densepose-privshield (VEIL — compliant-waveform WiFi-sensing privacy shield, ADR-288/289)",
+  "description": "Harness for wifi-densepose-privshield (WiFi Veil — compliant-waveform WiFi-sensing privacy shield, ADR-288/289)",
   "license": "MIT",
   "type": "module",
   "bin": {

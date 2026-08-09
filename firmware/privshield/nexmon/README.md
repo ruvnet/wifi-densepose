@@ -1,6 +1,6 @@
-# VEIL protector — Nexmon (Broadcom/Cypress) path
+# WiFi Veil protector — Nexmon (Broadcom/Cypress) path
 
-C-firmware-patch adapter that would call the portable VEIL core
+C-firmware-patch adapter that would call the portable WiFi Veil core
 (`../core/veil_shield.{h,c}`) on the compressed-beamforming-feedback **angles
 before transmission**, using the [Nexmon](https://github.com/seemoo-lab/nexmon)
 patching framework on a Broadcom/Cypress WiFi chip.
@@ -35,7 +35,7 @@ core**, a proprietary microcontroller running a programmable state machine
 ("ucode"). Published reverse-engineering of these chips reports that the D11
 generates the **VHT/HE compressed beamforming report ~10 µs after the NDP**, with
 its contents fetched from an **internal memory updated directly by the hardware**
-on NDP reception. In other words, the angles VEIL wants to touch are staged and
+on NDP reception. In other words, the angles WiFi Veil wants to touch are staged and
 emitted inside the ucode/PHY path on a microsecond deadline — *below* the ARM
 "wl" driver firmware where Nexmon's C hooks (`__attribute__((at(addr, ...)))`
 flashpatches / branch hooks) live most reliably. Reaching them means either a
@@ -83,7 +83,7 @@ The skeleton wires candidate **#1** and leaves #2/#3 documented but unimplemente
 
 ## What is realistic
 
-- **Realistic now:** verify VEIL's *effect* by reading — capture the shaped vs.
+- **Realistic now:** verify WiFi Veil's *effect* by reading — capture the shaped vs.
   unshaped report with `nexmon_csi`/Wi-BFI and confirm the fine subspace changed
   while energy (SNR/norm) is preserved. This validates the math, not the TX hook.
 - **Realistic with serious RE effort:** candidate #1, on one pinned firmware, as

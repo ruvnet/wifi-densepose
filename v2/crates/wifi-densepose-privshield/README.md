@@ -1,11 +1,12 @@
-![VEIL Console — the shield engaged, with the room's WiFi identity clusters collapsed to the chance floor (re-ID 4.7%, throughput preserved, compliant)](docs/veil-console.png)
+![WiFi Veil Console — the shield engaged, with the room's WiFi identity clusters collapsed to the chance floor (re-ID 4.7%, throughput preserved, compliant)](docs/veil-console.png)
 
-# wifi-densepose-privshield — VEIL
+# wifi-densepose-privshield — WiFi Veil
 
-**VEIL** (Verifiable Emission-shaping for Identity-Leakage prevention) is the
-compliant-waveform **countermeasure** counterpart to
+**WiFi Veil** (codename **VEIL** — Verifiable Emission-shaping for
+Identity-Leakage prevention) is the compliant-waveform **countermeasure**
+counterpart to
 [BFLD](../wifi-densepose-bfld) (ADR-118/121). BFLD *detects* when beamforming
-feedback becomes identifying; VEIL *acts* — it shapes a node's own outgoing
+feedback becomes identifying; WiFi Veil *acts* — it shapes a node's own outgoing
 beamforming feedback so that an unauthorized passive sniffer cannot
 re-identify people or infer activity, while a legitimate receiver (which shares
 the per-session key) sees an essentially unchanged link.
@@ -33,7 +34,7 @@ and the 2025 sensing standard (802.11bf) added the capability but **no privacy
 protection**. Because the attacker only listens, you get no indication it is
 happening.
 
-**The defense — scramble the fingerprint, keep the link.** VEIL adds a secret,
+**The defense — scramble the fingerprint, keep the link.** WiFi Veil adds a secret,
 **per-session "twist"** to your own outgoing feedback, built from the same
 rotation math (Givens rotations) the report already uses:
 
@@ -47,7 +48,7 @@ rotation math (Givens rotations) the report already uses:
   the signal's energy exactly (`energy in = energy out`), so it is **compliant,
   never jamming.** It never floods the air or blocks anyone else.
 
-**What it does *not* do (kept honest).** VEIL defends against a *third-party
+**What it does *not* do (kept honest).** WiFi Veil defends against a *third-party
 sniffer*, not the access point you are connected to (that party holds the key —
 protecting against a malicious AP is BFLD's detection job). It targets identity
 re-identification; coarse motion obfuscation is future work. And every figure in
@@ -63,7 +64,7 @@ captured hardware log.
 
 Identity leaks through the **fine** cross-subcarrier phase structure of a
 compressed beamforming report; data throughput rides the **dominant** beam
-direction. These live in (mostly) separable subspaces. VEIL composes extra
+direction. These live in (mostly) separable subspaces. WiFi Veil composes extra
 **keyed Givens rotations** — the exact primitive the report is already built
 from — over the *fine* subspace only:
 
@@ -90,7 +91,7 @@ unconstrained model optimum is 3-bit, matching the DySPAN-2026 finding.
 
 ## Threat model & scope (stated plainly)
 
-VEIL defends against a **third-party passive sniffer** capturing plaintext
+WiFi Veil defends against a **third-party passive sniffer** capturing plaintext
 beamforming feedback. It does **not** hide identity from the AP a node is
 associated with (that party holds the key by construction) — that is BFLD's
 detection/policy problem, not this shield's. It is **compliant by
@@ -123,7 +124,7 @@ cargo run -p wifi-densepose-privshield --bin veil -- doctor  # self-check, exit 
 
 ```text
 ┌──────────────────────────────────────────────────────────
-│  VEIL · wifi-sensing privacy shield        ● PROTECTED
+│  WiFi Veil · wifi-sensing privacy shield        ● PROTECTED
 │
 │  re-ID off   100.0%     re-ID on    4.7%   (chance 6.25%)
 │  throughput   97.6%     emission  1.000×   · not jamming
@@ -140,7 +141,7 @@ In the TUI, type commands to steer the shield live: `on`/`off`, `passes <n>`,
 `preset scif|board|ward|hotel`, `optimize`, `proof`, `quit`. All readouts are
 **SYNTHETIC / L0**.
 
-A self-contained graphical **VEIL Console** web dashboard mirrors this same
+A self-contained graphical **WiFi Veil Console** web dashboard mirrors this same
 instrument — it ships in [`ui/veil-console.html`](ui/veil-console.html) (open it
 in any browser; no build, no network). `veil` is the terminal-native version.
 

@@ -1,4 +1,4 @@
-# VEIL ↔ `mac80211` / driver integration map
+# WiFi Veil ↔ `mac80211` / driver integration map
 
 > **`SYNTHETIC / L0` — BUILD-ONLY, UNTESTED ON HARDWARE.** These are hook-point
 > designs derived from public API/source, not validated on silicon. Function and
@@ -47,7 +47,7 @@ Legend: **US** = userspace-reachable today · **DP** = needs driver patch ·
   firmware change to honor an externally supplied grouping. Not reachable without
   both a driver and firmware patch.
 
-## 4. Per-packet keyed unitary (the core VEIL transform) — **FW** (blob-blocked)
+## 4. Per-packet keyed unitary (the core WiFi Veil transform) — **FW** (blob-blocked)
 
 - **Daemon:** `veil_apply_keyed_rotation()` → `veil_shield_apply(fine, n, key,
   passes)` from the portable core. Orthogonal / energy-preserving (the
@@ -85,7 +85,7 @@ Legend: **US** = userspace-reachable today · **DP** = needs driver patch ·
 
 ## Summary of the effort boundary
 
-| Control | Effort to reach full VEIL fidelity |
+| Control | Effort to reach full WiFi Veil fidelity |
 |---|---|
 | TX antenna map | Ready now (US), coarse only |
 | Sounding cadence jitter | Wire hostapd `ctrl_iface` (US), coarse only |

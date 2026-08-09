@@ -1,4 +1,4 @@
-# VEIL on ESP32 — feasibility and honest scope
+# WiFi Veil on ESP32 — feasibility and honest scope
 
 **Status: `SYNTHETIC / L0` (build-only).** Everything in this directory is an
 ESP-IDF component *skeleton*. Nothing here has been flashed, run, or captured on
@@ -18,7 +18,7 @@ surface*.
 supporting roles.**
 
 The ESP32 **cannot shape its own transmitted 802.11 beamforming feedback.** The
-VEIL shield works by perturbing the *compressed beamforming feedback report* (the
+WiFi Veil shield works by perturbing the *compressed beamforming feedback report* (the
 Givens/phi-psi angles a station sends back to an AP) with a keyed orthogonal
 rotation. On the ESP32 that report is generated **inside the closed Espressif
 Wi-Fi PHY/MAC binary blob** (`esp-phy-lib`, shipped in object form; the Wi-Fi
@@ -30,23 +30,23 @@ and action* frames with the PHY choosing the actual precoding — it will not le
 you hand-craft the VHT/HE sounding-feedback subtype with a chosen precoder. So
 the ESP32 is **not** a beamforming-feedback protector.
 
-**Feasibility grade for "ESP32 as a self-protecting VEIL node": F (infeasible).**
+**Feasibility grade for "ESP32 as a self-protecting WiFi Veil node": F (infeasible).**
 The one waveform we need to touch is behind a blob with no hook.
 
-**Feasibility grade for "ESP32 as a VEIL supporting device": B (feasible,
+**Feasibility grade for "ESP32 as a WiFi Veil supporting device": B (feasible,
 build-only).** Three legitimate roles below, best-first.
 
 ---
 
 ## What the ESP32 can and cannot do
 
-| Capability | ESP-IDF surface | VEIL-relevant? | Verdict |
+| Capability | ESP-IDF surface | WiFi Veil-relevant? | Verdict |
 |---|---|---|---|
 | Read CSI (channel state) | `esp_wifi_set_csi_config` / `esp_wifi_set_csi_rx_cb` / `esp_wifi_set_csi` | Yes — detect *being sensed* | **CAN** (observe only) |
 | Promiscuous / sniffer RX | `esp_wifi_set_promiscuous` | Yes — more CSI, frame cadence | **CAN** (observe only) |
 | Inject raw mgmt/data frames | `esp_wifi_80211_tx` (beacon, probe, action, non-QoS data only) | Marginal; not for BF feedback | **CAN (limited)** |
 | Drive external GPIO/SPI hardware | `gpio_*`, `spi_master_*` | Yes — control an external RIS | **CAN** |
-| Shape its own **beamforming feedback** (compressed BF report angles) | *none* — generated in closed PHY blob | This is the actual VEIL waveform | **CANNOT** |
+| Shape its own **beamforming feedback** (compressed BF report angles) | *none* — generated in closed PHY blob | This is the actual WiFi Veil waveform | **CANNOT** |
 | Choose/replace its own **precoding matrix** | *none* — PHY-internal | Yes, but inaccessible | **CANNOT** |
 | Modify the Wi-Fi PHY / `esp-phy-lib` | *none* — object-only, NDA | — | **CANNOT** |
 
@@ -63,7 +63,7 @@ it does so without the ESP32 emitting any RF of its own.
 ### 1. `veil_sensing_detector/` — sensing-solicitation detector (strongest, clearly compliant)
 Uses the CSI callback (+ promiscuous RX) to estimate how often the node is being
 sounded/solicited, and raises an engage **trigger** (GPIO / MQTT / ESP-NOW) that
-tells the *AP-side* VEIL shield (running the portable `../core/veil_shield.c`) to
+tells the *AP-side* WiFi Veil shield (running the portable `../core/veil_shield.c`) to
 turn on. Pure observe-plus-control-signal; the ESP32 shapes nothing on air. This
 is the role we would actually build first.
 
