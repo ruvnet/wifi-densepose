@@ -1,0 +1,46 @@
+# WiFi Veil — standalone Rust package (extracted from the RuView monorepo).
+# Dependency-free by design: no `rand`, no `std::time`/`fs`/`env`/threads, so it
+# builds unchanged for `wasm32-unknown-unknown` and can never emit RF or touch a
+# radio. The shield *models* compliant waveform controls; it does not drive
+# hardware. Every number it prints is SYNTHETIC and reproduced by `cargo test`.
+
+# Empty [workspace] table marks this directory as its own workspace root so it is
+# self-contained even when nested inside another repository during extraction.
+[workspace]
+
+[package]
+name = "wifi-veil"
+description = "WiFi Veil (codename VEIL): compliant-waveform countermeasure against unauthorized WiFi sensing. Deterministic attacker-vs-protector experiment that drives beamforming-feedback identity inference toward chance while preserving link throughput. Std-only pure-compute leaf, no async/server/RF-hardware deps; SYNTHETIC data only."
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+authors = ["rUv <ruv@ruv.net>", "WiFi Veil Contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ruvnet/wifi-veil"
+documentation = "https://docs.rs/wifi-veil"
+homepage = "https://github.com/ruvnet/wifi-veil"
+keywords = ["wifi", "privacy", "beamforming", "sensing", "security"]
+categories = ["science", "simulation", "wasm"]
+readme = "README.md"
+
+# Intentionally dependency-free (see the module docs in `src/lib.rs`).
+[dependencies]
+
+[dev-dependencies]
+
+[lib]
+name = "wifi_veil"
+path = "src/lib.rs"
+
+# `veil` — the custom, dependency-free terminal harness + TUI. Native counterpart
+# to the npm metaharness under `harness/`. Std-only; builds without extra deps.
+# Excluded from the wasm leaf story (that stays `cargo build --lib`).
+[[bin]]
+name = "veil"
+path = "src/bin/veil.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

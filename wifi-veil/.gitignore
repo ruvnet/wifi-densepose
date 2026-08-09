@@ -1,0 +1,22 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Library crate: lockfile not committed
+Cargo.lock
+
+# C firmware host builds
+firmware/**/*.o
+firmware/core/test_veil_shield
+
+# Node / harness
+node_modules/
+harness/dist/
+
+# Agent/tooling telemetry — never commit
+.claude-flow/
+*.log
+
+# OS / editor
+.DS_Store
+*.swp

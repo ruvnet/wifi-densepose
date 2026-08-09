@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "generator": "0.1.0",
+  "template": "vertical:coding",
+  "template_version": "0.0.0",
+  "vars": {
+    "name": "wifi-veil-harness",
+    "description": "Harness for wifi-veil (WiFi Veil privacy shield)",
+    "host": "claude-code"
+  },
+  "hosts": [
+    "claude-code"
+  ],
+  "files": {
+    ".claude/settings.json": "b165b8dc3723febae34825e803d52857364f4574d617286b26e760fb6dc3020e",
+    ".claude-plugin/plugin.json": "884bb65b7244312a9648b2c2367ca7c088360e5dc1c8d625bd7c99c012824d12",
+    "bin/cli.js": "3a295534817c34bb01943f8d7964ecca822f8126daae726139f9e3cebd1694e5",
+    "CLAUDE.md": "8ebac3a49fd54723e1dc33cc8a808ec22776a5b5837361f84f3453f50ce88752",
+    "package.json": "76d772b504e795f763baa48b1660d3690768a70543fa8c3603771fbcf7d9c6ca",
+    "README.md": "ea0b98ce683096494e64466014d6578df16263ba68eb5b7a740d2e7b10dbcb58",
+    "src/init.ts": "1ca3baf35f6d0d95babb8022402531b212b70cf7318c5dd475485f52de117b9b",
+    "src/router.ts": "7c5eaebbe7061a1912250397271d460b517104de1b80f6861ad629529fde190d",
+    "src/flywheel.ts": "d8707cfc6d705e2999f4a61015d4392f7ce3f6bf480d7d50ded67b98e63c13e8",
+    "tsconfig.json": "8b4e730a1aa39162ac574455d7a98e1881f5313ca80ffe503b9652dcf0c76b9d",
+    "vitest.config.ts": "021b33ec623593effc3d163020479a91a1179329ee4ed1cb25f2dd9388e19820",
+    "__tests__/smoke.test.ts": "551d8835dbc8a2a617e3c35516c621e9e8694a42429dbb9dea2b4a43eea428be",
+    "__tests__/router.test.ts": "e2536fe37a5cac02e7a54188bc72a3e2e0809ab67655746ac1550c5c3ba69708",
+    "__tests__/flywheel.test.ts": "fe90a341fd18e56609a360f82b3567e9ef520b2181f4f0387bbf1b52776a29d0",
+    "__tests__/guidance.test.ts": "452553504887d6bf059123cb677e8b881cf09f8bf09d5bc259ed882161f79570",
+    "LICENSE": "07b1a7c2aa25991872e3594de2ecb64ff6b4c5d3dc2376dd5b9e9f77c4b258e8"
+  },
+  "generated_at": "2026-08-09T00:00:00.000Z",
+  "meta": {
+    "surface": "cli"
+  }
+}
