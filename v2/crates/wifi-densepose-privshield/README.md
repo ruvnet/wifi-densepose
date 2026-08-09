@@ -73,6 +73,8 @@ counterpart to the npm metaharness). It drives the same model the tests use — 
 interactive ANSI dashboard plus scriptable subcommands, std-only (no
 `crossterm`/`ratatui`), so it runs in any terminal, pipe, or CI.
 
+![veil TUI walkthrough — toggling the shield off/on, dropping to 32 passes (out of spec), back to 96 (pass), a ward preset, optimize, and a witness check](docs/veil-tui.gif)
+
 ```bash
 cargo run -p wifi-densepose-privshield --bin veil            # interactive TUI (or a one-shot report when piped)
 cargo run -p wifi-densepose-privshield --bin veil -- sweep   # re-ID vs passes + throughput vs bits
@@ -97,8 +99,11 @@ cargo run -p wifi-densepose-privshield --bin veil -- doctor  # self-check, exit 
 In the TUI, type commands to steer the shield live: `on`/`off`, `passes <n>`,
 `bits <n>`, `n <k>`, `snr <db>`, `metric euclid|cosine`,
 `preset scif|board|ward|hotel`, `optimize`, `proof`, `quit`. All readouts are
-**SYNTHETIC / L0**. (A graphical VEIL Console web dashboard mirrors this same
-instrument; `veil` is the terminal-native version.)
+**SYNTHETIC / L0**.
+
+A self-contained graphical **VEIL Console** web dashboard mirrors this same
+instrument — it ships in [`ui/veil-console.html`](ui/veil-console.html) (open it
+in any browser; no build, no network). `veil` is the terminal-native version.
 
 ## Modules
 

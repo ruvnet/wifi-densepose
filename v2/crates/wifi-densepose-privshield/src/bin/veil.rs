@@ -38,9 +38,16 @@ const BOLD: &str = "\x1b[1m";
 const RST: &str = "\x1b[0m";
 const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
-/// Emit color only for a real terminal, and never when `NO_COLOR` is set.
+/// Emit color for a real terminal; never when `NO_COLOR` is set; always when
+/// `CLICOLOR_FORCE` is set (so piped captures keep their color).
 fn color_enabled() -> bool {
-    io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none()
+    if std::env::var_os("NO_COLOR").is_some() {
+        return false;
+    }
+    if std::env::var_os("CLICOLOR_FORCE").is_some() {
+        return true;
+    }
+    io::stdout().is_terminal()
 }
 
 /// Wrap `s` in `code` when color is on.
