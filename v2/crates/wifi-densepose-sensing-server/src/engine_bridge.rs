@@ -38,6 +38,7 @@ use wifi_densepose_bfld::{PrivacyClass, PrivacyMode};
 use wifi_densepose_engine::{AdapterInfo, EngineError, StreamingEngine, TrustedOutput};
 use wifi_densepose_geo::types::GeoRegistration;
 use wifi_densepose_signal::ruvsense::fusion_quality::CalibrationId;
+use wifi_densepose_signal::ruvsense::multiband::MultiBandCsiFrame;
 use wifi_densepose_signal::ruvsense::multistatic::MultistaticConfig;
 use wifi_densepose_worldgraph::WorldId;
 
@@ -75,6 +76,26 @@ pub struct EngineBridge {
     engine_error_count: u64,
     /// Last time an engine error was actually logged (rate limiter).
     last_error_warn_at: Option<Instant>,
+    /// Hard timestamp guard mirrored from the engine's multistatic fuser.
+    fusion_guard_us: u64,
+}
+
+/// Keep the freshest time-consistent cohort instead of mixing adjacent cycles.
+///
+/// Wi-Fi delivery can briefly delay one link while the other continues. Passing
+/// both frames downstream either fails the whole governed cycle or tempts an
+/// operator to widen the fusion guard beyond one sensing cycle. Favoring the
+/// newest cohort preserves temporal integrity and lets the engine's documented
+/// single-node fallback produce a witnessed result for that cycle.
+fn newest_time_consistent_frames(
+    mut frames: Vec<MultiBandCsiFrame>,
+    guard_interval_us: u64,
+) -> Vec<MultiBandCsiFrame> {
+    let Some(newest) = frames.iter().map(|frame| frame.timestamp_us).max() else {
+        return frames;
+    };
+    frames.retain(|frame| newest.saturating_sub(frame.timestamp_us) <= guard_interval_us);
+    frames
 }
 
 impl EngineBridge {
@@ -95,6 +116,10 @@ impl EngineBridge {
         multistatic_cfg: Option<MultistaticConfig>,
     ) -> Self {
         let mut engine = StreamingEngine::new(mode, model_version, GeoRegistration::default());
+        let fusion_guard_us = multistatic_cfg.as_ref().map_or_else(
+            || MultistaticConfig::default().guard_interval_us,
+            |cfg| cfg.guard_interval_us,
+        );
         if let Some(cfg) = multistatic_cfg {
             engine.set_multistatic_config(cfg);
         }
@@ -110,6 +135,7 @@ impl EngineBridge {
             demoted: false,
             engine_error_count: 0,
             last_error_warn_at: None,
+            fusion_guard_us,
         }
     }
 
@@ -165,7 +191,10 @@ impl EngineBridge {
         node_states: &HashMap<u8, NodeState>,
         now_ms: i64,
     ) -> Option<Result<TrustedOutput, EngineError>> {
-        let frames = node_frames_from_states(node_states);
+        let frames = newest_time_consistent_frames(
+            node_frames_from_states(node_states),
+            self.fusion_guard_us,
+        );
         if frames.is_empty() {
             return None;
         }
@@ -419,22 +448,10 @@ mod tests {
         assert!(!bridge.suppress_raw_outputs());
     }
 
-    /// Error wiring (review finding 1a): a live cycle that fails fusion yields
-    /// an `EngineError` — previously dropped by `if let Some(Ok(..))` at the
-    /// call sites. The counter must increment and the last good trust state
-    /// must survive a later failure.
-    ///
-    /// Originally this forced the failure with a 56-vs-30 subcarrier mismatch
-    /// (`DimensionMismatch`). Since #1170 the live bridge canonicalizes every
-    /// node onto the 56-tone grid, so heterogeneous counts now fuse cleanly —
-    /// a frame-timestamp spread wider than the fuser's 60 ms guard interval is
-    /// the remaining deterministic way to provoke a fusion error here.
+    /// A delayed link belongs to an earlier sensing cycle and must not make the
+    /// current governed cycle fail or be fused as if it were simultaneous.
     #[test]
-    fn observe_cycle_counts_engine_errors() {
-        // Both nodes are 56-subcarrier (canonicalization-clean), but their
-        // frame timestamps are 500 ms apart — far beyond the 60 ms guard —
-        // so the fuser rejects the cycle with TimestampMismatch. Future
-        // offsets keep both instants safely after the bridge's lazy EPOCH.
+    fn observe_cycle_uses_the_freshest_time_consistent_cohort() {
         fn mismatched_states() -> HashMap<u8, NodeState> {
             let now = Instant::now();
             let mut a = node_state_with_history(1.0, 56);
@@ -450,26 +467,16 @@ mod tests {
         let mut bridge = EngineBridge::new(PrivacyMode::PrivateHome, 1, "r", "R", None);
         let mismatched = mismatched_states();
 
-        assert!(bridge.observe_cycle(&mismatched, 1_000).is_none());
-        assert_eq!(bridge.engine_error_count(), 1);
-        assert!(
-            bridge.last_trust_witness().is_none(),
-            "no witness from a failed cycle"
-        );
-
-        assert!(bridge.observe_cycle(&mismatched, 2_000).is_none());
-        assert_eq!(bridge.engine_error_count(), 2);
-
-        // A later good cycle records trust state; the audit count is kept.
-        let out = bridge.observe_cycle(&two_node_states(), 3_000);
-        assert!(out.is_some());
+        let out = bridge.observe_cycle(&mismatched, 1_000);
+        assert!(out.is_some(), "the newest link keeps the cycle observable");
+        assert_eq!(bridge.engine_error_count(), 0);
         assert!(bridge.last_trust_witness().is_some());
-        assert_eq!(bridge.engine_error_count(), 2);
+        assert_eq!(bridge.registered_node_count(), 1);
 
-        // And a subsequent failure keeps the last good witness readable.
-        assert!(bridge.observe_cycle(&mismatched, 4_000).is_none());
-        assert_eq!(bridge.engine_error_count(), 3);
-        assert!(bridge.last_trust_witness().is_some());
+        // Once both links are aligned, the following cycle uses and registers
+        // the full topology again rather than permanently dropping a node.
+        assert!(bridge.observe_cycle(&two_node_states(), 2_000).is_some());
+        assert_eq!(bridge.registered_node_count(), 2);
     }
 
     /// ADR-141 mapping (review finding 1c): a cycle emitted at class
