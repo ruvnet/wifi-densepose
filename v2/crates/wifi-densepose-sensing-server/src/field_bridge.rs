@@ -139,7 +139,8 @@ pub fn maybe_feed_calibration(field: &mut FieldModel, frame_history: &VecDeque<V
 /// Parse node positions from a semicolon-delimited string.
 ///
 /// Format: `"x,y,z;x,y,z;..."` where each coordinate is an `f32`.
-/// Malformed entries are skipped with a warning log.
+/// The full configuration is rejected if any entry is malformed. Skipping an
+/// entry would shift every later coordinate onto the wrong physical node ID.
 pub fn parse_node_positions(input: &str) -> Vec<[f32; 3]> {
     if input.is_empty() {
         return Vec::new();
@@ -147,11 +148,11 @@ pub fn parse_node_positions(input: &str) -> Vec<[f32; 3]> {
     input
         .split(';')
         .enumerate()
-        .filter_map(|(idx, triplet)| {
+        .map(|(idx, triplet)| {
             let parts: Vec<&str> = triplet.split(',').collect();
             if parts.len() != 3 {
                 tracing::warn!(
-                    "Skipping malformed node position entry {idx}: '{triplet}' (expected x,y,z)"
+                    "Rejecting node positions: malformed entry {idx}: '{triplet}' (expected x,y,z)"
                 );
                 return None;
             }
@@ -160,14 +161,29 @@ pub fn parse_node_positions(input: &str) -> Vec<[f32; 3]> {
                 parts[1].parse::<f32>(),
                 parts[2].parse::<f32>(),
             ) {
-                (Ok(x), Ok(y), Ok(z)) => Some([x, y, z]),
+                (Ok(x), Ok(y), Ok(z)) if x.is_finite() && y.is_finite() && z.is_finite() => {
+                    Some([x, y, z])
+                }
                 _ => {
-                    tracing::warn!("Skipping unparseable node position entry {idx}: '{triplet}'");
+                    tracing::warn!("Rejecting node positions: invalid entry {idx}: '{triplet}'");
                     None
                 }
             }
         })
-        .collect()
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_default()
+}
+
+/// Resolve the configured position for a physical node ID.
+///
+/// CLI positions are ordered for Node 1, Node 2, and so on. Keep the historical
+/// default for unconfigured IDs so existing deployments retain their API shape.
+pub fn node_position(positions: &[[f32; 3]], node_id: u8) -> [f64; 3] {
+    node_id
+        .checked_sub(1)
+        .and_then(|index| positions.get(usize::from(index)))
+        .map(|position| position.map(f64::from))
+        .unwrap_or([2.0, 0.0, 1.5])
 }
 
 #[cfg(test)]
@@ -192,15 +208,28 @@ mod tests {
     #[test]
     fn test_parse_node_positions_invalid() {
         let positions = parse_node_positions("abc;1,2,3");
-        assert_eq!(positions.len(), 1);
-        assert_eq!(positions[0], [1.0, 2.0, 3.0]);
+        assert!(positions.is_empty());
     }
 
     #[test]
     fn test_parse_node_positions_partial_triplet() {
         let positions = parse_node_positions("1,2;3,4,5");
-        assert_eq!(positions.len(), 1);
-        assert_eq!(positions[0], [3.0, 4.0, 5.0]);
+        assert!(positions.is_empty());
+    }
+
+    #[test]
+    fn test_parse_node_positions_rejects_non_finite_coordinates() {
+        assert!(parse_node_positions("NaN,0,1.5;1,0,1.5").is_empty());
+        assert!(parse_node_positions("0,0,1.5;inf,0,1.5").is_empty());
+    }
+
+    #[test]
+    fn configured_position_is_mapped_from_one_based_node_id() {
+        let positions = vec![[0.0, 0.0, 1.5], [1.5, 0.0, 1.5]];
+
+        assert_eq!(node_position(&positions, 1), [0.0, 0.0, 1.5]);
+        assert_eq!(node_position(&positions, 2), [1.5, 0.0, 1.5]);
+        assert_eq!(node_position(&positions, 3), [2.0, 0.0, 1.5]);
     }
 
     /// Regression: a freshly-started (`Uncalibrated`) field model must begin

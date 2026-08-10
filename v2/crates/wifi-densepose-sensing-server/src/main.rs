@@ -1098,6 +1098,8 @@ struct AppStateInner {
     frame_history: VecDeque<Vec<f64>>,
     tick: u64,
     source: String,
+    /// Physical coordinates ordered by one-based ESP32 node ID.
+    node_positions: Vec<[f32; 3]>,
     /// Instant of the last ESP32 UDP frame received (for offline detection).
     last_esp32_frame: Option<std::time::Instant>,
     /// Latest validated RTL8720F summary; raw radar samples are not retained here.
@@ -1335,6 +1337,7 @@ impl AppStateInner {
             frame_history: VecDeque::new(),
             tick: 0,
             source: "test".to_string(),
+            node_positions: Vec::new(),
             last_esp32_frame: None,
             latest_realtek_radar: None,
             last_realtek_frame: None,
@@ -6246,7 +6249,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         .map(|(&id, n)| NodeInfo {
                             node_id: id,
                             rssi_dbm: n.rssi_history.back().copied().unwrap_or(0.0),
-                            position: [2.0, 0.0, 1.5],
+                            position: field_bridge::node_position(&s.node_positions, id),
                             amplitude: vec![],
                             subcarrier_count: 0,
                             // Vitals-only path; still expose the sync snapshot
@@ -6714,7 +6717,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         .map(|(&id, n)| NodeInfo {
                             node_id: id,
                             rssi_dbm: n.rssi_history.back().copied().unwrap_or(0.0),
-                            position: [2.0, 0.0, 1.5],
+                            position: field_bridge::node_position(&s.node_positions, id),
                             amplitude: if suppress_raw {
                                 vec![]
                             } else {
@@ -8062,6 +8065,11 @@ async fn main() {
     // Vital sign sample rate derives from tick interval (e.g. 500ms tick => 2 Hz)
     let vital_sample_rate = 1000.0 / args.tick_ms as f64;
     info!("Vital sign detector sample rate: {vital_sample_rate:.1} Hz");
+    let configured_node_positions = args
+        .node_positions
+        .as_deref()
+        .map(field_bridge::parse_node_positions)
+        .unwrap_or_default();
 
     // Load RVF container if --load-rvf was specified
     let rvf_info = if let Some(ref rvf_path) = args.load_rvf {
@@ -8265,6 +8273,7 @@ async fn main() {
         frame_history: VecDeque::new(),
         tick: 0,
         source: source.into(),
+        node_positions: configured_node_positions.clone(),
         last_esp32_frame: None,
         latest_realtek_radar: None,
         last_realtek_frame: None,
@@ -8354,15 +8363,12 @@ async fn main() {
                 min_nodes: 1, // single-node passthrough
                 ..cfg.clone()
             });
-            if let Some(ref pos_str) = args.node_positions {
-                let positions = field_bridge::parse_node_positions(pos_str);
-                if !positions.is_empty() {
-                    info!(
-                        "Configured {} node positions for multistatic fusion",
-                        positions.len()
-                    );
-                    fuser.set_node_positions(positions);
-                }
+            if !configured_node_positions.is_empty() {
+                info!(
+                    "Configured {} node positions for multistatic fusion and sensing output",
+                    configured_node_positions.len()
+                );
+                fuser.set_node_positions(configured_node_positions.clone());
             }
             engine_bridge_multistatic_cfg = Some(MultistaticConfig {
                 min_nodes: 1,
