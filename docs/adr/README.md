@@ -145,6 +145,9 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-287](ADR-287-coherent-wideband-rf-tomography-crate.md) | `wifi-densepose-sar` — coherent wideband RF tomography research crate | Accepted (implemented, published) |
 | [ADR-285](ADR-285-homecore-wasm-first-metaharness.md) | WASM-first Homecore developer metaharness via `npx homecore` | Accepted (implemented and validated) |
 | [ADR-286](ADR-286-wifi-densepose-sar-harness-via-metaharness.md) | `wifi-densepose-sar-harness` — MetaHarness with darwin/router/flywheel | Accepted (implemented, published) |
+| [ADR-288](ADR-288-public-benchmark-evaluation-harness.md) | Public-benchmark evaluation harness — Widar3.0 ingest, split protocols, leakage guards | Accepted (initial implementation) |
+| [ADR-289](ADR-289-wideband-80211ax-csi-ingest.md) | Wideband 802.11ax CSI ingest — FeitCSI/AX210 adapter, subcarrier-agnostic plumbing | Accepted (initial implementation) |
+| [ADR-290](ADR-290-vitals-ground-truth-rig.md) | Vitals ground-truth rig — reference ingest, alignment, agreement metrics | Accepted (initial implementation) |
 
 ---
 
