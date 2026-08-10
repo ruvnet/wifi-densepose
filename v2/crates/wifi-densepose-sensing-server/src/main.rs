@@ -5345,14 +5345,57 @@ fn scan_recording_files() -> Vec<serde_json::Value> {
 
 // ── Adaptive classifier endpoints ────────────────────────────────────────────
 
+fn adaptive_recordings_dir_from(configured: Option<std::ffi::OsString>) -> PathBuf {
+    configured
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("data/recordings"))
+}
+
+fn adaptive_recordings_dir() -> PathBuf {
+    // The path is process configuration, not request input. This lets a private
+    // product keep household captures outside the upstream RuView checkout.
+    adaptive_recordings_dir_from(std::env::var_os("RUVIEW_ADAPTIVE_RECORDINGS_DIR"))
+}
+
+fn adaptive_node_count_from(configured: Option<std::ffi::OsString>) -> Option<usize> {
+    configured
+        .and_then(|value| value.into_string().ok())
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|count| *count > 0)
+}
+
+#[cfg(test)]
+mod adaptive_recordings_directory_tests {
+    use super::*;
+
+    #[test]
+    fn configured_directory_is_used_without_changing_the_default() {
+        assert_eq!(
+            PathBuf::from("/private/training-view"),
+            adaptive_recordings_dir_from(Some("/private/training-view".into()))
+        );
+        assert_eq!(
+            PathBuf::from("data/recordings"),
+            adaptive_recordings_dir_from(None)
+        );
+        assert_eq!(Some(2), adaptive_node_count_from(Some("2".into())));
+        assert_eq!(None, adaptive_node_count_from(Some("0".into())));
+    }
+}
+
 /// POST /api/v1/adaptive/train — train the adaptive classifier from recordings.
 async fn adaptive_train(State(state): State<SharedState>) -> Json<serde_json::Value> {
-    let rec_dir = PathBuf::from("data/recordings");
-    let expected_node_count = {
+    let rec_dir = adaptive_recordings_dir();
+    let active_node_count = {
         let s = state.read().await;
         let count = count_fresh_nodes(&s.node_states, std::time::Instant::now());
         (count > 0).then_some(count)
     };
+    let expected_node_count = adaptive_node_count_from(std::env::var_os(
+        "RUVIEW_ADAPTIVE_NODE_COUNT",
+    ))
+    .or(active_node_count);
     eprintln!("=== Adaptive Classifier Training ===");
     match adaptive_classifier::train_from_recordings_for_node_count(
         &rec_dir,
