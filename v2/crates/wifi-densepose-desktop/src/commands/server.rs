@@ -6,8 +6,33 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::state::AppState;
 
+const fn server_binary_name(is_windows: bool) -> &'static str {
+    if is_windows {
+        "sensing-server.exe"
+    } else {
+        "sensing-server"
+    }
+}
+
+const fn path_locator_command(is_windows: bool) -> &'static str {
+    if is_windows {
+        "where"
+    } else {
+        "which"
+    }
+}
+
 /// Default binary name for the sensing server.
-const DEFAULT_SERVER_BIN: &str = "sensing-server";
+const DEFAULT_SERVER_BIN: &str = server_binary_name(cfg!(windows));
+const PATH_LOCATOR_COMMAND: &str = path_locator_command(cfg!(windows));
+
+fn first_path_match(stdout: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_owned)
+}
 
 /// Find the sensing server binary path.
 ///
@@ -48,10 +73,12 @@ fn find_server_binary(app: &AppHandle, custom_path: Option<&str>) -> Result<Stri
     }
 
     // 4. Check if it's in PATH
-    if let Ok(output) = Command::new("which").arg(DEFAULT_SERVER_BIN).output() {
+    if let Ok(output) = Command::new(PATH_LOCATOR_COMMAND)
+        .arg(DEFAULT_SERVER_BIN)
+        .output()
+    {
         if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
+            if let Some(path) = first_path_match(&output.stdout) {
                 return Ok(path);
             }
         }
@@ -411,5 +438,24 @@ mod tests {
 
         assert_eq!(config.http_port, Some(8080));
         assert_eq!(config.ws_port, Some(8765));
+    }
+
+    #[test]
+    fn platform_lookup_names_include_windows_conventions() {
+        assert_eq!(server_binary_name(true), "sensing-server.exe");
+        assert_eq!(path_locator_command(true), "where");
+        assert_eq!(server_binary_name(false), "sensing-server");
+        assert_eq!(path_locator_command(false), "which");
+    }
+
+    #[test]
+    fn path_lookup_uses_the_first_match() {
+        let matches = b"C:\\first\\sensing-server.exe\r\nC:\\second\\sensing-server.exe\r\n";
+
+        assert_eq!(
+            first_path_match(matches).as_deref(),
+            Some("C:\\first\\sensing-server.exe")
+        );
+        assert_eq!(first_path_match(b"\r\n\r\n"), None);
     }
 }
