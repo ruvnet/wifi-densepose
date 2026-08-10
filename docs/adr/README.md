@@ -148,6 +148,7 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-288](ADR-288-public-benchmark-evaluation-harness.md) | Public-benchmark evaluation harness — Widar3.0 ingest, split protocols, leakage guards | Accepted (initial implementation) |
 | [ADR-289](ADR-289-wideband-80211ax-csi-ingest.md) | Wideband 802.11ax CSI ingest — FeitCSI/AX210 adapter, subcarrier-agnostic plumbing | Accepted (initial implementation) |
 | [ADR-290](ADR-290-vitals-ground-truth-rig.md) | Vitals ground-truth rig — reference ingest, alignment, agreement metrics | Accepted (initial implementation) |
+| [ADR-291](ADR-291-wifi-veil-integration.md) | WiFi Veil integration — emission-shaping countermeasure as advisory BFLD dependency | Accepted (initial implementation) |
 
 ---
 

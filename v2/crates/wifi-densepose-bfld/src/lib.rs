@@ -53,6 +53,9 @@ pub mod signature_hasher;
 pub mod sink;
 pub mod soul_channels;
 pub mod soul_match;
+/// WiFi Veil advisory integration (ADR-291). Feature-gated: `veil`.
+#[cfg(feature = "veil")]
+pub mod veil;
 
 pub use coherence_gate::{CoherenceGate, MatchOutcome, NullOracle, SoulMatchOracle};
 #[cfg(feature = "std")]

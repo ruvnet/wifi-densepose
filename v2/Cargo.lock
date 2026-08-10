@@ -11365,6 +11365,7 @@ dependencies = [
  "serde_json",
  "static_assertions",
  "thiserror 2.0.18",
+ "wifi-veil",
 ]
 
 [[package]]
@@ -11803,6 +11804,11 @@ dependencies = [
  "thiserror 2.0.18",
  "wifi-densepose-geo",
 ]
+
+[[package]]
+name = "wifi-veil"
+version = "0.1.0"
+source = "git+https://github.com/ruvnet/wifi-veil?rev=018468b5d2bf41f35c552910f35659830af0eb91#018468b5d2bf41f35c552910f35659830af0eb91"
 
 [[package]]
 name = "winapi"
