@@ -2344,7 +2344,9 @@ fn smooth_and_classify(state: &mut AppStateInner, raw: &mut ClassificationInfo, 
 
     // 6. Write the smoothed result back into the classification.
     raw.motion_level = state.current_motion_level.clone();
-    raw.presence = sm > 0.03;
+    // Keep the public classification contract internally consistent during
+    // hysteresis: the accepted state, not a second threshold, owns presence.
+    raw.presence = raw.motion_level != "absent";
     raw.confidence = (0.4 + sm * 0.6).clamp(0.0, 1.0);
 }
 
@@ -2382,8 +2384,48 @@ fn smooth_and_classify_node(ns: &mut NodeState, raw: &mut ClassificationInfo, ra
     }
 
     raw.motion_level = ns.current_motion_level.clone();
-    raw.presence = sm > 0.03;
+    // Match the aggregate path so consumers never receive absent + present.
+    raw.presence = raw.motion_level != "absent";
     raw.confidence = (0.4 + sm * 0.6).clamp(0.0, 1.0);
+}
+
+#[cfg(test)]
+mod smoothed_classification_consistency_tests {
+    use super::*;
+
+    fn raw_absent() -> ClassificationInfo {
+        ClassificationInfo {
+            motion_level: "absent".to_string(),
+            presence: false,
+            confidence: 0.0,
+        }
+    }
+
+    #[test]
+    fn aggregate_absent_state_cannot_report_presence() {
+        let mut state = AppStateInner::minimal();
+        state.baseline_frames = BASELINE_WARMUP;
+        state.smoothed_motion = 0.035;
+
+        let mut classification = raw_absent();
+        smooth_and_classify(&mut state, &mut classification, 0.035);
+
+        assert_eq!(classification.motion_level, "absent");
+        assert!(!classification.presence);
+    }
+
+    #[test]
+    fn per_node_absent_state_cannot_report_presence() {
+        let mut state = NodeState::new();
+        state.baseline_frames = BASELINE_WARMUP;
+        state.smoothed_motion = 0.035;
+
+        let mut classification = raw_absent();
+        smooth_and_classify_node(&mut state, &mut classification, 0.035);
+
+        assert_eq!(classification.motion_level, "absent");
+        assert!(!classification.presence);
+    }
 }
 
 /// If an adaptive model is loaded, override the classification with the
