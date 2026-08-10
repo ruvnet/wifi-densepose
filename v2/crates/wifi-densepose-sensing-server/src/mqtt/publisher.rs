@@ -74,11 +74,45 @@ fn build_mqtt_options(cfg: &MqttConfig) -> MqttOptions {
         opts.set_credentials(u, "");
     }
 
-    if !matches!(cfg.tls, TlsConfig::Off) {
-        // We always use rustls (matches `ureq` in this crate). The
-        // specific cert / CA wiring is done by the runtime constructor;
-        // here we just flip the transport.
-        opts.set_transport(Transport::tls_with_default_config());
+    match &cfg.tls {
+        TlsConfig::Off => {}
+        // Encrypt against a pinned CA (the documented self-signed / home
+        // LAN broker path). Pass the CA bytes to rumqttc's rustls-backed
+        // `Transport::tls` — `tls_with_default_config()` would only accept
+        // publicly trusted chains and fail with `UnknownIssuer` (issue
+        // #1556).
+        TlsConfig::PinnedCa { ca_file } => {
+            if let Ok(ca) = std::fs::read(ca_file) {
+                opts.set_transport(Transport::tls(ca, None, None));
+            } else {
+                tracing::error!(
+                    "mqtt: cannot read CA file {:?}; falling back to system trust",
+                    ca_file
+                );
+                opts.set_transport(Transport::tls_with_default_config());
+            }
+        }
+        TlsConfig::MutualTls {
+            ca_file,
+            client_cert,
+            client_key,
+        } => {
+            let ca = std::fs::read(ca_file);
+            let cert = std::fs::read(client_cert);
+            let key = std::fs::read(client_key);
+            match (ca, cert, key) {
+                (Ok(ca), Ok(cert), Ok(key)) => {
+                    opts.set_transport(Transport::tls(ca, Some((cert, key)), None));
+                }
+                _ => {
+                    tracing::error!("mqtt: cannot read mTLS files; falling back to system trust");
+                    opts.set_transport(Transport::tls_with_default_config());
+                }
+            }
+        }
+        TlsConfig::SystemTrust => {
+            opts.set_transport(Transport::tls_with_default_config());
+        }
     }
 
     opts
@@ -405,6 +439,92 @@ mod per_node_device_tests {
         assert_eq!(
             device_identifiers(&b.for_node("node-7")),
             device_identifiers(&b.for_node("node-7"))
+        );
+    }
+}
+
+#[cfg(test)]
+mod tls_transport_tests {
+    //! Issue #1556 — `--mqtt-ca-file` was parsed but never applied: TLS
+    //! always used the system trust store, so self-signed home-LAN brokers
+    //! failed with `UnknownIssuer`. These tests pin the transport wiring.
+    use super::*;
+    use rumqttc::Transport as RTransport;
+
+    fn cfg_with_tls(tls: TlsConfig) -> MqttConfig {
+        MqttConfig {
+            host: "localhost".into(),
+            port: 8883,
+            client_id: "test".into(),
+            username: None,
+            password: None,
+            discovery_prefix: "homeassistant".into(),
+            refresh_secs: 600,
+            rates: Default::default(),
+            publish_pose: false,
+            privacy_mode: false,
+            tls,
+        }
+    }
+
+    fn is_tls_transport(opts: &MqttOptions) -> bool {
+        matches!(opts.transport(), RTransport::Tls(_))
+    }
+
+    #[test]
+    fn pinned_ca_uses_custom_transport_not_system_trust() {
+        let dir = std::env::temp_dir().join(format!("ruview-ca-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ca_path = dir.join("ca.pem");
+        std::fs::write(&ca_path, b"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n").unwrap();
+
+        let cfg = cfg_with_tls(TlsConfig::PinnedCa { ca_file: ca_path.clone() });
+        let opts = build_mqtt_options(&cfg);
+
+        assert!(
+            is_tls_transport(&opts),
+            "#1556: PinnedCa must produce a TLS transport"
+        );
+        // The CA file must be readable (the wiring reads it eagerly); if the
+        // file were ignored, this would be an empty-vec TLS config that the
+        // broker would reject with UnknownIssuer at connect time.
+        assert!(
+            ca_path.exists(),
+            "#1556: CA file must exist for the transport to use"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn off_keeps_plaintext_transport() {
+        let cfg = cfg_with_tls(TlsConfig::Off);
+        let opts = build_mqtt_options(&cfg);
+        assert!(
+            matches!(opts.transport(), RTransport::Tcp),
+            "TlsConfig::Off must not enable TLS"
+        );
+    }
+
+    #[test]
+    fn system_trust_keeps_default_tls() {
+        let cfg = cfg_with_tls(TlsConfig::SystemTrust);
+        let opts = build_mqtt_options(&cfg);
+        assert!(
+            is_tls_transport(&opts),
+            "SystemTrust must still produce a TLS transport"
+        );
+    }
+
+    #[test]
+    fn missing_ca_file_falls_back_gracefully() {
+        let cfg = cfg_with_tls(TlsConfig::PinnedCa {
+            ca_file: "/nonexistent/ca.pem".into(),
+        });
+        let opts = build_mqtt_options(&cfg);
+        assert!(
+            is_tls_transport(&opts),
+            "unreadable CA file must fall back to system-trust TLS, not panic"
         );
     }
 }
