@@ -1,6 +1,9 @@
 # Local Claude config (contains WiFi credentials and machine-specific paths)
 CLAUDE.local.md
 
+# Operating-system metadata
+.DS_Store
+
 # ESP32 firmware build artifacts and local config (contains WiFi credentials)
 firmware/esp32-csi-node/build/
 firmware/esp32-csi-node/sdkconfig
@@ -298,4 +301,7 @@ ruvector.db
 # sensing-server runtime artifacts written by its test suite (trained model
 # snapshots + the generated session-secret) — never tracked
 v2/crates/wifi-densepose-sensing-server/data/
+# The server also writes this secret when launched from v2/. Keep the rule
+# file-specific so tracked datasets below v2/data remain visible.
+/v2/data/session-secret
 *.proptest-regressions
