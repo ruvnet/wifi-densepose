@@ -421,9 +421,17 @@ impl AdaptiveModel {
 // ── Training ─────────────────────────────────────────────────────────────────
 
 /// A labeled training sample.
+#[derive(Clone)]
 struct Sample {
     features: [f64; N_FEATURES],
     class_idx: usize,
+}
+
+/// Frames captured during one continuous physical session.
+struct Recording {
+    name: String,
+    class_idx: usize,
+    samples: Vec<Sample>,
 }
 
 /// Load JSONL recording frames and assign a class label based on filename.
@@ -496,9 +504,6 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
         .flatten()
         .collect();
 
-    let mut class_map: HashMap<String, usize> = HashMap::new();
-    let mut class_names: Vec<String> = Vec::new();
-
     // Collect (entry, class_name) pairs for files that match.
     let mut file_classes: Vec<(PathBuf, String, String)> = Vec::new(); // (path, fname, class_name)
     for entry in &entries {
@@ -507,115 +512,214 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
             continue;
         }
         if let Some(class_name) = classify_recording_name(&fname) {
-            if !class_map.contains_key(&class_name) {
-                let idx = class_names.len();
-                class_map.insert(class_name.clone(), idx);
-                class_names.push(class_name.clone());
-            }
             file_classes.push((entry.path(), fname, class_name));
         }
     }
 
-    let n_classes = class_names.len();
-    if n_classes == 0 {
+    if file_classes.is_empty() {
         return Err("No training samples found. Record data with train_* prefix.".into());
     }
 
-    // Stable ordering makes both the held-out choice and model fitting
-    // reproducible across filesystems whose read_dir order differs.
+    // Stable ordering makes class indices, folds, and fitting reproducible
+    // across filesystems whose read_dir order differs.
     file_classes.sort_by(|a, b| a.1.cmp(&b.1));
+    let mut class_names: Vec<String> = file_classes
+        .iter()
+        .map(|(_, _, class_name)| class_name.clone())
+        .collect();
+    class_names.sort();
+    class_names.dedup();
+    let class_map: HashMap<String, usize> = class_names
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, name)| (name, index))
+        .collect();
+    let n_classes = class_names.len();
 
-    // Hold out one whole recording per class. Adjacent CSI frames are highly
-    // autocorrelated, so a random frame split leaks a session's room/channel
-    // fingerprint into validation and overstates deployment accuracy.
+    let mut recordings = Vec::with_capacity(file_classes.len());
     let mut recordings_per_class: HashMap<String, usize> = HashMap::new();
-    for (_, _, class_name) in &file_classes {
+    for (path, fname, class_name) in file_classes {
+        let class_idx = class_map[&class_name];
+        let samples = load_recording(&path, class_idx);
+        if samples.is_empty() {
+            return Err(format!(
+                "Training recording '{fname}' contains no valid frames"
+            ));
+        }
+        eprintln!(
+            "  Loaded {}: {} frames → class '{}'",
+            fname,
+            samples.len(),
+            class_name
+        );
         *recordings_per_class.entry(class_name.clone()).or_default() += 1;
+        recordings.push(Recording {
+            name: fname,
+            class_idx,
+            samples,
+        });
     }
+
+    // Adjacent CSI frames are highly autocorrelated. Leave-one-session-out
+    // (LOSO) ensures every reported prediction comes from a model that never
+    // saw that physical session, instead of validating on a favorable tail.
     let can_validate_sessions = class_names
         .iter()
         .all(|name| recordings_per_class.get(name).copied().unwrap_or(0) >= 2);
-    let mut held_out_path_by_class: HashMap<String, PathBuf> = HashMap::new();
-    if can_validate_sessions {
-        for (path, _, class_name) in &file_classes {
-            // Sorted iteration intentionally leaves the last session per class.
-            held_out_path_by_class.insert(class_name.clone(), path.clone());
-        }
-    }
 
-    // Second pass: load fitting and held-out sessions separately.
-    let mut samples: Vec<Sample> = Vec::new();
-    let mut validation_samples: Vec<Sample> = Vec::new();
-    for (path, fname, class_name) in &file_classes {
-        let class_idx = class_map[class_name];
-        let loaded = load_recording(path, class_idx);
-        let is_held_out = held_out_path_by_class.get(class_name) == Some(path);
+    let validation = if can_validate_sessions {
+        let mut class_correct = vec![0usize; n_classes];
+        let mut class_total = vec![0usize; n_classes];
+        for held_out_index in 0..recordings.len() {
+            let training_recordings: Vec<&Recording> = recordings
+                .iter()
+                .enumerate()
+                .filter_map(|(index, recording)| (index != held_out_index).then_some(recording))
+                .collect();
+            let fold_model = fit_model(&training_recordings, &class_names, false)?;
+            let held_out = &recordings[held_out_index];
+            eprintln!("  LOSO held out '{}'", held_out.name);
+            for sample in &held_out.samples {
+                class_total[sample.class_idx] += 1;
+                let (predicted, _) = fold_model.classify(&sample.features);
+                if predicted == class_names[sample.class_idx] {
+                    class_correct[sample.class_idx] += 1;
+                }
+            }
+        }
+
+        let per_class_recall: HashMap<String, f64> = class_names
+            .iter()
+            .enumerate()
+            .map(|(class_idx, class_name)| {
+                let recall = class_correct[class_idx] as f64 / class_total[class_idx] as f64;
+                (class_name.clone(), recall)
+            })
+            .collect();
+        let balanced_accuracy = per_class_recall.values().sum::<f64>() / n_classes as f64;
+        let held_out_frames = class_total.iter().sum();
         eprintln!(
-            "  Loaded {}: {} frames → class '{}'{}",
-            fname,
-            loaded.len(),
-            class_name,
-            if is_held_out { " [held out]" } else { "" }
+            "LOSO balanced accuracy: {:.1}% across {} recording(s) / {} frames",
+            balanced_accuracy * 100.0,
+            recordings.len(),
+            held_out_frames
         );
-        if is_held_out {
-            validation_samples.extend(loaded);
-        } else {
-            samples.extend(loaded);
-        }
-    }
+        Some(ValidationMetrics {
+            held_out_recordings: recordings.len(),
+            held_out_frames,
+            balanced_accuracy,
+            per_class_recall,
+        })
+    } else {
+        eprintln!(
+            "Session-held-out validation unavailable: record at least two independent sessions per class"
+        );
+        None
+    };
 
-    if samples.is_empty() {
+    // Validation models are disposable. The deployed model is refit on every
+    // accepted session so scarce local calibration data is not wasted.
+    let all_recordings: Vec<&Recording> = recordings.iter().collect();
+    let mut model = fit_model(&all_recordings, &class_names, true)?;
+    model.validation = validation;
+    Ok(model)
+}
+
+/// Fit one room-specific classifier from complete recording sessions.
+fn fit_model(
+    recordings: &[&Recording],
+    class_names: &[String],
+    print_progress: bool,
+) -> Result<AdaptiveModel, String> {
+    let n_classes = class_names.len();
+    let n: usize = recordings
+        .iter()
+        .map(|recording| recording.samples.len())
+        .sum();
+    if n == 0 {
         return Err("No training samples found. Record data with train_* prefix.".into());
     }
 
-    let n = samples.len();
-    eprintln!(
-        "Total training samples: {n} across {n_classes} classes: {:?}",
-        class_names
-    );
+    let mut sessions_per_class = vec![0usize; n_classes];
+    for recording in recordings {
+        sessions_per_class[recording.class_idx] += 1;
+    }
+    if let Some(class_idx) = sessions_per_class.iter().position(|count| *count == 0) {
+        return Err(format!(
+            "Training fold contains no '{}' session",
+            class_names[class_idx]
+        ));
+    }
+
+    // Give each class equal total mass and each session within that class equal
+    // mass. Otherwise a ten-minute empty capture can dominate a short activity
+    // capture even though its adjacent frames add little independent evidence.
+    let weighted_samples: Vec<(&Sample, f64)> = recordings
+        .iter()
+        .flat_map(|recording| {
+            let session_weight = 1.0
+                / (sessions_per_class[recording.class_idx] as f64 * recording.samples.len() as f64);
+            recording
+                .samples
+                .iter()
+                .map(move |sample| (sample, session_weight))
+        })
+        .collect();
+    let total_weight: f64 = weighted_samples.iter().map(|(_, weight)| weight).sum();
+    if print_progress {
+        eprintln!(
+            "Total training samples: {n} across {n_classes} classes: {:?}",
+            class_names
+        );
+    }
 
     // ── Compute global normalisation stats ──
     let mut global_mean = [0.0f64; N_FEATURES];
     let mut global_var = [0.0f64; N_FEATURES];
-    for s in &samples {
-        for (m, &f) in global_mean.iter_mut().zip(s.features.iter()) {
-            *m += f;
+    for (sample, weight) in &weighted_samples {
+        for (mean, feature) in global_mean.iter_mut().zip(sample.features.iter()) {
+            *mean += feature * weight;
         }
     }
-    for m in global_mean.iter_mut() {
-        *m /= n as f64;
+    for mean in &mut global_mean {
+        *mean /= total_weight;
     }
-    for s in &samples {
+    for (sample, weight) in &weighted_samples {
         for i in 0..N_FEATURES {
-            global_var[i] += (s.features[i] - global_mean[i]).powi(2);
+            global_var[i] += weight * (sample.features[i] - global_mean[i]).powi(2);
         }
     }
     let mut global_std = [0.0f64; N_FEATURES];
     for i in 0..N_FEATURES {
-        global_std[i] = (global_var[i] / n as f64).sqrt().max(1e-9);
+        global_std[i] = (global_var[i] / total_weight).sqrt().max(1e-9);
     }
 
     // ── Compute per-class statistics ──
     let mut class_sums = vec![[0.0f64; N_FEATURES]; n_classes];
     let mut class_sq = vec![[0.0f64; N_FEATURES]; n_classes];
     let mut class_counts = vec![0usize; n_classes];
-    for s in &samples {
-        let c = s.class_idx;
+    let mut class_weight = vec![0.0f64; n_classes];
+    for (sample, weight) in &weighted_samples {
+        let c = sample.class_idx;
         class_counts[c] += 1;
+        class_weight[c] += weight;
         for i in 0..N_FEATURES {
-            class_sums[c][i] += s.features[i];
-            class_sq[c][i] += s.features[i] * s.features[i];
+            class_sums[c][i] += weight * sample.features[i];
+            class_sq[c][i] += weight * sample.features[i] * sample.features[i];
         }
     }
 
     let mut class_stats = Vec::new();
     for c in 0..n_classes {
-        let cnt = class_counts[c].max(1) as f64;
+        let weight = class_weight[c];
         let mut mean = [0.0; N_FEATURES];
         let mut stddev = [0.0; N_FEATURES];
         for i in 0..N_FEATURES {
-            mean[i] = class_sums[c][i] / cnt;
-            stddev[i] = ((class_sq[c][i] / cnt) - mean[i] * mean[i]).max(0.0).sqrt();
+            mean[i] = class_sums[c][i] / weight;
+            stddev[i] = ((class_sq[c][i] / weight) - mean[i] * mean[i])
+                .max(0.0)
+                .sqrt();
         }
         class_stats.push(ClassStats {
             label: class_names[c].clone(),
@@ -626,14 +730,14 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
     }
 
     // ── Normalise all samples ──
-    let mut norm_samples: Vec<([f64; N_FEATURES], usize)> = samples
+    let mut norm_samples: Vec<([f64; N_FEATURES], usize, f64)> = weighted_samples
         .iter()
-        .map(|s| {
+        .map(|(sample, weight)| {
             let mut x = [0.0; N_FEATURES];
             for i in 0..N_FEATURES {
-                x[i] = (s.features[i] - global_mean[i]) / (global_std[i] + 1e-9);
+                x[i] = (sample.features[i] - global_mean[i]) / (global_std[i] + 1e-9);
             }
-            (x, s.class_idx)
+            (x, sample.class_idx, *weight)
         })
         .collect();
 
@@ -668,7 +772,8 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
             // Accumulate gradients.
             let mut grad: Vec<Vec<f64>> = vec![vec![0.0f64; N_FEATURES + 1]; n_classes];
 
-            for (x, target) in batch {
+            let batch_weight: f64 = batch.iter().map(|(_, _, weight)| weight).sum();
+            for (x, target, sample_weight) in batch {
                 // Forward: softmax.
                 let mut logits: Vec<f64> = vec![0.0; n_classes];
                 for (c, logit) in logits.iter_mut().enumerate() {
@@ -687,11 +792,11 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
                 }
 
                 // Cross-entropy loss.
-                epoch_loss += -(probs[*target].max(1e-15)).ln();
+                epoch_loss += sample_weight * -(probs[*target].max(1e-15)).ln();
 
                 // Gradient: prob - one_hot(target).
                 for c in 0..n_classes {
-                    let delta = probs[c] - if c == *target { 1.0 } else { 0.0 };
+                    let delta = sample_weight * (probs[c] - if c == *target { 1.0 } else { 0.0 });
                     for (g, &xi) in grad[c][..N_FEATURES].iter_mut().zip(x.iter()) {
                         *g += delta * xi;
                     }
@@ -700,17 +805,16 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
             }
 
             // Update weights.
-            let bs = batch.len() as f64;
             let current_lr = lr * (1.0 - epoch as f64 / epochs as f64); // linear decay
             for c in 0..n_classes {
                 for i in 0..=N_FEATURES {
-                    weights[c][i] -= current_lr * grad[c][i] / bs;
+                    weights[c][i] -= current_lr * grad[c][i] / batch_weight;
                 }
             }
         }
 
-        if epoch % 50 == 0 || epoch == epochs - 1 {
-            let avg_loss = epoch_loss / n as f64;
+        if print_progress && (epoch % 50 == 0 || epoch == epochs - 1) {
+            let avg_loss = epoch_loss / total_weight;
             eprintln!("  Epoch {epoch:3}: loss = {avg_loss:.4}");
         }
     }
@@ -729,7 +833,7 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
             .collect()
     };
     let mut correct = 0;
-    for (x, target) in &norm_samples {
+    for (x, target, _) in &norm_samples {
         let logits = compute_logits(x);
         let pred = logits
             .iter()
@@ -742,15 +846,17 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
         }
     }
     let accuracy = correct as f64 / n as f64;
-    eprintln!(
-        "Training accuracy: {correct}/{n} = {:.1}%",
-        accuracy * 100.0
-    );
+    if print_progress {
+        eprintln!(
+            "Training accuracy: {correct}/{n} = {:.1}%",
+            accuracy * 100.0
+        );
+    }
 
     // ── Per-class accuracy ──
     let mut class_correct = vec![0usize; n_classes];
     let mut class_total = vec![0usize; n_classes];
-    for (x, target) in &norm_samples {
+    for (x, target, _) in &norm_samples {
         class_total[*target] += 1;
         let logits = compute_logits(x);
         let pred = logits
@@ -763,18 +869,20 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
             class_correct[*target] += 1;
         }
     }
-    for c in 0..n_classes {
-        let tot = class_total[c].max(1);
-        eprintln!(
-            "  {}: {}/{} ({:.0}%)",
-            class_names[c],
-            class_correct[c],
-            tot,
-            class_correct[c] as f64 / tot as f64 * 100.0
-        );
+    if print_progress {
+        for c in 0..n_classes {
+            let tot = class_total[c].max(1);
+            eprintln!(
+                "  {}: {}/{} ({:.0}%)",
+                class_names[c],
+                class_correct[c],
+                tot,
+                class_correct[c] as f64 / tot as f64 * 100.0
+            );
+        }
     }
 
-    let mut model = AdaptiveModel {
+    Ok(AdaptiveModel {
         class_stats,
         weights,
         global_mean,
@@ -782,67 +890,9 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
         trained_frames: n,
         training_accuracy: accuracy,
         version: 2,
-        class_names,
+        class_names: class_names.to_vec(),
         validation: None,
-    };
-    if can_validate_sessions {
-        model.validation = Some(evaluate_held_out(
-            &model,
-            &validation_samples,
-            held_out_path_by_class.len(),
-        ));
-    } else {
-        eprintln!(
-            "Session-held-out validation unavailable: record at least two independent sessions per class"
-        );
-    }
-    Ok(model)
-}
-
-/// Evaluate the fitted model only on sessions excluded from fitting.
-fn evaluate_held_out(
-    model: &AdaptiveModel,
-    samples: &[Sample],
-    held_out_recordings: usize,
-) -> ValidationMetrics {
-    let n_classes = model.class_names.len();
-    let mut class_correct = vec![0usize; n_classes];
-    let mut class_total = vec![0usize; n_classes];
-    for sample in samples {
-        class_total[sample.class_idx] += 1;
-        let (predicted, _) = model.classify(&sample.features);
-        if predicted == model.class_names[sample.class_idx] {
-            class_correct[sample.class_idx] += 1;
-        }
-    }
-
-    let mut per_class_recall = HashMap::new();
-    for class_idx in 0..n_classes {
-        let recall = if class_total[class_idx] == 0 {
-            0.0
-        } else {
-            class_correct[class_idx] as f64 / class_total[class_idx] as f64
-        };
-        per_class_recall.insert(model.class_names[class_idx].clone(), recall);
-    }
-    let balanced_accuracy = if n_classes == 0 {
-        0.0
-    } else {
-        per_class_recall.values().sum::<f64>() / n_classes as f64
-    };
-    eprintln!(
-        "Held-out balanced accuracy: {:.1}% across {} recording(s) / {} frames",
-        balanced_accuracy * 100.0,
-        held_out_recordings,
-        samples.len()
-    );
-
-    ValidationMetrics {
-        held_out_recordings,
-        held_out_frames: samples.len(),
-        balanced_accuracy,
-        per_class_recall,
-    }
+    })
 }
 
 /// Default path for the saved adaptive model.
@@ -987,7 +1037,7 @@ mod tests {
     }
 
     #[test]
-    fn validation_uses_whole_recording_sessions_not_training_frames() {
+    fn validation_covers_every_recording_and_final_fit_uses_all_frames() {
         let dir = tempfile::tempdir().unwrap();
         for session in 1..=2 {
             write_recording(
@@ -1007,8 +1057,9 @@ mod tests {
         let model = train_from_recordings(dir.path()).unwrap();
         let validation = model.validation.as_ref().expect("held-out metrics");
 
-        assert_eq!(validation.held_out_recordings, 2);
-        assert_eq!(validation.held_out_frames, 80);
+        assert_eq!(validation.held_out_recordings, 4);
+        assert_eq!(validation.held_out_frames, 160);
+        assert_eq!(model.trained_frames, 160);
         assert!(validation.balanced_accuracy > 0.95);
         assert!(model.runtime_eligibility().is_ok());
     }
