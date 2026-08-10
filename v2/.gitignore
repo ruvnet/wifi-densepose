@@ -1,1 +1,4 @@
 baselines/
+
+# Generated browser-session signing material must remain machine-local.
+data/session-secret
