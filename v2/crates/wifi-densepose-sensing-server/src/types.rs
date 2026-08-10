@@ -518,6 +518,7 @@ pub struct AppStateInner {
     pub training_config: Option<serde_json::Value>,
     pub adaptive_model: Option<adaptive_classifier::AdaptiveModel>,
     pub adaptive_feature_extractor: adaptive_classifier::AdaptiveFeatureExtractor,
+    pub adaptive_presence_smoother: adaptive_classifier::AdaptivePresenceSmoother,
     pub node_states: HashMap<u8, NodeState>,
     pub pose_tracker: PoseTracker,
     pub last_tracker_instant: Option<std::time::Instant>,

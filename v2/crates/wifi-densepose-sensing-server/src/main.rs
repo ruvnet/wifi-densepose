@@ -1200,6 +1200,8 @@ struct AppStateInner {
     adaptive_model: Option<adaptive_classifier::AdaptiveModel>,
     /// Rate-normalized short temporal context for the adaptive classifier.
     adaptive_feature_extractor: adaptive_classifier::AdaptiveFeatureExtractor,
+    /// Hysteresis over learned presence probabilities prevents one-frame flips.
+    adaptive_presence_smoother: adaptive_classifier::AdaptivePresenceSmoother,
     // ── Per-node state (issue #249) ─────────────────────────────────────
     /// Per-node sensing state for multi-node deployments.
     /// Keyed by `node_id` from the ESP32 frame header.
@@ -1380,6 +1382,7 @@ impl AppStateInner {
             training_progress_tx: broadcast::channel::<String>(256).0,
             adaptive_model: None,
             adaptive_feature_extractor: adaptive_classifier::AdaptiveFeatureExtractor::default(),
+            adaptive_presence_smoother: adaptive_classifier::AdaptivePresenceSmoother::default(),
             node_states: HashMap::new(),
             pose_tracker: PoseTracker::new(),
             last_tracker_instant: None,
@@ -2461,6 +2464,7 @@ fn adaptive_override_with_amplitudes(
             .and_then(|model| model.expected_node_count);
         if expected_node_count.is_some_and(|expected| expected != observed_node_count) {
             state.adaptive_feature_extractor.reset();
+            state.adaptive_presence_smoother.reset();
             return;
         }
         let feature_json = serde_json::json!({
@@ -2483,9 +2487,14 @@ fn adaptive_override_with_amplitudes(
             .as_ref()
             .expect("adaptive model presence checked above");
         let (label, conf) = model.classify(&feat_arr);
+        let stable_label = if state.adaptive_presence_smoother.update(&label, conf) {
+            "present"
+        } else {
+            "absent"
+        };
         (classification.motion_level, classification.presence) =
             adaptive_classifier::reconcile_presence_prediction(
-                &label,
+                stable_label,
                 &classification.motion_level,
             );
         // Blend model confidence with existing smoothed confidence.
@@ -5453,6 +5462,7 @@ async fn adaptive_train(State(state): State<SharedState>) -> Json<serde_json::Va
             let mut s = state.write().await;
             s.adaptive_model = Some(model);
             s.adaptive_feature_extractor.reset();
+            s.adaptive_presence_smoother.reset();
 
             Json(serde_json::json!({
                 "success": true,
@@ -5499,6 +5509,7 @@ async fn adaptive_unload(State(state): State<SharedState>) -> Json<serde_json::V
     let mut s = state.write().await;
     s.adaptive_model = None;
     s.adaptive_feature_extractor.reset();
+    s.adaptive_presence_smoother.reset();
     Json(serde_json::json!({ "success": true, "message": "Adaptive model unloaded." }))
 }
 
@@ -8323,6 +8334,7 @@ async fn main() {
             }
         },
         adaptive_feature_extractor: adaptive_classifier::AdaptiveFeatureExtractor::default(),
+        adaptive_presence_smoother: adaptive_classifier::AdaptivePresenceSmoother::default(),
         node_states: HashMap::new(),
         // Accuracy sprint
         pose_tracker: PoseTracker::new(),

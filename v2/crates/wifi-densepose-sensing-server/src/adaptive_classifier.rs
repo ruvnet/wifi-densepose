@@ -288,6 +288,48 @@ pub fn reconcile_presence_prediction(
     }
 }
 
+/// Debounces learned presence probabilities before they can change room state.
+#[derive(Debug, Default)]
+pub struct AdaptivePresenceSmoother {
+    present_score: Option<f64>,
+    present: Option<bool>,
+}
+
+impl AdaptivePresenceSmoother {
+    pub fn update(&mut self, learned_label: &str, confidence: f64) -> bool {
+        let confidence = if confidence.is_finite() {
+            confidence.clamp(0.0, 1.0)
+        } else {
+            0.5
+        };
+        let observation = if learned_label == "absent" {
+            1.0 - confidence
+        } else {
+            confidence
+        };
+        let score = self
+            .present_score
+            .map(|previous| previous * 0.9 + observation * 0.1)
+            .unwrap_or(observation);
+        self.present_score = Some(score);
+        let present = match self.present {
+            Some(true) => score >= 0.35,
+            Some(false) => score > 0.65,
+            None => score >= 0.5,
+        };
+        self.present = Some(present);
+        present
+    }
+
+    pub fn is_present(&self) -> Option<bool> {
+        self.present
+    }
+
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 /// Compute statistical features from raw subcarrier amplitudes.
 fn subcarrier_stats(amps: &[f64]) -> (f64, f64, f64, f64, f64, f64, f64, f64) {
     // HashMap-backed node serialization has no stable order. Sorting makes all
@@ -1094,9 +1136,16 @@ fn fit_model(
     })
 }
 
-/// Default path for the saved adaptive model.
+fn model_path_from(configured: Option<std::ffi::OsString>) -> PathBuf {
+    configured
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("data/adaptive_model.json"))
+}
+
+/// Default path for the saved adaptive model, overridable for private products.
 pub fn model_path() -> PathBuf {
-    PathBuf::from("data/adaptive_model.json")
+    model_path_from(std::env::var_os("RUVIEW_ADAPTIVE_MODEL_PATH"))
 }
 
 #[cfg(test)]
@@ -1293,6 +1342,33 @@ mod tests {
         assert_eq!(
             ("absent".to_string(), false),
             reconcile_presence_prediction("absent", "active")
+        );
+    }
+
+    #[test]
+    fn presence_smoother_rejects_a_single_contrary_prediction() {
+        let mut smoother = AdaptivePresenceSmoother::default();
+        assert!(smoother.update("present", 0.9));
+
+        assert!(
+            smoother.update("absent", 0.9),
+            "one noisy frame must not clear an occupied room"
+        );
+        for _ in 0..20 {
+            smoother.update("absent", 0.9);
+        }
+        assert!(!smoother.is_present().unwrap());
+    }
+
+    #[test]
+    fn private_model_path_does_not_change_the_default() {
+        assert_eq!(
+            PathBuf::from("/private/model.json"),
+            model_path_from(Some("/private/model.json".into()))
+        );
+        assert_eq!(
+            PathBuf::from("data/adaptive_model.json"),
+            model_path_from(None)
         );
     }
 

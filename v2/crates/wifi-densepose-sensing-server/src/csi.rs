@@ -590,6 +590,7 @@ pub fn adaptive_override(
             .is_some_and(|expected| expected != 1)
         {
             state.adaptive_feature_extractor.reset();
+            state.adaptive_presence_smoother.reset();
             return;
         }
         let amps = state.frame_history.back().cloned().unwrap_or_default();
@@ -613,9 +614,14 @@ pub fn adaptive_override(
             .as_ref()
             .expect("adaptive model presence checked above");
         let (label, conf) = model.classify(&feat_arr);
+        let stable_label = if state.adaptive_presence_smoother.update(&label, conf) {
+            "present"
+        } else {
+            "absent"
+        };
         (classification.motion_level, classification.presence) =
             adaptive_classifier::reconcile_presence_prediction(
-                &label,
+                stable_label,
                 &classification.motion_level,
             );
         classification.confidence = (conf * 0.7 + classification.confidence * 0.3).clamp(0.0, 1.0);
