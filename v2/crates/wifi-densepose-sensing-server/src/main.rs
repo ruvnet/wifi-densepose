@@ -2435,13 +2435,31 @@ fn adaptive_override(
     features: &FeatureInfo,
     classification: &mut ClassificationInfo,
 ) {
-    if let Some(ref model) = state.adaptive_model {
-        // Get current frame amplitudes from the latest history entry.
-        let amps = state
-            .frame_history
-            .back()
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
+    // Get current frame amplitudes from the latest history entry.
+    let amps = state
+        .frame_history
+        .back()
+        .map(|v| v.as_slice())
+        .unwrap_or(&[]);
+    adaptive_override_with_amplitudes(
+        state.adaptive_model.as_ref(),
+        features,
+        amps,
+        classification,
+    );
+}
+
+/// Apply a room-level adaptive model to an explicitly selected amplitude set.
+/// Keeping amplitude selection outside the classifier prevents the ESP32
+/// multi-node path from accidentally training on one link and inferring on a
+/// different one.
+fn adaptive_override_with_amplitudes(
+    model: Option<&adaptive_classifier::AdaptiveModel>,
+    features: &FeatureInfo,
+    amps: &[f64],
+    classification: &mut ClassificationInfo,
+) {
+    if let Some(model) = model {
         let feat_arr = adaptive_classifier::features_from_runtime(
             &serde_json::json!({
                 "variance": features.variance,
@@ -2459,6 +2477,50 @@ fn adaptive_override(
         classification.presence = label != "absent";
         // Blend model confidence with existing smoothed confidence.
         classification.confidence = (conf * 0.7 + classification.confidence * 0.3).clamp(0.0, 1.0);
+    }
+}
+
+/// At 10 Hz, 500 ms spans roughly five expected frames. Older link samples
+/// describe a different sensing instant and must not enter the room-level
+/// adaptive decision. This is the heuristic-path counterpart to the learned
+/// multiplicative freshness gate used by RuView's universal RF encoder.
+const ADAPTIVE_FUSION_MAX_SAMPLE_AGE: Duration = Duration::from_millis(500);
+
+fn collect_fresh_node_amplitudes(
+    node_states: &HashMap<u8, NodeState>,
+    now: std::time::Instant,
+) -> Vec<f64> {
+    node_states
+        .values()
+        .filter(|node| {
+            node.last_frame_time.is_some_and(|received_at| {
+                now.saturating_duration_since(received_at) <= ADAPTIVE_FUSION_MAX_SAMPLE_AGE
+            })
+        })
+        .filter_map(|node| node.frame_history.back())
+        .flatten()
+        .copied()
+        .collect()
+}
+
+#[cfg(test)]
+mod adaptive_fusion_amplitude_tests {
+    use super::*;
+
+    #[test]
+    fn room_level_adaptive_input_excludes_old_links() {
+        let now = std::time::Instant::now();
+        let mut fresh = NodeState::new();
+        fresh.frame_history.push_back(vec![1.0, 2.0]);
+        fresh.last_frame_time = Some(now);
+        let mut old = NodeState::new();
+        old.frame_history.push_back(vec![90.0, 100.0]);
+        old.last_frame_time = Some(now - Duration::from_secs(2));
+        let mut nodes = HashMap::new();
+        nodes.insert(1, fresh);
+        nodes.insert(2, old);
+
+        assert_eq!(collect_fresh_node_amplitudes(&nodes, now), vec![1.0, 2.0]);
     }
 }
 
@@ -3711,8 +3773,8 @@ async fn ingest_vendor_events(
 ///
 /// When multiple ESP32 nodes observe the same room, their CSI features
 /// can be combined:
-/// - Variance: use max (most sensitive node dominates)
-/// - Motion/breathing/spectral power: weighted average by RSSI (closer node = higher weight)
+/// - Variance: freshness- and link-quality-weighted average
+/// - Motion/breathing/spectral power: weighted by link quality and sample freshness
 /// - Dominant frequency: weighted average
 /// - Change points: keep current node's value (not meaningful to average)
 /// - Mean RSSI: use max (best signal)
@@ -3721,16 +3783,29 @@ fn fuse_multi_node_features(
     node_states: &HashMap<u8, NodeState>,
 ) -> FeatureInfo {
     let now = std::time::Instant::now();
-    let active: Vec<(&FeatureInfo, f64)> = node_states
+    let active: Vec<(&FeatureInfo, f64, f64)> = node_states
         .values()
-        .filter(|ns| {
-            ns.last_frame_time
-                .is_some_and(|t| now.duration_since(t).as_secs() < 10)
-        })
         .filter_map(|ns| {
+            let received_at = ns.last_frame_time?;
+            let age = now.saturating_duration_since(received_at);
+            if age > ADAPTIVE_FUSION_MAX_SAMPLE_AGE {
+                return None;
+            }
             let feat = ns.latest_features.as_ref()?;
             let rssi = ns.rssi_history.back().copied().unwrap_or(-80.0);
-            Some((feat, rssi))
+            let expected_interval_ms = if ns.csi_fps_samples >= 5
+                && ns.csi_fps_ema.is_finite()
+                && ns.csi_fps_ema > 0.0
+            {
+                1000.0 / ns.csi_fps_ema
+            } else {
+                100.0
+            };
+            // Multiplicative age gate: one expected interval retains half the
+            // weight, four intervals retain one fifth. This preserves a usable
+            // packet without treating it as simultaneous with a fresh link.
+            let freshness = 1.0 / (1.0 + age.as_secs_f64() * 1000.0 / expected_interval_ms);
+            Some((feat, rssi, freshness))
         })
         .collect();
 
@@ -3742,11 +3817,16 @@ fn fuse_multi_node_features(
     // Map RSSI relative to best node into [0.1, 1.0].
     let max_rssi = active
         .iter()
-        .map(|(_, r)| *r)
+        .map(|(_, r, _)| *r)
         .fold(f64::NEG_INFINITY, f64::max);
     let weights: Vec<f64> = active
         .iter()
-        .map(|(_, r)| (1.0 + (r - max_rssi + 20.0) / 20.0).clamp(0.1, 1.0))
+        .map(|(_, r, freshness)| {
+            // 20 dB RSSI loss means one tenth the link-quality weight. Age and
+            // link quality are independent reliability terms, so multiply.
+            let link_quality = 10.0_f64.powf((r - max_rssi) / 20.0).clamp(0.1, 1.0);
+            link_quality * freshness
+        })
         .collect();
     let w_sum: f64 = weights.iter().sum::<f64>().max(1e-9);
 
@@ -3756,40 +3836,97 @@ fn fuse_multi_node_features(
         variance: active
             .iter()
             .zip(&weights)
-            .map(|((f, _), w)| f.variance * w)
+            .map(|((f, _, _), w)| f.variance * w)
             .sum::<f64>()
             / w_sum,
         // Weighted average for motion/breathing/spectral
         motion_band_power: active
             .iter()
             .zip(&weights)
-            .map(|((f, _), w)| f.motion_band_power * w)
+            .map(|((f, _, _), w)| f.motion_band_power * w)
             .sum::<f64>()
             / w_sum,
         breathing_band_power: active
             .iter()
             .zip(&weights)
-            .map(|((f, _), w)| f.breathing_band_power * w)
+            .map(|((f, _, _), w)| f.breathing_band_power * w)
             .sum::<f64>()
             / w_sum,
         spectral_power: active
             .iter()
             .zip(&weights)
-            .map(|((f, _), w)| f.spectral_power * w)
+            .map(|((f, _, _), w)| f.spectral_power * w)
             .sum::<f64>()
             / w_sum,
         dominant_freq_hz: active
             .iter()
             .zip(&weights)
-            .map(|((f, _), w)| f.dominant_freq_hz * w)
+            .map(|((f, _, _), w)| f.dominant_freq_hz * w)
             .sum::<f64>()
             / w_sum,
         change_points: current_features.change_points, // keep current node's value
         // Best RSSI across nodes
         mean_rssi: active
             .iter()
-            .map(|(f, _)| f.mean_rssi)
+            .map(|(f, _, _)| f.mean_rssi)
             .fold(f64::NEG_INFINITY, f64::max),
+    }
+}
+
+#[cfg(test)]
+mod freshness_weighted_feature_fusion_tests {
+    use super::*;
+
+    fn node(now: std::time::Instant, age: Duration, variance: f64) -> NodeState {
+        let mut node = NodeState::new();
+        node.last_frame_time = Some(now - age);
+        node.csi_fps_ema = 10.0;
+        node.csi_fps_samples = 20;
+        node.rssi_history.push_back(-50.0);
+        node.latest_features = Some(FeatureInfo {
+            mean_rssi: -50.0,
+            variance,
+            motion_band_power: variance,
+            breathing_band_power: variance,
+            dominant_freq_hz: variance,
+            change_points: variance as usize,
+            spectral_power: variance,
+        });
+        node
+    }
+
+    #[test]
+    fn stale_link_cannot_influence_room_features() {
+        let now = std::time::Instant::now();
+        let mut nodes = HashMap::new();
+        nodes.insert(1, node(now, Duration::ZERO, 10.0));
+        nodes.insert(2, node(now, Duration::from_secs(2), 100.0));
+
+        let fused = fuse_multi_node_features(
+            nodes.get(&1).unwrap().latest_features.as_ref().unwrap(),
+            &nodes,
+        );
+
+        assert_eq!(fused.variance, 10.0);
+    }
+
+    #[test]
+    fn older_but_usable_link_is_multiplicatively_downweighted() {
+        let now = std::time::Instant::now();
+        let mut nodes = HashMap::new();
+        nodes.insert(1, node(now, Duration::ZERO, 10.0));
+        nodes.insert(2, node(now, Duration::from_millis(400), 100.0));
+
+        let fused = fuse_multi_node_features(
+            nodes.get(&1).unwrap().latest_features.as_ref().unwrap(),
+            &nodes,
+        );
+
+        assert!(
+            fused.variance < 30.0,
+            "400 ms sample should contribute less than a fresh sample: {}",
+            fused.variance
+        );
     }
 }
 
@@ -6007,8 +6144,10 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         .node_states
                         .iter()
                         .filter(|(_, n)| {
-                            n.last_frame_time
-                                .is_some_and(|t| now.duration_since(t).as_secs() < 10)
+                            n.last_frame_time.is_some_and(|t| {
+                                now.saturating_duration_since(t)
+                                    <= ADAPTIVE_FUSION_MAX_SAMPLE_AGE
+                            })
                         })
                         .map(|(&id, n)| NodeInfo {
                             node_id: id,
@@ -6048,8 +6187,10 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         .node_states
                         .values()
                         .filter(|ns| {
-                            ns.last_frame_time
-                                .is_some_and(|t| now.duration_since(t).as_secs() < 10)
+                            ns.last_frame_time.is_some_and(|t| {
+                                now.saturating_duration_since(t)
+                                    <= ADAPTIVE_FUSION_MAX_SAMPLE_AGE
+                            })
                         })
                         .count();
                     if n_active > 1 {
@@ -6301,10 +6442,6 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     // We scope the mutable borrow of node_states so we can
                     // access other AppStateInner fields afterward.
                     let node_id = frame.node_id;
-                    // Clone adaptive model before mutable borrow of node_states
-                    // to avoid unsafe raw pointer (review finding #2).
-                    let adaptive_model_clone = s.adaptive_model.clone();
-
                     let ns = s.node_states.entry(node_id).or_insert_with(NodeState::new);
                     // ADR-110 iter 19 — feed the per-node fps EMA from real
                     // CSI arrivals. The helper sets `last_frame_time` as a
@@ -6336,28 +6473,6 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         raw_motion,
                     ) = extract_features_from_frame(&frame, &ns.frame_history, sample_rate_hz);
                     smooth_and_classify_node(ns, &mut classification, raw_motion);
-
-                    // Adaptive override using cloned model (safe, no raw pointers).
-                    if let Some(ref model) = adaptive_model_clone {
-                        let amps = ns.frame_history.back().map(|v| v.as_slice()).unwrap_or(&[]);
-                        let feat_arr = adaptive_classifier::features_from_runtime(
-                            &serde_json::json!({
-                                "variance": features.variance,
-                                "motion_band_power": features.motion_band_power,
-                                "breathing_band_power": features.breathing_band_power,
-                                "spectral_power": features.spectral_power,
-                                "dominant_freq_hz": features.dominant_freq_hz,
-                                "change_points": features.change_points,
-                                "mean_rssi": features.mean_rssi,
-                            }),
-                            amps,
-                        );
-                        let (label, conf) = model.classify(&feat_arr);
-                        classification.motion_level = label.to_string();
-                        classification.presence = label != "absent";
-                        classification.confidence =
-                            (conf * 0.7 + classification.confidence * 0.3).clamp(0.0, 1.0);
-                    }
 
                     ns.rssi_history.push_back(features.mean_rssi);
                     if ns.rssi_history.len() > 60 {
@@ -6401,6 +6516,14 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
 
                     // Cross-node fusion: combine features from all active nodes.
                     let fused_features = fuse_multi_node_features(&features, &s.node_states);
+                    let adaptive_amps =
+                        collect_fresh_node_amplitudes(&s.node_states, std::time::Instant::now());
+                    adaptive_override_with_amplitudes(
+                        s.adaptive_model.as_ref(),
+                        &fused_features,
+                        &adaptive_amps,
+                        &mut classification,
+                    );
 
                     s.tick += 1;
                     let tick = s.tick;
@@ -6486,8 +6609,10 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         .node_states
                         .iter()
                         .filter(|(_, n)| {
-                            n.last_frame_time
-                                .is_some_and(|t| now.duration_since(t).as_secs() < 10)
+                            n.last_frame_time.is_some_and(|t| {
+                                now.saturating_duration_since(t)
+                                    <= ADAPTIVE_FUSION_MAX_SAMPLE_AGE
+                            })
                         })
                         .map(|(&id, n)| NodeInfo {
                             node_id: id,

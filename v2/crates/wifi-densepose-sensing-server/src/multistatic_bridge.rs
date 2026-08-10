@@ -16,8 +16,10 @@ use wifi_densepose_signal::ruvsense::multistatic::{FusedSensingFrame, Multistati
 
 use super::NodeState;
 
-/// Maximum age for a node frame to be considered active (10 seconds).
-const STALE_THRESHOLD: Duration = Duration::from_secs(10);
+/// Maximum age for a node frame to enter the same fusion cycle. At the
+/// measured ~10 Hz cadence this tolerates roughly five missed frames while
+/// preventing seconds-old evidence from being fused or counted as current.
+const STALE_THRESHOLD: Duration = Duration::from_millis(500);
 
 /// Default WiFi channel frequency (MHz) used for single-channel frames.
 const DEFAULT_FREQ_MHZ: u32 = 2437; // Channel 6
@@ -283,6 +285,29 @@ mod tests {
         let frames = node_frames_from_states(&states);
         assert_eq!(frames.len(), 1, "stale node should be excluded");
         assert_eq!(frames[0].node_id, 1);
+    }
+
+    #[test]
+    fn half_second_freshness_boundary_excludes_old_count_evidence() {
+        let mut states: HashMap<u8, NodeState> = HashMap::new();
+        let mut old_history = VecDeque::new();
+        old_history.push_back(vec![3.0, 4.0]);
+        states.insert(
+            2,
+            make_node_state(
+                old_history,
+                Some(Instant::now() - Duration::from_millis(600)),
+                3,
+            ),
+        );
+
+        let frames = node_frames_from_states(&states);
+        let fuser = MultistaticFuser::new();
+        let (fused, fallback) = fuse_or_fallback(&fuser, &states, 3.0);
+
+        assert!(frames.is_empty());
+        assert!(fused.is_none());
+        assert_eq!(fallback, Some(0), "old person count must not linger");
     }
 
     #[test]

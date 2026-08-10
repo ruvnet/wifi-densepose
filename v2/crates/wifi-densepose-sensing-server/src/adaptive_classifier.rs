@@ -29,16 +29,27 @@ const DEFAULT_CLASSES: &[&str] = &["absent", "present_still", "present_moving", 
 
 /// Extract extended feature vector from a JSONL frame (features + raw amplitudes).
 pub fn features_from_frame(frame: &serde_json::Value) -> [f64; N_FEATURES] {
+    // spatial-intelligence stores the original RuView envelope under
+    // `payload`; RuView's own recorder writes the envelope at the root. Keep
+    // one feature contract so offline evaluation cannot silently turn every
+    // wrapped feature into zero.
+    let frame = frame.get("payload").unwrap_or(frame);
     let feat = frame
         .get("features")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
     let nodes = frame.get("nodes").and_then(|n| n.as_array());
     let amps: Vec<f64> = nodes
-        .and_then(|ns| ns.first())
-        .and_then(|n| n.get("amplitude"))
-        .and_then(|a| a.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_f64()).collect())
+        .map(|ns| {
+            // The room-level adaptive model is trained over every link. Node
+            // order comes from a HashMap and is not stable across processes,
+            // so only order-invariant summary statistics are derived here.
+            ns.iter()
+                .filter_map(|node| node.get("amplitude").and_then(|a| a.as_array()))
+                .flatten()
+                .filter_map(|value| value.as_f64())
+                .collect()
+        })
         .unwrap_or_default();
 
     // Server-computed features (0-6).
@@ -141,33 +152,46 @@ pub fn features_from_runtime(feat: &serde_json::Value, amps: &[f64]) -> [f64; N_
 
 /// Compute statistical features from raw subcarrier amplitudes.
 fn subcarrier_stats(amps: &[f64]) -> (f64, f64, f64, f64, f64, f64, f64, f64) {
-    if amps.is_empty() {
+    // HashMap-backed node serialization has no stable order. Sorting makes all
+    // summary features bit-reproducible across process restarts; dropping
+    // non-finite hardware samples keeps one corrupt bin from poisoning every
+    // logit in the room model.
+    let mut sorted: Vec<f64> = amps
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite())
+        .collect();
+    if sorted.is_empty() {
         return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
     }
-    let n = amps.len() as f64;
-    let mean = amps.iter().sum::<f64>() / n;
-    let var = amps.iter().map(|a| (a - mean).powi(2)).sum::<f64>() / n;
+    sorted.sort_by(f64::total_cmp);
+    let n = sorted.len() as f64;
+    let mean = sorted.iter().sum::<f64>() / n;
+    let var = sorted.iter().map(|a| (a - mean).powi(2)).sum::<f64>() / n;
     let std = var.sqrt().max(1e-9);
 
     // Skewness (asymmetry).
-    let skew = amps.iter().map(|a| ((a - mean) / std).powi(3)).sum::<f64>() / n;
+    let skew = sorted
+        .iter()
+        .map(|a| ((a - mean) / std).powi(3))
+        .sum::<f64>()
+        / n;
     // Kurtosis (peakedness).
-    let kurt = amps.iter().map(|a| ((a - mean) / std).powi(4)).sum::<f64>() / n - 3.0;
+    let kurt = sorted
+        .iter()
+        .map(|a| ((a - mean) / std).powi(4))
+        .sum::<f64>()
+        / n
+        - 3.0;
 
     // IQR (inter-quartile range).
-    let mut sorted = amps.to_vec();
-    // partial_cmp returns None on NaN — fall back to Equal so a single NaN
-    // frame from real ESP32 hardware (silent DSP div-by-zero, empty buffer)
-    // can't panic the whole sensing server (#611). The same file already
-    // uses unwrap_or(Equal) at lines 149-150 and 155; this was an oversight.
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let q1 = sorted[sorted.len() / 4];
     let q3 = sorted[3 * sorted.len() / 4];
     let iqr = q3 - q1;
 
     // Spectral entropy (normalised).
-    let total_power: f64 = amps.iter().map(|a| a * a).sum::<f64>().max(1e-9);
-    let entropy: f64 = amps
+    let total_power: f64 = sorted.iter().map(|a| a * a).sum::<f64>().max(1e-9);
+    let entropy: f64 = sorted
         .iter()
         .map(|a| {
             let p = (a * a) / total_power;
@@ -987,5 +1011,46 @@ mod tests {
         assert_eq!(validation.held_out_frames, 80);
         assert!(validation.balanced_accuracy > 0.95);
         assert!(model.runtime_eligibility().is_ok());
+    }
+
+    #[test]
+    fn recorded_feature_extraction_uses_every_node_and_is_order_invariant() {
+        let frame_ab = serde_json::json!({
+            "features": { "variance": 1.0 },
+            "nodes": [
+                { "node_id": 1, "amplitude": [1.0, 2.0] },
+                { "node_id": 2, "amplitude": [9.0, 10.0] }
+            ]
+        });
+        let frame_ba = serde_json::json!({
+            "features": { "variance": 1.0 },
+            "nodes": [
+                { "node_id": 2, "amplitude": [9.0, 10.0] },
+                { "node_id": 1, "amplitude": [1.0, 2.0] }
+            ]
+        });
+
+        let ab = features_from_frame(&frame_ab);
+        let ba = features_from_frame(&frame_ba);
+
+        assert_eq!(ab, ba, "node serialization order must not change features");
+        assert!((ab[7] - 5.5).abs() < 1e-9, "all-node amplitude mean");
+        assert!((ab[14] - 9.0).abs() < 1e-9, "all-node amplitude range");
+    }
+
+    #[test]
+    fn spatial_intelligence_payload_wrapper_uses_the_same_feature_contract() {
+        let wrapped = serde_json::json!({
+            "captured_at": "2026-08-10T00:00:00Z",
+            "payload": {
+                "features": { "variance": 3.0 },
+                "nodes": [{ "node_id": 1, "amplitude": [2.0, 4.0] }]
+            }
+        });
+
+        let features = features_from_frame(&wrapped);
+
+        assert_eq!(features[0], 3.0);
+        assert_eq!(features[7], 3.0);
     }
 }
