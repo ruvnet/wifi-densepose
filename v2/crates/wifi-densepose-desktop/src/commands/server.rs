@@ -63,6 +63,12 @@ fn find_server_binary(app: &AppHandle, custom_path: Option<&str>) -> Result<Stri
     ))
 }
 
+fn configure_log_level(cmd: &mut Command, log_level: Option<&str>) {
+    if let Some(log_level) = log_level {
+        cmd.env("RUST_LOG", log_level);
+    }
+}
+
 /// Start the sensing server as a managed child process.
 ///
 /// The server binary is looked up in the following order:
@@ -104,9 +110,7 @@ pub async fn start_server(
     if let Some(ref bind_addr) = config.bind_address {
         cmd.args(["--bind", bind_addr]);
     }
-    if let Some(ref log_level) = config.log_level {
-        cmd.args(["--log-level", log_level]);
-    }
+    configure_log_level(&mut cmd, config.log_level.as_deref());
 
     // Default to explicit "simulated" demo mode when the desktop user hasn't
     // chosen a source — this is the *Tauri demo* app, not a production
@@ -396,6 +400,24 @@ pub struct ServerLogsResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_level_is_passed_through_rust_log() {
+        let mut command = Command::new("sensing-server");
+        configure_log_level(&mut command, Some("debug"));
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let rust_log = command
+            .get_envs()
+            .find(|(key, _)| key.to_string_lossy() == "RUST_LOG")
+            .and_then(|(_, value)| value)
+            .map(|value| value.to_string_lossy().into_owned());
+
+        assert!(!args.iter().any(|arg| arg == "--log-level"));
+        assert_eq!(rust_log.as_deref(), Some("debug"));
+    }
 
     #[test]
     fn test_server_config_default() {
