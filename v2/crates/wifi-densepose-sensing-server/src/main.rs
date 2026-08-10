@@ -511,6 +511,7 @@ struct NodeState {
     pub(crate) prev_person_count: usize,
     smoothed_motion: f64,
     current_motion_level: String,
+    current_classification_confidence: f64,
     debounce_counter: u32,
     debounce_candidate: String,
     baseline_motion: f64,
@@ -792,6 +793,7 @@ impl NodeState {
             prev_person_count: 0,
             smoothed_motion: 0.0,
             current_motion_level: "absent".to_string(),
+            current_classification_confidence: 0.0,
             debounce_counter: 0,
             debounce_candidate: "absent".to_string(),
             baseline_motion: 0.0,
@@ -1245,6 +1247,136 @@ struct AppStateInner {
 
 /// If no ESP32 frame arrives within this duration, source reverts to offline.
 const ESP32_OFFLINE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Aggregate the room-level classification from every fresh node.
+///
+/// A packet is only an update for one node. Deriving the top-level state from
+/// that packet makes presence depend on arrival order in a multi-node mesh.
+/// Instead, use the persistent per-node classifications and ignore nodes that
+/// have crossed the same staleness boundary exposed by `node_features`.
+fn aggregate_node_classification(
+    node_states: &HashMap<u8, NodeState>,
+    now: std::time::Instant,
+) -> Option<ClassificationInfo> {
+    fn rank(motion_level: &str) -> u8 {
+        match motion_level {
+            "active" => 3,
+            "present_moving" => 2,
+            "absent" => 0,
+            // Adaptive models may expose domain-specific labels such as
+            // `sleeping`. The existing classification contract treats every
+            // label except `absent` as presence, so rank unknown labels with
+            // the still/present tier instead of silently dropping them.
+            _ => 1,
+        }
+    }
+
+    let mut fresh = node_states.values().filter(|ns| {
+        ns.last_frame_time
+            .is_some_and(|last| now.saturating_duration_since(last) <= ESP32_OFFLINE_TIMEOUT)
+    });
+    let first = fresh.next()?;
+    let mut motion_level = first.current_motion_level.as_str();
+    let mut confidence = first.current_classification_confidence;
+
+    for ns in fresh {
+        let candidate_rank = rank(&ns.current_motion_level);
+        let current_rank = rank(motion_level);
+        let replaces_current = candidate_rank > current_rank
+            || (candidate_rank == current_rank
+                && ns.current_classification_confidence > confidence);
+        if replaces_current {
+            motion_level = &ns.current_motion_level;
+            confidence = ns.current_classification_confidence;
+        }
+    }
+
+    Some(ClassificationInfo {
+        motion_level: motion_level.to_string(),
+        presence: motion_level != "absent",
+        confidence: confidence.clamp(0.0, 1.0),
+    })
+}
+
+#[cfg(test)]
+mod aggregate_classification_tests {
+    use super::{aggregate_node_classification, NodeState, ESP32_OFFLINE_TIMEOUT};
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
+
+    fn node(level: &str, confidence: f64, seen_at: Instant) -> NodeState {
+        let mut node = NodeState::new();
+        node.current_motion_level = level.to_string();
+        node.current_classification_confidence = confidence;
+        node.last_frame_time = Some(seen_at);
+        node
+    }
+
+    #[test]
+    fn moving_node_wins_over_last_absent_packet() {
+        let now = Instant::now();
+        let states = HashMap::from([
+            (1, node("present_moving", 0.82, now)),
+            (2, node("absent", 0.97, now)),
+        ]);
+
+        let classification = aggregate_node_classification(&states, now).unwrap();
+        assert_eq!(classification.motion_level, "present_moving");
+        assert!(classification.presence);
+        assert!((classification.confidence - 0.82).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn present_still_wins_over_absent() {
+        let now = Instant::now();
+        let states = HashMap::from([
+            (1, node("absent", 0.2, now)),
+            (2, node("present_still", 0.7, now)),
+        ]);
+
+        let classification = aggregate_node_classification(&states, now).unwrap();
+        assert_eq!(classification.motion_level, "present_still");
+        assert!(classification.presence);
+    }
+
+    #[test]
+    fn stale_nodes_do_not_contribute() {
+        let now = Instant::now();
+        let stale = now - ESP32_OFFLINE_TIMEOUT - Duration::from_millis(1);
+        let states = HashMap::from([
+            (1, node("active", 0.99, stale)),
+            (2, node("absent", 0.1, now)),
+        ]);
+
+        let classification = aggregate_node_classification(&states, now).unwrap();
+        assert_eq!(classification.motion_level, "absent");
+        assert!(!classification.presence);
+        assert!((classification.confidence - 0.1).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn no_fresh_nodes_returns_none() {
+        let now = Instant::now();
+        let stale = now - ESP32_OFFLINE_TIMEOUT - Duration::from_millis(1);
+        let states = HashMap::from([(1, node("active", 0.99, stale))]);
+
+        assert!(aggregate_node_classification(&states, now).is_none());
+    }
+
+    #[test]
+    fn adaptive_presence_label_wins_over_absent() {
+        let now = Instant::now();
+        let states = HashMap::from([
+            (1, node("sleeping", 0.74, now)),
+            (2, node("absent", 0.99, now)),
+        ]);
+
+        let classification = aggregate_node_classification(&states, now).unwrap();
+        assert_eq!(classification.motion_level, "sleeping");
+        assert!(classification.presence);
+        assert!((classification.confidence - 0.74).abs() < f64::EPSILON);
+    }
+}
 
 impl AppStateInner {
     /// Return the effective data source, accounting for ESP32 frame timeout.
@@ -5854,6 +5986,11 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         ns.rssi_history.pop_front();
                     }
 
+                    let node_classification =
+                        classify_vitals(vitals.motion, vitals.presence, vitals.presence_score);
+                    ns.current_motion_level = node_classification.motion_level.clone();
+                    ns.current_classification_confidence = node_classification.confidence;
+
                     // Store per-node person count from edge vitals.
                     let node_est = if vitals.presence {
                         (vitals.n_persons as usize).max(1)
@@ -5862,20 +5999,26 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     };
                     ns.prev_person_count = node_est;
 
+                    let now = std::time::Instant::now();
+                    let mut classification = aggregate_node_classification(&s.node_states, now)
+                        .unwrap_or(node_classification);
+
                     s.tick += 1;
                     let tick = s.tick;
 
-                    let motion_score = if vitals.motion {
+                    let motion_score = if matches!(
+                        classification.motion_level.as_str(),
+                        "active" | "present_moving"
+                    ) {
                         0.8
-                    } else if vitals.presence {
+                    } else if classification.motion_level == "present_still" {
                         0.3
                     } else {
                         0.05
                     };
 
                     // Aggregate person count: gate on presence first (matching WiFi path).
-                    let now = std::time::Instant::now();
-                    let total_persons = if vitals.presence {
+                    let total_persons = if classification.presence {
                         let dedup = s.dedup_factor;
                         let (fused, fallback_count) = multistatic_bridge::fuse_or_fallback(
                             &s.multistatic_fuser,
@@ -5970,9 +6113,6 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
 
                     // Cross-node fusion: combine features from all active nodes.
                     let fused_features = fuse_multi_node_features(&features, &s.node_states);
-
-                    let mut classification =
-                        classify_vitals(vitals.motion, vitals.presence, vitals.presence_score);
 
                     // Boost classification confidence with multi-node coverage.
                     let n_active = s
@@ -6289,6 +6429,8 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         classification.confidence =
                             (conf * 0.7 + classification.confidence * 0.3).clamp(0.0, 1.0);
                     }
+                    ns.current_motion_level = classification.motion_level.clone();
+                    ns.current_classification_confidence = classification.confidence;
 
                     ns.rssi_history.push_back(features.mean_rssi);
                     if ns.rssi_history.len() > 60 {
@@ -6333,10 +6475,19 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     // Cross-node fusion: combine features from all active nodes.
                     let fused_features = fuse_multi_node_features(&features, &s.node_states);
 
+                    // The top-level classification represents the room, not
+                    // whichever node happened to deliver the latest packet.
+                    let now = std::time::Instant::now();
+                    classification = aggregate_node_classification(&s.node_states, now)
+                        .unwrap_or(classification);
+
                     s.tick += 1;
                     let tick = s.tick;
 
-                    let motion_score = if classification.motion_level == "active" {
+                    let motion_score = if matches!(
+                        classification.motion_level.as_str(),
+                        "active" | "present_moving"
+                    ) {
                         0.8
                     } else if classification.motion_level == "present_still" {
                         0.3
@@ -6345,7 +6496,6 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     };
 
                     // Aggregate person count: gate on presence first (matching WiFi path).
-                    let now = std::time::Instant::now();
                     let total_persons = if classification.presence {
                         let dedup = s.dedup_factor;
                         let (fused, fallback_count) = multistatic_bridge::fuse_or_fallback(
