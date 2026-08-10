@@ -215,6 +215,23 @@ pub struct AdaptiveModel {
     /// Dynamically discovered class names (in index order).
     #[serde(default = "default_class_names")]
     pub class_names: Vec<String>,
+    /// Session-held-out evaluation. Models saved before schema v2 do not have
+    /// this field and are deliberately ineligible for automatic activation.
+    #[serde(default)]
+    pub validation: Option<ValidationMetrics>,
+}
+
+/// Leakage-resistant evaluation metadata for the runtime activation gate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidationMetrics {
+    /// Recording sessions excluded from fitting and used only for evaluation.
+    pub held_out_recordings: usize,
+    /// Frames contained in the held-out sessions.
+    pub held_out_frames: usize,
+    /// Macro-average recall, so a dominant class cannot hide a failed class.
+    pub balanced_accuracy: f64,
+    /// Recall for each class name.
+    pub per_class_recall: HashMap<String, f64>,
 }
 
 /// Backward-compatible fallback for models saved without class_names.
@@ -234,11 +251,78 @@ impl Default for AdaptiveModel {
             training_accuracy: 0.0,
             version: 1,
             class_names: default_class_names(),
+            validation: None,
         }
     }
 }
 
 impl AdaptiveModel {
+    /// Whether this model has enough independent evidence to override the
+    /// conservative threshold classifier in production.
+    pub fn runtime_eligibility(&self) -> Result<(), String> {
+        let metrics = self.validation.as_ref().ok_or_else(|| {
+            "model has no session-held-out validation; automatic activation is unsafe".to_string()
+        })?;
+        let n_classes = self.class_names.len();
+        if n_classes < 2 {
+            return Err("model needs at least two classes".into());
+        }
+        if self.trained_frames == 0 {
+            return Err("model contains no fitted frames".into());
+        }
+        if self.weights.len() != n_classes
+            || self
+                .weights
+                .iter()
+                .any(|row| row.len() != N_FEATURES + 1 || row.iter().any(|v| !v.is_finite()))
+        {
+            return Err("model weight shape or values do not match its classes".into());
+        }
+        if self.class_stats.len() != n_classes
+            || self.global_mean.iter().any(|v| !v.is_finite())
+            || self.global_std.iter().any(|v| !v.is_finite() || *v <= 0.0)
+        {
+            return Err("model normalization or class statistics are invalid".into());
+        }
+        if metrics.held_out_recordings < n_classes {
+            return Err(format!(
+                "held-out validation needs at least one independent recording per class (have {}, need {n_classes})",
+                metrics.held_out_recordings
+            ));
+        }
+        if metrics.held_out_frames == 0 {
+            return Err("held-out validation contains no frames".into());
+        }
+
+        // Binary classifiers must clear a higher bar than four-way models
+        // because 50% is already random chance. The fixed 0.60 floor prevents
+        // a many-class model from activating on a superficially small margin.
+        let chance = 1.0 / n_classes as f64;
+        let required_balanced_accuracy = 0.60_f64.max(chance + 0.20);
+        if !metrics.balanced_accuracy.is_finite()
+            || metrics.balanced_accuracy < required_balanced_accuracy
+        {
+            return Err(format!(
+                "held-out balanced accuracy {:.3} is below activation floor {:.3}",
+                metrics.balanced_accuracy, required_balanced_accuracy
+            ));
+        }
+
+        for class_name in &self.class_names {
+            let recall = metrics
+                .per_class_recall
+                .get(class_name)
+                .copied()
+                .ok_or_else(|| format!("held-out recall missing for class '{class_name}'"))?;
+            if !recall.is_finite() || recall < 0.50 {
+                return Err(format!(
+                    "held-out recall for class '{class_name}' is {recall:.3}, below 0.500"
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Classify a raw feature vector.  Returns (class_label, confidence).
     pub fn classify(&self, raw_features: &[f64; N_FEATURES]) -> (String, f64) {
         let n_classes = self.weights.len();
@@ -299,6 +383,14 @@ impl AdaptiveModel {
     pub fn load(path: &Path) -> std::io::Result<Self> {
         let json = std::fs::read_to_string(path)?;
         serde_json::from_str(&json).map_err(std::io::Error::other)
+    }
+
+    /// Load a persisted model only when its independent-session evidence is
+    /// strong enough for automatic runtime activation.
+    pub fn load_runtime(path: &Path) -> Result<Self, String> {
+        let model = Self::load(path).map_err(|error| error.to_string())?;
+        model.runtime_eligibility()?;
+        Ok(model)
     }
 }
 
@@ -405,18 +497,47 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
         return Err("No training samples found. Record data with train_* prefix.".into());
     }
 
-    // Second pass: load recordings with the discovered class indices.
+    // Stable ordering makes both the held-out choice and model fitting
+    // reproducible across filesystems whose read_dir order differs.
+    file_classes.sort_by(|a, b| a.1.cmp(&b.1));
+
+    // Hold out one whole recording per class. Adjacent CSI frames are highly
+    // autocorrelated, so a random frame split leaks a session's room/channel
+    // fingerprint into validation and overstates deployment accuracy.
+    let mut recordings_per_class: HashMap<String, usize> = HashMap::new();
+    for (_, _, class_name) in &file_classes {
+        *recordings_per_class.entry(class_name.clone()).or_default() += 1;
+    }
+    let can_validate_sessions = class_names
+        .iter()
+        .all(|name| recordings_per_class.get(name).copied().unwrap_or(0) >= 2);
+    let mut held_out_path_by_class: HashMap<String, PathBuf> = HashMap::new();
+    if can_validate_sessions {
+        for (path, _, class_name) in &file_classes {
+            // Sorted iteration intentionally leaves the last session per class.
+            held_out_path_by_class.insert(class_name.clone(), path.clone());
+        }
+    }
+
+    // Second pass: load fitting and held-out sessions separately.
     let mut samples: Vec<Sample> = Vec::new();
+    let mut validation_samples: Vec<Sample> = Vec::new();
     for (path, fname, class_name) in &file_classes {
         let class_idx = class_map[class_name];
         let loaded = load_recording(path, class_idx);
+        let is_held_out = held_out_path_by_class.get(class_name) == Some(path);
         eprintln!(
-            "  Loaded {}: {} frames → class '{}'",
+            "  Loaded {}: {} frames → class '{}'{}",
             fname,
             loaded.len(),
-            class_name
+            class_name,
+            if is_held_out { " [held out]" } else { "" }
         );
-        samples.extend(loaded);
+        if is_held_out {
+            validation_samples.extend(loaded);
+        } else {
+            samples.extend(loaded);
+        }
     }
 
     if samples.is_empty() {
@@ -597,7 +718,10 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
         }
     }
     let accuracy = correct as f64 / n as f64;
-    eprintln!("Training accuracy: {correct}/{n} = {accuracy:.1}%");
+    eprintln!(
+        "Training accuracy: {correct}/{n} = {:.1}%",
+        accuracy * 100.0
+    );
 
     // ── Per-class accuracy ──
     let mut class_correct = vec![0usize; n_classes];
@@ -626,19 +750,242 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
         );
     }
 
-    Ok(AdaptiveModel {
+    let mut model = AdaptiveModel {
         class_stats,
         weights,
         global_mean,
         global_std,
         trained_frames: n,
         training_accuracy: accuracy,
-        version: 1,
+        version: 2,
         class_names,
-    })
+        validation: None,
+    };
+    if can_validate_sessions {
+        model.validation = Some(evaluate_held_out(
+            &model,
+            &validation_samples,
+            held_out_path_by_class.len(),
+        ));
+    } else {
+        eprintln!(
+            "Session-held-out validation unavailable: record at least two independent sessions per class"
+        );
+    }
+    Ok(model)
+}
+
+/// Evaluate the fitted model only on sessions excluded from fitting.
+fn evaluate_held_out(
+    model: &AdaptiveModel,
+    samples: &[Sample],
+    held_out_recordings: usize,
+) -> ValidationMetrics {
+    let n_classes = model.class_names.len();
+    let mut class_correct = vec![0usize; n_classes];
+    let mut class_total = vec![0usize; n_classes];
+    for sample in samples {
+        class_total[sample.class_idx] += 1;
+        let (predicted, _) = model.classify(&sample.features);
+        if predicted == model.class_names[sample.class_idx] {
+            class_correct[sample.class_idx] += 1;
+        }
+    }
+
+    let mut per_class_recall = HashMap::new();
+    for class_idx in 0..n_classes {
+        let recall = if class_total[class_idx] == 0 {
+            0.0
+        } else {
+            class_correct[class_idx] as f64 / class_total[class_idx] as f64
+        };
+        per_class_recall.insert(model.class_names[class_idx].clone(), recall);
+    }
+    let balanced_accuracy = if n_classes == 0 {
+        0.0
+    } else {
+        per_class_recall.values().sum::<f64>() / n_classes as f64
+    };
+    eprintln!(
+        "Held-out balanced accuracy: {:.1}% across {} recording(s) / {} frames",
+        balanced_accuracy * 100.0,
+        held_out_recordings,
+        samples.len()
+    );
+
+    ValidationMetrics {
+        held_out_recordings,
+        held_out_frames: samples.len(),
+        balanced_accuracy,
+        per_class_recall,
+    }
 }
 
 /// Default path for the saved adaptive model.
 pub fn model_path() -> PathBuf {
     PathBuf::from("data/adaptive_model.json")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn model_with_validation(balanced_accuracy: f64, recalls: &[(&str, f64)]) -> AdaptiveModel {
+        let mut model = AdaptiveModel::default();
+        model.version = 2;
+        model.class_names = recalls
+            .iter()
+            .map(|(name, _)| (*name).to_string())
+            .collect();
+        model.trained_frames = 800;
+        model.weights = vec![vec![0.0; N_FEATURES + 1]; recalls.len()];
+        model.class_stats = recalls
+            .iter()
+            .map(|(name, _)| ClassStats {
+                label: (*name).to_string(),
+                count: 400,
+                mean: [0.0; N_FEATURES],
+                stddev: [1.0; N_FEATURES],
+            })
+            .collect();
+        model.validation = Some(ValidationMetrics {
+            held_out_recordings: recalls.len(),
+            held_out_frames: 400,
+            balanced_accuracy,
+            per_class_recall: recalls
+                .iter()
+                .map(|(name, recall)| ((*name).to_string(), *recall))
+                .collect(),
+        });
+        model
+    }
+
+    #[test]
+    fn legacy_model_without_session_validation_is_not_runtime_eligible() {
+        let mut model = AdaptiveModel::default();
+        model.training_accuracy = 1.0;
+
+        let error = model.runtime_eligibility().unwrap_err();
+
+        assert!(error.contains("held-out"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn model_must_beat_dynamic_chance_margin_and_each_class_floor() {
+        let weak_binary = model_with_validation(0.69, &[("absent", 0.70), ("present_still", 0.68)]);
+        assert!(weak_binary.runtime_eligibility().is_err());
+
+        let collapsed_class =
+            model_with_validation(0.75, &[("absent", 0.98), ("present_still", 0.49)]);
+        assert!(collapsed_class.runtime_eligibility().is_err());
+
+        let eligible = model_with_validation(0.80, &[("absent", 0.82), ("present_still", 0.78)]);
+        assert!(eligible.runtime_eligibility().is_ok());
+    }
+
+    #[test]
+    fn every_class_needs_an_independent_held_out_recording() {
+        let mut model = model_with_validation(0.80, &[("absent", 0.82), ("present_still", 0.78)]);
+        model.validation.as_mut().unwrap().held_out_recordings = 1;
+
+        assert!(model.runtime_eligibility().is_err());
+    }
+
+    #[test]
+    fn malformed_or_non_finite_model_artifacts_are_never_activated() {
+        let mut wrong_shape =
+            model_with_validation(0.80, &[("absent", 0.82), ("present_still", 0.78)]);
+        wrong_shape.weights[0].pop();
+        assert!(wrong_shape.runtime_eligibility().is_err());
+
+        let mut non_finite =
+            model_with_validation(0.80, &[("absent", 0.82), ("present_still", 0.78)]);
+        non_finite.global_std[3] = f64::NAN;
+        assert!(non_finite.runtime_eligibility().is_err());
+    }
+
+    #[test]
+    fn runtime_loader_rejects_legacy_model_even_when_training_accuracy_is_high() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.json");
+        let mut model = AdaptiveModel::default();
+        model.training_accuracy = 1.0;
+        model.save(&path).unwrap();
+
+        assert!(AdaptiveModel::load_runtime(&path).is_err());
+    }
+
+    #[test]
+    fn runtime_loader_accepts_session_validated_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.json");
+        let model = model_with_validation(0.80, &[("absent", 0.82), ("present_still", 0.78)]);
+        model.save(&path).unwrap();
+
+        assert!(AdaptiveModel::load_runtime(&path).is_ok());
+    }
+
+    fn write_recording(dir: &Path, name: &str, variance: f64, amp: f64) {
+        let mut file = std::fs::File::create(dir.join(name)).unwrap();
+        for i in 0..40 {
+            let frame = serde_json::json!({
+                "features": {
+                    "variance": variance + (i % 3) as f64 * 0.01,
+                    "motion_band_power": variance,
+                    "breathing_band_power": variance * 0.5,
+                    "spectral_power": variance + 1.0,
+                    "dominant_freq_hz": variance * 0.01,
+                    "change_points": if variance > 10.0 { 8 } else { 0 },
+                    "mean_rssi": if variance > 10.0 { -45.0 } else { -60.0 }
+                },
+                "nodes": [{ "amplitude": [amp, amp + 0.1, amp + 0.2, amp + 0.3] }]
+            });
+            writeln!(file, "{frame}").unwrap();
+        }
+    }
+
+    #[test]
+    fn one_recording_per_class_cannot_claim_generalization() {
+        let dir = tempfile::tempdir().unwrap();
+        write_recording(dir.path(), "train_absent_session1.jsonl", 1.0, 1.0);
+        write_recording(
+            dir.path(),
+            "train_present_still_session1.jsonl",
+            100.0,
+            20.0,
+        );
+
+        let model = train_from_recordings(dir.path()).unwrap();
+
+        assert!(model.validation.is_none());
+        assert!(model.runtime_eligibility().is_err());
+    }
+
+    #[test]
+    fn validation_uses_whole_recording_sessions_not_training_frames() {
+        let dir = tempfile::tempdir().unwrap();
+        for session in 1..=2 {
+            write_recording(
+                dir.path(),
+                &format!("train_absent_session{session}.jsonl"),
+                1.0,
+                1.0,
+            );
+            write_recording(
+                dir.path(),
+                &format!("train_present_still_session{session}.jsonl"),
+                100.0,
+                20.0,
+            );
+        }
+
+        let model = train_from_recordings(dir.path()).unwrap();
+        let validation = model.validation.as_ref().expect("held-out metrics");
+
+        assert_eq!(validation.held_out_recordings, 2);
+        assert_eq!(validation.held_out_frames, 80);
+        assert!(validation.balanced_accuracy > 0.95);
+        assert!(model.runtime_eligibility().is_ok());
+    }
 }

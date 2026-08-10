@@ -5189,6 +5189,7 @@ async fn adaptive_train(State(state): State<SharedState>) -> Json<serde_json::Va
         Ok(model) => {
             let accuracy = model.training_accuracy;
             let frames = model.trained_frames;
+            let validation = model.validation.clone();
             let stats: Vec<_> = model
                 .class_stats
                 .iter()
@@ -5200,6 +5201,27 @@ async fn adaptive_train(State(state): State<SharedState>) -> Json<serde_json::Va
                     })
                 })
                 .collect();
+
+            // Never replace a working classifier with an unvalidated or weak
+            // candidate. CSI frames within one recording are autocorrelated;
+            // only whole-session held-out evidence is allowed to promote a
+            // model into the live path.
+            if let Err(activation_error) = model.runtime_eligibility() {
+                warn!(
+                    "Adaptive model trained but not activated: {}",
+                    activation_error
+                );
+                return Json(serde_json::json!({
+                    "success": true,
+                    "activated": false,
+                    "trained_frames": frames,
+                    "accuracy": accuracy,
+                    "training_accuracy": accuracy,
+                    "validation": validation,
+                    "activation_error": activation_error,
+                    "class_stats": stats,
+                }));
+            }
 
             // Save to disk.
             if let Err(e) = model.save(&adaptive_classifier::model_path()) {
@@ -5217,8 +5239,11 @@ async fn adaptive_train(State(state): State<SharedState>) -> Json<serde_json::Va
 
             Json(serde_json::json!({
                 "success": true,
+                "activated": true,
                 "trained_frames": frames,
                 "accuracy": accuracy,
+                "training_accuracy": accuracy,
+                "validation": validation,
                 "class_stats": stats,
             }))
         }
@@ -5237,6 +5262,8 @@ async fn adaptive_status(State(state): State<SharedState>) -> Json<serde_json::V
             "loaded": true,
             "trained_frames": model.trained_frames,
             "accuracy": model.training_accuracy,
+            "training_accuracy": model.training_accuracy,
+            "validation": model.validation,
             "version": model.version,
             "classes": model.class_names,
             "class_stats": model.class_stats,
@@ -8064,16 +8091,26 @@ async fn main() {
         // Training (ADR-186 TRAIN-RECONNECT)
         training_state: training_api::TrainingState::default(),
         training_progress_tx: broadcast::channel::<String>(256).0,
-        adaptive_model:
-            adaptive_classifier::AdaptiveModel::load(&adaptive_classifier::model_path())
-                .ok()
-                .inspect(|m| {
-                    info!(
-                        "Loaded adaptive classifier: {} frames, {:.1}% accuracy",
-                        m.trained_frames,
-                        m.training_accuracy * 100.0
-                    );
-                }),
+        adaptive_model: match adaptive_classifier::AdaptiveModel::load_runtime(
+            &adaptive_classifier::model_path(),
+        ) {
+            Ok(model) => {
+                info!(
+                    "Loaded adaptive classifier: {} frames, {:.1}% training accuracy, session-validated",
+                    model.trained_frames,
+                    model.training_accuracy * 100.0
+                );
+                Some(model)
+            }
+            Err(error) => {
+                warn!(
+                    "Adaptive classifier not auto-loaded from {}: {}",
+                    adaptive_classifier::model_path().display(),
+                    error
+                );
+                None
+            }
+        },
         node_states: HashMap::new(),
         // Accuracy sprint
         pose_tracker: PoseTracker::new(),
