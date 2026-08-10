@@ -16,19 +16,29 @@
 //! with the appropriate filename convention.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 // ── Feature vector ───────────────────────────────────────────────────────────
 
-/// Extended feature vector: 7 server features + 8 subcarrier-derived features = 15.
-const N_FEATURES: usize = 15;
+/// Instantaneous feature vector: 7 server features + 8 subcarrier statistics.
+const N_BASE_FEATURES: usize = 15;
+/// The most dynamic server/subcarrier channels used by the temporal patch.
+const TEMPORAL_FEATURE_INDICES: [usize; 8] = [0, 1, 2, 3, 4, 5, 7, 8];
+const N_TEMPORAL_FEATURES: usize = TEMPORAL_FEATURE_INDICES.len();
+/// Five-second patch: current features + selected velocity + selected stddev.
+/// Kept at 31 so the persisted fixed-size arrays remain natively serde-compatible.
+const N_FEATURES: usize = N_BASE_FEATURES + N_TEMPORAL_FEATURES * 2;
+const TEMPORAL_BUCKET_SECONDS: f64 = 1.0;
+const TEMPORAL_WINDOW_BUCKETS: i64 = 5;
+const TEMPORAL_MIN_CONTEXT_BUCKETS: usize = 3;
 
 /// Default class names for backward compatibility with old saved models.
-const DEFAULT_CLASSES: &[&str] = &["absent", "present_still", "present_moving", "active"];
+const DEFAULT_CLASSES: &[&str] = &["absent", "present"];
 
 /// Extract extended feature vector from a JSONL frame (features + raw amplitudes).
-pub fn features_from_frame(frame: &serde_json::Value) -> [f64; N_FEATURES] {
+pub fn features_from_frame(frame: &serde_json::Value) -> [f64; N_BASE_FEATURES] {
     // spatial-intelligence stores the original RuView envelope under
     // `payload`; RuView's own recorder writes the envelope at the root. Keep
     // one feature contract so offline evaluation cannot silently turn every
@@ -103,7 +113,7 @@ pub fn features_from_frame(frame: &serde_json::Value) -> [f64; N_FEATURES] {
 }
 
 /// Also keep a simpler version for runtime (no JSONL, just FeatureInfo + amps).
-pub fn features_from_runtime(feat: &serde_json::Value, amps: &[f64]) -> [f64; N_FEATURES] {
+pub fn features_from_runtime(feat: &serde_json::Value, amps: &[f64]) -> [f64; N_BASE_FEATURES] {
     let variance = feat.get("variance").and_then(|v| v.as_f64()).unwrap_or(0.0);
     let mbp = feat
         .get("motion_band_power")
@@ -148,6 +158,134 @@ pub fn features_from_runtime(feat: &serde_json::Value, amps: &[f64]) -> [f64; N_
         amp_max,
         amp_range,
     ]
+}
+
+/// Rate-invariant short temporal patch shared by offline fitting and runtime.
+///
+/// RuView can process ESP32 frames around 30 Hz while the product recorder
+/// polls `/latest` at 1 Hz. Keeping one latest observation per wall-clock
+/// second prevents sample rate from becoming an accidental class label.
+#[derive(Debug, Default)]
+pub struct AdaptiveFeatureExtractor {
+    history: VecDeque<(i64, [f64; N_BASE_FEATURES])>,
+    runtime_origin: Option<Instant>,
+}
+
+impl AdaptiveFeatureExtractor {
+    /// Add one observation at a monotonic/epoch timestamp in seconds.
+    pub fn observe_at(
+        &mut self,
+        base: [f64; N_BASE_FEATURES],
+        timestamp_seconds: f64,
+    ) -> Option<[f64; N_FEATURES]> {
+        if !timestamp_seconds.is_finite() || base.iter().any(|value| !value.is_finite()) {
+            return None;
+        }
+        let bucket = (timestamp_seconds / TEMPORAL_BUCKET_SECONDS).floor() as i64;
+        match self.history.back_mut() {
+            Some((last_bucket, last_base)) if *last_bucket == bucket => {
+                *last_base = base;
+            }
+            Some((last_bucket, _)) if bucket < *last_bucket => {
+                self.history.clear();
+                self.history.push_back((bucket, base));
+            }
+            Some((last_bucket, _)) => {
+                if bucket - *last_bucket >= TEMPORAL_WINDOW_BUCKETS {
+                    self.history.clear();
+                }
+                self.history.push_back((bucket, base));
+            }
+            None => self.history.push_back((bucket, base)),
+        }
+
+        while self
+            .history
+            .front()
+            .is_some_and(|(oldest, _)| bucket - *oldest >= TEMPORAL_WINDOW_BUCKETS)
+        {
+            self.history.pop_front();
+        }
+
+        if self.history.len() < TEMPORAL_MIN_CONTEXT_BUCKETS {
+            return None;
+        }
+        let span = self.history.back()?.0 - self.history.front()?.0;
+        if span < (TEMPORAL_MIN_CONTEXT_BUCKETS - 1) as i64 {
+            return None;
+        }
+
+        let mut output = [0.0; N_FEATURES];
+        output[..N_BASE_FEATURES].copy_from_slice(&base);
+        for (temporal_index, feature_index) in TEMPORAL_FEATURE_INDICES.iter().copied().enumerate()
+        {
+            let mean = self
+                .history
+                .iter()
+                .map(|(_, values)| values[feature_index])
+                .sum::<f64>()
+                / self.history.len() as f64;
+            let variance = self
+                .history
+                .iter()
+                .map(|(_, values)| (values[feature_index] - mean).powi(2))
+                .sum::<f64>()
+                / self.history.len() as f64;
+            let mean_abs_velocity = self
+                .history
+                .iter()
+                .zip(self.history.iter().skip(1))
+                .map(|((before_bucket, before), (after_bucket, after))| {
+                    (after[feature_index] - before[feature_index]).abs()
+                        / (*after_bucket - *before_bucket) as f64
+                })
+                .sum::<f64>()
+                / (self.history.len() - 1) as f64;
+            output[N_BASE_FEATURES + temporal_index] = mean_abs_velocity;
+            output[N_BASE_FEATURES + N_TEMPORAL_FEATURES + temporal_index] = variance.sqrt();
+        }
+        Some(output)
+    }
+
+    /// Add a live observation using a process-local monotonic clock.
+    pub fn observe_runtime(
+        &mut self,
+        feature_json: &serde_json::Value,
+        amplitudes: &[f64],
+    ) -> Option<[f64; N_FEATURES]> {
+        let origin = *self.runtime_origin.get_or_insert_with(Instant::now);
+        self.observe_at(
+            features_from_runtime(feature_json, amplitudes),
+            origin.elapsed().as_secs_f64(),
+        )
+    }
+
+    /// A newly loaded model must never inherit temporal context from the old one.
+    pub fn reset(&mut self) {
+        self.history.clear();
+        self.runtime_origin = None;
+    }
+}
+
+/// Merge the learned presence stage with the high-rate heuristic motion stage.
+pub fn reconcile_presence_prediction(
+    learned_label: &str,
+    heuristic_motion: &str,
+) -> (String, bool) {
+    match learned_label {
+        "absent" => ("absent".to_string(), false),
+        "present" => {
+            let motion = if heuristic_motion == "absent" {
+                "present_still"
+            } else {
+                heuristic_motion
+            };
+            (motion.to_string(), true)
+        }
+        // Preserve compatibility with explicit activity classes in externally
+        // produced models while the built-in trainer remains hierarchical.
+        other => (other.to_string(), other != "absent"),
+    }
 }
 
 /// Compute statistical features from raw subcarrier amplitudes.
@@ -239,6 +377,9 @@ pub struct AdaptiveModel {
     /// Dynamically discovered class names (in index order).
     #[serde(default = "default_class_names")]
     pub class_names: Vec<String>,
+    /// Sensor topology this local specialist was fitted for.
+    #[serde(default)]
+    pub expected_node_count: Option<usize>,
     /// Session-held-out evaluation. Models saved before schema v2 do not have
     /// this field and are deliberately ineligible for automatic activation.
     #[serde(default)]
@@ -275,6 +416,7 @@ impl Default for AdaptiveModel {
             training_accuracy: 0.0,
             version: 1,
             class_names: default_class_names(),
+            expected_node_count: None,
             validation: None,
         }
     }
@@ -293,6 +435,9 @@ impl AdaptiveModel {
         }
         if self.trained_frames == 0 {
             return Err("model contains no fitted frames".into());
+        }
+        if self.expected_node_count == Some(0) {
+            return Err("model node topology cannot be zero".into());
         }
         if self.weights.len() != n_classes
             || self
@@ -435,22 +580,51 @@ struct Recording {
 }
 
 /// Load JSONL recording frames and assign a class label based on filename.
-fn load_recording(path: &Path, class_idx: usize) -> Vec<Sample> {
+fn load_recording(path: &Path, class_idx: usize) -> (Vec<Sample>, Option<usize>) {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
-        Err(_) => return Vec::new(),
+        Err(_) => return (Vec::new(), None),
     };
-    content
-        .lines()
-        .filter_map(|line| {
-            let v: serde_json::Value = serde_json::from_str(line).ok()?;
-            // Use extended features (server features + subcarrier stats).
-            Some(Sample {
-                features: features_from_frame(&v),
-                class_idx,
+    let mut temporal = AdaptiveFeatureExtractor::default();
+    let mut samples = Vec::new();
+    let mut topology_counts: HashMap<usize, usize> = HashMap::new();
+    for (index, line) in content.lines().enumerate() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let envelope = v.get("payload").unwrap_or(&v);
+        if let Some(node_count) = envelope
+            .get("nodes")
+            .and_then(|nodes| nodes.as_array())
+            .map(Vec::len)
+            .filter(|count| *count > 0)
+        {
+            *topology_counts.entry(node_count).or_default() += 1;
+        }
+        let timestamp_seconds = envelope
+            .get("timestamp")
+            .and_then(|value| value.as_f64())
+            .or_else(|| {
+                v.get("captured_at")
+                    .and_then(|value| value.as_str())
+                    .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                    .map(|value| value.timestamp_millis() as f64 / 1000.0)
             })
-        })
-        .collect()
+            // Old recordings without timestamps remain usable, but their
+            // ordering is made explicit as one sample per second.
+            .unwrap_or(index as f64);
+        if let Some(features) = temporal.observe_at(features_from_frame(&v), timestamp_seconds) {
+            samples.push(Sample {
+                features,
+                class_idx,
+            });
+        }
+    }
+    let node_count = topology_counts
+        .into_iter()
+        .max_by_key(|(node_count, observations)| (*observations, *node_count))
+        .map(|(node_count, _)| node_count);
+    (samples, node_count)
 }
 
 /// Map a recording filename to a class name (String).
@@ -466,14 +640,19 @@ fn classify_recording_name(name: &str) -> Option<String> {
     if lower.contains("empty") || lower.contains("absent") {
         return Some("absent".into());
     }
-    if lower.contains("still") || lower.contains("sitting") || lower.contains("standing") {
-        return Some("present_still".into());
-    }
-    if lower.contains("walking") || lower.contains("moving") {
-        return Some("present_moving".into());
-    }
-    if lower.contains("active") || lower.contains("exercise") || lower.contains("running") {
-        return Some("active".into());
+    if lower.contains("still")
+        || lower.contains("sitting")
+        || lower.contains("standing")
+        || lower.contains("walking")
+        || lower.contains("moving")
+        || lower.contains("active")
+        || lower.contains("exercise")
+        || lower.contains("running")
+    {
+        // Presence is the safety-critical first stage. Motion granularity stays
+        // with the high-rate heuristic until each activity has enough truly
+        // independent sessions to support its own held-out classifier.
+        return Some("present".into());
     }
 
     // Fallback: extract class from filename structure train_<class>_*.jsonl
@@ -493,11 +672,17 @@ fn classify_recording_name(name: &str) -> Option<String> {
 /// Recordings are matched to classes by filename pattern. Classes are discovered
 /// dynamically from the training data filenames:
 /// - `*empty*` / `*absent*`   → absent
-/// - `*still*` / `*sitting*`  → present_still
-/// - `*walking*` / `*moving*` → present_moving
-/// - `*active*` / `*exercise*`→ active
+/// - occupied still/walking/active patterns → present
 /// - Any other `train_<class>_*.jsonl` → <class>
 pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, String> {
+    train_from_recordings_for_node_count(recordings_dir, None)
+}
+
+/// Train only from sessions matching the active sensor topology when known.
+pub fn train_from_recordings_for_node_count(
+    recordings_dir: &Path,
+    expected_node_count: Option<usize>,
+) -> Result<AdaptiveModel, String> {
     // First pass: scan filenames to discover all unique class names.
     let entries: Vec<_> = std::fs::read_dir(recordings_dir)
         .map_err(|e| format!("Cannot read {}: {}", recordings_dir.display(), e))?
@@ -541,11 +726,18 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
     let mut recordings_per_class: HashMap<String, usize> = HashMap::new();
     for (path, fname, class_name) in file_classes {
         let class_idx = class_map[&class_name];
-        let samples = load_recording(&path, class_idx);
+        let (samples, observed_node_count) = load_recording(&path, class_idx);
         if samples.is_empty() {
             return Err(format!(
                 "Training recording '{fname}' contains no valid frames"
             ));
+        }
+        if expected_node_count.is_some() && observed_node_count != expected_node_count {
+            eprintln!(
+                "  Skipped {}: recorded topology {:?}, active topology {:?}",
+                fname, observed_node_count, expected_node_count
+            );
+            continue;
         }
         eprintln!(
             "  Loaded {}: {} frames → class '{}'",
@@ -577,7 +769,12 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
                 .enumerate()
                 .filter_map(|(index, recording)| (index != held_out_index).then_some(recording))
                 .collect();
-            let fold_model = fit_model(&training_recordings, &class_names, false)?;
+            let fold_model = fit_model(
+                &training_recordings,
+                &class_names,
+                expected_node_count,
+                false,
+            )?;
             let held_out = &recordings[held_out_index];
             eprintln!("  LOSO held out '{}'", held_out.name);
             for sample in &held_out.samples {
@@ -621,7 +818,7 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
     // Validation models are disposable. The deployed model is refit on every
     // accepted session so scarce local calibration data is not wasted.
     let all_recordings: Vec<&Recording> = recordings.iter().collect();
-    let mut model = fit_model(&all_recordings, &class_names, true)?;
+    let mut model = fit_model(&all_recordings, &class_names, expected_node_count, true)?;
     model.validation = validation;
     Ok(model)
 }
@@ -630,6 +827,7 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
 fn fit_model(
     recordings: &[&Recording],
     class_names: &[String],
+    expected_node_count: Option<usize>,
     print_progress: bool,
 ) -> Result<AdaptiveModel, String> {
     let n_classes = class_names.len();
@@ -889,8 +1087,9 @@ fn fit_model(
         global_std,
         trained_frames: n,
         training_accuracy: accuracy,
-        version: 2,
+        version: 3,
         class_names: class_names.to_vec(),
+        expected_node_count,
         validation: None,
     })
 }
@@ -907,7 +1106,7 @@ mod tests {
 
     fn model_with_validation(balanced_accuracy: f64, recalls: &[(&str, f64)]) -> AdaptiveModel {
         let mut model = AdaptiveModel::default();
-        model.version = 2;
+        model.version = 3;
         model.class_names = recalls
             .iter()
             .map(|(name, _)| (*name).to_string())
@@ -1001,8 +1200,26 @@ mod tests {
     }
 
     fn write_recording(dir: &Path, name: &str, variance: f64, amp: f64) {
+        write_recording_with_node_count(dir, name, variance, amp, 1);
+    }
+
+    fn write_recording_with_node_count(
+        dir: &Path,
+        name: &str,
+        variance: f64,
+        amp: f64,
+        node_count: usize,
+    ) {
         let mut file = std::fs::File::create(dir.join(name)).unwrap();
         for i in 0..40 {
+            let nodes: Vec<_> = (0..node_count)
+                .map(|node_id| {
+                    serde_json::json!({
+                        "node_id": node_id + 1,
+                        "amplitude": [amp, amp + 0.1, amp + 0.2, amp + 0.3]
+                    })
+                })
+                .collect();
             let frame = serde_json::json!({
                 "features": {
                     "variance": variance + (i % 3) as f64 * 0.01,
@@ -1013,10 +1230,99 @@ mod tests {
                     "change_points": if variance > 10.0 { 8 } else { 0 },
                     "mean_rssi": if variance > 10.0 { -45.0 } else { -60.0 }
                 },
-                "nodes": [{ "amplitude": [amp, amp + 0.1, amp + 0.2, amp + 0.3] }]
+                "nodes": nodes
             });
             writeln!(file, "{frame}").unwrap();
         }
+    }
+
+    #[test]
+    fn temporal_patch_is_rate_invariant_and_requires_context() {
+        let mut one_hz = AdaptiveFeatureExtractor::default();
+        let mut ten_hz = AdaptiveFeatureExtractor::default();
+
+        let base = |value: f64| {
+            let mut features = [0.0; N_BASE_FEATURES];
+            features[0] = value;
+            features
+        };
+
+        assert!(one_hz.observe_at(base(0.0), 0.0).is_none());
+        assert!(one_hz.observe_at(base(1.0), 1.0).is_none());
+        let slow = one_hz.observe_at(base(2.0), 2.0).expect("two-second patch");
+
+        let mut fast = None;
+        for step in 0..=20 {
+            let time = step as f64 / 10.0;
+            fast = ten_hz.observe_at(base(time.floor()), time);
+        }
+
+        assert_eq!(slow, fast.expect("two-second patch"));
+        assert_eq!(2.0, slow[0]);
+        assert_eq!(1.0, slow[N_BASE_FEATURES]);
+        assert!(
+            (slow[N_BASE_FEATURES + N_TEMPORAL_FEATURES] - (2.0_f64 / 3.0).sqrt()).abs() < 1e-9
+        );
+    }
+
+    #[test]
+    fn occupied_recording_names_share_the_presence_class() {
+        for name in [
+            "train_present_still_desk.jsonl",
+            "train_walking_room.jsonl",
+            "train_active_dressing.jsonl",
+        ] {
+            assert_eq!(Some("present".to_string()), classify_recording_name(name));
+        }
+        assert_eq!(
+            Some("absent".to_string()),
+            classify_recording_name("train_empty_room.jsonl")
+        );
+    }
+
+    #[test]
+    fn learned_presence_preserves_motion_granularity() {
+        assert_eq!(
+            ("active".to_string(), true),
+            reconcile_presence_prediction("present", "active")
+        );
+        assert_eq!(
+            ("present_still".to_string(), true),
+            reconcile_presence_prediction("present", "absent")
+        );
+        assert_eq!(
+            ("absent".to_string(), false),
+            reconcile_presence_prediction("absent", "active")
+        );
+    }
+
+    #[test]
+    fn topology_filter_excludes_incompatible_recordings() {
+        let dir = tempfile::tempdir().unwrap();
+        for session in 1..=2 {
+            write_recording_with_node_count(
+                dir.path(),
+                &format!("train_absent_dual{session}.jsonl"),
+                1.0,
+                1.0,
+                2,
+            );
+            write_recording_with_node_count(
+                dir.path(),
+                &format!("train_present_still_dual{session}.jsonl"),
+                100.0,
+                20.0,
+                2,
+            );
+        }
+        write_recording(dir.path(), "train_absent_single.jsonl", 50.0, 10.0);
+        write_recording(dir.path(), "train_present_still_single.jsonl", 50.0, 10.0);
+
+        let model = train_from_recordings_for_node_count(dir.path(), Some(2)).unwrap();
+
+        assert_eq!(Some(2), model.expected_node_count);
+        assert_eq!(152, model.trained_frames);
+        assert_eq!(4, model.validation.unwrap().held_out_recordings);
     }
 
     #[test]
@@ -1058,8 +1364,8 @@ mod tests {
         let validation = model.validation.as_ref().expect("held-out metrics");
 
         assert_eq!(validation.held_out_recordings, 4);
-        assert_eq!(validation.held_out_frames, 160);
-        assert_eq!(model.trained_frames, 160);
+        assert_eq!(validation.held_out_frames, 152);
+        assert_eq!(model.trained_frames, 152);
         assert!(validation.balanced_accuracy > 0.95);
         assert!(model.runtime_eligibility().is_ok());
     }

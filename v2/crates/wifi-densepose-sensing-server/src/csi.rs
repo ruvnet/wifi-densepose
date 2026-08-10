@@ -578,31 +578,46 @@ pub fn smooth_and_classify_node(ns: &mut NodeState, raw: &mut ClassificationInfo
 }
 
 pub fn adaptive_override(
-    state: &AppStateInner,
+    state: &mut AppStateInner,
     features: &FeatureInfo,
     classification: &mut ClassificationInfo,
 ) {
-    if let Some(ref model) = state.adaptive_model {
-        let amps = state
-            .frame_history
-            .back()
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
-        let feat_arr = adaptive_classifier::features_from_runtime(
-            &serde_json::json!({
-                "variance": features.variance,
-                "motion_band_power": features.motion_band_power,
-                "breathing_band_power": features.breathing_band_power,
-                "spectral_power": features.spectral_power,
-                "dominant_freq_hz": features.dominant_freq_hz,
-                "change_points": features.change_points,
-                "mean_rssi": features.mean_rssi,
-            }),
-            amps,
-        );
+    if state.adaptive_model.is_some() {
+        if state
+            .adaptive_model
+            .as_ref()
+            .and_then(|model| model.expected_node_count)
+            .is_some_and(|expected| expected != 1)
+        {
+            state.adaptive_feature_extractor.reset();
+            return;
+        }
+        let amps = state.frame_history.back().cloned().unwrap_or_default();
+        let feature_json = serde_json::json!({
+            "variance": features.variance,
+            "motion_band_power": features.motion_band_power,
+            "breathing_band_power": features.breathing_band_power,
+            "spectral_power": features.spectral_power,
+            "dominant_freq_hz": features.dominant_freq_hz,
+            "change_points": features.change_points,
+            "mean_rssi": features.mean_rssi,
+        });
+        let Some(feat_arr) = state
+            .adaptive_feature_extractor
+            .observe_runtime(&feature_json, &amps)
+        else {
+            return;
+        };
+        let model = state
+            .adaptive_model
+            .as_ref()
+            .expect("adaptive model presence checked above");
         let (label, conf) = model.classify(&feat_arr);
-        classification.motion_level = label.to_string();
-        classification.presence = label != "absent";
+        (classification.motion_level, classification.presence) =
+            adaptive_classifier::reconcile_presence_prediction(
+                &label,
+                &classification.motion_level,
+            );
         classification.confidence = (conf * 0.7 + classification.confidence * 0.3).clamp(0.0, 1.0);
     }
 }

@@ -1198,6 +1198,8 @@ struct AppStateInner {
     // ── Adaptive classifier (environment-tuned) ──────────────────────────
     /// Trained adaptive model (loaded from data/adaptive_model.json or trained at runtime).
     adaptive_model: Option<adaptive_classifier::AdaptiveModel>,
+    /// Rate-normalized short temporal context for the adaptive classifier.
+    adaptive_feature_extractor: adaptive_classifier::AdaptiveFeatureExtractor,
     // ── Per-node state (issue #249) ─────────────────────────────────────
     /// Per-node sensing state for multi-node deployments.
     /// Keyed by `node_id` from the ESP32 frame header.
@@ -1377,6 +1379,7 @@ impl AppStateInner {
             training_state: training_api::TrainingState::default(),
             training_progress_tx: broadcast::channel::<String>(256).0,
             adaptive_model: None,
+            adaptive_feature_extractor: adaptive_classifier::AdaptiveFeatureExtractor::default(),
             node_states: HashMap::new(),
             pose_tracker: PoseTracker::new(),
             last_tracker_instant: None,
@@ -2429,24 +2432,15 @@ mod smoothed_classification_consistency_tests {
 }
 
 /// If an adaptive model is loaded, override the classification with the
-/// model's prediction.  Uses the full 15-feature vector for higher accuracy.
+/// model's prediction. Uses the same rate-normalized temporal patch as training.
 fn adaptive_override(
-    state: &AppStateInner,
+    state: &mut AppStateInner,
     features: &FeatureInfo,
     classification: &mut ClassificationInfo,
 ) {
     // Get current frame amplitudes from the latest history entry.
-    let amps = state
-        .frame_history
-        .back()
-        .map(|v| v.as_slice())
-        .unwrap_or(&[]);
-    adaptive_override_with_amplitudes(
-        state.adaptive_model.as_ref(),
-        features,
-        amps,
-        classification,
-    );
+    let amps = state.frame_history.back().cloned().unwrap_or_default();
+    adaptive_override_with_amplitudes(state, 1, features, &amps, classification);
 }
 
 /// Apply a room-level adaptive model to an explicitly selected amplitude set.
@@ -2454,27 +2448,46 @@ fn adaptive_override(
 /// multi-node path from accidentally training on one link and inferring on a
 /// different one.
 fn adaptive_override_with_amplitudes(
-    model: Option<&adaptive_classifier::AdaptiveModel>,
+    state: &mut AppStateInner,
+    observed_node_count: usize,
     features: &FeatureInfo,
     amps: &[f64],
     classification: &mut ClassificationInfo,
 ) {
-    if let Some(model) = model {
-        let feat_arr = adaptive_classifier::features_from_runtime(
-            &serde_json::json!({
-                "variance": features.variance,
-                "motion_band_power": features.motion_band_power,
-                "breathing_band_power": features.breathing_band_power,
-                "spectral_power": features.spectral_power,
-                "dominant_freq_hz": features.dominant_freq_hz,
-                "change_points": features.change_points,
-                "mean_rssi": features.mean_rssi,
-            }),
-            amps,
-        );
+    if state.adaptive_model.is_some() {
+        let expected_node_count = state
+            .adaptive_model
+            .as_ref()
+            .and_then(|model| model.expected_node_count);
+        if expected_node_count.is_some_and(|expected| expected != observed_node_count) {
+            state.adaptive_feature_extractor.reset();
+            return;
+        }
+        let feature_json = serde_json::json!({
+            "variance": features.variance,
+            "motion_band_power": features.motion_band_power,
+            "breathing_band_power": features.breathing_band_power,
+            "spectral_power": features.spectral_power,
+            "dominant_freq_hz": features.dominant_freq_hz,
+            "change_points": features.change_points,
+            "mean_rssi": features.mean_rssi,
+        });
+        let Some(feat_arr) = state
+            .adaptive_feature_extractor
+            .observe_runtime(&feature_json, amps)
+        else {
+            return;
+        };
+        let model = state
+            .adaptive_model
+            .as_ref()
+            .expect("adaptive model presence checked above");
         let (label, conf) = model.classify(&feat_arr);
-        classification.motion_level = label.to_string();
-        classification.presence = label != "absent";
+        (classification.motion_level, classification.presence) =
+            adaptive_classifier::reconcile_presence_prediction(
+                &label,
+                &classification.motion_level,
+            );
         // Blend model confidence with existing smoothed confidence.
         classification.confidence = (conf * 0.7 + classification.confidence * 0.3).clamp(0.0, 1.0);
     }
@@ -2501,6 +2514,20 @@ fn collect_fresh_node_amplitudes(
         .flatten()
         .copied()
         .collect()
+}
+
+fn count_fresh_nodes(
+    node_states: &HashMap<u8, NodeState>,
+    now: std::time::Instant,
+) -> usize {
+    node_states
+        .values()
+        .filter(|node| {
+            node.last_frame_time.is_some_and(|received_at| {
+                now.saturating_duration_since(received_at) <= ADAPTIVE_FUSION_MAX_SAMPLE_AGE
+            })
+        })
+        .count()
 }
 
 #[cfg(test)]
@@ -2826,7 +2853,7 @@ async fn windows_wifi_task(state: SharedState, tick_ms: u64) {
         let (features, mut classification, breathing_rate_hz, sub_variances, raw_motion) =
             extract_features_from_frame(&frame, &s_write_pre.frame_history, sample_rate_hz);
         smooth_and_classify(&mut s_write_pre, &mut classification, raw_motion);
-        adaptive_override(&s_write_pre, &features, &mut classification);
+        adaptive_override(&mut s_write_pre, &features, &mut classification);
         drop(s_write_pre);
 
         // ── Step 5: Build enhanced fields from pipeline result ───────
@@ -3009,7 +3036,7 @@ async fn windows_wifi_fallback_tick(state: &SharedState, seq: u32) {
     let (features, mut classification, breathing_rate_hz, sub_variances, raw_motion) =
         extract_features_from_frame(&frame, &s.frame_history, sample_rate_hz);
     smooth_and_classify(&mut s, &mut classification, raw_motion);
-    adaptive_override(&s, &features, &mut classification);
+    adaptive_override(&mut s, &features, &mut classification);
 
     s.source = format!("wifi:{ssid}");
     s.rssi_history.push_back(rssi_dbm);
@@ -5321,8 +5348,16 @@ fn scan_recording_files() -> Vec<serde_json::Value> {
 /// POST /api/v1/adaptive/train — train the adaptive classifier from recordings.
 async fn adaptive_train(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let rec_dir = PathBuf::from("data/recordings");
+    let expected_node_count = {
+        let s = state.read().await;
+        let count = count_fresh_nodes(&s.node_states, std::time::Instant::now());
+        (count > 0).then_some(count)
+    };
     eprintln!("=== Adaptive Classifier Training ===");
-    match adaptive_classifier::train_from_recordings(&rec_dir) {
+    match adaptive_classifier::train_from_recordings_for_node_count(
+        &rec_dir,
+        expected_node_count,
+    ) {
         Ok(model) => {
             let accuracy = model.training_accuracy;
             let frames = model.trained_frames;
@@ -5357,6 +5392,7 @@ async fn adaptive_train(State(state): State<SharedState>) -> Json<serde_json::Va
                     "validation": validation,
                     "activation_error": activation_error,
                     "class_stats": stats,
+                    "expected_node_count": expected_node_count,
                 }));
             }
 
@@ -5373,6 +5409,7 @@ async fn adaptive_train(State(state): State<SharedState>) -> Json<serde_json::Va
             // Load into runtime state.
             let mut s = state.write().await;
             s.adaptive_model = Some(model);
+            s.adaptive_feature_extractor.reset();
 
             Json(serde_json::json!({
                 "success": true,
@@ -5382,6 +5419,7 @@ async fn adaptive_train(State(state): State<SharedState>) -> Json<serde_json::Va
                 "training_accuracy": accuracy,
                 "validation": validation,
                 "class_stats": stats,
+                "expected_node_count": expected_node_count,
             }))
         }
         Err(e) => Json(serde_json::json!({
@@ -5404,6 +5442,7 @@ async fn adaptive_status(State(state): State<SharedState>) -> Json<serde_json::V
             "version": model.version,
             "classes": model.class_names,
             "class_stats": model.class_stats,
+            "expected_node_count": model.expected_node_count,
         })),
         None => Json(serde_json::json!({
             "loaded": false,
@@ -5416,6 +5455,7 @@ async fn adaptive_status(State(state): State<SharedState>) -> Json<serde_json::V
 async fn adaptive_unload(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let mut s = state.write().await;
     s.adaptive_model = None;
+    s.adaptive_feature_extractor.reset();
     Json(serde_json::json!({ "success": true, "message": "Adaptive model unloaded." }))
 }
 
@@ -6516,10 +6556,13 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
 
                     // Cross-node fusion: combine features from all active nodes.
                     let fused_features = fuse_multi_node_features(&features, &s.node_states);
+                    let adaptive_now = std::time::Instant::now();
                     let adaptive_amps =
-                        collect_fresh_node_amplitudes(&s.node_states, std::time::Instant::now());
+                        collect_fresh_node_amplitudes(&s.node_states, adaptive_now);
+                    let adaptive_node_count = count_fresh_nodes(&s.node_states, adaptive_now);
                     adaptive_override_with_amplitudes(
-                        s.adaptive_model.as_ref(),
+                        &mut s,
+                        adaptive_node_count,
                         &fused_features,
                         &adaptive_amps,
                         &mut classification,
@@ -6840,7 +6883,7 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
         let (features, mut classification, breathing_rate_hz, sub_variances, raw_motion) =
             extract_features_from_frame(&frame, &s.frame_history, sample_rate_hz);
         smooth_and_classify(&mut s, &mut classification, raw_motion);
-        adaptive_override(&s, &features, &mut classification);
+        adaptive_override(&mut s, &features, &mut classification);
 
         s.rssi_history.push_back(features.mean_rssi);
         if s.rssi_history.len() > 60 {
@@ -8236,6 +8279,7 @@ async fn main() {
                 None
             }
         },
+        adaptive_feature_extractor: adaptive_classifier::AdaptiveFeatureExtractor::default(),
         node_states: HashMap::new(),
         // Accuracy sprint
         pose_tracker: PoseTracker::new(),
