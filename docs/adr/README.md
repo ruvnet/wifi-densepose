@@ -149,6 +149,11 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-289](ADR-289-wideband-80211ax-csi-ingest.md) | Wideband 802.11ax CSI ingest — FeitCSI/AX210 adapter, subcarrier-agnostic plumbing | Accepted (initial implementation) |
 | [ADR-290](ADR-290-vitals-ground-truth-rig.md) | Vitals ground-truth rig — reference ingest, alignment, agreement metrics | Accepted (initial implementation) |
 | [ADR-291](ADR-291-wifi-veil-integration.md) | WiFi Veil integration — emission-shaping countermeasure as advisory BFLD dependency | Accepted (initial implementation) |
+| [ADR-292](ADR-292-source-provenance-state-machine.md) | Source provenance state machine — synthetic can never present as live | Accepted (initial implementation) |
+| [ADR-293](ADR-293-sensor-data-plane-bind-hardening.md) | Sensor data-plane hardening — UDP bind control and source allowlist (step one) | Accepted (initial implementation) |
+| [ADR-294](ADR-294-multi-node-semantic-correctness.md) | Multi-node semantic correctness — per-node inference, node-keyed rate limiting, stale state | Accepted (initial implementation) |
+| [ADR-295](ADR-295-model-release-sanity-gates.md) | Model release sanity gates — block degenerate and mislabeled model artifacts | Accepted (initial implementation) |
+| [ADR-296](ADR-296-csi-data-incident-repo-controls.md) | Repository CSI data-incident controls — ignore rules and pre-commit/CI policy check | Accepted (controls implemented; tree remediation gated) |
 
 ---
 
