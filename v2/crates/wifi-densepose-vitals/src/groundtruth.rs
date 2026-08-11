@@ -1,5 +1,5 @@
 //! Ground-truth reference ingest, time alignment, and agreement metrics
-//! (ADR-290).
+//! (ADR-293).
 //!
 //! Every credible vitals result ships with reference-sensor ground truth
 //! (chest strap, pulse oximeter, ECG). This module makes a `MEASURED` vitals
@@ -216,7 +216,7 @@ pub enum Measurand {
 }
 
 impl Measurand {
-    /// Default agreement tolerance for this measurand (ADR-290: ±2 bpm for
+    /// Default agreement tolerance for this measurand (ADR-293: ±2 bpm for
     /// heart rate, ±1 brpm for breathing).
     #[must_use]
     pub fn default_tolerance_bpm(self) -> f64 {
@@ -893,7 +893,7 @@ pub enum DistanceBand {
     Far,
 }
 
-/// Mandatory scope statement for an agreement report (ADR-290): a vitals
+/// Mandatory scope statement for an agreement report (ADR-293): a vitals
 /// number without its scope is systematically misleading, so a report
 /// cannot be constructed without one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1103,7 +1103,7 @@ impl AgreementReport {
 ///
 /// Has no public constructor: the only way to obtain one is
 /// [`GradedAgreementReport::measured`], which enforces the gate. This makes
-/// `MEASURED` unconstructible without passing the gate (ADR-288-style
+/// `MEASURED` unconstructible without passing the gate (ADR-291-style
 /// enforcement in types).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize))]

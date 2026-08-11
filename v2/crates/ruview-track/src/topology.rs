@@ -1,7 +1,7 @@
-//! Space/zone adjacency that constrains plausible hand-offs (ADR-304 §2).
+//! Space/zone adjacency that constrains plausible hand-offs (ADR-307 §2).
 //!
 //! Association across containers is only allowed between the **same** container
-//! or two **adjacent** ones (the ADR-303 `AdjacentTo`/`Doorway` analogue): a
+//! or two **adjacent** ones (the ADR-306 `AdjacentTo`/`Doorway` analogue): a
 //! person can only move between spaces that share a boundary. An empty topology
 //! therefore permits continuity only *within* a container — the privacy-safe
 //! default for single-room deployments, where cross-room joins never happen by

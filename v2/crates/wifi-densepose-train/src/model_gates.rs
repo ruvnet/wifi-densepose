@@ -1,4 +1,4 @@
-//! Model release sanity gates (ADR-295) — block degenerate and mislabeled
+//! Model release sanity gates (ADR-298) — block degenerate and mislabeled
 //! classifier artifacts before they can ship.
 //!
 //! # Why this module exists
@@ -21,7 +21,7 @@
 //! - [`check_class_balance`] — fail when the predicted-positive rate on a
 //!   balanced probe set sits at/above a ceiling (e.g. `> 99 %`).
 //! - [`check_baseline`] — fail a report with no paired mean-pose/majority
-//!   baseline (ties into the ADR-288 [`EvaluationReport`]).
+//!   baseline (ties into the ADR-291 [`EvaluationReport`]).
 //! - [`check_metric_provenance`] — a metric carries its computed
 //!   [`MetricKind`] and its display label derives from it, so a temporal-triplet
 //!   metric can never be surfaced under the `presence` task name.
@@ -32,7 +32,7 @@
 //! # This is prevention, not a correctness proof
 //!
 //! The gates are heuristic. They catch the *known* failure shapes above, not
-//! all bad models (ADR-295 §Consequences). This module does **not** withdraw
+//! all bad models (ADR-298 §Consequences). This module does **not** withdraw
 //! any already-published artifact — an outward-facing action requiring
 //! maintainer sign-off — it prevents recurrence.
 //!
@@ -168,7 +168,7 @@ pub enum GateFailure {
         probe_size: usize,
     },
 
-    /// A report was surfaced without a paired baseline (ADR-288).
+    /// A report was surfaced without a paired baseline (ADR-291).
     #[error("missing baseline: {reason}")]
     MissingBaseline {
         /// Why the baseline is considered missing/blank.
@@ -543,7 +543,7 @@ pub fn check_class_balance(
     Ok(())
 }
 
-/// Fail when a metric is surfaced without a paired baseline (ADR-288).
+/// Fail when a metric is surfaced without a paired baseline (ADR-291).
 ///
 /// A well-formed [`EvaluationReport`] structurally carries its `baseline_metric`
 /// (a model number can never be built without one), so this gate's job is to
@@ -558,7 +558,7 @@ pub fn check_baseline(report: Option<&EvaluationReport>) -> Result<(), GateFailu
     match report {
         None => Err(GateFailure::MissingBaseline {
             reason: "no EvaluationReport was provided; a model number must be \
-                     paired with a mean-pose/majority baseline (ADR-288)"
+                     paired with a mean-pose/majority baseline (ADR-291)"
                 .to_string(),
         }),
         Some(r) if !r.baseline_metric.is_finite() => Err(GateFailure::MissingBaseline {

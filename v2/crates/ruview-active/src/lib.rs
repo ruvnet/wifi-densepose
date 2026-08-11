@@ -1,6 +1,6 @@
-//! # `ruview-active` — closed-loop RF experiment control (ADR-306, ADR-297 primitive 9)
+//! # `ruview-active` — closed-loop RF experiment control (ADR-309, ADR-300 primitive 9)
 //!
-//! **SYNTHETIC / L0 research-forward model scaffold (ADR-282, ADR-297 phase 3).**
+//! **SYNTHETIC / L0 research-forward model scaffold (ADR-282, ADR-300 phase 3).**
 //! This crate turns sensing from *RF-happens → observe* into
 //! *RuView-controls-RF → observe the response → optimize the next measurement*.
 //! It models the **control loop** ADR-280 deferred (ADR-280 built the governed
@@ -16,9 +16,9 @@
 //! admission/actuation surface. A twin predicts; it does not measure: no
 //! `MEASURED`, accuracy, or traffic-reduction claim is made or implied. Every
 //! exploration figure this crate produces is `SYNTHETIC` (CLAUDE.md honesty
-//! discipline; ADR-306 §3).
+//! discipline; ADR-309 §3).
 //!
-//! ## The four ADR-297 non-negotiable rules, as they bind this crate
+//! ## The four ADR-300 non-negotiable rules, as they bind this crate
 //!
 //! 1. **UNKNOWN is first-class, never an error.** A [`LastResponse::Unknown`]
 //!    is not zero uncertainty and not an error: the policy *widens* exploration
@@ -27,7 +27,7 @@
 //!    uncertainty becomes maximal uncertainty, never a silent zero.
 //!    [`ClosedLoopController::step`] is total — no input panics.
 //! 2. **Certificates bind cryptographically.** Out of scope here; a proposal
-//!    names an already-authenticated ADR-303
+//!    names an already-authenticated ADR-306
 //!    [`ZoneId`](ruview_ontology::ZoneId), and a fielded loop step is admitted
 //!    through the ADR-280 governed path before any actuation.
 //! 3. **One canonical semantics downstream.** The loop reuses the canonical
@@ -35,7 +35,7 @@
 //!    [`EvidenceLevel`](ruview_ontology::EvidenceLevel), and
 //!    [`SemanticProvenance`](ruview_ontology::SemanticProvenance) rather than
 //!    reinventing per-crate identity/evidence shapes. It shares the *notion* of
-//!    expected gain with ADR-311 but defines its own [`ControlAction`]
+//!    expected gain with ADR-314 but defines its own [`ControlAction`]
 //!    vocabulary and does **not** depend on `ruview-infogain`, so the two crates
 //!    build in parallel.
 //! 4. **Honest evidence.** Every proposal is stamped [`EvidenceLevel::L1`]
@@ -126,7 +126,7 @@ mod tests {
         ClosedLoopController::new(full_capability(), ControllerConfig::default())
     }
 
-    // ADR-306 §2: a high-uncertainty zone drives an exploratory control action
+    // ADR-309 §2: a high-uncertainty zone drives an exploratory control action
     // — widest bandwidth, fastest cadence, widest aperture, Explore intent.
     #[test]
     fn high_uncertainty_drives_exploratory_action() {
@@ -141,7 +141,7 @@ mod tests {
         assert_eq!(p.provenance.model_version, MODEL_VERSION);
     }
 
-    // ADR-306 validation: convergence (falling uncertainty) reduces exploration
+    // ADR-309 validation: convergence (falling uncertainty) reduces exploration
     // — the proposal narrows and the intent flips to Exploit.
     #[test]
     fn convergence_reduces_exploration() {
@@ -169,7 +169,7 @@ mod tests {
         assert_eq!(pl.action.bandwidth, Some(Bandwidth::Bw20)); // narrowest
     }
 
-    // ADR-297 rule 1: an UNKNOWN last response widens exploration relative to
+    // ADR-300 rule 1: an UNKNOWN last response widens exploration relative to
     // the same uncertainty with an observed response.
     #[test]
     fn unknown_last_response_widens_exploration() {
@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(pu.intent, ControlIntent::Explore);
     }
 
-    // ADR-306 §2 degradation: an empty controllable set (ESP32-only) falls back
+    // ADR-309 §2 degradation: an empty controllable set (ESP32-only) falls back
     // to the passive planner with no error and no fabricated gain.
     #[test]
     fn empty_capability_degrades_to_passive() {
@@ -300,7 +300,7 @@ mod tests {
     }
 
     // Non-finite uncertainty is treated as maximal uncertainty, never a silent
-    // zero (ADR-297 rule 1), and never panics.
+    // zero (ADR-300 rule 1), and never panics.
     #[test]
     fn non_finite_uncertainty_is_maximal_not_zero() {
         assert_eq!(Uncertainty::new(f64::NAN).value(), 1.0);

@@ -1,4 +1,4 @@
-//! # `ruview-track` — persistent, privacy-preserving probabilistic tracking (ADR-304)
+//! # `ruview-track` — persistent, privacy-preserving probabilistic tracking (ADR-307)
 //!
 //! Builds **track continuity without civil identity**. A [`TrackManager`]
 //! ingests per-frame [`Detection`]s (a container + 2-D position + a coarse,
@@ -8,11 +8,11 @@
 //! answers "person_7 moved kitchen → hallway → bedroom" via per-entity
 //! [histories](TrackManager::history) — across zones, rooms, and modalities.
 //!
-//! This crate produces and updates the **canonical ADR-303 ontology types**
+//! This crate produces and updates the **canonical ADR-306 ontology types**
 //! (`Track`, `Person`, `Container`, `EvidenceLevel`, `SemanticProvenance`) from
-//! [`ruview_ontology`]; it invents no per-crate identity shape (ADR-297 rule 3).
+//! [`ruview_ontology`]; it invents no per-crate identity shape (ADR-300 rule 3).
 //!
-//! ## The four privacy invariants (ADR-304 §3), enforced by construction
+//! ## The four privacy invariants (ADR-307 §3), enforced by construction
 //!
 //! 1. **No civil-identity binding.** The pseudonym is a synthetic id with no
 //!    field or join key to a name, account, MAC, or phone — the ontology
@@ -22,7 +22,7 @@
 //!    persisted.
 //! 3. **Opaque, rotatable ids.** Pseudonyms are `person_N` strings and can be
 //!    rotated with [`TrackManager::rotate_pseudonym`].
-//! 4. **UNKNOWN is first-class** (ADR-297 rule 1). An unmatched or ambiguous
+//! 4. **UNKNOWN is first-class** (ADR-300 rule 1). An unmatched or ambiguous
 //!    detection spawns a *tentative* track and returns an
 //!    [`Association::Unknown`] outcome — it never forces a wrong join and never
 //!    errors. Under-linking (a fresh pseudonym when unsure) is the privacy-safe
@@ -30,7 +30,7 @@
 //!
 //! ## Evidence discipline
 //!
-//! This crate asserts **no accuracy number** (ADR-304 §Validation). Emitted
+//! This crate asserts **no accuracy number** (ADR-307 §Validation). Emitted
 //! nodes carry the caller-supplied [`EvidenceLevel`](ruview_ontology::EvidenceLevel)
 //! (default `L1`, heuristic/synthetic) and a pseudonymous
 //! [`SemanticProvenance`](ruview_ontology::SemanticProvenance); tentative tracks

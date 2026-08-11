@@ -1,4 +1,4 @@
-//! # `ruview-certify` — signed capability certificates (ADR-315, ADR-297 §1)
+//! # `ruview-certify` — signed capability certificates (ADR-318, ADR-300 §1)
 //!
 //! A [`CapabilityCertificate`] is a bounded, signed attestation that a specific
 //! capability (e.g. presence, pose) has been *validated for a specific
@@ -11,13 +11,13 @@
 //! ## What the certificate binds
 //!
 //! - the **capability** ([`Capability`]);
-//! - the **room** ([`SpaceId`], ADR-303) plus the **calibration-certificate
-//!   version** (ADR-298) it was validated against;
-//! - the **hardware** ([`DeviceId`], ADR-302);
+//! - the **room** ([`SpaceId`], ADR-306) plus the **calibration-certificate
+//!   version** (ADR-301) it was validated against;
+//! - the **hardware** ([`DeviceId`], ADR-305);
 //! - the scored **model** version;
 //! - the **calibrated date** the calibration was captured;
 //! - the operating **metrics** (`moving_recall`, `stationary_recall`,
-//!   `false_presence_per_24h`) sliced from the ADR-301 ledger for **exactly this
+//!   `false_presence_per_24h`) sliced from the ADR-304 ledger for **exactly this
 //!   context** (never pooled across contexts);
 //! - a `valid_until` expiry that is **never open-ended** and **cannot outlive the
 //!   calibration validity**;
@@ -26,7 +26,7 @@
 //! - a **signature** over the canonical serialization ([`ruview_attest`]); an
 //!   unsigned certificate is not a valid certificate.
 //!
-//! ## Honest by construction (ADR-297 rule)
+//! ## Honest by construction (ADR-300 rule)
 //!
 //! - Minting from a slice that reports **no evidence** yields no certificate —
 //!   absence of evidence is never a capability.
@@ -34,7 +34,7 @@
 //! - A certificate minted from a synthetic ledger slice is `L0`/SYNTHETIC by
 //!   construction; nothing here invents a MEASURED number.
 //! - [`CapabilityCertificate::is_valid`] is *conditional on the live domain
-//!   signature* (ADR-299): a certificate over a `DEGRADED`/`UNKNOWN` domain is
+//!   signature* (ADR-302): a certificate over a `DEGRADED`/`UNKNOWN` domain is
 //!   not valid, and an expired certificate is not valid — the honest failure is
 //!   UNKNOWN, not a best-effort guess.
 //!
@@ -62,7 +62,7 @@ const DOMAIN: &[u8] = b"ruview-certify/CapabilityCertificate/v1";
 // ---------------------------------------------------------------------------
 
 /// The phenomenon a certificate is about. A device may only be certified for a
-/// capability it is attested to sense (ADR-302/ADR-141); the attestation gate is
+/// capability it is attested to sense (ADR-305/ADR-141); the attestation gate is
 /// a phase-2 concern — this phase binds the capability into the signed object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -85,7 +85,7 @@ impl Capability {
 }
 
 /// The live domain-state signature a consumer supplies at validation time
-/// (ADR-299). Only `Known` permits a capability; `Degraded`/`Unknown` gate the
+/// (ADR-302). Only `Known` permits a capability; `Degraded`/`Unknown` gate the
 /// certificate to invalid — the honest failure is UNKNOWN, not a guess.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -106,7 +106,7 @@ impl DomainState {
     }
 }
 
-/// The operating metrics frozen onto a certificate, sliced from the ADR-301
+/// The operating metrics frozen onto a certificate, sliced from the ADR-304
 /// ledger for one exact context (never a global average).
 ///
 /// `false_presence_per_24h` carries the ledger's context false-positive rate;
@@ -128,15 +128,15 @@ pub struct OperatingMetrics {
 pub struct CertificateContent {
     /// The certified phenomenon.
     pub capability: Capability,
-    /// The room this claim is validated for (ADR-303).
+    /// The room this claim is validated for (ADR-306).
     pub room: SpaceId,
     /// Version of the calibration certificate the validation ran against
-    /// (ADR-298). The certificate cannot outlive this calibration.
+    /// (ADR-301). The certificate cannot outlive this calibration.
     pub calibration_version: u64,
     /// Expiry of the calibration certificate (unix seconds); the ceiling on
     /// `valid_until`.
     pub calibration_expires_at_unix_s: i64,
-    /// The authenticated device the claim is validated for (ADR-302).
+    /// The authenticated device the claim is validated for (ADR-305).
     pub hardware: DeviceId,
     /// The scored model version.
     pub model_version: String,
@@ -180,7 +180,7 @@ impl CertificateContent {
 
 /// A signed capability certificate: the [`CertificateContent`] together with a
 /// signature over its canonical bytes. `signature` is [`None`] for an unsigned
-/// certificate, which is never valid (ADR-315 §1).
+/// certificate, which is never valid (ADR-318 §1).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CapabilityCertificate {
     /// The signed content.
@@ -193,7 +193,7 @@ impl CapabilityCertificate {
     /// Wrap content as an **unsigned** certificate. Useful for tests and for
     /// staging content before signing; [`Self::verify`] and [`Self::is_valid`]
     /// both reject it because an unsigned certificate is not a valid
-    /// certificate (ADR-315 §1).
+    /// certificate (ADR-318 §1).
     #[must_use]
     pub fn unsigned(content: CertificateContent) -> Self {
         Self {
@@ -213,7 +213,7 @@ impl CapabilityCertificate {
         }
     }
 
-    /// The consumer gate (ADR-315 §3, ADR-297/ADR-299): the certificate is valid
+    /// The consumer gate (ADR-318 §3, ADR-300/ADR-302): the certificate is valid
     /// **iff** it is signed, it has not expired (`now < valid_until`), and the
     /// live domain state is `Known`. A `Degraded`/`Unknown` domain or an expired
     /// or unsigned certificate resolves to *not valid* — the honest UNKNOWN,
@@ -252,7 +252,7 @@ pub struct MintRequest<'c> {
     pub evidence_level: EvidenceLevel,
 }
 
-/// Mint a signed [`CapabilityCertificate`] from an ADR-301 evidence slice for
+/// Mint a signed [`CapabilityCertificate`] from an ADR-304 evidence slice for
 /// one `(room, device, model)` context.
 ///
 /// Minting is a pure function over the slice: the metrics are frozen into the
@@ -284,7 +284,7 @@ pub fn mint<S: Signer + ?Sized>(
         });
     }
 
-    // Absence of evidence is never a capability (ADR-315 §2).
+    // Absence of evidence is never a capability (ADR-318 §2).
     let summary = slice.summarize();
     let (floor, agg) = match summary.evidence {
         SummaryEvidence::NoEvidence => return Err(CertifyError::NoEvidence),

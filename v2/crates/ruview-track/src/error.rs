@@ -1,8 +1,8 @@
-//! Boundary-validation errors (ADR-304).
+//! Boundary-validation errors (ADR-307).
 //!
 //! These cover *malformed input* only. Association **uncertainty** is never an
 //! error: an ambiguous or unmatched detection is reported as a first-class
-//! [`Association::Unknown`](crate::Association) outcome (ADR-297 rule 1), not a
+//! [`Association::Unknown`](crate::Association) outcome (ADR-300 rule 1), not a
 //! `Result::Err`.
 
 use ruview_ontology::IdError;

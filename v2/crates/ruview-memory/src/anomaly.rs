@@ -1,12 +1,12 @@
 //! Deviation categories, per-channel assessment, and the anomaly event
-//! (ADR-309 §3 — anomaly = deviation from learned normal).
+//! (ADR-312 §3 — anomaly = deviation from learned normal).
 //!
 //! **SYNTHETIC / L0.** An [`AnomalyEvent`] is a *model-relative* statement: a
 //! live value sits statistically far from the location's own learned normal. It
 //! is a **candidate** change to corroborate, never a confident detection and
-//! never a diagnosis (ADR-282 bounded-claims discipline, ADR-297). No accuracy,
+//! never a diagnosis (ADR-282 bounded-claims discipline, ADR-300). No accuracy,
 //! detection-rate, or false-positive number is asserted anywhere. Consistent
-//! with ADR-297 rule 1, [`Assessment::Unknown`] (insufficient history) is a
+//! with ADR-300 rule 1, [`Assessment::Unknown`] (insufficient history) is a
 //! first-class value, never an error and never a false positive.
 
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use ruview_evidence::{AccuracyMetrics, EvidenceContext, EvidenceError, EvidenceRecord};
 use ruview_ontology::{EvidenceLevel, SemanticProvenance, ZoneId};
 
-/// The coarse category of a learned-normal deviation (ADR-309 §1). None of
+/// The coarse category of a learned-normal deviation (ADR-312 §1). None of
 /// these is a labelled anomaly *class* trained from examples — each is a
 /// deviation from a baseline of normality, so a novel change still registers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,7 +53,7 @@ impl AnomalyKind {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Assessment {
     /// Insufficient history to judge (fewer than `min_history` updates). A
-    /// first-class value (ADR-297 rule 1): the channel is *not* flagged, so no
+    /// first-class value (ADR-300 rule 1): the channel is *not* flagged, so no
     /// anomaly is emitted before a baseline exists.
     Unknown,
     /// Evaluated and within normal variation (`significance < threshold`).
@@ -93,7 +93,7 @@ impl Assessment {
     }
 }
 
-/// A flagged deviation from a zone's learned normal (ADR-309 §3).
+/// A flagged deviation from a zone's learned normal (ADR-312 §3).
 ///
 /// **SYNTHETIC / L0.** Carries the baseline it deviated from, the deviation
 /// magnitude and significance, and its evidence level — which is the floor of
@@ -134,7 +134,7 @@ impl AnomalyEvent {
     }
 
     /// Project this anomaly into an append-only [`EvidenceRecord`]
-    /// (ADR-301/ADR-309: "emit anomalies as evidence records with provenance").
+    /// (ADR-304/ADR-312: "emit anomalies as evidence records with provenance").
     ///
     /// The record is always **synthetic** (forced [`ruview_evidence::EvidenceLevel::L0`]),
     /// keyed by context `(room = zone, device = "spatial-memory-scaffold",

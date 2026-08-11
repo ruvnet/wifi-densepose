@@ -1,4 +1,4 @@
-//! Hardware inventory: the radios available to place (ADR-305 §1).
+//! Hardware inventory: the radios available to place (ADR-308 §1).
 //!
 //! **SYNTHETIC / L0.** A coarse description of available hardware — each entry is
 //! one physical radio the installer can place, with a modelled transmit power and
@@ -18,7 +18,7 @@ pub const MAX_INVENTORY: usize = 64;
 /// carrying it through so a recommendation names the hardware it plans for.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RadioSpec {
-    /// Coarse hardware/capability label (ADR-315/ADR-317 descriptor handle).
+    /// Coarse hardware/capability label (ADR-318/ADR-320 descriptor handle).
     pub model: String,
     /// Modelled transmit power, dBm. A SYNTHETIC parameter of the forward model.
     pub tx_power_dbm: f64,

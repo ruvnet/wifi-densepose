@@ -304,7 +304,7 @@ class SensingService {
    * hardware or simulation. Called once on WebSocket open.
    */
   async _detectServerSource() {
-    // ADR-292 (issue #1526): an unreachable or unauthorized status endpoint is
+    // ADR-295 (issue #1526): an unreachable or unauthorized status endpoint is
     // an *unknown* state — it must NOT collapse to "live". Prefer the canonical
     // `source_state` the server now returns; on any error stay conservative
     // (server-simulated) until a real frame's `source` field promotes us.
@@ -322,12 +322,12 @@ class SensingService {
   }
 
   /**
-   * Map a raw server source string (and optional canonical ADR-292
+   * Map a raw server source string (and optional canonical ADR-295
    * `source_state`) to the UI data-source label.
    */
   _applyServerSource(rawSource, sourceState) {
     this._serverSource = rawSource;
-    // ADR-292: only the verified/unverified live states may show "live"; any
+    // ADR-295: only the verified/unverified live states may show "live"; any
     // synthetic/stale/disconnected state must not.
     if (sourceState) {
       if (sourceState === 'live_verified' || sourceState === 'live_unverified') {

@@ -108,7 +108,7 @@ ndarray-npy.workspace = true
 name = "training_bench"
 harness = false
 
-# ADR-288 — bfee-parser throughput and split-assignment benchmarks on
+# ADR-291 — bfee-parser throughput and split-assignment benchmarks on
 # synthetic, code-generated corpora (no dataset files).
 [[bench]]
 name = "benchmark_harness"

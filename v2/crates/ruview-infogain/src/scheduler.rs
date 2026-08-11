@@ -1,11 +1,11 @@
 //! The information-gain scheduler: rank candidates by value of information and
-//! select the most informative subset under a resource budget (ADR-311 §2).
+//! select the most informative subset under a resource budget (ADR-314 §2).
 //!
 //! **SYNTHETIC / L0 scaffold (ADR-282).** The scheduler emits an *allocation*
 //! (a [`SchedulePlan`]), never a measurement and never a sensing claim. It has
 //! **no** side effects: it starts no sampling, touches no hardware, and asserts
-//! no efficiency figure — ADR-306 active sensing chooses the probe on each
-//! selected sensor and ADR-308 fusion incorporates the result. A scheduling
+//! no efficiency figure — ADR-309 active sensing chooses the probe on each
+//! selected sensor and ADR-311 fusion incorporates the result. A scheduling
 //! decision is a resource choice, not evidence.
 //!
 //! ## Selection algorithm (documented)
@@ -49,7 +49,7 @@ use crate::cost::{Cost, CostPolicy};
 const BUDGET_EPSILON: f64 = 1e-9;
 
 /// How the scheduler treats a candidate with an
-/// [`Unknown`](crate::ExpectedReduction::Unknown) expected reduction (ADR-311:
+/// [`Unknown`](crate::ExpectedReduction::Unknown) expected reduction (ADR-314:
 /// unknown value is not zero value).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
@@ -190,9 +190,9 @@ pub struct DeferredAction {
 
 /// The scheduler's output: a pure allocation for one cycle.
 ///
-/// Recording both `selected` and `deferred` is the ADR-311 §3 honesty
+/// Recording both `selected` and `deferred` is the ADR-314 §3 honesty
 /// requirement — skipping a sensor is a *deliberate* reduction in coverage, so
-/// downstream observability (ADR-299) can raise `UNKNOWN` for an under-sampled
+/// downstream observability (ADR-302) can raise `UNKNOWN` for an under-sampled
 /// zone rather than reporting a stale estimate as current.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SchedulePlan {
@@ -222,7 +222,7 @@ impl SchedulePlan {
         self.selected.is_empty()
     }
 
-    /// The sensors actually sampled by this plan, for the ADR-311 §3 sampling
+    /// The sensors actually sampled by this plan, for the ADR-314 §3 sampling
     /// record consumed downstream.
     #[must_use]
     pub fn sampled_sensors(&self) -> Vec<&SensorId> {

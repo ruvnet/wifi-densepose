@@ -1,11 +1,11 @@
-//! Online, forgetting running statistics (ADR-309 §2 — continuously learned
+//! Online, forgetting running statistics (ADR-312 §2 — continuously learned
 //! baseline).
 //!
 //! **SYNTHETIC / L0.** A [`RunningStat`] is a bounded, deterministic model of a
 //! single scalar's *normal* value: an exponentially weighted mean and variance
 //! that update online with a documented **forgetting factor**. It is part of a
 //! simulation scaffold — it estimates a modelled normal, it never *measures*
-//! anything, and it makes no accuracy claim (ADR-282 L0, ADR-297 evidence
+//! anything, and it makes no accuracy claim (ADR-282 L0, ADR-300 evidence
 //! discipline).
 //!
 //! ## The forgetting factor
@@ -25,7 +25,7 @@
 //!
 //! The recursion keeps `var ≥ 0` exactly, so `sqrt` is always defined. There is
 //! no wall-clock and no randomness anywhere: the same inputs in the same order
-//! always yield the same state (ADR-297 determinism discipline).
+//! always yield the same state (ADR-300 determinism discipline).
 
 use serde::{Deserialize, Serialize};
 
@@ -58,7 +58,7 @@ impl RunningStat {
     }
 
     /// A statistic pre-seeded from an external prior — used to anchor a
-    /// propagation baseline on the twin's expected distribution (ADR-309 §1:
+    /// propagation baseline on the twin's expected distribution (ADR-312 §1:
     /// "RF-propagation baseline … via the twin's expected distributions").
     ///
     /// `count` is the synthetic prior weight; a non-finite mean/variance is

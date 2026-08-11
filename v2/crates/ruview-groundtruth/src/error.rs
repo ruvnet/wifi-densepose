@@ -1,4 +1,4 @@
-//! Boundary errors for the ground-truth validation plane (ADR-300).
+//! Boundary errors for the ground-truth validation plane (ADR-303).
 //!
 //! No variant panics: malformed reference/estimate input is always a returned
 //! error, and UNKNOWN/uncertainty are represented as first-class *values*
@@ -43,7 +43,7 @@ pub enum GroundTruthError {
         max: usize,
     },
     /// Timestamps were not strictly increasing — rejected, never silently
-    /// sorted (ADR-290 ingest discipline).
+    /// sorted (ADR-293 ingest discipline).
     #[error("non-monotonic timestamp at sample {index}: {this_ms} does not follow {prev_ms}")]
     NonMonotonic {
         /// Index of the offending sample.

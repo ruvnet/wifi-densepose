@@ -1,10 +1,10 @@
-# csi-data-policy.allow — ADR-296 synthetic-fixture allowlist.
+# csi-data-policy.allow — ADR-299 synthetic-fixture allowlist.
 #
 # One shell glob per line (repo-relative paths). `#` starts a comment; blank
 # lines are ignored. A tracked/staged file whose path matches any pattern here
 # is exempt from the CSI data-policy check (scripts/csi-data-policy-check.sh).
 #
-# ONLY synthetic or expressly-consented minimal fixtures belong here (ADR-296).
+# ONLY synthetic or expressly-consented minimal fixtures belong here (ADR-299).
 # Never allowlist a real capture to silence the guard — real CSI is person data.
 # The CSI_POLICY_ALLOW env var appends extra patterns (colon-separated) for
 # one-off/local use.

@@ -1,5 +1,5 @@
 //! Widar3.0 ingest — Intel 5300 `.dat` "bfee" CSI log parser and dataset
-//! adapter (ADR-288 §1).
+//! adapter (ADR-291 §1).
 //!
 //! The Widar3.0 raw distribution ships CSI captured with the Intel 5300 NIC
 //! and the Linux 802.11n CSI Tool, stored as framed binary `.dat` logs. This
@@ -12,11 +12,11 @@
 //! - [`WidarDataset`] — a [`CsiDataset`] implementation that maps each `.dat`
 //!   recording into windowed [`CsiSample`]s (with subcarrier interpolation to
 //!   the training pipeline's target count) and exposes per-window
-//!   [`SampleMeta`] for the ADR-288 split protocols.
+//!   [`SampleMeta`] for the ADR-291 split protocols.
 //! - [`encode_bfee_frame`] — a deterministic synthetic-fixture encoder used by
 //!   unit tests and benches, so no binary dataset files are ever checked in.
 //!
-//! # Binary record layout (ADR-288)
+//! # Binary record layout (ADR-291)
 //!
 //! ```text
 //! frame   : u16 LE field_len | u8 code            (code 0xBB = bfee record)
@@ -42,7 +42,7 @@
 //!           `len` must equal ceil(30 * n_rx * n_tx * 2 * 10 / 8).
 //! ```
 //!
-//! This is the layout specified by ADR-288. Note the original Linux CSI Tool
+//! This is the layout specified by ADR-291. Note the original Linux CSI Tool
 //! writes 8-bit components with per-group shift bits and a big-endian frame
 //! length; if raw upstream logs are ingested unconverted, records fail the
 //! `len` consistency check and are skipped with a warning rather than being
@@ -172,7 +172,7 @@ pub struct BfeeParse {
     pub non_bfee: usize,
 }
 
-/// Parse a buffer of framed Intel 5300 bfee records (ADR-288 layout — see the
+/// Parse a buffer of framed Intel 5300 bfee records (ADR-291 layout — see the
 /// module docs for the exact binary format).
 ///
 /// The parser never panics on malformed input: invalid or truncated records
@@ -392,7 +392,7 @@ fn write_i10(buf: &mut [u8], bit_off: usize, value: i16) {
 }
 
 /// Encode one framed bfee record from synthetic CSI values — the fixture
-/// generator used by unit tests and benches (ADR-288: fixtures are generated
+/// generator used by unit tests and benches (ADR-291: fixtures are generated
 /// in code, never checked in as binary files).
 ///
 /// `csi` is `(real, imag)` pairs in the packing order
@@ -575,7 +575,7 @@ impl WidarEntry {
     }
 }
 
-/// Dataset adapter for Widar3.0 `.dat` recordings (ADR-288 §1).
+/// Dataset adapter for Widar3.0 `.dat` recordings (ADR-291 §1).
 ///
 /// Scanning parses every file once at construction to count valid records;
 /// [`CsiDataset::get`] re-reads the file lazily and cuts the requested
@@ -759,7 +759,7 @@ impl WidarDataset {
         Some((entry_idx, idx - self.cumulative[entry_idx]))
     }
 
-    /// Split-protocol metadata for the window at `idx` (ADR-288 §2): user →
+    /// Split-protocol metadata for the window at `idx` (ADR-291 §2): user →
     /// subject, room → environment, plus orientation/gesture, and the owning
     /// `.dat` file as the continuous `recording_id`.
     ///

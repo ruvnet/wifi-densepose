@@ -38,7 +38,7 @@ use wifi_densepose_sensing_server::{
     dataset, embedding, error_response, graph_transformer, rufield_surface, semconv, telemetry,
     trainer,
 };
-// ADR-292 / ADR-294: canonical provenance state + per-node/room inference.
+// ADR-295 / ADR-297: canonical provenance state + per-node/room inference.
 use wifi_densepose_sensing_server::inference::{fuse_room, NodeInference, RoomInference};
 use wifi_densepose_sensing_server::provenance::SourceState;
 
@@ -100,7 +100,7 @@ struct Args {
     #[arg(long, default_value = "5005")]
     udp_port: u16,
 
-    /// UDP bind address for the CSI receiver (ADR-293). Defaults to
+    /// UDP bind address for the CSI receiver (ADR-296). Defaults to
     /// `127.0.0.1` (loopback only). Binding to a routable address (`0.0.0.0`
     /// or a LAN IP) is an explicit operator choice and requires `--udp-allow`
     /// or `--udp-insecure-lan`.
@@ -115,7 +115,7 @@ struct Args {
     udp_allow: Vec<String>,
 
     /// Accept a routable UDP bind with no source allowlist, explicitly opting
-    /// into the LAN-spoofing risk (ADR-293). The UDP data plane is NOT
+    /// into the LAN-spoofing risk (ADR-296). The UDP data plane is NOT
     /// authenticated; see the crate SECURITY.md.
     #[arg(long, env = "RUVIEW_UDP_INSECURE_LAN")]
     udp_insecure_lan: bool,
@@ -348,7 +348,7 @@ struct SensingUpdate {
     /// Per-node feature breakdown for multi-node deployments.
     #[serde(skip_serializing_if = "Option::is_none")]
     node_features: Option<Vec<PerNodeFeatureInfo>>,
-    /// ADR-294 — the explicitly-fused room aggregate over the current per-node
+    /// ADR-297 — the explicitly-fused room aggregate over the current per-node
     /// inferences (freshness-weighted vote). Deterministic and order-independent,
     /// unlike the legacy last-writer `classification`; `"unavailable"` when no
     /// fresh node backs the room rather than a frozen online value.
@@ -369,7 +369,7 @@ struct NodeInfo {
     /// `NodeState::latest_sync` and the iter 18 fps EMA.
     #[serde(skip_serializing_if = "Option::is_none")]
     sync: Option<NodeSyncSnapshot>,
-    /// ADR-294 — this node's *own* inference (classification + confidence +
+    /// ADR-297 — this node's *own* inference (classification + confidence +
     /// freshness). Distinct from the room aggregate; a node reports what it
     /// sees, with no silent fallback to the room value. `None` on synthetic /
     /// placeholder frames that carry no per-node classification.
@@ -451,14 +451,14 @@ fn classify_vitals(motion: bool, presence: bool, presence_score: f32) -> Classif
     }
 }
 
-/// ADR-294 — the window a node may be silent before it stops contributing to
+/// ADR-297 — the window a node may be silent before it stops contributing to
 /// the fused room aggregate (its entities go stale/unavailable rather than
 /// holding a frozen online value). Mirrors the 10 s active-node filter used to
 /// assemble the nodes array.
 const NODE_STALE_AFTER_MS: u64 = 10_000;
 
 /// Build a node's *own* [`NodeInference`] from its smoothed per-node state
-/// (ADR-294). Uses the node's own `current_motion_level` — never the room
+/// (ADR-297). Uses the node's own `current_motion_level` — never the room
 /// aggregate — with a confidence from its smoothed person score and freshness
 /// from its last frame time. Pure given the state snapshot + `now`.
 fn node_inference_for(n: &NodeState, now: std::time::Instant) -> NodeInference {
@@ -1366,7 +1366,7 @@ impl AppStateInner {
         self.source.clone()
     }
 
-    /// ADR-292 — canonical provenance state for the current source. Derived
+    /// ADR-295 — canonical provenance state for the current source. Derived
     /// from the freshness-gated [`effective_source`](Self::effective_source)
     /// label so ambiguity can never collapse to "live": a synthetic source is
     /// always `Synthetic`, an `":offline"` label is `Disconnected`, and a fresh
@@ -4673,7 +4673,7 @@ async fn health_ready(State(state): State<SharedState>) -> Json<serde_json::Valu
     Json(serde_json::json!({
         "status": "ready",
         "source": s.effective_source(),
-        // ADR-292 — canonical provenance state so a status-endpoint consumer
+        // ADR-295 — canonical provenance state so a status-endpoint consumer
         // never has to infer "live" from the absence of a signal (issue #1526).
         "source_state": s.source_state().as_str(),
         // Governed trust-path state (ADR-135..146; review finding 1b): latest
@@ -5801,7 +5801,7 @@ async fn udp_receiver_task(
     loop {
         match socket.recv_from(&mut buf).await {
             Ok((len, src)) => {
-                // ADR-293: drop frames from sources outside the allowlist
+                // ADR-296: drop frames from sources outside the allowlist
                 // (loopback is always admitted). Counted for observability.
                 if !allowlist.admit(src.ip()) {
                     debug!(
@@ -6041,12 +6041,12 @@ async fn udp_receiver_task(
                             // Vitals-only path; still expose the sync snapshot
                             // if the node also speaks ESP-NOW.
                             sync: n.sync_snapshot(),
-                            // ADR-294 — each node carries its own inference.
+                            // ADR-297 — each node carries its own inference.
                             node_inference: Some(node_inference_for(n, now)),
                         })
                         .collect();
 
-                    // ADR-294 — explicit, deterministic room aggregate over the
+                    // ADR-297 — explicit, deterministic room aggregate over the
                     // per-node inferences (freshness-weighted vote). Not the
                     // latest-writer classification (issue #1555).
                     let room_inference = fuse_room(
@@ -6541,12 +6541,12 @@ async fn udp_receiver_task(
                             },
                             // ADR-110 iter 23 / iter 30 — single source of truth.
                             sync: n.sync_snapshot(),
-                            // ADR-294 — each node carries its own inference.
+                            // ADR-297 — each node carries its own inference.
                             node_inference: Some(node_inference_for(n, now)),
                         })
                         .collect();
 
-                    // ADR-294 — explicit deterministic room aggregate over the
+                    // ADR-297 — explicit deterministic room aggregate over the
                     // per-node inferences (not last-writer; issue #1555).
                     let room_inference = fuse_room(
                         active_nodes.iter().filter_map(|ni| ni.node_inference.as_ref()),
@@ -8212,7 +8212,7 @@ async fn main() {
     // promoted — see `simulated_data_task`). Explicit `--source simulated` has
     // `bind_udp = false`, so it serves simulated data only, with no live binding.
     if plan.bind_udp {
-        // ADR-293: resolve the UDP bind scope + source allowlist and fail closed
+        // ADR-296: resolve the UDP bind scope + source allowlist and fail closed
         // on an unguarded routable bind, mirroring the OAuth boot refusal below.
         use wifi_densepose_sensing_server::udp_bind;
         let udp_bind_ip: std::net::IpAddr = match args.udp_bind.parse() {

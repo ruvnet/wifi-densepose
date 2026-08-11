@@ -1,4 +1,4 @@
-//! Fresnel-zone geometry for link observability (ADR-305 §2).
+//! Fresnel-zone geometry for link observability (ADR-308 §2).
 //!
 //! **SYNTHETIC / L0.** WiFi sensing perturbs a link when the target sits inside
 //! the link's first Fresnel zone. This module implements that geometry as a

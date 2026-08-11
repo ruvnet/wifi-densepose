@@ -1,13 +1,13 @@
-//! Coverage / observability scoring of a candidate placement (ADR-305 §2).
+//! Coverage / observability scoring of a candidate placement (ADR-308 §2).
 //!
 //! **SYNTHETIC / L0.** Everything here is a *recommendation derived from a
 //! simulation*, never a sensing claim. A candidate placement is scored by
-//! consuming the ADR-312 [`RfTwin`] forward model: for a grid of sample points in
+//! consuming the ADR-315 [`RfTwin`] forward model: for a grid of sample points in
 //! a target region, a point is "observable" when it lies inside the first Fresnel
 //! zone of a well-predicted link ([`crate::fresnel`]). Per target we report an
 //! [`Observability`] carrying **both** a modelled score and its uncertainty —
-//! never a single confident number for a simulated result (ADR-305 §2). Following
-//! ADR-297 rule 1, a target the model cannot evaluate is [`Observability::Unknown`],
+//! never a single confident number for a simulated result (ADR-308 §2). Following
+//! ADR-300 rule 1, a target the model cannot evaluate is [`Observability::Unknown`],
 //! a first-class value, not an error.
 
 use serde::{Deserialize, Serialize};
@@ -210,7 +210,7 @@ impl PlacementParams {
 }
 
 /// Why a target's observability is unknown. UNKNOWN is a first-class output
-/// (ADR-297 rule 1), not an error.
+/// (ADR-300 rule 1), not an error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ObservabilityUnknown {

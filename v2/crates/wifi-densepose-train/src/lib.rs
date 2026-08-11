@@ -59,12 +59,12 @@ pub mod mae;
 /// `oks_canonical`, available **without** the `tch-backend` feature so the
 /// single metric definition is reachable from the workspace test gate.
 pub mod metrics_core;
-/// Model release sanity gates (ADR-295) — block degenerate and mislabeled
+/// Model release sanity gates (ADR-298) — block degenerate and mislabeled
 /// classifier artifacts (unreachable decision boundary, constant output,
 /// degenerate class balance, missing baseline, metric-name provenance) before
 /// release. Prevention only; withdraws nothing already published.
 pub mod model_gates;
-/// Public-benchmark split protocols and leakage guards (ADR-288 §2–3) —
+/// Public-benchmark split protocols and leakage guards (ADR-291 §2–3) —
 /// deterministic cross-subject / cross-environment / cross-orientation
 /// assignment plus the structural [`protocols::leakage::LeakageAudit`],
 /// mean-pose baseline, and evidence-graded evaluation reports.
@@ -113,14 +113,14 @@ pub use config::TrainingConfig;
 pub use dataset::{
     CsiDataset, CsiSample, DataLoader, MmFiDataset, SyntheticConfig, SyntheticCsiDataset,
 };
-// ADR-288 — Widar3.0 ingest, split protocols, and leakage guards.
+// ADR-291 — Widar3.0 ingest, split protocols, and leakage guards.
 pub use dataset::widar::{parse_bfee_bytes, BfeeParse, BfeeRecord, WidarDataset, WidarFileMeta};
 pub use protocols::leakage::{
     EvaluationReport, EvidenceGrade, LeakageAudit, LeakageClaims, MeanPoseBaseline,
 };
 pub use protocols::{SampleMeta, SplitPlan, SplitProtocol, SplitSide};
 
-// ADR-295 — model release sanity gates.
+// ADR-298 — model release sanity gates.
 pub use model_gates::{
     check_baseline, check_class_balance, check_constant_output, check_metric_provenance,
     check_unreachable_boundary, evaluate_linear_head, GateError, GateFailure, GateOutcomeError,

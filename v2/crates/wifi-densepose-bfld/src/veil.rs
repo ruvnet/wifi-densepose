@@ -1,4 +1,4 @@
-//! WiFi Veil advisory integration (ADR-291).
+//! WiFi Veil advisory integration (ADR-294).
 //!
 //! Bridges BFLD's privacy layer to the [`wifi-veil`](https://github.com/ruvnet/wifi-veil)
 //! countermeasure crate: a deterministic, dependency-free attacker-vs-protector
@@ -12,7 +12,7 @@
 //! scenes and never touches a radio. Assessments quantify the *modeled*
 //! re-identification risk of unprotected beamforming feedback and the *modeled*
 //! effect of a shield; they are advisory inputs to privacy posture, never
-//! measured hardware claims. See ADR-291 and the wifi-veil README.
+//! measured hardware claims. See ADR-294 and the wifi-veil README.
 //!
 //! # Relationship to BFLD invariants
 //!

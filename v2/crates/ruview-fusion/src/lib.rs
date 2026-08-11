@@ -1,16 +1,16 @@
-//! # `ruview-fusion` — uncertainty-aware sensor fusion (ADR-308, ADR-297 §11)
+//! # `ruview-fusion` — uncertainty-aware sensor fusion (ADR-311, ADR-300 §11)
 //!
 //! **Many observations resolve to one probabilistic world state, not many feeds
-//! into a visualization.** This is the defining invariant of ADR-308: a
+//! into a visualization.** This is the defining invariant of ADR-311: a
 //! dashboard that shows a WiFi layer, a mmWave layer, and a BLE layer side by
 //! side is not fusion — it pushes reconciliation onto the human. Real fusion
 //! produces *one* uncertainty-aware [`WorldState`] that every downstream
-//! consumer (ADR-309 spatial memory, ADR-310 counterfactual, ADR-312 RF twin)
+//! consumer (ADR-312 spatial memory, ADR-313 counterfactual, ADR-315 RF twin)
 //! reads, with each contributing observation's provenance and confidence still
 //! recoverable.
 //!
 //! [`FusionEngine`] ingests a set of [`PresenceObservation`]s — canonical
-//! ADR-303 [`HalObservation`](ruview_hal::HalObservation)s paired with a
+//! ADR-306 [`HalObservation`](ruview_hal::HalObservation)s paired with a
 //! per-source occupancy [`Claim`] — that may span modalities (WiFi/CSI, BLE,
 //! UWB, mmWave, …) and may conflict, and emits a single [`WorldState`]: a fused
 //! per-container occupancy probability with a fused variance, the set of
@@ -38,7 +38,7 @@
 //!   and barely moves the fused value; it is down-weighted, not averaged in as
 //!   if trustworthy.
 //!
-//! ## When the answer is UNKNOWN (ADR-297 rule 1)
+//! ## When the answer is UNKNOWN (ADR-300 rule 1)
 //!
 //! UNKNOWN is a first-class world-state value, never an error or a panic:
 //!
@@ -54,7 +54,7 @@
 //! ## Evidence and honesty discipline
 //!
 //! The fused evidence level is the **minimum** over contributing observations —
-//! never lifted above the weakest necessary input (ADR-308). This crate asserts
+//! never lifted above the weakest necessary input (ADR-311). This crate asserts
 //! **no accuracy number and makes no camera-grade claim** (CLAUDE.md, ADR-282);
 //! its tests use synthetic in-code fixtures only (SYNTHETIC / L0..L2). It is a
 //! pure, deterministic function of its inputs: no I/O, no clock, no randomness,

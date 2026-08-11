@@ -3,7 +3,7 @@
 //! Errors are raised only when *configuration* input is malformed (a threshold
 //! outside its valid range, a non-finite quality score). Runtime domain
 //! ambiguity is **never** an error: it is the first-class [`DomainState::Unknown`]
-//! value (ADR-297 rule 1). Nothing in this crate panics on malformed runtime
+//! value (ADR-300 rule 1). Nothing in this crate panics on malformed runtime
 //! input.
 //!
 //! [`DomainState::Unknown`]: crate::DomainState::Unknown

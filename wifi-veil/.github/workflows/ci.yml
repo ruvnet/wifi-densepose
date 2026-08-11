@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: Honesty / anti-slop guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce honesty / anti-slop invariants
+        run: bash scripts/ci-guard.sh
+
+  rust:
+    name: Rust (test + lint + wasm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup component add clippy rustfmt
+          rustup target add wasm32-unknown-unknown
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test (crate + proof witness)
+        run: cargo test
+      - name: WASM leaf builds
+        run: cargo build --lib --target wasm32-unknown-unknown
+
+  c-core:
+    name: Firmware C core (host test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build + test portable core
+        run: make -C firmware/core test
+
+  harness:
+    name: Harness (smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Guidance runs dependency-free
+        run: node harness/bin/cli.js guidance --topic overview
+      - name: Install + unit tests
+        working-directory: harness
+        run: |
+          npm ci --ignore-scripts || npm install --ignore-scripts
+          npm test --if-present

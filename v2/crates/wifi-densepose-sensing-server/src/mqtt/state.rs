@@ -63,7 +63,7 @@ impl StateMessage {
 /// emissions accordingly. Time is supplied by the caller so the limiter is
 /// testable without a clock.
 ///
-/// ADR-294 (issue #1541): the key is `(NodeId, EntityKind)`, not `EntityKind`
+/// ADR-297 (issue #1541): the key is `(NodeId, EntityKind)`, not `EntityKind`
 /// alone. With an entity-only key one node consumed the numeric publish slot
 /// and every other node was suppressed until the interval expired — while
 /// availability still reported them online. Keying by node keeps each node's
@@ -82,7 +82,7 @@ impl RateLimiter {
     /// Decide whether a sample for `entity` on node `node_id` is allowed to
     /// publish at `now`, given the configured `rates`. Returns true to publish
     /// (and updates last-emitted state); false to drop. Each node's budget for
-    /// an entity is independent of every other node's (ADR-294).
+    /// an entity is independent of every other node's (ADR-297).
     pub fn allow(
         &mut self,
         node_id: &str,
@@ -427,7 +427,7 @@ mod tests {
 
     #[test]
     fn rate_limiter_nodes_do_not_starve_each_other() {
-        // ADR-294 (issue #1541): with an entity-only key, node-a consuming the
+        // ADR-297 (issue #1541): with an entity-only key, node-a consuming the
         // slot suppressed node-b. Keyed by (node, entity), both publish.
         let mut rl = RateLimiter::new();
         let r = rates();

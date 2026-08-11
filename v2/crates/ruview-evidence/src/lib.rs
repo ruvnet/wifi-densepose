@@ -1,10 +1,10 @@
-//! # `ruview-evidence` — the append-only accuracy ledger (ADR-301, ADR-297 §4)
+//! # `ruview-evidence` — the append-only accuracy ledger (ADR-304, ADR-300 §4)
 //!
 //! "MLflow for physical sensing." Where an experiment tracker overwrites
 //! yesterday's number, this crate is an **append-only** record of how a model
 //! actually performs, keyed per deployment context
 //! `(room, device, subject-class, model-version)` and carrying, per record,
-//! the ADR-301 metrics (moving/stationary recall, false-positive rate, drift,
+//! the ADR-304 metrics (moving/stationary recall, false-positive rate, drift,
 //! predictive uncertainty, calibration age, sample count) plus exactly one
 //! [`EvidenceLevel`] (L0–L5, mirroring ADR-282 semantics).
 //!
@@ -21,15 +21,15 @@
 //!     no `set_level`). This is the ADR-282/288/290 "no upgrade" rule.
 //!   - Records are **append-only**: [`EvidenceLedger::append`] consumes a
 //!     record by value and nothing hands back a mutable reference. A correction
-//!     is a *new* record, never an in-place edit (ADR-301 §1).
-//!   - Aggregation **never pools across contexts** (ADR-301 §2/§Consequences):
+//!     is a *new* record, never an in-place edit (ADR-304 §1).
+//!   - Aggregation **never pools across contexts** (ADR-304 §2/§Consequences):
 //!     an [`EvidenceSlice`] is minted by [`EvidenceLedger::query`] for exactly
 //!     one context and there is no API that averages two contexts into one
 //!     number. A summary's evidence level is the **floor** (minimum) of the
 //!     levels present in the slice — a slice can never report a level above the
 //!     weakest record it contains.
 //!   - An empty context returns [`SummaryEvidence::NoEvidence`], distinct from a
-//!     present-but-zero-accuracy summary — downstream (ADR-315) must treat
+//!     present-but-zero-accuracy summary — downstream (ADR-318) must treat
 //!     "no evidence" as "no capability", not as a `0.0` score.
 
 #![forbid(unsafe_code)]
@@ -65,7 +65,7 @@ pub enum EvidenceLevel {
     L3,
     /// L4 — calibrated multi-site field evidence.
     L4,
-    /// L5 — production, witnessed / certified (ADR-316).
+    /// L5 — production, witnessed / certified (ADR-319).
     L5,
 }
 
@@ -78,22 +78,22 @@ pub enum ProvenanceClass {
     Synthetic,
     /// Real inference but no ground-truth reference backs the accuracy.
     Claimed,
-    /// Backed by an ADR-300 reference plus a reproducer handle.
+    /// Backed by an ADR-303 reference plus a reproducer handle.
     Measured,
 }
 
 /// The deployment context a record is keyed by: `(room, device, subject-class,
-/// model-version)`. Identity is caller-supplied (ADR-303 space id, ADR-302
+/// model-version)`. Identity is caller-supplied (ADR-306 space id, ADR-305
 /// signed device id); this crate treats the fields as opaque bounded handles
 /// and never invents them.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EvidenceContext {
-    /// Space / room id (ADR-303).
+    /// Space / room id (ADR-306).
     pub room: String,
-    /// Signed device id (ADR-302).
+    /// Signed device id (ADR-305).
     pub device: String,
     /// Subject class where consented/available; empty means "no subject"
-    /// (ADR-301 §1 — subject id only where consented).
+    /// (ADR-304 §1 — subject id only where consented).
     pub subject_class: String,
     /// Model version that produced the inferences (ADR-136).
     pub model_version: String,
@@ -155,7 +155,7 @@ fn check_nonempty(field: &'static str, value: &str) -> Result<(), EvidenceError>
 }
 
 /// The per-inference-window accuracy metrics accumulated into a record
-/// (ADR-301 §1). Rates are fractions in `[0, 1]`; `drift` and `uncertainty`
+/// (ADR-304 §1). Rates are fractions in `[0, 1]`; `drift` and `uncertainty`
 /// are non-negative finite magnitudes; `sample_count` is the number of
 /// inferences the record summarizes and must be at least one.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -167,11 +167,11 @@ pub struct AccuracyMetrics {
     /// False-positive rate, `[0, 1]`.
     pub false_positive_rate: f64,
     /// Drift magnitude — fingerprint distance from the calibration baseline
-    /// (ADR-298); non-negative.
+    /// (ADR-301); non-negative.
     pub drift: f64,
     /// Predictive uncertainty; non-negative.
     pub uncertainty: f64,
-    /// Age of the calibration certificate in effect, seconds (ADR-298).
+    /// Age of the calibration certificate in effect, seconds (ADR-301).
     pub calibration_age_secs: u64,
     /// Number of inferences this record summarizes; at least one.
     pub sample_count: u64,
@@ -213,7 +213,7 @@ fn check_magnitude(field: &'static str, v: f64) -> Result<(), EvidenceError> {
     Ok(())
 }
 
-/// One immutable, append-only accuracy record (ADR-301 §1). All fields are
+/// One immutable, append-only accuracy record (ADR-304 §1). All fields are
 /// private: there is no setter and no `&mut` accessor, so a level can never be
 /// upgraded and a record can never be edited in place — a correction is a new
 /// record. Construct via [`EvidenceRecord::synthetic`],
@@ -225,7 +225,7 @@ pub struct EvidenceRecord {
     metrics: AccuracyMetrics,
     level: EvidenceLevel,
     class: ProvenanceClass,
-    /// Reproducer handle for `Measured` records (ADR-300); empty otherwise.
+    /// Reproducer handle for `Measured` records (ADR-303); empty otherwise.
     reproducer: String,
     /// Caller-injected record time, nanoseconds. Never read from a clock here.
     timestamp_ns: u64,
@@ -236,7 +236,7 @@ pub struct EvidenceRecord {
 impl EvidenceRecord {
     /// Mint a **synthetic** record. Class is [`ProvenanceClass::Synthetic`] and
     /// the evidence level is forced to [`EvidenceLevel::L0`] — synthetic input
-    /// is L0 by construction (ADR-301 §3) and there is no way to raise it.
+    /// is L0 by construction (ADR-304 §3) and there is no way to raise it.
     ///
     /// # Errors
     /// Propagates [`AccuracyMetrics::validate`] failures.
@@ -257,7 +257,7 @@ impl EvidenceRecord {
         })
     }
 
-    /// Mint a **claimed** record: a real inference with no ADR-300 reference
+    /// Mint a **claimed** record: a real inference with no ADR-303 reference
     /// backing its accuracy. The level is set by the caller's provenance at
     /// write time and is never MEASURED. A claimed record may not be minted at
     /// `L0`, which is reserved for synthetic input.
@@ -286,7 +286,7 @@ impl EvidenceRecord {
         })
     }
 
-    /// Mint a **measured** record: accuracy backed by an ADR-300 reference and
+    /// Mint a **measured** record: accuracy backed by an ADR-303 reference and
     /// a non-empty reproducer handle. The level is set by provenance and must
     /// not be `L0`.
     ///
@@ -365,7 +365,7 @@ impl EvidenceRecord {
     }
 }
 
-/// The append-only evidence ledger (ADR-301). The record vector is private and
+/// The append-only evidence ledger (ADR-304). The record vector is private and
 /// exposed only through read-only queries; nothing returns a mutable reference
 /// to a stored record, so the append-only and no-upgrade invariants hold at the
 /// type level.
@@ -434,7 +434,7 @@ impl EvidenceLedger {
 
     /// Query the records for exactly one context, in append order. The returned
     /// [`EvidenceSlice`] carries only records whose context equals `context`,
-    /// so aggregation over it can never mix two contexts (ADR-301 §2 — no
+    /// so aggregation over it can never mix two contexts (ADR-304 §2 — no
     /// pooling).
     #[must_use]
     pub fn query<'a>(&'a self, context: &EvidenceContext) -> EvidenceSlice<'a> {
@@ -462,7 +462,7 @@ impl EvidenceLedger {
     }
 
     /// Summarize **each** context independently and return one summary per
-    /// context — never a single pooled number across contexts (ADR-301
+    /// context — never a single pooled number across contexts (ADR-304
     /// §Consequences: "never paper over a thin context with a global average").
     #[must_use]
     pub fn summarize(&self) -> Vec<ContextSummary> {
@@ -512,7 +512,7 @@ impl<'a> EvidenceSlice<'a> {
     /// function of the records (deterministic; no clock, no randomness):
     ///
     /// - An empty slice yields [`SummaryEvidence::NoEvidence`] — distinct from
-    ///   a zero-accuracy summary (ADR-301 §3).
+    ///   a zero-accuracy summary (ADR-304 §3).
     /// - The summary's evidence level is the **floor** — the minimum level over
     ///   the records — so a slice can never report a level above its weakest
     ///   record (the "no upgrade" honesty rule). Synthetic (L0) records pin the
@@ -640,7 +640,7 @@ impl ContextSummary {
 /// The evidence outcome for a context: explicitly absent, or aggregated.
 ///
 /// [`SummaryEvidence::NoEvidence`] is deliberately **not** a zero-accuracy
-/// summary: an empty context has *no capability*, which downstream (ADR-315)
+/// summary: an empty context has *no capability*, which downstream (ADR-318)
 /// must not read as a `0.0` score.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum SummaryEvidence {

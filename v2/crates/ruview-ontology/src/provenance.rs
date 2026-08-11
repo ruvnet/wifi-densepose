@@ -1,4 +1,4 @@
-//! Evidence ladder and provenance carried by every fact (ADR-303 §2, ADR-282).
+//! Evidence ladder and provenance carried by every fact (ADR-306 §2, ADR-282).
 //!
 //! The ontology mandates that a fact cannot cross a surface boundary and lose
 //! its lineage: every leaf entity carries exactly one [`EvidenceLevel`] plus a
@@ -22,7 +22,7 @@ pub enum EvidenceLevel {
     L3,
     /// L4 — calibrated and held-out validated.
     L4,
-    /// L5 — witnessed / certified (ADR-316).
+    /// L5 — witnessed / certified (ADR-319).
     L5,
 }
 
@@ -36,7 +36,7 @@ pub struct SemanticProvenance {
     pub evidence: Vec<String>,
     /// Model version that produced the fact (ADR-136).
     pub model_version: String,
-    /// Calibration baseline in effect (ADR-135/ADR-298).
+    /// Calibration baseline in effect (ADR-135/ADR-301).
     pub calibration_version: String,
     /// Privacy decision the fact was derived under (ADR-141).
     pub privacy_decision: String,

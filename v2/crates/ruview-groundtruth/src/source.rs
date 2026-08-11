@@ -1,7 +1,7 @@
-//! Named reference sources on the validation plane (ADR-300 §1).
+//! Named reference sources on the validation plane (ADR-303 §1).
 //!
 //! A reference source is an *independent observer* used only to check RF
-//! inference — never an inference input (ADR-300 Decision, option 1 rejected).
+//! inference — never an inference input (ADR-303 Decision, option 1 rejected).
 //! It carries the modality, a named source, device metadata, and the recorded
 //! measurement principle so a MEASURED claim states what it was measured
 //! against.
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{check_bound, check_nonempty, GroundTruthError};
 
 /// The modality of an independent reference. Camera/mmWave references arrive as
-/// exported label/keypoint streams, not live model feeds (ADR-300 §1).
+/// exported label/keypoint streams, not live model feeds (ADR-303 §1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReferenceModality {

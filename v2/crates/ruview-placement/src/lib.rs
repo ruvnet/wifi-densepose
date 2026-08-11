@@ -1,18 +1,18 @@
-//! # `ruview-placement` — sensor placement optimizer (ADR-305, ADR-297 phase 3)
+//! # `ruview-placement` — sensor placement optimizer (ADR-308, ADR-300 phase 3)
 //!
 //! **SYNTHETIC / L0 — a planning scaffold, not a measurement system.**
 //!
 //! This crate is a *research-forward primitive*: given a coarse floor plan
-//! ([`FloorPlan`], an ADR-303 scene abstraction) and a hardware [`Inventory`], it
+//! ([`FloorPlan`], an ADR-306 scene abstraction) and a hardware [`Inventory`], it
 //! recommends radio-node positions by scoring candidate placements against the
-//! ADR-312 RF twin's **SYNTHETIC** propagation model. Every coverage and
+//! ADR-315 RF twin's **SYNTHETIC** propagation model. Every coverage and
 //! observability value it produces is a *simulation* at evidence level `L0`
 //! (ADR-282), labelled `SYNTHETIC`: a **recommendation**, never a sensing claim.
 //! Nothing here is a hardware, `MEASURED`, or accuracy claim, and the crate
 //! asserts **no** coverage or accuracy number — a twin/optimizer *predicts*, it
-//! does not *measure* (ADR-305 evidence discipline).
+//! does not *measure* (ADR-308 evidence discipline).
 //!
-//! Consistent with ADR-297 rule 1, *insufficient information* is a first-class
+//! Consistent with ADR-300 rule 1, *insufficient information* is a first-class
 //! value ([`Observability::Unknown`]), never an error and never a confident
 //! default. Consistent with rule 3, the crate reuses the canonical ontology
 //! vocabulary ([`SpaceId`], [`ZoneId`], [`SensorId`], [`Container`],
@@ -34,7 +34,7 @@
 //! - **Post-install compare** ([`compare_post_install`]): compare the optimizer's
 //!   `L0` prediction against **caller-supplied** measured observability (this
 //!   crate never measures) and recommend adjustments plus a coarse twin-parameter
-//!   residual to feed back into ADR-312.
+//!   residual to feed back into ADR-315.
 //!
 //! ## Determinism
 //!
@@ -93,7 +93,7 @@ pub use inventory::{Inventory, RadioSpec, MAX_INVENTORY};
 pub use plan::{candidate_positions, optimize, PlacementPlan};
 
 // Re-export the canonical ontology and twin vocabulary consumers need, so they
-// speak one semantics (ADR-297 rule 3).
+// speak one semantics (ADR-300 rule 3).
 pub use ruview_ontology::{
     Container, EvidenceLevel, SemanticProvenance, SensorId, SpaceId, ZoneId,
 };
@@ -326,7 +326,7 @@ mod tests {
         let objectives = vec![synthetic_objective(&plan)];
         let recommended = optimize(&plan, &inv, &objectives, &params());
 
-        // Every known target carries BOTH a score and an uncertainty (ADR-305 §2).
+        // Every known target carries BOTH a score and an uncertainty (ADR-308 §2).
         let mut saw_known = false;
         for t in &recommended.score.per_target {
             if let Observability::Known { score, uncertainty } = t.observability {
@@ -510,7 +510,7 @@ mod tests {
     #[test]
     fn marginal_case_reports_higher_uncertainty() {
         // A zone squarely on the link line vs. a marginal one at the Fresnel edge:
-        // the marginal case is reported with higher uncertainty (ADR-305 §2, the
+        // the marginal case is reported with higher uncertainty (ADR-308 §2, the
         // model reports uncertainty rather than overstating a coarse result).
         let plan = FloorPlan {
             space: SpaceId::new("room").unwrap(),

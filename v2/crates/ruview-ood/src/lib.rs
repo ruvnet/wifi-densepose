@@ -1,22 +1,22 @@
-//! # ruview-ood — out-of-distribution detection (ADR-299)
+//! # ruview-ood — out-of-distribution detection (ADR-302)
 //!
-//! Primitive 2 of the ADR-297 perception substrate: the gate that attaches a
+//! Primitive 2 of the ADR-300 perception substrate: the gate that attaches a
 //! [`DomainState`] — `KNOWN` / `DEGRADED` / `UNKNOWN` — to **every** inference,
 //! so RuView can say *"I do not recognize this situation"* instead of returning
 //! a confidently-wrong label when it leaves its calibrated domain.
 //!
-//! It fuses four measured inputs (ADR-299 §1) against the ADR-298
+//! It fuses four measured inputs (ADR-302 §1) against the ADR-301
 //! [`CalibrationCertificate`](wifi_densepose_calibration::certificate::CalibrationCertificate):
 //!
 //! 1. **domain distance** — [`domain_distance`] over live vs certified
-//!    fingerprints (reusing ADR-298's [`FingerprintDistance`]);
+//!    fingerprints (reusing ADR-301's [`FingerprintDistance`]);
 //! 2. **signal quality** — [`SignalQuality`] (ADR-137);
 //! 3. **calibration compatibility** — [`CalibrationCompat`], derived from a
 //!    certificate via [`assess_certificate`] / [`no_certificate`];
 //! 4. **uncertainty** — the model head's own predictive uncertainty, attached
 //!    at the [`InferenceGate`].
 //!
-//! ## The four non-negotiable rules (ADR-297)
+//! ## The four non-negotiable rules (ADR-300)
 //!
 //! - **UNKNOWN is a first-class value, never an error.** [`DomainState::Unknown`]
 //!   is returned, not thrown; the gate suppresses the confident class rather
@@ -269,7 +269,7 @@ mod tests {
             CalibrationCompat::Valid,
         );
         assert!(out.state.is_unknown());
-        // ADR-297 rule 1: no confident class survives an UNKNOWN domain.
+        // ADR-300 rule 1: no confident class survives an UNKNOWN domain.
         assert_eq!(out.class, None);
         assert_eq!(out.confidence, None);
         assert!(!out.is_confident());
@@ -429,7 +429,7 @@ mod tests {
         assert!((0.0..=1.0).contains(&q2.score));
     }
 
-    // --- cross-ADR: consume a real ADR-298 certificate --------------------
+    // --- cross-ADR: consume a real ADR-301 certificate --------------------
 
     fn af(label: AnchorLabel, mean: f32, variance: f32, motion: f32) -> AnchorFeature {
         AnchorFeature {

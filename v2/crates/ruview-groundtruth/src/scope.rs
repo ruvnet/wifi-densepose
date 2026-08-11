@@ -1,8 +1,8 @@
-//! Mandatory session scope (ADR-300 §3, mirroring ADR-290).
+//! Mandatory session scope (ADR-303 §3, mirroring ADR-293).
 //!
 //! An agreement report without scope cannot be constructed: WiFi-sensing
 //! numbers without stated scope (subject count, motion, line-of-sight,
-//! distance) are systematically misleading (ADR-290 Context). [`SessionScope`]
+//! distance) are systematically misleading (ADR-293 Context). [`SessionScope`]
 //! is a required argument to [`crate::AgreementReport::build`], so the type
 //! system enforces the rule.
 

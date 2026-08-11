@@ -1,4 +1,4 @@
-//! Validated parser for FeitCSI binary CSI records (ADR-289).
+//! Validated parser for FeitCSI binary CSI records (ADR-292).
 //!
 //! [FeitCSI](https://feitcsi.kuskosoft.com) is an open-source tool
 //! (<https://github.com/KuskoSoft/FeitCSI>) that extracts 802.11ax channel
@@ -49,7 +49,7 @@
 //!
 //! The on-disk format carries **no magic number or version field** (it is the
 //! raw iwlwifi notification header), so the "version check" required by
-//! ADR-289 is structural and strict:
+//! ADR-292 is structural and strict:
 //!
 //! - the declared dimensions must agree exactly with the declared buffer
 //!   length ([`FeitCsiError::DimensionMismatch`]);
@@ -285,7 +285,7 @@ impl FeitCsiRecord {
 
     /// Convert to adapter-level [`CsiReadings`], one [`SensorCsiReading`] per
     /// (rx, tx) antenna pair, carrying native subcarrier count, bandwidth and
-    /// band as first-class frame metadata (ADR-289).
+    /// band as first-class frame metadata (ADR-292).
     ///
     /// The FeitCSI header does not record channel/band (the capture
     /// configuration owns that), so both are supplied by the caller. The
@@ -633,7 +633,7 @@ impl FeitCsiFileReader {
 /// existing interpolation path (`wifi-densepose-signal`'s Catmull-Rom cubic
 /// resampler from ADR-027), recording the native → pipeline mapping in frame
 /// metadata so downstream consumers know the true spectral resolution
-/// (ADR-289 §3).
+/// (ADR-292 §3).
 ///
 /// This is the ONLY sanctioned native→pipeline conversion: it is explicit,
 /// and the mapping is auditable in `metadata.wideband.mapping`.

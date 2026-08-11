@@ -38,7 +38,7 @@ WiFi DensePose turns commodity WiFi signals into real-time human pose estimation
 14. [Training a Model](#training-a-model)
     - [CRV Signal-Line Protocol](#crv-signal-line-protocol)
 14. [RVF Model Containers](#rvf-model-containers)
-14. [Perception Certificate Spine (Developer Preview, ADR-297)](#perception-certificate-spine-developer-preview-adr-297)
+14. [Perception Certificate Spine (Developer Preview, ADR-300)](#perception-certificate-spine-developer-preview-adr-297)
 14. [Hardware Setup](#hardware-setup)
     - [ESP32-S3 Mesh](#esp32-s3-mesh)
     - [Intel 5300 / Atheros NIC](#intel-5300--atheros-nic)
@@ -1494,9 +1494,9 @@ An RVF file contains: model weights, HNSW vector index, quantization codebooks, 
 
 ---
 
-## Perception Certificate Spine (Developer Preview, ADR-297)
+## Perception Certificate Spine (Developer Preview, ADR-300)
 
-RuView's perception substrate program (ADR-297) is building a `signal → observation →
+RuView's perception substrate program (ADR-300) is building a `signal → observation →
 calibration → inference → uncertainty → evidence → certificate → policy → governed
 action` pipeline, where a downstream consumer either gets a calibrated, provenance-backed
 answer or an explicit `UNKNOWN` — never a confident-looking guess outside the sensor's
@@ -1557,11 +1557,11 @@ one crate's domain read automatically reaches another's gate.
 
 ### What's genuinely enforced today, for comparison
 
-Not every ADR-292–296 remediation item is preview-only. Two are live now:
+Not every ADR-295–296 remediation item is preview-only. Two are live now:
 
-- **UDP data-plane bind hardening (ADR-293)** — `sensing-server`'s `UdpSourceAllowlist`
+- **UDP data-plane bind hardening (ADR-296)** — `sensing-server`'s `UdpSourceAllowlist`
   is checked on every incoming packet (`main.rs`), not just defined.
-- **CSI data-incident repo controls (ADR-296)** — `scripts/csi-data-policy-check.sh`
+- **CSI data-incident repo controls (ADR-299)** — `scripts/csi-data-policy-check.sh`
   runs in CI on every push/PR and fails the build on a policy violation.
 
 ---

@@ -130,7 +130,7 @@ impl HardwareConfig {
     }
 
     /// Create configuration for deterministic FeitCSI capture replay
-    /// (wideband 802.11ax records from Intel AX200/AX210, ADR-289).
+    /// (wideband 802.11ax records from Intel AX200/AX210, ADR-292).
     pub fn feitcsi_replay(file_path: &str) -> Self {
         Self::feitcsi(file_path, FeitCsiMode::FileReplay)
     }
@@ -196,7 +196,7 @@ pub enum DeviceType {
     UdpReceiver,
     /// PCAP file replay
     PcapFile,
-    /// FeitCSI wideband 802.11ax records from Intel AX200/AX210 (ADR-289):
+    /// FeitCSI wideband 802.11ax records from Intel AX200/AX210 (ADR-292):
     /// file replay of a recorded capture, or a path/pipe an external FeitCSI
     /// process writes to. RuView never configures the NIC — FeitCSI's own
     /// tooling owns capture, per least-authority.
@@ -233,7 +233,7 @@ pub enum DeviceSettings {
     Simulated,
 }
 
-/// FeitCSI ingest mode (ADR-289).
+/// FeitCSI ingest mode (ADR-292).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeitCsiMode {
     /// Deterministic replay of a recorded capture file.
@@ -243,7 +243,7 @@ pub enum FeitCsiMode {
     Stream,
 }
 
-/// FeitCSI source settings (ADR-289).
+/// FeitCSI source settings (ADR-292).
 ///
 /// The FeitCSI record header carries bandwidth (via the iwlwifi rate flags)
 /// but not channel/band — the capture configuration owns those — so band and
@@ -353,7 +353,7 @@ impl Bandwidth {
     }
 }
 
-/// WiFi radio band (first-class frame metadata per ADR-289).
+/// WiFi radio band (first-class frame metadata per ADR-292).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WifiBand {
     /// 2.4 GHz ISM band
@@ -366,7 +366,7 @@ pub enum WifiBand {
 
 /// Record of an explicit native → pipeline subcarrier conversion, so
 /// downstream consumers know the true spectral resolution of a frame and
-/// how it was resampled (ADR-289 §3).
+/// how it was resampled (ADR-292 §3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SubcarrierMapping {
     /// Native subcarrier count as captured.
@@ -377,7 +377,7 @@ pub struct SubcarrierMapping {
     pub method: &'static str,
 }
 
-/// Wideband spectral provenance metadata (ADR-289): band, bandwidth, native
+/// Wideband spectral provenance metadata (ADR-292): band, bandwidth, native
 /// subcarrier dimensionality, and any native → pipeline mapping applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WidebandMeta {
@@ -796,7 +796,7 @@ impl HardwareAdapter {
         Ok(())
     }
 
-    /// Initialize FeitCSI file-replay / stream ingest (ADR-289).
+    /// Initialize FeitCSI file-replay / stream ingest (ADR-292).
     ///
     /// No privileged operations: RuView does not configure the NIC; the
     /// external FeitCSI tooling owns capture. This only validates the
@@ -962,7 +962,7 @@ impl HardwareAdapter {
         }
     }
 
-    /// Read one wideband CSI frame from a FeitCSI capture or stream (ADR-289).
+    /// Read one wideband CSI frame from a FeitCSI capture or stream (ADR-292).
     ///
     /// Frames carry their native subcarrier count, bandwidth (20–160 MHz) and
     /// band (2.4/5/6 GHz) as metadata. When `pipeline_subcarriers` is
@@ -1639,7 +1639,7 @@ pub struct CsiMetadata {
     pub noise_floor: Option<f64>,
     /// Frame control type
     pub fc_type: FrameControlType,
-    /// Wideband spectral provenance (ADR-289): band, native subcarrier count
+    /// Wideband spectral provenance (ADR-292): band, native subcarrier count
     /// and any native → pipeline mapping applied. `None` for legacy
     /// narrowband sources that predate wideband metadata.
     pub wideband: Option<WidebandMeta>,

@@ -1,4 +1,4 @@
-//! ADR-294 — per-node inference vs. fused room inference.
+//! ADR-297 — per-node inference vs. fused room inference.
 //!
 //! The multi-node path used to collapse two distinct concepts into one:
 //!
@@ -97,7 +97,7 @@ impl RoomInference {
         }
     }
 
-    /// Migration accessor for consumers of the pre-ADR-294 aggregate-only shape:
+    /// Migration accessor for consumers of the pre-ADR-297 aggregate-only shape:
     /// with a single node, that node's inference *is* the room aggregate. This
     /// preserves single-node behavior (one node = one inference) exactly.
     pub fn from_single_node(node: &NodeInference, stale_after_ms: u64) -> Self {
@@ -107,7 +107,7 @@ impl RoomInference {
 
 /// Fuse per-node inferences into one room aggregate.
 ///
-/// Pure and deterministic (ADR-294): the result depends only on the *set* of
+/// Pure and deterministic (ADR-297): the result depends only on the *set* of
 /// inputs, not on their order or on which arrived last. Each non-stale node
 /// votes for its classification with its freshness weight; the class with the
 /// greatest total freshness weight wins, ties broken by classification string

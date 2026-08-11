@@ -1,12 +1,12 @@
-//! # `ruview-scorecard` — the multi-domain benchmark scorecard (ADR-314, ADR-297 §4)
+//! # `ruview-scorecard` — the multi-domain benchmark scorecard (ADR-317, ADR-300 §4)
 //!
-//! ADR-297 program rule 4 is non-negotiable: **pooled accuracy is never
+//! ADR-300 program rule 4 is non-negotiable: **pooled accuracy is never
 //! sufficient for promotion**. A single headline number is exactly the surface
 //! a domain-generalization regression hides behind — a model can raise mean
 //! presence accuracy while quietly collapsing on unseen rooms, unseen devices,
 //! or a stationary subject at range (the canonical WiFi failure case).
 //!
-//! This crate is the *data model* for that discipline (ADR-314 §1). It holds,
+//! This crate is the *data model* for that discipline (ADR-317 §1). It holds,
 //! per capability, one cell **per operating domain** rather than one pooled
 //! figure:
 //!
@@ -14,13 +14,13 @@
 //!   `stationary-10m`.
 //! - **Pose**: `matched`, `subject-unseen`, `room-unseen`.
 //! - **OOD rejection**: the rate at which genuinely out-of-distribution input
-//!   is correctly returned as UNKNOWN (a capability, ADR-299).
+//!   is correctly returned as UNKNOWN (a capability, ADR-302).
 //! - **Calibration drift**: the fingerprint-distance trajectory against the
-//!   ADR-298 certificate (lower is better) plus the fraction of inferences in
-//!   each ADR-299 [`DomainState`] under the `VALID → DEGRADED → UNKNOWN`
-//!   staleness guard (ADR-297).
+//!   ADR-301 certificate (lower is better) plus the fraction of inferences in
+//!   each ADR-302 [`DomainState`] under the `VALID → DEGRADED → UNKNOWN`
+//!   staleness guard (ADR-300).
 //!
-//! ## Honesty by construction (CLAUDE.md, ADR-282, ADR-297)
+//! ## Honesty by construction (CLAUDE.md, ADR-282, ADR-300)
 //!
 //! - Every scored [`Cell`] carries a point estimate, a **confidence interval**
 //!   (a documented deterministic Wilson score interval — no RNG), and exactly
@@ -28,7 +28,7 @@
 //!   construction ([`Metric::synthetic`]); nothing raises it here.
 //! - An empty domain is [`Cell::NoEvidence`], a first-class value distinct
 //!   from a present-but-zero score. The promotion gate treats no evidence as
-//!   **no coverage, never a pass** (ADR-314 §Provenance).
+//!   **no coverage, never a pass** (ADR-317 §Provenance).
 //! - [`Scorecard::worst_domain`] returns the promotion-relevant number: the
 //!   minimum across a task's domain slices. [`promotion_gate`] fails if *any*
 //!   worst-domain slice regresses beyond its budget, **even when the pooled
@@ -175,7 +175,7 @@ impl Metric {
     }
 
     /// Construct a **synthetic** metric: the evidence level is forced to `L0`
-    /// (ADR-282/ADR-297 — synthetic input is `L0` by construction and cannot be
+    /// (ADR-282/ADR-300 — synthetic input is `L0` by construction and cannot be
     /// raised here).
     ///
     /// # Errors
@@ -227,7 +227,7 @@ impl Metric {
 
 /// One scorecard cell. A domain with no coverage is [`Cell::NoEvidence`] — a
 /// first-class value the promotion gate treats as no coverage, never a pass
-/// (ADR-314). It is deliberately distinct from a scored cell whose point
+/// (ADR-317). It is deliberately distinct from a scored cell whose point
 /// happens to be `0.0`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Cell {
@@ -279,14 +279,14 @@ impl From<Metric> for Cell {
 }
 
 // ---------------------------------------------------------------------------
-// Domain-state staleness guard (ADR-299 / ADR-297)
+// Domain-state staleness guard (ADR-302 / ADR-300)
 // ---------------------------------------------------------------------------
 
-/// The ADR-299 domain state under the ADR-297 staleness guard
+/// The ADR-302 domain state under the ADR-300 staleness guard
 /// `VALID → DEGRADED → UNKNOWN`. A certificate is conditional on a continuously
 /// evaluated domain signature; crossing the OOD threshold degrades the state
 /// rather than silently continuing. `Unknown` is a first-class output, not an
-/// error (ADR-297 rule 1).
+/// error (ADR-300 rule 1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum DomainState {
@@ -299,7 +299,7 @@ pub enum DomainState {
 }
 
 /// The fraction of scored inferences observed in each [`DomainState`] over the
-/// scoring window (ADR-314 calibration-drift axis). Fractions are each in
+/// scoring window (ADR-317 calibration-drift axis). Fractions are each in
 /// `[0, 1]` and sum to ~1.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StateFractions {
@@ -392,7 +392,7 @@ pub enum SliceId {
     PoseRoomUnseen,
     /// Rate of correctly rejecting out-of-distribution input as UNKNOWN.
     OodRejection,
-    /// Calibration-drift fingerprint distance against the ADR-298 certificate.
+    /// Calibration-drift fingerprint distance against the ADR-301 certificate.
     CalibrationDrift,
 }
 
@@ -451,7 +451,7 @@ impl SliceId {
     }
 
     /// Whether this is a strict-budget domain (unseen / stationary / OOD) —
-    /// the ones a pooled score hides, per ADR-314 §2.
+    /// the ones a pooled score hides, per ADR-317 §2.
     #[must_use]
     pub fn is_strict(self) -> bool {
         matches!(
@@ -478,7 +478,7 @@ impl SliceId {
 // Scorecard
 // ---------------------------------------------------------------------------
 
-/// The multi-domain scorecard (ADR-314 §1): one [`Cell`] per operating domain,
+/// The multi-domain scorecard (ADR-317 §1): one [`Cell`] per operating domain,
 /// never pooled into a single figure. Fields are public for direct
 /// construction from an evidence query; every cell defaults to
 /// [`Cell::NoEvidence`] via [`Scorecard::empty`].
@@ -556,7 +556,7 @@ impl Scorecard {
     }
 
     /// The **worst domain** for a task: the promotion-relevant number
-    /// (ADR-297 §4). Returns the slice with the lowest point estimate, with a
+    /// (ADR-300 §4). Returns the slice with the lowest point estimate, with a
     /// [`Cell::NoEvidence`] slice ranking below any scored cell — an uncovered
     /// domain is the worst possible outcome, never silently skipped.
     ///
@@ -588,7 +588,7 @@ impl Scorecard {
     }
 
     /// The pooled accuracy average across covered higher-is-better slices — the
-    /// figure ADR-297 rule 4 forbids relying on alone. Provided precisely so
+    /// figure ADR-300 rule 4 forbids relying on alone. Provided precisely so
     /// [`promotion_gate`] can prove a regression was *hidden behind* a rising
     /// pool. `None` when no such slice is covered.
     #[must_use]
@@ -611,7 +611,7 @@ impl Scorecard {
         }
     }
 
-    /// Render an ASCII scorecard approximating the ADR-314 layout: one row per
+    /// Render an ASCII scorecard approximating the ADR-317 layout: one row per
     /// domain slice with its point estimate, confidence interval, evidence
     /// level, and sample count; the per-task worst domain; the pooled figure
     /// (labelled as insufficient on its own); and the domain state. Empty
@@ -619,9 +619,9 @@ impl Scorecard {
     #[must_use]
     pub fn render(&self) -> String {
         let mut out = String::new();
-        out.push_str("ADR-314 multi-domain scorecard\n");
+        out.push_str("ADR-317 multi-domain scorecard\n");
         out.push_str(
-            "  (per-domain; pooled accuracy is never sufficient for promotion, ADR-297 §4)\n",
+            "  (per-domain; pooled accuracy is never sufficient for promotion, ADR-300 §4)\n",
         );
         out.push_str(
             "  slice                     point   ci_low  ci_high  level  samples\n",
@@ -721,7 +721,7 @@ impl WorstCell {
 
 /// Per-capability regression budgets. Strict-budget domains
 /// (unseen / stationary / OOD) carry the tightest tolerance because they are
-/// the ones a pooled score hides (ADR-314 §2).
+/// the ones a pooled score hides (ADR-317 §2).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GatePolicy {
     /// Budget for non-strict presence/pose slices (e.g. room-known, matched).
@@ -766,7 +766,7 @@ pub enum RegressionKind {
     /// Calibration drift rose beyond tolerance.
     DriftIncrease,
     /// A previously-covered domain lost all evidence — no coverage is never a
-    /// pass (ADR-314 §Provenance).
+    /// pass (ADR-317 §Provenance).
     CoverageLoss,
 }
 
@@ -802,7 +802,7 @@ pub struct GateReport {
 
 impl GateReport {
     /// True when the pooled average improved yet the gate still failed — the
-    /// exact "regression hiding behind pooled accuracy" case ADR-297 rule 4
+    /// exact "regression hiding behind pooled accuracy" case ADR-300 rule 4
     /// exists to catch.
     #[must_use]
     pub fn hidden_behind_pooled(&self) -> bool {
@@ -813,7 +813,7 @@ impl GateReport {
 /// Compare a candidate scorecard against a baseline and decide promotion.
 ///
 /// The gate **fails if any single domain regresses beyond its budget**, even
-/// when the pooled average improved (ADR-314 §2, ADR-297 rule 4): improvement
+/// when the pooled average improved (ADR-317 §2, ADR-300 rule 4): improvement
 /// on `room-known` cannot buy a regression on `room-unseen`. Because the gate
 /// evaluates every domain independently, a regression can never hide behind a
 /// flattering pool; [`GateReport::hidden_behind_pooled`] reports when exactly

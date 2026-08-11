@@ -1,10 +1,10 @@
-//! The closed-loop experiment controller (ADR-306 §2).
+//! The closed-loop experiment controller (ADR-309 §2).
 //!
 //! **SYNTHETIC / L0 model scaffold.** This is the *loop* ADR-280 deferred: it
 //! reads a modelled per-zone uncertainty and the last modelled response, and
 //! proposes the next controllable measurement configuration expected to reduce
 //! that uncertainty most. It is an information-driven **planning** policy — it
-//! shares the *notion* of expected gain with ADR-311 but defines its own
+//! shares the *notion* of expected gain with ADR-314 but defines its own
 //! control vocabulary and takes **no** dependency on `ruview-infogain`, so the
 //! two crates build in parallel.
 //!
@@ -14,7 +14,7 @@
 //! ADR-280 governed admission/actuation surface — a fielded caller submits each
 //! proposal through that fail-closed path.
 //!
-//! ## First-class UNKNOWN (ADR-297 rule 1)
+//! ## First-class UNKNOWN (ADR-300 rule 1)
 //!
 //! The last response is [`LastResponse::Unknown`] whenever the previous
 //! solicited measurement returned nothing interpretable. UNKNOWN is **not**
@@ -58,8 +58,8 @@ impl Uncertainty {
 /// The outcome of the previous solicited measurement for a zone.
 ///
 /// This reuses the canonical [`EvidenceLevel`] vocabulary rather than a
-/// per-crate grade (ADR-297 rule 3). A fielded caller derives it from the
-/// ADR-303 [`Observation`](ruview_ontology::Observation) the sounding produced.
+/// per-crate grade (ADR-300 rule 3). A fielded caller derives it from the
+/// ADR-306 [`Observation`](ruview_ontology::Observation) the sounding produced.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LastResponse {
@@ -82,14 +82,14 @@ pub enum LastResponse {
 /// to one closed-loop [`ClosedLoopController::step`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ZoneBelief {
-    /// The target zone (canonical ontology id, ADR-303).
+    /// The target zone (canonical ontology id, ADR-306).
     pub zone: ZoneId,
     /// Current modelled uncertainty about the zone.
     pub uncertainty: Uncertainty,
     /// The outcome of the previous solicited measurement.
     pub last_response: LastResponse,
     /// A deterministic loop counter used only to sweep channels across cycles.
-    /// Injected by the caller — never sampled from a clock (ADR-297 §rules).
+    /// Injected by the caller — never sampled from a clock (ADR-300 §rules).
     #[serde(default)]
     pub cycle: u64,
 }
@@ -126,7 +126,7 @@ pub enum ControlIntent {
 }
 
 /// Why the controller could not propose a controllable action and fell back to
-/// the passive planner (ADR-306 §2 degradation).
+/// the passive planner (ADR-309 §2 degradation).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PassiveReason {
@@ -222,7 +222,7 @@ pub struct ControllerConfig {
     pub explore_threshold: f64,
     /// Additive widening applied to the exploration level when the last
     /// response was [`LastResponse::Unknown`]. Bounded into `[0, 1]` after
-    /// application (ADR-297 rule 1: UNKNOWN widens rather than commits).
+    /// application (ADR-300 rule 1: UNKNOWN widens rather than commits).
     pub unknown_widen: f64,
 }
 
@@ -238,7 +238,7 @@ impl Default for ControllerConfig {
 /// The synthetic model version stamped onto every proposal's provenance.
 pub const MODEL_VERSION: &str = "ruview-active@synthetic-l0";
 
-/// The closed-loop RF experiment controller (ADR-306).
+/// The closed-loop RF experiment controller (ADR-309).
 ///
 /// Holds the controllable [`ControlCapability`] of the deployment and the
 /// policy [`ControllerConfig`]. [`ClosedLoopController::step`] is a total,

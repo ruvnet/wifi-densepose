@@ -1,4 +1,4 @@
-//! Deterministic tests (ADR-315 validation matrix): mint+verify, no-evidence =>
+//! Deterministic tests (ADR-318 validation matrix): mint+verify, no-evidence =>
 //! no certificate, evidence-level floor enforced, expiry, unsigned invalid,
 //! not-KNOWN domain invalidates, canonical-bytes determinism, serde round-trip,
 //! calibration-linked expiry ceiling, and context binding. No wall clock, no

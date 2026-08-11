@@ -1,4 +1,4 @@
-//! Boundary errors (ADR-309 / CLAUDE.md — validate untrusted input, never
+//! Boundary errors (ADR-312 / CLAUDE.md — validate untrusted input, never
 //! panic).
 //!
 //! Malformed input yields one of these typed errors; nothing here panics.

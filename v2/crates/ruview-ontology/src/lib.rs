@@ -1,4 +1,4 @@
-//! # `ruview-ontology` — the canonical spatial ontology (ADR-303, ADR-297 §6)
+//! # `ruview-ontology` — the canonical spatial ontology (ADR-306, ADR-300 §6)
 //!
 //! One `Site ▸ Building ▸ Floor ▸ Space ▸ Zone` containment model, plus the
 //! leaf entities `Sensor`, `Person`, `Object`, `Observation`, `Track`, and
@@ -9,7 +9,7 @@
 //!
 //! This crate is a **pure data / relationship representation**: no I/O, no
 //! async, no inference. It says nothing about *how* a `Track` or `Event` is
-//! produced (that is owned by ADR-298/ADR-304/ADR-299) and makes no accuracy
+//! produced (that is owned by ADR-301/ADR-307/ADR-302) and makes no accuracy
 //! claim. Identity is caller-supplied and deterministic — ids are never
 //! randomly generated here.
 //!
@@ -62,7 +62,7 @@
 //!
 //! ## Migration path from existing per-surface shapes (docs only)
 //!
-//! ADR-303 §3 requires a documented, tested bidirectional mapping from each
+//! ADR-306 §3 requires a documented, tested bidirectional mapping from each
 //! existing per-surface schema onto these canonical types. This crate does not
 //! edit those surfaces; the mappings below are the contract each surface's
 //! projection implements when it is cut over (one surface at a time). Until a
@@ -71,8 +71,8 @@
 //!
 //! | Legacy shape | Source | Canonical target |
 //! |---|---|---|
-//! | `NodeInference` | ADR-294 MQTT/HA mapper | `Sensor` + an `Observation` whose `sensor` is that node; node-vs-room separation is preserved because the observation is sensor-scoped, not space-scoped. |
-//! | `RoomInference` | ADR-294 MQTT/HA mapper | The `Space`-level fused inference: a `Person`/`Track` (or `Event`) whose `located_in` is `Container::Space`. `RoomInference.area_id` ↦ [`Space::area_id`]. |
+//! | `NodeInference` | ADR-297 MQTT/HA mapper | `Sensor` + an `Observation` whose `sensor` is that node; node-vs-room separation is preserved because the observation is sensor-scoped, not space-scoped. |
+//! | `RoomInference` | ADR-297 MQTT/HA mapper | The `Space`-level fused inference: a `Person`/`Track` (or `Event`) whose `located_in` is `Container::Space`. `RoomInference.area_id` ↦ [`Space::area_id`]. |
 //! | `WorldNode::Room { area_id, name, floor }` | `worldgraph` | [`Space`] (`area_id`, `name` retained; `floor` index ↦ the parent [`Floor::level`]). |
 //! | `WorldNode::Zone { parent_room }` | `worldgraph` | [`Zone`] (`parent_room` ↦ [`Zone::parent`]). |
 //! | `WorldNode::Sensor { device_id, modality }` | `worldgraph` | [`Sensor`] (`device_id` retained; placement ↦ its [`Container`]). |

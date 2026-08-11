@@ -1,9 +1,9 @@
 //! [`WorldGraph`] — the canonical registry that holds the containment hierarchy
-//! and resolves an entity's containing [`Space`]/[`Zone`] (ADR-303 §1).
+//! and resolves an entity's containing [`Space`]/[`Zone`] (ADR-306 §1).
 //!
 //! The registry is the sole insertion boundary: every `add_*` method rejects a
 //! duplicate id and a dangling parent/container, so the single-parent
-//! containment invariants of ADR-303 hold by construction. The graph is a pure
+//! containment invariants of ADR-306 hold by construction. The graph is a pure
 //! data structure — no I/O, no async, deterministic `BTreeMap` ordering for a
 //! stable canonical serialization.
 

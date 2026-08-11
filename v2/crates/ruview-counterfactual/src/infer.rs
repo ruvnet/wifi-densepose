@@ -1,15 +1,15 @@
-//! Counterfactual scoring and best-explanation selection (ADR-310 §2, §3).
+//! Counterfactual scoring and best-explanation selection (ADR-313 §2, §3).
 //!
 //! **SYNTHETIC / L0 — a research-forward generative-scoring scaffold, not a
 //! measurement system.** This module scores a small set of scene
 //! [`Hypothesis`](crate::Hypothesis) against an observed link-measurement set,
-//! using the ADR-312 [`RfTwin`] as the generative forward model. It is a
+//! using the ADR-315 [`RfTwin`] as the generative forward model. It is a
 //! *consumer* of the twin, not a second simulator: the twin supplies the
 //! baseline expected distribution per link (geometry + propagation), and this
 //! layer applies a **documented SYNTHETIC occupant-attenuation model** on top —
 //! a hypothesized occupant attenuates any link whose line of sight passes near
 //! it. Nothing here is a hardware, `MEASURED`, or accuracy claim; this crate
-//! asserts **no** discrimination-accuracy number (ADR-310 evidence discipline).
+//! asserts **no** discrimination-accuracy number (ADR-313 evidence discipline).
 //!
 //! ## Likelihood (documented SYNTHETIC)
 //!
@@ -22,13 +22,13 @@
 //! This is a deliberately simple, deterministic model — clearly a scaffold, not
 //! real RF.
 //!
-//! ## UNKNOWN is first-class (ADR-297 rule 1, ADR-310 §3)
+//! ## UNKNOWN is first-class (ADR-300 rule 1, ADR-313 §3)
 //!
 //! The layer never forces a label. It returns [`BestExplanation::Unknown`] when
 //! the top two hypotheses are near-indistinguishable (margin below threshold),
 //! when **no** hypothesis explains the observation well (best mean per-link
 //! log-likelihood below a floor — the observation is outside what the twin can
-//! account for, routed to the ADR-299 UNKNOWN verdict rather than a forced
+//! account for, routed to the ADR-302 UNKNOWN verdict rather than a forced
 //! occupancy label), when no hypotheses are supplied, or when no observed link
 //! is evaluable against the twin.
 
@@ -95,7 +95,7 @@ impl Default for OccupantModel {
 }
 
 /// Thresholds that route a scored hypothesis set to a best explanation or to a
-/// first-class UNKNOWN verdict (ADR-310 §3).
+/// first-class UNKNOWN verdict (ADR-313 §3).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ScoringConfig {
     /// Minimum log-likelihood-ratio margin (nats) between the top two
@@ -105,7 +105,7 @@ pub struct ScoringConfig {
     /// Minimum best *mean per-link* log-likelihood (nats) required for any
     /// hypothesis to count as explaining the observation; below this the
     /// observation is outside what the twin can account for and the result is
-    /// UNKNOWN (routed to the ADR-299 verdict). Must be finite.
+    /// UNKNOWN (routed to the ADR-302 verdict). Must be finite.
     pub min_mean_log_likelihood: f64,
 }
 
@@ -170,8 +170,8 @@ pub enum BestExplanation {
         /// Log-likelihood-ratio margin (nats) over the runner-up.
         margin: f64,
     },
-    /// No confident best explanation; carries a first-class reason (ADR-297
-    /// rule 1, ADR-310 §3).
+    /// No confident best explanation; carries a first-class reason (ADR-300
+    /// rule 1, ADR-313 §3).
     Unknown {
         /// Why the result is UNKNOWN.
         reason: UnknownReason,
@@ -197,7 +197,7 @@ pub enum UnknownReason {
     },
     /// No hypothesis explains the observation well: the best mean per-link
     /// log-likelihood fell below the configured floor. The observation is
-    /// outside what the twin can account for (routes to the ADR-299 verdict).
+    /// outside what the twin can account for (routes to the ADR-302 verdict).
     NoHypothesisExplains {
         /// The best hypothesis's mean per-link log-likelihood (nats).
         best_mean_log_likelihood: f64,
@@ -210,7 +210,7 @@ pub enum UnknownReason {
 ///
 /// **SYNTHETIC / L0.** Every score and the verdict are model-relative and
 /// inherit the twin's `L0` evidence level; nothing here is a camera-grade or
-/// `MEASURED` claim (CLAUDE.md honesty rule, ADR-310 evidence discipline).
+/// `MEASURED` claim (CLAUDE.md honesty rule, ADR-313 evidence discipline).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CounterfactualResult {
     /// Every hypothesis's score, ranked best-first: descending by
@@ -426,7 +426,7 @@ fn decide(ranked: &[HypothesisScore], config: &ScoringConfig) -> BestExplanation
         };
     };
 
-    // No hypothesis explains the observation well ⇒ ADR-299 UNKNOWN verdict.
+    // No hypothesis explains the observation well ⇒ ADR-302 UNKNOWN verdict.
     if mean_ll < config.min_mean_log_likelihood {
         return BestExplanation::Unknown {
             reason: UnknownReason::NoHypothesisExplains {

@@ -1,4 +1,4 @@
-//! ADR-292 — canonical source-provenance state machine.
+//! ADR-295 — canonical source-provenance state machine.
 //!
 //! Source state used to be a boolean (`live` vs. not), so any ambiguous
 //! condition — an unauthenticated status-endpoint error, a simulator that has
@@ -44,7 +44,7 @@ pub enum AuthStatus {
     Unknown,
 }
 
-/// Canonical, mutually-exclusive source state (ADR-292). There is intentionally
+/// Canonical, mutually-exclusive source state (ADR-295). There is intentionally
 /// no `Unknown` / `Live` boolean — every ambiguous input maps to one of these.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceState {
@@ -78,7 +78,7 @@ impl SourceState {
     ) -> SourceState {
         // A synthetic source is *always* synthetic. It can only become live by
         // being reconstructed as `SourceKind::Live` presenting a verified frame,
-        // never by a transition here (ADR-292, issue #1557).
+        // never by a transition here (ADR-295, issue #1557).
         if kind == SourceKind::Synthetic {
             return SourceState::Synthetic;
         }
@@ -108,7 +108,7 @@ impl SourceState {
     }
 
     /// True when this state must be watermarked as synthetic in every view and
-    /// export (ADR-292).
+    /// export (ADR-295).
     pub fn is_synthetic(self) -> bool {
         matches!(self, SourceState::Synthetic)
     }

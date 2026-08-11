@@ -1,4 +1,4 @@
-//! ADR-288 benchmarks: bfee parser throughput and split assignment over
+//! ADR-291 benchmarks: bfee parser throughput and split assignment over
 //! synthetic, code-generated corpora (no dataset files are read or written).
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};

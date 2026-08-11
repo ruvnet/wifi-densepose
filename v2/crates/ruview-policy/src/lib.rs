@@ -1,6 +1,6 @@
-//! # `ruview-policy` — action authorization gate (ADR-318, ADR-297 phase 1)
+//! # `ruview-policy` — action authorization gate (ADR-321, ADR-300 phase 1)
 //!
-//! A capability certificate (ADR-315) is a statement of *knowledge*, not a
+//! A capability certificate (ADR-318) is a statement of *knowledge*, not a
 //! *grant of action*. The same certificate that is adequate to dim a light is
 //! wholly inadequate to release a door lock. This crate is the authorization
 //! layer that sits between governed spatial state and any actuator: given the
@@ -8,7 +8,7 @@
 //! returns [`Authorization::Allow`] or a **fail-closed**
 //! [`Authorization::Deny`] that names the *specific* condition that failed.
 //!
-//! ## The four non-negotiable rules (ADR-297)
+//! ## The four non-negotiable rules (ADR-300)
 //!
 //! - **UNKNOWN is a first-class value, never an error.** An UNKNOWN domain
 //!   ([`DomainState::Unknown`]) does not raise — it *denies* high-assurance
@@ -17,7 +17,7 @@
 //!   [`Authorization::Allow`] *records* that it proceeded under UNKNOWN
 //!   (`under_unknown_domain`).
 //! - **Staleness guard `VALID → DEGRADED → UNKNOWN`.** A safety- or
-//!   security-class action requires the live domain signature (ADR-299) to be
+//!   security-class action requires the live domain signature (ADR-302) to be
 //!   `KNOWN`; a `DEGRADED` domain denies with [`FailedCondition::DomainDegraded`]
 //!   and an `UNKNOWN` domain denies with [`FailedCondition::DomainNotKnown`].
 //! - **Honesty / no silent optimism.** A missing or expired certificate, a
@@ -46,16 +46,16 @@
 //!   ([`FailedCondition::DomainNotKnown`]) rather than being hidden inside a
 //!   generic "certificate invalid".
 //! - `certificate_age` ← `now - content.calibrated_date_unix_s`, clamped at 0.
-//! - `certificate_class` ← the ADR-315 assurance tier the certificate was
+//! - `certificate_class` ← the ADR-318 assurance tier the certificate was
 //!   minted at (derived by the caller from the certificate's evidence floor and
 //!   validated capability); see [`CertificateClass`].
 //! - `domain_state` ← `ruview_ood::DomainState`: `Known → `[`DomainState::Known`],
 //!   `Degraded(_) → `[`DomainState::Degraded`], `Unknown(_) → `[`DomainState::Unknown`].
-//! - `uncertainty` ← the model head's live predictive uncertainty (ADR-299/301).
+//! - `uncertainty` ← the model head's live predictive uncertainty (ADR-302/301).
 //! - `evidence_level` ← the certificate's [`EvidenceLevel`] (ADR-282/301).
 //!
 //! Every allow or deny is intended to be emitted as the terminal stage of the
-//! witness chain (ADR-316); this crate returns the decision, the caller records
+//! witness chain (ADR-319); this crate returns the decision, the caller records
 //! it.
 
 #![forbid(unsafe_code)]
@@ -67,12 +67,12 @@ use serde::{Deserialize, Serialize};
 // Value types owned by this crate
 // ---------------------------------------------------------------------------
 
-/// The assurance tier a certificate was minted at (ADR-315). Ordering is
+/// The assurance tier a certificate was minted at (ADR-318). Ordering is
 /// meaningful and load-bearing: an action declares a
 /// [`AssuranceRequirements::min_certificate_class`] and a certificate at a
 /// class strictly below that floor is rejected. `Basic < Standard < High`.
 ///
-/// This is a policy-side ladder: the ADR-315 certificate binds a capability and
+/// This is a policy-side ladder: the ADR-318 certificate binds a capability and
 /// an evidence level, and the adapter (see crate docs) derives the class from
 /// them. Keeping the ladder local lets the policy crate build in parallel with
 /// the certificate crate.
@@ -88,7 +88,7 @@ pub enum CertificateClass {
     High,
 }
 
-/// Local, simplified mirror of the ADR-299 domain signature. The concrete
+/// Local, simplified mirror of the ADR-302 domain signature. The concrete
 /// `ruview_ood::DomainState` carries a `DomainCause`; this policy only needs
 /// the three-way outcome, so the cause is dropped at the adapter boundary (see
 /// crate docs). `Known` is the only state that satisfies a "requires known
@@ -96,11 +96,11 @@ pub enum CertificateClass {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum DomainState {
-    /// The live situation is recognized: inside the calibrated domain (ADR-299).
+    /// The live situation is recognized: inside the calibrated domain (ADR-302).
     Known,
     /// Drift/quality has crossed the inner envelope — degraded but not lost.
     Degraded,
-    /// The situation is not recognized (ADR-299). A first-class value, never an
+    /// The situation is not recognized (ADR-302). A first-class value, never an
     /// error; it *denies* high-assurance actions rather than guessing.
     Unknown,
 }
@@ -128,7 +128,7 @@ impl DomainState {
 /// keeps [`authorize`] a pure, clock-free function.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AssuranceInputs {
-    /// The certificate's assurance tier (ADR-315), derived by the adapter.
+    /// The certificate's assurance tier (ADR-318), derived by the adapter.
     pub certificate_class: CertificateClass,
     /// Whether the certificate is currently signed and unexpired (time +
     /// signature validity **only** — the domain gate is applied separately).
@@ -137,7 +137,7 @@ pub struct AssuranceInputs {
     pub certificate_valid: bool,
     /// Age of the certificate's calibration, in seconds (`now - calibrated_date`).
     pub certificate_age_secs: u64,
-    /// The live domain signature (ADR-299), reduced to three states.
+    /// The live domain signature (ADR-302), reduced to three states.
     pub domain_state: DomainState,
     /// The model head's live predictive uncertainty, in `[0.0, 1.0]`. A `NaN`
     /// or out-of-range value is treated as over any ceiling (fail-closed).
@@ -146,7 +146,7 @@ pub struct AssuranceInputs {
     pub evidence_level: EvidenceLevel,
 }
 
-/// The assurance an [`ActionClass`] demands (ADR-318 §1). Every field is a
+/// The assurance an [`ActionClass`] demands (ADR-321 §1). Every field is a
 /// gate; an input that fails any one denies.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AssuranceRequirements {
@@ -164,7 +164,7 @@ pub struct AssuranceRequirements {
     pub requires_domain_known: bool,
 }
 
-/// The class of action being authorized (ADR-318 §1). Each class declares the
+/// The class of action being authorized (ADR-321 §1). Each class declares the
 /// assurance it demands via [`ActionClass::requirements`]. The classes are
 /// reference defaults — illustrative and, in a fuller system, configurable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -188,7 +188,7 @@ const ONE_WEEK_SECS: u64 = 7 * ONE_DAY_SECS;
 const THIRTY_DAYS_SECS: u64 = 30 * ONE_DAY_SECS;
 
 impl ActionClass {
-    /// The reference assurance requirements for this class (ADR-318 §1 table).
+    /// The reference assurance requirements for this class (ADR-321 §1 table).
     #[must_use]
     pub const fn requirements(self) -> AssuranceRequirements {
         match self {
@@ -224,7 +224,7 @@ impl ActionClass {
 #[serde(rename_all = "snake_case")]
 pub enum FailedCondition {
     /// No policy was supplied for the action — an unrecognized action class.
-    /// Absence of a policy is not permission (ADR-318 §3).
+    /// Absence of a policy is not permission (ADR-321 §3).
     NoPolicy,
     /// The certificate is missing or expired (`certificate_valid == false`).
     CertificateInvalid,
@@ -245,7 +245,7 @@ pub enum FailedCondition {
     /// The action requires a known domain and the live domain is `DEGRADED`.
     DomainDegraded,
     /// The action requires a known domain and the live domain is `UNKNOWN`
-    /// (ADR-297 acceptance test: drift-invalidated capability denied at the
+    /// (ADR-300 acceptance test: drift-invalidated capability denied at the
     /// actuator). This is the canonical `domain_not_known` failure.
     DomainNotKnown,
     /// Inference uncertainty exceeds the ceiling (a `NaN` lands here too).
@@ -283,7 +283,7 @@ impl FailedCondition {
     }
 }
 
-/// The authorization decision (ADR-318 §2). Fail-closed: anything that is not an
+/// The authorization decision (ADR-321 §2). Fail-closed: anything that is not an
 /// [`Authorization::Allow`] is a deny that names its condition.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -324,7 +324,7 @@ impl Authorization {
 // The decision
 // ---------------------------------------------------------------------------
 
-/// Authorize an action of `class` against the live `inputs` (ADR-318 §2).
+/// Authorize an action of `class` against the live `inputs` (ADR-321 §2).
 ///
 /// A **pure**, fail-closed function of `(class, inputs)`: deterministic, no
 /// clock, no randomness, no panics. It applies the class's reference
@@ -338,7 +338,7 @@ pub fn authorize(class: ActionClass, inputs: &AssuranceInputs) -> Authorization 
 /// Authorize against an explicit, optional policy. `None` means *no policy was
 /// found for this action* — an unrecognized action class — and denies with
 /// [`FailedCondition::NoPolicy`] (absence of a policy is not permission,
-/// ADR-318 §3).
+/// ADR-321 §3).
 ///
 /// Evaluation order (the first unmet condition is the one named):
 /// 1. policy present,
@@ -603,7 +603,7 @@ mod tests {
         );
     }
 
-    /// ADR-297 / ADR-318 acceptance-test B: a post-drift UNKNOWN domain causes a
+    /// ADR-300 / ADR-321 acceptance-test B: a post-drift UNKNOWN domain causes a
     /// `SafetyCritical` authorize() to Deny with `domain_not_known`, *before*
     /// the inference reaches the actuator. The certificate is otherwise valid
     /// (signed, unexpired, correct class, fresh) — the domain gate is what
@@ -614,7 +614,7 @@ mod tests {
         let mut inputs = passing(ActionClass::SafetyCritical);
         assert!(authorize(ActionClass::SafetyCritical, &inputs).is_allowed());
 
-        // Drift drives the domain to UNKNOWN (ADR-299 VALID→DEGRADED→UNKNOWN).
+        // Drift drives the domain to UNKNOWN (ADR-302 VALID→DEGRADED→UNKNOWN).
         inputs.domain_state = DomainState::Unknown;
         let decision = authorize(ActionClass::SafetyCritical, &inputs);
 

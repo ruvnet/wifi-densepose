@@ -1,6 +1,6 @@
-//! Modality-agnostic measurands and readings (ADR-300 §1).
+//! Modality-agnostic measurands and readings (ADR-303 §1).
 //!
-//! ADR-290 built ground truth for a single measurand family (heart rate,
+//! ADR-293 built ground truth for a single measurand family (heart rate,
 //! breathing rate). This module generalizes the *value* being compared to any
 //! phenomenon RuView senses — continuous scalars (vitals, count, range) and
 //! categorical labels (presence, activity, posture) — so the same alignment
@@ -19,9 +19,9 @@ pub enum ReadingKind {
 }
 
 /// A phenomenon compared against an independent reference. This is the
-/// modality-agnostic generalization of ADR-290's per-device measurand: the set
+/// modality-agnostic generalization of ADR-293's per-device measurand: the set
 /// is deliberately small and closed so the agreement math per family stays
-/// honest (pose keypoint PCK, which needs the ADR-288 mean-pose baseline and a
+/// honest (pose keypoint PCK, which needs the ADR-291 mean-pose baseline and a
 /// leakage-free split, is intentionally out of scope for this crate).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -118,7 +118,7 @@ impl Reading {
 /// Whether the compared data is real inference/measurement or a generated
 /// (SYNTHETIC/L0) fixture. This is what forces an [`crate::EvidenceGrade`] to
 /// `Synthetic`; it is never inferred, it is declared by the producer (mirrors
-/// ADR-301's synthetic-is-L0-by-construction rule).
+/// ADR-304's synthetic-is-L0-by-construction rule).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DataProvenance {

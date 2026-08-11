@@ -1,17 +1,17 @@
-//! Twin model, geometry, and construction (ADR-312 §1).
+//! Twin model, geometry, and construction (ADR-315 §1).
 //!
 //! **SYNTHETIC / L0.** Every structure here is part of a *simulation scaffold*.
 //! A [`RfTwin`] is a persistent, per-deployment *model* of an RF environment; it
 //! **predicts** an expected observable, it does not **measure** one. No value it
 //! holds or produces is a hardware, `MEASURED`, or accuracy claim (ADR-282 L0,
-//! ADR-297 evidence discipline). Coordinates are a coarse metric abstraction,
+//! ADR-300 evidence discipline). Coordinates are a coarse metric abstraction,
 //! and the propagation model in [`crate::predict`] is a deliberately simple
 //! log-distance model, not real RF.
 //!
 //! Geometry and radio identity are *referenced* from the canonical
 //! [`ruview_ontology`] vocabulary ([`SpaceId`], [`SensorId`], [`Container`],
 //! [`SemanticProvenance`], [`EvidenceLevel`]) rather than reinvented — the twin
-//! annotates the ADR-303 scene with RF state (ADR-312 "annotates and persists").
+//! annotates the ADR-306 scene with RF state (ADR-315 "annotates and persists").
 
 use std::collections::BTreeMap;
 
@@ -71,7 +71,7 @@ impl Point3 {
 
 /// A wall or static reflector, modelled (SYNTHETIC) as a floor-plan segment that
 /// adds a fixed attenuation to any link whose straight path crosses it. This is
-/// a coarse stand-in for the worldgraph `Wall { rf_attenuation_db }` (ADR-303),
+/// a coarse stand-in for the worldgraph `Wall { rf_attenuation_db }` (ADR-306),
 /// not a solved electromagnetic obstacle.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Wall {
@@ -101,7 +101,7 @@ impl Wall {
 /// references, not new vocabulary.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RadioNode {
-    /// Ontology sensor identity (ADR-302 authenticated device / ADR-303 sensor).
+    /// Ontology sensor identity (ADR-305 authenticated device / ADR-306 sensor).
     pub id: SensorId,
     /// Metric position in the deployment frame.
     pub position: Point3,
@@ -111,7 +111,7 @@ pub struct RadioNode {
     pub tx_power_dbm: f64,
 }
 
-/// Parameters of the SYNTHETIC log-distance path-loss model (ADR-312 §1). These
+/// Parameters of the SYNTHETIC log-distance path-loss model (ADR-315 §1). These
 /// describe a simple didactic propagation model, **not** a calibrated RF fit.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PropagationParams {
@@ -197,7 +197,7 @@ impl LinkId {
 
 /// Recorded multipath / calibration state for one link: an extra variance
 /// (dB²) folded into that link's expected distribution. A bounded temporal
-/// summary in ADR-312 terms; here a single non-negative scalar.
+/// summary in ADR-315 terms; here a single non-negative scalar.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MultipathRecord {
     /// The link this record applies to.
@@ -206,12 +206,12 @@ pub struct MultipathRecord {
     pub extra_variance_db2: f64,
 }
 
-/// Reason a twin version was advanced (ADR-312 §2 versioning). Kept for audit;
+/// Reason a twin version was advanced (ADR-315 §2 versioning). Kept for audit;
 /// the twin is always relative to a *named* baseline version.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VersionEvent {
-    /// A calibration event under ADR-298 advanced the baseline.
+    /// A calibration event under ADR-301 advanced the baseline.
     Calibration,
     /// A deliberate geometry edit advanced the baseline.
     GeometryEdit,
@@ -236,13 +236,13 @@ pub struct DeploymentDescription {
     /// Recorded per-link multipath / calibration variance state.
     #[serde(default)]
     pub multipath: Vec<MultipathRecord>,
-    /// Referenced calibration baseline (ADR-298), as a version handle only.
+    /// Referenced calibration baseline (ADR-301), as a version handle only.
     pub calibration_version: String,
     /// Explicit seed identifying the synthetic scene. Deterministic.
     pub seed: u64,
 }
 
-/// A persistent, versioned, per-deployment RF *model* (ADR-312).
+/// A persistent, versioned, per-deployment RF *model* (ADR-315).
 ///
 /// **SYNTHETIC / L0.** The twin's expected distributions and any propagation
 /// simulation are a model (ADR-282 L0), never evidence that a physical state is
@@ -263,9 +263,9 @@ pub struct RfTwin {
     pub params: PropagationParams,
     /// Recorded per-link multipath / calibration variance state.
     pub multipath: Vec<MultipathRecord>,
-    /// Referenced calibration baseline handle (ADR-298).
+    /// Referenced calibration baseline handle (ADR-301).
     pub calibration_version: String,
-    /// Provenance travelling with the twin (ADR-303 §2).
+    /// Provenance travelling with the twin (ADR-306 §2).
     pub provenance: SemanticProvenance,
     /// Evidence level of everything the twin asserts. Always `L0` (SYNTHETIC):
     /// a twin predicts, it does not measure.
@@ -378,7 +378,7 @@ impl RfTwin {
     }
 
     /// Advance the baseline version on an auditable event and return the new
-    /// version. History semantics (ADR-309) live outside this crate; here we
+    /// version. History semantics (ADR-312) live outside this crate; here we
     /// simply move the named baseline forward.
     pub fn advance_version(&mut self, _event: VersionEvent) -> u64 {
         self.version = self.version.saturating_add(1);

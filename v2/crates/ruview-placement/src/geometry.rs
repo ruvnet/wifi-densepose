@@ -1,12 +1,12 @@
-//! Coarse 2D floor-plan geometry the optimizer plans over (ADR-305 §1).
+//! Coarse 2D floor-plan geometry the optimizer plans over (ADR-308 §1).
 //!
-//! **SYNTHETIC / L0.** This is a deliberately coarse stand-in for the ADR-303
+//! **SYNTHETIC / L0.** This is a deliberately coarse stand-in for the ADR-306
 //! scene: axis-aligned rectangular [`Rect`] bounds for a [`Space`](ruview_ontology::Space)
 //! and its [`Zone`](ruview_ontology::Zone)s, plus attenuating [`Wall`] segments
 //! (reused from the twin). It is a *model* of a room, never a surveyed floor
 //! plan, and it makes no measurement or accuracy claim. Geometry references the
 //! canonical ontology vocabulary ([`SpaceId`], [`ZoneId`], [`Container`]); it
-//! does not invent a second identity scheme (ADR-297 rule 3).
+//! does not invent a second identity scheme (ADR-300 rule 3).
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -77,7 +77,7 @@ impl Rect {
 /// A zone footprint within a floor plan's space.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ZoneGeometry {
-    /// Ontology zone id (ADR-303).
+    /// Ontology zone id (ADR-306).
     pub id: ZoneId,
     /// The zone's rectangular footprint.
     pub bounds: Rect,
@@ -133,7 +133,7 @@ impl FloorPlan {
 
     /// Resolve the rectangular region a [`Container`] targets, if present in this
     /// plan. A first-class `None` (never an error) when the target is not in the
-    /// plan (ADR-297 rule 1 — the caller surfaces it as UNKNOWN).
+    /// plan (ADR-300 rule 1 — the caller surfaces it as UNKNOWN).
     #[must_use]
     pub fn region_for(&self, target: &Container) -> Option<Rect> {
         match target {

@@ -1,4 +1,4 @@
-//! The forward model: expected distribution per link (ADR-312 §1).
+//! The forward model: expected distribution per link (ADR-315 §1).
 //!
 //! **SYNTHETIC / L0.** This module is a *simulation* of an observable, not a
 //! measurement. It implements a deliberately simple, documented log-distance
@@ -6,7 +6,7 @@
 //! not real RF. Nothing here is a hardware, `MEASURED`, or accuracy claim.
 //!
 //! An [`ExpectedDistribution`] is the mean/variance of a modelled observable
-//! under the twin. Consistent with ADR-297 rule 1, insufficient information is
+//! under the twin. Consistent with ADR-300 rule 1, insufficient information is
 //! reported as [`ExpectedDistribution::Unknown`] — a first-class value, never an
 //! error or a confident default.
 
@@ -24,7 +24,7 @@ pub enum Observable {
 }
 
 /// Why a link's expected distribution is unknown. UNKNOWN is a first-class
-/// output (ADR-297 rule 1), not an error.
+/// output (ADR-300 rule 1), not an error.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnknownReason {

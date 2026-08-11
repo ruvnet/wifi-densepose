@@ -25,7 +25,7 @@ mqtt = ["std", "dep:rumqttc"]
 # enables privacy_class = 1 (derived) mode and the SoulMatchOracle gate
 # exemption. Disabled by default per the structural class-2 default.
 soul-signature = []
-# WiFi Veil advisory integration (ADR-291): deterministic attacker-vs-
+# WiFi Veil advisory integration (ADR-294): deterministic attacker-vs-
 # protector assessment of BFI identity leakage and emission-shaping shield
 # configs. All numbers it produces are SYNTHETIC / L0 by construction.
 veil = ["std", "dep:wifi-veil"]

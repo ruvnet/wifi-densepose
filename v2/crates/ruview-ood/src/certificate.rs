@@ -1,13 +1,13 @@
-//! Cross-ADR adapter: turn an ADR-298 [`CalibrationCertificate`] plus a live
+//! Cross-ADR adapter: turn an ADR-301 [`CalibrationCertificate`] plus a live
 //! fingerprint into the two OOD inputs it governs — the [`FingerprintDistance`]
-//! and the [`CalibrationCompat`] (ADR-299 §1 inputs 1 and 3).
+//! and the [`CalibrationCompat`] (ADR-302 §1 inputs 1 and 3).
 //!
 //! This is the point where certificate *staleness* becomes a domain signal:
 //! an expired, tampered, drifted, or identity-mismatched certificate maps to a
 //! non-`Valid` compatibility, which the state machine drives straight to
-//! UNKNOWN (ADR-297 staleness guard). Absence of a certificate is handled by
+//! UNKNOWN (ADR-300 staleness guard). Absence of a certificate is handled by
 //! [`no_certificate`] and likewise defaults to UNKNOWN — absence of evidence is
-//! absence of capability (ADR-299 §3).
+//! absence of capability (ADR-302 §3).
 
 use wifi_densepose_calibration::certificate::{
     CalibrationCertificate, CertificateStatus, CertificateVerifier, FingerprintDistance, RoomFingerprint,
@@ -16,7 +16,7 @@ use wifi_densepose_calibration::certificate::{
 use crate::domain::CalibrationCompat;
 
 /// Identity the live inference expects the certificate to attest: which space
-/// (ADR-303) and which signed device (ADR-302). Validated before the
+/// (ADR-306) and which signed device (ADR-305). Validated before the
 /// certificate's own status, so a certificate for the wrong room/device can
 /// never present as compatible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,7 +35,7 @@ pub struct ExpectedIdentity<'a> {
 /// certificate-fingerprint-vs-live distance, computed even for a stale/tampered
 /// certificate so the drift is still reported.
 ///
-/// Precedence mirrors ADR-298 `status()` but adds the identity checks first:
+/// Precedence mirrors ADR-301 `status()` but adds the identity checks first:
 /// space mismatch → device mismatch → tampered → expired → drifted → valid.
 pub fn assess_certificate<V: CertificateVerifier>(
     cert: &CalibrationCertificate,
@@ -46,7 +46,7 @@ pub fn assess_certificate<V: CertificateVerifier>(
 ) -> (FingerprintDistance, CalibrationCompat) {
     let distance = cert.fingerprint.distance(live);
 
-    // Identity binding first (ADR-302/303): a certificate for the wrong
+    // Identity binding first (ADR-305/303): a certificate for the wrong
     // space/device is incompatible regardless of its own validity.
     if cert.space_id != expected.space_id {
         return (distance, CalibrationCompat::SpaceMismatch);
@@ -65,7 +65,7 @@ pub fn assess_certificate<V: CertificateVerifier>(
 }
 
 /// The compatibility for a space/device with **no** certificate present. Always
-/// [`CalibrationCompat::Absent`], which the gate treats as UNKNOWN (ADR-299 §3:
+/// [`CalibrationCompat::Absent`], which the gate treats as UNKNOWN (ADR-302 §3:
 /// the default state without a valid certificate is UNKNOWN, not KNOWN).
 pub fn no_certificate() -> CalibrationCompat {
     CalibrationCompat::Absent

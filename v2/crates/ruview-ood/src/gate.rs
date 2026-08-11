@@ -1,18 +1,18 @@
-//! The inference gate (ADR-299 §2, ADR-297 rule 1).
+//! The inference gate (ADR-302 §2, ADR-300 rule 1).
 //!
 //! Every inference passes through the gate. It:
 //!
 //! 1. classifies the domain from distance + envelope + signal quality +
 //!    calibration compatibility;
-//! 2. attaches the model's own predictive **uncertainty** (the fourth ADR-299
+//! 2. attaches the model's own predictive **uncertainty** (the fourth ADR-302
 //!    input), escalating a KNOWN domain to DEGRADED when uncertainty is
 //!    elevated;
 //! 3. **suppresses the confident class** when the domain is not KNOWN — an
 //!    UNKNOWN domain returns no class, a first-class value rather than a
-//!    confidently-wrong label (ADR-297 rule 1);
+//!    confidently-wrong label (ADR-300 rule 1);
 //! 4. emits a [`RecalibrationRequest`] whenever the state is DEGRADED or
 //!    UNKNOWN — a *signal*, never an action; recalibration itself is out of
-//!    scope for this crate (ADR-297 staleness guard).
+//!    scope for this crate (ADR-300 staleness guard).
 
 use serde::{Deserialize, Serialize};
 use wifi_densepose_calibration::certificate::{CompatibilityEnvelope, FingerprintDistance};
@@ -54,9 +54,9 @@ pub enum RecalibrationUrgency {
     Required,
 }
 
-/// A signal that recalibration should be triggered (ADR-299 §2 / ADR-297
+/// A signal that recalibration should be triggered (ADR-302 §2 / ADR-300
 /// staleness guard). This crate **emits** the request; it never performs
-/// recalibration (that is ADR-298's job). Carries the triggering cause so the
+/// recalibration (that is ADR-301's job). Carries the triggering cause so the
 /// caller can route it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecalibrationRequest {
@@ -68,22 +68,22 @@ pub struct RecalibrationRequest {
 
 /// The fully-contextualized result of gating one inference. Carries the domain
 /// state, all four input measurements, and either a (flagged) class or none —
-/// so downstream consumers (ADR-301 evidence engine) get the whole decision,
+/// so downstream consumers (ADR-304 evidence engine) get the whole decision,
 /// never a bare label.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GatedInference<C> {
     /// The domain state (KNOWN / DEGRADED / UNKNOWN + cause).
     pub state: DomainState,
-    /// Live-vs-certified domain distance (ADR-299 input 1).
+    /// Live-vs-certified domain distance (ADR-302 input 1).
     pub distance: FingerprintDistance,
-    /// Signal quality (ADR-299 input 2).
+    /// Signal quality (ADR-302 input 2).
     pub signal_quality: SignalQuality,
-    /// Calibration compatibility (ADR-299 input 3).
+    /// Calibration compatibility (ADR-302 input 3).
     pub calibration_compat: CalibrationCompat,
-    /// Model predictive uncertainty, sanitized to `[0, 1]` (ADR-299 input 4).
+    /// Model predictive uncertainty, sanitized to `[0, 1]` (ADR-302 input 4).
     pub uncertainty: f32,
     /// The returned class. `None` in UNKNOWN — the confident label is
-    /// suppressed (ADR-297 rule 1). `Some` in KNOWN and DEGRADED (flagged).
+    /// suppressed (ADR-300 rule 1). `Some` in KNOWN and DEGRADED (flagged).
     pub class: Option<C>,
     /// Sanitized confidence, present iff a class is returned.
     pub confidence: Option<f32>,
@@ -98,12 +98,12 @@ impl<C> GatedInference<C> {
     }
 }
 
-/// The shared OOD gate every inference routes through (ADR-299 §2).
+/// The shared OOD gate every inference routes through (ADR-302 §2).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InferenceGate {
     thresholds: DomainThresholds,
     /// Max uncertainty tolerated while KNOWN; above it, a KNOWN domain is
-    /// escalated to DEGRADED (the fourth ADR-299 input acting on the state).
+    /// escalated to DEGRADED (the fourth ADR-302 input acting on the state).
     max_uncertainty_known: f32,
 }
 
@@ -126,7 +126,7 @@ impl InferenceGate {
         })
     }
 
-    /// The thresholds in effect (reported with each decision per ADR-299 §2).
+    /// The thresholds in effect (reported with each decision per ADR-302 §2).
     pub fn thresholds(&self) -> DomainThresholds {
         self.thresholds
     }
@@ -171,7 +171,7 @@ impl InferenceGate {
                     urgency: RecalibrationUrgency::Recommended,
                 }),
             ),
-            // ADR-297 rule 1: no confident class in UNKNOWN. The class is
+            // ADR-300 rule 1: no confident class in UNKNOWN. The class is
             // dropped, not returned with lowered confidence.
             DomainState::Unknown(reason) => (
                 None,

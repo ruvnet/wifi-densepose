@@ -1,7 +1,7 @@
-//! Coarse, non-reversible appearance features (ADR-304 §3, privacy boundary).
+//! Coarse, non-reversible appearance features (ADR-307 §3, privacy boundary).
 //!
 //! A [`CoarseFeature`] is the appearance channel used for short-horizon track
-//! continuity (the ADR-303/ADR-304 `CsiFingerprint` analogue). Its type is the
+//! continuity (the ADR-306/ADR-307 `CsiFingerprint` analogue). Its type is the
 //! privacy enforcement point:
 //!
 //! - **Coarse.** Raw values are quantized into a handful of buckets

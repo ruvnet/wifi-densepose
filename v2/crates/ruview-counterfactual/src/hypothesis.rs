@@ -1,14 +1,14 @@
-//! Scene hypotheses over the canonical ontology (ADR-310 §1).
+//! Scene hypotheses over the canonical ontology (ADR-313 §1).
 //!
 //! **SYNTHETIC / L0 — a research-forward model scaffold, not a measurement
 //! system.** A [`Hypothesis`] is a *hypothesized* scene state — an occupant
-//! count and their coarse positions — expressed over the ADR-303 canonical
+//! count and their coarse positions — expressed over the ADR-306 canonical
 //! [`SpaceId`] so a counterfactual result is a governed spatial statement, not
 //! an opaque score. Nothing here is a hardware, `MEASURED`, or accuracy claim,
-//! and this crate asserts **no** discrimination-accuracy number (ADR-310
+//! and this crate asserts **no** discrimination-accuracy number (ADR-313
 //! evidence discipline).
 //!
-//! Hypotheses are drawn from (and score *relative to*) the ADR-308 fused world
+//! Hypotheses are drawn from (and score *relative to*) the ADR-311 fused world
 //! state and its neighbourhood: the current estimate, the **null hypothesis**
 //! (nobody present, [`Hypothesis::empty`]), and a bounded set of nearby
 //! alternatives (±1 occupant, shifted position). Positions are a coarse metric

@@ -1,11 +1,11 @@
 //! Configuration, the per-zone learned baseline, and the live observation
-//! snapshot (ADR-309 §1–§2 — what "normal" is learned over, on the RuVector
+//! snapshot (ADR-312 §1–§2 — what "normal" is learned over, on the RuVector
 //! temporal substrate; here a bounded in-memory scaffold).
 //!
 //! **SYNTHETIC / L0.** Every structure here is part of a simulation scaffold. A
 //! [`ZoneBaseline`] is a *learned model* of a location's normal physics; it
 //! predicts what is normal, it never measures. No value it holds is a hardware,
-//! `MEASURED`, or accuracy claim (ADR-282, ADR-297).
+//! `MEASURED`, or accuracy claim (ADR-282, ADR-300).
 
 use std::collections::BTreeMap;
 
@@ -17,7 +17,7 @@ use ruview_twin::{LinkId, ObservationSet};
 use crate::error::MemoryError;
 use crate::stat::RunningStat;
 
-/// Hours in the occupancy-by-hour periodicity model (ADR-309 §1).
+/// Hours in the occupancy-by-hour periodicity model (ADR-312 §1).
 pub const HOURS_PER_DAY: usize = 24;
 
 /// Upper bound on distinct zones a memory holds. Bounds allocation on untrusted
@@ -44,11 +44,11 @@ pub struct MemoryConfig {
     pub forgetting_factor: f64,
     /// Minimum updates a channel needs before it is scored; below this the
     /// channel is [`Assessment::Unknown`](crate::Assessment::Unknown) — never a
-    /// false positive on thin history (ADR-297 rule 1).
+    /// false positive on thin history (ADR-300 rule 1).
     pub min_history: u32,
     /// Significance gate (standard deviations). A channel whose deviation meets
     /// or exceeds this is flagged. Not a calibrated false-alarm rate — a model
-    /// gate (cf. ADR-312 `DEFAULT_SIGNIFICANCE_THRESHOLD`).
+    /// gate (cf. ADR-315 `DEFAULT_SIGNIFICANCE_THRESHOLD`).
     pub significance_threshold: f64,
     /// Standard-deviation floor for the occupancy model, so an always-empty hour
     /// (zero variance) yields finite significance rather than a divide-by-zero.
@@ -223,7 +223,7 @@ impl ZoneObservation {
     }
 }
 
-/// The learned normal physics of one zone (ADR-309 §1): occupancy periodicity,
+/// The learned normal physics of one zone (ADR-312 §1): occupancy periodicity,
 /// per-link RF propagation, and coarse per-modality signatures.
 ///
 /// **SYNTHETIC / L0.** A learned model of normality, never a measurement.

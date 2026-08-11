@@ -1,4 +1,4 @@
-//! Benchmark for ground-truth time alignment (ADR-290).
+//! Benchmark for ground-truth time alignment (ADR-293).
 //!
 //! Aligns an hour-scale synthetic session (3600 s) against a reference
 //! series with a known 12 s clock offset, over the default ±30 s lag

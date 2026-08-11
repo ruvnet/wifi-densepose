@@ -151,7 +151,7 @@ function init() {
   if (wsUrlInput) wsUrlInput.value = defaultWsUrl;
   // ADR-272: exchange the stored bearer for a single-use ?ticket= before the
   // upgrade — a browser cannot set an Authorization header on a WebSocket.
-  // ADR-292 (issue #1557): opening the socket does NOT mean live — the
+  // ADR-295 (issue #1557): opening the socket does NOT mean live — the
   // simulator keeps producing watermarked SYNTHETIC data until a real CSI frame
   // is decoded. Only the verified-frame callback promotes the label to LIVE.
   csiSimulator.onVerifiedFrame = () => {

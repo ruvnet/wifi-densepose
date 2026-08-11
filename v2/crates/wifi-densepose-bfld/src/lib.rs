@@ -53,7 +53,7 @@ pub mod signature_hasher;
 pub mod sink;
 pub mod soul_channels;
 pub mod soul_match;
-/// WiFi Veil advisory integration (ADR-291). Feature-gated: `veil`.
+/// WiFi Veil advisory integration (ADR-294). Feature-gated: `veil`.
 #[cfg(feature = "veil")]
 pub mod veil;
 

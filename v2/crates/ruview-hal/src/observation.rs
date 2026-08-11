@@ -1,8 +1,8 @@
-//! The HAL observation (ADR-317 §2): a canonical observation plus HAL context.
+//! The HAL observation (ADR-320 §2): a canonical observation plus HAL context.
 //!
 //! [`HalObservation`] wraps the canonical ontology
 //! [`Observation`](ruview_ontology::Observation) — reusing it rather than
-//! reinventing a per-crate shape (ADR-297 rule 3) — and adds the two pieces the
+//! reinventing a per-crate shape (ADR-300 rule 3) — and adds the two pieces the
 //! HAL boundary contributes: the [`Modality`] the measurement came through and
 //! a per-observation [`Uncertainty`]. The ontology `Observation` already
 //! carries the mandatory `EvidenceLevel` and `SemanticProvenance`, so those
@@ -17,7 +17,7 @@ use crate::modality::Modality;
 
 /// A confidence value that is either a bounded scalar or first-class UNKNOWN.
 ///
-/// UNKNOWN is a value, never an error (ADR-297 rule 1): a source that cannot
+/// UNKNOWN is a value, never an error (ADR-300 rule 1): a source that cannot
 /// quantify its confidence says so and stays legible rather than defaulting to
 /// a confident number.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

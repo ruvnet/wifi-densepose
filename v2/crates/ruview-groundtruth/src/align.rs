@@ -1,4 +1,4 @@
-//! Deterministic time alignment (ADR-300 §2, generalizing ADR-290).
+//! Deterministic time alignment (ADR-303 §2, generalizing ADR-293).
 //!
 //! Estimate and reference series rarely share a clock. This module recovers a
 //! **constant offset** by resampling both series onto a common grid
@@ -37,7 +37,7 @@ pub struct AlignmentConfig {
 }
 
 impl Default for AlignmentConfig {
-    /// ADR-290 defaults: 1 s grid, ±30 s lag window, 2 s max gap.
+    /// ADR-293 defaults: 1 s grid, ±30 s lag window, 2 s max gap.
     fn default() -> Self {
         Self {
             grid_ms: 1_000,

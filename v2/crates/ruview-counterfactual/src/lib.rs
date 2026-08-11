@@ -1,4 +1,4 @@
-//! # `ruview-counterfactual` — counterfactual spatial inference (ADR-310, ADR-297 phase 3)
+//! # `ruview-counterfactual` — counterfactual spatial inference (ADR-313, ADR-300 phase 3)
 //!
 //! **SYNTHETIC / L0 — a research-forward generative-scoring scaffold, not a
 //! measurement system.**
@@ -9,22 +9,22 @@
 //! better explained by absence"* or *"one occupant explains this better than
 //! two,"* because it has no model of what a measurement *should* look like under
 //! a hypothesized world state. This layer supplies that missing piece: given an
-//! observed link-measurement set and the ADR-312 digital RF twin as the
+//! observed link-measurement set and the ADR-315 digital RF twin as the
 //! generative forward model, it scores a small set of scene
 //! [`Hypothesis`](Hypothesis) — including the **null hypothesis** (nobody
 //! present) — and returns the maximum-likelihood explanation with a **margin**,
 //! or a first-class `UNKNOWN` when the hypotheses are near-indistinguishable.
 //!
-//! It is a **consumer** of the twin, never a second simulator (ADR-310 option 3,
-//! rejecting option 2): the ADR-312 twin supplies each link's baseline expected
+//! It is a **consumer** of the twin, never a second simulator (ADR-313 option 3,
+//! rejecting option 2): the ADR-315 twin supplies each link's baseline expected
 //! distribution (geometry + propagation), and this layer applies a **documented
 //! SYNTHETIC occupant-attenuation model** — a hypothesized occupant attenuates
 //! any link whose line of sight passes near it. Hypotheses are drawn from the
-//! ADR-308 fused world state and its neighbourhood and are expressed over the
-//! canonical ADR-303 [`SpaceId`](ruview_ontology::SpaceId), so a counterfactual
-//! result is a governed spatial statement, not an opaque score (ADR-297 rule 3).
+//! ADR-311 fused world state and its neighbourhood and are expressed over the
+//! canonical ADR-306 [`SpaceId`](ruview_ontology::SpaceId), so a counterfactual
+//! result is a governed spatial statement, not an opaque score (ADR-300 rule 3).
 //!
-//! ## Honesty and evidence discipline (CLAUDE.md, ADR-310)
+//! ## Honesty and evidence discipline (CLAUDE.md, ADR-313)
 //!
 //! Every likelihood is a **model-relative** score under a twin whose
 //! distributions are a simulation at evidence level `L0`, labelled `SYNTHETIC`.
@@ -36,13 +36,13 @@
 //! require the mean-pose-style baseline discipline, a leakage-free held-out
 //! split, and a reproducer before it could be tagged `MEASURED`.
 //!
-//! ## UNKNOWN is a first-class output (ADR-297 rule 1, ADR-310 §3)
+//! ## UNKNOWN is a first-class output (ADR-300 rule 1, ADR-313 §3)
 //!
 //! The layer never forces a label. The best explanation resolves to a
 //! first-class [`BestExplanation::Unknown`] when the top two hypotheses are
 //! near-indistinguishable (margin below threshold), when **no** hypothesis
 //! explains the observation well (best mean per-link log-likelihood below a
-//! floor — routed to the ADR-299 `UNKNOWN` verdict), when no hypotheses are
+//! floor — routed to the ADR-302 `UNKNOWN` verdict), when no hypotheses are
 //! supplied, or when no observed link is evaluable against the twin. UNKNOWN is
 //! a value, never an error, a panic, or a confident default.
 //!
@@ -90,7 +90,7 @@ pub use infer::{
 };
 
 // Re-export the canonical ontology and twin vocabulary this crate consumes, so
-// downstream speaks one semantics (ADR-297 rule 3, ADR-303).
+// downstream speaks one semantics (ADR-300 rule 3, ADR-306).
 pub use ruview_ontology::{EvidenceLevel, SemanticProvenance, SpaceId};
 pub use ruview_twin::{LinkId, LinkObservation, ObservationSet, RfTwin};
 
@@ -207,7 +207,7 @@ mod tests {
     }
 
     // Out-of-model measurements (gross deviations the twin cannot account for)
-    // route to UNKNOWN rather than a forced occupancy label (ADR-310 §3).
+    // route to UNKNOWN rather than a forced occupancy label (ADR-313 §3).
     #[test]
     fn out_of_model_observation_routes_to_unknown() {
         let t = twin(7);

@@ -1,8 +1,8 @@
-//! Cost descriptors and the deployment cost policy (ADR-311 §1).
+//! Cost descriptors and the deployment cost policy (ADR-314 §1).
 //!
 //! **SYNTHETIC / L0 scaffold (ADR-282).** Every quantity here is a *modelled*
 //! resource figure supplied by the caller (in a fielded system, read from the
-//! ADR-317 HAL descriptors); nothing in this module measures a device. No
+//! ADR-320 HAL descriptors); nothing in this module measures a device. No
 //! `MEASURED` energy/latency/throughput claim is made or implied — a scheduler
 //! predicts where budget is best spent, it does not observe hardware.
 
@@ -15,10 +15,10 @@ pub(crate) const MIN_WEIGHTED_COST: f64 = 1e-9;
 
 /// The three scarce edge resources one sensor action is modelled to consume.
 ///
-/// These are the ADR-311 denominator terms — compute, energy, and bandwidth —
-/// the three resources ADR-311 names as scarce on the ESP32-class nodes and
+/// These are the ADR-314 denominator terms — compute, energy, and bandwidth —
+/// the three resources ADR-314 names as scarce on the ESP32-class nodes and
 /// small gateways RuView targets. Values are unitless modelled magnitudes; the
-/// caller supplies them (from ADR-317 HAL descriptors in a fielded system).
+/// caller supplies them (from ADR-320 HAL descriptors in a fielded system).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Cost {
     /// Modelled compute cost of running the action (unitless magnitude).
@@ -49,7 +49,7 @@ impl Cost {
 
     /// True when every component is finite and non-negative. A malformed cost
     /// (NaN/∞/negative) is not silently coerced to a number; the scheduler
-    /// defers such a candidate as UNKNOWN-cost rather than guessing (ADR-297
+    /// defers such a candidate as UNKNOWN-cost rather than guessing (ADR-300
     /// rule 1).
     #[must_use]
     pub fn is_well_formed(&self) -> bool {
@@ -70,7 +70,7 @@ impl Cost {
 }
 
 /// The deployment cost policy: how the three cost terms are weighted into one
-/// scalar denominator (ADR-311 §1).
+/// scalar denominator (ADR-314 §1).
 ///
 /// The weighting is a *deployment* choice, not a hardcoded constant: a battery
 /// node weights energy heavily, a wired gateway weights bandwidth. The policy

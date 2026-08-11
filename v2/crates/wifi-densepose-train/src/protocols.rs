@@ -1,9 +1,9 @@
-//! Standard public-benchmark split protocols (ADR-288 §2).
+//! Standard public-benchmark split protocols (ADR-291 §2).
 //!
 //! The field's documented leakage failure is the window-level random split:
 //! adjacent windows cut from one continuous recording are near-identical, so
 //! splitting them across train/test inflates accuracy (one dataset's F1
-//! collapsed from ~90% to ~22% under subject-disjoint splits — ADR-288
+//! collapsed from ~90% to ~22% under subject-disjoint splits — ADR-291
 //! §Context). This module expresses the standard leaderboard evaluations as a
 //! [`SplitProtocol`] whose assignment is a **pure function of sample metadata
 //! plus a seed** — no RNG state, no iteration-order dependence, byte-identical

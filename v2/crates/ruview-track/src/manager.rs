@@ -1,5 +1,5 @@
 //! [`TrackManager`] — persistent, privacy-preserving probabilistic tracking
-//! (ADR-304).
+//! (ADR-307).
 //!
 //! # What it does
 //!
@@ -29,7 +29,7 @@
 //!    track has already expired, so a fresh pseudonym is minted.
 //!
 //! Any detection without a confident, unambiguous match yields an
-//! [`Association::Unknown`] outcome and a new tentative track (ADR-297 rule 1:
+//! [`Association::Unknown`] outcome and a new tentative track (ADR-300 rule 1:
 //! UNKNOWN is first-class, never an error).
 //!
 //! # Privacy boundary (by construction)
@@ -166,7 +166,7 @@ struct Entity {
     history: Vec<Waypoint>,
 }
 
-/// Persistent probabilistic tracker producing ADR-303 `Track`/`Person` nodes
+/// Persistent probabilistic tracker producing ADR-306 `Track`/`Person` nodes
 /// without civil identity.
 #[derive(Clone, Debug)]
 pub struct TrackManager {
@@ -419,7 +419,7 @@ impl TrackManager {
         Ok(fresh)
     }
 
-    /// Project a track to a canonical ADR-303 [`Track`] node, carrying the
+    /// Project a track to a canonical ADR-306 [`Track`] node, carrying the
     /// pseudonym, evidence level, and provenance. `None` if not held.
     #[must_use]
     pub fn to_track(&self, track: &TrackId) -> Option<Track> {
@@ -433,7 +433,7 @@ impl TrackManager {
         })
     }
 
-    /// Project a track's pseudonymous entity to a canonical ADR-303 [`Person`]
+    /// Project a track's pseudonymous entity to a canonical ADR-306 [`Person`]
     /// node. `None` if not held.
     #[must_use]
     pub fn to_person(&self, track: &TrackId) -> Option<Person> {

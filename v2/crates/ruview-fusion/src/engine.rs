@@ -1,4 +1,4 @@
-//! The fusion engine (ADR-308 §2): many observations → one world state.
+//! The fusion engine (ADR-311 §2): many observations → one world state.
 //!
 //! [`FusionEngine::fuse`] groups the input observations by their canonical
 //! container and, for each container, combines the usable presence estimates by

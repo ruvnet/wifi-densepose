@@ -1,5 +1,5 @@
 //! Structural leakage guards, mean-pose baseline, and evidence-graded
-//! evaluation reports (ADR-288 §3).
+//! evaluation reports (ADR-291 §3).
 //!
 //! Three enforcement points, all `Err`-on-failure (never a warning):
 //!
@@ -58,7 +58,7 @@ pub struct LeakageAuditPass {
     pub test_recordings: usize,
 }
 
-/// Structural train/test-split auditor (ADR-288 §3).
+/// Structural train/test-split auditor (ADR-291 §3).
 ///
 /// A failed audit is an [`Err`], not a warning: leaky splits must be unusable
 /// for reporting, not merely frowned upon.
@@ -311,7 +311,7 @@ impl EvidenceGrade {
 
 /// An evaluation result that structurally pairs the model metric with the
 /// mean-pose (or other) baseline metric and an [`EvidenceGrade`] — a model
-/// number can never be reported without its baseline (ADR-288 §3).
+/// number can never be reported without its baseline (ADR-291 §3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvaluationReport {
     /// Protocol the split followed.

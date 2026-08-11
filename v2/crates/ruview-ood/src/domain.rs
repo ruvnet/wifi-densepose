@@ -1,16 +1,16 @@
 //! The domain-state machine: KNOWN → DEGRADED → UNKNOWN.
 //!
-//! Implements the ADR-297 staleness guard `VALID → DEGRADED → UNKNOWN` as a
-//! **pure** classification over four measured inputs (ADR-299 §1):
+//! Implements the ADR-300 staleness guard `VALID → DEGRADED → UNKNOWN` as a
+//! **pure** classification over four measured inputs (ADR-302 §1):
 //!
 //! 1. **domain distance** — [`FingerprintDistance`] of the live fingerprint vs
-//!    the certified one (ADR-298 `distance()`);
+//!    the certified one (ADR-301 `distance()`);
 //! 2. **signal quality** — [`SignalQuality`] (ADR-137 coherence/contradiction
 //!    plus per-frame validity);
 //! 3. **calibration compatibility** — [`CalibrationCompat`]: is a valid,
 //!    non-invalidated, device/space-matched certificate present?
 //!
-//! (The model's own predictive **uncertainty** — the fourth ADR-299 input — is
+//! (The model's own predictive **uncertainty** — the fourth ADR-302 input — is
 //! attached and acted on at the [`crate::InferenceGate`], keeping `classify`'s
 //! signature exactly the three-plus-envelope form the phase-1 spec pins.)
 //!
@@ -24,10 +24,10 @@ use wifi_densepose_calibration::certificate::{CompatibilityEnvelope, Fingerprint
 
 use crate::error::{require_unit_interval, Result};
 
-/// The domain-distance primitive (ADR-299 §1): drift of the **live** room
+/// The domain-distance primitive (ADR-302 §1): drift of the **live** room
 /// fingerprint away from the **certified** reference distribution.
 ///
-/// Reuses the calibration crate's [`FingerprintDistance`] (ADR-298), which
+/// Reuses the calibration crate's [`FingerprintDistance`] (ADR-301), which
 /// already splits drift into an empty-baseline (geometry) component and an
 /// occupancy component, so a consumer can distinguish "the room itself changed"
 /// from "occupancy statistics changed". This is a thin, documented adapter — no
@@ -40,19 +40,19 @@ pub fn domain_distance(certified: &RoomFingerprint, live: &RoomFingerprint) -> F
 }
 
 /// The specific reason a domain left KNOWN. Always reported alongside the state
-/// (ADR-299: "never a bare label").
+/// (ADR-302: "never a bare label").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DomainCause {
     // --- UNKNOWN-grade causes (hard) ---
     /// No calibration certificate is present for this space/device.
     NoCertificate,
-    /// The certificate is past its expiry (stale — ADR-297 staleness guard).
+    /// The certificate is past its expiry (stale — ADR-300 staleness guard).
     CertificateExpired,
     /// The certificate's signature did not verify (tamper).
     CertificateTampered,
-    /// The certificate was minted by a different signed device (ADR-302).
+    /// The certificate was minted by a different signed device (ADR-305).
     DeviceMismatch,
-    /// The certificate attests a different space (ADR-303).
+    /// The certificate attests a different space (ADR-306).
     SpaceMismatch,
     /// Empty-baseline / total drift crossed the **outer** envelope threshold —
     /// the room changed materially (furniture, AP channel, geometry).
@@ -72,7 +72,7 @@ pub enum DomainCause {
 }
 
 impl DomainCause {
-    /// A stable machine-readable slug for evidence records (ADR-301).
+    /// A stable machine-readable slug for evidence records (ADR-304).
     pub fn as_str(self) -> &'static str {
         match self {
             DomainCause::NoCertificate => "no_certificate",
@@ -90,7 +90,7 @@ impl DomainCause {
     }
 }
 
-/// The gate's decision for one inference (ADR-299 §2).
+/// The gate's decision for one inference (ADR-302 §2).
 ///
 /// `DEGRADED` and `UNKNOWN` always carry the triggering [`DomainCause`]; a bare
 /// state is never produced.
@@ -104,7 +104,7 @@ pub enum DomainState {
     Degraded(DomainCause),
     /// The room changed materially or calibration is absent/stale. RuView stops
     /// returning confident classifications. This is required behavior, not an
-    /// error (ADR-297 rule 1).
+    /// error (ADR-300 rule 1).
     Unknown(DomainCause),
 }
 
@@ -132,7 +132,7 @@ impl DomainState {
         }
     }
 
-    /// Pure classification with the default thresholds (ADR-299 §2). This is the
+    /// Pure classification with the default thresholds (ADR-302 §2). This is the
     /// canonical `classify(distance, envelope, signal_quality, calibration_compat)`
     /// entry point: it takes only measured inputs and returns a state — no clock,
     /// no randomness, no allocation.
@@ -196,7 +196,7 @@ impl SignalQuality {
 }
 
 /// Whether a valid, non-invalidated calibration certificate is present for this
-/// space and signed device (ADR-299 §1 input 3). Derived from an ADR-298
+/// space and signed device (ADR-302 §1 input 3). Derived from an ADR-301
 /// [`CertificateStatus`](wifi_densepose_calibration::certificate::CertificateStatus)
 /// plus space/device identity checks; see [`crate::assess_certificate`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -225,7 +225,7 @@ impl CalibrationCompat {
 
     /// The hard (UNKNOWN-grade) cause this compatibility state implies, if any.
     /// A non-`Valid` compatibility is always a hard failure: a stale, absent,
-    /// or mismatched certificate cannot support a KNOWN domain (ADR-299 §3,
+    /// or mismatched certificate cannot support a KNOWN domain (ADR-302 §3,
     /// "absence of evidence is absence of capability").
     fn hard_cause(self) -> Option<DomainCause> {
         match self {
@@ -240,7 +240,7 @@ impl CalibrationCompat {
     }
 }
 
-/// The gate's calibration thresholds (ADR-299 §2). These are the "calibration
+/// The gate's calibration thresholds (ADR-302 §2). These are the "calibration
 /// parameters, reported with each decision" the ADR requires — not baked-in
 /// magic numbers. All are validated at construction.
 ///
@@ -299,7 +299,7 @@ impl DomainThresholds {
         })
     }
 
-    /// Pure classification (ADR-297 staleness guard `VALID → DEGRADED →
+    /// Pure classification (ADR-300 staleness guard `VALID → DEGRADED →
     /// UNKNOWN`). Monotone escalation: the first matching hard cause wins
     /// UNKNOWN; otherwise the first matching soft cause wins DEGRADED; else
     /// KNOWN. Deterministic, allocation-free, no clock.

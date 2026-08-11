@@ -1,4 +1,4 @@
-//! # `ruview-memory` — long-term spatial memory (ADR-309, ADR-297 phase 3)
+//! # `ruview-memory` — long-term spatial memory (ADR-312, ADR-300 phase 3)
 //!
 //! **SYNTHETIC / L0 — a simulation / model scaffold, not a measurement system.**
 //!
@@ -8,17 +8,17 @@
 //! **model**, not a sensor. It predicts what is normal for a place and time and
 //! flags a statistically significant delta; it never *measures* anything, and it
 //! asserts **no** detection-accuracy, false-positive, or health/safety number
-//! (ADR-282 bounded-claims discipline, ADR-309 evidence discipline, CLAUDE.md
+//! (ADR-282 bounded-claims discipline, ADR-312 evidence discipline, CLAUDE.md
 //! honesty rule). A flagged deviation is a *candidate change to corroborate*,
 //! never a confident detection and never a diagnosis.
 //!
-//! Following ADR-297 rule 1, *insufficient information* is a first-class value
+//! Following ADR-300 rule 1, *insufficient information* is a first-class value
 //! ([`Assessment::Unknown`]), never an error and never a false positive: no
 //! anomaly is ever flagged before a baseline exists.
 //!
-//! ## What "normal" is learned over (ADR-309 §1)
+//! ## What "normal" is learned over (ADR-312 §1)
 //!
-//! Per ADR-303 [`ZoneId`], a [`ZoneBaseline`] accumulates:
+//! Per ADR-306 [`ZoneId`], a [`ZoneBaseline`] accumulates:
 //!
 //! - **Occupancy periodicity** — a distribution of occupancy by UTC hour-of-day
 //!   (the "bedroom usually occupied certain hours" case).
@@ -35,7 +35,7 @@
 //! evidence level of the observations it was learned from and is never presented
 //! above them (ADR-282 no-upgrade).
 //!
-//! ## Anomaly = deviation from learned normal (ADR-309 §3)
+//! ## Anomaly = deviation from learned normal (ADR-312 §3)
 //!
 //! [`SpatialMemory::observe`] scores a live [`ZoneObservation`] against the
 //! applicable learned baseline (matched by zone and hour), returns an
@@ -44,13 +44,13 @@
 //! gate. Anomalies project to append-only [`ruview_evidence`] records with
 //! provenance ([`AnomalyEvent::to_evidence_record`]).
 //!
-//! ## The four ADR-297 non-negotiable rules, as they bind this crate
+//! ## The four ADR-300 non-negotiable rules, as they bind this crate
 //!
 //! 1. **UNKNOWN is first-class, never an error.** A channel with fewer than
 //!    `min_history` updates is [`Assessment::Unknown`]; `observe` is total and
 //!    never panics on malformed input (it returns a typed [`MemoryError`]).
 //! 2. **Certificates bind cryptographically.** Out of scope here; a baseline is
-//!    keyed by an already-authenticated ADR-303 [`ZoneId`] and its evidence
+//!    keyed by an already-authenticated ADR-306 [`ZoneId`] and its evidence
 //!    level is the floor of its source observations.
 //! 3. **One canonical semantics.** The memory reuses the canonical
 //!    [`ZoneId`]/[`EvidenceLevel`]/[`SemanticProvenance`] vocabulary, the twin's
@@ -109,7 +109,7 @@ pub use baseline::{
 pub use error::MemoryError;
 pub use stat::RunningStat;
 
-// Re-export the canonical vocabulary consumers speak (ADR-297 rule 3, ADR-303),
+// Re-export the canonical vocabulary consumers speak (ADR-300 rule 3, ADR-306),
 // and the twin's link type the propagation model is keyed by.
 pub use ruview_ontology::{EvidenceLevel, SemanticProvenance, ZoneId};
 pub use ruview_twin::LinkId;
@@ -118,7 +118,7 @@ pub use ruview_twin::LinkId;
 const PROVENANCE_MODEL: &str = "ruview-memory@0 (SYNTHETIC/L0)";
 
 /// The learned normal physics of every zone, and the operation that scores a
-/// live snapshot against it (ADR-309).
+/// live snapshot against it (ADR-312).
 ///
 /// **SYNTHETIC / L0.** A learned model of normality, never a measurement.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -160,7 +160,7 @@ impl SpatialMemory {
     }
 
     /// Anchor a zone's propagation baseline on a twin's expected distributions
-    /// (ADR-309 §1). Each link the twin can predict seeds a learned statistic
+    /// (ADR-312 §1). Each link the twin can predict seeds a learned statistic
     /// with the twin's modelled mean/variance and a prior weight of
     /// `min_history`, so the propagation model is usable immediately as a prior
     /// and then refined online. The twin prior is SYNTHETIC/L0, so the zone's
@@ -191,7 +191,7 @@ impl SpatialMemory {
     }
 
     /// Score a live snapshot against the zone's learned normal, then fold it into
-    /// the baseline (ADR-309 §3). Scoring uses the baseline learned *before* this
+    /// the baseline (ADR-312 §3). Scoring uses the baseline learned *before* this
     /// snapshot, so a flagged anomaly is a genuine deviation and the current
     /// value does not mask itself. Deterministic; never panics on malformed
     /// input.
@@ -321,7 +321,7 @@ impl SpatialMemory {
     }
 
     /// Append each anomaly in an outcome to an [`EvidenceLedger`] as a synthetic
-    /// record (ADR-309: "emit anomalies as evidence records with provenance").
+    /// record (ADR-312: "emit anomalies as evidence records with provenance").
     /// Returns the ledger sequence assigned to each record, in order.
     ///
     /// # Errors
@@ -353,7 +353,7 @@ impl SpatialMemory {
 }
 
 /// Score one value against its (optional) learned statistic. UNKNOWN when there
-/// is no statistic or its history is below `min_history` (ADR-297 rule 1).
+/// is no statistic or its history is below `min_history` (ADR-300 rule 1).
 fn assess(
     stat: Option<RunningStat>,
     x: f64,

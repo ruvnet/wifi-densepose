@@ -1,4 +1,4 @@
-//! # `ruview-twin` — a digital RF twin (ADR-312, ADR-297 phase 3)
+//! # `ruview-twin` — a digital RF twin (ADR-315, ADR-300 phase 3)
 //!
 //! **SYNTHETIC / L0 — a simulation scaffold, not a measurement system.**
 //!
@@ -7,8 +7,8 @@
 //! observable; it never **measures** one. Every distribution it produces and any
 //! propagation it simulates is a model at evidence level `L0` (ADR-282),
 //! labelled `SYNTHETIC`. Nothing in this crate is a hardware, `MEASURED`, or
-//! accuracy claim, and it asserts **no** detection-accuracy number (ADR-312
-//! evidence discipline). Following ADR-297 rule 1, *insufficient information* is
+//! accuracy claim, and it asserts **no** detection-accuracy number (ADR-315
+//! evidence discipline). Following ADR-300 rule 1, *insufficient information* is
 //! a first-class value ([`ExpectedDistribution::Unknown`] /
 //! [`LinkDeltaStatus::Unknown`]), never an error and never a confident default.
 //!
@@ -17,7 +17,7 @@
 //! - **Radio node positions** in coarse metric coordinates ([`RadioNode`],
 //!   [`Point3`]).
 //! - **Geometry references** into the canonical ontology ([`SpaceId`],
-//!   [`Container`]) — the twin *annotates* the ADR-303 scene, it does not invent
+//!   [`Container`]) — the twin *annotates* the ADR-306 scene, it does not invent
 //!   a second geometry.
 //! - A **simple documented propagation model** — log-distance path loss with
 //!   optional wall attenuation ([`PropagationParams`], [`crate::predict`]),
@@ -73,7 +73,7 @@ pub use twin::{
 };
 
 // Re-export the canonical ontology vocabulary the twin references, so consumers
-// speak one semantics (ADR-297 rule 3, ADR-303).
+// speak one semantics (ADR-300 rule 3, ADR-306).
 pub use ruview_ontology::{Container, EvidenceLevel, SensorId, SpaceId};
 
 impl RfTwin {

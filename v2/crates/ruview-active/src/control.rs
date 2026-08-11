@@ -1,4 +1,4 @@
-//! Controllable degrees of freedom of an RF measurement (ADR-306 §1).
+//! Controllable degrees of freedom of an RF measurement (ADR-309 §1).
 //!
 //! **SYNTHETIC / L0 model scaffold.** These types describe *what a controller
 //! could ask hardware to configure*; constructing one drives **no** radio and
@@ -10,7 +10,7 @@
 //! that can only vary its sounding cadence exposes a capability whose only
 //! non-empty axis is [`ControlCapability::cadences`]; an all-empty capability
 //! means nothing is controllable and the controller degrades to the passive
-//! planner (ADR-306 §2, ADR-280).
+//! planner (ADR-309 §2, ADR-280).
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -325,7 +325,7 @@ impl ControlAction {
 }
 
 /// The set of control values a deployment can actually set, per axis
-/// (capability-gated by the ADR-317 HAL in a fielded system). An axis with no
+/// (capability-gated by the ADR-320 HAL in a fielded system). An axis with no
 /// values is not controllable on this deployment; an all-empty capability is
 /// the ESP32-style passive fallback trigger.
 ///

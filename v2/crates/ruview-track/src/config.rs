@@ -1,4 +1,4 @@
-//! Tuning for the association / lifecycle / decay policy (ADR-304).
+//! Tuning for the association / lifecycle / decay policy (ADR-307).
 //!
 //! All thresholds are explicit and deterministic; nothing here reads a clock or
 //! draws randomness. The manager injects every timestamp.

@@ -1,10 +1,10 @@
-//! # `ruview-groundtruth` — reference sensors as a formal validation plane (ADR-300)
+//! # `ruview-groundtruth` — reference sensors as a formal validation plane (ADR-303)
 //!
-//! This crate generalizes the ADR-290 vitals ground-truth rig from a single
+//! This crate generalizes the ADR-293 vitals ground-truth rig from a single
 //! measurand to **any** phenomenon RuView senses (presence, count, range,
 //! posture, activity, heart rate, breathing rate) and **any** reference
 //! modality (camera, mmWave, pressure mat, wearable, pulse oximeter,
-//! microphone, manual label). Its defining design decision (ADR-300) is that
+//! microphone, manual label). Its defining design decision (ADR-303) is that
 //! reference sensors are a **validation plane, never inference inputs**: this
 //! crate compares RF estimates against independent observation and never hands
 //! a reference reading back to an estimator.
@@ -26,10 +26,10 @@
 //!
 //! ## Honesty and determinism
 //!
-//! - **Canonical vocabulary (ADR-297 rule 3):** the report speaks the
+//! - **Canonical vocabulary (ADR-300 rule 3):** the report speaks the
 //!   [`ruview_ontology`] evidence ladder ([`EvidenceLevel`]) and writes an
 //!   [`ruview_evidence`] record — no per-crate reinvention of evidence shapes.
-//! - **UNKNOWN is first-class (ADR-297 rule 1):** insufficient overlap yields a
+//! - **UNKNOWN is first-class (ADR-300 rule 1):** insufficient overlap yields a
 //!   report with zero pairs and a non-MEASURED grade, and an uncomputable
 //!   alignment score is `None` — never an error, never a fabricated number.
 //! - **Deterministic:** no wall clock and no randomness. All timestamps are
@@ -39,7 +39,7 @@
 //!   boundary (monotonic timestamps, finite scalars, matching reading family)
 //!   and sample/grid/lag counts are capped so malformed input cannot exhaust
 //!   memory.
-//! - **Grade in types (ADR-290/301):** `Measured` requires an independent
+//! - **Grade in types (ADR-293/301):** `Measured` requires an independent
 //!   reference, coverage, paired samples, and a reproducer; synthetic input is
 //!   `Synthetic`/L0 by construction and cannot be raised.
 
@@ -65,7 +65,7 @@ pub use series::{EstimateSeries, ReferenceObservation, ReferenceSeries, MAX_SAMP
 pub use source::{ReferenceModality, ReferenceSource};
 
 // The canonical evidence ladder is the ontology's, re-exported so downstream
-// crates use one vocabulary (ADR-297 rule 3).
+// crates use one vocabulary (ADR-300 rule 3).
 pub use ruview_ontology::EvidenceLevel;
 
 #[cfg(test)]

@@ -1,12 +1,12 @@
-name: CSI data policy (ADR-296)
+name: CSI data policy (ADR-299)
 
-# ADR-296 repository CSI data-incident guard. Fails when CSI-format files
+# ADR-299 repository CSI data-incident guard. Fails when CSI-format files
 # (*.csi.jsonl / *.csi.meta.json) or oversized JSONL captures are tracked in
-# git. Raw CSI is person data and must never be committed (CLAUDE.md, ADR-296).
+# git. Raw CSI is person data and must never be committed (CLAUDE.md, ADR-299).
 #
 # NOTE: the tree currently still contains the pre-existing incident recordings
 # under data/recordings/ and v2/data/recordings/, whose removal is gated on
-# data-owner sign-off (ADR-296). Until they are removed this job is EXPECTED to
+# data-owner sign-off (ADR-299). Until they are removed this job is EXPECTED to
 # fail, and that failure documents the incident. To make it green in a
 # follow-up without weakening the guard for NEW files, set CSI_POLICY_BASELINE
 # to a file listing the acknowledged paths (see the script header).
@@ -45,7 +45,7 @@ jobs:
         if: always()
         run: |
           {
-            echo '### CSI data policy (ADR-296)'
+            echo '### CSI data policy (ADR-299)'
             echo ''
             echo '```'
             bash scripts/csi-data-policy-check.sh --tracked 2>&1 || true

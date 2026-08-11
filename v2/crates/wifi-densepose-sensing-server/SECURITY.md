@@ -1,6 +1,6 @@
 # Security notes — wifi-densepose-sensing-server
 
-## UDP CSI data plane (ADR-293)
+## UDP CSI data plane (ADR-296)
 
 The sensing server ingests CSI/radar frames over UDP from ESP32, MediaTek,
 Qualcomm, and RTL8720F sensor nodes. A valid-shaped frame flips an
@@ -10,10 +10,10 @@ presence/vital/automation outputs.
 ### Threat model
 
 Any host that can reach the UDP port can inject a valid-shaped frame. Prior to
-ADR-293 the receiver bound `0.0.0.0` unconditionally, so on a routable
+ADR-296 the receiver bound `0.0.0.0` unconditionally, so on a routable
 deployment the data plane was open to the entire LAN.
 
-The controls in ADR-293 (step one) are:
+The controls in ADR-296 (step one) are:
 
 - **`--udp-bind` (env `RUVIEW_UDP_BIND`), default `127.0.0.1`.** The receiver is
   loopback-only by default and not reachable off-host. Binding to a routable

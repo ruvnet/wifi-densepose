@@ -1,6 +1,6 @@
-//! Signed, versioned, invalidatable room-fingerprint certificate (ADR-298).
+//! Signed, versioned, invalidatable room-fingerprint certificate (ADR-301).
 //!
-//! ADR-298 is primitive 1 of the perception-substrate program (ADR-297) and the
+//! ADR-301 is primitive 1 of the perception-substrate program (ADR-300) and the
 //! first brick of its "certificate spine". This module implements the
 //! **certificate portion**: a portable, signed, expiring artifact that says
 //! *"this is the room, here is when it was measured, and here is the evidence
@@ -15,7 +15,7 @@
 //! a signing sensor identity, a monotonic version, a capture time, an expiry,
 //! an evidence level (ADR-282), and a content hash suitable for signing.
 //!
-//! ## Honesty discipline (ADR-298 §"Provenance and honesty")
+//! ## Honesty discipline (ADR-301 §"Provenance and honesty")
 //!
 //! A certificate produced from generated CSI is [`EvidenceLevel::L0Synthetic`]
 //! by construction; [`CalibrationCertificate::mint`] **rejects** labelling a
@@ -40,7 +40,7 @@ use crate::error::{CalibrationError, Result};
 use crate::geometry_embedding::GeometryEmbedding;
 
 /// Schema version for the [`RoomFingerprint`] wire format. Bumped when the
-/// fingerprint's field set changes (ADR-298 §1: "its schema is versioned").
+/// fingerprint's field set changes (ADR-301 §1: "its schema is versioned").
 pub const FINGERPRINT_SCHEMA_VERSION: u32 = 1;
 
 /// Schema version for the [`CalibrationCertificate`] wire format.
@@ -59,7 +59,7 @@ const GEOM_SCALE: f32 = 1.0;
 // ---------------------------------------------------------------------------
 
 /// Evidence ladder (ADR-282 L0–L5). An automatic characterization on real
-/// captured CSI is at most L1/L2 and is labelled as such, never L3+ (ADR-298
+/// captured CSI is at most L1/L2 and is labelled as such, never L3+ (ADR-301
 /// §3). L0 is reserved for synthetic/generated input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum EvidenceLevel {
@@ -96,7 +96,7 @@ impl EvidenceLevel {
     }
 }
 
-/// How the fingerprint was characterized (ADR-298 §"Provenance and honesty").
+/// How the fingerprint was characterized (ADR-301 §"Provenance and honesty").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CharacterizationSource {
     /// Generated / simulated CSI. Forces [`EvidenceLevel::L0Synthetic`].
@@ -114,7 +114,7 @@ impl CharacterizationSource {
     }
 }
 
-/// Calibration tier (ADR-298 §1/§3): the automatic observe-only path yields a
+/// Calibration tier (ADR-301 §1/§3): the automatic observe-only path yields a
 /// weaker evidence level than guided enrollment; the certificate states which
 /// path produced it so consumers can weight it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,7 +147,7 @@ impl CalibrationTier {
 // ---------------------------------------------------------------------------
 
 /// A bounded, fixed-length statistical summary of a room's CSI distribution —
-/// the distance-comparable object ADR-299 measures against.
+/// the distance-comparable object ADR-302 measures against.
 ///
 /// It is *derived* from the existing calibration state, not a new measurement:
 /// the empty-vs-occupied separation comes from the bank's
@@ -223,7 +223,7 @@ impl RoomFingerprint {
     }
 
     /// Bounded fingerprint distance to another fingerprint — the primitive
-    /// ADR-299 uses to gate KNOWN → DEGRADED → UNKNOWN.
+    /// ADR-302 uses to gate KNOWN → DEGRADED → UNKNOWN.
     ///
     /// Splits drift into an **empty-room** component (static multipath + physical
     /// geometry) and an **occupancy** component (dynamics), so a consumer can
@@ -280,7 +280,7 @@ impl FingerprintDistance {
     }
 }
 
-/// The compatibility envelope for continuous drift compensation (ADR-298 §4).
+/// The compatibility envelope for continuous drift compensation (ADR-301 §4).
 /// Drift within the envelope is absorbed and logged; drift beyond it invalidates
 /// the certificate.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -293,7 +293,7 @@ pub struct CompatibilityEnvelope {
 impl Default for CompatibilityEnvelope {
     fn default() -> Self {
         // A conservative default: modest drift is absorbed, a clearly different
-        // room is rejected. Consumers (ADR-299) may tighten this per space.
+        // room is rejected. Consumers (ADR-302) may tighten this per space.
         Self {
             max_total_drift: 0.15,
         }
@@ -320,7 +320,7 @@ impl CompatibilityEnvelope {
 /// Signs a certificate content hash. Kept behind a trait so the RuField
 /// provenance/signature backend (ADR-260/262/277/279) can be substituted
 /// without changing the certificate types. A signature is mandatory: an
-/// unsigned certificate is not a valid certificate (ADR-298 §3).
+/// unsigned certificate is not a valid certificate (ADR-301 §3).
 pub trait CertificateSigner {
     /// Identity of the signing key (bound into the certificate as the signer).
     fn key_id(&self) -> &str;
@@ -385,7 +385,7 @@ impl CertificateVerifier for KeyedHashSigner {
 /// A detached signature bound to a content hash and a signing-key identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CertificateSignature {
-    /// Identity of the signing key (ADR-302 sensor identity binding).
+    /// Identity of the signing key (ADR-305 sensor identity binding).
     pub key_id: String,
     /// Lowercase-hex SHA-256 of the certificate's canonical signable bytes.
     pub content_hash_hex: String,
@@ -401,9 +401,9 @@ pub struct CertificateSignature {
 /// avoids a long positional argument list and documents each binding.
 #[derive(Debug, Clone)]
 pub struct MintParams {
-    /// Canonical space identifier (ADR-303 ontology) — *which* space.
+    /// Canonical space identifier (ADR-306 ontology) — *which* space.
     pub space_id: String,
-    /// Signing sensor identity (ADR-302) — *which signed device* produced it.
+    /// Signing sensor identity (ADR-305) — *which signed device* produced it.
     /// Must equal the signer's `key_id`.
     pub sensor_id: String,
     /// Capture time (unix seconds). Injected, never read from the wall clock.
@@ -427,13 +427,13 @@ pub struct MintParams {
 pub struct CalibrationCertificate {
     /// Certificate schema version ([`CERTIFICATE_SCHEMA_VERSION`]).
     pub schema_version: u32,
-    /// Canonical space identifier (ADR-303).
+    /// Canonical space identifier (ADR-306).
     pub space_id: String,
     /// Room scope carried through from the calibration state.
     pub room_id: String,
     /// ADR-135 baseline id the fingerprint was derived against.
     pub baseline_id: String,
-    /// Signing sensor identity (ADR-302).
+    /// Signing sensor identity (ADR-305).
     pub sensor_id: String,
     /// Monotonic version (append-only history; renewal increments).
     pub version: u64,
@@ -564,7 +564,7 @@ impl CalibrationCertificate {
     }
 
     /// Re-characterize into the **next** version, preserving the append-only
-    /// history (ADR-298 §4). Same space/sensor/tier/evidence/source/envelope,
+    /// history (ADR-301 §4). Same space/sensor/tier/evidence/source/envelope,
     /// `version + 1`, re-signed over the fresh fingerprint and capture time.
     ///
     /// `source`/`evidence` are inherited so a renewal cannot silently upgrade a
@@ -591,7 +591,7 @@ impl CalibrationCertificate {
     }
 
     /// The 32-byte content hash over this certificate's canonical signable bytes
-    /// — the object the signature covers and a witness-chain anchor (ADR-316).
+    /// — the object the signature covers and a witness-chain anchor (ADR-319).
     pub fn content_hash(&self) -> [u8; 32] {
         self.as_unsigned().content_hash()
     }
@@ -628,14 +628,14 @@ impl CalibrationCertificate {
     }
 
     /// Distance between this certificate's fingerprint and another's — two
-    /// certificates for the same space are comparable (ADR-298 §3).
+    /// certificates for the same space are comparable (ADR-301 §3).
     pub fn distance(&self, other: &CalibrationCertificate) -> FingerprintDistance {
         self.fingerprint.distance(&other.fingerprint)
     }
 
     /// Evaluate validity against live room state and a signature verifier.
     ///
-    /// Invalidation is an explicit, typed transition (ADR-298 §4), never a
+    /// Invalidation is an explicit, typed transition (ADR-301 §4), never a
     /// silent flag. Order of precedence: tampered signature → expired → drift
     /// beyond the envelope → valid. `now_unix_s` is injected (no wall clock).
     pub fn status<V: CertificateVerifier>(
@@ -695,7 +695,7 @@ impl CalibrationCertificate {
     }
 }
 
-/// The typed result of a certificate validity check (ADR-298 §4).
+/// The typed result of a certificate validity check (ADR-301 §4).
 #[derive(Debug, Clone, PartialEq)]
 pub enum CertificateStatus {
     /// Still valid; carries the (in-envelope) drift for logging/compensation.

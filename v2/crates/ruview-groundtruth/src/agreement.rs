@@ -1,10 +1,10 @@
-//! Agreement as validation, not fusion (ADR-300 §3–§4).
+//! Agreement as validation, not fusion (ADR-303 §3–§4).
 //!
 //! An [`AgreementReport`] compares an RF [`EstimateSeries`] against an
 //! independent [`ReferenceSeries`] after time alignment, computes
 //! modality-appropriate agreement metrics (MAE/RMSE/bias/within-tolerance for
 //! continuous measurands; label-agreement for categorical ones), grades the
-//! result on the ADR-290/301 evidence ladder, and feeds a per-context record
+//! result on the ADR-293/301 evidence ladder, and feeds a per-context record
 //! into the [`ruview_evidence`] ledger. Reference sensors are strictly a
 //! validation plane here — this crate never returns a reference reading to an
 //! estimator.
@@ -21,8 +21,8 @@ use crate::series::{EstimateSeries, ReferenceSeries};
 use crate::source::ReferenceSource;
 
 /// Map the ontology's canonical evidence ladder onto the evidence ledger's
-/// (structurally identical) ladder, so the report speaks the ADR-303 vocabulary
-/// while still writing an ADR-301 record.
+/// (structurally identical) ladder, so the report speaks the ADR-306 vocabulary
+/// while still writing an ADR-304 record.
 fn to_ledger_level(level: OntEvidenceLevel) -> ruview_evidence::EvidenceLevel {
     match level {
         OntEvidenceLevel::L0 => ruview_evidence::EvidenceLevel::L0,
@@ -34,7 +34,7 @@ fn to_ledger_level(level: OntEvidenceLevel) -> ruview_evidence::EvidenceLevel {
     }
 }
 
-/// The honesty grade of an agreement report (mirrors ADR-290/301). Fixed by the
+/// The honesty grade of an agreement report (mirrors ADR-293/301). Fixed by the
 /// data provenance, the reference, coverage, paired samples, and a reproducer —
 /// never aliasable upward.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,7 +53,7 @@ pub enum EvidenceGrade {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "family")]
 pub enum AgreementMetrics {
-    /// Continuous measurand agreement (ADR-290 statistics).
+    /// Continuous measurand agreement (ADR-293 statistics).
     Continuous {
         /// Mean absolute error.
         mae: f64,
@@ -142,7 +142,7 @@ pub struct AgreementReport {
     pub metrics: AgreementMetrics,
     /// The honesty grade.
     pub grade: EvidenceGrade,
-    /// The evidence level (canonical ADR-303 ladder) stamped on emission.
+    /// The evidence level (canonical ADR-306 ladder) stamped on emission.
     pub evidence_level: OntEvidenceLevel,
     /// The reproducer handle, when the report is MEASURED.
     pub reproducer: Option<String>,
@@ -152,7 +152,7 @@ pub struct AgreementReport {
 
 impl AgreementReport {
     /// Build an agreement report. `scope` is a required argument, so a report
-    /// can never be constructed without it (ADR-300 §3).
+    /// can never be constructed without it (ADR-303 §3).
     ///
     /// The estimate and reference must describe the same measurand. `tolerance`
     /// is the within-tolerance band for continuous measurands (ignored for
@@ -244,7 +244,7 @@ impl AgreementReport {
     /// [`GroundTruthError::Evidence`].
     ///
     /// The agreement statistics (MAE/RMSE/coverage/label-agreement) live on the
-    /// report for the benchmark (ADR-314); the ledger record carries the
+    /// report for the benchmark (ADR-317); the ledger record carries the
     /// per-context accuracy metrics with the correct, non-upgradable grade.
     ///
     /// # Errors

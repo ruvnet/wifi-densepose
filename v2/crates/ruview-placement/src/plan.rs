@@ -1,10 +1,10 @@
 //! Deterministic placement search: floor plan + inventory → recommended plan
-//! (ADR-305 §2).
+//! (ADR-308 §2).
 //!
 //! **SYNTHETIC / L0.** The search consumes the SYNTHETIC coverage model in
 //! [`crate::coverage`] and recommends radio positions that maximise modelled
 //! objective observability subject to the inventory count and the scene geometry.
-//! It is a *recommendation*, never a guarantee that a room is sensed (ADR-305
+//! It is a *recommendation*, never a guarantee that a room is sensed (ADR-308
 //! consequences). Determinism is total: candidate positions come from a seeded
 //! grid ([`PlacementParams::seed`]) with **no RNG and no wall-clock**; greedy
 //! forward selection then adds the best candidate one radio at a time. Because

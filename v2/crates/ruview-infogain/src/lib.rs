@@ -1,12 +1,12 @@
-//! # `ruview-infogain` — information-gain scheduler (ADR-311, ADR-297 primitive 14)
+//! # `ruview-infogain` — information-gain scheduler (ADR-314, ADR-300 primitive 14)
 //!
-//! **SYNTHETIC / L0 research-forward scaffold (ADR-282, ADR-297 phase 3).**
+//! **SYNTHETIC / L0 research-forward scaffold (ADR-282, ADR-300 phase 3).**
 //! This crate models *which radios/modalities to spend the next sampling budget
 //! on* by value of information. It is a **simulation/model scaffold**: every
 //! informativeness estimate is a model prediction and every cost is a modelled
 //! magnitude. Nothing here measures hardware, and **no** `MEASURED`, accuracy,
 //! or energy/latency/throughput claim is made or implied — a twin predicts, it
-//! does not measure (CLAUDE.md honesty discipline; ADR-311 asserts no
+//! does not measure (CLAUDE.md honesty discipline; ADR-314 asserts no
 //! efficiency number). Any figure produced by this crate is `SYNTHETIC`.
 //!
 //! ## What it does
@@ -21,11 +21,11 @@
 //!
 //! and spends the budget on the highest-value actions, so the edge samples the
 //! most informative radios first. In a fielded system the numerator comes from
-//! the ADR-312 RF-twin forward model against the ADR-308 fused covariance and
-//! the denominator from ADR-317 HAL cost descriptors; this crate takes both as
+//! the ADR-315 RF-twin forward model against the ADR-311 fused covariance and
+//! the denominator from ADR-320 HAL cost descriptors; this crate takes both as
 //! caller-supplied inputs and stays a pure allocator.
 //!
-//! ## The four ADR-297 non-negotiable rules, as they bind this crate
+//! ## The four ADR-300 non-negotiable rules, as they bind this crate
 //!
 //! 1. **UNKNOWN is first-class, never an error.** A candidate whose
 //!    informativeness the model cannot predict is
@@ -34,20 +34,20 @@
 //!    malformed cost is UNKNOWN cost and defers the candidate rather than
 //!    panicking or guessing. [`Scheduler::plan`] is total: no input panics.
 //! 2. **Certificates bind cryptographically.** Out of scope here; a candidate
-//!    names an already-authenticated ADR-302 [`SensorId`](ruview_ontology::SensorId).
+//!    names an already-authenticated ADR-305 [`SensorId`](ruview_ontology::SensorId).
 //! 3. **One canonical semantics downstream.** Candidates reuse the canonical
 //!    [`SensorId`](ruview_ontology::SensorId) and HAL [`Modality`](ruview_hal::Modality)
 //!    rather than reinventing per-crate identity/modality shapes.
 //! 4. **Honest evidence.** A scheduling decision is a resource choice, not a
-//!    sensing claim; the plan records which sensors were skipped so ADR-299 can
+//!    sensing claim; the plan records which sensors were skipped so ADR-302 can
 //!    raise `UNKNOWN` for an under-sampled zone rather than reporting a stale
 //!    estimate as current.
 //!
 //! ## Purity
 //!
 //! [`Scheduler::plan`] has **no** scheduling side effects: it starts no
-//! sampling and touches no hardware — it returns a [`SchedulePlan`]. ADR-306
-//! active sensing chooses the probe on each selected sensor; ADR-308 fusion
+//! sampling and touches no hardware — it returns a [`SchedulePlan`]. ADR-309
+//! active sensing chooses the probe on each selected sensor; ADR-311 fusion
 //! incorporates the result. It is deterministic (no wall clock, no randomness;
 //! synthetic scenes vary only by explicit caller-supplied parameters) and
 //! bounded in allocation.
@@ -117,7 +117,7 @@ mod tests {
         Scheduler::new(SchedulerConfig::default()).plan(candidates, &budget)
     }
 
-    // ADR-311 §2: the highest value/cost candidate is ranked and selected first.
+    // ADR-314 §2: the highest value/cost candidate is ranked and selected first.
     #[test]
     fn highest_value_per_cost_selected_first() {
         let candidates = vec![
@@ -133,7 +133,7 @@ mod tests {
         assert!(p.deferred.is_empty());
     }
 
-    // ADR-311 §1: a high-cost low-gain sensor is deferred when the budget cannot
+    // ADR-314 §1: a high-cost low-gain sensor is deferred when the budget cannot
     // hold both it and the more valuable action.
     #[test]
     fn high_cost_low_gain_deferred_under_budget() {
@@ -202,7 +202,7 @@ mod tests {
         assert_eq!(order, vec!["cheap", "expensive"]);
     }
 
-    // ADR-297 rule 1: an unknown-value candidate is NOT treated as zero. Under
+    // ADR-300 rule 1: an unknown-value candidate is NOT treated as zero. Under
     // the default Defer policy it is deferred with an explicit reason.
     #[test]
     fn unknown_value_defer_policy_defers_explicitly() {
@@ -217,7 +217,7 @@ mod tests {
         assert_eq!(p.deferred[0].reason, DeferReason::UnknownDeferred);
     }
 
-    // ADR-311: the Probe policy spends budget to LEARN an unknown candidate's
+    // ADR-314: the Probe policy spends budget to LEARN an unknown candidate's
     // informativeness, with an explicit synthetic probe value (not zero).
     #[test]
     fn unknown_value_probe_policy_selects_to_learn() {
@@ -239,7 +239,7 @@ mod tests {
         assert_eq!(p.selected[0].value_density, None);
     }
 
-    // ADR-311 §2: the sampling floor force-includes a starved low-value sensor
+    // ADR-314 §2: the sampling floor force-includes a starved low-value sensor
     // so it is re-evaluated rather than permanently blinded.
     #[test]
     fn sampling_floor_forces_starved_low_value_sensor() {

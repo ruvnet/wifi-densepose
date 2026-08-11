@@ -1,4 +1,4 @@
-//! ADR-304 scenario tests: continuity, no-swap, spawn/expire, ambiguity,
+//! ADR-307 scenario tests: continuity, no-swap, spawn/expire, ambiguity,
 //! id opacity, and determinism. All fixtures are synthetic and in-code; time is
 //! injected (no wall clock); no randomness.
 

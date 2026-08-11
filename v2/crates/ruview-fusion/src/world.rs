@@ -1,13 +1,13 @@
-//! The fused output: one probabilistic world state (ADR-308 §3).
+//! The fused output: one probabilistic world state (ADR-311 §3).
 //!
-//! The invariant of ADR-308 is the *shape* of the output: many observations
+//! The invariant of ADR-311 is the *shape* of the output: many observations
 //! resolve to **one** [`WorldState`], not many feeds into a visualization. A
 //! [`WorldState`] holds a per-container [`ZoneState`], each carrying either a
 //! fused [`Presence::Estimated`] belief or a first-class [`Presence::Unknown`]
 //! when the evidence cannot support a confident single value. Every fused value
 //! keeps recoverable per-observation provenance ([`Contribution`]s) and an
 //! aggregate evidence level that is never lifted above the weakest contributing
-//! input (ADR-308: "never upgraded above the weakest contributing L-level").
+//! input (ADR-311: "never upgraded above the weakest contributing L-level").
 
 use serde::{Deserialize, Serialize};
 
@@ -17,7 +17,7 @@ use ruview_ontology::{Container, EvidenceLevel, ObservationId, SensorId};
 use crate::estimate::Estimate;
 
 /// Why a zone resolved to UNKNOWN instead of a confident estimate. UNKNOWN is a
-/// value, not an error (ADR-297 rule 1): the reason stays legible.
+/// value, not an error (ADR-300 rule 1): the reason stays legible.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "reason", rename_all = "snake_case")]
 pub enum UnknownReason {
@@ -125,7 +125,7 @@ impl ZoneState {
 
 /// One probabilistic world state fused from many observations.
 ///
-/// This is the single object every downstream consumer reads (ADR-309/310/312):
+/// This is the single object every downstream consumer reads (ADR-312/310/312):
 /// one probabilistic world, not a modality stack. Zones are held in a
 /// deterministic order so the state is reproducible.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

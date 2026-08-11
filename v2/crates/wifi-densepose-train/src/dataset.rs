@@ -41,7 +41,7 @@
 //! ```
 
 /// Widar3.0 ingest — Intel 5300 `.dat` "bfee" parser and [`CsiDataset`]
-/// adapter with split-protocol metadata (ADR-288 §1).
+/// adapter with split-protocol metadata (ADR-291 §1).
 pub mod widar;
 
 use ndarray::{Array1, Array2, Array4};

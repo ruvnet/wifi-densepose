@@ -15,7 +15,7 @@
 //! - **Nexmon**: For Broadcom chips with CSI firmware
 //! - **FeitCSI (Intel AX200/AX210)**: Wideband 802.11ax CSI up to 160 MHz /
 //!   1992 subcarriers including 6 GHz, ingested from recorded captures or a
-//!   stream written by the external FeitCSI tool (ADR-289)
+//!   stream written by the external FeitCSI tool (ADR-292)
 //!
 //! # Example Usage
 //!
@@ -56,7 +56,7 @@ pub use hardware_adapter::{
     CsiStream,
     DeviceSettings,
     DeviceType,
-    // FeitCSI wideband ingest settings (ADR-289)
+    // FeitCSI wideband ingest settings (ADR-292)
     FeitCsiMode,
     FeitCsiSettings,
     FlowControl,
@@ -80,7 +80,7 @@ pub use hardware_adapter::{
     // Serial settings
     SerialSettings,
     StreamingStats,
-    // Wideband spectral provenance (ADR-289)
+    // Wideband spectral provenance (ADR-292)
     SubcarrierMapping,
     // UDP settings
     UdpSettings,

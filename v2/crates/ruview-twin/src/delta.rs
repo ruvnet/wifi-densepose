@@ -1,13 +1,13 @@
-//! The load-bearing operation: `delta(observed, expected)` (ADR-312 §2).
+//! The load-bearing operation: `delta(observed, expected)` (ADR-315 §2).
 //!
 //! **SYNTHETIC / L0.** A [`TwinDelta`] is a *model-relative* statement: how far a
 //! supplied observation set sits from the twin's own predicted distributions,
 //! measured against the twin's own modelled variance. It is **not** a detection,
-//! and asserts no accuracy (ADR-312 evidence discipline, ADR-297). A change that
+//! and asserts no accuracy (ADR-315 evidence discipline, ADR-300). A change that
 //! is large relative to the modelled variance is a *candidate physical change*
 //! to be corroborated, never a confident claim.
 //!
-//! Consistent with ADR-297 rule 1, a link the twin cannot evaluate — unknown
+//! Consistent with ADR-300 rule 1, a link the twin cannot evaluate — unknown
 //! prediction, or an observation for a link outside the twin — is reported as
 //! [`LinkDeltaStatus::Unknown`], excluded from the aggregate magnitude, never an
 //! error.
@@ -89,7 +89,7 @@ pub enum LinkDeltaStatus {
         #[serde(skip_serializing_if = "Option::is_none")]
         significance: Option<f64>,
     },
-    /// The link could not be evaluated; first-class UNKNOWN (ADR-297 rule 1).
+    /// The link could not be evaluated; first-class UNKNOWN (ADR-300 rule 1).
     Unknown {
         /// Why it is unknown.
         reason: UnknownReason,
@@ -111,7 +111,7 @@ pub struct LinkDelta {
 /// summaries, not a detection or accuracy claim.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TwinDelta {
-    /// Twin baseline version this delta is relative to (ADR-312 §2).
+    /// Twin baseline version this delta is relative to (ADR-315 §2).
     pub baseline_version: u64,
     /// Significance threshold (standard deviations) used to flag deviating links.
     pub significance_threshold: f64,

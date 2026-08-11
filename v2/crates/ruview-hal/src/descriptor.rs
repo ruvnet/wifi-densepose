@@ -1,4 +1,4 @@
-//! The sensor descriptor (ADR-317 §1): what a device is, in canonical terms.
+//! The sensor descriptor (ADR-320 §1): what a device is, in canonical terms.
 //!
 //! A [`SensorDescriptor`] binds a HAL implementation to its ontology
 //! [`Sensor`](ruview_ontology::Sensor) identity, its [`Modality`], the
@@ -25,7 +25,7 @@ use crate::modality::Modality;
 pub struct SamplingSpec {
     /// Native sampling rate in Hz when fixed/known. `None` is a first-class
     /// UNKNOWN — an event-driven or unspecified source is not an error
-    /// (ADR-297 rule 1).
+    /// (ADR-300 rule 1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample_rate_hz: Option<f64>,
     /// Native unit label for one raw sample (e.g. `"csi-complex"`, `"m/s^2"`,
@@ -38,13 +38,13 @@ pub struct SamplingSpec {
 
 /// A canonical description of one sensing device.
 ///
-/// Round-trips losslessly through serde so a fleet controller (ADR-313) can
+/// Round-trips losslessly through serde so a fleet controller (ADR-316) can
 /// enumerate heterogeneous hardware uniformly. The `sensor_id` is the ontology
-/// identity the device is authenticated as (ADR-302) before its observations
+/// identity the device is authenticated as (ADR-305) before its observations
 /// are trusted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SensorDescriptor {
-    /// The ontology sensor identity this device is authenticated as (ADR-302).
+    /// The ontology sensor identity this device is authenticated as (ADR-305).
     pub sensor_id: SensorId,
     /// What phenomenon class the device senses.
     pub modality: Modality,

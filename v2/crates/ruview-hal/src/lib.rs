@@ -1,4 +1,4 @@
-//! # `ruview-hal` — the RuView sensor HAL (ADR-317, ADR-297 primitive 20)
+//! # `ruview-hal` — the RuView sensor HAL (ADR-320, ADR-300 primitive 20)
 //!
 //! One hardware abstraction that maps **any** sensing modality — {CSI, 802.11bf,
 //! BLE, UWB, mmWave, acoustic, camera, lidar, IMU, custom} — onto one canonical
@@ -8,20 +8,20 @@
 //! modality-specific frame, only a provenance-bearing, evidence-labelled
 //! observation.
 //!
-//! This crate consumes the canonical ontology (ADR-303) — its output is an
+//! This crate consumes the canonical ontology (ADR-306) — its output is an
 //! ontology `Observation` bound to a `Sensor` — and its observations feed real
-//! sensor fusion (ADR-308). It is a **pure abstraction**: no I/O, no async, no
+//! sensor fusion (ADR-311). It is a **pure abstraction**: no I/O, no async, no
 //! inference, no accuracy claim. A passing trait test proves the abstraction,
 //! not a fielded device; hardware support for any modality stays CLAIMED until
 //! demonstrated on real silicon with captured evidence (CLAUDE.md).
 //!
-//! ## The four ADR-297 non-negotiable rules, as they bind this crate
+//! ## The four ADR-300 non-negotiable rules, as they bind this crate
 //!
 //! 1. **UNKNOWN is first-class, never an error.** [`SensorHal::normalize`] is
 //!    infallible: malformed / out-of-bounds raw input yields an UNKNOWN-flagged
 //!    ([`Uncertainty::degraded`]) observation, never a panic or `Err`.
 //! 2. **Certificates bind cryptographically.** Out of scope for the HAL, but a
-//!    device is authenticated as an ADR-302 `Sensor` (the descriptor's
+//!    device is authenticated as an ADR-305 `Sensor` (the descriptor's
 //!    `sensor_id`) before its observations are trusted.
 //! 3. **One canonical semantics downstream.** The HAL reuses the ontology's
 //!    `Observation`, `Sensor`, `EvidenceLevel`, and `SemanticProvenance` rather
@@ -57,7 +57,7 @@
 //! | ESP32-S3/C6 CSI node | ADR-279 / firmware | [`Modality::Csi`] | `RfFrameV2` (subcarrier complex) | Reuses the ADR-279 native-frame → shared-latent adapter; the HAL only lifts the latent into an `Observation`. |
 //! | Nexmon CSI | ADR-279 | [`Modality::Csi`] | `RfFrameV2` | Per-device adapter into the shared latent; same trait, different native layout. |
 //! | FeitCSI / Intel / Atheros / Realtek | ADR-279 | [`Modality::Csi`] | `RfFrameV2` | Same shared-latent path; bandwidth/antenna structure kept native, not canonicalized. |
-//! | 802.11bf sensing | ADR-307 (phase 2) | [`Modality::Ieee80211bf`] | native 11bf measurement frame | Enters under the same trait as it lands. |
+//! | 802.11bf sensing | ADR-310 (phase 2) | [`Modality::Ieee80211bf`] | native 11bf measurement frame | Enters under the same trait as it lands. |
 //! | mmWave radar | ADR-063 | [`Modality::Mmwave`] | range-doppler / point frame | The ADR-063 fusion producer becomes a `SensorHal` implementation. |
 //! | Multistatic WiFi | ADR-029 | [`Modality::Csi`] | multi-link `RfFrameV2` set | Multiple links, one authenticated `Sensor`, one `Observation`. |
 //!
@@ -126,7 +126,7 @@ mod tests {
         }
     }
 
-    // ADR-317 validation: descriptor round-trips losslessly through serde.
+    // ADR-320 validation: descriptor round-trips losslessly through serde.
     #[test]
     fn descriptor_round_trip() {
         for descriptor in [csi_adapter().describe(), imu_adapter().describe()] {
@@ -153,7 +153,7 @@ mod tests {
         assert!(back.validate().is_ok());
     }
 
-    // ADR-317 validation: a reference adapter normalizes a synthetic sample to a
+    // ADR-320 validation: a reference adapter normalizes a synthetic sample to a
     // uniform HalObservation carrying sensor id, container, time, exactly one
     // evidence level, and provenance.
     #[test]
@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(imu.provenance().model_version, "synthetic-imu-adapter@0");
     }
 
-    // ADR-317 validation: unknown / degraded input yields an UNKNOWN-flagged
+    // ADR-320 validation: unknown / degraded input yields an UNKNOWN-flagged
     // observation, never a panic.
     #[test]
     fn degraded_input_yields_unknown_not_panic() {

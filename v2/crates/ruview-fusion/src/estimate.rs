@@ -1,4 +1,4 @@
-//! The presence estimate and its uncertainty-aware combination (ADR-308 §2).
+//! The presence estimate and its uncertainty-aware combination (ADR-311 §2).
 //!
 //! An [`Estimate`] is a single sensor's belief about zone occupancy expressed as
 //! a probability with a variance. Estimates combine by **inverse-variance
@@ -8,7 +8,7 @@
 //! (uncertain) one is down-weighted, and combining agreeing estimates *lowers*
 //! the fused variance (the belief sharpens). This is deliberately **not** a
 //! naive mean, which would ignore how certain each source is and could never
-//! sharpen (ADR-308: "uncertainty-weighted ... not a silently averaged value").
+//! sharpen (ADR-311: "uncertainty-weighted ... not a silently averaged value").
 
 use serde::{Deserialize, Serialize};
 

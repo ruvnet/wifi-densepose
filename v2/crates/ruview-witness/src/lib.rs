@@ -1,7 +1,7 @@
 //! `ruview-witness` — the staged, append-only, hash-linked witness chain.
 //!
-//! This crate implements **ADR-316** (witness chain), primitive 19 of the
-//! ADR-297 perception substrate. Instead of emitting a bare boolean
+//! This crate implements **ADR-319** (witness chain), primitive 19 of the
+//! ADR-300 perception substrate. Instead of emitting a bare boolean
 //! ("person present"), RuView emits a *chain* whose ordered stages record the
 //! auditable reasoning behind an output:
 //!
@@ -19,21 +19,21 @@
 //!
 //! ## Relationship to sibling ADRs
 //!
-//! - **ADR-302 ([`ruview_attest`])** roots the chain: the first stage is built
+//! - **ADR-305 ([`ruview_attest`])** roots the chain: the first stage is built
 //!   from an authenticated [`VerifiedMeasurement`]
 //!   ([`WitnessChain::from_measurement`]), so the whole chain descends from a
 //!   verified chain of custody. The stage hash reuses `ruview-attest`'s BLAKE3
 //!   ([`ruview_attest::PayloadHash`]) — no separate hash primitive is added.
-//! - **ADR-292** contributes [`SourceState`]: a `Synthetic` root can never
+//! - **ADR-295** contributes [`SourceState`]: a `Synthetic` root can never
 //!   present as `LiveVerified`, and it caps the chain's effective evidence
 //!   level.
-//! - **ADR-299** contributes [`DomainState`] (the `KNOWN → DEGRADED → UNKNOWN`
+//! - **ADR-302** contributes [`DomainState`] (the `KNOWN → DEGRADED → UNKNOWN`
 //!   staleness guard): a low-confidence or out-of-distribution inference is
 //!   recorded as such, never silently promoted.
-//! - **ADR-318** will attach the real terminal [`PolicyDecision`]; here it is a
+//! - **ADR-321** will attach the real terminal [`PolicyDecision`]; here it is a
 //!   faithfully-typed placeholder for the governed action taken (or withheld).
 //!
-//! ## Honesty discipline (ADR-297 rule 1 / CLAUDE.md)
+//! ## Honesty discipline (ADR-300 rule 1 / CLAUDE.md)
 //!
 //! [`Confidence::Unknown`] is a first-class value, never an error. A missing
 //! corroboration is recorded as [`Corroboration::None`], never fabricated. The
@@ -45,7 +45,7 @@
 //! Like `ruview-attest`, any guarantee exercised by this crate's tests is
 //! **SYNTHETIC / L0** — the fixtures are constructed in code, never captured
 //! from silicon. Hash-linking here is tamper-*evident* against in-place
-//! mutation; deployment-grade non-repudiation additionally requires the ADR-302
+//! mutation; deployment-grade non-repudiation additionally requires the ADR-305
 //! per-stage RuField signatures, layered on top of this structure, plus
 //! real-hardware evidence.
 
@@ -148,7 +148,7 @@ pub enum EvidenceLevel {
     L5 = 5,
 }
 
-/// The ADR-292 source state of an RF observation. `Unknown` is structurally
+/// The ADR-295 source state of an RF observation. `Unknown` is structurally
 /// absent here: a stage that cannot assert a live state records `Synthetic` or
 /// `Disconnected`, and a `Synthetic` root can never present as `LiveVerified`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -156,7 +156,7 @@ pub enum EvidenceLevel {
 pub enum SourceState {
     /// Synthetic input; caps the chain at [`EvidenceLevel::L0`].
     Synthetic = 0,
-    /// Live and cryptographically verified (ADR-302).
+    /// Live and cryptographically verified (ADR-305).
     LiveVerified = 1,
     /// Live but unverified.
     LiveUnverified = 2,
@@ -168,13 +168,13 @@ pub enum SourceState {
 
 impl SourceState {
     /// Whether this state is the authenticated live state. A `Synthetic` root
-    /// answers `false`, upholding the ADR-292 invariant.
+    /// answers `false`, upholding the ADR-295 invariant.
     pub fn is_live_verified(&self) -> bool {
         matches!(self, SourceState::LiveVerified)
     }
 }
 
-/// The ADR-299 domain-signature gate result for a model inference — the
+/// The ADR-302 domain-signature gate result for a model inference — the
 /// `VALID → DEGRADED → UNKNOWN` staleness guard. Recorded faithfully so a
 /// degraded or out-of-distribution inference is never silently promoted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -189,7 +189,7 @@ pub enum DomainState {
 }
 
 /// A stage's confidence. [`Confidence::Unknown`] is a first-class value
-/// (ADR-297 rule 1), never an error and never coerced to a number.
+/// (ADR-300 rule 1), never an error and never coerced to a number.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Confidence {
     /// A finite confidence in `0.0..=1.0`.
@@ -228,23 +228,23 @@ pub enum StageKind {
     RfObservation = 0,
     /// Deterministic DSP features and ADR-137 quality signals.
     DspEvidence = 1,
-    /// Model version, raw output, uncertainty, and the ADR-299 gate result.
+    /// Model version, raw output, uncertainty, and the ADR-302 gate result.
     ModelInference = 2,
-    /// The ADR-300 agreement link (phase 2); "no corroboration" in phase 1.
+    /// The ADR-303 agreement link (phase 2); "no corroboration" in phase 1.
     IndependentCorroboration = 3,
-    /// The ADR-303 ontology entity the inference updated.
+    /// The ADR-306 ontology entity the inference updated.
     SpatialState = 4,
-    /// The terminal governed action (ADR-318).
+    /// The terminal governed action (ADR-321).
     PolicyDecision = 5,
 }
 
 /// The RF observation stage: the authenticated measurement lineage plus its
-/// ADR-292 source state. This is the root link of every chain.
+/// ADR-295 source state. This is the root link of every chain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RfObservation {
-    /// The verified chain-of-custody record from `ruview-attest` (ADR-302).
+    /// The verified chain-of-custody record from `ruview-attest` (ADR-305).
     pub measurement: VerifiedMeasurement,
-    /// The ADR-292 source state of the measurement.
+    /// The ADR-295 source state of the measurement.
     pub source_state: SourceState,
 }
 
@@ -290,14 +290,14 @@ impl DspEvidence {
 }
 
 /// The model inference stage: which model produced which raw output, with what
-/// predictive uncertainty, under which ADR-299 domain gate.
+/// predictive uncertainty, under which ADR-302 domain gate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelInference {
     model_version: String,
     label: String,
     /// Predictive uncertainty of the raw output.
     pub uncertainty: f32,
-    /// The ADR-299 domain-gate result. `Unknown` records an OOD inference.
+    /// The ADR-302 domain-gate result. `Unknown` records an OOD inference.
     pub domain_state: DomainState,
 }
 
@@ -328,7 +328,7 @@ impl ModelInference {
     }
 }
 
-/// The independent-corroboration stage (ADR-300). In phase 1 the honest value
+/// The independent-corroboration stage (ADR-303). In phase 1 the honest value
 /// is [`Corroboration::None`] — a missing corroboration is recorded, never
 /// fabricated.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -369,7 +369,7 @@ impl Corroboration {
     }
 }
 
-/// The kind of ADR-303 ontology entity a stage updated.
+/// The kind of ADR-306 ontology entity a stage updated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum SpatialEntity {
@@ -381,7 +381,7 @@ pub enum SpatialEntity {
     Event = 2,
 }
 
-/// The spatial-state stage: the ADR-303 ontology entity the inference updated.
+/// The spatial-state stage: the ADR-306 ontology entity the inference updated.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpatialState {
     /// The kind of entity updated.
@@ -404,7 +404,7 @@ impl SpatialState {
     }
 }
 
-/// The governed action a policy took or withheld (ADR-318 owns the real one).
+/// The governed action a policy took or withheld (ADR-321 owns the real one).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PolicyAction {
     /// An action was taken.
@@ -419,7 +419,7 @@ pub enum PolicyAction {
     },
 }
 
-/// The terminal policy-decision stage: the governed action, with the ADR-315
+/// The terminal policy-decision stage: the governed action, with the ADR-318
 /// capability certificate it relied on (if any).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyDecision {
@@ -670,7 +670,7 @@ pub struct ChainSummary {
     pub finalized: bool,
 }
 
-/// A staged, append-only, hash-linked witness chain (ADR-316).
+/// A staged, append-only, hash-linked witness chain (ADR-319).
 ///
 /// A chain always roots in an RF observation and grows by strictly-increasing
 /// stage kind. Prior stages are immutable: [`WitnessChain::append`] only ever
@@ -707,7 +707,7 @@ impl WitnessChain {
     }
 
     /// Root a chain directly in an authenticated [`VerifiedMeasurement`]
-    /// (ADR-302), so the chain descends from a verified chain of custody.
+    /// (ADR-305), so the chain descends from a verified chain of custody.
     pub fn from_measurement(
         measurement: VerifiedMeasurement,
         source_state: SourceState,

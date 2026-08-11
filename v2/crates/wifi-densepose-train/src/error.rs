@@ -13,7 +13,7 @@
 //! ├── DatasetError     (data loading, I/O, format)
 //! ├── SubcarrierError  (frequency-axis resampling)
 //! ├── MaeError         (MAE patchify / masking — ADR-152 §2.3)
-//! └── ProtocolError    (split protocols / leakage audit — ADR-288)
+//! └── ProtocolError    (split protocols / leakage audit — ADR-291)
 //! ```
 
 use std::path::PathBuf;
@@ -50,7 +50,7 @@ pub enum TrainError {
     #[error("MAE pretraining error: {0}")]
     Mae(#[from] MaeError),
 
-    /// A split-protocol / leakage-audit error (ADR-288).
+    /// A split-protocol / leakage-audit error (ADR-291).
     #[error("Protocol error: {0}")]
     Protocol(#[from] ProtocolError),
 
@@ -477,7 +477,7 @@ pub enum MaeError {
 // ---------------------------------------------------------------------------
 
 /// Errors produced by the public-benchmark split protocols and leakage guards
-/// ([`crate::protocols`], ADR-288).
+/// ([`crate::protocols`], ADR-291).
 ///
 /// Every leakage-audit failure is an `Err`, never a warning: a split that
 /// leaks subjects, environments, or windows of a continuous recording across
@@ -527,7 +527,7 @@ pub enum ProtocolError {
     /// Two windows cut from the same continuous recording ended up on
     /// opposite sides of the split. Overlapping/adjacent windows are
     /// near-identical, so this is window-level leakage regardless of the
-    /// protocol (the 2024–2025 leakage reckoning; ADR-288 §Context).
+    /// protocol (the 2024–2025 leakage reckoning; ADR-291 §Context).
     #[error(
         "Recording {recording_id} has windows on both sides of the split \
          (window-level leakage from a continuous recording)"

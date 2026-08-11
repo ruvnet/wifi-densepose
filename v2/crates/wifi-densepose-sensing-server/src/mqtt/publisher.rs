@@ -333,7 +333,7 @@ async fn publish_snapshot(
     }
 
     // Numeric rate-limited entities. Rate limiting is per (node, entity)
-    // (ADR-294, issue #1541) so nodes never starve one another.
+    // (ADR-297, issue #1541) so nodes never starve one another.
     let node = snap.node_id.as_str();
     for (entity, allowed) in [
         (EntityKind::PersonCount, rl.allow(node, EntityKind::PersonCount, elapsed, &cfg.rates)),

@@ -1,5 +1,5 @@
 //! Canonical entity types: the `Site ▸ Building ▸ Floor ▸ Space ▸ Zone`
-//! containment spine and the leaf entities located within it (ADR-303 §1).
+//! containment spine and the leaf entities located within it (ADR-306 §1).
 //!
 //! Containment is expressed by a typed `parent` field on each spine node and a
 //! [`Container`] reference on each leaf. This is the pure-hierarchy analogue of
@@ -50,7 +50,7 @@ pub struct Floor {
     pub name: String,
 }
 
-/// A bounded interior space within a [`Floor`] — the ADR-294 "room" and the
+/// A bounded interior space within a [`Floor`] — the ADR-297 "room" and the
 /// HomeCore `area_id` join point (ADR-127).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Space {
@@ -93,12 +93,12 @@ pub enum Container {
     },
 }
 
-/// A physical sensing device placement — the entity ADR-302 authenticates.
+/// A physical sensing device placement — the entity ADR-305 authenticates.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sensor {
     /// Stable id.
     pub id: SensorId,
-    /// ADR-302 authenticated device identity (HomeCore `device_id`).
+    /// ADR-305 authenticated device identity (HomeCore `device_id`).
     pub device_id: String,
     /// Where the sensor is placed.
     pub located_in: Container,
@@ -136,7 +136,7 @@ pub struct Object {
     pub provenance: SemanticProvenance,
 }
 
-/// A calibrated observation produced from an authenticated frame (ADR-298).
+/// A calibrated observation produced from an authenticated frame (ADR-301).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Observation {
     /// Stable id.
@@ -154,7 +154,7 @@ pub struct Observation {
     pub provenance: SemanticProvenance,
 }
 
-/// A persistent track (ADR-304), optionally resolved to a [`Person`].
+/// A persistent track (ADR-307), optionally resolved to a [`Person`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Track {
     /// Stable id.
@@ -170,7 +170,7 @@ pub struct Track {
     pub provenance: SemanticProvenance,
 }
 
-/// A discrete governed event (ADR-315 certified, ADR-316 witnessed).
+/// A discrete governed event (ADR-318 certified, ADR-319 witnessed).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Event {
     /// Stable id.

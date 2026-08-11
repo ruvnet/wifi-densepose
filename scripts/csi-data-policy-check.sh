@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# csi-data-policy-check.sh — ADR-296 CSI data-incident repository guard.
+# csi-data-policy-check.sh — ADR-299 CSI data-incident repository guard.
 #
-# WHY (ADR-296): raw CSI recordings are person data (they encode breathing,
+# WHY (ADR-299): raw CSI recordings are person data (they encode breathing,
 # movement, and presence) and CLAUDE.md prohibits committing CSI or person
 # data. A stale `.gitignore` rule let ~64.6 MB of raw captures reach the tree
 # under `data/recordings/` and `v2/data/recordings/`. This check is the
@@ -30,7 +30,7 @@
 # ------------------------------------------------------------------------------
 # ALLOWLIST (synthetic test fixtures)
 # ------------------------------------------------------------------------------
-# Tests may use only synthetic or expressly-consented minimal fixtures (ADR-296).
+# Tests may use only synthetic or expressly-consented minimal fixtures (ADR-299).
 # A file whose path matches an allow pattern is exempt. Patterns come from:
 #   * the file `scripts/csi-data-policy.allow` (one glob per line, `#` comments), and
 #   * the env var `CSI_POLICY_ALLOW` (colon-separated globs).
@@ -38,11 +38,11 @@
 #   scripts/tests/fixtures/csi-policy/*.csi.jsonl
 #
 # ------------------------------------------------------------------------------
-# BASELINE (acknowledged pre-existing incident, ADR-296)
+# BASELINE (acknowledged pre-existing incident, ADR-299)
 # ------------------------------------------------------------------------------
 # The tree today ALREADY contains the incident recordings under
 # `data/recordings/` and `v2/data/recordings/`. Removing them is destructive and
-# gated on data-owner sign-off (ADR-296 "Decision"), so this guard is EXPECTED to
+# gated on data-owner sign-off (ADR-299 "Decision"), so this guard is EXPECTED to
 # fail on the current tree — that failure documents the incident.
 #
 # Once the owner removes those files, or to acknowledge them in the interim
@@ -160,7 +160,7 @@ scan_stdin() {
       continue  # synthetic fixture, expressly allowed
     fi
     if matches_any "$f" BASELINE_PATTERNS; then
-      echo "ack:   $f — $reason (acknowledged baseline, ADR-296)" >&2
+      echo "ack:   $f — $reason (acknowledged baseline, ADR-299)" >&2
       acknowledged=$((acknowledged + 1))
       continue
     fi
@@ -169,14 +169,14 @@ scan_stdin() {
   done
 
   if [[ "$acknowledged" -gt 0 ]]; then
-    echo "note: $acknowledged file(s) acknowledged via CSI_POLICY_BASELINE (ADR-296)." >&2
+    echo "note: $acknowledged file(s) acknowledged via CSI_POLICY_BASELINE (ADR-299)." >&2
   fi
 
   if [[ "$violations" -gt 0 ]]; then
     echo "" >&2
-    echo "FAIL: $violations CSI/person-data policy violation(s) (ADR-296)." >&2
+    echo "FAIL: $violations CSI/person-data policy violation(s) (ADR-299)." >&2
     echo "      Raw CSI is person data and must not be tracked in git. See" >&2
-    echo "      docs/adr/ADR-296-csi-data-incident-repo-controls.md." >&2
+    echo "      docs/adr/ADR-299-csi-data-incident-repo-controls.md." >&2
     echo "      Synthetic test fixtures can be allowlisted in $ALLOW_FILE." >&2
     return 1
   fi

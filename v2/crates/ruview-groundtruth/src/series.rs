@@ -1,5 +1,5 @@
 //! Timestamped reference and estimate series with boundary validation
-//! (ADR-300 §1, reusing ADR-290's ingest discipline).
+//! (ADR-303 §1, reusing ADR-293's ingest discipline).
 //!
 //! Both a reference (independent observer) and an RF estimate are sequences of
 //! timestamped [`Reading`]s for one [`Measurand`]. Timestamps must be strictly

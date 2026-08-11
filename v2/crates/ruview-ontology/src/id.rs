@@ -1,9 +1,9 @@
-//! Typed, deterministic identifier scheme (ADR-303 §1).
+//! Typed, deterministic identifier scheme (ADR-306 §1).
 //!
 //! Every ontology entity carries a stable, caller-provided string id wrapped in
 //! a distinct newtype. Ids are *never* randomly generated here: the ontology is
 //! a pure representation, so identity is supplied by the producing surface
-//! (ADR-302 `DeviceId`, HomeCore `area_id`, tracker `track_id`, …) and only
+//! (ADR-305 `DeviceId`, HomeCore `area_id`, tracker `track_id`, …) and only
 //! validated at the crate boundary.
 
 use serde::{Deserialize, Serialize};
@@ -105,7 +105,7 @@ typed_id!(
     FloorId, "floor"
 );
 typed_id!(
-    /// Identifier for a [`Space`](crate::Space) (ADR-294 room / HomeCore area).
+    /// Identifier for a [`Space`](crate::Space) (ADR-297 room / HomeCore area).
     SpaceId, "space"
 );
 typed_id!(
@@ -113,7 +113,7 @@ typed_id!(
     ZoneId, "zone"
 );
 typed_id!(
-    /// Identifier for a [`Sensor`](crate::Sensor) (ADR-302 authenticated device).
+    /// Identifier for a [`Sensor`](crate::Sensor) (ADR-305 authenticated device).
     SensorId, "sensor"
 );
 typed_id!(
@@ -129,11 +129,11 @@ typed_id!(
     ObservationId, "observation"
 );
 typed_id!(
-    /// Identifier for a [`Track`](crate::Track) (ADR-304 persistent track).
+    /// Identifier for a [`Track`](crate::Track) (ADR-307 persistent track).
     TrackId, "track"
 );
 typed_id!(
-    /// Identifier for an [`Event`](crate::Event) (ADR-315/ADR-316 governed output).
+    /// Identifier for an [`Event`](crate::Event) (ADR-318/ADR-319 governed output).
     EventId, "event"
 );
 

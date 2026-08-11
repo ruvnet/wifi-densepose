@@ -1,4 +1,4 @@
-//! Criterion benchmark for FeitCSI record parse throughput (ADR-289).
+//! Criterion benchmark for FeitCSI record parse throughput (ADR-292).
 //!
 //! Measures `parse_record` over synthetic in-code fixtures at the wideband
 //! 802.11ax shapes: 20 MHz (242 tones), 80 MHz (996) and the headline

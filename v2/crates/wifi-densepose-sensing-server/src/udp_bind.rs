@@ -1,4 +1,4 @@
-//! ADR-293: sensor data-plane bind hardening — UDP bind scope + source allowlist.
+//! ADR-296: sensor data-plane bind hardening — UDP bind scope + source allowlist.
 //!
 //! The CSI UDP receiver historically bound `0.0.0.0` unconditionally, with no
 //! equivalent of the HTTP `--bind-addr` flag, no source allowlist, and no
@@ -68,7 +68,7 @@ pub fn decide_udp_bind(
         "Refusing to bind the UDP CSI receiver to routable address {bind} with no \
          source allowlist. Pass --udp-allow <IP/CIDR,...> to restrict sources, or \
          --udp-insecure-lan to accept the LAN-spoofing risk explicitly. The default \
-         is loopback (127.0.0.1); see the crate SECURITY.md (ADR-293)."
+         is loopback (127.0.0.1); see the crate SECURITY.md (ADR-296)."
     ))
 }
 

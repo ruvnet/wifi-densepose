@@ -1,19 +1,19 @@
 //! `ruview-attest` — authenticated sensor identity and RF chain of custody.
 //!
-//! This crate implements **ADR-302** (authenticated sensor identity), phase 1 of
-//! the ADR-297 perception substrate. It models the chain of custody link
+//! This crate implements **ADR-305** (authenticated sensor identity), phase 1 of
+//! the ADR-300 perception substrate. It models the chain of custody link
 //! `device → signed measurement → sequence → timestamp → payload hash →
 //! calibration`, verified at the ingest boundary.
 //!
 //! ## Relationship to sibling ADRs
 //!
-//! - **ADR-293** shipped step one — a loopback-default UDP bind and an optional
+//! - **ADR-296** shipped step one — a loopback-default UDP bind and an optional
 //!   source IP/CIDR allowlist — and explicitly deferred "per-device provisioned
 //!   keys, MAC/AEAD, device identifiers, monotonic sequence numbers, freshness
 //!   window, and replay rejection." **This crate is that step two.** An IP
 //!   allowlist does not stop on-subnet spoofing; a cryptographic device
 //!   identity bound into each measurement does.
-//! - **ADR-316** (witness chain) consumes the [`VerifiedMeasurement`] lineage
+//! - **ADR-319** (witness chain) consumes the [`VerifiedMeasurement`] lineage
 //!   produced here and serializes it for offline re-verification.
 //!
 //! ## Signer / Verifier abstraction and the SYNTHETIC reference
@@ -74,7 +74,7 @@ pub enum InputError {
 /// Reason a [`SignedMeasurement`] was rejected at the verification boundary.
 ///
 /// Every variant is a hard `Err`: a rejected frame is dropped and counted,
-/// never a warning that proceeds (mirroring ADR-293's source-drop behaviour).
+/// never a warning that proceeds (mirroring ADR-296's source-drop behaviour).
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum VerifyError {
     /// The measurement's `DeviceId` is not enrolled.
@@ -155,7 +155,7 @@ impl PayloadHash {
     }
 }
 
-/// Optional reference to a calibration certificate (ADR-298) in effect for a
+/// Optional reference to a calibration certificate (ADR-301) in effect for a
 /// measurement. Validated length at the boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CalibrationRef(String);
@@ -224,7 +224,7 @@ impl MeasurementContent {
 }
 
 /// A [`MeasurementContent`] together with its signature. This is the object on
-/// the wire and the unit the witness chain (ADR-316) serializes.
+/// the wire and the unit the witness chain (ADR-319) serializes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignedMeasurement {
     /// The signed content.
@@ -331,7 +331,7 @@ impl Verifier for Blake3MacSigner {
 
 /// Bounds a measurement timestamp against the injected server clock. Rejects
 /// frames older than `max_age_nanos` (stale) or more than `max_skew_ahead_nanos`
-/// in the future (clock-skew budget). Reuses ADR-292's freshness notion rather
+/// in the future (clock-skew budget). Reuses ADR-295's freshness notion rather
 /// than inventing a parallel one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FreshnessPolicy {
@@ -395,7 +395,7 @@ impl<V: Verifier> AttestationVerifier<V> {
     }
 
     /// Enroll (or re-enroll) a device with the verifier for its identity. This
-    /// is the explicit, authorized enrollment step from ADR-302; re-enrolling
+    /// is the explicit, authorized enrollment step from ADR-305; re-enrolling
     /// resets the device's sequence state.
     pub fn enroll(&mut self, device: DeviceId, verifier: V) {
         self.enrolled.insert(

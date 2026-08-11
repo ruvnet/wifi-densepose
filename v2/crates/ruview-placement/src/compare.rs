@@ -1,14 +1,14 @@
 //! Post-install loop: predicted vs. measured observability → adjustments
-//! (ADR-305 §3).
+//! (ADR-308 §3).
 //!
 //! **This crate never measures.** The `measured` observability values are
-//! supplied by the caller — the ADR-299 runtime observability signal from freshly
+//! supplied by the caller — the ADR-302 runtime observability signal from freshly
 //! enrolled, calibrated sensors — and this module only *compares* them against the
 //! optimizer's own SYNTHETIC/L0 prediction. The predicted side stays labelled
 //! `L0`; a `MEASURED` statement, if any, belongs to the caller's measured input
 //! together with its reproducer (CLAUDE.md hardware rule). Where measurement
 //! disagrees with prediction, the module recommends an adjustment and a coarse
-//! twin-parameter residual to feed back into the ADR-312 twin. Following ADR-297
+//! twin-parameter residual to feed back into the ADR-315 twin. Following ADR-300
 //! rule 1, a target with no measured value yields a first-class UNKNOWN verdict,
 //! never an error.
 
@@ -23,7 +23,7 @@ use crate::coverage::{Observability, PlacementScore};
 pub const DEFAULT_COMPARE_TOLERANCE: f64 = 0.15;
 
 /// Coarse dB of implied effective attenuation per unit of observability shortfall,
-/// used only to suggest a twin-parameter residual to feed back into ADR-312. A
+/// used only to suggest a twin-parameter residual to feed back into ADR-315. A
 /// rough SYNTHETIC heuristic, not a calibrated figure.
 const RESIDUAL_DB_PER_UNIT: f64 = 30.0;
 
@@ -81,7 +81,7 @@ pub enum CompareVerdict {
     /// Measured is materially above predicted (the model was pessimistic).
     Overperforming,
     /// Cannot compare (no measured value, or prediction was UNKNOWN). First-class
-    /// UNKNOWN (ADR-297 rule 1).
+    /// UNKNOWN (ADR-300 rule 1).
     Unknown,
 }
 
@@ -112,7 +112,7 @@ pub enum ResidualKind {
     EffectiveAttenuationLower,
 }
 
-/// A coarse twin-parameter residual to feed back into the ADR-312 twin.
+/// A coarse twin-parameter residual to feed back into the ADR-315 twin.
 ///
 /// **SYNTHETIC / L0.** A rough model-improvement hint, not a calibrated value.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -132,7 +132,7 @@ pub struct Adjustment {
     pub action: AdjustmentAction,
     /// Human-readable rationale.
     pub rationale: String,
-    /// Coarse twin-parameter residual to feed back into ADR-312, if any.
+    /// Coarse twin-parameter residual to feed back into ADR-315, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub twin_residual: Option<TwinResidual>,
 }
@@ -194,7 +194,7 @@ pub fn compare_post_install(
 ///
 /// Deterministic and never panics. A target whose prediction is UNKNOWN, or that
 /// has no measured value, yields a [`CompareVerdict::Unknown`] and an
-/// [`AdjustmentAction::InsufficientData`] recommendation (ADR-297 rule 1).
+/// [`AdjustmentAction::InsufficientData`] recommendation (ADR-300 rule 1).
 #[must_use]
 pub fn compare_post_install_with_tolerance(
     predicted: &PlacementScore,

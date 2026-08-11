@@ -23,7 +23,7 @@
 //! Results are stored in a [`VitalSignStore`] with configurable
 //! retention for historical analysis.
 //!
-//! Ground-truth evaluation ([`groundtruth`], ADR-290) ingests a
+//! Ground-truth evaluation ([`groundtruth`], ADR-293) ingests a
 //! reference-device series (CSV export), time-aligns it against a store
 //! session, and produces evidence-graded agreement statistics
 //! (MAE/RMSE/bias, Bland-Altman limits, percent-within-tolerance) with a

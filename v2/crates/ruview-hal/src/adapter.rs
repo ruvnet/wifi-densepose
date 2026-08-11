@@ -1,4 +1,4 @@
-//! The [`SensorHal`] trait (ADR-317 §1) and two deterministic reference
+//! The [`SensorHal`] trait (ADR-320 §1) and two deterministic reference
 //! adapters.
 //!
 //! The trait is the extension point: every sensing modality lands as one
@@ -8,12 +8,12 @@
 //! sample into a [`HalObservation`]. `normalize` is the hardware/FFI boundary
 //! where untrusted input is validated (CLAUDE.md); it is **infallible** by
 //! design — malformed or out-of-bounds input yields an UNKNOWN-flagged
-//! observation, never a panic or an error (ADR-297 rule 1).
+//! observation, never a panic or an error (ADR-300 rule 1).
 //!
 //! Two reference adapters ship here, one RF (CSI) and one non-RF (IMU), per the
-//! ADR-317 validation requirement of at least two modalities. Both are labelled
+//! ADR-320 validation requirement of at least two modalities. Both are labelled
 //! SYNTHETIC / L0: they prove the abstraction, not a fielded device, and make
-//! no MEASURED claim (CLAUDE.md; ADR-317 "Category and honesty discipline").
+//! no MEASURED claim (CLAUDE.md; ADR-320 "Category and honesty discipline").
 
 use ruview_ontology::{Container, EvidenceLevel, Observation, ObservationId, SemanticProvenance, SensorId};
 
@@ -41,9 +41,9 @@ pub struct NormalizeCtx {
 /// observation.
 ///
 /// Implementations wrap existing producers — CSI (ESP32/Nexmon/FeitCSI via the
-/// ADR-279 `RfFrameV2` path), 802.11bf (ADR-307), BLE, UWB, mmWave (ADR-063),
+/// ADR-279 `RfFrameV2` path), 802.11bf (ADR-310), BLE, UWB, mmWave (ADR-063),
 /// acoustic, camera, lidar, IMU, and `custom` — behind this single trait, so
-/// the world model and fusion (ADR-308) see only [`HalObservation`]s.
+/// the world model and fusion (ADR-311) see only [`HalObservation`]s.
 pub trait SensorHal {
     /// The native, modality-specific raw sample type this adapter consumes.
     /// Kept native (not canonicalized) per the ADR-279 shared-latent lesson.
@@ -176,7 +176,7 @@ pub struct ImuSample {
 
 /// A deterministic, synthetic IMU reference adapter (SYNTHETIC / L0).
 ///
-/// The required non-RF second modality (ADR-317 validation). Demonstrates that
+/// The required non-RF second modality (ADR-320 validation). Demonstrates that
 /// a wholly different phenomenon class lifts into the *same* canonical
 /// observation with its own honest evidence level — it is never lifted to
 /// camera- or RF-grade.

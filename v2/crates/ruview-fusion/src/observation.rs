@@ -1,15 +1,15 @@
 //! The fusion input: a canonical HAL observation plus its presence claim
-//! (ADR-308 §1).
+//! (ADR-311 §1).
 //!
 //! Fusion consumes authenticated, ontology-typed observations. A
 //! [`HalObservation`] carries the modality, evidence level, sensor identity,
-//! container, and provenance (the canonical ADR-303 vocabulary, reused rather
-//! than reinvented — ADR-297 rule 3); a [`PresenceObservation`] pairs it with
+//! container, and provenance (the canonical ADR-306 vocabulary, reused rather
+//! than reinvented — ADR-300 rule 3); a [`PresenceObservation`] pairs it with
 //! that sensor's [`Claim`] about whether its container is occupied. Keeping the
 //! claim separate from the HAL frame lets the engine gate on the observation's
 //! own health: a malformed / degraded HAL observation abstains no matter what
 //! number it reports, and a source that cannot quantify presence says
-//! [`Claim::Unknown`] rather than defaulting to a confident value (ADR-297
+//! [`Claim::Unknown`] rather than defaulting to a confident value (ADR-300
 //! rule 1).
 
 use serde::{Deserialize, Serialize};

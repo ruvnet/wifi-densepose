@@ -29,7 +29,7 @@ firmware/esp32-csi-node/test/*.obj
 .swarm/
 
 # CSI recordings (local training/capture data — CSI is person data per
-# CLAUDE.md; never commit). Covers current and legacy layouts. See ADR-296.
+# CLAUDE.md; never commit). Covers current and legacy layouts. See ADR-299.
 data/recordings/
 v2/data/recordings/
 rust-port/wifi-densepose-rs/data/recordings/

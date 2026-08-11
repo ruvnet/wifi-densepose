@@ -1,10 +1,10 @@
-//! The sensing modality tag (ADR-317 §1).
+//! The sensing modality tag (ADR-320 §1).
 //!
 //! [`Modality`] enumerates the phenomenon class a sensor measures. It is the
 //! only place the pipeline distinguishes "how the world was sensed"; every
 //! modality flows through the same [`SensorHal`](crate::SensorHal) trait into
 //! the same canonical [`Observation`](ruview_ontology::Observation), so the
-//! world model never branches on a modality-specific frame shape (ADR-297 rule
+//! world model never branches on a modality-specific frame shape (ADR-300 rule
 //! 3: one canonical semantics downstream).
 
 use serde::{Deserialize, Serialize};
@@ -13,7 +13,7 @@ use crate::label::{validate_label, LabelError};
 
 /// The class of physical phenomenon a sensor observes.
 ///
-/// The closed variants cover the modalities named in ADR-317; [`Modality::Custom`]
+/// The closed variants cover the modalities named in ADR-320; [`Modality::Custom`]
 /// is the open extension point for a modality not yet enumerated, carrying a
 /// validated free-form label. `Custom` is validated with [`Modality::custom`]
 /// (or [`Modality::validate`]) at the boundary.
@@ -22,7 +22,7 @@ use crate::label::{validate_label, LabelError};
 pub enum Modality {
     /// WiFi channel-state information (ESP32/Nexmon/FeitCSI via ADR-279).
     Csi,
-    /// IEEE 802.11bf native sensing (ADR-307, phase 2).
+    /// IEEE 802.11bf native sensing (ADR-310, phase 2).
     Ieee80211bf,
     /// Bluetooth Low Energy ranging / RSSI.
     Ble,
