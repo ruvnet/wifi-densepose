@@ -58,10 +58,10 @@ pub use handler::{
 };
 pub use intent::{Card, Intent, IntentName, IntentResponse};
 pub use minimax_tts::{
-    MiniMaxAudioOutputFormat, MiniMaxRegion, MiniMaxTts, MiniMaxTtsConfig,
-    MINIMAX_TTS_AUDIO_FORMATS, MINIMAX_TTS_DEFAULT_MODEL, MINIMAX_TTS_DOCS_URLS,
-    MINIMAX_TTS_ENDPOINTS, MINIMAX_TTS_MODELS, MINIMAX_TTS_REQUEST_FIELDS,
-    MINIMAX_TTS_RESPONSE_FIELDS,
+    MiniMaxAudioOutputFormat, MiniMaxPronunciationDict, MiniMaxRegion, MiniMaxTts,
+    MiniMaxTtsConfig, MINIMAX_TTS_AUDIO_FORMATS, MINIMAX_TTS_DEFAULT_MODEL, MINIMAX_TTS_DOCS_URLS,
+    MINIMAX_TTS_ENDPOINTS, MINIMAX_TTS_INLINE_OUTPUT_FORMAT, MINIMAX_TTS_MODELS,
+    MINIMAX_TTS_REQUEST_FIELDS, MINIMAX_TTS_REQUIRED_FIELDS, MINIMAX_TTS_RESPONSE_FIELDS,
 };
 pub use pipeline::AssistPipeline;
 pub use recognizer::{
