@@ -38,6 +38,9 @@ use wifi_densepose_sensing_server::{
     dataset, embedding, error_response, graph_transformer, rufield_surface, semconv, telemetry,
     trainer,
 };
+// ADR-292 / ADR-294: canonical provenance state + per-node/room inference.
+use wifi_densepose_sensing_server::inference::{fuse_room, NodeInference, RoomInference};
+use wifi_densepose_sensing_server::provenance::SourceState;
 
 use ruvector_mincut::{DynamicMinCut, MinCutBuilder};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -96,6 +99,26 @@ struct Args {
     /// UDP port for ESP32 CSI frames
     #[arg(long, default_value = "5005")]
     udp_port: u16,
+
+    /// UDP bind address for the CSI receiver (ADR-293). Defaults to
+    /// `127.0.0.1` (loopback only). Binding to a routable address (`0.0.0.0`
+    /// or a LAN IP) is an explicit operator choice and requires `--udp-allow`
+    /// or `--udp-insecure-lan`.
+    #[arg(long, default_value = "127.0.0.1", env = "RUVIEW_UDP_BIND")]
+    udp_bind: String,
+
+    /// Source IP/CIDR allowlist for inbound UDP CSI frames (comma-separated,
+    /// repeatable; env `RUVIEW_UDP_ALLOW`). When set, frames from non-matching
+    /// sources are dropped and counted. Loopback is always allowed.
+    /// Example: `--udp-allow 192.168.1.0/24,10.0.0.5`.
+    #[arg(long = "udp-allow", value_name = "IP/CIDR", env = "RUVIEW_UDP_ALLOW")]
+    udp_allow: Vec<String>,
+
+    /// Accept a routable UDP bind with no source allowlist, explicitly opting
+    /// into the LAN-spoofing risk (ADR-293). The UDP data plane is NOT
+    /// authenticated; see the crate SECURITY.md.
+    #[arg(long, env = "RUVIEW_UDP_INSECURE_LAN")]
+    udp_insecure_lan: bool,
 
     /// Path to UI static files (repo `ui/`; from `v2/` use `../ui` or rely on auto-detect)
     #[arg(long, default_value = "../ui")]
@@ -325,6 +348,12 @@ struct SensingUpdate {
     /// Per-node feature breakdown for multi-node deployments.
     #[serde(skip_serializing_if = "Option::is_none")]
     node_features: Option<Vec<PerNodeFeatureInfo>>,
+    /// ADR-294 — the explicitly-fused room aggregate over the current per-node
+    /// inferences (freshness-weighted vote). Deterministic and order-independent,
+    /// unlike the legacy last-writer `classification`; `"unavailable"` when no
+    /// fresh node backs the room rather than a frozen online value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    room_inference: Option<RoomInference>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -340,6 +369,12 @@ struct NodeInfo {
     /// `NodeState::latest_sync` and the iter 18 fps EMA.
     #[serde(skip_serializing_if = "Option::is_none")]
     sync: Option<NodeSyncSnapshot>,
+    /// ADR-294 — this node's *own* inference (classification + confidence +
+    /// freshness). Distinct from the room aggregate; a node reports what it
+    /// sees, with no silent fallback to the room value. `None` on synthetic /
+    /// placeholder frames that carry no per-node classification.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    node_inference: Option<NodeInference>,
 }
 
 /// ADR-110 iter 23 — per-node mesh-sync snapshot embedded in NodeInfo.
@@ -414,6 +449,26 @@ fn classify_vitals(motion: bool, presence: bool, presence_score: f32) -> Classif
         presence: motion_level != "absent",
         confidence: presence_score as f64,
     }
+}
+
+/// ADR-294 — the window a node may be silent before it stops contributing to
+/// the fused room aggregate (its entities go stale/unavailable rather than
+/// holding a frozen online value). Mirrors the 10 s active-node filter used to
+/// assemble the nodes array.
+const NODE_STALE_AFTER_MS: u64 = 10_000;
+
+/// Build a node's *own* [`NodeInference`] from its smoothed per-node state
+/// (ADR-294). Uses the node's own `current_motion_level` — never the room
+/// aggregate — with a confidence from its smoothed person score and freshness
+/// from its last frame time. Pure given the state snapshot + `now`.
+fn node_inference_for(n: &NodeState, now: std::time::Instant) -> NodeInference {
+    let age_ms = n
+        .last_frame_time
+        .map(|t| now.duration_since(t).as_millis() as u64);
+    let present = !matches!(n.current_motion_level.as_str(), "absent");
+    let score = n.smoothed_person_score.clamp(0.0, 1.0);
+    let confidence = if present { score } else { 1.0 - score };
+    NodeInference::new(n.current_motion_level.clone(), confidence, age_ms)
 }
 
 #[cfg(test)]
@@ -1309,6 +1364,21 @@ impl AppStateInner {
             }
         }
         self.source.clone()
+    }
+
+    /// ADR-292 — canonical provenance state for the current source. Derived
+    /// from the freshness-gated [`effective_source`](Self::effective_source)
+    /// label so ambiguity can never collapse to "live": a synthetic source is
+    /// always `Synthetic`, an `":offline"` label is `Disconnected`, and a fresh
+    /// hardware feed is `LiveUnverified` — never `LiveVerified`, since this path
+    /// carries no attestation. `effective_source()` has already applied the
+    /// freshness gate, so a non-offline live label means a fresh frame.
+    fn source_state(&self) -> SourceState {
+        SourceState::from_source_label(
+            &self.effective_source(),
+            Some(Duration::ZERO),
+            ESP32_OFFLINE_TIMEOUT,
+        )
     }
 }
 
@@ -2801,6 +2871,7 @@ async fn windows_wifi_task(state: SharedState, tick_ms: u64) {
                 amplitude: multi_ap_frame.amplitudes,
                 subcarrier_count: obs_count,
                 sync: None,  // multi-BSSID scan path — no mesh peer
+                node_inference: None, // single aggregate frame; no per-node split
             }],
             features,
             classification,
@@ -2827,6 +2898,7 @@ async fn windows_wifi_task(state: SharedState, tick_ms: u64) {
                 None
             },
             node_features: None,
+            room_inference: None,
         };
 
         // Populate persons from the sensing update (Kalman-smoothed via tracker).
@@ -2961,6 +3033,7 @@ async fn windows_wifi_fallback_tick(state: &SharedState, seq: u32) {
             amplitude: vec![signal_pct],
             subcarrier_count: 1,
             sync: None,  // synthetic-RSSI fallback path — no mesh peer
+            node_inference: None, // synthetic fallback; no per-node inference
         }],
         features,
         classification,
@@ -2987,6 +3060,7 @@ async fn windows_wifi_fallback_tick(state: &SharedState, seq: u32) {
             None
         },
         node_features: None,
+        room_inference: None,
     };
 
     let raw_persons = derive_pose_from_sensing(&update);
@@ -4599,6 +4673,9 @@ async fn health_ready(State(state): State<SharedState>) -> Json<serde_json::Valu
     Json(serde_json::json!({
         "status": "ready",
         "source": s.effective_source(),
+        // ADR-292 — canonical provenance state so a status-endpoint consumer
+        // never has to infer "live" from the absence of a signal (issue #1526).
+        "source_state": s.source_state().as_str(),
         // Governed trust-path state (ADR-135..146; review finding 1b): latest
         // witness + privacy class + recalibration flag, and the engine error
         // audit — previously write-only on AppState, now readable here.
@@ -5702,8 +5779,13 @@ async fn info_page() -> Html<String> {
 
 // ── UDP receiver task ────────────────────────────────────────────────────────
 
-async fn udp_receiver_task(state: SharedState, udp_port: u16) {
-    let addr = format!("0.0.0.0:{udp_port}");
+async fn udp_receiver_task(
+    state: SharedState,
+    bind_ip: std::net::IpAddr,
+    udp_port: u16,
+    allowlist: std::sync::Arc<wifi_densepose_sensing_server::udp_bind::UdpSourceAllowlist>,
+) {
+    let addr = format!("{bind_ip}:{udp_port}");
     let socket = match UdpSocket::bind(&addr).await {
         Ok(s) => {
             info!("UDP listening on {addr} for ESP32, MediaTek, Qualcomm CSI, and RTL8720F radar frames");
@@ -5719,6 +5801,15 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
     loop {
         match socket.recv_from(&mut buf).await {
             Ok((len, src)) => {
+                // ADR-293: drop frames from sources outside the allowlist
+                // (loopback is always admitted). Counted for observability.
+                if !allowlist.admit(src.ip()) {
+                    debug!(
+                        "Dropped UDP frame from disallowed source {src} (allowlist active; total dropped={})",
+                        allowlist.dropped()
+                    );
+                    continue;
+                }
                 if len > 0 && buf[0] == b'{' {
                     match serde_json::from_slice::<wifi_densepose_hardware::vendor_rf::VendorRfEvent>(&buf[..len])
                         .map_err(|error| error.to_string())
@@ -5950,8 +6041,18 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                             // Vitals-only path; still expose the sync snapshot
                             // if the node also speaks ESP-NOW.
                             sync: n.sync_snapshot(),
+                            // ADR-294 — each node carries its own inference.
+                            node_inference: Some(node_inference_for(n, now)),
                         })
                         .collect();
+
+                    // ADR-294 — explicit, deterministic room aggregate over the
+                    // per-node inferences (freshness-weighted vote). Not the
+                    // latest-writer classification (issue #1555).
+                    let room_inference = fuse_room(
+                        active_nodes.iter().filter_map(|ni| ni.node_inference.as_ref()),
+                        NODE_STALE_AFTER_MS,
+                    );
 
                     let features = FeatureInfo {
                         mean_rssi: vitals.rssi as f64,
@@ -6041,6 +6142,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         // can implement model-wake gating without round-
                         // tripping back to the server.
                         node_features: build_node_features(&s.node_states, now),
+                        room_inference: Some(room_inference),
                     };
 
                     let raw_persons = derive_pose_from_sensing(&update);
@@ -6439,8 +6541,17 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                             },
                             // ADR-110 iter 23 / iter 30 — single source of truth.
                             sync: n.sync_snapshot(),
+                            // ADR-294 — each node carries its own inference.
+                            node_inference: Some(node_inference_for(n, now)),
                         })
                         .collect();
+
+                    // ADR-294 — explicit deterministic room aggregate over the
+                    // per-node inferences (not last-writer; issue #1555).
+                    let room_inference = fuse_room(
+                        active_nodes.iter().filter_map(|ni| ni.node_inference.as_ref()),
+                        NODE_STALE_AFTER_MS,
+                    );
 
                     let mut update = SensingUpdate {
                         msg_type: "sensing_update".to_string(),
@@ -6478,6 +6589,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         // can implement model-wake gating without round-
                         // tripping back to the server.
                         node_features: build_node_features(&s.node_states, now),
+                        room_inference: Some(room_inference),
                     };
 
                     let raw_persons = derive_pose_from_sensing(&update);
@@ -6699,6 +6811,7 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
                 amplitude: frame_amplitudes,
                 subcarrier_count: frame_n_sub as usize,
                 sync: None,  // simulated frame path — no mesh peer
+                node_inference: None, // simulated frame; source is synthetic
             }],
             features: features.clone(),
             classification,
@@ -6735,6 +6848,7 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
                 None
             },
             node_features: None,
+            room_inference: None,
         };
 
         // Populate persons from the sensing update (Kalman-smoothed via tracker).
@@ -7720,7 +7834,7 @@ async fn main() {
     info!("WiFi-DensePose Sensing Server (Rust + Axum + RuVector)");
     info!("  HTTP:      http://localhost:{}", args.http_port);
     info!("  WebSocket: ws://localhost:{}/ws/sensing", args.ws_port);
-    info!("  UDP:       0.0.0.0:{} (ESP32 CSI)", args.udp_port);
+    info!("  UDP:       {}:{} (ESP32 CSI)", args.udp_bind, args.udp_port);
     info!("  UI path:   {}", args.ui_path.display());
     info!("  Source:    {}", args.source);
 
@@ -8098,7 +8212,48 @@ async fn main() {
     // promoted — see `simulated_data_task`). Explicit `--source simulated` has
     // `bind_udp = false`, so it serves simulated data only, with no live binding.
     if plan.bind_udp {
-        tokio::spawn(udp_receiver_task(state.clone(), args.udp_port));
+        // ADR-293: resolve the UDP bind scope + source allowlist and fail closed
+        // on an unguarded routable bind, mirroring the OAuth boot refusal below.
+        use wifi_densepose_sensing_server::udp_bind;
+        let udp_bind_ip: std::net::IpAddr = match args.udp_bind.parse() {
+            Ok(ip) => ip,
+            Err(_) => {
+                error!(
+                    "Invalid --udp-bind '{}' (use 127.0.0.1 or 0.0.0.0)",
+                    args.udp_bind
+                );
+                std::process::exit(1);
+            }
+        };
+        let udp_allowlist = match udp_bind::UdpSourceAllowlist::parse(args.udp_allow.iter()) {
+            Ok(a) => std::sync::Arc::new(a),
+            Err(e) => {
+                error!("Invalid --udp-allow: {e}");
+                std::process::exit(1);
+            }
+        };
+        match udp_bind::decide_udp_bind(
+            udp_bind_ip,
+            udp_allowlist.is_active(),
+            args.udp_insecure_lan,
+        ) {
+            Ok(decision) => {
+                info!(
+                    "UDP data plane security: {}",
+                    udp_bind::startup_summary(decision, udp_bind_ip, args.udp_port, &udp_allowlist)
+                );
+            }
+            Err(e) => {
+                error!("{e}");
+                std::process::exit(1);
+            }
+        }
+        tokio::spawn(udp_receiver_task(
+            state.clone(),
+            udp_bind_ip,
+            args.udp_port,
+            udp_allowlist,
+        ));
         tokio::spawn(broadcast_tick_task(state.clone(), args.tick_ms));
     }
     if plan.run_wifi {
@@ -8526,6 +8681,7 @@ mod node_sync_snapshot_serialization_tests {
             amplitude: vec![],
             subcarrier_count: 0,
             sync,
+            node_inference: None,
         }
     }
 
@@ -9247,6 +9403,7 @@ mod observatory_persons_field_position_tests {
             persons: None,
             estimated_persons: Some(1),
             node_features: None,
+            room_inference: None,
         }
     }
 

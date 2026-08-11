@@ -332,15 +332,17 @@ async fn publish_snapshot(
         }
     }
 
-    // Numeric rate-limited entities.
+    // Numeric rate-limited entities. Rate limiting is per (node, entity)
+    // (ADR-294, issue #1541) so nodes never starve one another.
+    let node = snap.node_id.as_str();
     for (entity, allowed) in [
-        (EntityKind::PersonCount, rl.allow(EntityKind::PersonCount, elapsed, &cfg.rates)),
-        (EntityKind::HeartRate, !cfg.privacy_mode && rl.allow(EntityKind::HeartRate, elapsed, &cfg.rates)),
-        (EntityKind::BreathingRate, !cfg.privacy_mode && rl.allow(EntityKind::BreathingRate, elapsed, &cfg.rates)),
-        (EntityKind::MotionLevel, rl.allow(EntityKind::MotionLevel, elapsed, &cfg.rates)),
-        (EntityKind::MotionEnergy, rl.allow(EntityKind::MotionEnergy, elapsed, &cfg.rates)),
-        (EntityKind::PresenceScore, rl.allow(EntityKind::PresenceScore, elapsed, &cfg.rates)),
-        (EntityKind::Rssi, rl.allow(EntityKind::Rssi, elapsed, &cfg.rates)),
+        (EntityKind::PersonCount, rl.allow(node, EntityKind::PersonCount, elapsed, &cfg.rates)),
+        (EntityKind::HeartRate, !cfg.privacy_mode && rl.allow(node, EntityKind::HeartRate, elapsed, &cfg.rates)),
+        (EntityKind::BreathingRate, !cfg.privacy_mode && rl.allow(node, EntityKind::BreathingRate, elapsed, &cfg.rates)),
+        (EntityKind::MotionLevel, rl.allow(node, EntityKind::MotionLevel, elapsed, &cfg.rates)),
+        (EntityKind::MotionEnergy, rl.allow(node, EntityKind::MotionEnergy, elapsed, &cfg.rates)),
+        (EntityKind::PresenceScore, rl.allow(node, EntityKind::PresenceScore, elapsed, &cfg.rates)),
+        (EntityKind::Rssi, rl.allow(node, EntityKind::Rssi, elapsed, &cfg.rates)),
     ] {
         if !allowed {
             continue;

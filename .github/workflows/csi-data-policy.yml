@@ -1,0 +1,53 @@
+name: CSI data policy (ADR-296)
+
+# ADR-296 repository CSI data-incident guard. Fails when CSI-format files
+# (*.csi.jsonl / *.csi.meta.json) or oversized JSONL captures are tracked in
+# git. Raw CSI is person data and must never be committed (CLAUDE.md, ADR-296).
+#
+# NOTE: the tree currently still contains the pre-existing incident recordings
+# under data/recordings/ and v2/data/recordings/, whose removal is gated on
+# data-owner sign-off (ADR-296). Until they are removed this job is EXPECTED to
+# fail, and that failure documents the incident. To make it green in a
+# follow-up without weakening the guard for NEW files, set CSI_POLICY_BASELINE
+# to a file listing the acknowledged paths (see the script header).
+#
+# Checker: scripts/csi-data-policy-check.sh   Run locally: bash the same script.
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  csi-data-policy:
+    name: CSI data policy check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Self-test the policy checker (deterministic, offline)
+        run: bash scripts/csi-data-policy-check.sh --self-test
+
+      - name: Enforce CSI data policy on tracked files
+        # CSI_POLICY_BASELINE can point at an acknowledged-paths file once the
+        # owner remediates the tree; unset here so a regression fails loudly.
+        run: bash scripts/csi-data-policy-check.sh --tracked
+
+      - name: Summarize result
+        if: always()
+        run: |
+          {
+            echo '### CSI data policy (ADR-296)'
+            echo ''
+            echo '```'
+            bash scripts/csi-data-policy-check.sh --tracked 2>&1 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

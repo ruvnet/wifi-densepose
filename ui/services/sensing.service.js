@@ -304,25 +304,41 @@ class SensingService {
    * hardware or simulation. Called once on WebSocket open.
    */
   async _detectServerSource() {
+    // ADR-292 (issue #1526): an unreachable or unauthorized status endpoint is
+    // an *unknown* state — it must NOT collapse to "live". Prefer the canonical
+    // `source_state` the server now returns; on any error stay conservative
+    // (server-simulated) until a real frame's `source` field promotes us.
     try {
       const resp = await fetch('/api/v1/status');
       if (resp.ok) {
         const json = await resp.json();
-        this._applyServerSource(json.source);
+        this._applyServerSource(json.source, json.source_state);
       } else {
-        // Can't reach status endpoint — assume live until first frame tells us
-        this._setDataSource('live');
+        this._setDataSource('server-simulated');
       }
     } catch {
-      this._setDataSource('live');
+      this._setDataSource('server-simulated');
     }
   }
 
   /**
-   * Map a raw server source string to the UI data-source label.
+   * Map a raw server source string (and optional canonical ADR-292
+   * `source_state`) to the UI data-source label.
    */
-  _applyServerSource(rawSource) {
+  _applyServerSource(rawSource, sourceState) {
     this._serverSource = rawSource;
+    // ADR-292: only the verified/unverified live states may show "live"; any
+    // synthetic/stale/disconnected state must not.
+    if (sourceState) {
+      if (sourceState === 'live_verified' || sourceState === 'live_unverified') {
+        this._setDataSource('live');
+      } else if (sourceState === 'synthetic') {
+        this._setDataSource('server-simulated');
+      } else {
+        this._setDataSource('server-simulated');
+      }
+      return;
+    }
     if (rawSource === 'esp32' || rawSource === 'wifi' || rawSource === 'live') {
       this._setDataSource('live');
     } else if (rawSource === 'simulated' || rawSource === 'simulate') {
