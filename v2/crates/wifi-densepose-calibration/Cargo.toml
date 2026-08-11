@@ -13,6 +13,7 @@ wifi-densepose-signal = { version = "0.3.0", path = "../wifi-densepose-signal", 
 
 serde = { workspace = true }
 serde_json = "1.0"
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 uuid = { version = "1.6", features = ["v4", "serde"] }
 

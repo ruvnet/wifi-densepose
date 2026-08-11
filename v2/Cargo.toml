@@ -21,7 +21,7 @@ members = [
     "crates/wifi-densepose-train",
     "crates/wifi-densepose-sensing-server",
     "crates/wifi-densepose-aether",    # ADR-185 §13 — AETHER pure-compute leaf (std-only)
-    "crates/wifi-densepose-privshield", # ADR-288 — VEIL privacy shield (compliant-waveform anti-sensing; std-only leaf)
+    "crates/wifi-densepose-privshield", # ADR-291 — VEIL privacy shield (compliant-waveform anti-sensing; std-only leaf)
     "crates/wifi-densepose-wifiscan",
     "crates/wifi-densepose-vitals",
     "crates/wifi-densepose-ruvector",
@@ -95,6 +95,28 @@ members = [
     # hardware coupling, every number SYNTHETIC/L0 until real wideband RF
     # hardware exists.
     "crates/wifi-densepose-sar",
+    # ADR-300 phase 1 — perception substrate spine (new first-party crates):
+    "crates/ruview-ontology",   # ADR-306 canonical spatial ontology (Site..Event)
+    "crates/ruview-attest",     # ADR-305 authenticated sensor identity / RF chain of custody
+    "crates/ruview-evidence",   # ADR-304 evidence engine (per-room/device/subject ledger)
+    # ADR-300 phase 1 — dependent wave (build on the spine roots above):
+    "crates/ruview-ood",        # ADR-302 OOD KNOWN/DEGRADED/UNKNOWN gating
+    "crates/ruview-witness",    # ADR-319 witness chain (staged signed provenance)
+    "crates/ruview-certify",    # ADR-318 capability certificate
+    "crates/ruview-scorecard",  # ADR-317 multi-domain benchmark scorecard
+    "crates/ruview-policy",     # ADR-321 decision policy / action authorization
+    # ADR-300 phase 2 — unified world-model core:
+    "crates/ruview-hal",        # ADR-320 sensor HAL (any modality -> Observation)
+    "crates/ruview-groundtruth",# ADR-303 ground-truth synchronization / validation plane
+    "crates/ruview-track",      # ADR-307 persistent privacy-preserving tracking
+    "crates/ruview-fusion",     # ADR-311 uncertainty-aware fusion -> one world state
+    # ADR-300 phase 3 — higher-ceiling primitives (on the fused world state):
+    "crates/ruview-twin",          # ADR-315 digital RF twin (per-deployment model)
+    "crates/ruview-placement",     # ADR-308 sensor placement optimizer
+    "crates/ruview-memory",        # ADR-312 long-term spatial memory / anomaly
+    "crates/ruview-counterfactual",# ADR-313 counterfactual spatial inference
+    "crates/ruview-infogain",      # ADR-314 information-gain scheduler
+    "crates/ruview-active",        # ADR-309 active sensing control
 ]
 # ADR-040: WASM edge crate targets wasm32-unknown-unknown (no_std),
 # excluded from workspace to avoid breaking `cargo test --workspace`.
@@ -122,6 +144,10 @@ categories = ["science", "computer-vision", "wasm"]
 [workspace.dependencies]
 # Core utilities
 thiserror = "2.0"
+# WiFi Veil — compliant-waveform countermeasure against unauthorized WiFi
+# sensing (ADR-294). Dependency-free, deterministic, SYNTHETIC-only leaf;
+# pinned to an exact rev because the crate is consumed pre-crates.io-release.
+wifi-veil = { git = "https://github.com/ruvnet/wifi-veil", rev = "018468b5d2bf41f35c552910f35659830af0eb91" }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

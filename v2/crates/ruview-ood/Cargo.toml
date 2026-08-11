@@ -1,0 +1,15 @@
+[package]
+name = "ruview-ood"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde = { workspace = true, features = ["derive"] }
+wifi-densepose-calibration = { path = "../wifi-densepose-calibration", default-features = false }
+
+[dev-dependencies]
+serde_json.workspace = true

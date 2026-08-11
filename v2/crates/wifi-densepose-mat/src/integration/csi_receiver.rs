@@ -1293,6 +1293,9 @@ impl From<CsiPacket> for CsiReadings {
                 rssi: Some(packet.rssi as f64),
                 noise_floor: Some(packet.noise_floor as f64),
                 fc_type: FrameControlType::Data,
+                // Narrowband receiver formats predate wideband provenance
+                // metadata; FeitCSI ingest attaches it in feitcsi.rs.
+                wideband: None,
             },
         }
     }

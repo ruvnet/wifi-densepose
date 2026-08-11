@@ -7870,6 +7870,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "753a07254fa68db183949ec6c7575d890da4d42404afabc11d610a720fcf570c"
 
 [[package]]
+name = "ruview-active"
+version = "0.3.1"
+dependencies = [
+ "ruview-hal",
+ "ruview-ontology",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruview-attest"
+version = "0.3.1"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "ruview-auth"
 version = "0.1.0"
 dependencies = [
@@ -7887,6 +7908,146 @@ dependencies = [
  "tracing",
  "ureq 2.12.1",
  "url",
+]
+
+[[package]]
+name = "ruview-certify"
+version = "0.3.1"
+dependencies = [
+ "blake3",
+ "ruview-attest",
+ "ruview-evidence",
+ "ruview-ontology",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "wifi-densepose-calibration",
+]
+
+[[package]]
+name = "ruview-counterfactual"
+version = "0.3.1"
+dependencies = [
+ "ruview-fusion",
+ "ruview-ontology",
+ "ruview-twin",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruview-evidence"
+version = "0.3.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruview-fusion"
+version = "0.3.1"
+dependencies = [
+ "ruview-hal",
+ "ruview-ontology",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruview-groundtruth"
+version = "0.3.1"
+dependencies = [
+ "ruview-evidence",
+ "ruview-ontology",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruview-hal"
+version = "0.3.1"
+dependencies = [
+ "ruview-ontology",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruview-infogain"
+version = "0.3.1"
+dependencies = [
+ "ruview-hal",
+ "ruview-ontology",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruview-memory"
+version = "0.3.1"
+dependencies = [
+ "ruview-evidence",
+ "ruview-ontology",
+ "ruview-twin",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruview-ontology"
+version = "0.3.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruview-ood"
+version = "0.3.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "wifi-densepose-calibration",
+]
+
+[[package]]
+name = "ruview-placement"
+version = "0.3.1"
+dependencies = [
+ "ruview-ontology",
+ "ruview-twin",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruview-policy"
+version = "0.3.1"
+dependencies = [
+ "ruview-evidence",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruview-scorecard"
+version = "0.3.1"
+dependencies = [
+ "ruview-evidence",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -7914,6 +8075,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruview-track"
+version = "0.3.1"
+dependencies = [
+ "ruview-ontology",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruview-twin"
+version = "0.3.1"
+dependencies = [
+ "ruview-ontology",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "ruview-unified"
 version = "0.3.1"
 dependencies = [
@@ -7927,6 +8108,16 @@ dependencies = [
  "thiserror 2.0.18",
  "wifi-densepose-core",
  "wifi-densepose-hardware",
+]
+
+[[package]]
+name = "ruview-witness"
+version = "0.3.1"
+dependencies = [
+ "ruview-attest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -11365,6 +11556,7 @@ dependencies = [
  "serde_json",
  "static_assertions",
  "thiserror 2.0.18",
+ "wifi-veil",
 ]
 
 [[package]]
@@ -11375,6 +11567,7 @@ dependencies = [
  "num-complex",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.18",
  "uuid",
  "wifi-densepose-core",
@@ -11803,6 +11996,11 @@ dependencies = [
  "thiserror 2.0.18",
  "wifi-densepose-geo",
 ]
+
+[[package]]
+name = "wifi-veil"
+version = "0.1.0"
+source = "git+https://github.com/ruvnet/wifi-veil?rev=018468b5d2bf41f35c552910f35659830af0eb91#018468b5d2bf41f35c552910f35659830af0eb91"
 
 [[package]]
 name = "winapi"

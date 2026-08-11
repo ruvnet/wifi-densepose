@@ -23,6 +23,12 @@
 //! Results are stored in a [`VitalSignStore`] with configurable
 //! retention for historical analysis.
 //!
+//! Ground-truth evaluation ([`groundtruth`], ADR-293) ingests a
+//! reference-device series (CSV export), time-aligns it against a store
+//! session, and produces evidence-graded agreement statistics
+//! (MAE/RMSE/bias, Bland-Altman limits, percent-within-tolerance) with a
+//! mandatory session scope.
+//!
 //! # Example
 //!
 //! ```
@@ -67,6 +73,7 @@
 
 pub mod anomaly;
 pub mod breathing;
+pub mod groundtruth;
 pub mod heartrate;
 pub mod preprocessor;
 pub mod store;
@@ -74,6 +81,12 @@ pub mod types;
 
 pub use anomaly::{AnomalyAlert, VitalAnomalyDetector};
 pub use breathing::BreathingExtractor;
+pub use groundtruth::{
+    align, evaluate_session, AgreementConfig, AgreementReport, AlignmentConfig, AlignmentResult,
+    DistanceBand, DriftFit, EstimateSeries, EvidenceGrade, GradedAgreementReport,
+    GroundTruthError, Measurand, MeasurementPrinciple, MotionState, Propagation, ReferenceDevice,
+    ReferenceSample, ReferenceSeries, SessionEvaluation, SessionScope,
+};
 pub use heartrate::HeartRateExtractor;
 pub use preprocessor::CsiVitalPreprocessor;
 pub use store::{VitalSignStore, VitalStats};
