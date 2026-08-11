@@ -30,7 +30,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use rumqttc::{AsyncClient, ClientError, EventLoop, MqttOptions, QoS, Transport};
+use rumqttc::{AsyncClient, ClientError, EventLoop, MqttOptions, QoS, Transport, TlsConfiguration};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
@@ -62,6 +62,12 @@ use super::state::{RateLimiter, StateEncoder, StateMessage, VitalsSnapshot};
 /// Heartbeat cadence for availability re-publication (per §3.6).
 const AVAILABILITY_HEARTBEAT: Duration = Duration::from_secs(30);
 
+/// A node whose broadcast snapshot hasn't arrived within this window is
+/// treated as stale for the availability heartbeat, not just "quiet" (issue
+/// #1555). Matches `NODE_STALE_AFTER_MS` in `main.rs`'s room-fusion staleness
+/// window, so "stale" means the same thing on the MQTT and WebSocket paths.
+const NODE_SNAPSHOT_STALE_AFTER: Duration = Duration::from_secs(10);
+
 /// Build a `rumqttc::MqttOptions` from validated [`MqttConfig`].
 fn build_mqtt_options(cfg: &MqttConfig) -> MqttOptions {
     let mut opts = MqttOptions::new(&cfg.client_id, &cfg.host, cfg.port);
@@ -74,14 +80,67 @@ fn build_mqtt_options(cfg: &MqttConfig) -> MqttOptions {
         opts.set_credentials(u, "");
     }
 
-    if !matches!(cfg.tls, TlsConfig::Off) {
-        // We always use rustls (matches `ureq` in this crate). The
-        // specific cert / CA wiring is done by the runtime constructor;
-        // here we just flip the transport.
-        opts.set_transport(Transport::tls_with_default_config());
-    }
+    opts.set_transport(build_transport(&cfg.tls));
 
     opts
+}
+
+/// Build the `rumqttc::Transport` for the configured [`TlsConfig`].
+///
+/// Issue #1556: `PinnedCa`/`MutualTls` were parsed from the CLI and stored,
+/// but this function used to ignore them entirely and always call
+/// `Transport::tls_with_default_config()` — the system trust store only, so
+/// a self-signed broker (the common case for a home-LAN Mosquitto add-on)
+/// always failed with `UnknownIssuer`. `TlsConfiguration::Simple` (rumqttc's
+/// own pinned-CA / mTLS variant — see `rumqttc::tls::rustls_connector`) takes
+/// raw PEM bytes directly, so no new TLS dependency is needed here.
+///
+/// A CA/cert/key file that can't be read falls back to the system trust
+/// store (same behavior as today, i.e. still fails `UnknownIssuer` against a
+/// self-signed broker) rather than panicking this background task — but now
+/// logs *why*, which issue #1556 also asked for.
+fn build_transport(tls: &TlsConfig) -> Transport {
+    let read_pem = |label: &str, path: &std::path::Path| -> Option<Vec<u8>> {
+        match std::fs::read(path) {
+            Ok(bytes) => Some(bytes),
+            Err(e) => {
+                let path = path.display();
+                otel_error!(
+                    "[mqtt] tls: could not read {label} file {path}: {e} — falling back to \
+                     the system trust store (issue #1556)"
+                );
+                None
+            }
+        }
+    };
+
+    match tls {
+        TlsConfig::Off => return Transport::Tcp,
+        TlsConfig::SystemTrust => {}
+        TlsConfig::PinnedCa { ca_file } => {
+            if let Some(ca) = read_pem("CA", ca_file) {
+                return Transport::tls_with_config(TlsConfiguration::Simple {
+                    ca,
+                    alpn: None,
+                    client_auth: None,
+                });
+            }
+        }
+        TlsConfig::MutualTls { ca_file, client_cert, client_key } => {
+            if let (Some(ca), Some(cert), Some(key)) = (
+                read_pem("CA", ca_file),
+                read_pem("client cert", client_cert),
+                read_pem("client key", client_key),
+            ) {
+                return Transport::tls_with_config(TlsConfiguration::Simple {
+                    ca,
+                    alpn: None,
+                    client_auth: Some((cert, key)),
+                });
+            }
+        }
+    }
+    Transport::tls_with_default_config()
 }
 
 /// One node's per-entity availability topics, pre-computed at startup so
@@ -177,8 +236,14 @@ async fn run(
     // each node's builder + availability are retained here for heartbeats and
     // the offline LWT. (Previously a single hard-coded builder collapsed every
     // node into one device.)
-    let mut nodes: std::collections::HashMap<String, (OwnedDiscoveryBuilder, NodeAvailability)> =
-        std::collections::HashMap::new();
+    // Issue #1555: the third tuple element is the Instant this node's last
+    // broadcast snapshot arrived, so the heartbeat below can tell a node that
+    // has genuinely gone quiet from one that's just between publish-rate
+    // ticks, and stop asserting "online" for it.
+    let mut nodes: std::collections::HashMap<
+        String,
+        (OwnedDiscoveryBuilder, NodeAvailability, Instant),
+    > = std::collections::HashMap::new();
 
     let mut rate_limiter = RateLimiter::new();
     let mut last_heartbeat = Instant::now();
@@ -215,15 +280,26 @@ async fn run(
             // Periodic heartbeat / discovery refresh.
             _ = tokio::time::sleep(Duration::from_secs(1)) => {
                 if last_heartbeat.elapsed() >= AVAILABILITY_HEARTBEAT {
-                    for (_, na) in nodes.values() {
-                        if let Err(e) = publish_availability(&client, na, "online").await {
-                            otel_warn!("[mqtt] heartbeat publish failed: {e}");
+                    for (node_id, (_, na, last_seen)) in &nodes {
+                        // Issue #1555: a node whose snapshots have actually
+                        // stopped arriving must go `offline`, not keep
+                        // reporting `online` on a fixed timer regardless of
+                        // whether its data is still flowing — a frozen HA
+                        // entity that still shows "available" is worse than
+                        // one correctly marked unavailable.
+                        let state = if last_seen.elapsed() < NODE_SNAPSHOT_STALE_AFTER {
+                            "online"
+                        } else {
+                            "offline"
+                        };
+                        if let Err(e) = publish_availability(&client, na, state).await {
+                            otel_warn!("[mqtt] heartbeat publish failed for node {node_id}: {e}");
                         }
                     }
                     last_heartbeat = Instant::now();
                 }
                 if last_refresh.elapsed() >= Duration::from_secs(cfg.refresh_secs) {
-                    for (nb, _) in nodes.values() {
+                    for (nb, _, _) in nodes.values() {
                         if let Err(e) =
                             publish_all_discovery(&client, &nb.as_borrowed(), &entities).await
                         {
@@ -239,6 +315,7 @@ async fn run(
                 match recv {
                     Ok(snap) => {
                         let elapsed = start_instant.elapsed();
+                        let now = Instant::now();
                         // #898: on first sight of a node_id, publish that
                         // node's discovery + availability; then route its
                         // state to per-node topics.
@@ -254,7 +331,12 @@ async fn run(
                             if let Err(e) = publish_availability(&client, &na, "online").await {
                                 otel_warn!("[mqtt] node {} availability failed: {e}", snap.node_id);
                             }
-                            nodes.insert(snap.node_id.clone(), (nb, na));
+                            nodes.insert(snap.node_id.clone(), (nb, na, now));
+                        } else if let Some(entry) = nodes.get_mut(&snap.node_id) {
+                            // Issue #1555: record that this node is still
+                            // alive so the heartbeat above doesn't have to
+                            // guess from a fixed timer.
+                            entry.2 = now;
                         }
                         let borrowed = nodes[&snap.node_id].0.as_borrowed();
                         publish_snapshot(&client, &borrowed, &snap, &cfg, &mut rate_limiter, elapsed).await;
@@ -265,7 +347,7 @@ async fn run(
                     Err(broadcast::error::RecvError::Closed) => {
                         info!("[mqtt] broadcast channel closed, draining");
                         // Publish offline for every known node before exit.
-                        for (_, na) in nodes.values() {
+                        for (_, na, _) in nodes.values() {
                             let _ = publish_availability(&client, na, "offline").await;
                         }
                         let _ = client.disconnect().await;

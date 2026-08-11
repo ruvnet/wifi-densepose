@@ -1502,12 +1502,24 @@ action` pipeline, where a downstream consumer either gets a calibrated, provenan
 answer or an explicit `UNKNOWN` — never a confident-looking guess outside the sensor's
 proven operating envelope.
 
-**Status: developer preview.** Phase 1 shipped nine new crates with their own test
-suites, and each one works correctly in isolation. **They are not yet wired together or
-into the live `sensing-server` request path** — there is currently no code path where a
-real drift signal from a running sensor flows through calibration → certificate
-invalidation → policy denial. Treat everything below as a library you can compose
-yourself today, not a safety guarantee the server enforces for you yet.
+**Status: developer preview, now wired at the crate level.** Phase 1 shipped nine new
+crates. `ruview-certify` and `ruview-policy` now depend on `ruview-ood` and provide a
+real adapter (`impl From<ruview_ood::DomainState> for _`) plus a composed entry point,
+`ruview_policy::authorize_from_certificate`, that takes a real signed
+`CapabilityCertificate` and a real `ruview_ood::DomainState` and drives them through
+`authorize()` — not a hand-built `AssuranceInputs`. A cross-crate integration test
+(`ruview-policy`'s `acceptance_test_b_real_integration` module) mints an actual signed
+certificate and proves a real post-drift `Unknown` denies a `SafetyCritical` action
+through that one composed pipeline.
+
+**What's still not done:** none of this runs automatically inside the live
+`sensing-server` request path yet — there is no continuous calibration/OOD-monitoring
+loop wired into the running server that calls this pipeline on live sensor data. Treat
+`authorize_from_certificate` as a real, tested library entry point you can call from your
+own integration today, not something the server invokes for you on every request yet.
+That remaining step is a genuinely separate, larger effort (deciding polling cadence,
+where calibration state lives, what triggers re-certification) — see ADR-300 for the
+phased plan.
 
 ### The crates
 
@@ -1539,30 +1551,41 @@ assert!(!cert.is_valid(now_ms, DomainState::Degraded));
 assert!(!cert.is_valid(now_ms, DomainState::Unknown));
 ```
 
-### Gating an action
+### Gating an action from a real certificate + a real OOD reading
 
 ```rust
-use ruview_policy::{authorize, ActionClass, DomainState};
+use ruview_policy::authorize_from_certificate;
 
-let decision = authorize(ActionClass::SafetyCritical, &inputs);
-// Deny with a named FailedCondition (e.g. `domain_not_known`) rather than a
-// silent false-positive, whenever the domain isn't KNOWN.
+// `cert` (ruview_certify::CapabilityCertificate) and `domain`
+// (ruview_ood::DomainState) come from your own certify/OOD calls.
+let decision = authorize_from_certificate(
+    ActionClass::SafetyCritical,
+    &cert, &verifier, now_unix_s, domain,
+    certificate_class, uncertainty, evidence_level,
+);
+// Deny with a named FailedCondition (e.g. DomainNotKnown) — not a silent
+// false-positive — the moment `domain` degrades, even though `cert` itself
+// is still validly signed and unexpired.
 ```
 
-**Important:** `ruview_certify::DomainState` and `ruview_policy::DomainState` (and
-`ruview_ood`'s) are currently three separate enum types — `ruview-ood`'s `Degraded`
-variant even carries different data. There is no automatic conversion between them.
-If you compose these crates yourself today, you own writing that bridge; don't assume
-one crate's domain read automatically reaches another's gate.
+`ruview_certify::DomainState` and `ruview_policy::DomainState` are still each their own
+type (`ruview-ood`'s `Degraded`/`Unknown` additionally carry a `DomainCause`), but the
+conversion between them is no longer something you have to write yourself —
+`authorize_from_certificate` does it via the crates' own `From<ruview_ood::DomainState>`
+impls.
 
 ### What's genuinely enforced today, for comparison
 
-Not every ADR-295–296 remediation item is preview-only. Two are live now:
+Not every ADR-295–296 remediation item is preview-only. Three are live now:
 
 - **UDP data-plane bind hardening (ADR-296)** — `sensing-server`'s `UdpSourceAllowlist`
   is checked on every incoming packet (`main.rs`), not just defined.
 - **CSI data-incident repo controls (ADR-299)** — `scripts/csi-data-policy-check.sh`
   runs in CI on every push/PR and fails the build on a policy violation.
+- **Synthetic-export watermarking (ADR-295)** — `start_recording` stamps a `SYNTHETIC`
+  watermark on a recording's metadata (`GET /api/v1/recordings`, the start-recording
+  response) whenever it captures while the live source is synthetic — an operator
+  browsing or scripting against recordings can't mistake generated data for a capture.
 
 ---
 

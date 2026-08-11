@@ -434,6 +434,70 @@ pub fn authorize_with(
 }
 
 // ---------------------------------------------------------------------------
+// The real adapter (ADR-297/318/321) — ruview-ood + ruview-certify -> here.
+// ---------------------------------------------------------------------------
+
+/// The adapter boundary from a real `ruview-ood` gate result to this crate's
+/// three-way domain signature, exactly as the crate-level doc comment
+/// prescribes: the cause carried by `Degraded`/`Unknown` is dropped, since
+/// [`authorize`] only needs the three-way outcome.
+impl From<ruview_ood::DomainState> for DomainState {
+    fn from(state: ruview_ood::DomainState) -> Self {
+        match state {
+            ruview_ood::DomainState::Known => DomainState::Known,
+            ruview_ood::DomainState::Degraded(_) => DomainState::Degraded,
+            ruview_ood::DomainState::Unknown(_) => DomainState::Unknown,
+        }
+    }
+}
+
+/// Authorize an action from a **real** [`ruview_certify::CapabilityCertificate`]
+/// and a **real** [`ruview_ood::DomainState`], instead of a hand-built
+/// [`AssuranceInputs`].
+///
+/// This is the composition the crate-level "Adapter note" describes but that,
+/// before this function existed, no code in the workspace actually performed:
+/// `ruview-policy` never depended on `ruview-certify`/`ruview-ood`, so a real
+/// OOD drift result had no path into a real `authorize()` call — only two
+/// disconnected unit tests, each hand-setting the same enum value on its own
+/// crate's local type, exercised the *shape* of the story.
+///
+/// Deliberately **not** `cert.is_valid(now, domain)`: that folds the domain
+/// check into `certificate_valid`, which would attribute a domain-caused deny
+/// to a generic "certificate invalid" instead of
+/// [`FailedCondition::DomainNotKnown`]/[`FailedCondition::DomainDegraded`].
+/// Time+signature and domain are validated separately here, per the crate's
+/// own documented contract, and `authorize` (pure, clock-free) does the rest.
+#[must_use]
+pub fn authorize_from_certificate<V: ruview_attest::Verifier + ?Sized>(
+    class: ActionClass,
+    cert: &ruview_certify::CapabilityCertificate,
+    verifier: &V,
+    now_unix_s: i64,
+    domain: ruview_ood::DomainState,
+    certificate_class: CertificateClass,
+    uncertainty: f64,
+    evidence_level: EvidenceLevel,
+) -> Authorization {
+    let certificate_valid =
+        cert.verify(verifier) && now_unix_s < cert.content.valid_until_unix_s;
+    let certificate_age_secs =
+        (now_unix_s - cert.content.calibrated_date_unix_s).max(0) as u64;
+
+    authorize(
+        class,
+        &AssuranceInputs {
+            certificate_class,
+            certificate_valid,
+            certificate_age_secs,
+            domain_state: DomainState::from(domain),
+            uncertainty,
+            evidence_level,
+        },
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Tests — all fixtures are SYNTHETIC / L0 (CLAUDE.md honesty rule).
 // ---------------------------------------------------------------------------
 
@@ -749,5 +813,148 @@ mod tests {
         let json = serde_json::to_string(&decision).expect("serialize");
         let back: Authorization = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(decision, back);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Real cross-crate integration test (ADR-297/300/318/321 acceptance test B).
+//
+// The PR that introduced ruview-ood/-certify/-policy claimed this exact
+// scenario — "a post-drift UNKNOWN domain invalidates the capability
+// certificate and denies a SafetyCritical action" — as a load-bearing
+// acceptance test. What existed were two disconnected unit tests in two
+// crates that had no dependency on each other, each hand-setting the same
+// enum value on its own crate's *local* type. Neither exercised
+// `authorize_from_certificate`, because it didn't exist, and `ruview-policy`
+// didn't depend on `ruview-certify`/`ruview-ood` at all.
+//
+// This test mints a REAL signed `CapabilityCertificate` (ruview-certify) and
+// drives `authorize_from_certificate` (this crate) with a REAL
+// `ruview_ood::DomainState`, so the drift-invalidates-capability claim is
+// backed by one composed pipeline, not two same-shaped unit tests.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod acceptance_test_b_real_integration {
+    use super::*;
+    use ruview_attest::{Blake3MacSigner, DeviceId};
+    use ruview_certify::{Capability, CertificateContent, OperatingMetrics};
+    use ruview_evidence::EvidenceLevel;
+    use ruview_ontology::SpaceId;
+
+    const CALIBRATED_AT: i64 = 1_000;
+    const VALID_UNTIL: i64 = 5_000;
+
+    /// A real, signed `CapabilityCertificate` — hand-assembled from public
+    /// types rather than going through `ruview_certify::mint`'s full
+    /// calibration/evidence-ledger pipeline (already covered by that crate's
+    /// own test suite). What this test is pinning is the *adapter*, not
+    /// certify's minting validation.
+    fn real_signed_certificate() -> (ruview_certify::CapabilityCertificate, Blake3MacSigner) {
+        let signer = Blake3MacSigner::new([9u8; 32]);
+        let content = CertificateContent {
+            capability: Capability::Presence,
+            room: SpaceId::new("kitchen").unwrap(),
+            calibration_version: 1,
+            calibration_expires_at_unix_s: VALID_UNTIL + 1,
+            hardware: DeviceId::new("dev-1").unwrap(),
+            model_version: "m-1".to_string(),
+            calibrated_date_unix_s: CALIBRATED_AT,
+            metrics: OperatingMetrics {
+                moving_recall: 0.9,
+                stationary_recall: 0.85,
+                false_presence_per_24h: 0.1,
+            },
+            valid_until_unix_s: VALID_UNTIL,
+            evidence_level: EvidenceLevel::L0,
+        };
+        let signature = ruview_attest::Signer::sign(&signer, &content.canonical_bytes());
+        let cert = ruview_certify::CapabilityCertificate {
+            content,
+            signature: Some(signature),
+        };
+        (cert, signer)
+    }
+
+    #[test]
+    fn known_domain_authorizes_safety_critical() {
+        let (cert, signer) = real_signed_certificate();
+        let decision = authorize_from_certificate(
+            ActionClass::SafetyCritical,
+            &cert,
+            &signer,
+            CALIBRATED_AT + 10, // well inside validity
+            ruview_ood::DomainState::Known,
+            CertificateClass::High,
+            0.05,
+            EvidenceLevel::L3,
+        );
+        assert!(decision.is_allowed(), "{decision:?}");
+    }
+
+    /// The acceptance-test-B claim, for real: the SAME certificate that just
+    /// authorized a SafetyCritical action, re-evaluated with nothing changed
+    /// except a real post-drift `ruview_ood::DomainState::Unknown`, denies —
+    /// through the actual ood -> certify-adapter -> policy composition, not a
+    /// hand-set field on a local type.
+    #[test]
+    fn post_drift_unknown_domain_denies_safety_critical() {
+        let (cert, signer) = real_signed_certificate();
+        let now = CALIBRATED_AT + 10;
+
+        let pre_drift = authorize_from_certificate(
+            ActionClass::SafetyCritical,
+            &cert,
+            &signer,
+            now,
+            ruview_ood::DomainState::Known,
+            CertificateClass::High,
+            0.05,
+            EvidenceLevel::L3,
+        );
+        assert!(pre_drift.is_allowed(), "pre-drift: {pre_drift:?}");
+
+        let post_drift = authorize_from_certificate(
+            ActionClass::SafetyCritical,
+            &cert,
+            &signer,
+            now,
+            ruview_ood::DomainState::Unknown(ruview_ood::DomainCause::DriftBeyondEnvelope),
+            CertificateClass::High,
+            0.05,
+            EvidenceLevel::L3,
+        );
+        assert_eq!(
+            post_drift,
+            Authorization::Deny {
+                failed_condition: FailedCondition::DomainNotKnown,
+            },
+            "a real post-drift UNKNOWN domain must deny the same certificate \
+             that was just valid, before a false-confident inference reaches \
+             an actuator",
+        );
+    }
+
+    #[test]
+    fn tampered_certificate_is_rejected_regardless_of_domain() {
+        let (cert, _signer) = real_signed_certificate();
+        // A different signer's key cannot verify this certificate's tag —
+        // exercises the "real verify(), not is_valid()" half of the adapter.
+        let wrong_signer = Blake3MacSigner::new([0xAAu8; 32]);
+        let decision = authorize_from_certificate(
+            ActionClass::Convenience,
+            &cert,
+            &wrong_signer,
+            CALIBRATED_AT + 10,
+            ruview_ood::DomainState::Known,
+            CertificateClass::Basic,
+            0.05,
+            EvidenceLevel::L0,
+        );
+        assert_eq!(
+            decision,
+            Authorization::Deny {
+                failed_condition: FailedCondition::CertificateInvalid,
+            },
+        );
     }
 }

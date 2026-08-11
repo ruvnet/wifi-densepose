@@ -7918,6 +7918,7 @@ dependencies = [
  "ruview-attest",
  "ruview-evidence",
  "ruview-ontology",
+ "ruview-ood",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -8034,7 +8035,11 @@ dependencies = [
 name = "ruview-policy"
 version = "0.3.1"
 dependencies = [
+ "ruview-attest",
+ "ruview-certify",
  "ruview-evidence",
+ "ruview-ontology",
+ "ruview-ood",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -11787,6 +11792,10 @@ dependencies = [
  "tokio",
  "tower-http",
 ]
+
+[[package]]
+name = "wifi-densepose-privshield"
+version = "0.1.0"
 
 [[package]]
 name = "wifi-densepose-rufield"
