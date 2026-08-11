@@ -1,6 +1,6 @@
 # ADR-310: Counterfactual inference — generative spatial reasoning
 
-- **Status**: Proposed (ADR-297 phase 3)
+- **Status**: Accepted — initial implementation (ADR-297 phase 3)
 - **Date**: 2026-08-11
 - **Deciders**: ruv
 - **Tags**: inference, generative, counterfactual, rf-twin, fusion, uncertainty, phase-3

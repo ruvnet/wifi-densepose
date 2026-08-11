@@ -7870,6 +7870,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "753a07254fa68db183949ec6c7575d890da4d42404afabc11d610a720fcf570c"
 
 [[package]]
+name = "ruview-active"
+version = "0.3.1"
+dependencies = [
+ "ruview-hal",
+ "ruview-ontology",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "ruview-attest"
 version = "0.3.1"
 dependencies = [
@@ -7914,6 +7925,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruview-counterfactual"
+version = "0.3.1"
+dependencies = [
+ "ruview-fusion",
+ "ruview-ontology",
+ "ruview-twin",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "ruview-evidence"
 version = "0.3.1"
 dependencies = [
@@ -7955,6 +7978,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruview-infogain"
+version = "0.3.1"
+dependencies = [
+ "ruview-hal",
+ "ruview-ontology",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruview-memory"
+version = "0.3.1"
+dependencies = [
+ "ruview-evidence",
+ "ruview-ontology",
+ "ruview-twin",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "ruview-ontology"
 version = "0.3.1"
 dependencies = [
@@ -7971,6 +8017,17 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "wifi-densepose-calibration",
+]
+
+[[package]]
+name = "ruview-placement"
+version = "0.3.1"
+dependencies = [
+ "ruview-ontology",
+ "ruview-twin",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -8019,6 +8076,16 @@ dependencies = [
 
 [[package]]
 name = "ruview-track"
+version = "0.3.1"
+dependencies = [
+ "ruview-ontology",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruview-twin"
 version = "0.3.1"
 dependencies = [
  "ruview-ontology",

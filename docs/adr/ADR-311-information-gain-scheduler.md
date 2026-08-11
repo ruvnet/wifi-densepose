@@ -1,6 +1,6 @@
 # ADR-311: Information-gain scheduler — sample the most informative radios
 
-- **Status**: Proposed (ADR-297 phase 3)
+- **Status**: Accepted — initial implementation (ADR-297 phase 3)
 - **Date**: 2026-08-11
 - **Deciders**: ruv
 - **Tags**: scheduling, active-sensing, information-gain, edge, energy, fusion, phase-3

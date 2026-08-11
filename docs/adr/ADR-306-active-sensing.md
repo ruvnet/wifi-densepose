@@ -1,6 +1,6 @@
 # ADR-306: Active sensing — closed-loop RF experiment control
 
-- **Status**: Proposed (ADR-297 phase 3)
+- **Status**: Accepted — initial implementation (ADR-297 phase 3)
 - **Date**: 2026-08-11
 - **Deciders**: ruv
 - **Tags**: active-sensing, control-plane, closed-loop, information-gain, actuation, phase-3

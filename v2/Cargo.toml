@@ -109,6 +109,13 @@ members = [
     "crates/ruview-groundtruth",# ADR-300 ground-truth synchronization / validation plane
     "crates/ruview-track",      # ADR-304 persistent privacy-preserving tracking
     "crates/ruview-fusion",     # ADR-308 uncertainty-aware fusion -> one world state
+    # ADR-297 phase 3 — higher-ceiling primitives (on the fused world state):
+    "crates/ruview-twin",          # ADR-312 digital RF twin (per-deployment model)
+    "crates/ruview-placement",     # ADR-305 sensor placement optimizer
+    "crates/ruview-memory",        # ADR-309 long-term spatial memory / anomaly
+    "crates/ruview-counterfactual",# ADR-310 counterfactual spatial inference
+    "crates/ruview-infogain",      # ADR-311 information-gain scheduler
+    "crates/ruview-active",        # ADR-306 active sensing control
 ]
 # ADR-040: WASM edge crate targets wasm32-unknown-unknown (no_std),
 # excluded from workspace to avoid breaking `cargo test --workspace`.

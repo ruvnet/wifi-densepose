@@ -1,6 +1,6 @@
 # ADR-312: Digital RF twin — persistent per-deployment RF model
 
-- **Status**: Proposed (ADR-297 phase 3)
+- **Status**: Accepted — initial implementation (ADR-297 phase 3)
 - **Date**: 2026-08-11
 - **Deciders**: ruv
 - **Tags**: rf-twin, digital-twin, propagation, calibration, spatial-memory, worldgraph, phase-3

@@ -1,6 +1,6 @@
 # ADR-309: Long-term spatial memory — learn the normal physics of a location
 
-- **Status**: Proposed (ADR-297 phase 3)
+- **Status**: Accepted — initial implementation (ADR-297 phase 3)
 - **Date**: 2026-08-11
 - **Deciders**: ruv
 - **Tags**: spatial-memory, ruvector, anomaly-detection, temporal, world-state, phase-3

@@ -1,6 +1,6 @@
 # ADR-305: Sensor placement optimizer — floorplan + inventory → recommended positions
 
-- **Status**: Proposed (ADR-297 phase 3)
+- **Status**: Accepted — initial implementation (ADR-297 phase 3)
 - **Date**: 2026-08-11
 - **Deciders**: ruv
 - **Tags**: placement, planning, rf-twin, coverage, worldgraph, phase-3
