@@ -38,6 +38,7 @@ WiFi DensePose turns commodity WiFi signals into real-time human pose estimation
 14. [Training a Model](#training-a-model)
     - [CRV Signal-Line Protocol](#crv-signal-line-protocol)
 14. [RVF Model Containers](#rvf-model-containers)
+14. [Perception Certificate Spine (Developer Preview, ADR-297)](#perception-certificate-spine-developer-preview-adr-297)
 14. [Hardware Setup](#hardware-setup)
     - [ESP32-S3 Mesh](#esp32-s3-mesh)
     - [Intel 5300 / Atheros NIC](#intel-5300--atheros-nic)
@@ -1490,6 +1491,78 @@ An RVF file contains: model weights, HNSW vector index, quantization codebooks, 
 | Mobile / WASM | int8 | ~6-10 MB | ~200-500ms |
 | Field (WiFi-Mat) | fp16 | ~62 MB | ~2s |
 | Server / Cloud | f32 | ~50+ MB | ~3s |
+
+---
+
+## Perception Certificate Spine (Developer Preview, ADR-297)
+
+RuView's perception substrate program (ADR-297) is building a `signal → observation →
+calibration → inference → uncertainty → evidence → certificate → policy → governed
+action` pipeline, where a downstream consumer either gets a calibrated, provenance-backed
+answer or an explicit `UNKNOWN` — never a confident-looking guess outside the sensor's
+proven operating envelope.
+
+**Status: developer preview.** Phase 1 shipped nine new crates with their own test
+suites, and each one works correctly in isolation. **They are not yet wired together or
+into the live `sensing-server` request path** — there is currently no code path where a
+real drift signal from a running sensor flows through calibration → certificate
+invalidation → policy denial. Treat everything below as a library you can compose
+yourself today, not a safety guarantee the server enforces for you yet.
+
+### The crates
+
+| Crate | Role |
+|---|---|
+| `ruview-ontology` | Canonical `Site → … → Event` types |
+| `ruview-attest` | Signed measurement / RF chain-of-custody |
+| `ruview-evidence` | Append-only per-context ledger (no pooling, no evidence upgrade) |
+| `wifi-densepose-calibration` | Signed, drift-invalidatable calibration certificate |
+| `ruview-ood` | `Known` / `Degraded` / `Unknown` staleness-guard domain gating |
+| `ruview-witness` | Hash-linked staged provenance chain |
+| `ruview-certify` | Capability certificate, conditional on a live domain signature |
+| `ruview-scorecard` | Multi-domain scorecard, worst-domain promotion gate |
+| `ruview-policy` | Fail-closed action authorization gate |
+
+### Minting and checking a certificate
+
+```rust
+use ruview_certify::{mint, CapabilityCertificate, DomainState};
+
+// `signer`, `request`, and `evidence_slice` come from your own calibration run —
+// see each crate's README for how to build them.
+let cert = mint(&signer, request, &evidence_slice)?;
+
+// A certificate is only valid at a given instant AND domain state — the same
+// signed certificate is rejected the moment the live domain degrades:
+assert!(cert.is_valid(now_ms, DomainState::Known));
+assert!(!cert.is_valid(now_ms, DomainState::Degraded));
+assert!(!cert.is_valid(now_ms, DomainState::Unknown));
+```
+
+### Gating an action
+
+```rust
+use ruview_policy::{authorize, ActionClass, DomainState};
+
+let decision = authorize(ActionClass::SafetyCritical, &inputs);
+// Deny with a named FailedCondition (e.g. `domain_not_known`) rather than a
+// silent false-positive, whenever the domain isn't KNOWN.
+```
+
+**Important:** `ruview_certify::DomainState` and `ruview_policy::DomainState` (and
+`ruview_ood`'s) are currently three separate enum types — `ruview-ood`'s `Degraded`
+variant even carries different data. There is no automatic conversion between them.
+If you compose these crates yourself today, you own writing that bridge; don't assume
+one crate's domain read automatically reaches another's gate.
+
+### What's genuinely enforced today, for comparison
+
+Not every ADR-292–296 remediation item is preview-only. Two are live now:
+
+- **UDP data-plane bind hardening (ADR-293)** — `sensing-server`'s `UdpSourceAllowlist`
+  is checked on every incoming packet (`main.rs`), not just defined.
+- **CSI data-incident repo controls (ADR-296)** — `scripts/csi-data-policy-check.sh`
+  runs in CI on every push/PR and fails the build on a policy violation.
 
 ---
 
