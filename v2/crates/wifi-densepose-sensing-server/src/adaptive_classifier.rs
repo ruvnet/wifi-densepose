@@ -3,7 +3,7 @@
 //! Learns environment-specific classification thresholds from labeled JSONL
 //! recordings.  Uses a lightweight approach:
 //!
-//! 1. **Feature statistics**: per-class mean/stddev for each of 7 CSI features
+//! 1. **Feature statistics**: per-class mean/stddev for each server-published CSI feature
 //! 2. **Mahalanobis-like distance**: weighted distance to each class centroid
 //! 3. **Logistic regression weights**: learned via gradient descent on the
 //!    labeled data for fine-grained boundary tuning
@@ -22,14 +22,17 @@ use std::time::Instant;
 
 // ── Feature vector ───────────────────────────────────────────────────────────
 
-/// Instantaneous feature vector: 7 server features + 8 subcarrier statistics.
-const N_BASE_FEATURES: usize = 15;
-/// The most dynamic server/subcarrier channels used by the temporal patch.
-const TEMPORAL_FEATURE_INDICES: [usize; 8] = [0, 1, 2, 3, 4, 5, 7, 8];
+/// Instantaneous feature vector published identically to the recorder and runtime.
+/// Raw amplitudes are intentionally excluded: recorders may omit/cap them while the
+/// runtime sees full internal vectors, which previously caused train/serve skew.
+const N_BASE_FEATURES: usize = 7;
+const TEMPORAL_FEATURE_INDICES: [usize; N_BASE_FEATURES] = [0, 1, 2, 3, 4, 5, 6];
 const N_TEMPORAL_FEATURES: usize = TEMPORAL_FEATURE_INDICES.len();
-/// Five-second patch: current features + selected velocity + selected stddev.
-/// Kept at 31 so the persisted fixed-size arrays remain natively serde-compatible.
+/// Five-second patch: current features + velocity + standard deviation.
 const N_FEATURES: usize = N_BASE_FEATURES + N_TEMPORAL_FEATURES * 2;
+const ADAPTIVE_FEATURE_SCHEMA_VERSION: u32 = 4;
+const MIN_RUNTIME_BALANCED_ACCURACY: f64 = 0.90;
+const MIN_RUNTIME_CLASS_RECALL: f64 = 0.90;
 const TEMPORAL_BUCKET_SECONDS: f64 = 1.0;
 const TEMPORAL_WINDOW_BUCKETS: i64 = 5;
 const TEMPORAL_MIN_CONTEXT_BUCKETS: usize = 3;
@@ -37,7 +40,7 @@ const TEMPORAL_MIN_CONTEXT_BUCKETS: usize = 3;
 /// Default class names for backward compatibility with old saved models.
 const DEFAULT_CLASSES: &[&str] = &["absent", "present"];
 
-/// Extract extended feature vector from a JSONL frame (features + raw amplitudes).
+/// Extract the server-published feature vector from a JSONL frame.
 pub fn features_from_frame(frame: &serde_json::Value) -> [f64; N_BASE_FEATURES] {
     // spatial-intelligence stores the original RuView envelope under
     // `payload`; RuView's own recorder writes the envelope at the root. Keep
@@ -48,72 +51,15 @@ pub fn features_from_frame(frame: &serde_json::Value) -> [f64; N_BASE_FEATURES] 
         .get("features")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
-    let nodes = frame.get("nodes").and_then(|n| n.as_array());
-    let amps: Vec<f64> = nodes
-        .map(|ns| {
-            // The room-level adaptive model is trained over every link. Node
-            // order comes from a HashMap and is not stable across processes,
-            // so only order-invariant summary statistics are derived here.
-            ns.iter()
-                .filter_map(|node| node.get("amplitude").and_then(|a| a.as_array()))
-                .flatten()
-                .filter_map(|value| value.as_f64())
-                .collect()
-        })
-        .unwrap_or_default();
-
-    // Server-computed features (0-6).
-    let variance = feat.get("variance").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let mbp = feat
-        .get("motion_band_power")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0);
-    let bbp = feat
-        .get("breathing_band_power")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0);
-    let sp = feat
-        .get("spectral_power")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0);
-    let df = feat
-        .get("dominant_freq_hz")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0);
-    let cp = feat
-        .get("change_points")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0);
-    let rssi = feat
-        .get("mean_rssi")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0);
-
-    // Subcarrier-derived features (7-14).
-    let (amp_mean, amp_std, amp_skew, amp_kurt, amp_iqr, amp_entropy, amp_max, amp_range) =
-        subcarrier_stats(&amps);
-
-    [
-        variance,
-        mbp,
-        bbp,
-        sp,
-        df,
-        cp,
-        rssi,
-        amp_mean,
-        amp_std,
-        amp_skew,
-        amp_kurt,
-        amp_iqr,
-        amp_entropy,
-        amp_max,
-        amp_range,
-    ]
+    features_from_runtime(&feat, &[])
 }
 
-/// Also keep a simpler version for runtime (no JSONL, just FeatureInfo + amps).
-pub fn features_from_runtime(feat: &serde_json::Value, amps: &[f64]) -> [f64; N_BASE_FEATURES] {
+/// Runtime equivalent of [`features_from_frame`]. The amplitude argument remains for
+/// source compatibility but is excluded from schema v4 to guarantee train/serve parity.
+pub fn features_from_runtime(
+    feat: &serde_json::Value,
+    _amplitudes: &[f64],
+) -> [f64; N_BASE_FEATURES] {
     let variance = feat.get("variance").and_then(|v| v.as_f64()).unwrap_or(0.0);
     let mbp = feat
         .get("motion_band_power")
@@ -139,25 +85,8 @@ pub fn features_from_runtime(feat: &serde_json::Value, amps: &[f64]) -> [f64; N_
         .get("mean_rssi")
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0);
-    let (amp_mean, amp_std, amp_skew, amp_kurt, amp_iqr, amp_entropy, amp_max, amp_range) =
-        subcarrier_stats(amps);
-    [
-        variance,
-        mbp,
-        bbp,
-        sp,
-        df,
-        cp,
-        rssi,
-        amp_mean,
-        amp_std,
-        amp_skew,
-        amp_kurt,
-        amp_iqr,
-        amp_entropy,
-        amp_max,
-        amp_range,
-    ]
+
+    [variance, mbp, bbp, sp, df, cp, rssi]
 }
 
 /// Rate-invariant short temporal patch shared by offline fitting and runtime.
@@ -330,66 +259,6 @@ impl AdaptivePresenceSmoother {
     }
 }
 
-/// Compute statistical features from raw subcarrier amplitudes.
-fn subcarrier_stats(amps: &[f64]) -> (f64, f64, f64, f64, f64, f64, f64, f64) {
-    // HashMap-backed node serialization has no stable order. Sorting makes all
-    // summary features bit-reproducible across process restarts; dropping
-    // non-finite hardware samples keeps one corrupt bin from poisoning every
-    // logit in the room model.
-    let mut sorted: Vec<f64> = amps
-        .iter()
-        .copied()
-        .filter(|value| value.is_finite())
-        .collect();
-    if sorted.is_empty() {
-        return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
-    }
-    sorted.sort_by(f64::total_cmp);
-    let n = sorted.len() as f64;
-    let mean = sorted.iter().sum::<f64>() / n;
-    let var = sorted.iter().map(|a| (a - mean).powi(2)).sum::<f64>() / n;
-    let std = var.sqrt().max(1e-9);
-
-    // Skewness (asymmetry).
-    let skew = sorted
-        .iter()
-        .map(|a| ((a - mean) / std).powi(3))
-        .sum::<f64>()
-        / n;
-    // Kurtosis (peakedness).
-    let kurt = sorted
-        .iter()
-        .map(|a| ((a - mean) / std).powi(4))
-        .sum::<f64>()
-        / n
-        - 3.0;
-
-    // IQR (inter-quartile range).
-    let q1 = sorted[sorted.len() / 4];
-    let q3 = sorted[3 * sorted.len() / 4];
-    let iqr = q3 - q1;
-
-    // Spectral entropy (normalised).
-    let total_power: f64 = sorted.iter().map(|a| a * a).sum::<f64>().max(1e-9);
-    let entropy: f64 = sorted
-        .iter()
-        .map(|a| {
-            let p = (a * a) / total_power;
-            if p > 1e-12 {
-                -p * p.ln()
-            } else {
-                0.0
-            }
-        })
-        .sum::<f64>()
-        / n.ln().max(1e-9); // normalise to [0,1]
-
-    let max_val = sorted.last().copied().unwrap_or(0.0);
-    let range = max_val - sorted.first().copied().unwrap_or(0.0);
-
-    (mean, std, skew, kurt, iqr, entropy, max_val, range)
-}
-
 // ── Per-class statistics ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -456,7 +325,7 @@ impl Default for AdaptiveModel {
             global_std: [1.0; N_FEATURES],
             trained_frames: 0,
             training_accuracy: 0.0,
-            version: 1,
+            version: ADAPTIVE_FEATURE_SCHEMA_VERSION,
             class_names: default_class_names(),
             expected_node_count: None,
             validation: None,
@@ -468,6 +337,12 @@ impl AdaptiveModel {
     /// Whether this model has enough independent evidence to override the
     /// conservative threshold classifier in production.
     pub fn runtime_eligibility(&self) -> Result<(), String> {
+        if self.version != ADAPTIVE_FEATURE_SCHEMA_VERSION {
+            return Err(format!(
+                "model feature schema v{} is stale; runtime requires v{}",
+                self.version, ADAPTIVE_FEATURE_SCHEMA_VERSION
+            ));
+        }
         let metrics = self.validation.as_ref().ok_or_else(|| {
             "model has no session-held-out validation; automatic activation is unsafe".to_string()
         })?;
@@ -495,27 +370,23 @@ impl AdaptiveModel {
         {
             return Err("model normalization or class statistics are invalid".into());
         }
-        if metrics.held_out_recordings < n_classes {
+        if metrics.held_out_recordings < n_classes * 2 {
             return Err(format!(
-                "held-out validation needs at least one independent recording per class (have {}, need {n_classes})",
-                metrics.held_out_recordings
+                "held-out validation needs at least two independent recordings per class (have {}, need {})",
+                metrics.held_out_recordings,
+                n_classes * 2
             ));
         }
         if metrics.held_out_frames == 0 {
             return Err("held-out validation contains no frames".into());
         }
 
-        // Binary classifiers must clear a higher bar than four-way models
-        // because 50% is already random chance. The fixed 0.60 floor prevents
-        // a many-class model from activating on a superficially small margin.
-        let chance = 1.0 / n_classes as f64;
-        let required_balanced_accuracy = 0.60_f64.max(chance + 0.20);
         if !metrics.balanced_accuracy.is_finite()
-            || metrics.balanced_accuracy < required_balanced_accuracy
+            || metrics.balanced_accuracy < MIN_RUNTIME_BALANCED_ACCURACY
         {
             return Err(format!(
                 "held-out balanced accuracy {:.3} is below activation floor {:.3}",
-                metrics.balanced_accuracy, required_balanced_accuracy
+                metrics.balanced_accuracy, MIN_RUNTIME_BALANCED_ACCURACY
             ));
         }
 
@@ -525,9 +396,9 @@ impl AdaptiveModel {
                 .get(class_name)
                 .copied()
                 .ok_or_else(|| format!("held-out recall missing for class '{class_name}'"))?;
-            if !recall.is_finite() || recall < 0.50 {
+            if !recall.is_finite() || recall < MIN_RUNTIME_CLASS_RECALL {
                 return Err(format!(
-                    "held-out recall for class '{class_name}' is {recall:.3}, below 0.500"
+                    "held-out recall for class '{class_name}' is {recall:.3}, below {MIN_RUNTIME_CLASS_RECALL:.3}"
                 ));
             }
         }
@@ -1129,7 +1000,7 @@ fn fit_model(
         global_std,
         trained_frames: n,
         training_accuracy: accuracy,
-        version: 3,
+        version: ADAPTIVE_FEATURE_SCHEMA_VERSION,
         class_names: class_names.to_vec(),
         expected_node_count,
         validation: None,
@@ -1155,7 +1026,7 @@ mod tests {
 
     fn model_with_validation(balanced_accuracy: f64, recalls: &[(&str, f64)]) -> AdaptiveModel {
         let mut model = AdaptiveModel::default();
-        model.version = 3;
+        model.version = 4;
         model.class_names = recalls
             .iter()
             .map(|(name, _)| (*name).to_string())
@@ -1172,7 +1043,7 @@ mod tests {
             })
             .collect();
         model.validation = Some(ValidationMetrics {
-            held_out_recordings: recalls.len(),
+            held_out_recordings: recalls.len() * 2,
             held_out_frames: 400,
             balanced_accuracy,
             per_class_recall: recalls
@@ -1194,16 +1065,45 @@ mod tests {
     }
 
     #[test]
-    fn model_must_beat_dynamic_chance_margin_and_each_class_floor() {
-        let weak_binary = model_with_validation(0.69, &[("absent", 0.70), ("present_still", 0.68)]);
+    fn model_must_clear_product_balanced_accuracy_and_each_class_floor() {
+        let weak_binary = model_with_validation(0.89, &[("absent", 0.95), ("present_still", 0.83)]);
         assert!(weak_binary.runtime_eligibility().is_err());
 
         let collapsed_class =
-            model_with_validation(0.75, &[("absent", 0.98), ("present_still", 0.49)]);
+            model_with_validation(0.94, &[("absent", 0.98), ("present_still", 0.89)]);
         assert!(collapsed_class.runtime_eligibility().is_err());
 
-        let eligible = model_with_validation(0.80, &[("absent", 0.82), ("present_still", 0.78)]);
+        let eligible = model_with_validation(0.94, &[("absent", 0.95), ("present_still", 0.93)]);
         assert!(eligible.runtime_eligibility().is_ok());
+    }
+
+    #[test]
+    fn stale_feature_schema_is_never_activated() {
+        let mut stale = model_with_validation(0.95, &[("absent", 0.95), ("present", 0.95)]);
+        stale.version = 3;
+
+        let error = stale.runtime_eligibility().unwrap_err();
+
+        assert!(error.contains("schema"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn offline_and_runtime_features_do_not_depend_on_private_amplitude_payloads() {
+        let features = serde_json::json!({
+            "variance": 1.0,
+            "motion_band_power": 2.0,
+            "breathing_band_power": 0.3,
+            "spectral_power": 4.0,
+            "dominant_freq_hz": 0.25,
+            "change_points": 5,
+            "mean_rssi": -45.0
+        });
+        let frame = serde_json::json!({"features": features.clone(), "nodes": []});
+
+        assert_eq!(
+            features_from_frame(&frame),
+            features_from_runtime(&features, &[100.0, 200.0, 300.0])
+        );
     }
 
     #[test]
@@ -1242,7 +1142,7 @@ mod tests {
     fn runtime_loader_accepts_session_validated_model() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("model.json");
-        let model = model_with_validation(0.80, &[("absent", 0.82), ("present_still", 0.78)]);
+        let model = model_with_validation(0.95, &[("absent", 0.96), ("present_still", 0.94)]);
         model.save(&path).unwrap();
 
         assert!(AdaptiveModel::load_runtime(&path).is_ok());
@@ -1447,7 +1347,7 @@ mod tests {
     }
 
     #[test]
-    fn recorded_feature_extraction_uses_every_node_and_is_order_invariant() {
+    fn recorded_feature_extraction_is_independent_of_node_payload_order() {
         let frame_ab = serde_json::json!({
             "features": { "variance": 1.0 },
             "nodes": [
@@ -1467,8 +1367,7 @@ mod tests {
         let ba = features_from_frame(&frame_ba);
 
         assert_eq!(ab, ba, "node serialization order must not change features");
-        assert!((ab[7] - 5.5).abs() < 1e-9, "all-node amplitude mean");
-        assert!((ab[14] - 9.0).abs() < 1e-9, "all-node amplitude range");
+        assert_eq!(ab.len(), N_BASE_FEATURES);
     }
 
     #[test]
@@ -1484,6 +1383,6 @@ mod tests {
         let features = features_from_frame(&wrapped);
 
         assert_eq!(features[0], 3.0);
-        assert_eq!(features[7], 3.0);
+        assert_eq!(features[1..], [0.0; N_BASE_FEATURES - 1]);
     }
 }
