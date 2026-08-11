@@ -104,6 +104,11 @@ members = [
     "crates/ruview-certify",    # ADR-315 capability certificate
     "crates/ruview-scorecard",  # ADR-314 multi-domain benchmark scorecard
     "crates/ruview-policy",     # ADR-318 decision policy / action authorization
+    # ADR-297 phase 2 — unified world-model core:
+    "crates/ruview-hal",        # ADR-317 sensor HAL (any modality -> Observation)
+    "crates/ruview-groundtruth",# ADR-300 ground-truth synchronization / validation plane
+    "crates/ruview-track",      # ADR-304 persistent privacy-preserving tracking
+    "crates/ruview-fusion",     # ADR-308 uncertainty-aware fusion -> one world state
 ]
 # ADR-040: WASM edge crate targets wasm32-unknown-unknown (no_std),
 # excluded from workspace to avoid breaking `cargo test --workspace`.

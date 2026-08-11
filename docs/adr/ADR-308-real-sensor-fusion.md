@@ -1,6 +1,6 @@
 # ADR-308: Real sensor fusion — uncertainty-aware, multiple observations → one world state
 
-- **Status**: Proposed (ADR-297 phase 2)
+- **Status**: Accepted — initial implementation (ADR-297 phase 2)
 - **Date**: 2026-08-11
 - **Deciders**: ruv
 - **Tags**: fusion, uncertainty, multimodal, world-state, ontology, phase-2

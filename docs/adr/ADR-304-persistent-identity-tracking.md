@@ -1,6 +1,6 @@
 # ADR-304: Persistent identity & tracking — privacy-preserving probabilistic tracks
 
-- **Status**: Proposed (ADR-297 phase 2)
+- **Status**: Accepted — initial implementation (ADR-297 phase 2)
 - **Date**: 2026-08-11
 - **Deciders**: ruv
 - **Tags**: tracking, identity, privacy, fusion, worldgraph, phase-2

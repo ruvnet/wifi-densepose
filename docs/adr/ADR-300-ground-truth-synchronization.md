@@ -1,6 +1,6 @@
 # ADR-300: Ground-truth synchronization — reference sensors as a formal validation plane
 
-- **Status**: Proposed (ADR-297 phase 2)
+- **Status**: Accepted — initial implementation (ADR-297 phase 2)
 - **Date**: 2026-08-11
 - **Deciders**: ruv
 - **Tags**: ground-truth, validation, fusion, evidence, benchmark, honesty, substrate

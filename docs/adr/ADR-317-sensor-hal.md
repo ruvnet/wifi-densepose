@@ -1,6 +1,6 @@
 # ADR-317: RuView sensor HAL — abstract all sensing hardware to one Observation type
 
-- **Status**: Proposed (ADR-297 phase 2)
+- **Status**: Accepted — initial implementation (ADR-297 phase 2)
 - **Date**: 2026-08-11
 - **Deciders**: ruv
 - **Tags**: hal, sensor-abstraction, ontology, fusion, adapters, category, phase-2

@@ -7923,6 +7923,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruview-fusion"
+version = "0.3.1"
+dependencies = [
+ "ruview-hal",
+ "ruview-ontology",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruview-groundtruth"
+version = "0.3.1"
+dependencies = [
+ "ruview-evidence",
+ "ruview-ontology",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruview-hal"
+version = "0.3.1"
+dependencies = [
+ "ruview-ontology",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "ruview-ontology"
 version = "0.3.1"
 dependencies = [
@@ -7983,6 +8015,16 @@ dependencies = [
  "tokio-test",
  "toml 0.8.23",
  "tracing",
+]
+
+[[package]]
+name = "ruview-track"
+version = "0.3.1"
+dependencies = [
+ "ruview-ontology",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
