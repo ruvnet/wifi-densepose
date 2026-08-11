@@ -1,0 +1,67 @@
+name: Model release gate (ADR-298)
+
+# ADR-298 model-release sanity gates (issue #1521): structural checks that
+# block a degenerate/mislabeled classifier head (unreachable decision
+# boundary, near-constant output, degenerate class balance, a metric
+# surfaced under a task name it wasn't computed as) before it ships.
+#
+# Checker: v2/crates/wifi-densepose-train/src/model_gates.rs
+#
+# IMPORTANT — the honest scope of this job: it protects the *checker itself*
+# from regressing (the gate logic + its issue-1521 regression fixture are
+# exercised on every push/PR that touches this crate), and running it is
+# required before ADR-298 can be called "wired in" at all. It does NOT gate
+# an actual model publish — this repository does not automate uploading to
+# the HuggingFace model repo (`ruvnet/wifi-densepose-pretrained`); that
+# remains a manual, human-run step. Before publishing or replacing a model
+# artifact there, run this gate against the real head weights locally:
+#
+#   cargo test -p wifi-densepose-train model_gates
+#
+# and, until a CLI entry point exists to run `evaluate_linear_head` against an
+# arbitrary `.safetensors`/`.rvf` file, load the head's `weight`/`bias` in a
+# short script and call `wifi_densepose_train::evaluate_linear_head` directly.
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "v2/crates/wifi-densepose-train/**"
+  pull_request:
+    paths:
+      - "v2/crates/wifi-densepose-train/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  model-release-gate:
+    name: Model release gate check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Run the model-release gate's own test suite
+        working-directory: v2
+        run: cargo test -p wifi-densepose-train --no-default-features model_gates -- --nocapture
+
+      - name: Summarize result
+        if: always()
+        run: |
+          {
+            echo '### Model release gate (ADR-298)'
+            echo ''
+            echo 'This job protects `model_gates.rs` from regressing. It does not itself'
+            echo 'gate a real HuggingFace model publish — that upload is a manual step'
+            echo 'outside this repository; run `cargo test -p wifi-densepose-train model_gates`'
+            echo 'against real head weights before publishing one.'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,4 +1,5 @@
 import { withWsTicket } from './ws-ticket.js';
+import { apiService } from './api.service.js';
 /**
  * Sensing WebSocket Service
  *
@@ -308,8 +309,13 @@ class SensingService {
     // an *unknown* state — it must NOT collapse to "live". Prefer the canonical
     // `source_state` the server now returns; on any error stay conservative
     // (server-simulated) until a real frame's `source` field promotes us.
+    //
+    // Send the bearer token via `apiService.getHeaders()` so the probe can
+    // actually succeed under the documented secure posture (API auth
+    // enabled) instead of always 401ing and relying solely on the
+    // conservative fallback below (issue #1526, suggested fix #1).
     try {
-      const resp = await fetch('/api/v1/status');
+      const resp = await fetch('/api/v1/status', { headers: apiService.getHeaders() });
       if (resp.ok) {
         const json = await resp.json();
         this._applyServerSource(json.source, json.source_state);

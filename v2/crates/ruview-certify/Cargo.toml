@@ -13,6 +13,7 @@ blake3 = { version = "1.5", default-features = false }
 ruview-ontology = { path = "../ruview-ontology" }
 ruview-attest = { path = "../ruview-attest" }
 ruview-evidence = { path = "../ruview-evidence" }
+ruview-ood = { path = "../ruview-ood" }
 wifi-densepose-calibration = { path = "../wifi-densepose-calibration", default-features = false }
 
 [dev-dependencies]

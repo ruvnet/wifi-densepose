@@ -10,6 +10,10 @@ repository.workspace = true
 thiserror.workspace = true
 serde = { workspace = true, features = ["derive"] }
 ruview-evidence = { path = "../ruview-evidence" }
+ruview-ood = { path = "../ruview-ood" }
+ruview-certify = { path = "../ruview-certify" }
+ruview-attest = { path = "../ruview-attest" }
 
 [dev-dependencies]
 serde_json.workspace = true
+ruview-ontology = { path = "../ruview-ontology" }

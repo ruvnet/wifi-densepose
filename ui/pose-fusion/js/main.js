@@ -140,13 +140,23 @@ function init() {
   csiCnn.tryLoadWasm(wasmBase);
 
   // Auto-connect to local sensing server WebSocket if available.
-  // Served from the Docker image the sensing stream lives on :3001 (same
-  // port mapping sensing.service.js uses); the standalone dev server stays
-  // on :8765.
-  const wsPortMap = { '3000': '3001' };
-  const mappedPort = wsPortMap[window.location.port];
-  const defaultWsUrl = mappedPort
-    ? `ws://${window.location.hostname}:${mappedPort}/ws/sensing`
+  // Served from the Docker image, the sensing stream lives one port above the
+  // HTTP port (3000 -> 3001 is the documented default mapping); the
+  // standalone dev server stays on :8765.
+  //
+  // Issue #1557: a hardcoded `{'3000': '3001'}` map only worked when the UI
+  // was served on exactly port 3000 — remapping the host port (e.g.
+  // `-p 3010:3000 -p 3011:3001`, needed whenever 3000 is already taken) fell
+  // through to `localhost:8765`, which for a remote viewer is nothing on
+  // *their* machine. `connectLive()` then failed silently. Derive the WS port
+  // from the actual HTTP port instead of a fixed lookup table, so it follows
+  // any host-port remapping automatically. This is a best-effort default, not
+  // a safety mechanism — `onVerifiedFrame` below (issue #1557 fix) is what
+  // actually prevents an unconfirmed/failed connection from ever being shown
+  // as LIVE, regardless of whether this guess is right.
+  const httpPort = Number(window.location.port);
+  const defaultWsUrl = Number.isFinite(httpPort) && httpPort > 0
+    ? `ws://${window.location.hostname}:${httpPort + 1}/ws/sensing`
     : 'ws://localhost:8765/ws/sensing';
   if (wsUrlInput) wsUrlInput.value = defaultWsUrl;
   // ADR-272: exchange the stored bearer for a single-use ?ticket= before the

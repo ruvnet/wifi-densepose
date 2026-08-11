@@ -422,7 +422,7 @@ struct FeatureInfo {
     spectral_power: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct ClassificationInfo {
     motion_level: String,
     presence: bool,
@@ -448,6 +448,25 @@ fn classify_vitals(motion: bool, presence: bool, presence_score: f32) -> Classif
         motion_level: motion_level.to_string(),
         presence: motion_level != "absent",
         confidence: presence_score as f64,
+    }
+}
+
+/// Derive the top-level (room) [`ClassificationInfo`] from the fused
+/// [`RoomInference`] aggregate (ADR-297, issue #1554), rather than from
+/// whichever node's packet happened to arrive last. `RoomInference`'s
+/// `"unavailable"` (no fresh node contributing) maps to `"absent"` with zero
+/// confidence — no evidence of presence, since `ClassificationInfo` has no
+/// separate "unknown" state — never a frozen last-known value.
+fn classification_from_room(room: &RoomInference) -> ClassificationInfo {
+    let motion_level = if room.classification == "unavailable" {
+        "absent"
+    } else {
+        room.classification.as_str()
+    };
+    ClassificationInfo {
+        motion_level: motion_level.to_string(),
+        presence: motion_level != "absent",
+        confidence: room.confidence,
     }
 }
 
@@ -502,6 +521,73 @@ mod classify_vitals_tests {
     fn confidence_passes_through_presence_score() {
         let c = classify_vitals(true, true, 0.33);
         assert!((c.confidence - 0.33_f64).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod issue_1554_room_classification_tests {
+    //! Issue #1554 — the top-level `classification` in `SensingUpdate` (served
+    //! by `GET /api/v1/sensing/latest`) used to be `classify_vitals(...)` on
+    //! *this packet's* single node, overwritten on every UDP packet. With 2+
+    //! disagreeing nodes it flapped at packet rate (~40/s in the field report)
+    //! because whichever node's packet arrived last won.
+    //!
+    //! `classification_from_room` instead derives the top-level classification
+    //! from the deterministic, freshness-weighted `RoomInference` aggregate
+    //! (ADR-297) — the same aggregate `fuse_room` already computes for the
+    //! `room_inference` field — so it no longer depends on packet arrival
+    //! order.
+    use super::{classification_from_room, RoomInference};
+
+    #[test]
+    fn derives_presence_and_motion_from_room_classification() {
+        let room = RoomInference {
+            classification: "present_moving".to_string(),
+            confidence: 0.82,
+            contributing_nodes: 3,
+        };
+        let c = classification_from_room(&room);
+        assert_eq!(c.motion_level, "present_moving");
+        assert!(c.presence);
+        assert!((c.confidence - 0.82).abs() < 1e-9);
+    }
+
+    #[test]
+    fn absent_room_classification_has_no_presence() {
+        let room = RoomInference {
+            classification: "absent".to_string(),
+            confidence: 0.4,
+            contributing_nodes: 1,
+        };
+        let c = classification_from_room(&room);
+        assert_eq!(c.motion_level, "absent");
+        assert!(!c.presence);
+    }
+
+    #[test]
+    fn unavailable_room_maps_to_absent_not_a_frozen_value() {
+        // No fresh node contributing -> RoomInference::unavailable(). Must not
+        // surface as a stale "present" from whichever node reported last.
+        let room = RoomInference::unavailable();
+        let c = classification_from_room(&room);
+        assert_eq!(c.motion_level, "absent");
+        assert!(!c.presence);
+        assert_eq!(c.confidence, 0.0);
+    }
+
+    #[test]
+    fn does_not_depend_on_which_node_is_named_last() {
+        // The old bug was order/arrival dependent. The room-derived value must
+        // be a pure function of the aggregate, so two RoomInferences with the
+        // same fields (regardless of which node contributed them) classify
+        // identically.
+        let a = RoomInference {
+            classification: "present_still".to_string(),
+            confidence: 0.6,
+            contributing_nodes: 2,
+        };
+        let b = a.clone();
+        assert_eq!(classification_from_room(&a), classification_from_room(&b));
     }
 }
 
@@ -4389,7 +4475,15 @@ fn derive_single_person_pose(
                 x: final_x,
                 y: final_y,
                 z: lean_x * 0.02,
-                confidence: kp_conf.clamp(0.1, 1.0),
+                // Issue #1525: the UI's default `keypointConfidenceThreshold`
+                // is 0.1 (`ui/utils/pose-renderer.js`), and every draw gate
+                // there rejects at `<=`/requires `>` that value — so a floor
+                // of exactly 0.1 still renders nothing on the default,
+                // no-model Docker path (low `base_confidence` hits this floor
+                // often). Clamp strictly above the client's threshold so a
+                // signal-derived keypoint is always visible, never fully
+                // transparent/undrawn by construction.
+                confidence: kp_conf.clamp(0.15, 1.0),
             }
         })
         .collect();
@@ -5023,6 +5117,17 @@ async fn start_recording(
         .map(|s| s.to_string())
         .unwrap_or_else(|| format!("rec_{}", chrono_timestamp()));
 
+    // ADR-295: a recording captured while the live source is `Synthetic` is an
+    // export, and every export of synthetic data must be watermarked so it can
+    // never later be mistaken for a real capture (`export_watermark`). Stamped
+    // onto the recording's own metadata entry — not the filename or the
+    // per-line JSON — so the on-disk `.jsonl` schema and the `{id}.jsonl` path
+    // convention `delete_recording`/`scan_recording_files` both rely on stay
+    // exactly as every existing consumer (including `wifi-densepose-train`'s
+    // dataset loader) already expects. Still unmissable: every caller of
+    // `GET /api/v1/recordings` (and the success response below) sees it.
+    let watermark = s.source_state().export_watermark();
+
     // Create the recording file
     let rec_path = PathBuf::from("data/recordings").join(format!("{}.jsonl", id));
     let file = match std::fs::File::create(&rec_path) {
@@ -5051,6 +5156,7 @@ async fn start_recording(
         "status": "recording",
         "started_at": chrono_timestamp(),
         "frames": 0,
+        "watermark": watermark,
     }));
 
     let rec_id = id.clone();
@@ -5096,8 +5202,11 @@ async fn start_recording(
         info!("Recording {rec_id} finished: {frame_count} frames written");
     });
 
-    info!("Recording started: {id}");
-    Json(serde_json::json!({ "success": true, "recording_id": id }))
+    match watermark {
+        Some(mark) => info!("Recording started: {id} (source watermarked {mark})"),
+        None => info!("Recording started: {id}"),
+    }
+    Json(serde_json::json!({ "success": true, "recording_id": id, "watermark": watermark }))
 }
 
 /// POST /api/v1/recording/stop — stop recording CSI data.
@@ -6072,23 +6181,12 @@ async fn udp_receiver_task(
                     // Cross-node fusion: combine features from all active nodes.
                     let fused_features = fuse_multi_node_features(&features, &s.node_states);
 
-                    let mut classification =
-                        classify_vitals(vitals.motion, vitals.presence, vitals.presence_score);
-
-                    // Boost classification confidence with multi-node coverage.
-                    let n_active = s
-                        .node_states
-                        .values()
-                        .filter(|ns| {
-                            ns.last_frame_time
-                                .is_some_and(|t| now.duration_since(t).as_secs() < 10)
-                        })
-                        .count();
-                    if n_active > 1 {
-                        classification.confidence = (classification.confidence
-                            * (1.0 + 0.15 * (n_active as f64 - 1.0)))
-                            .clamp(0.0, 1.0);
-                    }
+                    // ADR-297 (issue #1554): the top-level classification is the
+                    // fused room aggregate, not this packet's single node — a
+                    // node's own reading no longer overwrites the room's. The
+                    // old ad-hoc "boost confidence by node count" is replaced by
+                    // `room_inference`'s freshness-weighted multi-node confidence.
+                    let classification = classification_from_room(&room_inference);
 
                     let signal_field = generate_signal_field(
                         fused_features.mean_rssi,
@@ -6560,7 +6658,12 @@ async fn udp_receiver_task(
                         tick,
                         nodes: active_nodes,
                         features: fused_features.clone(),
-                        classification,
+                        // ADR-297 (issue #1554): top-level classification is the
+                        // fused room aggregate, not this frame's single node.
+                        // `classification` (this node's own smoothed reading)
+                        // still drives `motion_score`/`total_persons` above,
+                        // which are legitimately this-packet-local.
+                        classification: classification_from_room(&room_inference),
                         signal_field: generate_signal_field(
                             fused_features.mean_rssi,
                             motion_score,
@@ -6977,12 +7080,20 @@ fn vitals_snapshots_from_sensing_json(
             .iter()
             .map(|node| {
                 let n = node["node_id"].as_u64().unwrap_or(0);
-                // Each node carries its OWN classification — use it, deferring to
-                // the room aggregate only for fields the node omits.
-                let ncls = &node["classification"];
-                let presence = ncls["presence"].as_bool().unwrap_or(agg_presence);
-                let motion = motion_of(ncls["motion_level"].as_str(), agg_motion);
-                let conf = ncls["confidence"].as_f64().unwrap_or(agg_conf);
+                // Each node carries its OWN classification under `node_inference`
+                // (ADR-297) — use it, deferring to the room aggregate only for
+                // fields the node omits. Issue #1541: this previously read a
+                // `"classification"` key that does not exist on `NodeInfo`'s
+                // serialized JSON (the field is `node_inference`), so every
+                // per-node lookup silently fell through to the room aggregate —
+                // per-node MQTT topics carried array-global values.
+                let ninf = &node["node_inference"];
+                let presence = ninf["classification"]
+                    .as_str()
+                    .map(|c| c != "absent")
+                    .unwrap_or(agg_presence);
+                let motion = motion_of(ninf["classification"].as_str(), agg_motion);
+                let conf = ninf["confidence"].as_f64().unwrap_or(agg_conf);
                 mk(
                     format!("{base_id}-node{n}"),
                     presence,
@@ -9162,10 +9273,21 @@ mod mqtt_bridge_tests {
     use super::vitals_snapshots_from_sensing_json;
     use serde_json::json;
 
-    /// Regression for the per-node presence bug (#872/#898): each node must
-    /// surface its OWN classification, not the room-level aggregate. Node 1 is
-    /// present+moving; node 2 is absent — node 2 must NOT inherit node 1's
-    /// "present".
+    /// Regression for the per-node presence bug (#872/#898, and its
+    /// resurgence as #1541): each node must surface its OWN classification,
+    /// not the room-level aggregate. Node 1 is present+moving; node 2 is
+    /// absent — node 2 must NOT inherit node 1's "present".
+    ///
+    /// The fixture below uses `nodes[].node_inference.classification` — the
+    /// field `NodeInfo` actually serializes (ADR-297) — not a bare
+    /// `nodes[].classification`. Issue #1541: an earlier version of this exact
+    /// test used the latter, non-existent shape, which the reader silently
+    /// treated as "field omitted" and fell back to the room aggregate for
+    /// every node. The test therefore passed while the real per-node MQTT
+    /// output was array-global — 100% line coverage of
+    /// `vitals_snapshots_from_sensing_json` with a fixture that didn't match
+    /// what `NodeInfo` actually serializes. Keep this fixture in the real
+    /// shape so this can't recur silently.
     #[test]
     fn per_node_presence_uses_each_nodes_own_classification() {
         let v = json!({
@@ -9175,9 +9297,9 @@ mod mqtt_bridge_tests {
             "persons": [{}, {}],
             "nodes": [
                 { "node_id": 1, "rssi_dbm": -40.0,
-                  "classification": { "presence": true, "motion_level": "walking", "confidence": 0.8 } },
+                  "node_inference": { "classification": "present_moving", "confidence": 0.8 } },
                 { "node_id": 2, "rssi_dbm": -70.0,
-                  "classification": { "presence": false, "motion_level": "absent", "confidence": 0.1 } }
+                  "node_inference": { "classification": "absent", "confidence": 0.1 } }
             ]
         });
         let snaps = vitals_snapshots_from_sensing_json(&v, "ruview");

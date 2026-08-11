@@ -106,6 +106,59 @@ impl DomainState {
     }
 }
 
+/// The adapter boundary from the real `ruview-ood` gate result to this
+/// crate's three-way domain signature (ADR-297/302). `ruview_ood::DomainState`
+/// carries a `DomainCause` on `Degraded`/`Unknown`; `is_valid` only needs the
+/// three-way outcome, so the cause is dropped here — this is the conversion
+/// this crate's own `DomainState` doc comment already described but that
+/// previously did not exist anywhere, leaving `ruview-ood`'s live drift result
+/// with no path into a certificate check.
+impl From<ruview_ood::DomainState> for DomainState {
+    fn from(state: ruview_ood::DomainState) -> Self {
+        match state {
+            ruview_ood::DomainState::Known => DomainState::Known,
+            ruview_ood::DomainState::Degraded(_) => DomainState::Degraded,
+            ruview_ood::DomainState::Unknown(_) => DomainState::Unknown,
+        }
+    }
+}
+
+#[cfg(test)]
+mod domain_state_adapter_tests {
+    //! Pins the `ruview-ood` -> `ruview-certify` adapter boundary: a real OOD
+    //! gate result must map to the matching certify-side outcome, and — the
+    //! load-bearing case — a post-drift `Unknown` from `ood` must actually
+    //! invalidate an otherwise-valid certificate through this conversion,
+    //! not just when a test hand-constructs `certify::DomainState::Unknown`
+    //! directly.
+    use super::DomainState;
+
+    #[test]
+    fn known_maps_to_known() {
+        assert_eq!(DomainState::from(ruview_ood::DomainState::Known), DomainState::Known);
+    }
+
+    #[test]
+    fn degraded_drops_the_cause_and_maps_to_degraded() {
+        assert_eq!(
+            DomainState::from(ruview_ood::DomainState::Degraded(
+                ruview_ood::DomainCause::ModerateDrift
+            )),
+            DomainState::Degraded
+        );
+    }
+
+    #[test]
+    fn unknown_drops_the_cause_and_maps_to_unknown() {
+        assert_eq!(
+            DomainState::from(ruview_ood::DomainState::Unknown(
+                ruview_ood::DomainCause::DriftBeyondEnvelope
+            )),
+            DomainState::Unknown
+        );
+    }
+}
+
 /// The operating metrics frozen onto a certificate, sliced from the ADR-304
 /// ledger for one exact context (never a global average).
 ///
