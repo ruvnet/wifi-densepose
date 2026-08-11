@@ -154,7 +154,7 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-294](ADR-294-multi-node-semantic-correctness.md) | Multi-node semantic correctness — per-node inference, node-keyed rate limiting, stale state | Accepted (initial implementation) |
 | [ADR-295](ADR-295-model-release-sanity-gates.md) | Model release sanity gates — block degenerate and mislabeled model artifacts | Accepted (initial implementation) |
 | [ADR-296](ADR-296-csi-data-incident-repo-controls.md) | Repository CSI data-incident controls — ignore rules and pre-commit/CI policy check | Accepted (controls implemented; tree remediation gated) |
-| [ADR-297](ADR-297-perception-substrate-program.md) | RuView perception substrate — phased 20-primitive program (calibration, evidence, trust, deployment) | Accepted (program; children ADR-298..317) |
+| [ADR-297](ADR-297-perception-substrate-program.md) | RuView perception substrate — phased 21-primitive program (calibration, evidence, trust, deployment) | Accepted (program; children ADR-298..317) |
 | [ADR-298](ADR-298-automatic-domain-calibration.md) | Automatic domain calibration — signed, versioned, invalidatable room fingerprint | Accepted (phase 1) |
 | [ADR-299](ADR-299-out-of-distribution-detection.md) | Out-of-distribution detection — KNOWN / DEGRADED / UNKNOWN gating | Accepted (phase 1) |
 | [ADR-300](ADR-300-ground-truth-synchronization.md) | Ground-truth synchronization — reference sensors as a formal validation plane | Proposed (phase 2) |
@@ -175,6 +175,7 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-315](ADR-315-capability-certificates.md) | Capability certificates — validated-for-this-environment claims | Accepted (phase 1) |
 | [ADR-316](ADR-316-witness-chain.md) | Witness chain — staged, signed epistemic envelope | Accepted (phase 1) |
 | [ADR-317](ADR-317-sensor-hal.md) | RuView sensor HAL — abstract all sensing hardware to one Observation type | Proposed (phase 2) |
+| [ADR-318](ADR-318-decision-policy-action-authorization.md) | Decision policy — action authorization conditioned on certificate class, freshness, uncertainty, evidence | Accepted (phase 1) |
 
 ---
 

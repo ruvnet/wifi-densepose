@@ -28,10 +28,69 @@ Several of these primitives already have foundations in the tree and should be
 - The in-flight ADR-292 (provenance state machine), ADR-293 (authenticated
   data plane, step one), ADR-295 (model sanity gates) — the first bricks.
 
+## What RuView is optimizing for
+
+Not inference capability — **epistemic reliability**:
+
+```
+signal → observation → calibration → inference → uncertainty → evidence
+       → certificate → policy → governed action
+```
+
+That pipeline is the product. The defensible category is not "RuView perceives
+the physical world" but "RuView determines what machines are justified in
+believing about it, proves why, and constrains what they may do with that
+belief."
+
+### Four non-negotiable program rules
+
+Every child ADR and implementation is bound by these:
+
+1. **UNKNOWN is a first-class output, never an error condition.** A surface that
+   cannot answer says UNKNOWN and stays legible; it does not throw, default to a
+   confident class, or silently hold a stale value.
+2. **Capability certificates bind cryptographically.** Hardware, environment,
+   model, calibration, metrics, expiry, and evidence level are bound under one
+   signature (ADR-315/ADR-302). An unsigned or partially-bound certificate is
+   not a certificate.
+3. **One canonical semantics downstream.** Every surface (MQTT, REST, WebSocket,
+   RuField, Matter, agents, UI) consumes the same Observation → Inference →
+   GovernedEvent types (ADR-303). No transport- or UI-specific reinterpretation.
+4. **Benchmarks expose worst-domain performance and confidence intervals.**
+   Pooled accuracy is never sufficient for promotion (ADR-314).
+
+### Certificate conditionality (the staleness guard)
+
+The central architectural risk is **certificate staleness**: a room can remain
+syntactically calibrated while its RF distribution has drifted enough to
+invalidate the certificate. Therefore a capability certificate is **conditional
+on a continuously evaluated domain signature** (ADR-299), not a one-time stamp.
+Crossing the OOD threshold automatically degrades state and triggers
+recalibration rather than silently continuing:
+
+```
+VALID → DEGRADED → UNKNOWN   (auto-degrade on domain drift; triggers recalibration)
+```
+
+This binds ADR-298 (calibration), ADR-299 (OOD), ADR-315 (certificate), and
+ADR-318 (policy): a degraded/unknown domain must invalidate the affected
+capability *before* a false confident inference reaches an actuator.
+
+### Commercial framing — three primitives, not one product
+
+- **RuView Runtime** — provides perception.
+- **RuView Certify** — establishes what a deployment can legitimately claim
+  (calibration + evidence + capability certificate + policy).
+- **RuView Trust / Fleet** — keeps that claim valid across hardware, firmware,
+  models, and environmental drift (ADR-313).
+
+Certify and Trust are the parts that are hard to commoditize; presence
+detection alone is not.
+
 ## Decision
 
-Adopt a **20-primitive phased program**. Each primitive gets a child ADR
-(ADR-298…ADR-317) that owns its detailed decision, status, and validation.
+Adopt a **21-primitive phased program**. Each primitive gets a child ADR
+(ADR-298…ADR-318) that owns its detailed decision, status, and validation.
 This ADR owns the framing, the dependency order, and the phase assignment.
 
 ### Primitive → ADR map
@@ -58,23 +117,29 @@ This ADR owns the framing, the dependency order, and the phase assignment.
 | 18 | Capability certificates | ADR-315 | 1 |
 | 19 | Witness chain | ADR-316 | 1 |
 | 20 | RuView sensor HAL | ADR-317 | 2 |
+| 21 | Decision policy — action authorization | ADR-318 | 1 |
 
 ### Dependency order (why phase, not score, drives sequencing)
 
 ```
         ADR-303 spatial ontology ──┐
         ADR-302 auth identity ─────┼──► ADR-298 calibration cert ──► ADR-299 OOD gating
-                                   │             │
-                                   └──► ADR-316 witness chain        │
-                                                 │                   ▼
+                                   │             │                        │
+                                   └──► ADR-316 witness chain             │ (VALID→DEGRADED→UNKNOWN)
+                                                 │                        ▼
                                    ADR-301 evidence engine ──► ADR-315 capability certificate
-                                                 │
+                                                 │                        │ (conditional on domain signature)
+                                                 │                        ▼
+                                                 │              ADR-318 decision policy ──► governed action
                                                  └──► ADR-314 benchmark scorecard (per-PR gate)
 ```
 
-- **Phase 1 (the certificate spine, built now):** 303, 302, 316, 298, 299,
-  301, 315, 314. This set is exactly the acceptance test decomposed and is
-  buildable without new hardware (types, logic, signatures, tests).
+- **Phase 1 (the certificate spine, built now):** foundational roots 303, 302,
+  301, 298 (implemented first, in their own crates); then the dependent wave
+  316, 299, 315, 314, 318. This set is exactly the acceptance test decomposed
+  and is buildable without new hardware (types, logic, signatures, tests). The
+  dependent wave adds the staleness guard (299 auto-degrades 315) and the
+  action gate (318) that denies at the actuator on a degraded/unknown domain.
 - **Phase 2 (integration & operations):** 300 ground truth, 304 tracking, 307
   802.11bf-native, 308 fusion, 313 fleet, 317 HAL. Depends on the spine.
 - **Phase 3 (higher-ceiling, research-forward):** 305 placement optimizer, 306
@@ -84,7 +149,7 @@ This ADR owns the framing, the dependency order, and the phase assignment.
 Phase-2 and phase-3 child ADRs are authored as **Proposed** (design intent,
 validation plan) and are not implemented by the phase-1 swarm.
 
-### Acceptance test (from the strategic assessment)
+### Acceptance test A — onboarding (from the strategic assessment)
 
 > Connect a new sensor type in an unseen room. Within 30 minutes RuView should
 > identify the hardware (HAL, ADR-317), calibrate the environment (ADR-298),
@@ -93,7 +158,18 @@ validation plan) and are not implemented by the phase-1 swarm.
 > events (ADR-303), and return UNKNOWN whenever evidence falls outside that
 > certificate (ADR-299).
 
-Phase 1 makes every clause except HAL testable in software; HAL (phase 2)
+### Acceptance test B — drift invalidation (the staleness guard)
+
+> Deliberately change the room after certification — move furniture, change the
+> AP channel, or substitute hardware. RuView should detect distribution drift
+> (ADR-299), invalidate the affected capability (ADR-315) **before** a false
+> confident inference reaches an actuator (ADR-318 denies with the specific
+> failed condition), emit UNKNOWN, preserve the complete witness chain
+> (ADR-316), and explain exactly which certificate condition failed.
+
+Test B is the load-bearing one: it proves the substrate fails safe, not just
+that it perceives well. Phase 1 makes every clause except HAL testable in
+software; HAL (phase 2)
 closes the "identify the hardware" clause.
 
 ## Consequences
