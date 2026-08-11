@@ -155,6 +155,26 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-295](ADR-295-model-release-sanity-gates.md) | Model release sanity gates — block degenerate and mislabeled model artifacts | Accepted (initial implementation) |
 | [ADR-296](ADR-296-csi-data-incident-repo-controls.md) | Repository CSI data-incident controls — ignore rules and pre-commit/CI policy check | Accepted (controls implemented; tree remediation gated) |
 | [ADR-297](ADR-297-perception-substrate-program.md) | RuView perception substrate — phased 20-primitive program (calibration, evidence, trust, deployment) | Accepted (program; children ADR-298..317) |
+| [ADR-298](ADR-298-automatic-domain-calibration.md) | Automatic domain calibration — signed, versioned, invalidatable room fingerprint | Accepted (phase 1) |
+| [ADR-299](ADR-299-out-of-distribution-detection.md) | Out-of-distribution detection — KNOWN / DEGRADED / UNKNOWN gating | Accepted (phase 1) |
+| [ADR-300](ADR-300-ground-truth-synchronization.md) | Ground-truth synchronization — reference sensors as a formal validation plane | Proposed (phase 2) |
+| [ADR-301](ADR-301-evidence-engine.md) | Evidence engine — per-(room,device,subject) accuracy ledger | Accepted (phase 1) |
+| [ADR-302](ADR-302-authenticated-sensor-identity.md) | Authenticated sensor identity — RF chain of custody | Accepted (phase 1) |
+| [ADR-303](ADR-303-canonical-spatial-ontology.md) | Canonical spatial ontology — one Site→…→Event model for every surface | Accepted (phase 1) |
+| [ADR-304](ADR-304-persistent-identity-tracking.md) | Persistent identity & tracking — privacy-preserving probabilistic tracks | Proposed (phase 2) |
+| [ADR-305](ADR-305-sensor-placement-optimizer.md) | Sensor placement optimizer — floorplan + inventory → recommended positions | Proposed (phase 3) |
+| [ADR-306](ADR-306-active-sensing.md) | Active sensing — closed-loop RF experiment control | Proposed (phase 3) |
+| [ADR-307](ADR-307-80211bf-native-architecture.md) | 802.11bf-native architecture — standardized WLAN sensing as native measurement types | Proposed (phase 2) |
+| [ADR-308](ADR-308-real-sensor-fusion.md) | Real sensor fusion — uncertainty-aware, multiple observations → one world state | Proposed (phase 2) |
+| [ADR-309](ADR-309-long-term-spatial-memory.md) | Long-term spatial memory — learn the normal physics of a location | Proposed (phase 3) |
+| [ADR-310](ADR-310-counterfactual-inference.md) | Counterfactual inference — generative spatial reasoning | Proposed (phase 3) |
+| [ADR-311](ADR-311-information-gain-scheduler.md) | Information-gain scheduler — sample the most informative radios | Proposed (phase 3) |
+| [ADR-312](ADR-312-digital-rf-twin.md) | Digital RF twin — persistent per-deployment RF model | Proposed (phase 3) |
+| [ADR-313](ADR-313-fleet-control-plane.md) | Fleet control plane — provisioning to audit trails | Proposed (phase 2) |
+| [ADR-314](ADR-314-benchmark-multi-domain-scorecard.md) | Multi-domain benchmark scorecard — regressions cannot hide behind pooled accuracy | Accepted (phase 1) |
+| [ADR-315](ADR-315-capability-certificates.md) | Capability certificates — validated-for-this-environment claims | Accepted (phase 1) |
+| [ADR-316](ADR-316-witness-chain.md) | Witness chain — staged, signed epistemic envelope | Accepted (phase 1) |
+| [ADR-317](ADR-317-sensor-hal.md) | RuView sensor HAL — abstract all sensing hardware to one Observation type | Proposed (phase 2) |
 
 ---
 
