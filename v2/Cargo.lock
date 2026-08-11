@@ -7900,6 +7900,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruview-certify"
+version = "0.3.1"
+dependencies = [
+ "blake3",
+ "ruview-attest",
+ "ruview-evidence",
+ "ruview-ontology",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "wifi-densepose-calibration",
+]
+
+[[package]]
 name = "ruview-evidence"
 version = "0.3.1"
 dependencies = [
@@ -7912,6 +7926,36 @@ dependencies = [
 name = "ruview-ontology"
 version = "0.3.1"
 dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruview-ood"
+version = "0.3.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "wifi-densepose-calibration",
+]
+
+[[package]]
+name = "ruview-policy"
+version = "0.3.1"
+dependencies = [
+ "ruview-evidence",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruview-scorecard"
+version = "0.3.1"
+dependencies = [
+ "ruview-evidence",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -7955,6 +7999,16 @@ dependencies = [
  "thiserror 2.0.18",
  "wifi-densepose-core",
  "wifi-densepose-hardware",
+]
+
+[[package]]
+name = "ruview-witness"
+version = "0.3.1"
+dependencies = [
+ "ruview-attest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
