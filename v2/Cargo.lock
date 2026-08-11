@@ -7870,6 +7870,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "753a07254fa68db183949ec6c7575d890da4d42404afabc11d610a720fcf570c"
 
 [[package]]
+name = "ruview-attest"
+version = "0.3.1"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "ruview-auth"
 version = "0.1.0"
 dependencies = [
@@ -7887,6 +7897,24 @@ dependencies = [
  "tracing",
  "ureq 2.12.1",
  "url",
+]
+
+[[package]]
+name = "ruview-evidence"
+version = "0.3.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruview-ontology"
+version = "0.3.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -11376,6 +11404,7 @@ dependencies = [
  "num-complex",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.18",
  "uuid",
  "wifi-densepose-core",

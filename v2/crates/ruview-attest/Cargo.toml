@@ -1,0 +1,16 @@
+[package]
+name = "ruview-attest"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+
+[dependencies]
+thiserror.workspace = true
+serde = { workspace = true, features = ["derive"] }
+blake3 = { version = "1.5", default-features = false }
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -94,6 +94,10 @@ members = [
     # hardware coupling, every number SYNTHETIC/L0 until real wideband RF
     # hardware exists.
     "crates/wifi-densepose-sar",
+    # ADR-297 phase 1 — perception substrate spine (new first-party crates):
+    "crates/ruview-ontology",   # ADR-303 canonical spatial ontology (Site..Event)
+    "crates/ruview-attest",     # ADR-302 authenticated sensor identity / RF chain of custody
+    "crates/ruview-evidence",   # ADR-301 evidence engine (per-room/device/subject ledger)
 ]
 # ADR-040: WASM edge crate targets wasm32-unknown-unknown (no_std),
 # excluded from workspace to avoid breaking `cargo test --workspace`.
