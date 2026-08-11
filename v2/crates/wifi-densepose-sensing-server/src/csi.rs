@@ -401,59 +401,16 @@ pub fn extract_features_from_frame(
     let variance = intra_variance.max(temporal_variance);
 
     let spectral_power: f64 = frame.amplitudes.iter().map(|a| a * a).sum::<f64>() / n;
-    let half = frame.amplitudes.len() / 2;
-    let motion_band_power = if half > 0 {
-        frame.amplitudes[half..]
-            .iter()
-            .map(|a| (a - mean_amp).powi(2))
-            .sum::<f64>()
-            / (frame.amplitudes.len() - half) as f64
-    } else {
-        0.0
-    };
-    let breathing_band_power = if half > 0 {
-        frame.amplitudes[..half]
-            .iter()
-            .map(|a| (a - mean_amp).powi(2))
-            .sum::<f64>()
-            / half as f64
-    } else {
-        0.0
-    };
-
-    let peak_idx = frame
-        .amplitudes
-        .iter()
-        .enumerate()
-        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(i, _)| i)
-        .unwrap_or(0);
-    let dominant_freq_hz = peak_idx as f64 * 0.05;
-
-    let threshold = mean_amp * 1.2;
-    let change_points = frame
-        .amplitudes
-        .windows(2)
-        .filter(|w| (w[0] < threshold) != (w[1] < threshold))
-        .count();
-
-    let temporal_motion_score = if let Some(prev_frame) = frame_history.back() {
-        let n_cmp = n_sub.min(prev_frame.len());
-        if n_cmp > 0 {
-            let diff_energy: f64 = (0..n_cmp)
-                .map(|k| (frame.amplitudes[k] - prev_frame[k]).powi(2))
-                .sum::<f64>()
-                / n_cmp as f64;
-            let ref_energy = mean_amp * mean_amp + 1e-9;
-            (diff_energy / ref_energy).sqrt().clamp(0.0, 1.0)
-        } else {
-            0.0
-        }
-    } else {
-        (intra_variance / (mean_amp * mean_amp + 1e-9))
-            .sqrt()
-            .clamp(0.0, 1.0)
-    };
+    let temporal = crate::temporal_features::extract_temporal_frequency_features(
+        frame_history,
+        &frame.amplitudes,
+        sample_rate_hz,
+    );
+    let motion_band_power = temporal.motion_band_power;
+    let breathing_band_power = temporal.breathing_band_power;
+    let dominant_freq_hz = temporal.dominant_freq_hz;
+    let change_points = temporal.change_points;
+    let temporal_motion_score = motion_band_power / 100.0;
 
     let variance_motion = (temporal_variance / 10.0).clamp(0.0, 1.0);
     let mbp_motion = (motion_band_power / 25.0).clamp(0.0, 1.0);
@@ -470,7 +427,7 @@ pub fn extract_features_from_frame(
         (1.0 - (temporal_variance / (mean_amp * mean_amp + 1e-9)).clamp(0.0, 1.0)).max(0.0);
     let signal_quality = (snr_quality * 0.6 + stability * 0.4).clamp(0.0, 1.0);
 
-    let breathing_rate_hz = estimate_breathing_rate_hz(frame_history, sample_rate_hz);
+    let breathing_rate_hz = temporal.breathing_rate_hz;
 
     let features = FeatureInfo {
         mean_rssi,

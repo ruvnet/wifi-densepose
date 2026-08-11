@@ -24,9 +24,10 @@ const BREATHING_MAX_HZ: f64 = 0.5; // 30 BPM
 const HEARTBEAT_MIN_HZ: f64 = 0.667; // 40 BPM
 const HEARTBEAT_MAX_HZ: f64 = 2.0; // 120 BPM
 
-/// Minimum number of samples before attempting extraction.
-const MIN_BREATHING_SAMPLES: usize = 40; // ~2s at 20 Hz
-const MIN_HEARTBEAT_SAMPLES: usize = 30; // ~1.5s at 20 Hz
+/// Minimum elapsed context before attempting extraction. Sample-count constants
+/// silently change meaning when CSI packet rate changes.
+const MIN_BREATHING_WINDOW_SECS: f64 = 8.0;
+const MIN_HEARTBEAT_WINDOW_SECS: f64 = 4.0;
 
 /// Peak-to-mean ratio threshold for confident detection.
 const CONFIDENCE_THRESHOLD: f64 = 2.0;
@@ -109,6 +110,35 @@ impl VitalSignDetector {
         }
     }
 
+    /// Reconfigure the detector from a measured CSI packet rate.
+    ///
+    /// A material rate change invalidates the time axis of buffered samples, so those
+    /// samples are discarded instead of being interpreted at a new frequency scale.
+    /// Small EMA drift updates capacities in place to avoid repeated warm-up resets.
+    pub fn update_sample_rate(&mut self, measured_rate_hz: f64) -> bool {
+        if !measured_rate_hz.is_finite() || measured_rate_hz <= 0.0 {
+            return false;
+        }
+        let measured_rate_hz = measured_rate_hz.clamp(1.0, 200.0);
+        let relative_change =
+            (measured_rate_hz - self.sample_rate).abs() / self.sample_rate.max(1.0);
+        self.sample_rate = measured_rate_hz;
+        self.breathing_capacity = (measured_rate_hz * self.breathing_window_secs).ceil() as usize;
+        self.heartbeat_capacity = (measured_rate_hz * self.heartbeat_window_secs).ceil() as usize;
+        if relative_change >= 0.10 {
+            self.reset();
+            true
+        } else {
+            while self.breathing_buffer.len() > self.breathing_capacity {
+                self.breathing_buffer.pop_front();
+            }
+            while self.heartbeat_buffer.len() > self.heartbeat_capacity {
+                self.heartbeat_buffer.pop_front();
+            }
+            false
+        }
+    }
+
     /// Process one CSI frame and return updated vital signs.
     ///
     /// `amplitude` - per-subcarrier amplitude values for this frame.
@@ -188,7 +218,8 @@ impl VitalSignDetector {
     /// Extract breathing rate from the breathing buffer via FFT.
     /// Returns (rate_bpm, confidence).
     pub fn extract_breathing(&self) -> (Option<f64>, f64) {
-        if self.breathing_buffer.len() < MIN_BREATHING_SAMPLES {
+        let minimum_samples = (self.sample_rate * MIN_BREATHING_WINDOW_SECS).ceil() as usize;
+        if self.breathing_buffer.len() < minimum_samples {
             return (None, 0.0);
         }
 
@@ -200,7 +231,8 @@ impl VitalSignDetector {
     /// Extract heart rate from the heartbeat buffer via FFT.
     /// Returns (rate_bpm, confidence).
     pub fn extract_heartbeat(&self) -> (Option<f64>, f64) {
-        if self.heartbeat_buffer.len() < MIN_HEARTBEAT_SAMPLES {
+        let minimum_samples = (self.sample_rate * MIN_HEARTBEAT_WINDOW_SECS).ceil() as usize;
+        if self.heartbeat_buffer.len() < minimum_samples {
             return (None, 0.0);
         }
 
@@ -840,6 +872,22 @@ mod tests {
         let (br_len, _, hb_len, _) = detector.buffer_status();
         assert_eq!(br_len, 0);
         assert_eq!(hb_len, 0);
+    }
+
+    #[test]
+    fn measured_sample_rate_rebuilds_the_time_axis_and_capacities() {
+        let mut detector = VitalSignDetector::new(10.0);
+        for _ in 0..20 {
+            detector.process_frame(&[10.0; 8], &[0.0; 8]);
+        }
+
+        assert!(detector.update_sample_rate(40.0));
+        assert_eq!(detector.sample_rate, 40.0);
+        assert_eq!(detector.buffer_status(), (0, 1_200, 0, 600));
+
+        detector.process_frame(&[10.0; 8], &[0.0; 8]);
+        assert!(!detector.update_sample_rate(41.0));
+        assert_eq!(detector.buffer_status().0, 1);
     }
 
     #[test]

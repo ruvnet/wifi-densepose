@@ -31,6 +31,7 @@ mod training_api;
 mod rvf_pipeline;
 mod tracker_bridge;
 pub mod types;
+mod temporal_features;
 mod vital_signs;
 
 // Training pipeline modules (exposed via lib.rs)
@@ -1319,8 +1320,9 @@ impl AppStateInner {
 }
 
 /// Number of frames retained in `frame_history` for temporal analysis.
-/// At 500 ms ticks this covers ~50 seconds; at 100 ms ticks ~10 seconds.
-const FRAME_HISTORY_CAPACITY: usize = 100;
+/// 1,200 frames preserve a 30-second window at the measured ~40 FPS ESP32 rate,
+/// which resolves slow 0.1 Hz dynamics without unbounded memory growth.
+const FRAME_HISTORY_CAPACITY: usize = 1_200;
 
 type SharedState = Arc<RwLock<AppStateInner>>;
 
@@ -1938,93 +1940,6 @@ fn generate_signal_field(
 
 // ── Feature extraction from ESP32 frame ──────────────────────────────────────
 
-/// Estimate breathing rate in Hz from the amplitude time series stored in `frame_history`.
-///
-/// Approach:
-/// 1. Build a scalar time series by computing the mean amplitude of each historical frame.
-/// 2. Run a peak-detection pass: count rising-edge zero-crossings of the de-meaned signal.
-/// 3. Convert the crossing rate to Hz, clipped to the physiological range 0.1–0.5 Hz
-///    (12–30 breaths/min).
-///
-/// For accuracy the function additionally applies a simple 3-tap Goertzel-style power
-/// estimate at evenly-spaced candidate frequencies in the breathing band and returns
-/// the candidate with the highest energy.
-fn estimate_breathing_rate_hz(frame_history: &VecDeque<Vec<f64>>, sample_rate_hz: f64) -> f64 {
-    let n = frame_history.len();
-    if n < 6 {
-        return 0.0;
-    }
-
-    // Build scalar time series: mean amplitude per frame.
-    let series: Vec<f64> = frame_history
-        .iter()
-        .map(|amps| {
-            if amps.is_empty() {
-                0.0
-            } else {
-                amps.iter().sum::<f64>() / amps.len() as f64
-            }
-        })
-        .collect();
-
-    let mean_s = series.iter().sum::<f64>() / n as f64;
-    // De-mean.
-    let detrended: Vec<f64> = series.iter().map(|x| x - mean_s).collect();
-
-    // Goertzel power at candidate frequencies in the breathing band [0.1, 0.5] Hz.
-    // We evaluate 9 candidate frequencies uniformly spaced in that band.
-    let n_candidates = 9usize;
-    let f_low = 0.1f64;
-    let f_high = 0.5f64;
-    let mut best_freq = 0.0f64;
-    let mut best_power = 0.0f64;
-
-    for i in 0..n_candidates {
-        let freq = f_low + (f_high - f_low) * i as f64 / (n_candidates - 1).max(1) as f64;
-        let omega = 2.0 * std::f64::consts::PI * freq / sample_rate_hz;
-        let coeff = 2.0 * omega.cos();
-        let mut s_prev2 = 0.0f64;
-        let mut s_prev1 = 0.0f64;
-        for &x in &detrended {
-            let s = x + coeff * s_prev1 - s_prev2;
-            s_prev2 = s_prev1;
-            s_prev1 = s;
-        }
-        // Goertzel magnitude squared.
-        let power = s_prev2 * s_prev2 + s_prev1 * s_prev1 - coeff * s_prev1 * s_prev2;
-        if power > best_power {
-            best_power = power;
-            best_freq = freq;
-        }
-    }
-
-    // Only report a breathing rate if the Goertzel energy is meaningfully above noise.
-    // Threshold: power must exceed 10× the average power across all candidates.
-    let avg_power = {
-        let mut total = 0.0f64;
-        for i in 0..n_candidates {
-            let freq = f_low + (f_high - f_low) * i as f64 / (n_candidates - 1).max(1) as f64;
-            let omega = 2.0 * std::f64::consts::PI * freq / sample_rate_hz;
-            let coeff = 2.0 * omega.cos();
-            let mut s_prev2 = 0.0f64;
-            let mut s_prev1 = 0.0f64;
-            for &x in &detrended {
-                let s = x + coeff * s_prev1 - s_prev2;
-                s_prev2 = s_prev1;
-                s_prev1 = s;
-            }
-            total += s_prev2 * s_prev2 + s_prev1 * s_prev1 - coeff * s_prev1 * s_prev2;
-        }
-        total / n_candidates as f64
-    };
-
-    if best_power > avg_power * 3.0 {
-        best_freq.clamp(f_low, f_high)
-    } else {
-        0.0
-    }
-}
-
 /// Compute per-subcarrier variance across the sliding window of `frame_history`.
 ///
 /// For each subcarrier index `k`, returns `Var[A_k]` over all stored frames.
@@ -2171,69 +2086,19 @@ fn extract_features_from_frame(
     // ── Spectral power ──
     let spectral_power: f64 = frame.amplitudes.iter().map(|a| a * a).sum::<f64>() / n;
 
-    // ── Motion band power (upper half of subcarriers, high spatial frequency) ──
-    let half = frame.amplitudes.len() / 2;
-    let motion_band_power = if half > 0 {
-        frame.amplitudes[half..]
-            .iter()
-            .map(|a| (a - mean_amp).powi(2))
-            .sum::<f64>()
-            / (frame.amplitudes.len() - half) as f64
-    } else {
-        0.0
-    };
-
-    // ── Breathing band power (lower half of subcarriers, low spatial frequency) ──
-    let breathing_band_power = if half > 0 {
-        frame.amplitudes[..half]
-            .iter()
-            .map(|a| (a - mean_amp).powi(2))
-            .sum::<f64>()
-            / half as f64
-    } else {
-        0.0
-    };
-
-    // ── Dominant frequency via peak subcarrier index ──
-    let peak_idx = frame
-        .amplitudes
-        .iter()
-        .enumerate()
-        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(i, _)| i)
-        .unwrap_or(0);
-    let dominant_freq_hz = peak_idx as f64 * 0.05;
-
-    // ── Change point detection (threshold-crossing count in current frame) ──
-    let threshold = mean_amp * 1.2;
-    let change_points = frame
-        .amplitudes
-        .windows(2)
-        .filter(|w| (w[0] < threshold) != (w[1] < threshold))
-        .count();
-
-    // ── Motion score: sliding-window temporal difference ──
-    // Compare current frame against the most recent historical frame.
-    // The difference is normalised by the mean amplitude to be scale-invariant.
-    let temporal_motion_score = if let Some(prev_frame) = frame_history.back() {
-        let n_cmp = n_sub.min(prev_frame.len());
-        if n_cmp > 0 {
-            let diff_energy: f64 = (0..n_cmp)
-                .map(|k| (frame.amplitudes[k] - prev_frame[k]).powi(2))
-                .sum::<f64>()
-                / n_cmp as f64;
-            // Normalise by mean squared amplitude to get a dimensionless ratio.
-            let ref_energy = mean_amp * mean_amp + 1e-9;
-            (diff_energy / ref_energy).sqrt().clamp(0.0, 1.0)
-        } else {
-            0.0
-        }
-    } else {
-        // No history yet — fall back to intra-frame variance-based estimate.
-        (intra_variance / (mean_amp * mean_amp + 1e-9))
-            .sqrt()
-            .clamp(0.0, 1.0)
-    };
+    // Frequency-band features must be calculated over elapsed time. The previous
+    // subcarrier-half split and peak-index-as-Hz encoding made quiet rooms look
+    // consistently occupied because spatial statistics were given temporal names.
+    let temporal = temporal_features::extract_temporal_frequency_features(
+        frame_history,
+        &frame.amplitudes,
+        sample_rate_hz,
+    );
+    let motion_band_power = temporal.motion_band_power;
+    let breathing_band_power = temporal.breathing_band_power;
+    let dominant_freq_hz = temporal.dominant_freq_hz;
+    let change_points = temporal.change_points;
+    let temporal_motion_score = motion_band_power / 100.0;
 
     // Blend temporal motion with variance-based motion for robustness.
     // Also factor in motion_band_power and change_points for ESP32 real-world sensitivity.
@@ -2255,8 +2120,7 @@ fn extract_features_from_frame(
         (1.0 - (temporal_variance / (mean_amp * mean_amp + 1e-9)).clamp(0.0, 1.0)).max(0.0);
     let signal_quality = (snr_quality * 0.6 + stability * 0.4).clamp(0.0, 1.0);
 
-    // ── Breathing rate estimation ──
-    let breathing_rate_hz = estimate_breathing_rate_hz(frame_history, sample_rate_hz);
+    let breathing_rate_hz = temporal.breathing_rate_hz;
 
     let features = FeatureInfo {
         mean_rssi,
@@ -2283,6 +2147,52 @@ fn extract_features_from_frame(
         sub_variances,
         motion_score,
     )
+}
+
+/// Preserve causality: compare the current frame with prior history, then record it.
+/// Keeping the ordering in one helper prevents callers from silently comparing a
+/// sample with itself and zeroing all frame-to-frame motion.
+fn extract_features_and_record_frame(
+    frame: &Esp32Frame,
+    frame_history: &mut VecDeque<Vec<f64>>,
+    sample_rate_hz: f64,
+) -> (FeatureInfo, ClassificationInfo, f64, Vec<f64>, f64) {
+    let extracted = extract_features_from_frame(frame, frame_history, sample_rate_hz);
+    frame_history.push_back(frame.amplitudes.clone());
+    if frame_history.len() > FRAME_HISTORY_CAPACITY {
+        frame_history.pop_front();
+    }
+    extracted
+}
+
+#[cfg(test)]
+mod temporal_history_order_tests {
+    use super::*;
+
+    #[test]
+    fn records_current_frame_only_after_feature_extraction() {
+        let mut history = VecDeque::from([vec![10.0; 4]]);
+        let current = Esp32Frame {
+            magic: 0xC511_0001,
+            node_id: 1,
+            n_antennas: 1,
+            n_subcarriers: 4,
+            freq_mhz: 2437,
+            sequence: 1,
+            rssi: -45,
+            noise_floor: -90,
+            ppdu_type: wifi_densepose_hardware::PpduType::HtLegacy,
+            amplitudes: vec![20.0; 4],
+            phases: vec![0.0; 4],
+        };
+
+        let (features, _, _, _, raw_motion) =
+            extract_features_and_record_frame(&current, &mut history, 20.0);
+
+        assert!(features.motion_band_power > 20.0);
+        assert!(raw_motion > 0.20);
+        assert_eq!(history.back(), Some(&current.amplitudes));
+    }
 }
 
 /// Simple threshold classification (no smoothing) — used as the "raw" input.
@@ -2444,20 +2354,14 @@ fn adaptive_override(
     features: &FeatureInfo,
     classification: &mut ClassificationInfo,
 ) {
-    // Get current frame amplitudes from the latest history entry.
-    let amps = state.frame_history.back().cloned().unwrap_or_default();
-    adaptive_override_with_amplitudes(state, 1, features, &amps, classification);
+    adaptive_override_with_topology(state, 1, features, classification);
 }
 
-/// Apply a room-level adaptive model to an explicitly selected amplitude set.
-/// Keeping amplitude selection outside the classifier prevents the ESP32
-/// multi-node path from accidentally training on one link and inferring on a
-/// different one.
-fn adaptive_override_with_amplitudes(
+/// Apply the room-level specialist only to its trained sensor topology.
+fn adaptive_override_with_topology(
     state: &mut AppStateInner,
     observed_node_count: usize,
     features: &FeatureInfo,
-    amps: &[f64],
     classification: &mut ClassificationInfo,
 ) {
     if state.adaptive_model.is_some() {
@@ -2481,7 +2385,7 @@ fn adaptive_override_with_amplitudes(
         });
         let Some(feat_arr) = state
             .adaptive_feature_extractor
-            .observe_runtime(&feature_json, amps)
+            .observe_runtime(&feature_json, &[])
         else {
             return;
         };
@@ -2511,23 +2415,6 @@ fn adaptive_override_with_amplitudes(
 /// multiplicative freshness gate used by RuView's universal RF encoder.
 const ADAPTIVE_FUSION_MAX_SAMPLE_AGE: Duration = Duration::from_millis(500);
 
-fn collect_fresh_node_amplitudes(
-    node_states: &HashMap<u8, NodeState>,
-    now: std::time::Instant,
-) -> Vec<f64> {
-    node_states
-        .values()
-        .filter(|node| {
-            node.last_frame_time.is_some_and(|received_at| {
-                now.saturating_duration_since(received_at) <= ADAPTIVE_FUSION_MAX_SAMPLE_AGE
-            })
-        })
-        .filter_map(|node| node.frame_history.back())
-        .flatten()
-        .copied()
-        .collect()
-}
-
 fn count_fresh_nodes(
     node_states: &HashMap<u8, NodeState>,
     now: std::time::Instant,
@@ -2543,11 +2430,11 @@ fn count_fresh_nodes(
 }
 
 #[cfg(test)]
-mod adaptive_fusion_amplitude_tests {
+mod adaptive_fusion_topology_tests {
     use super::*;
 
     #[test]
-    fn room_level_adaptive_input_excludes_old_links() {
+    fn room_level_adaptive_topology_excludes_old_links() {
         let now = std::time::Instant::now();
         let mut fresh = NodeState::new();
         fresh.frame_history.push_back(vec![1.0, 2.0]);
@@ -2559,7 +2446,7 @@ mod adaptive_fusion_amplitude_tests {
         nodes.insert(1, fresh);
         nodes.insert(2, old);
 
-        assert_eq!(collect_fresh_node_amplitudes(&nodes, now), vec![1.0, 2.0]);
+        assert_eq!(count_fresh_nodes(&nodes, now), 1);
     }
 }
 
@@ -2855,15 +2742,13 @@ async fn windows_wifi_task(state: SharedState, tick_ms: u64) {
 
         // ── Step 4b: Update frame history and extract features ───────
         let mut s_write_pre = state.write().await;
-        s_write_pre
-            .frame_history
-            .push_back(frame.amplitudes.clone());
-        if s_write_pre.frame_history.len() > FRAME_HISTORY_CAPACITY {
-            s_write_pre.frame_history.pop_front();
-        }
         let sample_rate_hz = 1000.0 / tick_ms as f64;
         let (features, mut classification, breathing_rate_hz, sub_variances, raw_motion) =
-            extract_features_from_frame(&frame, &s_write_pre.frame_history, sample_rate_hz);
+            extract_features_and_record_frame(
+                &frame,
+                &mut s_write_pre.frame_history,
+                sample_rate_hz,
+            );
         smooth_and_classify(&mut s_write_pre, &mut classification, raw_motion);
         adaptive_override(&mut s_write_pre, &features, &mut classification);
         drop(s_write_pre);
@@ -3039,14 +2924,9 @@ async fn windows_wifi_fallback_tick(state: &SharedState, seq: u32) {
     };
 
     let mut s = state.write().await;
-    // Update frame history before extracting features.
-    s.frame_history.push_back(frame.amplitudes.clone());
-    if s.frame_history.len() > FRAME_HISTORY_CAPACITY {
-        s.frame_history.pop_front();
-    }
     let sample_rate_hz = 2.0_f64; // fallback tick ~ 500 ms => 2 Hz
     let (features, mut classification, breathing_rate_hz, sub_variances, raw_motion) =
-        extract_features_from_frame(&frame, &s.frame_history, sample_rate_hz);
+        extract_features_and_record_frame(&frame, &mut s.frame_history, sample_rate_hz);
     smooth_and_classify(&mut s, &mut classification, raw_motion);
     adaptive_override(&mut s, &features, &mut classification);
 
@@ -6556,19 +6436,25 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     // for downstream model-wake gating.
                     ns.update_novelty(&frame.amplitudes);
 
-                    ns.frame_history.push_back(frame.amplitudes.clone());
-                    if ns.frame_history.len() > FRAME_HISTORY_CAPACITY {
-                        ns.frame_history.pop_front();
-                    }
-
-                    let sample_rate_hz = 1000.0 / 500.0_f64;
+                    // Frequency bins only have physical meaning at the measured packet
+                    // cadence. The former 2 Hz constant compressed the observed
+                    // ~30–40 Hz stream and shifted every inferred frequency.
+                    let sample_rate_hz = if ns.csi_fps_samples >= 5 {
+                        ns.csi_fps_ema.clamp(1.0, 200.0)
+                    } else {
+                        20.0
+                    };
                     let (
                         features,
                         mut classification,
                         breathing_rate_hz,
                         sub_variances,
                         raw_motion,
-                    ) = extract_features_from_frame(&frame, &ns.frame_history, sample_rate_hz);
+                    ) = extract_features_and_record_frame(
+                        &frame,
+                        &mut ns.frame_history,
+                        sample_rate_hz,
+                    );
                     smooth_and_classify_node(ns, &mut classification, raw_motion);
 
                     ns.rssi_history.push_back(features.mean_rssi);
@@ -6576,6 +6462,7 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                         ns.rssi_history.pop_front();
                     }
 
+                    ns.vital_detector.update_sample_rate(sample_rate_hz);
                     let raw_vitals = ns
                         .vital_detector
                         .process_frame(&frame.amplitudes, &frame.phases);
@@ -6614,14 +6501,11 @@ async fn udp_receiver_task(state: SharedState, udp_port: u16) {
                     // Cross-node fusion: combine features from all active nodes.
                     let fused_features = fuse_multi_node_features(&features, &s.node_states);
                     let adaptive_now = std::time::Instant::now();
-                    let adaptive_amps =
-                        collect_fresh_node_amplitudes(&s.node_states, adaptive_now);
                     let adaptive_node_count = count_fresh_nodes(&s.node_states, adaptive_now);
-                    adaptive_override_with_amplitudes(
+                    adaptive_override_with_topology(
                         &mut s,
                         adaptive_node_count,
                         &fused_features,
-                        &adaptive_amps,
                         &mut classification,
                     );
 
@@ -6930,15 +6814,9 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
 
         let frame = generate_simulated_frame(tick);
 
-        // Append current amplitudes to history before feature extraction.
-        s.frame_history.push_back(frame.amplitudes.clone());
-        if s.frame_history.len() > FRAME_HISTORY_CAPACITY {
-            s.frame_history.pop_front();
-        }
-
         let sample_rate_hz = 1000.0 / tick_ms as f64;
         let (features, mut classification, breathing_rate_hz, sub_variances, raw_motion) =
-            extract_features_from_frame(&frame, &s.frame_history, sample_rate_hz);
+            extract_features_and_record_frame(&frame, &mut s.frame_history, sample_rate_hz);
         smooth_and_classify(&mut s, &mut classification, raw_motion);
         adaptive_override(&mut s, &features, &mut classification);
 
