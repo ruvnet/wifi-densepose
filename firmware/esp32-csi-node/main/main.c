@@ -61,11 +61,18 @@ static EventGroupHandle_t s_wifi_event_group;
 static int s_retry_num = 0;
 #define MAX_RETRY 10
 
+/* #1542: WIFI_EVENT_STA_CONNECTED events since boot, read by the
+ * csi_collector link-status packet so the host can distinguish "stable
+ * association" from "re-associated to the same BSSID". Monotonic per boot. */
+volatile uint32_t g_wifi_reassoc_count = 0;
+
 static void event_handler(void *arg, esp_event_base_t event_base,
                           int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
+        g_wifi_reassoc_count++;
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *)event_data;
         ESP_LOGW(TAG, "WiFi disconnected, reason=%d rssi=%d", disc->reason, disc->rssi);

@@ -203,6 +203,29 @@ All packets are sent over UDP to the configured aggregator. The magic number in 
 | `0xC5110001` | CSI Frame (ADR-018) | ~20 Hz | Variable | Raw I/Q per subcarrier per antenna |
 | `0xC5110002` | Vitals Packet | 1 Hz | 32 bytes | Presence, breathing BPM, heart rate, fall flag, occupancy |
 | `0xC5110004` | WASM Output | Event-driven | Variable | Custom events from WASM modules (u8 type + f32 value) |
+| `0xC511A111` | Link Status (#1542) | ~30 s + on BSSID change | 32 bytes | Associated-AP BSSID, channel, AP RSSI, reassoc count |
+
+### Link Status Packet Format (#1542)
+
+The associated AP is the sensing-link geometry; a roam silently changes what a
+node senses, and frame RSSI cannot reveal it. This packet surfaces the BSSID.
+Sent every `CONFIG_LINK_STATUS_EVERY_N_FRAMES` CSI callbacks (default 600, or
+about 30 s at 20 Hz) plus immediately whenever the BSSID observed via
+`esp_wifi_sta_get_ap_info()` differs from the last reported one.
+
+```
+Offset  Size  Field
+0       4     Magic: 0xC511A111 (LE u32)
+4       1     Node ID
+5       1     Protocol version (0x01)
+6       1     Flags: bit 0 = ap_info_valid
+7       1     Primary channel (0 when not associated)
+8       6     BSSID (all-zero when not associated)
+14      1     AP RSSI as seen by the station, dBm (i8)
+15      1     Reserved
+16      4     Reassoc count: WIFI_EVENT_STA_CONNECTED events since boot (LE u32)
+20      12    Reserved
+```
 
 ### ADR-018 Binary Frame Format
 

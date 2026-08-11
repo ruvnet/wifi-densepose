@@ -357,6 +357,55 @@ static void wifi_csi_callback(void *ctx, wifi_csi_info_t *info)
             }
         }
     }
+
+    /* #1542 ask 1 — Link-status packet: the associated AP IS the sensing-link
+     * geometry, and published RSSI is provably blind to a roam (field data on
+     * the issue: -47.7 vs -48.2 dBm across two completely different link
+     * geometries). Emit every CONFIG_LINK_STATUS_EVERY_N_FRAMES CSI callbacks
+     * (default 600 = ~30 s at 20 Hz) PLUS immediately when the observed BSSID
+     * differs from the last reported one, so a roam is visible within one
+     * callback rather than one cadence period. Same 32-byte auxiliary-packet
+     * family as the ADR-110 sync packet (magic 0xC511A111). */
+    {
+#ifndef CONFIG_LINK_STATUS_EVERY_N_FRAMES
+#define CONFIG_LINK_STATUS_EVERY_N_FRAMES 600
+#endif
+        extern volatile uint32_t g_wifi_reassoc_count;
+        static uint8_t s_link_last_bssid[6] = {0};
+        static bool    s_link_ever_sent = false;
+
+        wifi_ap_record_t ap = {0};
+        bool ap_ok = (esp_wifi_sta_get_ap_info(&ap) == ESP_OK);
+        bool changed = ap_ok && (!s_link_ever_sent ||
+                       memcmp(ap.bssid, s_link_last_bssid, 6) != 0);
+        if (changed || (s_cb_count % CONFIG_LINK_STATUS_EVERY_N_FRAMES) == 0) {
+            uint8_t pkt[32] = {0};
+            uint32_t link_magic = 0xC511A111u;   /* #1542 link-status packet */
+            memcpy(&pkt[0], &link_magic, 4);
+            pkt[4] = s_node_id;
+            pkt[5] = 0x01;                        /* protocol version */
+            pkt[6] = ap_ok ? 0x01 : 0x00;         /* flags: ap_info_valid */
+            pkt[7] = ap_ok ? ap.primary : 0;
+            if (ap_ok) memcpy(&pkt[8], ap.bssid, 6);
+            pkt[14] = ap_ok ? (uint8_t)ap.rssi : 0;
+            /* pkt[15] reserved */
+            uint32_t reassoc = g_wifi_reassoc_count;
+            memcpy(&pkt[16], &reassoc, 4);
+            /* pkt[20..31] reserved */
+            int lr = stream_sender_send_priority(pkt, sizeof(pkt));
+            if (ap_ok) {
+                memcpy(s_link_last_bssid, ap.bssid, 6);
+                s_link_ever_sent = true;
+            }
+            if (changed) {
+                ESP_LOGI(TAG, "link-status: BSSID change -> "
+                              "%02x:%02x:%02x:%02x:%02x:%02x ch=%u reassoc=%lu (lr=%d)",
+                         ap.bssid[0], ap.bssid[1], ap.bssid[2],
+                         ap.bssid[3], ap.bssid[4], ap.bssid[5],
+                         (unsigned)ap.primary, (unsigned long)reassoc, lr);
+            }
+        }
+    }
 }
 
 /**

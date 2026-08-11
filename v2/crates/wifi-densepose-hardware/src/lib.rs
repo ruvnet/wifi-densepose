@@ -46,6 +46,7 @@ mod esp32_parser;
 // the OpportunisticCsiBridge maps today's ESP32 CSI extraction onto the
 // standardized report path until an OTA binding exists.
 pub mod ieee80211bf;
+pub mod link_packet;
 pub mod sync_packet;
 /// ADR-270 capability-safe vendor RF provider contract.
 pub mod vendor_rf;
@@ -98,6 +99,9 @@ pub use rtl8720f::{
     RadarFrame as Rtl8720fRadarFrame, RadarParseError as Rtl8720fRadarParseError,
     RadarPayload as Rtl8720fRadarPayload, ReportType as Rtl8720fReportType,
     RTL8720F_RADAR_HEADER_LEN, RTL8720F_RADAR_MAGIC, RTL8720F_RADAR_VERSION,
+};
+pub use link_packet::{
+    LinkStatusPacket, LINK_PACKET_MAGIC, LINK_PACKET_PROTO_VER, LINK_PACKET_SIZE,
 };
 pub use sync_packet::{
     SyncPacket, SyncPacketFlags, SYNC_PACKET_MAGIC, SYNC_PACKET_PROTO_VER, SYNC_PACKET_SIZE,

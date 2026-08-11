@@ -376,6 +376,34 @@ struct NodeInfo {
     /// placeholder frames that carry no per-node classification.
     #[serde(skip_serializing_if = "Option::is_none")]
     node_inference: Option<NodeInference>,
+    /// #1542 ask 1 — the node's associated-AP link identity, from the
+    /// firmware's link-status packet (magic 0xC511_A111). The associated AP
+    /// IS the sensing-link geometry; published RSSI is provably blind to a
+    /// roam (field data on #1542: -47.7 vs -48.2 dBm across two completely
+    /// different link geometries). `None` until a link-status packet has
+    /// been observed for this node.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    link: Option<NodeLinkInfo>,
+}
+
+/// #1542 — per-node association telemetry embedded in NodeInfo. A downstream
+/// consumer that stores the previous `bssid` gets roam *events* for free by
+/// comparing successive snapshots; `reassoc_count` additionally reveals
+/// same-BSSID re-associations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct NodeLinkInfo {
+    /// Lowercase colon-separated BSSID of the associated AP.
+    bssid: String,
+    /// Primary channel of the associated AP.
+    channel: u8,
+    /// AP RSSI as measured by the station (dBm), from the same
+    /// `wifi_ap_record_t` read as the BSSID.
+    ap_rssi_dbm: i8,
+    /// WIFI_EVENT_STA_CONNECTED count since node boot.
+    reassoc_count: u32,
+    /// Milliseconds since the host last received a link-status packet from
+    /// this node (staleness signal; cadence is ~30 s + on-change).
+    age_ms: u64,
 }
 
 /// ADR-110 iter 23 — per-node mesh-sync snapshot embedded in NodeInfo.
@@ -675,6 +703,10 @@ struct NodeState {
     latest_sync: Option<wifi_densepose_hardware::SyncPacket>,
     /// Last time a sync packet from this node was received (for staleness).
     latest_sync_at: Option<std::time::Instant>,
+    /// #1542: latest link-status packet (associated-AP identity) from this node.
+    latest_link: Option<wifi_densepose_hardware::LinkStatusPacket>,
+    /// Last time a link-status packet from this node was received.
+    latest_link_at: Option<std::time::Instant>,
     /// ADR-110 iter 18: EMA-tracked CSI frame rate for this node.
     /// Replaces the hardcoded 20 Hz fallback in
     /// `mesh_aligned_us_for_csi_frame` once `csi_fps_samples ≥ 5`.
@@ -888,6 +920,34 @@ impl NodeState {
     /// extracted here so tests can build a `NodeState`, populate
     /// `latest_sync`, and assert the snapshot shape without spinning up
     /// the axum router.
+    /// #1542: record a link-status packet from this node.
+    pub(crate) fn apply_link_packet(
+        &mut self,
+        pkt: wifi_densepose_hardware::LinkStatusPacket,
+        at: std::time::Instant,
+    ) {
+        self.latest_link = Some(pkt);
+        self.latest_link_at = Some(at);
+    }
+
+    /// #1542: project the latest link-status packet into the NodeInfo shape.
+    /// `None` until a packet has been seen, or while the node reports itself
+    /// unassociated (`ap_info_valid == false`).
+    pub(crate) fn link_snapshot(&self, now: std::time::Instant) -> Option<NodeLinkInfo> {
+        let link = self.latest_link.as_ref()?;
+        if !link.ap_info_valid {
+            return None;
+        }
+        let seen_at = self.latest_link_at?;
+        Some(NodeLinkInfo {
+            bssid: link.bssid_string(),
+            channel: link.channel,
+            ap_rssi_dbm: link.ap_rssi_dbm,
+            reassoc_count: link.reassoc_count,
+            age_ms: now.duration_since(seen_at).as_millis() as u64,
+        })
+    }
+
     pub(crate) fn sync_snapshot(&self) -> Option<NodeSyncSnapshot> {
         let sync = self.latest_sync.as_ref()?;
         Some(NodeSyncSnapshot {
@@ -951,6 +1011,8 @@ impl NodeState {
             edge_vitals: None,
             latest_sync: None,
             latest_sync_at: None,
+            latest_link: None,
+            latest_link_at: None,
             csi_fps_ema: 20.0,
             csi_fps_samples: 0,
             latest_features: None,
@@ -3036,6 +3098,7 @@ async fn windows_wifi_task(state: SharedState, tick_ms: u64) {
                 amplitude: multi_ap_frame.amplitudes,
                 subcarrier_count: obs_count,
                 sync: None,  // multi-BSSID scan path — no mesh peer
+                link: None,
                 node_inference: None, // single aggregate frame; no per-node split
             }],
             features,
@@ -3199,6 +3262,7 @@ async fn windows_wifi_fallback_tick(state: &SharedState, seq: u32) {
             amplitude: vec![signal_pct],
             subcarrier_count: 1,
             sync: None,  // synthetic-RSSI fallback path — no mesh peer
+            link: None,
             node_inference: None, // synthetic fallback; no per-node inference
         }],
         features,
@@ -6413,6 +6477,7 @@ async fn udp_receiver_task(
                             sync: n.sync_snapshot(),
                             // ADR-297 — each node carries its own inference.
                             node_inference: Some(node_inference_for(n, now)),
+                            link: n.link_snapshot(now),
                         })
                         .collect();
 
@@ -6553,6 +6618,35 @@ async fn udp_receiver_task(
                             Err(e) => {
                                 debug!("Sync packet decode error from {src}: {e}");
                                 // Fall through — magic matched but decode failed; not a CSI frame.
+                                continue;
+                            }
+                        }
+                    }
+                }
+
+                // #1542 ask 1: Try link-status packet (magic 0xC511_A111).
+                // 32-byte datagram carrying the node's associated-AP identity
+                // (BSSID/channel/AP-RSSI/reassoc count). Stored per-node and
+                // surfaced through NodeInfo.link — the BSSID is the only
+                // observable that reveals a roam (RSSI provably isn't).
+                if len >= wifi_densepose_hardware::LINK_PACKET_SIZE {
+                    let magic = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+                    if magic == wifi_densepose_hardware::LINK_PACKET_MAGIC {
+                        match wifi_densepose_hardware::LinkStatusPacket::from_bytes(&buf[..len]) {
+                            Ok(link) => {
+                                debug!("ESP32 link-status from {src}: node={} bssid={} ch={} \
+                                        ap_rssi={} reassoc={} valid={}",
+                                       link.node_id, link.bssid_string(), link.channel,
+                                       link.ap_rssi_dbm, link.reassoc_count, link.ap_info_valid);
+                                let mut s = state.write().await;
+                                let node_id = link.node_id;
+                                let ns = s.node_states.entry(node_id)
+                                    .or_insert_with(NodeState::new);
+                                ns.apply_link_packet(link, std::time::Instant::now());
+                                continue;
+                            }
+                            Err(e) => {
+                                debug!("Link-status packet decode error from {src}: {e}");
                                 continue;
                             }
                         }
@@ -6903,6 +6997,7 @@ async fn udp_receiver_task(
                             sync: n.sync_snapshot(),
                             // ADR-297 — each node carries its own inference.
                             node_inference: Some(node_inference_for(n, now)),
+                            link: n.link_snapshot(now),
                         })
                         .collect();
 
@@ -7178,6 +7273,7 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
                 subcarrier_count: frame_n_sub as usize,
                 sync: None,  // simulated frame path — no mesh peer
                 node_inference: None, // simulated frame; source is synthetic
+                link: None,
             }],
             features: features.clone(),
             classification,
@@ -7358,13 +7454,20 @@ fn vitals_snapshots_from_sensing_json(
                     .unwrap_or(agg_presence);
                 let motion = motion_of(ninf["classification"].as_str(), agg_motion);
                 let conf = ninf["confidence"].as_f64().unwrap_or(agg_conf);
-                mk(
+                let mut vs = mk(
                     format!("{base_id}-node{n}"),
                     presence,
                     motion,
                     conf,
                     node["rssi_dbm"].as_f64(),
-                )
+                );
+                // #1542: ride the associated-AP identity on the per-node
+                // snapshot so the MQTT RSSI entity can surface it.
+                vs.link_bssid = node["link"]["bssid"].as_str().map(str::to_string);
+                vs.link_channel = node["link"]["channel"].as_u64().map(|c| c as u8);
+                vs.link_reassoc_count =
+                    node["link"]["reassoc_count"].as_u64().map(|c| c as u32);
+                vs
             })
             .collect(),
         _ => vec![mk(
@@ -9062,6 +9165,7 @@ mod node_sync_snapshot_serialization_tests {
             subcarrier_count: 0,
             sync,
             node_inference: None,
+            link: None,
         }
     }
 
@@ -9161,6 +9265,45 @@ mod sync_snapshot_helper_tests {
         assert_eq!(snap.sequence, 20);
         assert!((snap.csi_fps_ema - 10.5).abs() < 1e-9);
         assert_eq!(snap.csi_fps_samples, 42);
+    }
+
+    /// #1542: a link-status packet round-trips into NodeInfo.link via
+    /// NodeState, and an unassociated packet (ap_info_valid=false) projects
+    /// to None rather than an all-zero BSSID.
+    #[test]
+    fn apply_link_packet_projects_into_link_snapshot() {
+        use std::time::Duration;
+        let base = std::time::Instant::now();
+        let mut ns = NodeState::new();
+        assert!(ns.link_snapshot(base).is_none(), "no packet yet -> None");
+
+        let pkt = wifi_densepose_hardware::LinkStatusPacket {
+            node_id: 3,
+            proto_ver: 1,
+            ap_info_valid: true,
+            channel: 6,
+            bssid: [0x6c, 0xae, 0xf6, 0xb6, 0x52, 0xc7],
+            ap_rssi_dbm: -48,
+            reassoc_count: 2,
+        };
+        ns.apply_link_packet(pkt, base);
+        let snap = ns.link_snapshot(base + Duration::from_millis(1500)).unwrap();
+        assert_eq!(snap.bssid, "6c:ae:f6:b6:52:c7");
+        assert_eq!(snap.channel, 6);
+        assert_eq!(snap.ap_rssi_dbm, -48);
+        assert_eq!(snap.reassoc_count, 2);
+        assert_eq!(snap.age_ms, 1500);
+
+        // Node reports itself unassociated -> no link info surfaced.
+        let unassoc = wifi_densepose_hardware::LinkStatusPacket {
+            ap_info_valid: false,
+            bssid: [0; 6],
+            channel: 0,
+            ap_rssi_dbm: 0,
+            ..pkt
+        };
+        ns.apply_link_packet(unassoc, base);
+        assert!(ns.link_snapshot(base).is_none());
     }
 
     #[test]
