@@ -101,6 +101,11 @@ approx = "0.5"
 name = "detection_bench"
 harness = false
 
+# FeitCSI record parse throughput at wideband 802.11ax shapes (ADR-289).
+[[bench]]
+name = "feitcsi_bench"
+harness = false
+
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]

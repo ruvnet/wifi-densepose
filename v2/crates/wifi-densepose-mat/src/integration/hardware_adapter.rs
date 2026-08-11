@@ -129,6 +129,42 @@ impl HardwareConfig {
         }
     }
 
+    /// Create configuration for deterministic FeitCSI capture replay
+    /// (wideband 802.11ax records from Intel AX200/AX210, ADR-289).
+    pub fn feitcsi_replay(file_path: &str) -> Self {
+        Self::feitcsi(file_path, FeitCsiMode::FileReplay)
+    }
+
+    /// Create configuration for streaming FeitCSI ingest from a path/pipe an
+    /// external FeitCSI process writes to (no NIC configuration in-crate).
+    pub fn feitcsi_stream(path: &str) -> Self {
+        Self::feitcsi(path, FeitCsiMode::Stream)
+    }
+
+    fn feitcsi(path: &str, mode: FeitCsiMode) -> Self {
+        Self {
+            device_type: DeviceType::FeitCsi,
+            device_settings: DeviceSettings::FeitCsi(FeitCsiSettings {
+                path: path.to_string(),
+                mode,
+                band: WifiBand::Band5GHz,
+                channel: 36,
+                loop_playback: false,
+                pipeline_subcarriers: None,
+            }),
+            buffer_size: 8192,
+            raw_mode: false,
+            sample_rate_override: 0,
+            channel_config: ChannelConfig {
+                channel: 36,
+                bandwidth: Bandwidth::VHT160,
+                // Native width travels with each frame; this is only the
+                // configured expectation (802.11ax HE 160 MHz = 1992 tones).
+                num_subcarriers: 1992,
+            },
+        }
+    }
+
     /// Create configuration for UDP receiver (generic CSI)
     pub fn udp_receiver(bind_addr: &str, port: u16) -> Self {
         Self {
@@ -160,6 +196,11 @@ pub enum DeviceType {
     UdpReceiver,
     /// PCAP file replay
     PcapFile,
+    /// FeitCSI wideband 802.11ax records from Intel AX200/AX210 (ADR-289):
+    /// file replay of a recorded capture, or a path/pipe an external FeitCSI
+    /// process writes to. RuView never configures the NIC — FeitCSI's own
+    /// tooling owns capture, per least-authority.
+    FeitCsi,
     /// Simulated device (for testing)
     Simulated,
 }
@@ -186,8 +227,44 @@ pub enum DeviceSettings {
     Udp(UdpSettings),
     /// PCAP file settings
     Pcap(PcapSettings),
+    /// FeitCSI capture replay / stream settings
+    FeitCsi(FeitCsiSettings),
     /// Simulated device (no real hardware)
     Simulated,
+}
+
+/// FeitCSI ingest mode (ADR-289).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeitCsiMode {
+    /// Deterministic replay of a recorded capture file.
+    FileReplay,
+    /// Live stream read from a path/pipe an external FeitCSI process writes
+    /// to. RuView performs no NIC configuration; the external tool owns it.
+    Stream,
+}
+
+/// FeitCSI source settings (ADR-289).
+///
+/// The FeitCSI record header carries bandwidth (via the iwlwifi rate flags)
+/// but not channel/band — the capture configuration owns those — so band and
+/// channel are supplied here and stamped into frame metadata.
+#[derive(Debug, Clone)]
+pub struct FeitCsiSettings {
+    /// Path to the recorded capture (FileReplay) or the file/FIFO the
+    /// external FeitCSI process appends records to (Stream).
+    pub path: String,
+    /// Ingest mode.
+    pub mode: FeitCsiMode,
+    /// Radio band the capture was taken on (2.4/5/6 GHz).
+    pub band: WifiBand,
+    /// WiFi channel the capture was taken on.
+    pub channel: u8,
+    /// Restart from the beginning when file replay reaches the end.
+    pub loop_playback: bool,
+    /// When `Some(n)`, frames are explicitly converted from their native
+    /// subcarrier count to `n` via the interpolation path, and the mapping is
+    /// recorded in `CsiMetadata::wideband`. `None` keeps native width.
+    pub pipeline_subcarriers: Option<usize>,
 }
 
 /// Serial port configuration
@@ -264,6 +341,55 @@ impl Bandwidth {
             Bandwidth::VHT160 => 484,
         }
     }
+
+    /// Channel bandwidth in MHz.
+    pub fn mhz(&self) -> u16 {
+        match self {
+            Bandwidth::HT20 => 20,
+            Bandwidth::HT40 => 40,
+            Bandwidth::VHT80 => 80,
+            Bandwidth::VHT160 => 160,
+        }
+    }
+}
+
+/// WiFi radio band (first-class frame metadata per ADR-289).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WifiBand {
+    /// 2.4 GHz ISM band
+    Band2_4GHz,
+    /// 5 GHz band
+    Band5GHz,
+    /// 6 GHz band (802.11ax/Wi-Fi 6E and later)
+    Band6GHz,
+}
+
+/// Record of an explicit native → pipeline subcarrier conversion, so
+/// downstream consumers know the true spectral resolution of a frame and
+/// how it was resampled (ADR-289 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubcarrierMapping {
+    /// Native subcarrier count as captured.
+    pub native: usize,
+    /// Pipeline subcarrier count after conversion.
+    pub pipeline: usize,
+    /// Interpolation/decimation method used (e.g. "catmull-rom-cubic").
+    pub method: &'static str,
+}
+
+/// Wideband spectral provenance metadata (ADR-289): band, bandwidth, native
+/// subcarrier dimensionality, and any native → pipeline mapping applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WidebandMeta {
+    /// Radio band the frame was captured on.
+    pub band: WifiBand,
+    /// Channel bandwidth in MHz (20–160).
+    pub bandwidth_mhz: u16,
+    /// Native subcarrier count of the capture (true spectral resolution).
+    pub native_subcarriers: usize,
+    /// Native → pipeline conversion record; `None` while the frame is still
+    /// at native width.
+    pub mapping: Option<SubcarrierMapping>,
 }
 
 /// Antenna configuration for MIMO
@@ -376,6 +502,13 @@ enum DeviceSpecificState {
         driver: AtherosDriver,
         csi_buf_ptr: Option<u64>,
     },
+    FeitCsi {
+        /// Byte offset into the capture for deterministic file replay.
+        replay_offset: u64,
+        /// Open handle for streaming mode (path/pipe written by an external
+        /// FeitCSI process); opened lazily on first read.
+        stream: Option<std::fs::File>,
+    },
     Other,
 }
 
@@ -457,6 +590,7 @@ impl HardwareAdapter {
             DeviceType::Atheros(driver) => self.initialize_atheros(*driver).await?,
             DeviceType::UdpReceiver => self.initialize_udp().await?,
             DeviceType::PcapFile => self.initialize_pcap().await?,
+            DeviceType::FeitCsi => self.initialize_feitcsi().await?,
             DeviceType::Simulated => self.initialize_simulated().await?,
         }
 
@@ -662,6 +796,57 @@ impl HardwareAdapter {
         Ok(())
     }
 
+    /// Initialize FeitCSI file-replay / stream ingest (ADR-289).
+    ///
+    /// No privileged operations: RuView does not configure the NIC; the
+    /// external FeitCSI tooling owns capture. This only validates the
+    /// configured path.
+    async fn initialize_feitcsi(&mut self) -> Result<(), AdapterError> {
+        let settings = match &self.config.device_settings {
+            DeviceSettings::FeitCsi(s) => s,
+            _ => {
+                return Err(AdapterError::Config(
+                    "FeitCSI requires FeitCSI settings".into(),
+                ))
+            }
+        };
+
+        tracing::info!(
+            "Initializing FeitCSI ingest ({:?}) from {}",
+            settings.mode,
+            settings.path
+        );
+
+        match settings.mode {
+            FeitCsiMode::FileReplay => {
+                if !std::path::Path::new(&settings.path).exists() {
+                    return Err(AdapterError::Hardware(format!(
+                        "FeitCSI capture file not found: {}",
+                        settings.path
+                    )));
+                }
+            }
+            FeitCsiMode::Stream => {
+                // The external process may create the pipe/file later; warn
+                // rather than fail so start order is not constrained.
+                if !std::path::Path::new(&settings.path).exists() {
+                    tracing::warn!(
+                        "FeitCSI stream path {} does not exist yet; will retry on read",
+                        settings.path
+                    );
+                }
+            }
+        }
+
+        let mut state = self.state.write().await;
+        state.device_state = DeviceSpecificState::FeitCsi {
+            replay_offset: 0,
+            stream: None,
+        };
+
+        Ok(())
+    }
+
     /// Initialize simulated device
     async fn initialize_simulated(&mut self) -> Result<(), AdapterError> {
         tracing::info!("Initializing simulated CSI device");
@@ -764,7 +949,7 @@ impl HardwareAdapter {
     /// Read a single CSI packet from the device
     async fn read_csi_packet(
         config: &HardwareConfig,
-        _state: &Arc<RwLock<DeviceState>>,
+        state: &Arc<RwLock<DeviceState>>,
     ) -> Result<CsiReadings, AdapterError> {
         match &config.device_type {
             DeviceType::Esp32 => Self::read_esp32_csi(config).await,
@@ -772,8 +957,139 @@ impl HardwareAdapter {
             DeviceType::Atheros(driver) => Self::read_atheros_csi(config, *driver).await,
             DeviceType::UdpReceiver => Self::read_udp_csi(config).await,
             DeviceType::PcapFile => Self::read_pcap_csi(config).await,
+            DeviceType::FeitCsi => Self::read_feitcsi_csi(config, state).await,
             DeviceType::Simulated => Self::generate_simulated_csi(config).await,
         }
+    }
+
+    /// Read one wideband CSI frame from a FeitCSI capture or stream (ADR-289).
+    ///
+    /// Frames carry their native subcarrier count, bandwidth (20–160 MHz) and
+    /// band (2.4/5/6 GHz) as metadata. When `pipeline_subcarriers` is
+    /// configured, conversion to pipeline width happens explicitly via the
+    /// interpolation path and the native → pipeline mapping is recorded in
+    /// `CsiMetadata::wideband`.
+    async fn read_feitcsi_csi(
+        config: &HardwareConfig,
+        state: &Arc<RwLock<DeviceState>>,
+    ) -> Result<CsiReadings, AdapterError> {
+        let settings = match &config.device_settings {
+            DeviceSettings::FeitCsi(s) => s,
+            _ => return Err(AdapterError::Config("Invalid settings for FeitCSI".into())),
+        };
+
+        let record = match settings.mode {
+            FeitCsiMode::FileReplay => Self::read_feitcsi_replay(settings, state).await?,
+            FeitCsiMode::Stream => Self::read_feitcsi_stream(settings, state).await?,
+        };
+
+        let readings = record.to_readings(settings.band, settings.channel);
+        match settings.pipeline_subcarriers {
+            Some(n) if n != readings.metadata.num_subcarriers => {
+                super::feitcsi::resample_readings_to_pipeline(&readings, n)
+            }
+            _ => Ok(readings),
+        }
+    }
+
+    /// Deterministic file replay: reads the record at the current byte offset
+    /// and advances it, so the capture is walked once from start to end
+    /// (looping when configured). Same input file ⇒ same record sequence.
+    async fn read_feitcsi_replay(
+        settings: &FeitCsiSettings,
+        state: &Arc<RwLock<DeviceState>>,
+    ) -> Result<super::feitcsi::FeitCsiRecord, AdapterError> {
+        let offset = {
+            let st = state.read().await;
+            match &st.device_state {
+                DeviceSpecificState::FeitCsi { replay_offset, .. } => *replay_offset,
+                _ => 0,
+            }
+        };
+
+        let path = settings.path.clone();
+        let loop_playback = settings.loop_playback;
+        let (record, new_offset) = tokio::task::spawn_blocking(
+            move || -> Result<(super::feitcsi::FeitCsiRecord, u64), AdapterError> {
+                use std::io::{Seek, SeekFrom};
+                let mut file = std::fs::File::open(&path).map_err(|e| {
+                    AdapterError::Hardware(format!("Failed to open FeitCSI capture {path}: {e}"))
+                })?;
+                file.seek(SeekFrom::Start(offset))
+                    .map_err(AdapterError::Io)?;
+                match super::feitcsi::read_one_record(&mut file)? {
+                    Some((rec, consumed)) => Ok((rec, offset + consumed as u64)),
+                    None if loop_playback && offset != 0 => {
+                        file.seek(SeekFrom::Start(0)).map_err(AdapterError::Io)?;
+                        match super::feitcsi::read_one_record(&mut file)? {
+                            Some((rec, consumed)) => Ok((rec, consumed as u64)),
+                            None => Err(AdapterError::DataFormat(format!(
+                                "FeitCSI capture {path} contains no records"
+                            ))),
+                        }
+                    }
+                    None => Err(AdapterError::HardwareUnavailable(format!(
+                        "End of FeitCSI capture {path} (offset {offset})"
+                    ))),
+                }
+            },
+        )
+        .await
+        .map_err(|e| AdapterError::Hardware(format!("FeitCSI replay task failed: {e}")))??;
+
+        let mut st = state.write().await;
+        if let DeviceSpecificState::FeitCsi { replay_offset, .. } = &mut st.device_state {
+            *replay_offset = new_offset;
+        }
+        Ok(record)
+    }
+
+    /// Streaming mode: hold the open handle across reads (a FIFO cannot be
+    /// reopened per record) and block until one full record arrives. The
+    /// blocking read runs on the blocking pool; if the surrounding stream
+    /// loop is shut down mid-read, the orphaned task finishes on its own and
+    /// the handle is reopened on the next read.
+    async fn read_feitcsi_stream(
+        settings: &FeitCsiSettings,
+        state: &Arc<RwLock<DeviceState>>,
+    ) -> Result<super::feitcsi::FeitCsiRecord, AdapterError> {
+        let existing = {
+            let mut st = state.write().await;
+            match &mut st.device_state {
+                DeviceSpecificState::FeitCsi { stream, .. } => stream.take(),
+                _ => None,
+            }
+        };
+
+        let path = settings.path.clone();
+        let result = tokio::task::spawn_blocking(
+            move || -> Result<(std::fs::File, super::feitcsi::FeitCsiRecord), AdapterError> {
+                let mut file = match existing {
+                    Some(f) => f,
+                    None => std::fs::File::open(&path).map_err(|e| {
+                        AdapterError::HardwareUnavailable(format!(
+                            "FeitCSI stream {path} unavailable: {e}"
+                        ))
+                    })?,
+                };
+                match super::feitcsi::read_one_record(&mut file) {
+                    Ok(Some((rec, _consumed))) => Ok((file, rec)),
+                    Ok(None) => Err(AdapterError::HardwareUnavailable(format!(
+                        "FeitCSI stream {path} closed (EOF)"
+                    ))),
+                    Err(e) => Err(e.into()),
+                }
+            },
+        )
+        .await
+        .map_err(|e| AdapterError::Hardware(format!("FeitCSI stream task failed: {e}")))?;
+
+        let (file, record) = result?;
+        let mut st = state.write().await;
+        if let DeviceSpecificState::FeitCsi { stream, .. } = &mut st.device_state {
+            *stream = Some(file);
+        }
+        Ok(record)
     }
 
     /// Read CSI from ESP32 via serial.
@@ -1023,6 +1339,7 @@ impl HardwareAdapter {
                 rssi: Some(-45.0),
                 noise_floor: Some(-92.0),
                 fc_type: FrameControlType::Data,
+                wideband: None,
             },
         })
     }
@@ -1039,6 +1356,7 @@ impl HardwareAdapter {
             DeviceType::Intel5300 | DeviceType::Atheros(_) => self.discover_nic_sensors().await,
             DeviceType::UdpReceiver => Ok(vec![]),
             DeviceType::PcapFile => Ok(vec![]),
+            DeviceType::FeitCsi => Ok(vec![]),
             DeviceType::Simulated => self.discover_simulated_sensors().await,
         }
     }
@@ -1165,6 +1483,7 @@ impl HardwareAdapter {
                 rssi: None,
                 noise_floor: None,
                 fc_type: FrameControlType::Data,
+                wideband: None,
             },
         })
     }
@@ -1320,6 +1639,10 @@ pub struct CsiMetadata {
     pub noise_floor: Option<f64>,
     /// Frame control type
     pub fc_type: FrameControlType,
+    /// Wideband spectral provenance (ADR-289): band, native subcarrier count
+    /// and any native → pipeline mapping applied. `None` for legacy
+    /// narrowband sources that predate wideband metadata.
+    pub wideband: Option<WidebandMeta>,
 }
 
 /// WiFi frame control types
@@ -1636,6 +1959,124 @@ mod tests {
         let readings = HardwareAdapter::read_pcap_csi(&config).await.expect("pcap read");
         assert_eq!(readings.readings[0].amplitudes.len(), 2);
         assert_eq!(readings.metadata.channel, 6);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_feitcsi_config() {
+        let config = HardwareConfig::feitcsi_replay("/tmp/capture.dat");
+        assert!(matches!(config.device_type, DeviceType::FeitCsi));
+        match &config.device_settings {
+            DeviceSettings::FeitCsi(s) => {
+                assert_eq!(s.mode, FeitCsiMode::FileReplay);
+                assert!(s.pipeline_subcarriers.is_none());
+            }
+            other => panic!("unexpected settings: {other:?}"),
+        }
+
+        let config = HardwareConfig::feitcsi_stream("/tmp/feitcsi.fifo");
+        match &config.device_settings {
+            DeviceSettings::FeitCsi(s) => assert_eq!(s.mode, FeitCsiMode::Stream),
+            other => panic!("unexpected settings: {other:?}"),
+        }
+    }
+
+    /// End-to-end FeitCSI file replay through the adapter read path:
+    /// initialize, then read the capture record-by-record. Two adapters over
+    /// the same synthetic capture see identical, order-preserving sequences
+    /// (replay determinism), and native+wideband metadata is carried.
+    #[tokio::test]
+    async fn test_feitcsi_replay_end_to_end_deterministic() {
+        use crate::integration::feitcsi::synth;
+
+        // Synthetic 3-record HE 80 MHz capture, generated in code.
+        let mut capture = Vec::new();
+        for ts in [100u64, 200, 300] {
+            capture.extend_from_slice(&synth::record_bytes(2, 1, 996, 2, 4, ts));
+        }
+        let path = std::env::temp_dir().join(format!(
+            "feitcsi_adapter_test_{}.dat",
+            std::process::id()
+        ));
+        std::fs::write(&path, &capture).unwrap();
+
+        let run = || async {
+            let mut config = HardwareConfig::feitcsi_replay(path.to_str().unwrap());
+            if let DeviceSettings::FeitCsi(s) = &mut config.device_settings {
+                s.band = WifiBand::Band6GHz;
+                s.channel = 37;
+            }
+            let mut adapter = HardwareAdapter::with_config(config.clone());
+            adapter.initialize().await.unwrap();
+
+            let mut frames = Vec::new();
+            for _ in 0..3 {
+                let readings = HardwareAdapter::read_csi_packet(&config, &adapter.state)
+                    .await
+                    .expect("replay read");
+                frames.push(readings);
+            }
+            // Capture exhausted: typed error, not fabricated data.
+            let end = HardwareAdapter::read_csi_packet(&config, &adapter.state).await;
+            assert!(matches!(end, Err(AdapterError::HardwareUnavailable(_))));
+            frames
+        };
+
+        let first = run().await;
+        let second = run().await;
+
+        assert_eq!(first.len(), 3);
+        for (a, b) in first.iter().zip(&second) {
+            assert_eq!(a.timestamp, b.timestamp, "replay must be deterministic");
+            assert_eq!(a.readings[0].amplitudes, b.readings[0].amplitudes);
+        }
+
+        // Native wideband metadata is first-class on every frame.
+        let meta = &first[0].metadata;
+        assert!(matches!(meta.device_type, DeviceType::FeitCsi));
+        assert_eq!(meta.num_subcarriers, 996);
+        assert_eq!(meta.bandwidth, Bandwidth::VHT80);
+        let wb = meta.wideband.as_ref().expect("wideband metadata");
+        assert_eq!(wb.band, WifiBand::Band6GHz);
+        assert_eq!(wb.bandwidth_mhz, 80);
+        assert_eq!(wb.native_subcarriers, 996);
+        assert!(wb.mapping.is_none(), "native width: no mapping");
+        // 2 rx * 1 tx = 2 antenna-pair readings per frame.
+        assert_eq!(first[0].readings.len(), 2);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// FeitCSI replay with a configured pipeline width converts explicitly
+    /// through the interpolation path and records the mapping in metadata.
+    #[tokio::test]
+    async fn test_feitcsi_replay_pipeline_conversion() {
+        use crate::integration::feitcsi::synth;
+
+        let capture = synth::record_bytes(1, 1, 1992, 3, 4, 42);
+        let path = std::env::temp_dir().join(format!(
+            "feitcsi_pipeline_test_{}.dat",
+            std::process::id()
+        ));
+        std::fs::write(&path, &capture).unwrap();
+
+        let mut config = HardwareConfig::feitcsi_replay(path.to_str().unwrap());
+        if let DeviceSettings::FeitCsi(s) = &mut config.device_settings {
+            s.pipeline_subcarriers = Some(56);
+        }
+        let mut adapter = HardwareAdapter::with_config(config.clone());
+        adapter.initialize().await.unwrap();
+
+        let readings = HardwareAdapter::read_csi_packet(&config, &adapter.state)
+            .await
+            .expect("replay read");
+        assert_eq!(readings.metadata.num_subcarriers, 56);
+        assert_eq!(readings.readings[0].amplitudes.len(), 56);
+        let wb = readings.metadata.wideband.as_ref().unwrap();
+        assert_eq!(wb.native_subcarriers, 1992, "true resolution preserved");
+        let mapping = wb.mapping.as_ref().expect("mapping recorded");
+        assert_eq!((mapping.native, mapping.pipeline), (1992, 56));
 
         let _ = std::fs::remove_file(&path);
     }

@@ -12,7 +12,8 @@
 //! ├── ConfigError      (config validation / file loading)
 //! ├── DatasetError     (data loading, I/O, format)
 //! ├── SubcarrierError  (frequency-axis resampling)
-//! └── MaeError         (MAE patchify / masking — ADR-152 §2.3)
+//! ├── MaeError         (MAE patchify / masking — ADR-152 §2.3)
+//! └── ProtocolError    (split protocols / leakage audit — ADR-288)
 //! ```
 
 use std::path::PathBuf;
@@ -48,6 +49,10 @@ pub enum TrainError {
     /// A MAE pretraining patchify / masking error (ADR-152 §2.3).
     #[error("MAE pretraining error: {0}")]
     Mae(#[from] MaeError),
+
+    /// A split-protocol / leakage-audit error (ADR-288).
+    #[error("Protocol error: {0}")]
+    Protocol(#[from] ProtocolError),
 
     /// JSON (de)serialization error.
     #[error("JSON error: {0}")]
@@ -464,5 +469,100 @@ pub enum MaeError {
         col: usize,
         /// The non-finite value itself.
         value: f32,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// ProtocolError
+// ---------------------------------------------------------------------------
+
+/// Errors produced by the public-benchmark split protocols and leakage guards
+/// ([`crate::protocols`], ADR-288).
+///
+/// Every leakage-audit failure is an `Err`, never a warning: a split that
+/// leaks subjects, environments, or windows of a continuous recording across
+/// the train/test boundary must not be usable for reporting.
+#[derive(Debug, Error)]
+pub enum ProtocolError {
+    /// The requested held-out fraction is not a finite value strictly inside
+    /// `(0, 1)`.
+    #[error("Invalid test fraction {value}: must be finite and strictly inside (0, 1)")]
+    InvalidTestFraction {
+        /// The offending fraction.
+        value: f64,
+    },
+
+    /// A split side contains no samples — a degenerate split cannot support
+    /// any claim.
+    #[error("The {side} partition is empty")]
+    EmptyPartition {
+        /// Which side is empty (`"train"` or `"test"`).
+        side: &'static str,
+    },
+
+    /// A subject appears on both sides of a split that claims
+    /// subject-disjointness.
+    #[error("Subject {subject_id} appears in both train and test (subject leakage)")]
+    SubjectOverlap {
+        /// The leaked subject id.
+        subject_id: u32,
+    },
+
+    /// An environment/room appears on both sides of a split that claims
+    /// environment-disjointness.
+    #[error("Environment {environment_id} appears in both train and test (environment leakage)")]
+    EnvironmentOverlap {
+        /// The leaked environment id.
+        environment_id: u32,
+    },
+
+    /// An orientation appears on both sides of a split that claims
+    /// orientation-disjointness.
+    #[error("Orientation {orientation_id} appears in both train and test (orientation leakage)")]
+    OrientationOverlap {
+        /// The leaked orientation id.
+        orientation_id: u32,
+    },
+
+    /// Two windows cut from the same continuous recording ended up on
+    /// opposite sides of the split. Overlapping/adjacent windows are
+    /// near-identical, so this is window-level leakage regardless of the
+    /// protocol (the 2024–2025 leakage reckoning; ADR-288 §Context).
+    #[error(
+        "Recording {recording_id} has windows on both sides of the split \
+         (window-level leakage from a continuous recording)"
+    )]
+    RecordingCrossesSplit {
+        /// The recording whose windows straddle the boundary.
+        recording_id: u64,
+    },
+
+    /// The mean-pose baseline cannot be fitted because the training split
+    /// contributed no poses.
+    #[error("Cannot fit mean-pose baseline: the training split contains no poses")]
+    EmptyTrainingPoses,
+
+    /// A pose array has a different shape from the first pose seen.
+    #[error("Pose shape mismatch: expected {expected:?}, got {actual:?}")]
+    PoseShapeMismatch {
+        /// Shape established by the first pose.
+        expected: Vec<usize>,
+        /// Offending shape.
+        actual: Vec<usize>,
+    },
+
+    /// A `MEASURED` evidence grade was requested without a reproducer
+    /// command. CLAUDE.md: accuracy statements tagged `MEASURED` require a
+    /// reproducer; anything else must be `SYNTHETIC` or `CLAIMED`.
+    #[error("MEASURED evidence requires a non-empty reproducer command string")]
+    MissingReproducer,
+
+    /// A reported metric is NaN or ±inf.
+    #[error("Metric `{name}` is not finite: {value}")]
+    NonFiniteMetric {
+        /// Name of the offending metric.
+        name: String,
+        /// The non-finite value.
+        value: f64,
     },
 }
