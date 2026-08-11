@@ -154,6 +154,7 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-294](ADR-294-multi-node-semantic-correctness.md) | Multi-node semantic correctness — per-node inference, node-keyed rate limiting, stale state | Accepted (initial implementation) |
 | [ADR-295](ADR-295-model-release-sanity-gates.md) | Model release sanity gates — block degenerate and mislabeled model artifacts | Accepted (initial implementation) |
 | [ADR-296](ADR-296-csi-data-incident-repo-controls.md) | Repository CSI data-incident controls — ignore rules and pre-commit/CI policy check | Accepted (controls implemented; tree remediation gated) |
+| [ADR-297](ADR-297-perception-substrate-program.md) | RuView perception substrate — phased 20-primitive program (calibration, evidence, trust, deployment) | Accepted (program; children ADR-298..317) |
 
 ---
 
