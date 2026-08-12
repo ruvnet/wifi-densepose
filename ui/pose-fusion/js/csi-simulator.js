@@ -14,7 +14,14 @@ export class CsiSimulator {
   constructor(opts = {}) {
     this.subcarriers = opts.subcarriers || 52; // 802.11n HT20
     this.timeWindow = opts.timeWindow || 56;   // frames in sliding window
-    this.mode = 'demo'; // 'demo' | 'live'
+    // Provenance of the frames currently rendered. A socket alone is not
+    // enough to claim live sensing; `live` is entered only after a validated,
+    // explicitly hardware-sourced frame.
+    this.mode = 'demo'; // demo | connecting | server-simulated | offline | unverified | live
+    this._modeListeners = new Set();
+    this._connectionGeneration = 0;
+    this._pendingConnect = null;
+    this.connectTimeoutMs = opts.connectTimeoutMs ?? 3000;
     this.ws = null;
 
     // Circular buffer for CSI frames
@@ -37,6 +44,7 @@ export class CsiSimulator {
     // RSSI tracking
     this.rssiDbm = -70; // default mid-range
     this._rssiTarget = -70;
+    this._hasServerRssi = false;
 
     // Person influence (updated from video motion)
     this.personPresence = 0;
@@ -50,35 +58,143 @@ export class CsiSimulator {
    * @param {string} url - WebSocket URL (e.g. ws://localhost:3030/ws/csi)
    */
   async connectLive(url) {
+    if (this._pendingConnect) this._pendingConnect.cancel();
+
+    const generation = ++this._connectionGeneration;
+    const previousSocket = this.ws;
+    if (previousSocket) {
+      previousSocket.onopen = null;
+      previousSocket.onmessage = null;
+      previousSocket.onerror = null;
+      previousSocket.onclose = null;
+      try { previousSocket.close(); } catch { /* already closed */ }
+    }
+    this.ws = null;
+    this._liveAmplitude = null;
+    this._livePhase = null;
+    this._hasServerRssi = false;
+    this.rssiDbm = -70;
+    this._rssiTarget = -70;
+    this._setMode('connecting');
+
     return new Promise((resolve) => {
+      let settled = false;
+      let timeoutId = null;
+      const pending = { cancel: null };
+      const finish = (source) => {
+        if (settled) return;
+        settled = true;
+        if (timeoutId !== null) clearTimeout(timeoutId);
+        if (this._pendingConnect === pending) this._pendingConnect = null;
+        resolve(source);
+      };
+      pending.cancel = () => finish(null);
+      this._pendingConnect = pending;
+
       try {
-        this.ws = new WebSocket(url);
-        this.ws.binaryType = 'arraybuffer';
-        this.ws.onmessage = (evt) => this._handleLiveFrame(evt.data);
-        // ADR-295 (issue #1557): a socket that merely *opened* is NOT live —
-        // synthetic demo data keeps flowing until a real frame is decoded. We
-        // stay in demo mode (watermarked) on open; `_handleLiveFrame` flips to
-        // live only once it has parsed a verified frame.
-        this.ws.onopen = () => { this.socketOpen = true; resolve(true); };
-        this.ws.onerror = () => resolve(false);
-        this.ws.onclose = () => { this.mode = 'demo'; this.verifiedFrame = false; this.socketOpen = false; };
-        // Timeout after 3s
-        setTimeout(() => { if (!this.socketOpen) resolve(false); }, 3000);
+        const socket = new WebSocket(url);
+        this.ws = socket;
+        socket.binaryType = 'arraybuffer';
+        socket.onmessage = async (evt) => {
+          if (generation !== this._connectionGeneration || this.ws !== socket) return;
+
+          let payload = evt.data;
+          if (typeof Blob !== 'undefined' && payload instanceof Blob) {
+            try {
+              payload = await payload.arrayBuffer();
+            } catch {
+              return;
+            }
+            // The connection may have been replaced while the Blob decoded.
+            if (generation !== this._connectionGeneration || this.ws !== socket) return;
+          }
+
+          // Parsing is synchronous, so no other connection can supersede this
+          // socket between the guard and the state mutation.
+          const source = this._handleLiveFrame(payload);
+          if (
+            !source
+            || generation !== this._connectionGeneration
+            || this.ws !== socket
+          ) return;
+          this._setMode(source);
+          finish(source);
+        };
+        // Opening the transport does not prove that usable or live CSI exists.
+        socket.onopen = () => {};
+        socket.onerror = () => {
+          if (generation !== this._connectionGeneration || this.ws !== socket) return;
+          this._setMode('demo');
+          finish(null);
+        };
+        socket.onclose = () => {
+          if (generation !== this._connectionGeneration || this.ws !== socket) return;
+          this.ws = null;
+          this._liveAmplitude = null;
+          this._livePhase = null;
+          this._setMode('demo');
+          finish(null);
+        };
+        timeoutId = setTimeout(() => {
+          if (generation !== this._connectionGeneration || this.ws !== socket) return;
+          this._setMode('demo');
+          finish(null);
+          try { socket.close(); } catch { /* already closed */ }
+        }, this.connectTimeoutMs);
       } catch {
-        resolve(false);
+        this._setMode('demo');
+        finish(null);
       }
     });
   }
 
   disconnect() {
-    if (this.ws) { this.ws.close(); this.ws = null; }
-    this.mode = 'demo';
-    this.verifiedFrame = false;
-    this.socketOpen = false;
+    this._connectionGeneration++;
+    if (this._pendingConnect) this._pendingConnect.cancel();
+    if (this.ws) {
+      const socket = this.ws;
+      this.ws = null;
+      try { socket.close(); } catch { /* already closed */ }
+    }
+    this._liveAmplitude = null;
+    this._livePhase = null;
+    this._setMode('demo');
   }
 
   /** True only once a real frame has been decoded — not merely on socket open. */
-  get isLive() { return this.mode === 'live' && this.verifiedFrame === true; }
+  get isLive() { return this.mode === 'live'; }
+
+  /** Subscribe to live/demo source changes. Returns an unsubscribe function. */
+  onModeChange(callback) {
+    this._modeListeners.add(callback);
+    callback(this.mode);
+    return () => this._modeListeners.delete(callback);
+  }
+
+  _setMode(mode) {
+    if (mode === this.mode) return;
+    const previousWasSynthetic = this.mode === 'demo' || this.mode === 'connecting';
+    const nextIsSynthetic = mode === 'demo' || mode === 'connecting';
+    // Buffered rows feed both the heatmap and CNN pseudo-image. Never carry
+    // rows across provenance domains: otherwise a newly-live badge could sit
+    // above a window that is still mostly demo or stale CSI.
+    this.amplitudeBuffer.length = 0;
+    this.phaseBuffer.length = 0;
+    if (!nextIsSynthetic) {
+      // Never carry RSSI across provenance domains. This also covers runtime
+      // promotion from server-simulated/offline/unverified to live hardware,
+      // not only the initial demo-to-server transition.
+      this.rssiDbm = this._hasServerRssi ? this._rssiTarget : null;
+    } else if (!previousWasSynthetic && nextIsSynthetic) {
+      this._hasServerRssi = false;
+      this.rssiDbm = -70;
+      this._rssiTarget = -70;
+    }
+    this.mode = mode;
+    for (const callback of this._modeListeners) {
+      try { callback(mode); } catch { /* source labels must not break sensing */ }
+    }
+  }
 
   /**
    * Update person state from video detection (for correlated demo data).
@@ -87,7 +203,7 @@ export class CsiSimulator {
    */
   updatePersonState(presence, x, y, motion) {
     // Don't override real CSI sensing with synthetic video-derived state
-    if (this.mode === 'live') return;
+    if (this.mode !== 'demo' && this.mode !== 'connecting') return;
 
     if (presence > 0.1) {
       // Person detected in video — update CSI state directly
@@ -127,11 +243,11 @@ export class CsiSimulator {
     const amp = new Float32Array(this.subcarriers);
     const phase = new Float32Array(this.subcarriers);
 
-    if (this.mode === 'live' && this._liveAmplitude) {
+    if (this.mode === 'demo' || this.mode === 'connecting') {
+      this._generateDemoFrame(amp, phase, elapsed);
+    } else if (this._liveAmplitude) {
       amp.set(this._liveAmplitude);
       phase.set(this._livePhase);
-    } else {
-      this._generateDemoFrame(amp, phase, elapsed);
     }
 
     // Push to circular buffer
@@ -143,11 +259,13 @@ export class CsiSimulator {
     }
 
     // RSSI: smooth toward target (demo mode generates synthetic RSSI)
-    if (this.mode === 'demo') {
+    if (this.mode === 'demo' || this.mode === 'connecting') {
       // Simulate RSSI based on person presence and slow drift
       this._rssiTarget = -55 - 25 * (1 - this.personPresence) + Math.sin(elapsed * 0.3) * 3;
     }
-    this.rssiDbm += (this._rssiTarget - this.rssiDbm) * 0.1;
+    if (Number.isFinite(this.rssiDbm) && Number.isFinite(this._rssiTarget)) {
+      this.rssiDbm += (this._rssiTarget - this.rssiDbm) * 0.1;
+    }
 
     // SNR estimate
     let signalPower = 0, noisePower = 0;
@@ -269,66 +387,128 @@ export class CsiSimulator {
     if (typeof data === 'string') {
       try {
         const msg = JSON.parse(data);
-        this._handleJsonFrame(msg);
+        return this._handleJsonFrame(msg);
       } catch (_) { /* ignore malformed JSON */ }
-      return;
-    }
-
-    // Handle Blob data (convert to ArrayBuffer and re-process)
-    if (data instanceof Blob) {
-      data.arrayBuffer().then(ab => this._handleLiveFrame(ab)).catch(() => {});
-      return;
+      return null;
     }
 
     // Handle binary ArrayBuffer frames (ADR-018 format)
-    if (!(data instanceof ArrayBuffer)) return;
+    if (!(data instanceof ArrayBuffer)) return null;
     const view = new DataView(data);
     // Check ADR-018 magic: 0xC5110001
-    if (data.byteLength < 20) return;
+    if (data.byteLength < 20) return null;
     const magic = view.getUint32(0, true);
-    if (magic !== 0xC5110001) return;
+    if (magic !== 0xC5110001) return null;
 
     const numSub = Math.min(view.getUint16(8, true), this.subcarriers);
+    if (numSub === 0) return null;
     this._liveAmplitude = new Float32Array(this.subcarriers);
     this._livePhase = new Float32Array(this.subcarriers);
 
     const headerSize = 20;
+    let parsed = 0;
     for (let i = 0; i < numSub && (headerSize + i * 4 + 3) < data.byteLength; i++) {
       const real = view.getInt16(headerSize + i * 4, true);
       const imag = view.getInt16(headerSize + i * 4 + 2, true);
       this._liveAmplitude[i] = Math.sqrt(real * real + imag * imag) / 2048;
       this._livePhase[i] = Math.atan2(imag, real);
+      parsed++;
     }
-    // ADR-295 (issue #1557): a real frame was decoded — only now is this live.
-    this._markVerifiedFrame();
-  }
-
-  /** ADR-295: promote from watermarked demo to live once a real frame lands. */
-  _markVerifiedFrame() {
-    this.verifiedFrame = true;
-    this.mode = 'live';
-    if (typeof this.onVerifiedFrame === 'function') this.onVerifiedFrame();
+    if (parsed === 0) return null;
+    // Binary ADR-018 frames do not carry RSSI metadata. Treat it as unknown
+    // for this frame instead of retaining a value from another provenance.
+    this._hasServerRssi = false;
+    this._rssiTarget = null;
+    this.rssiDbm = null;
+    // ADR-018 carries no trustworthy source string, so the transport is usable
+    // but its hardware provenance remains explicitly unverified.
+    return 'unverified';
   }
 
   _handleJsonFrame(msg) {
+    // Extract amplitude from sensing_update node data
+    const node = (msg.nodes && msg.nodes[0]) || msg;
+    const rawSource = String(node.source || msg.source || '').toLowerCase();
+    const explicitlySimulated = msg._simulated === true
+      || node._simulated === true
+      || rawSource === 'simulate'
+      || rawSource === 'simulated'
+      || rawSource.endsWith(':simulated');
+    let frameSource = 'unverified';
+    let confirmedHardware = false;
+    if (explicitlySimulated) {
+      frameSource = 'server-simulated';
+    } else if (rawSource.endsWith(':offline')) {
+      frameSource = 'offline';
+    } else {
+      const hardwarePrefixes = ['esp32', 'wifi', 'realtek', 'mediatek', 'qualcomm'];
+      confirmedHardware = hardwarePrefixes.some((prefix) => (
+        rawSource === prefix || rawSource.startsWith(`${prefix}:`)
+      ));
+      confirmedHardware = confirmedHardware || rawSource === 'live';
+    }
+
+    const ampArr = node.amplitude || msg.amplitude;
+    const iq = node.iq || msg.iq;
+    const hasAmplitude = Array.isArray(ampArr)
+      && ampArr.some((value) => Number.isFinite(Number(value)));
+    const hasIq = Array.isArray(iq)
+      && iq.length >= 2
+      && Number.isFinite(Number(iq[0]))
+      && Number.isFinite(Number(iq[1]));
+    // ADR-295: a hardware label alone is not enough to claim LIVE CSI. Only a
+    // decoded CSI payload from an explicitly hardware-sourced frame promotes
+    // the UI; payloadless hardware metadata remains visibly unverified.
+    if (confirmedHardware && (hasAmplitude || hasIq)) frameSource = 'live';
+
+    // Metadata remains authoritative on privacy-gated and vitals-only frames
+    // that intentionally omit raw CSI samples.
+    this._hasServerRssi = false;
+    this._rssiTarget = null;
+    if (typeof node.rssi_dbm === 'number') {
+      this._rssiTarget = node.rssi_dbm;
+      this._hasServerRssi = true;
+    } else if (msg.features && typeof msg.features.mean_rssi === 'number') {
+      this._rssiTarget = msg.features.mean_rssi;
+      this._hasServerRssi = true;
+    } else {
+      // RSSI belongs to the current frame. Never reuse a simulated, offline,
+      // or otherwise differently sourced value beneath a newer source label.
+      this.rssiDbm = null;
+    }
+    if (this._hasServerRssi && !Number.isFinite(this.rssiDbm)) {
+      // Recover immediately when RSSI metadata resumes within the same source
+      // mode; the smoothing path cannot advance from an explicit null value.
+      this.rssiDbm = this._rssiTarget;
+    }
+    const cls = msg.classification;
+    if (cls && typeof cls.confidence === 'number') {
+      this.personPresence = cls.presence ? cls.confidence : 0;
+    }
+
+    if (!hasAmplitude && !hasIq) {
+      // Source transitions are authoritative even when privacy gating, a
+      // vitals-only path, or an offline re-broadcast omits raw CSI. Clear the
+      // previous frame so stale/live data is never rendered under the new
+      // provenance label.
+      this._liveAmplitude = null;
+      this._livePhase = null;
+      return frameSource;
+    }
+
     // Sensing server sends: { type: "sensing_update", nodes: [{ amplitude: [...], subcarrier_count }], classification, features }
     this._liveAmplitude = new Float32Array(this.subcarriers);
     this._livePhase = new Float32Array(this.subcarriers);
 
-    // Extract amplitude from sensing_update node data
-    const node = (msg.nodes && msg.nodes[0]) || msg;
-    const ampArr = node.amplitude || msg.amplitude;
-    if (ampArr && Array.isArray(ampArr)) {
+    if (hasAmplitude) {
       const n = Math.min(ampArr.length, this.subcarriers);
       // Server sends raw amplitude (already magnitude), normalize to 0-1
       let maxAmp = 0;
-      for (let i = 0; i < n; i++) maxAmp = Math.max(maxAmp, Math.abs(ampArr[i]));
+      for (let i = 0; i < n; i++) maxAmp = Math.max(maxAmp, Math.abs(Number(ampArr[i]) || 0));
       const scale = maxAmp > 0 ? 1.0 / maxAmp : 1.0;
       for (let i = 0; i < n; i++) {
-        this._liveAmplitude[i] = Math.abs(ampArr[i]) * scale;
+        this._liveAmplitude[i] = Math.abs(Number(ampArr[i]) || 0) * scale;
       }
-      // ADR-295 (issue #1557): a real frame carrying amplitude was decoded.
-      this._markVerifiedFrame();
     }
 
     // Phase from node (if available)
@@ -344,30 +524,17 @@ export class CsiSimulator {
     }
 
     // Handle raw I/Q pairs
-    const iq = node.iq || msg.iq;
-    if (iq && Array.isArray(iq)) {
+    if (hasIq) {
       const n = Math.min(iq.length / 2, this.subcarriers);
       for (let i = 0; i < n; i++) {
-        const real = iq[i * 2], imag = iq[i * 2 + 1];
+        const real = Number(iq[i * 2]) || 0;
+        const imag = Number(iq[i * 2 + 1]) || 0;
         this._liveAmplitude[i] = Math.sqrt(real * real + imag * imag) / 2048;
         this._livePhase[i] = Math.atan2(imag, real);
       }
     }
 
-    // Extract RSSI from node data
-    if (typeof node.rssi_dbm === 'number') {
-      this._rssiTarget = node.rssi_dbm;
-    } else if (msg.features && typeof msg.features.mean_rssi === 'number') {
-      this._rssiTarget = msg.features.mean_rssi;
-    }
-
-    // Update presence from server classification
-    const cls = msg.classification;
-    if (cls) {
-      if (typeof cls.confidence === 'number') {
-        this.personPresence = cls.presence ? cls.confidence : 0;
-      }
-    }
+    return frameSource;
   }
 
   _mulberry32(seed) {

@@ -5,12 +5,13 @@
  */
 
 import { VideoCapture } from './video-capture.js?v=13';
-import { CsiSimulator } from './csi-simulator.js?v=13';
+import { CsiSimulator } from './csi-simulator.js?v=14';
 import { CnnEmbedder } from './cnn-embedder.js?v=13';
 import { FusionEngine } from './fusion-engine.js?v=13';
 import { PoseDecoder } from './pose-decoder.js?v=13';
 import { CanvasRenderer } from './canvas-renderer.js?v=13';
 import { withWsTicket } from '../../services/ws-ticket.js';
+import { buildPoseFusionWsUrl, renderPoseFusionSourceState } from './source-status.js?v=1';
 
 // === State ===
 let mode = 'dual';  // 'dual' | 'video' | 'csi'
@@ -54,6 +55,7 @@ const confSlider = document.getElementById('confidence-slider');
 const confValue = document.getElementById('confidence-value');
 const wsUrlInput = document.getElementById('ws-url');
 const connectWsBtn = document.getElementById('connect-ws-btn');
+const sourceUi = { statusDot, statusLabel, connectButton: connectWsBtn };
 
 // Fusion bar elements
 const videoBar = document.getElementById('video-bar');
@@ -80,6 +82,15 @@ const rssiSparkCanvas = document.getElementById('rssi-sparkline');
 const rssiSparkCtx = rssiSparkCanvas ? rssiSparkCanvas.getContext('2d') : null;
 const rssiHistory = [];
 const RSSI_HISTORY_MAX = 80;
+
+// Keep the visible provenance synchronized when a validated source changes.
+// Clear the sparkline at the same boundary so demo/stale RSSI never remains
+// visible underneath a newer provenance label.
+csiSimulator.onModeChange((source) => {
+  rssiHistory.length = 0;
+  drawRssiSparkline();
+  renderPoseFusionSourceState(source, sourceUi);
+});
 
 // === Initialize ===
 function init() {
@@ -114,13 +125,14 @@ function init() {
   connectWsBtn.addEventListener('click', async () => {
     const url = wsUrlInput.value.trim();
     if (!url) return;
-    connectWsBtn.textContent = 'Connecting...';
-    // ADR-272: exchange the stored bearer for a single-use ?ticket= before the
-    // upgrade — a browser cannot set an Authorization header on a WebSocket.
-    const ok = await csiSimulator.connectLive(await withWsTicket(url));
-    connectWsBtn.textContent = ok ? '✓ Connected' : 'Connect';
-    if (ok) {
-      connectWsBtn.classList.add('active');
+    renderPoseFusionSourceState('connecting', sourceUi);
+    try {
+      // ADR-272: exchange the stored bearer for a single-use ?ticket= before
+      // the upgrade — a browser cannot set an Authorization header there.
+      const source = await csiSimulator.connectLive(await withWsTicket(url));
+      renderPoseFusionSourceState(source || 'simulated', sourceUi);
+    } catch {
+      renderPoseFusionSourceState('simulated', sourceUi);
     }
   });
 
@@ -139,45 +151,17 @@ function init() {
   });
   csiCnn.tryLoadWasm(wasmBase);
 
-  // Auto-connect to local sensing server WebSocket if available.
-  // Served from the Docker image, the sensing stream lives one port above the
-  // HTTP port (3000 -> 3001 is the documented default mapping); the
-  // standalone dev server stays on :8765.
-  //
-  // Issue #1557: a hardcoded `{'3000': '3001'}` map only worked when the UI
-  // was served on exactly port 3000 — remapping the host port (e.g.
-  // `-p 3010:3000 -p 3011:3001`, needed whenever 3000 is already taken) fell
-  // through to `localhost:8765`, which for a remote viewer is nothing on
-  // *their* machine. `connectLive()` then failed silently. Derive the WS port
-  // from the actual HTTP port instead of a fixed lookup table, so it follows
-  // any host-port remapping automatically. This is a best-effort default, not
-  // a safety mechanism — `onVerifiedFrame` below (issue #1557 fix) is what
-  // actually prevents an unconfirmed/failed connection from ever being shown
-  // as LIVE, regardless of whether this guess is right.
-  const httpPort = Number(window.location.port);
-  const defaultWsUrl = Number.isFinite(httpPort) && httpPort > 0
-    ? `ws://${window.location.hostname}:${httpPort + 1}/ws/sensing`
-    : 'ws://localhost:8765/ws/sensing';
+  // Auto-connect to the sensing port exposed next to the current HTTP port.
+  // Never fall back to the viewer's localhost for an unknown remote mapping.
+  const defaultWsUrl = buildPoseFusionWsUrl(window.location);
   if (wsUrlInput) wsUrlInput.value = defaultWsUrl;
   // ADR-272: exchange the stored bearer for a single-use ?ticket= before the
   // upgrade — a browser cannot set an Authorization header on a WebSocket.
-  // ADR-295 (issue #1557): opening the socket does NOT mean live — the
-  // simulator keeps producing watermarked SYNTHETIC data until a real CSI frame
-  // is decoded. Only the verified-frame callback promotes the label to LIVE.
-  csiSimulator.onVerifiedFrame = () => {
-    if (connectWsBtn) {
-      connectWsBtn.textContent = '✓ Live ESP32';
-      connectWsBtn.classList.add('active');
-    }
-    statusLabel.textContent = 'LIVE CSI';
-    statusDot.classList.remove('offline');
-  };
-  withWsTicket(defaultWsUrl).then(u => csiSimulator.connectLive(u)).then(ok => {
-    if (ok) {
-      // Socket open, but no verified frame yet — stay honest.
-      statusLabel.textContent = 'SYNTHETIC';
-    }
-  });
+  renderPoseFusionSourceState('connecting', sourceUi);
+  withWsTicket(defaultWsUrl)
+    .then(u => csiSimulator.connectLive(u))
+    .then(source => renderPoseFusionSourceState(source || 'simulated', sourceUi))
+    .catch(() => renderPoseFusionSourceState('simulated', sourceUi));
 
   // Auto-start camera for video/dual modes
   updateModeUI();
@@ -190,8 +174,6 @@ async function startCamera() {
   cameraPrompt.style.display = 'none';
   const ok = await videoCapture.start();
   if (ok) {
-    statusDot.classList.remove('offline');
-    statusLabel.textContent = 'LIVE';
     resizeCanvases();
   } else {
     cameraPrompt.style.display = 'flex';
@@ -412,6 +394,14 @@ function mainLoop(timestamp) {
 function updateRssi(dbm) {
   if (!rssiBarEl) return;
 
+  if (!Number.isFinite(dbm)) {
+    rssiBarEl.style.width = '0%';
+    rssiValueEl.textContent = '-- dBm';
+    rssiValueEl.style.color = 'var(--text-dim)';
+    rssiQualityEl.textContent = 'Unknown';
+    return;
+  }
+
   // Clamp to typical WiFi range: -100 (worst) to -30 (best)
   const clamped = Math.max(-100, Math.min(-30, dbm));
   const pct = ((clamped + 100) / 70) * 100; // 0-100%
@@ -440,12 +430,13 @@ function updateRssi(dbm) {
 }
 
 function drawRssiSparkline() {
-  if (!rssiSparkCtx || rssiHistory.length < 2) return;
+  if (!rssiSparkCtx) return;
   const w = rssiSparkCanvas.width;
   const h = rssiSparkCanvas.height;
   const ctx = rssiSparkCtx;
 
   ctx.clearRect(0, 0, w, h);
+  if (rssiHistory.length < 2) return;
 
   // Draw signal strength line
   const len = rssiHistory.length;
