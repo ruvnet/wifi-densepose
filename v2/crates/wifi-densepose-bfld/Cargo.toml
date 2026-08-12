@@ -25,6 +25,10 @@ mqtt = ["std", "dep:rumqttc"]
 # enables privacy_class = 1 (derived) mode and the SoulMatchOracle gate
 # exemption. Disabled by default per the structural class-2 default.
 soul-signature = []
+# WiFi Veil advisory integration (ADR-294): deterministic attacker-vs-
+# protector assessment of BFI identity leakage and emission-shaping shield
+# configs. All numbers it produces are SYNTHETIC / L0 by construction.
+veil = ["std", "dep:wifi-veil"]
 
 [dependencies]
 thiserror.workspace = true
@@ -36,6 +40,7 @@ serde_json = { workspace = true, optional = true }
 # MQTT publisher backend (optional). Matches the `rumqttc` choice already in
 # `wifi-densepose-sensing-server` so both crates share TLS / version posture.
 rumqttc = { version = "0.24", default-features = false, features = ["use-rustls"], optional = true }
+wifi-veil = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest.workspace = true

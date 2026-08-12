@@ -1,0 +1,15 @@
+[package]
+name = "ruview-witness"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde = { workspace = true, features = ["derive"] }
+ruview-attest = { path = "../ruview-attest" }
+
+[dev-dependencies]
+serde_json.workspace = true
