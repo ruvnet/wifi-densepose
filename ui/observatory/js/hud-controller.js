@@ -438,11 +438,15 @@ export class HudController {
     const fallEl = document.getElementById('fall-alert');
     if (fallEl) fallEl.style.display = cls.fall_detected ? 'block' : 'none';
 
-    // Scenario description and edge modules
-    const scenarioKey = demoData._autoMode ? (demoData.currentScenario || 'auto') : (demoData.currentScenario || 'auto');
+    // Keep the caption derived from the same current-scenario value as the
+    // rendered HUD on every frame. The DOM can otherwise retain stale startup
+    // text even when the cached scenario key already matches.
+    const scenarioKey = demoData.currentScenario || 'auto';
+    this._updateScenarioDescription(scenarioKey);
+
+    // Edge-module markup only needs rebuilding when the scenario changes.
     if (scenarioKey !== this._currentScenarioKey) {
       this._currentScenarioKey = scenarioKey;
-      this._updateScenarioDescription(scenarioKey);
       this._updateEdgeModules(scenarioKey);
     }
   }
@@ -546,7 +550,8 @@ export class HudController {
   _updateScenarioDescription(scenarioKey) {
     const el = document.getElementById('scenario-description');
     if (!el) return;
-    el.textContent = SCENARIO_DESCRIPTIONS[scenarioKey] || '';
+    const description = SCENARIO_DESCRIPTIONS[scenarioKey] || '';
+    if (el.textContent !== description) el.textContent = description;
   }
 
   _updateEdgeModules(scenarioKey) {
