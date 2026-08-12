@@ -161,6 +161,7 @@ export class CsiSimulator {
     this._setMode('demo');
   }
 
+  /** True only once a real frame has been decoded — not merely on socket open. */
   get isLive() { return this.mode === 'live'; }
 
   /** Subscribe to live/demo source changes. Returns an unsubscribe function. */
@@ -434,16 +435,17 @@ export class CsiSimulator {
       || rawSource === 'simulated'
       || rawSource.endsWith(':simulated');
     let frameSource = 'unverified';
+    let confirmedHardware = false;
     if (explicitlySimulated) {
       frameSource = 'server-simulated';
     } else if (rawSource.endsWith(':offline')) {
       frameSource = 'offline';
     } else {
       const hardwarePrefixes = ['esp32', 'wifi', 'realtek', 'mediatek', 'qualcomm'];
-      const confirmedHardware = hardwarePrefixes.some((prefix) => (
+      confirmedHardware = hardwarePrefixes.some((prefix) => (
         rawSource === prefix || rawSource.startsWith(`${prefix}:`)
       ));
-      if (confirmedHardware || rawSource === 'live') frameSource = 'live';
+      confirmedHardware = confirmedHardware || rawSource === 'live';
     }
 
     const ampArr = node.amplitude || msg.amplitude;
@@ -454,6 +456,10 @@ export class CsiSimulator {
       && iq.length >= 2
       && Number.isFinite(Number(iq[0]))
       && Number.isFinite(Number(iq[1]));
+    // ADR-295: a hardware label alone is not enough to claim LIVE CSI. Only a
+    // decoded CSI payload from an explicitly hardware-sourced frame promotes
+    // the UI; payloadless hardware metadata remains visibly unverified.
+    if (confirmedHardware && (hasAmplitude || hasIq)) frameSource = 'live';
 
     // Metadata remains authoritative on privacy-gated and vitals-only frames
     // that intentionally omit raw CSI samples.

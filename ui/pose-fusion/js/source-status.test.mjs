@@ -247,7 +247,7 @@ test('entering live mode discards every buffered demo row', async () => {
   );
 });
 
-test('payloadless live frames use server metadata without demo CSI', async () => {
+test('payloadless hardware frames stay unverified and never render demo CSI', async () => {
   const simulator = new CsiSimulator({ connectTimeoutMs: 100 });
   simulator.nextFrame(1);
 
@@ -260,7 +260,8 @@ test('payloadless live frames use server metadata without demo CSI', async () =>
     classification: { presence: true, confidence: 0.9 },
   }));
 
-  assert.equal(await connection, 'live');
+  assert.equal(await connection, 'unverified');
+  assert.equal(simulator.isLive, false);
   assert.equal(simulator._rssiTarget, -35);
   assert.equal(simulator.rssiDbm, -35);
   assert.equal(simulator.personPresence, 0.9);

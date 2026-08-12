@@ -223,7 +223,7 @@ huggingface-cli download ruvnet/wifi-densepose-pretrained --local-dir models/wif
 
 | Consumer | Format used | Status |
 |----------|-------------|--------|
-| Python training / evaluation / embedding extraction | `model.safetensors` | ✅ Works — load with `safetensors.torch.load_file` |
+| Python training / evaluation / embedding extraction | `model.safetensors` | ⚠️ The published file's header is NUL-padded, which the reference `safetensors.torch.load_file` rejects (issue [#1522](https://github.com/ruvnet/RuView/issues/1522)) — pending a corrected re-upload. `csi-embed-v2.safetensors` in the same repo is unaffected and loads normally. |
 | Inspect / re-export the bundle | `model.rvf.jsonl` (line-by-line JSON) | ✅ Works — plain JSONL |
 | Sensing-server `--model <PATH>` flag | native RVF, `model.safetensors`, or `model.rvf.jsonl` | ✅ Native RVF loads directly; safetensors and JSONL auto-convert in memory |
 

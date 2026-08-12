@@ -16,11 +16,16 @@ pub mod dataset;
 pub mod edge_registry;
 pub mod error_response;
 pub mod host_validation;
+/// ADR-297: per-node vs. fused room inference, with deterministic fusion.
+pub mod inference;
 pub mod introspection;
 pub mod matter;
 pub mod model_format;
 pub mod mqtt;
 pub mod path_safety;
+/// ADR-295: canonical source-provenance state machine (synthetic can never
+/// present as live).
+pub mod provenance;
 pub mod semantic;
 /// ADR-262 P3: the live RuField surface — turns the governed sensing cycle into
 /// signed RuField `FieldEvent`s on the additive `/api/field` + `/ws/field`
@@ -32,6 +37,8 @@ pub mod semconv;
 pub mod telemetry;
 #[allow(dead_code)]
 pub mod trainer;
+/// ADR-296: UDP data-plane bind scope decision + source IP/CIDR allowlist.
+pub mod udp_bind;
 pub mod vital_signs;
 /// ADR-270 Mist and NETGEAR telemetry providers.
 pub mod vendor_mist_netgear;

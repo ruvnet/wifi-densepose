@@ -28,8 +28,13 @@ firmware/esp32-csi-node/test/*.obj
 # Claude Flow swarm runtime state
 .swarm/
 
-# CSI recordings (local training data, machine-specific)
+# CSI recordings (local training/capture data — CSI is person data per
+# CLAUDE.md; never commit). Covers current and legacy layouts. See ADR-299.
+data/recordings/
+v2/data/recordings/
 rust-port/wifi-densepose-rs/data/recordings/
+**/*.csi.jsonl
+**/*.csi.meta.json
 
 # NVS partition images and CSVs (contain WiFi credentials)
 nvs.bin

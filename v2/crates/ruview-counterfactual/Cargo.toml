@@ -1,0 +1,17 @@
+[package]
+name = "ruview-counterfactual"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde = { workspace = true, features = ["derive"] }
+ruview-ontology = { path = "../ruview-ontology" }
+ruview-fusion = { path = "../ruview-fusion" }
+ruview-twin = { path = "../ruview-twin" }
+
+[dev-dependencies]
+serde_json.workspace = true

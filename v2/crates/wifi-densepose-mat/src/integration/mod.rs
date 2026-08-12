@@ -13,6 +13,9 @@
 //! - **Intel 5300 NIC**: Using Linux CSI Tool (iwlwifi driver)
 //! - **Atheros NICs**: Using ath9k/ath10k/ath11k CSI patches
 //! - **Nexmon**: For Broadcom chips with CSI firmware
+//! - **FeitCSI (Intel AX200/AX210)**: Wideband 802.11ax CSI up to 160 MHz /
+//!   1992 subcarriers including 6 GHz, ingested from recorded captures or a
+//!   stream written by the external FeitCSI tool (ADR-292)
 //!
 //! # Example Usage
 //!
@@ -37,6 +40,7 @@
 //! ```
 
 pub mod csi_receiver;
+pub mod feitcsi;
 mod hardware_adapter;
 mod neural_adapter;
 mod signal_adapter;
@@ -52,6 +56,9 @@ pub use hardware_adapter::{
     CsiStream,
     DeviceSettings,
     DeviceType,
+    // FeitCSI wideband ingest settings (ADR-292)
+    FeitCsiMode,
+    FeitCsiSettings,
     FlowControl,
     FrameControlType,
     // Main adapter
@@ -73,8 +80,18 @@ pub use hardware_adapter::{
     // Serial settings
     SerialSettings,
     StreamingStats,
+    // Wideband spectral provenance (ADR-292)
+    SubcarrierMapping,
     // UDP settings
     UdpSettings,
+    WidebandMeta,
+    WifiBand,
+};
+
+pub use feitcsi::{
+    parse_record as parse_feitcsi_record, resample_readings_to_pipeline, FeitCsiBandwidth,
+    FeitCsiError, FeitCsiFileReader, FeitCsiHeader, FeitCsiModType, FeitCsiRecord,
+    FeitCsiStreamReader,
 };
 pub use neural_adapter::NeuralAdapter;
 pub use signal_adapter::SignalAdapter;
