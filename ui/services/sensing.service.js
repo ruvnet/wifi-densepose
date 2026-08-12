@@ -56,6 +56,11 @@ class SensingService {
     this._dataSource = 'reconnecting';
     // The raw source string from the server (e.g. "esp32", "simulated", "simulate")
     this._serverSource = null;
+    // Status probes race the first WebSocket frame. Track both the latest
+    // probe and explicit frame observations so stale HTTP results cannot
+    // overwrite a newer source reported by the stream.
+    this._sourceProbeGeneration = 0;
+    this._sourceObservationRevision = 0;
     this._lastMessage = null;
 
     // Ring buffer of recent RSSI values for sparkline
@@ -305,25 +310,28 @@ class SensingService {
    * hardware or simulation. Called once on WebSocket open.
    */
   async _detectServerSource() {
-    // ADR-295 (issue #1526): an unreachable or unauthorized status endpoint is
-    // an *unknown* state — it must NOT collapse to "live". Prefer the canonical
-    // `source_state` the server now returns; on any error stay conservative
-    // (server-simulated) until a real frame's `source` field promotes us.
-    //
-    // Send the bearer token via `apiService.getHeaders()` so the probe can
-    // actually succeed under the documented secure posture (API auth
-    // enabled) instead of always 401ing and relying solely on the
-    // conservative fallback below (issue #1526, suggested fix #1).
+    const probeGeneration = ++this._sourceProbeGeneration;
+    const observationRevision = this._sourceObservationRevision;
+    const isCurrent = () => (
+      this._state === 'connected'
+      && probeGeneration === this._sourceProbeGeneration
+      && observationRevision === this._sourceObservationRevision
+    );
+
     try {
-      const resp = await fetch('/api/v1/status', { headers: apiService.getHeaders() });
-      if (resp.ok) {
-        const json = await resp.json();
-        this._applyServerSource(json.source, json.source_state);
-      } else {
-        this._setDataSource('server-simulated');
+      const status = await apiService.get('/api/v1/status');
+      if (isCurrent()) {
+        this._applyServerSource(status?.source, status?.source_state);
       }
     } catch {
-      this._setDataSource('server-simulated');
+      // ADR-295 (issue #1526): a failed or unauthorised probe cannot confirm
+      // attached hardware. Stay fail-safe until a later frame supplies an
+      // explicit source, but never overwrite a source frame that arrived
+      // while the authenticated API request awaited.
+      if (isCurrent()) {
+        this._serverSource = null;
+        this._setDataSource('server-simulated');
+      }
     }
   }
 
@@ -368,10 +376,11 @@ class SensingService {
     // Track the server's source field from each frame so the UI
     // can react if the server switches between esp32 ↔ simulated at runtime.
     if (data.source && this._state === 'connected') {
-      const raw = data.source;
-      if (raw !== this._serverSource) {
-        this._applyServerSource(raw);
-      }
+      this._sourceObservationRevision++;
+      // Re-assert every explicit frame source. `_setDataSource` itself is a
+      // no-op when unchanged, while this guarantees the stream stays
+      // authoritative over a slower status request.
+      this._applyServerSource(data.source);
     }
 
     // Update RSSI history for sparkline
