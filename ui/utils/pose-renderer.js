@@ -1,5 +1,24 @@
 // Pose Renderer Utility for WiFi-DensePose UI
 
+// A zero across the complete keypoint set means "unscored" on the
+// signal-derived path. This value is display-only and is never written back to
+// the source data or presented as a sensing confidence.
+const UNSCORED_KEYPOINT_RENDER_CONFIDENCE = 0.5;
+
+export function getRenderableKeypoints(keypoints) {
+  if (!Array.isArray(keypoints) || keypoints.length === 0) return keypoints;
+
+  const isUnscoredSet = keypoints.every((keypoint) =>
+    keypoint && typeof keypoint.confidence === 'number' && keypoint.confidence === 0
+  );
+
+  if (!isUnscoredSet) return keypoints;
+  return keypoints.map((keypoint) => ({
+    ...keypoint,
+    confidence: UNSCORED_KEYPOINT_RENDER_CONFIDENCE,
+  }));
+}
+
 export class PoseRenderer {
   constructor(canvas, options = {}) {
     this.canvas = canvas;
@@ -187,8 +206,13 @@ export class PoseRenderer {
         return; // Skip low confidence detections
       }
 
+      // The signal-derived path supplies coordinates without per-point scores.
+      // Give that complete unscored set a neutral display strength, while
+      // preserving zeroes in mixed scored sets as rejected keypoints.
+      const renderableKps = getRenderableKeypoints(person.keypoints);
+
       // Apply client-side lerp smoothing to reduce visual jitter
-      const smoothedKps = this._getSmoothedKeypoints(index, person.keypoints);
+      const smoothedKps = this._getSmoothedKeypoints(index, renderableKps);
 
       // Render skeleton connections
       if (this.config.showSkeleton && smoothedKps) {
@@ -225,7 +249,8 @@ export class PoseRenderer {
 
     persons.forEach((person, index) => {
       if (person.confidence >= this.config.confidenceThreshold && person.keypoints) {
-        this.renderKeypoints(person.keypoints, person.confidence, true);
+        const renderableKps = getRenderableKeypoints(person.keypoints);
+        this.renderKeypoints(renderableKps, person.confidence, true);
 
         // Render bounding box
         if (this.config.showBoundingBox && person.bbox) {
@@ -251,7 +276,8 @@ export class PoseRenderer {
 
       const hue = (personIdx * 60) % 360; // different hue per person
 
-      person.keypoints.forEach((kp) => {
+      const renderableKps = getRenderableKeypoints(person.keypoints);
+      renderableKps.forEach((kp) => {
         if (kp.confidence <= this.config.keypointConfidenceThreshold) return;
 
         const cx = this.scaleX(kp.x);
@@ -268,9 +294,9 @@ export class PoseRenderer {
       });
 
       // Light skeleton overlay so joints are connected
-      if (person.keypoints) {
+      if (renderableKps) {
         this.ctx.globalAlpha = 0.25;
-        this.renderSkeleton(person.keypoints, person.confidence);
+        this.renderSkeleton(renderableKps, person.confidence);
         this.ctx.globalAlpha = 1.0;
       }
 
@@ -301,7 +327,8 @@ export class PoseRenderer {
     persons.forEach((person, personIdx) => {
       if (person.confidence < this.config.confidenceThreshold || !person.keypoints) return;
 
-      const kps = this._getSmoothedKeypoints(personIdx, person.keypoints);
+      const renderableKps = getRenderableKeypoints(person.keypoints);
+      const kps = this._getSmoothedKeypoints(personIdx, renderableKps);
 
       bodyParts.forEach((part) => {
         // Collect valid keypoints for this body part
