@@ -23,6 +23,10 @@ criterion = { version = "0.5", features = ["html_reports"] }
 name = "vitals_bench"
 harness = false
 
+[[bench]]
+name = "groundtruth_bench"
+harness = false
+
 [features]
 default = ["serde"]
 serde = ["dep:serde"]

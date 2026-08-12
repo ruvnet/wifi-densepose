@@ -35,6 +35,18 @@ pub enum CalibrationError {
     #[error("serialization error: {0}")]
     Serde(String),
 
+    /// A calibration certificate failed validation at construction (ADR-301).
+    #[error("invalid calibration certificate: {0}")]
+    InvalidCertificate(String),
+
+    /// A synthetic characterization was labelled as measured evidence — rejected
+    /// by the honesty discipline (ADR-279 invariant 6, ADR-282 ladder, ADR-301).
+    #[error("synthetic characterization cannot be labelled measured (claimed {claimed})")]
+    SyntheticMislabel {
+        /// The measured evidence level that was wrongly claimed for synthetic input.
+        claimed: String,
+    },
+
     /// The specialist bank was trained against a different baseline and is stale.
     #[error("bank is STALE: trained against baseline {trained}, current is {current}")]
     StaleBaseline {

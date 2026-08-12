@@ -58,24 +58,38 @@ impl StateMessage {
     }
 }
 
-/// Sample-rate-limit decisions, per entity. Tracks the last-emitted
-/// instant per entity and gates further emissions accordingly. Time is
-/// supplied by the caller so the limiter is testable without a clock.
+/// Sample-rate-limit decisions, per `(node, entity)`. Tracks the
+/// last-emitted instant for each entity *on each node* and gates further
+/// emissions accordingly. Time is supplied by the caller so the limiter is
+/// testable without a clock.
+///
+/// ADR-297 (issue #1541): the key is `(NodeId, EntityKind)`, not `EntityKind`
+/// alone. With an entity-only key one node consumed the numeric publish slot
+/// and every other node was suppressed until the interval expired — while
+/// availability still reported them online. Keying by node keeps each node's
+/// per-entity budget independent so nodes no longer starve one another.
 #[derive(Debug, Default)]
 pub struct RateLimiter {
-    last: HashMap<EntityKind, Duration>,
+    last: HashMap<(String, EntityKind), Duration>,
 }
 
 impl RateLimiter {
-    /// Build a fresh limiter with no per-entity history.
+    /// Build a fresh limiter with no per-`(node, entity)` history.
     pub fn new() -> Self {
         Self { last: HashMap::new() }
     }
 
-    /// Decide whether a sample for `entity` is allowed to publish at
-    /// `now`, given the configured `rates`. Returns true to publish
-    /// (and updates last-emitted state); false to drop.
-    pub fn allow(&mut self, entity: EntityKind, now: Duration, rates: &PublishRates) -> bool {
+    /// Decide whether a sample for `entity` on node `node_id` is allowed to
+    /// publish at `now`, given the configured `rates`. Returns true to publish
+    /// (and updates last-emitted state); false to drop. Each node's budget for
+    /// an entity is independent of every other node's (ADR-297).
+    pub fn allow(
+        &mut self,
+        node_id: &str,
+        entity: EntityKind,
+        now: Duration,
+        rates: &PublishRates,
+    ) -> bool {
         let min_gap = match rate_hz_for(entity, rates) {
             // Zero / negative Hz → emit only on change (caller path).
             // Here we treat it as "always allow" because the caller is
@@ -83,13 +97,15 @@ impl RateLimiter {
             rate if rate <= 0.0 => return true,
             rate => Duration::from_secs_f64(1.0 / rate),
         };
-        match self.last.get(&entity) {
-            Some(&prev) if now.saturating_sub(prev) < min_gap => false,
-            _ => {
-                self.last.insert(entity, now);
-                true
+        // Borrow the key without allocating on the hot lookup path; only
+        // allocate the owned `String` when inserting a new node/entity slot.
+        if let Some(&prev) = self.last.get(&(node_id.to_string(), entity)) {
+            if now.saturating_sub(prev) < min_gap {
+                return false;
             }
         }
+        self.last.insert((node_id.to_string(), entity), now);
+        true
     }
 
     /// Reset all per-entity history. Used after a reconnect so the first
@@ -352,10 +368,12 @@ mod tests {
 
     // ─── Rate limiter ────────────────────────────────────────────────
 
+    const NODE: &str = "node-a";
+
     #[test]
     fn rate_limiter_first_sample_always_passes() {
         let mut rl = RateLimiter::new();
-        assert!(rl.allow(EntityKind::HeartRate, Duration::ZERO, &rates()));
+        assert!(rl.allow(NODE, EntityKind::HeartRate, Duration::ZERO, &rates()));
     }
 
     #[test]
@@ -363,27 +381,27 @@ mod tests {
         let mut rl = RateLimiter::new();
         let r = rates();
         // 0.2 Hz → 5 s gap.
-        assert!(rl.allow(EntityKind::HeartRate, Duration::from_secs(0), &r));
-        assert!(!rl.allow(EntityKind::HeartRate, Duration::from_secs(1), &r));
-        assert!(!rl.allow(EntityKind::HeartRate, Duration::from_secs(4), &r));
+        assert!(rl.allow(NODE, EntityKind::HeartRate, Duration::from_secs(0), &r));
+        assert!(!rl.allow(NODE, EntityKind::HeartRate, Duration::from_secs(1), &r));
+        assert!(!rl.allow(NODE, EntityKind::HeartRate, Duration::from_secs(4), &r));
     }
 
     #[test]
     fn rate_limiter_allows_after_gap() {
         let mut rl = RateLimiter::new();
         let r = rates();
-        assert!(rl.allow(EntityKind::HeartRate, Duration::from_secs(0), &r));
+        assert!(rl.allow(NODE, EntityKind::HeartRate, Duration::from_secs(0), &r));
         // 5 s gap met → allow.
-        assert!(rl.allow(EntityKind::HeartRate, Duration::from_secs(5), &r));
+        assert!(rl.allow(NODE, EntityKind::HeartRate, Duration::from_secs(5), &r));
     }
 
     #[test]
     fn rate_limiter_per_entity_independent() {
         let mut rl = RateLimiter::new();
         let r = rates();
-        assert!(rl.allow(EntityKind::HeartRate, Duration::from_secs(0), &r));
+        assert!(rl.allow(NODE, EntityKind::HeartRate, Duration::from_secs(0), &r));
         // Different entity, same instant → independent budget.
-        assert!(rl.allow(EntityKind::MotionLevel, Duration::from_secs(0), &r));
+        assert!(rl.allow(NODE, EntityKind::MotionLevel, Duration::from_secs(0), &r));
     }
 
     #[test]
@@ -392,7 +410,7 @@ mod tests {
         let r = rates();
         // Presence is change-only → rate=0 → unlimited; caller does change detection.
         for s in 0..3 {
-            assert!(rl.allow(EntityKind::Presence, Duration::from_secs(s), &r));
+            assert!(rl.allow(NODE, EntityKind::Presence, Duration::from_secs(s), &r));
         }
     }
 
@@ -400,11 +418,27 @@ mod tests {
     fn rate_limiter_reset_re_enables_immediate_publish() {
         let mut rl = RateLimiter::new();
         let r = rates();
-        assert!(rl.allow(EntityKind::HeartRate, Duration::from_secs(0), &r));
-        assert!(!rl.allow(EntityKind::HeartRate, Duration::from_secs(1), &r));
+        assert!(rl.allow(NODE, EntityKind::HeartRate, Duration::from_secs(0), &r));
+        assert!(!rl.allow(NODE, EntityKind::HeartRate, Duration::from_secs(1), &r));
         rl.reset();
         // Post-reset: first sample passes.
-        assert!(rl.allow(EntityKind::HeartRate, Duration::from_secs(1), &r));
+        assert!(rl.allow(NODE, EntityKind::HeartRate, Duration::from_secs(1), &r));
+    }
+
+    #[test]
+    fn rate_limiter_nodes_do_not_starve_each_other() {
+        // ADR-297 (issue #1541): with an entity-only key, node-a consuming the
+        // slot suppressed node-b. Keyed by (node, entity), both publish.
+        let mut rl = RateLimiter::new();
+        let r = rates();
+        assert!(rl.allow("node-a", EntityKind::PersonCount, Duration::from_secs(0), &r));
+        assert!(
+            rl.allow("node-b", EntityKind::PersonCount, Duration::from_secs(0), &r),
+            "second node must not be starved by the first"
+        );
+        // Each node still rate-limits itself.
+        assert!(!rl.allow("node-a", EntityKind::PersonCount, Duration::from_millis(100), &r));
+        assert!(!rl.allow("node-b", EntityKind::PersonCount, Duration::from_millis(100), &r));
     }
 
     // ─── Boolean / binary_sensor encoder ─────────────────────────────

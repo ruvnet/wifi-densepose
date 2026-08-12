@@ -1,0 +1,50 @@
+{
+  "name": "wifi-densepose-privshield-harness",
+  "version": "0.1.0",
+  "description": "Harness for wifi-densepose-privshield (WiFi Veil — compliant-waveform WiFi-sensing privacy shield, ADR-288/289)",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "wifi-densepose-privshield-harness": "bin/cli.js"
+  },
+  "files": [
+    "bin/**",
+    "dist/**",
+    "src/**",
+    "tsconfig.json",
+    ".claude/**",
+    ".claude-plugin/**",
+    "CLAUDE.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "init": "node ./bin/cli.js init",
+    "doctor": "node ./bin/cli.js doctor",
+    "guidance": "node ./bin/cli.js guidance",
+    "evolve": "metaharness-darwin evolve . --sandbox real --generations 3 --children 4",
+    "evolve:dry": "metaharness-darwin evolve . --sandbox mock --generations 2 --children 3",
+    "route": "npm run build && node ./bin/cli.js route",
+    "flywheel:dry": "npm run build && node ./bin/cli.js flywheel 3"
+  },
+  "dependencies": {
+    "@metaharness/kernel": "^0.1.0",
+    "@metaharness/host-claude-code": "^0.1.0",
+    "@metaharness/router": "^0.3.2",
+    "@metaharness/flywheel": "^0.1.7"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^3.0.0",
+    "@metaharness/darwin": "^0.2.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

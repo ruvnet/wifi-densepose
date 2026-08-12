@@ -320,11 +320,14 @@ class SensingService {
 
     try {
       const status = await apiService.get('/api/v1/status');
-      if (isCurrent()) this._applyServerSource(status?.source);
+      if (isCurrent()) {
+        this._applyServerSource(status?.source, status?.source_state);
+      }
     } catch {
-      // A failed or unauthorised probe cannot confirm attached hardware.
-      // Stay fail-safe until a later frame supplies an explicit source, but
-      // never overwrite a source frame that arrived while the probe awaited.
+      // ADR-295 (issue #1526): a failed or unauthorised probe cannot confirm
+      // attached hardware. Stay fail-safe until a later frame supplies an
+      // explicit source, but never overwrite a source frame that arrived
+      // while the authenticated API request awaited.
       if (isCurrent()) {
         this._serverSource = null;
         this._setDataSource('server-simulated');
@@ -333,10 +336,23 @@ class SensingService {
   }
 
   /**
-   * Map a raw server source string to the UI data-source label.
+   * Map a raw server source string (and optional canonical ADR-295
+   * `source_state`) to the UI data-source label.
    */
-  _applyServerSource(rawSource) {
+  _applyServerSource(rawSource, sourceState) {
     this._serverSource = rawSource;
+    // ADR-295: only the verified/unverified live states may show "live"; any
+    // synthetic/stale/disconnected state must not.
+    if (sourceState) {
+      if (sourceState === 'live_verified' || sourceState === 'live_unverified') {
+        this._setDataSource('live');
+      } else if (sourceState === 'synthetic') {
+        this._setDataSource('server-simulated');
+      } else {
+        this._setDataSource('server-simulated');
+      }
+      return;
+    }
     if (rawSource === 'esp32' || rawSource === 'wifi' || rawSource === 'live') {
       this._setDataSource('live');
     } else if (rawSource === 'simulated' || rawSource === 'simulate') {

@@ -55,11 +55,15 @@ export class CsiSimulator {
         this.ws = new WebSocket(url);
         this.ws.binaryType = 'arraybuffer';
         this.ws.onmessage = (evt) => this._handleLiveFrame(evt.data);
-        this.ws.onopen = () => { this.mode = 'live'; resolve(true); };
+        // ADR-295 (issue #1557): a socket that merely *opened* is NOT live —
+        // synthetic demo data keeps flowing until a real frame is decoded. We
+        // stay in demo mode (watermarked) on open; `_handleLiveFrame` flips to
+        // live only once it has parsed a verified frame.
+        this.ws.onopen = () => { this.socketOpen = true; resolve(true); };
         this.ws.onerror = () => resolve(false);
-        this.ws.onclose = () => { this.mode = 'demo'; };
+        this.ws.onclose = () => { this.mode = 'demo'; this.verifiedFrame = false; this.socketOpen = false; };
         // Timeout after 3s
-        setTimeout(() => { if (this.mode !== 'live') resolve(false); }, 3000);
+        setTimeout(() => { if (!this.socketOpen) resolve(false); }, 3000);
       } catch {
         resolve(false);
       }
@@ -69,9 +73,12 @@ export class CsiSimulator {
   disconnect() {
     if (this.ws) { this.ws.close(); this.ws = null; }
     this.mode = 'demo';
+    this.verifiedFrame = false;
+    this.socketOpen = false;
   }
 
-  get isLive() { return this.mode === 'live'; }
+  /** True only once a real frame has been decoded — not merely on socket open. */
+  get isLive() { return this.mode === 'live' && this.verifiedFrame === true; }
 
   /**
    * Update person state from video detection (for correlated demo data).
@@ -292,6 +299,15 @@ export class CsiSimulator {
       this._liveAmplitude[i] = Math.sqrt(real * real + imag * imag) / 2048;
       this._livePhase[i] = Math.atan2(imag, real);
     }
+    // ADR-295 (issue #1557): a real frame was decoded — only now is this live.
+    this._markVerifiedFrame();
+  }
+
+  /** ADR-295: promote from watermarked demo to live once a real frame lands. */
+  _markVerifiedFrame() {
+    this.verifiedFrame = true;
+    this.mode = 'live';
+    if (typeof this.onVerifiedFrame === 'function') this.onVerifiedFrame();
   }
 
   _handleJsonFrame(msg) {
@@ -311,6 +327,8 @@ export class CsiSimulator {
       for (let i = 0; i < n; i++) {
         this._liveAmplitude[i] = Math.abs(ampArr[i]) * scale;
       }
+      // ADR-295 (issue #1557): a real frame carrying amplitude was decoded.
+      this._markVerifiedFrame();
     }
 
     // Phase from node (if available)

@@ -51,7 +51,7 @@ test('status probe uses the configured bearer and applies the server source', as
   fetchImpl = async () => ({
     ok: true,
     status: 200,
-    json: async () => ({ source: 'simulated' }),
+    json: async () => ({ source: 'simulated', source_state: 'synthetic' }),
   });
 
   await sensingService._detectServerSource();
@@ -63,6 +63,20 @@ test('status probe uses the configured bearer and applies the server source', as
   assert.equal(init.headers.Authorization, 'Bearer status-probe-token');
   assert.equal(sensingService.dataSource, 'server-simulated');
   assert.equal(sensingService.serverSource, 'simulated');
+});
+
+test('canonical source state prevents a stale hardware label from claiming live', async () => {
+  fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ source: 'esp32:offline', source_state: 'disconnected' }),
+  });
+
+  sensingService._dataSource = 'live';
+  await sensingService._detectServerSource();
+
+  assert.equal(sensingService.dataSource, 'server-simulated');
+  assert.equal(sensingService.serverSource, 'esp32:offline');
 });
 
 test('an unauthorised status probe never claims live hardware', async () => {

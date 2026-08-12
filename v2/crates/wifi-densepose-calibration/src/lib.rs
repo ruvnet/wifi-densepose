@@ -23,6 +23,7 @@
 
 pub mod anchor;
 pub mod bank;
+pub mod certificate;
 pub mod enrollment;
 pub mod error;
 pub mod extract;
@@ -34,6 +35,11 @@ pub mod specialist;
 
 pub use anchor::{Anchor, AnchorLabel, AnchorQuality, EnrollmentEvent, EnrollmentSession, Posture};
 pub use bank::SpecialistBank;
+pub use certificate::{
+    CalibrationCertificate, CalibrationTier, CertificateSignature, CertificateSigner,
+    CertificateStatus, CertificateVerifier, CharacterizationSource, CompatibilityEnvelope,
+    EvidenceLevel, FingerprintDistance, KeyedHashSigner, MintParams, RoomFingerprint,
+};
 pub use enrollment::{AnchorQualityGate, AnchorRecorder};
 pub use error::{CalibrationError, Result};
 pub use extract::AnchorFeature;

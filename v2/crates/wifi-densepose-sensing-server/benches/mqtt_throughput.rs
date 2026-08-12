@@ -136,6 +136,7 @@ fn bench_rate_limit(c: &mut Criterion) {
             RateLimiter::new,
             |mut rl| {
                 black_box(rl.allow(
+                    black_box("bench-node"),
                     black_box(EntityKind::HeartRate),
                     Duration::from_secs(0),
                     &r,
@@ -148,11 +149,12 @@ fn bench_rate_limit(c: &mut Criterion) {
         bench.iter_batched(
             || {
                 let mut rl = RateLimiter::new();
-                rl.allow(EntityKind::HeartRate, Duration::from_secs(0), &r);
+                rl.allow("bench-node", EntityKind::HeartRate, Duration::from_secs(0), &r);
                 rl
             },
             |mut rl| {
                 black_box(rl.allow(
+                    black_box("bench-node"),
                     black_box(EntityKind::HeartRate),
                     Duration::from_secs(1),
                     &r,
