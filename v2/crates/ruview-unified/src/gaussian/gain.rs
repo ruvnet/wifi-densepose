@@ -10,9 +10,13 @@
 //!
 //! where `I_g = ∫₀ᴸ exp(-½·q_g(o + t·u)) dt` is the closed-form line
 //! integral of Gaussian `g`'s unnormalized density along the TX→RX segment
-//! (a 1-D Gaussian integral, evaluated with `erf`). Two exactness anchors
-//! make this testable: an **empty map returns exact Friis**, and adding an
-//! absorber strictly, monotonically reduces gain.
+//! (a 1-D Gaussian integral, evaluated with `erf`). Three anchors make this
+//! testable, each scoped to what it actually exercises: an **empty map
+//! returns exact Friis** (baseline only — with no Gaussians the
+//! Beer–Lambert path never runs), the **closed-form line integral matches
+//! numeric quadrature**, and the **occluded gain through [`channel_gain`]
+//! matches Friis × Beer–Lambert with quadrature integrals** (the erf path
+//! validated end-to-end through the public API).
 
 use num_complex::Complex64;
 
@@ -179,6 +183,11 @@ mod tests {
         Provenance { device_id: "gain-test".into(), model_version: 1, synthetic: true }
     }
 
+    /// Scope: free-space baseline ONLY. With no Gaussians, `optical_depth`
+    /// short-circuits to `τ = 0` before `line_integral`/`erf` ever runs, so
+    /// this pins the Friis amplitude and propagation phase and nothing else.
+    /// The Beer–Lambert/erf path is validated end-to-end by
+    /// `occluded_channel_gain_matches_beer_lambert_quadrature` below.
     #[test]
     fn empty_map_returns_exact_friis() {
         let map = GaussianMap::new(1.0);
@@ -193,6 +202,81 @@ mod tests {
         // Compare phasors (phase is only defined mod 2π).
         let diff = (h / Complex64::from_polar(expected_amp, expected_phase)) - 1.0;
         assert!(diff.norm() < 1e-9, "propagation phase must match");
+    }
+
+    /// The erf/Beer–Lambert claim, validated through the public API: with
+    /// matter on the path, `|H|` from [`channel_gain`] must equal
+    /// `Friis · exp(-Σ_g occ_g·I_g)` where every `I_g` is recomputed here by
+    /// trapezoid quadrature — never by the closed form under test. Uses two
+    /// anisotropic, rotated Gaussians at different perpendicular offsets so
+    /// the exercised integrals are not degenerate symmetric cases.
+    #[test]
+    fn occluded_channel_gain_matches_beer_lambert_quadrature() {
+        let f = 5.18e9;
+        let tx = [0.0, 0.0, 1.0];
+        let rx = [6.0, 0.0, 1.0];
+        let gaussians = [
+            // On the line of sight, anisotropic and rotated.
+            RfGaussian::new(
+                [2.5, 0.0, 1.0],
+                [0.5, 0.8, 0.3],
+                [0.9, 0.1, 0.2, 0.1],
+                1.3,
+                0.9,
+                0,
+                300.0,
+                prov(),
+            )
+            .expect("valid"),
+            // Half a metre off the line of sight: partial occlusion.
+            RfGaussian::new(
+                [4.0, 0.5, 1.2],
+                [0.4, 0.6, 0.5],
+                [0.8, -0.3, 0.1, 0.2],
+                0.7,
+                0.9,
+                0,
+                300.0,
+                prov(),
+            )
+            .expect("valid"),
+        ];
+
+        // Ground-truth optical depth by quadrature over each density,
+        // computed before the map ever sees the Gaussians.
+        let len = 6.0;
+        let u = [1.0, 0.0, 0.0];
+        let n = 6000;
+        let mut tau_quad = 0.0;
+        for g in &gaussians {
+            let mut acc = 0.0;
+            for i in 0..=n {
+                let t = len * i as f64 / n as f64;
+                let w = if i == 0 || i == n { 0.5 } else { 1.0 };
+                acc += w * g.density_at([tx[0] + t * u[0], tx[1] + t * u[1], tx[2] + t * u[2]]);
+            }
+            tau_quad += g.occupancy * acc * len / n as f64;
+        }
+
+        let mut map = GaussianMap::new(1.0);
+        for g in gaussians {
+            map.insert(g);
+        }
+        assert!(tau_quad > 0.3, "test must exercise real attenuation, τ = {tau_quad}");
+
+        let lambda = C / f;
+        let friis = lambda / (4.0 * std::f64::consts::PI * len);
+        let expected = friis * (-tau_quad).exp();
+        let h = channel_gain(&map, tx, rx, f);
+        // Tolerance is set by the 1 mm trapezoid truncation error of the
+        // reference integrals (same budget as
+        // `line_integral_matches_numeric_quadrature`), not by the closed
+        // form: agreement to 1 ppm through the public API.
+        assert!(
+            (h.norm() - expected).abs() < 1e-6 * expected,
+            "|H| = {} must match Friis·exp(-τ_quad) = {expected}",
+            h.norm()
+        );
     }
 
     #[test]
@@ -277,8 +361,15 @@ mod tests {
         );
     }
 
+    /// Scope: single-scalar convergence ONLY. The 20 iterations are 20
+    /// repeats of the *same* measurement on the *same* link, and
+    /// `τ = occ·I` is exactly linear in the one spawned Gaussian's
+    /// occupancy, so this verifies that the damped-Newton `observe_link`
+    /// update converges one scalar unknown geometrically — nothing about
+    /// learning from diverse observations. That stronger scenario is
+    /// covered by `interleaved_links_resolve_distinct_absorbers` below.
     #[test]
-    fn inverse_update_learns_a_wall_from_link_residuals() {
+    fn inverse_update_converges_one_scalar_from_a_repeated_link() {
         let f = 2.437e9;
         let tx = [0.0, 0.0, 1.0];
         let rx = [6.0, 0.0, 1.0];
@@ -302,6 +393,132 @@ mod tests {
         assert!(
             (predicted_db - measured_db).abs() < 0.5,
             "map prediction {predicted_db:.2} dB must match measurement {measured_db:.2} dB"
+        );
+    }
+
+    /// Learning from genuinely diverse observations: two hidden absorbers
+    /// with different optical depths, observed through three interleaved
+    /// links — one crossing only the first absorber, one crossing only the
+    /// second, and a coupled link crossing *both*. The coupled link is
+    /// observed FIRST, so its greedy midpoint spawn creates a structurally
+    /// wrong third absorber between the true two; the interleaved updates
+    /// must then jointly drain that blob to zero occupancy while the two
+    /// real unknowns converge to the hidden truth. This is the multi-
+    /// measurement, multi-unknown scenario the single-link test above
+    /// deliberately does not claim.
+    #[test]
+    fn interleaved_links_resolve_distinct_absorbers() {
+        let f = 2.437e9;
+        // Truth absorbers sit exactly at the midpoints of links A and B with
+        // the same σ = 0.3 the spawner uses, so the truth is representable
+        // and the joint system is consistent — what is under test is whether
+        // interleaved coupled updates actually find it from a wrong start.
+        let g1_pos = [3.0, 0.0, 1.0];
+        let g2_pos = [3.0, 3.0, 1.0];
+        let (occ1, occ2) = (1.2, 0.45); // genuinely different unknowns
+        let mut truth = GaussianMap::new(1.0);
+        for (pos, occ) in [(g1_pos, occ1), (g2_pos, occ2)] {
+            truth.insert(
+                RfGaussian::new(pos, [0.3, 0.3, 0.3], [1.0, 0.0, 0.0, 0.0], occ, 0.9, 0, 300.0, prov())
+                    .expect("valid"),
+            );
+        }
+
+        // Link C runs through both centres (the x = 3 vertical), coupling
+        // the two unknowns; link A crosses only G1, link B only G2.
+        let link_c = ([3.0, -1.5, 1.0], [3.0, 4.5, 1.0]);
+        let link_a = ([0.0, 0.0, 1.0], [6.0, 0.0, 1.0]);
+        let link_b = ([0.0, 3.0, 1.0], [6.0, 3.0, 1.0]);
+        let links = [link_c, link_a, link_b];
+        let measured: Vec<f64> =
+            links.iter().map(|(tx, rx)| channel_gain(&truth, *tx, *rx, f).norm()).collect();
+
+        // The two single-absorber links must present distinct attenuations,
+        // otherwise "different unknowns" is not actually being tested.
+        let db = |amp: f64| 20.0 * amp.log10();
+        let clean_db = |tx: [f64; 3], rx: [f64; 3]| gain_db(&GaussianMap::new(1.0), tx, rx, f);
+        let atten_a = clean_db(link_a.0, link_a.1) - db(measured[1]);
+        let atten_b = clean_db(link_b.0, link_b.1) - db(measured[2]);
+        assert!(
+            atten_a > 2.0 * atten_b,
+            "truth attenuations must differ: A {atten_a:.2} dB vs B {atten_b:.2} dB"
+        );
+
+        let mut learner = GaussianMap::new(1.0);
+        let mut residuals = [f64::INFINITY; 3];
+        for round in 0..40u64 {
+            for (i, (tx, rx)) in links.iter().enumerate() {
+                residuals[i] = observe_link(
+                    &mut learner,
+                    *tx,
+                    *rx,
+                    f,
+                    measured[i],
+                    0.7,
+                    round * links.len() as u64 + i as u64,
+                );
+            }
+            if round == 0 {
+                // The wrong structure must actually have been created —
+                // otherwise this test degenerates to three independent
+                // single-scalar problems.
+                assert!(
+                    learner
+                        .gaussians()
+                        .iter()
+                        .any(|g| (g.position[1] - 1.5).abs() < 1e-9 && g.occupancy > 0.5),
+                    "coupled link must first spawn a (wrong) midpoint absorber"
+                );
+            }
+        }
+
+        // Every link's measurement must be explained simultaneously.
+        for (i, r) in residuals.iter().enumerate() {
+            assert!(
+                r.abs() < 0.06,
+                "link {i} residual must converge below 0.06 nepers, got {r}"
+            );
+        }
+        for (i, (tx, rx)) in links.iter().enumerate() {
+            let predicted_db = gain_db(&learner, *tx, *rx, f);
+            let measured_db = db(measured[i]);
+            assert!(
+                (predicted_db - measured_db).abs() < 0.5,
+                "link {i}: prediction {predicted_db:.2} dB vs measurement {measured_db:.2} dB"
+            );
+        }
+
+        // Structure, not just per-link fit: the wrong blob at C's midpoint
+        // must have been drained to (near) zero, and the two real absorbers
+        // must carry occupancies close to the hidden truth — distinct
+        // unknowns genuinely resolved, not one smeared explanation.
+        assert_eq!(learner.gaussians().len(), 3, "C-blob + two real absorbers expected");
+        let occupancy_near = |pos: [f64; 3]| {
+            learner
+                .gaussians()
+                .iter()
+                .find(|g| {
+                    (0..3).map(|k| (g.position[k] - pos[k]).powi(2)).sum::<f64>().sqrt() < 1e-9
+                })
+                .map(|g| g.occupancy)
+        };
+        let blob = occupancy_near([3.0, 1.5, 1.0]).expect("blob spawned at C midpoint");
+        assert!(blob < 0.05, "wrong midpoint blob must drain to ~0, still at {blob}");
+        for (pos, occ) in [(g1_pos, occ1), (g2_pos, occ2)] {
+            let recovered = occupancy_near(pos).expect("absorber spawned at truth position");
+            assert!(
+                (recovered - occ).abs() < 0.15 * occ,
+                "recovered occupancy {recovered} must be within 15 % of truth {occ}"
+            );
+        }
+
+        // Locality: a link far from both absorbers stays at clean Friis.
+        let (tx_d, rx_d) = ([0.0, -3.0, 1.0], [6.0, -3.0, 1.0]);
+        let clean = clean_db(tx_d, rx_d);
+        let with_learned = gain_db(&learner, tx_d, rx_d, f);
+        assert!(
+            (clean - with_learned).abs() < 1e-6,
+            "learning must not smear absorption onto untouched links: {clean} vs {with_learned}"
         );
     }
 }

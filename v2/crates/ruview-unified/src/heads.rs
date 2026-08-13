@@ -390,8 +390,12 @@ impl PoseOutput {
 /// environment-invariant content representation (so it cannot learn
 /// room-specific position shortcuts), while the **root localization**
 /// branch reads the geometry-conditioned representation (where sensor
-/// pose is signal). This is the anti-leakage factorization measured in
-/// `tests::factorized_pose_resists_room_shortcut_leakage`.
+/// pose is signal). The head's algebra is checked on hand-built
+/// representations in
+/// `tests::factorized_pose_head_algebra_resists_hand_built_room_feature`;
+/// the end-to-end property — through the real synthetic-CSI → tokenizer →
+/// [`crate::encoder::RfEncoder`] pipeline — is measured in
+/// `tests/pose_shortcut_e2e.rs`.
 #[derive(Debug, Clone)]
 pub struct FactorizedPoseHead {
     /// Relative-skeleton regressor on the content representation.
@@ -561,14 +565,20 @@ mod tests {
         );
     }
 
-    /// The RePos leakage experiment: in the training rooms, room position
-    /// correlates with body scale (small people in room A, tall in room B).
-    /// A monolithic absolute-pose head exploits the room feature as a
-    /// shortcut and collapses in an unseen room that breaks the
-    /// correlation; the factorized head's skeleton branch never sees room
-    /// features and generalizes.
+    /// The RePos leakage setup on HAND-BUILT representations: `content` and
+    /// `full` are 2- and 3-dim vectors constructed by this test, so the
+    /// anti-leakage property (room feature excluded from `content`) is true
+    /// by construction, not learned. What this verifies is therefore the
+    /// *head's algebra*: given representations with that separation, the
+    /// factorized branches fit and compose correctly while a monolithic
+    /// absolute-pose regressor on the room-conditioned input exploits the
+    /// train-time scale↔room correlation and collapses when it breaks.
+    /// The end-to-end claim — the same property through the real
+    /// synthetic-CSI → tokenizer → `RfEncoder::encode_content`/`encode`
+    /// pipeline, where nothing is baked in — is measured separately in
+    /// `tests/pose_shortcut_e2e.rs`.
     #[test]
-    fn factorized_pose_resists_room_shortcut_leakage() {
+    fn factorized_pose_head_algebra_resists_hand_built_room_feature() {
         use crate::eval::mpjpe;
 
         // 17 fixed joint directions (deterministic).
