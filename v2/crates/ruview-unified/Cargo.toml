@@ -36,6 +36,11 @@ proptest = { workspace = true }
 # `esp32_live_hardware_test` example. Does not affect the published dependency
 # graph — the crate's real dependency stays thin-dependency (see above).
 wifi-densepose-hardware = { workspace = true }
+# Dev-only: lets integration tests (`tests/pose_shortcut_e2e.rs`) assemble
+# canonical `RfTensor`s from physics-synthesized CSI. Same versions the crate
+# itself uses; the published dependency graph is unchanged.
+ndarray = { workspace = true }
+num-complex = { workspace = true }
 
 [[bench]]
 name = "unified_bench"

@@ -49,11 +49,12 @@ with `I_g` the **closed-form** line integral of each Gaussian's density along th
 
 **Exactness anchors (MEASURED-CODE):**
 
-- Empty map ⇒ **exact Friis** amplitude (< 1e-15) and propagation phase (`empty_map_returns_exact_friis`).
+- Empty map ⇒ **exact Friis** amplitude (< 1e-15) and propagation phase (`empty_map_returns_exact_friis`). Free-space baseline only: with no Gaussians the Beer–Lambert/erf path never runs (#1438 item 2).
 - Closed-form line integral matches 1 mm trapezoid quadrature through a rotated anisotropic Gaussian to < 1e-6 (`line_integral_matches_numeric_quadrature`).
+- Occluded `channel_gain` through two rotated anisotropic absorbers matches Friis × Beer–Lambert with independently quadratured integrals to < 1 ppm — the erf path validated end-to-end through the public API (`occluded_channel_gain_matches_beer_lambert_quadrature`).
 - On-path absorber attenuates strictly monotonically in occupancy; a 10σ off-path absorber changes LoS gain < 1e-6 dB.
 
-**Inverse update** (`observe_link`) — the incremental-mapping move: measured link amplitude → target optical depth `τ* = ln(friis/measured)`; a projected-gradient step distributes the residual over intersected Gaussians proportional to their path integrals (exact Newton along the link at lr = 1), clamped at occupancy ≥ 0; if nothing intersects and attenuation is demanded, a compact absorber is spawned at the midpoint sized to close the residual. **Measured**: from an empty map, 20 observations of a link with an unseen 0.7-neper (≈6.1 dB) obstruction converge to < 0.06 neper residual and < 0.5 dB prediction error (`inverse_update_learns_a_wall_from_link_residuals`).
+**Inverse update** (`observe_link`) — the incremental-mapping move: measured link amplitude → target optical depth `τ* = ln(friis/measured)`; a projected-gradient step distributes the residual over intersected Gaussians proportional to their path integrals (exact Newton along the link at lr = 1), clamped at occupancy ≥ 0; if nothing intersects and attenuation is demanded, a compact absorber is spawned at the midpoint sized to close the residual. **Measured**, at two levels of claim (#1438 item 3): (a) single-scalar convergence — 20 repeats of *one* measurement of a link with an unseen 0.7-neper (≈6.1 dB) obstruction converge the one spawned occupancy to < 0.06 neper residual and < 0.5 dB prediction error (`inverse_update_converges_one_scalar_from_a_repeated_link`); (b) genuinely diverse observations — two hidden absorbers with 2×-different depths observed through three interleaved links, one crossing both, where the coupled link's greedy first spawn is structurally wrong and must be drained to ~0 by the joint updates: every link converges < 0.06 neper and < 0.5 dB, and both occupancies are recovered within 15 % of the hidden truth (`interleaved_links_resolve_distinct_absorbers`).
 
 ## 5. Decision — task-gated scene graph
 
