@@ -36,6 +36,7 @@ safetensors = "0.4"
 # wifi-densepose-train re-exports the model types we need; depend by path
 # inside the workspace.
 wifi-densepose-train = { version = "0.3.1", path = "../wifi-densepose-train", default-features = false }
+wifi-densepose-core = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 tempfile = "3"

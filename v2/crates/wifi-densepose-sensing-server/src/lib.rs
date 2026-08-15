@@ -23,6 +23,8 @@ pub mod matter;
 pub mod model_format;
 pub mod mqtt;
 pub mod path_safety;
+/// ADR-323: fail-closed pose physics integration and raw/refined view selection.
+pub mod pose_physics;
 /// ADR-295: canonical source-provenance state machine (synthetic can never
 /// present as live).
 pub mod provenance;

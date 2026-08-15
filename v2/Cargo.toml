@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/wifi-densepose-core",
+    "crates/wifi-densepose-physics", # ADR-323 bounded pose assessment/correction
     "crates/wifi-densepose-signal",
     "crates/wifi-densepose-nn",
     # wifi-densepose-api / -db / -config: removed in #578.
@@ -155,6 +156,16 @@ serde_yaml = "0.9"
 tokio = { version = "1.35", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+nalgebra = "0.34"
+smallvec = "1.15"
+bitflags = "2.9"
+rapier3d = { version = "0.33", default-features = false, features = ["std", "dim3", "f32"] }
+burn-core = { version = "0.21", default-features = false, features = ["std"] }
+burn-nn = { version = "0.21", default-features = false }
+burn-ndarray = { version = "0.21", default-features = false, features = ["std"] }
+burn-train = { version = "0.21", default-features = false }
+burn-wgpu = { version = "0.21", default-features = false, features = ["std"] }
+burn-cuda = { version = "0.21", default-features = false, features = ["std"] }
 
 # Signal processing
 ndarray = { version = "0.17", features = ["serde"] }
@@ -251,6 +262,7 @@ ruvector-gnn = { version = "2.2.0", default-features = false }
 
 # Internal crates
 wifi-densepose-core = { version = "0.3.0", path = "crates/wifi-densepose-core" }
+wifi-densepose-physics = { version = "0.1.0", path = "crates/wifi-densepose-physics" }
 wifi-densepose-signal = { version = "0.3.0", path = "crates/wifi-densepose-signal" }
 wifi-densepose-nn = { version = "0.3.0", path = "crates/wifi-densepose-nn" }
 wifi-densepose-api = { version = "0.3.0", path = "crates/wifi-densepose-api" }

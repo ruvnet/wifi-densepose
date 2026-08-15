@@ -20,6 +20,11 @@ use candle_core::{DType, Device, Tensor};
 use candle_nn::{Conv1d, Conv1dConfig, Linear, Module, VarBuilder};
 use std::path::Path;
 use std::sync::Arc;
+use wifi_densepose_core::{
+    CalibrationId, Coco17Joint, JointObservation, JointVisibility, ModelRef, PoseDimensionality,
+    PoseObservationV2, PoseTrustState, Probability, SourceProvenance, SpatialFrameRef,
+    SymmetricCovariance3, TrackId,
+};
 
 /// 56 subcarriers × 20 frames per CSI window — matches the format
 /// produced by `scripts/align-ground-truth.js` after #641.
@@ -50,9 +55,86 @@ pub struct PoseOutput {
     pub confidence: f32,
 }
 
+/// Process-owned provenance required to wrap the current two-dimensional
+/// observer output without claiming metric depth or calibrated uncertainty.
+#[derive(Debug, Clone)]
+pub struct ImageObservationContext {
+    pub timestamp_ns: u64,
+    pub sensor_epoch: u64,
+    pub sequence: u64,
+    pub model_id: String,
+    pub model_artifact_hash: [u8; 32],
+}
+
 impl PoseOutput {
     pub fn is_finite(&self) -> bool {
         self.keypoints.iter().all(|v| v.is_finite()) && self.confidence.is_finite()
+    }
+
+    /// Add the canonical ADR-323 contract while honestly retaining the
+    /// current observer's image-space and uncertainty limitations.
+    #[must_use]
+    pub fn to_image_observation(
+        &self,
+        context: ImageObservationContext,
+    ) -> Option<PoseObservationV2> {
+        if self.keypoints.len() != OUTPUT_KEYPOINTS * 2 || !self.is_finite() {
+            return None;
+        }
+        let confidence = Probability::new(self.confidence.clamp(0.0, 1.0)).ok()?;
+        let joints = core::array::from_fn(|index| JointObservation {
+            kind: Coco17Joint::ALL[index],
+            position_m: [self.keypoints[index * 2], self.keypoints[index * 2 + 1], 0.0],
+            // Zero only means no covariance estimate is supplied. The explicit
+            // `uncertainty_calibrated=false` gate prevents correction.
+            covariance_m2: SymmetricCovariance3 {
+                xx: 0.0,
+                xy: 0.0,
+                xz: 0.0,
+                yy: 0.0,
+                yz: 0.0,
+                zz: 0.0,
+            },
+            confidence,
+            visibility: if confidence == Probability::ZERO {
+                JointVisibility::Unknown
+            } else {
+                JointVisibility::Visible
+            },
+        });
+        let mut observation = PoseObservationV2 {
+            schema_version: wifi_densepose_core::POSE_OBSERVATION_SCHEMA_VERSION,
+            timestamp_ns: context.timestamp_ns,
+            sensor_epoch: context.sensor_epoch,
+            sequence: context.sequence,
+            track_id: TrackId("local:1".into()),
+            frame: SpatialFrameRef {
+                name: "normalized-image".into(),
+                version: 1,
+                metric: false,
+                right_handed: false,
+                z_up: false,
+            },
+            calibration_id: CalibrationId("image:uncalibrated".into()),
+            floor_plane: None,
+            model: ModelRef {
+                id: context.model_id,
+                artifact_hash: context.model_artifact_hash,
+            },
+            source: SourceProvenance {
+                sensor_id: "sensing-server:loopback".into(),
+                authenticated: false,
+                replay_protected: false,
+            },
+            trust_state: PoseTrustState::Degraded,
+            dimensionality: PoseDimensionality::Image2d,
+            uncertainty_calibrated: false,
+            joints,
+            observer_confidence: confidence,
+            canonical_hash: [0; 32],
+        };
+        observation.seal();
+        Some(observation)
     }
 }
 
@@ -185,6 +267,7 @@ impl PoseNet {
 pub struct InferenceEngine {
     inner: Option<Arc<LoadedModel>>,
     device: Device,
+    artifact_hash: [u8; 32],
 }
 
 struct LoadedModel {
@@ -227,6 +310,7 @@ impl InferenceEngine {
         adapter_path: Option<&Path>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let device = pick_device();
+        let artifact_hash = combined_artifact_hash(weights_path, adapter_path)?;
         let inner = match weights_path {
             Some(p) if p.exists() => {
                 // SAFETY: `from_mmaped_safetensors` mmaps the file for the
@@ -246,7 +330,11 @@ impl InferenceEngine {
             }
             _ => None,
         };
-        Ok(Self { inner, device })
+        Ok(Self {
+            inner,
+            device,
+            artifact_hash,
+        })
     }
 
     /// Whether a per-room calibration adapter is currently attached.
@@ -264,6 +352,13 @@ impl InferenceEngine {
             (Some(_), _) => "candle-cpu",
             (None, _) => "stub",
         }
+    }
+
+    /// SHA-256 identity of the base weights and optional adapter, or zero for
+    /// the explicit no-model stub.
+    #[must_use]
+    pub const fn artifact_hash(&self) -> [u8; 32] {
+        self.artifact_hash
     }
 
     pub fn infer(&self, window: &CsiWindow) -> Result<PoseOutput, Box<dyn std::error::Error>> {
@@ -334,6 +429,24 @@ fn pick_device() -> Device {
         return d;
     }
     Device::Cpu
+}
+
+fn combined_artifact_hash(
+    weights_path: Option<&Path>,
+    adapter_path: Option<&Path>,
+) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+    use sha2::{Digest, Sha256};
+    let Some(weights_path) = weights_path.filter(|path| path.exists()) else {
+        return Ok([0; 32]);
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(b"ruview.pose-observer-artifacts-v1\0");
+    hasher.update(std::fs::read(weights_path)?);
+    if let Some(adapter_path) = adapter_path.filter(|path| path.exists()) {
+        hasher.update(b"adapter\0");
+        hasher.update(std::fs::read(adapter_path)?);
+    }
+    Ok(hasher.finalize().into())
 }
 
 fn default_weights_path() -> Option<std::path::PathBuf> {
