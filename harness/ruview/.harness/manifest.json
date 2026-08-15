@@ -54,7 +54,7 @@
   },
   "filesDigest": "278e166323774f53215cb493818bdedff39ea0aab94cfaf6eeea216c90929e41",
   "brainDigest": "c0fb7b079ded157059b91601361429944697dae3cc42abc00dfe1a680986b0f4",
-  "gateFingerprint": "6e53c784eee38310188948fc75fb49e6b4ebc04e247d01b903fa8c8a92d67bdd",
+  "gateFingerprint": "06c79d85776260f1d36d1387760357c12410180faacb25f0d4850f2039ab2ea9",
   "developmentPins": {
     "@metaharness/darwin": "0.8.0",
     "@metaharness/flywheel": "0.1.7",

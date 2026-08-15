@@ -174,7 +174,7 @@ impl BreathingExtractor {
         self.consecutive_rejections = 0;
 
         let bpm = frequency_hz * 60.0;
-        let confidence = compute_confidence(history);
+        let confidence = compute_confidence(history, frequency_hz, self.sample_rate);
 
         let status = if confidence >= 0.7 {
             VitalStatus::Valid
@@ -288,27 +288,55 @@ fn count_zero_crossings(signal: &[f64]) -> usize {
     signal.windows(2).filter(|w| w[0] * w[1] < 0.0).count()
 }
 
-/// Compute confidence in the breathing estimate based on signal regularity.
-fn compute_confidence(history: &[f64]) -> f64 {
-    if history.len() < 4 {
+/// Compute confidence from normalized autocorrelation at the estimated period.
+///
+/// A periodic breathing signal should resemble itself one cycle later. This is
+/// intentionally different from crest factor (`peak / standard_deviation`),
+/// which describes waveform shape and can increase when broadband noise is
+/// added. The overlap is mean-centered and normalized independently so the
+/// score measures repeatability rather than amplitude.
+fn compute_confidence(history: &[f64], frequency_hz: f64, sample_rate: f64) -> f64 {
+    if history.len() < 4
+        || !frequency_hz.is_finite()
+        || frequency_hz <= 0.0
+        || !sample_rate.is_finite()
+        || sample_rate <= 0.0
+    {
         return 0.0;
     }
 
-    let n = history.len() as f64;
-    let mean: f64 = history.iter().sum::<f64>() / n;
-    let variance: f64 = history.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / n;
-
-    if variance < 1e-15 {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let period_samples = (sample_rate / frequency_hz).round() as usize;
+    if period_samples == 0 || period_samples >= history.len().saturating_sub(1) {
         return 0.0;
     }
 
-    let peak = history.iter().map(|x| x.abs()).fold(0.0_f64, f64::max);
-    let noise = variance.sqrt();
+    let overlap = history.len() - period_samples;
+    let (earlier, later) = (&history[..overlap], &history[period_samples..]);
+    let overlap_f64 = overlap as f64;
+    let earlier_mean = earlier.iter().sum::<f64>() / overlap_f64;
+    let later_mean = later.iter().sum::<f64>() / overlap_f64;
 
-    let snr = if noise > 1e-15 { peak / noise } else { 0.0 };
+    let mut covariance = 0.0;
+    let mut earlier_energy = 0.0;
+    let mut later_energy = 0.0;
+    for (&x, &y) in earlier.iter().zip(later) {
+        let centered_x = x - earlier_mean;
+        let centered_y = y - later_mean;
+        covariance += centered_x * centered_y;
+        earlier_energy += centered_x * centered_x;
+        later_energy += centered_y * centered_y;
+    }
 
-    // Map SNR to [0, 1] confidence
-    (snr / 5.0).min(1.0)
+    let denominator = (earlier_energy * later_energy).sqrt();
+    if denominator < 1e-15 {
+        return 0.0;
+    }
+
+    let regularity = (covariance / denominator).clamp(0.0, 1.0);
+    let observed_cycles = history.len() as f64 / period_samples as f64;
+    let cycle_coverage = (observed_cycles - 1.0).clamp(0.0, 1.0);
+    (regularity * cycle_coverage).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
@@ -349,22 +377,32 @@ mod tests {
         let breathing_freq = 0.25; // 15 BPM
 
         // Generate 60 seconds of sinusoidal breathing signal
+        let mut last_estimate = None;
         for i in 0..600 {
             let t = i as f64 / sample_rate;
             let signal = (2.0 * std::f64::consts::PI * breathing_freq * t).sin();
-            ext.extract(&[signal], &[1.0]);
+            if let Some(estimate) = ext.extract(&[signal], &[1.0]) {
+                last_estimate = Some(estimate);
+            }
         }
 
-        let result = ext.extract(&[0.0], &[1.0]);
-        if let Some(est) = result {
-            // Should be approximately 15 BPM (0.25 Hz * 60)
-            assert!(
-                est.value_bpm > 5.0 && est.value_bpm < 40.0,
-                "estimated BPM should be in breathing range: {}",
-                est.value_bpm,
-            );
-            assert!(est.confidence > 0.0, "confidence should be > 0");
-        }
+        let estimate = last_estimate.expect("clean in-band breathing must produce an estimate");
+        assert!(
+            (estimate.value_bpm - 15.0).abs() < 1.0,
+            "estimated BPM should be close to 15, got {}",
+            estimate.value_bpm,
+        );
+        assert_eq!(
+            estimate.status,
+            VitalStatus::Valid,
+            "clean periodic breathing must be Valid (confidence={})",
+            estimate.confidence,
+        );
+        assert!(
+            estimate.confidence >= 0.7,
+            "clean periodic breathing confidence must reach the Valid threshold: {}",
+            estimate.confidence,
+        );
     }
 
     #[test]
@@ -387,15 +425,46 @@ mod tests {
     #[test]
     fn confidence_zero_for_flat_signal() {
         let history = vec![0.0; 100];
-        let conf = compute_confidence(&history);
+        let conf = compute_confidence(&history, 0.25, 10.0);
         assert!((conf - 0.0).abs() < f64::EPSILON);
     }
 
     #[test]
     fn confidence_positive_for_oscillating_signal() {
-        let history: Vec<f64> = (0..100).map(|i| (i as f64 * 0.5).sin()).collect();
-        let conf = compute_confidence(&history);
+        let history: Vec<f64> = (0..100)
+            .map(|i| (2.0 * std::f64::consts::PI * 0.25 * i as f64 / 10.0).sin())
+            .collect();
+        let conf = compute_confidence(&history, 0.25, 10.0);
         assert!(conf > 0.0);
+    }
+
+    #[test]
+    fn clean_periodic_signal_confidence_outranks_noise() {
+        let clean: Vec<f64> = (0..600)
+            .map(|i| (2.0 * std::f64::consts::PI * 0.25 * i as f64 / 10.0).sin())
+            .collect();
+
+        let mut seed = 0x5eed_u64;
+        let noise: Vec<f64> = (0..600)
+            .map(|_| {
+                seed = seed
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                ((seed >> 33) as f64 / (1_u64 << 31) as f64) - 1.0
+            })
+            .collect();
+
+        let clean_confidence = compute_confidence(&clean, 0.25, 10.0);
+        let noise_confidence = compute_confidence(&noise, 0.25, 10.0);
+
+        assert!(
+            clean_confidence >= 0.7,
+            "clean periodic confidence must reach Valid: {clean_confidence}",
+        );
+        assert!(
+            clean_confidence > noise_confidence,
+            "clean periodic confidence ({clean_confidence}) must outrank noise ({noise_confidence})",
+        );
     }
 
     #[test]

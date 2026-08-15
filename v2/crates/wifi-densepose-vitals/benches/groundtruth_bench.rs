@@ -22,7 +22,7 @@ use wifi_densepose_vitals::groundtruth::{
 };
 
 /// Session length in seconds (one hour).
-const SESSION_SECS: usize = 3600;
+const SESSION_SECS: i64 = 3600;
 
 /// Known clock offset injected into the estimate series, milliseconds.
 const OFFSET_MS: i64 = 12_000;
@@ -44,7 +44,7 @@ fn reference_1hz() -> ReferenceSeries {
         },
         (0..SESSION_SECS)
             .map(|i| ReferenceSample {
-                timestamp_ms: (i as i64) * 1000,
+                timestamp_ms: i * 1000,
                 value: synth(i as f64),
             })
             .collect(),
@@ -54,7 +54,7 @@ fn reference_1hz() -> ReferenceSeries {
 
 /// Estimate series at `period_ms` sampling, shifted `OFFSET_MS` earlier.
 fn estimate(period_ms: i64) -> EstimateSeries {
-    let n = (SESSION_SECS as i64 * 1000) / period_ms;
+    let n = (SESSION_SECS * 1000) / period_ms;
     EstimateSeries::new(
         Measurand::HeartRateBpm,
         (0..n)
