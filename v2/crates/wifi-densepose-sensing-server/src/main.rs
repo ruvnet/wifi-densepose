@@ -22,6 +22,7 @@ mod qualcomm_csi;
 mod realtek_radar;
 mod path_safety;
 pub mod pose;
+pub mod pose_physics;
 mod rvf_container;
 // ADR-186 (TRAIN-RECONNECT): the in-server training pipeline was written but
 // never declared as a module, so it was orphaned / uncompiled. Declaring it
@@ -1382,6 +1383,80 @@ struct AppStateInner {
     /// Held behind its own `Arc<RwLock<_>>` so the additive field router can
     /// take it as state without re-locking `AppStateInner`.
     field_surface: rufield_surface::FieldState,
+    /// Canonical ADR-323 engine and latest additive publication. Existing
+    /// image-space renderer poses are never silently inserted here.
+    pose_physics: pose_physics::PosePhysicsRuntime,
+}
+
+#[cfg(test)]
+mod adr323_pose_physics_http_tests {
+    use super::*;
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+
+    fn app() -> Router {
+        Router::new()
+            .route("/api/v1/pose/current", get(pose_current))
+            .route("/api/v1/pose/physics/metrics", get(pose_physics_metrics))
+            .with_state(Arc::new(RwLock::new(AppStateInner::minimal())))
+    }
+
+    #[tokio::test]
+    async fn raw_view_remains_backward_compatible() {
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/pose/current?view=raw")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 65_536)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(body.get("persons").is_some());
+        assert!(body.get("physics").is_none());
+    }
+
+    #[tokio::test]
+    async fn refined_view_is_typed_conflict_when_no_selected_pose_exists() {
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/pose/current?view=refined")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(response.into_body(), 65_536)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["code"], "pose_refined_unavailable");
+    }
+
+    #[tokio::test]
+    async fn physics_metrics_use_prometheus_content_type() {
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/pose/physics/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_TYPE],
+            "text/plain; version=0.0.4"
+        );
+    }
 }
 
 /// If no ESP32 frame arrives within this duration, source reverts to offline.
@@ -1551,6 +1626,10 @@ impl AppStateInner {
             dedup_factor: 3.0,
             data_dir: std::path::PathBuf::from("data"),
             field_surface: Arc::new(RwLock::new(rufield_surface::FieldSurface::from_env())),
+            pose_physics: pose_physics::PosePhysicsRuntime::new(
+                wifi_densepose_physics::PhysicsConfig::default(),
+            )
+            .expect("default pose physics configuration is valid"),
         }
     }
 }
@@ -3001,6 +3080,7 @@ async fn windows_wifi_task(state: SharedState, tick_ms: u64) {
         }
         // #1050: attach real signal_field-peak positions to each person.
         attach_field_positions(&mut update);
+        assess_legacy_image_pose(&mut s, &update);
 
         if let Ok(json) = serde_json::to_string(&update) {
             let _ = s.tx.send(json);
@@ -3159,6 +3239,7 @@ async fn windows_wifi_fallback_tick(state: &SharedState, seq: u32) {
     }
     // #1050: attach real signal_field-peak positions to each person.
     attach_field_positions(&mut update);
+    assess_legacy_image_pose(&mut s, &update);
 
     if let Ok(json) = serde_json::to_string(&update) {
         let _ = s.tx.send(json);
@@ -3572,9 +3653,18 @@ async fn handle_ws_pose_client(mut socket: WebSocket, state: SharedState) {
                                 // Determine pose estimation mode for the UI indicator.
                                 // "model_inference"    — a trained RVF model is loaded.
                                 // "signal_derived"     — keypoints estimated from raw CSI features.
-                                let model_loaded = {
+                                let (model_loaded, physics_assessment) = {
                                     let s = state.read().await;
-                                    s.model_loaded
+                                    let physics = s.pose_physics.latest().and_then(|(raw, result)| {
+                                        (raw.sequence == sensing.tick).then(|| {
+                                            serde_json::json!({
+                                                "schema": "pose-refinement-v1",
+                                                "raw_observation_hash": raw.canonical_hash,
+                                                "assessment": result,
+                                            })
+                                        })
+                                    });
+                                    (s.model_loaded, physics)
                                 };
                                 let pose_source = if model_loaded {
                                     "model_inference"
@@ -3627,6 +3717,7 @@ async fn handle_ws_pose_client(mut socket: WebSocket, state: SharedState) {
                                     "type": "pose_data",
                                     "zone_id": "zone_1",
                                     "timestamp": sensing.timestamp,
+                                    "physics": physics_assessment,
                                     "payload": {
                                         "pose": {
                                             "persons": persons,
@@ -4630,6 +4721,110 @@ fn attach_field_positions(update: &mut SensingUpdate) {
     }
 }
 
+/// Feed legacy renderer coordinates into the canonical audit boundary without
+/// promoting them to metric 3D or calibrated evidence.
+fn assess_legacy_image_pose(state: &mut AppStateInner, update: &SensingUpdate) {
+    use wifi_densepose_core::{
+        CalibrationId, Coco17Joint, JointObservation, JointVisibility, ModelRef,
+        PoseDimensionality, PoseObservationV2, PoseTrustState, Probability, SourceProvenance,
+        SpatialFrameRef, SymmetricCovariance3, TrackId,
+    };
+
+    if !update.timestamp.is_finite() || update.timestamp < 0.0 {
+        return;
+    }
+    let timestamp_ns = (update.timestamp * 1_000_000_000.0) as u64;
+    let Some(persons) = update.persons.as_ref() else {
+        return;
+    };
+    for person in persons {
+        if person.keypoints.len() != Coco17Joint::ALL.len()
+            || !person.confidence.is_finite()
+        {
+            continue;
+        }
+        let Some(joints) = person
+            .keypoints
+            .iter()
+            .zip(Coco17Joint::ALL)
+            .map(|(keypoint, kind)| {
+                let position = [keypoint.x as f32, keypoint.y as f32, 0.0];
+                if !position.iter().all(|coordinate| coordinate.is_finite())
+                    || !keypoint.confidence.is_finite()
+                {
+                    return None;
+                }
+                let confidence =
+                    Probability::new((keypoint.confidence as f32).clamp(0.0, 1.0)).ok()?;
+                Some(JointObservation {
+                    kind,
+                    position_m: position,
+                    covariance_m2: SymmetricCovariance3 {
+                        xx: 0.0,
+                        xy: 0.0,
+                        xz: 0.0,
+                        yy: 0.0,
+                        yz: 0.0,
+                        zz: 0.0,
+                    },
+                    confidence,
+                    visibility: if confidence.get() > 0.0 {
+                        JointVisibility::Visible
+                    } else {
+                        JointVisibility::Unknown
+                    },
+                })
+            })
+            .collect::<Option<Vec<_>>>()
+            .and_then(|joints| joints.try_into().ok())
+        else {
+            continue;
+        };
+        let observer_confidence =
+            match Probability::new((person.confidence as f32).clamp(0.0, 1.0)) {
+                Ok(confidence) => confidence,
+                Err(_) => continue,
+            };
+        let mut raw = PoseObservationV2 {
+            schema_version: 2,
+            timestamp_ns,
+            sensor_epoch: 1,
+            sequence: update.tick,
+            track_id: TrackId(format!("local:{}", person.id)),
+            frame: SpatialFrameRef {
+                name: "legacy-renderer-image".into(),
+                version: 1,
+                metric: false,
+                right_handed: false,
+                z_up: false,
+            },
+            calibration_id: CalibrationId("uncalibrated-image".into()),
+            floor_plane: None,
+            model: ModelRef {
+                id: if state.model_loaded {
+                    "sensing-server-model-artifact-unknown".into()
+                } else {
+                    "sensing-server-signal-derived".into()
+                },
+                artifact_hash: [0; 32],
+            },
+            source: SourceProvenance {
+                sensor_id: "sensing-server-local".into(),
+                authenticated: false,
+                replay_protected: false,
+            },
+            trust_state: PoseTrustState::Degraded,
+            dimensionality: PoseDimensionality::Image2d,
+            uncertainty_calibrated: false,
+            joints,
+            observer_confidence,
+            canonical_hash: [0; 32],
+        };
+        raw.seal();
+        let _ = state.pose_physics.process(&raw, timestamp_ns);
+    }
+}
+
 fn derive_pose_from_sensing(update: &SensingUpdate) -> Vec<PersonDetection> {
     let cls = &update.classification;
     if !cls.presence {
@@ -4845,7 +5040,16 @@ async fn api_info(State(state): State<SharedState>) -> Json<serde_json::Value> {
     }))
 }
 
-async fn pose_current(State(state): State<SharedState>) -> Json<serde_json::Value> {
+#[derive(Debug, Default, Deserialize)]
+struct PoseCurrentQuery {
+    #[serde(default)]
+    view: pose_physics::PoseView,
+}
+
+async fn pose_current(
+    State(state): State<SharedState>,
+    Query(query): Query<PoseCurrentQuery>,
+) -> impl IntoResponse {
     let s = state.read().await;
     let persons = match &s.latest_update {
         Some(update) => update
@@ -4854,12 +5058,69 @@ async fn pose_current(State(state): State<SharedState>) -> Json<serde_json::Valu
             .unwrap_or_else(|| derive_pose_from_sensing(update)),
         None => vec![],
     };
-    Json(serde_json::json!({
+    let legacy = serde_json::json!({
         "timestamp": chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
         "persons": persons,
         "total_persons": persons.len(),
         "source": s.effective_source(),
-    }))
+    });
+    match query.view {
+        pose_physics::PoseView::Raw => (StatusCode::OK, Json(legacy)),
+        pose_physics::PoseView::Both => {
+            if let Some((raw, physics)) = s.pose_physics.latest() {
+                let mut body = legacy;
+                body["raw"] = serde_json::to_value(raw).unwrap_or(serde_json::Value::Null);
+                body["physics"] =
+                    serde_json::to_value(physics).unwrap_or(serde_json::Value::Null);
+                (StatusCode::OK, Json(body))
+            } else {
+                (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "code": "pose_physics_unavailable",
+                        "detail": "no canonical pose observation has been assessed"
+                    })),
+                )
+            }
+        }
+        pose_physics::PoseView::Refined => {
+            let Some((raw, physics)) = s.pose_physics.latest() else {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "code": "pose_refined_unavailable",
+                        "detail": "no canonical pose observation has been assessed"
+                    })),
+                );
+            };
+            match pose_physics::PosePhysicsRuntime::select(query.view, raw, physics) {
+                Ok(pose_physics::SelectedPose::Refined(joints)) => (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "schema_version": 1,
+                        "raw_observation_hash": raw.canonical_hash,
+                        "joints_m": joints,
+                        "physics": physics,
+                    })),
+                ),
+                Ok(_) => unreachable!("refined view returns only refined data"),
+                Err(error) => (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::to_value(error).unwrap_or_else(|_| {
+                        serde_json::json!({"code": "pose_refined_unavailable"})
+                    })),
+                ),
+            }
+        }
+    }
+}
+
+async fn pose_physics_metrics(State(state): State<SharedState>) -> impl IntoResponse {
+    let metrics = state.read().await.pose_physics.metrics_text();
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        metrics,
+    )
 }
 
 async fn pose_stats(State(state): State<SharedState>) -> Json<serde_json::Value> {
@@ -6256,6 +6517,7 @@ async fn udp_receiver_task(
                     }
                     // #1050: attach real signal_field-peak positions to each person.
                     attach_field_positions(&mut update);
+                    assess_legacy_image_pose(&mut s, &update);
 
                     if let Ok(json) = serde_json::to_string(&update) {
                         let _ = s.tx.send(json);
@@ -6708,6 +6970,7 @@ async fn udp_receiver_task(
                     }
                     // #1050: attach real signal_field-peak positions to each person.
                     attach_field_positions(&mut update);
+                    assess_legacy_image_pose(&mut s, &update);
 
                     if let Ok(json) = serde_json::to_string(&update) {
                         let _ = s.tx.send(json);
@@ -6968,6 +7231,7 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
         }
         // #1050: attach real signal_field-peak positions to each person.
         attach_field_positions(&mut update);
+        assess_legacy_image_pose(&mut s, &update);
 
         if update.classification.presence {
             s.total_detections += 1;
@@ -8313,6 +8577,10 @@ async fn main() {
         dedup_factor: runtime_config.dedup_factor,
         data_dir: data_dir.clone(),
         field_surface: field_surface.clone(),
+        pose_physics: pose_physics::PosePhysicsRuntime::new(
+            wifi_densepose_physics::PhysicsConfig::default(),
+        )
+        .expect("default pose physics configuration is valid"),
     }));
 
     // Start background tasks from the resolved plan (issue #1004).
@@ -8531,6 +8799,7 @@ async fn main() {
         .route("/api/v1/model/sona/activate", post(sona_activate))
         // Pose endpoints (WiFi-derived)
         .route("/api/v1/pose/current", get(pose_current))
+        .route("/api/v1/pose/physics/metrics", get(pose_physics_metrics))
         .route("/api/v1/pose/stats", get(pose_stats))
         .route("/api/v1/pose/zones/summary", get(pose_zones_summary))
         .route("/api/v1/pose/activities", get(pose_activities))
@@ -9564,6 +9833,29 @@ mod observatory_persons_field_position_tests {
         assert!((pj["position"][0].as_f64().unwrap() - 3.0).abs() < 1e-6);
         assert!((pj["position"][2].as_f64().unwrap() - (-3.0)).abs() < 1e-6);
         assert!((pj["motion_score"].as_f64().unwrap() - 63.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn legacy_live_pose_is_audited_as_uncalibrated_image_data() {
+        let mut update = base_update(field_with_peak(10, 10), true, 20.0);
+        update.persons = Some(derive_pose_from_sensing(&update));
+        let mut state = AppStateInner::minimal();
+
+        assess_legacy_image_pose(&mut state, &update);
+
+        let (raw, result) = state
+            .pose_physics
+            .latest()
+            .expect("legacy image pose should reach canonical audit");
+        assert_eq!(raw.dimensionality, wifi_densepose_core::PoseDimensionality::Image2d);
+        assert!(!raw.uncertainty_calibrated);
+        assert!(!raw.source.authenticated);
+        assert_eq!(
+            result.disposition,
+            wifi_densepose_core::RefinementDisposition::Audited2d
+        );
+        assert!(!result.selected);
+        assert!(result.refined_joints_m.is_none());
     }
 
     #[test]

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ruview.net/schemas/pose-observation-v2.schema.json",
+  "title": "PoseObservationV2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "timestamp_ns", "sensor_epoch", "sequence", "track_id", "frame", "calibration_id", "floor_plane", "model", "source", "trust_state", "dimensionality", "uncertainty_calibrated", "joints", "observer_confidence", "canonical_hash"],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "timestamp_ns": { "type": "integer", "minimum": 0 },
+    "sensor_epoch": { "type": "integer", "minimum": 0 },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "track_id": { "$ref": "#/$defs/string_id" },
+    "frame": { "$ref": "#/$defs/frame" },
+    "calibration_id": { "$ref": "#/$defs/string_id" },
+    "floor_plane": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/floor" }] },
+    "model": { "$ref": "#/$defs/model" },
+    "source": { "$ref": "#/$defs/source" },
+    "trust_state": { "enum": ["KNOWN", "DEGRADED", "UNKNOWN"] },
+    "dimensionality": { "enum": ["image2d", "metric3d"] },
+    "uncertainty_calibrated": { "type": "boolean" },
+    "joints": { "type": "array", "minItems": 17, "maxItems": 17, "items": { "$ref": "#/$defs/joint" } },
+    "observer_confidence": { "$ref": "#/$defs/probability" },
+    "canonical_hash": { "$ref": "#/$defs/hash" }
+  },
+  "$defs": {
+    "probability": { "type": "number", "minimum": 0, "maximum": 1 },
+    "hash": { "type": "array", "minItems": 32, "maxItems": 32, "items": { "type": "integer", "minimum": 0, "maximum": 255 } },
+    "string_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "vec3": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } },
+    "frame": { "type": "object", "additionalProperties": false, "required": ["name", "version", "metric", "right_handed", "z_up"], "properties": { "name": { "type": "string", "minLength": 1, "maxLength": 128 }, "version": { "type": "integer", "minimum": 1 }, "metric": { "type": "boolean" }, "right_handed": { "type": "boolean" }, "z_up": { "type": "boolean" } } },
+    "floor": { "type": "object", "additionalProperties": false, "required": ["normal", "offset_m"], "properties": { "normal": { "$ref": "#/$defs/vec3" }, "offset_m": { "type": "number" } } },
+    "model": { "type": "object", "additionalProperties": false, "required": ["id", "artifact_hash"], "properties": { "id": { "type": "string", "minLength": 1, "maxLength": 128 }, "artifact_hash": { "$ref": "#/$defs/hash" } } },
+    "source": { "type": "object", "additionalProperties": false, "required": ["sensor_id", "authenticated", "replay_protected"], "properties": { "sensor_id": { "type": "string", "minLength": 1, "maxLength": 128 }, "authenticated": { "type": "boolean" }, "replay_protected": { "type": "boolean" } } },
+    "covariance": { "type": "object", "additionalProperties": false, "required": ["xx", "xy", "xz", "yy", "yz", "zz"], "properties": { "xx": { "type": "number", "minimum": 0 }, "xy": { "type": "number" }, "xz": { "type": "number" }, "yy": { "type": "number", "minimum": 0 }, "yz": { "type": "number" }, "zz": { "type": "number", "minimum": 0 } } },
+    "joint": { "type": "object", "additionalProperties": false, "required": ["kind", "position_m", "covariance_m2", "confidence", "visibility"], "properties": { "kind": { "enum": ["nose", "left_eye", "right_eye", "left_ear", "right_ear", "left_shoulder", "right_shoulder", "left_elbow", "right_elbow", "left_wrist", "right_wrist", "left_hip", "right_hip", "left_knee", "right_knee", "left_ankle", "right_ankle"] }, "position_m": { "$ref": "#/$defs/vec3" }, "covariance_m2": { "$ref": "#/$defs/covariance" }, "confidence": { "$ref": "#/$defs/probability" }, "visibility": { "enum": ["visible", "occluded", "unknown"] } } }
+  }
+}

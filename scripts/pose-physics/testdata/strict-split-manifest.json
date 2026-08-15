@@ -1,0 +1,8 @@
+{
+  "evidence": "SYNTHETIC/L0",
+  "records": [
+    { "split": "train", "sequence": "syn-train-seq", "take": "syn-train-take", "subject": "syn-train-subject", "room": "syn-train-room", "calibration_session": "syn-train-cal" },
+    { "split": "validation", "sequence": "syn-validation-seq", "take": "syn-validation-take", "subject": "syn-validation-subject", "room": "syn-validation-room", "calibration_session": "syn-validation-cal" },
+    { "split": "test", "sequence": "syn-test-seq", "take": "syn-test-take", "subject": "syn-test-subject", "room": "syn-test-room", "calibration_session": "syn-test-cal" }
+  ]
+}

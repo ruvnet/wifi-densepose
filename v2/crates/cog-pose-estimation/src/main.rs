@@ -125,7 +125,10 @@ fn cmd_run(
         );
     }
 
-    let engine = InferenceEngine::with_adapter(adapter.as_deref())?;
+    let engine = InferenceEngine::with_weights_and_adapter(
+        Some(cfg.model_path.as_path()),
+        adapter.as_deref(),
+    )?;
     if engine.is_calibrated() {
         tracing::info!("per-room calibration adapter loaded");
     }

@@ -47,12 +47,23 @@
 extern crate alloc;
 
 pub mod error;
+pub mod pose_observation_v2;
+pub mod pose_refinement_v1;
 pub mod traits;
 pub mod types;
 pub mod utils;
 
 // Re-export commonly used types at the crate root
 pub use error::{CoreError, CoreResult, InferenceError, SignalError, StorageError};
+pub use pose_observation_v2::{
+    CalibrationId, Coco17Joint, FloorPlane, JointObservation, JointVisibility, ModelRef,
+    PoseDimensionality, PoseObservationV2, PoseTrustState, Probability, SourceProvenance,
+    SpatialFrameRef, SymmetricCovariance3, TrackId, POSE_OBSERVATION_SCHEMA_VERSION,
+};
+pub use pose_refinement_v1::{
+    AbstentionReason, ConstraintResiduals, ContactHypothesis, ContactState, DynamicsResiduals,
+    InterventionSummary, PhysicsMode, PhysicsProvenance, PoseRefinementV1, RefinementDisposition,
+};
 pub use traits::{CanonicalFrame, DataStore, NeuralInference, SignalProcessor};
 pub use types::{
     AntennaConfig,
