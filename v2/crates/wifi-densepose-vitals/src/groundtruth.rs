@@ -561,6 +561,9 @@ fn resample_nearest(
     let mut out = Vec::with_capacity(n_points);
     let mut j = 0usize;
     for i in 0..n_points {
+        // `n_points` is bounded by `MAX_GRID_POINTS` before this helper is
+        // called, so the index is representable as an i64.
+        #[allow(clippy::cast_possible_wrap)]
         let t = grid_start_ms + (i as i64) * step_ms;
         while j + 1 < samples.len()
             && (samples[j + 1].timestamp_ms - t).abs() < (samples[j].timestamp_ms - t).abs()
@@ -692,7 +695,8 @@ fn best_lag(
     max_lag_steps: i64,
     min_overlap: usize,
 ) -> Result<LagSearch, GroundTruthError> {
-    let n = est.len() as i64;
+    let n = i64::try_from(est.len())
+        .map_err(|_| GroundTruthError::InvalidConfig("series exceeds signed index range"))?;
     let mut best: Option<LagSearch> = None;
     let mut max_overlap_seen = 0usize;
 
@@ -707,32 +711,36 @@ fn best_lag(
         let est_win = &est[i_lo as usize..i_hi as usize];
         let ref_win = &refg[(i_lo + lag) as usize..(i_hi + lag) as usize];
         let mut count = 0usize;
-        let (mut se, mut sr, mut see, mut srr, mut ser) = (0.0f64, 0.0, 0.0, 0.0, 0.0);
+        let (mut sum_estimate, mut sum_reference) = (0.0f64, 0.0);
+        let (mut sum_estimate_squared, mut sum_reference_squared, mut sum_product) =
+            (0.0f64, 0.0, 0.0);
         for (&ev, &rv) in est_win.iter().zip(ref_win) {
             let (Some(e), Some(r)) = (ev, rv) else {
                 continue;
             };
             count += 1;
-            se += e;
-            sr += r;
-            see += e * e;
-            srr += r * r;
-            ser += e * r;
+            sum_estimate += e;
+            sum_reference += r;
+            sum_estimate_squared += e * e;
+            sum_reference_squared += r * r;
+            sum_product += e * r;
         }
         max_overlap_seen = max_overlap_seen.max(count);
         if count < min_overlap {
             continue;
         }
         let nf = count as f64;
-        let var_e = see - se * se / nf;
-        let var_r = srr - sr * sr / nf;
+        let var_e = sum_estimate_squared - sum_estimate * sum_estimate / nf;
+        let var_r = sum_reference_squared - sum_reference * sum_reference / nf;
         if var_e <= 0.0 || var_r <= 0.0 {
             continue;
         }
-        let ncc = (ser - se * sr / nf) / (var_e * var_r).sqrt();
+        let ncc = (sum_product - sum_estimate * sum_reference / nf) / (var_e * var_r).sqrt();
         let take = match &best {
             None => true,
-            Some(b) => ncc > b.ncc || (ncc == b.ncc && lag.abs() < b.lag_steps.abs()),
+            Some(b) => {
+                ncc > b.ncc || (ncc.total_cmp(&b.ncc).is_eq() && lag.abs() < b.lag_steps.abs())
+            }
         };
         if take {
             best = Some(LagSearch {
@@ -789,16 +797,16 @@ fn fit_drift(
     let nf = xs.len() as f64;
     let x_mean = xs.iter().sum::<f64>() / nf;
     let y_mean = ys.iter().sum::<f64>() / nf;
-    let sxx: f64 = xs.iter().map(|x| (x - x_mean) * (x - x_mean)).sum();
-    if sxx <= 0.0 {
+    let variance_numerator: f64 = xs.iter().map(|x| (x - x_mean) * (x - x_mean)).sum();
+    if variance_numerator <= 0.0 {
         return None;
     }
-    let sxy: f64 = xs
+    let covariance_numerator: f64 = xs
         .iter()
         .zip(&ys)
         .map(|(x, y)| (x - x_mean) * (y - y_mean))
         .sum();
-    let slope = sxy / sxx;
+    let slope = covariance_numerator / variance_numerator;
     let intercept = y_mean - slope * x_mean;
     Some(DriftFit {
         offset_at_start_ms: intercept,
@@ -1299,6 +1307,7 @@ mod tests {
             + 3.0 * (2.0 * std::f64::consts::PI * t_secs / 113.0).sin()
     }
 
+    #[allow(clippy::cast_possible_wrap)] // Test fixtures are bounded to a few thousand samples.
     fn series_1hz(start_ms: i64, n: usize, f: impl Fn(f64) -> f64) -> Vec<ReferenceSample> {
         (0..n)
             .map(|i| {
@@ -1610,6 +1619,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_possible_wrap)] // The synthetic fixture has exactly 2,000 samples.
     fn alignment_drift_fit_recovers_synthetic_drift() {
         // The mapping reference_time = estimate_time + offset(t) with
         // offset(t) = 2000 ms + 0.01 * t (1% clock-rate error).
@@ -1686,6 +1696,7 @@ mod tests {
     ///
     /// Hand-computed: bias = 0.5, MAE = 1.0, RMSE = sqrt(1.5),
     /// SD (n-1) = sqrt(5/3), LoA = 0.5 ± 1.96*sqrt(5/3).
+    #[allow(clippy::cast_possible_wrap)] // The fixture enumerates exactly four values.
     fn fixture_pair() -> (EstimateSeries, ReferenceSeries) {
         let ref_samples: Vec<ReferenceSample> = (0..4)
             .map(|i| ReferenceSample {

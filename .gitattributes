@@ -1,0 +1,3 @@
+# The contributor harness hashes provenance inputs byte-for-byte. Keep text
+# files in this boundary on LF even when Windows enables core.autocrlf.
+harness/ruview/** text=auto eol=lf

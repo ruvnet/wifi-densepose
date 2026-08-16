@@ -6,8 +6,39 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::state::AppState;
 
+const fn server_binary_name(is_windows: bool) -> &'static str {
+    if is_windows {
+        "sensing-server.exe"
+    } else {
+        "sensing-server"
+    }
+}
+
+const fn path_locator_command(is_windows: bool) -> &'static str {
+    if is_windows {
+        "where"
+    } else {
+        "which"
+    }
+}
+
 /// Default binary name for the sensing server.
-const DEFAULT_SERVER_BIN: &str = "sensing-server";
+const DEFAULT_SERVER_BIN: &str = server_binary_name(cfg!(windows));
+const PATH_LOCATOR_COMMAND: &str = path_locator_command(cfg!(windows));
+
+fn first_path_match(stdout: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_owned)
+}
+
+fn configure_log_level(cmd: &mut Command, log_level: Option<&str>) {
+    if let Some(log_level) = log_level {
+        cmd.env("RUST_LOG", log_level);
+    }
+}
 
 /// Find the sensing server binary path.
 ///
@@ -48,10 +79,12 @@ fn find_server_binary(app: &AppHandle, custom_path: Option<&str>) -> Result<Stri
     }
 
     // 4. Check if it's in PATH
-    if let Ok(output) = Command::new("which").arg(DEFAULT_SERVER_BIN).output() {
+    if let Ok(output) = Command::new(PATH_LOCATOR_COMMAND)
+        .arg(DEFAULT_SERVER_BIN)
+        .output()
+    {
         if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
+            if let Some(path) = first_path_match(&output.stdout) {
                 return Ok(path);
             }
         }
@@ -104,9 +137,7 @@ pub async fn start_server(
     if let Some(ref bind_addr) = config.bind_address {
         cmd.args(["--bind", bind_addr]);
     }
-    if let Some(ref log_level) = config.log_level {
-        cmd.args(["--log-level", log_level]);
-    }
+    configure_log_level(&mut cmd, config.log_level.as_deref());
 
     // Default to explicit "simulated" demo mode when the desktop user hasn't
     // chosen a source — this is the *Tauri demo* app, not a production
@@ -396,6 +427,44 @@ pub struct ServerLogsResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn should_pass_log_level_through_rust_log() {
+        let mut command = Command::new("sensing-server");
+        configure_log_level(&mut command, Some("debug"));
+
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let rust_log = command
+            .get_envs()
+            .find(|(key, _)| key.to_string_lossy() == "RUST_LOG")
+            .and_then(|(_, value)| value)
+            .map(|value| value.to_string_lossy().into_owned());
+
+        assert!(!args.iter().any(|arg| arg == "--log-level"));
+        assert_eq!(rust_log.as_deref(), Some("debug"));
+    }
+
+    #[test]
+    fn should_use_platform_binary_names() {
+        assert_eq!(server_binary_name(true), "sensing-server.exe");
+        assert_eq!(path_locator_command(true), "where");
+        assert_eq!(server_binary_name(false), "sensing-server");
+        assert_eq!(path_locator_command(false), "which");
+    }
+
+    #[test]
+    fn should_use_first_path_match_when_locator_returns_multiple_results() {
+        let matches = b"C:\\first\\sensing-server.exe\r\nC:\\second\\sensing-server.exe\r\n";
+
+        assert_eq!(
+            first_path_match(matches).as_deref(),
+            Some("C:\\first\\sensing-server.exe")
+        );
+        assert_eq!(first_path_match(b"\r\n\r\n"), None);
+    }
 
     #[test]
     fn test_server_config_default() {
