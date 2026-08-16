@@ -118,6 +118,9 @@ members = [
     "crates/ruview-counterfactual",# ADR-313 counterfactual spatial inference
     "crates/ruview-infogain",      # ADR-314 information-gain scheduler
     "crates/ruview-active",        # ADR-309 active sensing control
+    # ADR-324 — clean-room Kooima off-axis (head-coupled perspective) projection.
+    # Dependency-free native core; wasm-bindgen surface only on wasm32.
+    "crates/ruview-offaxis",
 ]
 # ADR-040: WASM edge crate targets wasm32-unknown-unknown (no_std),
 # excluded from workspace to avoid breaking `cargo test --workspace`.

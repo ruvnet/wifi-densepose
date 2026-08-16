@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RuView · ADR-324 · off-axis window (ruview-offaxis WASM)</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='7' y='9' width='18' height='14' rx='2' fill='none' stroke='%23e8a634' stroke-width='2'/><circle cx='16' cy='16' r='3' fill='%23e8a634'/></svg>">
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --bg-panel: rgba(0, 0, 0, 0.88);
+            --amber: #e8a634;
+            --amber-dim: #4a3a1a;
+            --amber-hot: #ffc04d;
+            --grid-major: #444444;
+            --grid-minor: #222222;
+            --green: #4f4;
+            --blue: #4cf;
+            --red: #f66;
+            --text-mute: #888;
+            --border: #2a2a2a;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--amber);
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace;
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+        }
+        canvas { display: block; }
+
+        #info {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            padding: 14px 16px;
+            background: var(--bg-panel);
+            border: 1px solid var(--amber);
+            border-radius: 8px;
+            min-width: 280px;
+            max-width: 360px;
+            font-size: 12px;
+            line-height: 1.55;
+            z-index: 10;
+            backdrop-filter: blur(6px);
+            box-shadow: 0 4px 24px rgba(232, 166, 52, 0.08);
+        }
+        #info h1 { margin: 0 0 2px 0; font-size: 14px; letter-spacing: 0.5px; }
+        #info .sub { font-size: 11px; color: var(--text-mute); margin-bottom: 10px; }
+        #info .row { display: flex; justify-content: space-between; gap: 12px; margin: 2px 0; }
+        #info .row .k { color: var(--text-mute); }
+        #info .row .v { color: var(--amber); font-variant-numeric: tabular-nums; }
+        #info .row .v.live { color: var(--green); }
+        #info .row .v.warn { color: var(--red); }
+
+        /* The mandatory ADR-324 §2.4 mode label: always visible while RF
+           drives the camera; there is no configuration that hides it. */
+        #mode-label {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            padding: 8px 14px;
+            background: var(--bg-panel);
+            border: 1px solid var(--blue);
+            border-radius: 8px;
+            color: var(--blue);
+            font-size: 12px;
+            z-index: 11;
+        }
+        #mode-label.rf { border-color: var(--red); color: var(--red); }
+
+        #controls {
+            position: absolute;
+            bottom: 16px;
+            left: 16px;
+            padding: 12px 16px;
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 12px;
+            z-index: 10;
+            max-width: 340px;
+        }
+        #controls h2 { margin: 0 0 8px 0; font-size: 12px; color: var(--text-mute); }
+        #controls label { display: flex; justify-content: space-between; gap: 8px; margin: 4px 0; align-items: center; }
+        #controls input[type="number"] {
+            width: 70px; background: #111; border: 1px solid var(--border);
+            color: var(--amber); font-family: inherit; font-size: 12px; padding: 2px 6px; border-radius: 4px;
+        }
+        #controls input[type="text"] {
+            width: 190px; background: #111; border: 1px solid var(--border);
+            color: var(--amber); font-family: inherit; font-size: 11px; padding: 2px 6px; border-radius: 4px;
+        }
+        #controls button {
+            background: var(--amber-dim); border: 1px solid var(--amber); color: var(--amber-hot);
+            font-family: inherit; font-size: 12px; padding: 4px 10px; border-radius: 5px; cursor: pointer; margin-top: 6px;
+        }
+        #controls button:hover { background: var(--amber); color: #000; }
+
+        #wasm-missing {
+            position: absolute;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.92);
+            z-index: 50;
+        }
+        #wasm-missing .box {
+            max-width: 560px; border: 1px solid var(--amber); border-radius: 10px;
+            background: var(--bg-panel); padding: 22px 26px; font-size: 13px; line-height: 1.7;
+        }
+        #wasm-missing code { color: var(--amber-hot); background: #151005; padding: 1px 5px; border-radius: 4px; display: block; margin: 4px 0; }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <h1>OFF-AXIS WINDOW</h1>
+        <div class="sub">ADR-324 · clean-room Kooima projection · ruview-offaxis (Rust→WASM)</div>
+        <div class="row"><span class="k">engine</span><span class="v" id="hud-engine">loading…</span></div>
+        <div class="row"><span class="k">input</span><span class="v" id="hud-input">mouse (SYNTHETIC)</span></div>
+        <div class="row"><span class="k">eye x/y/z (m)</span><span class="v" id="hud-eye">—</span></div>
+        <div class="row"><span class="k">render fps</span><span class="v live" id="hud-fps">—</span></div>
+        <div class="row"><span class="k">rf socket</span><span class="v" id="hud-ws">not connected</span></div>
+        <div class="row"><span class="k">rf peak</span><span class="v" id="hud-peak">—</span></div>
+        <div class="row" style="margin-top:8px"><span class="k" style="font-size:10px">
+            keys: <b>M</b> mouse · <b>R</b> RF Tier B · wheel = distance</span></div>
+    </div>
+
+    <div id="mode-label">MOUSE SIM — SYNTHETIC INPUT</div>
+
+    <div id="controls">
+        <h2>PHYSICAL CALIBRATION (stored locally)</h2>
+        <label>screen width (cm) <input id="cal-w" type="number" step="0.5" value="60"></label>
+        <label>screen height (cm) <input id="cal-h" type="number" step="0.5" value="34"></label>
+        <label>viewing distance (cm) <input id="cal-d" type="number" step="1" value="65"></label>
+        <h2 style="margin-top:10px">RF SOURCE (Tier B)</h2>
+        <label>ws url <input id="ws-url" type="text" value="ws://127.0.0.1:8080/ws/sensing"></label>
+        <button id="apply">apply calibration</button>
+    </div>
+
+    <div id="wasm-missing">
+        <div class="box">
+            <b>ruview-offaxis WASM module not found.</b><br><br>
+            This demo loads the crate's wasm-bindgen output from
+            <code>v2/crates/ruview-offaxis/pkg/</code>. Generated artifacts are not
+            committed (repo rule); build them once:
+            <code>cd v2 && cargo build -p ruview-offaxis --target wasm32-unknown-unknown --release</code>
+            <code>wasm-bindgen --target web --out-dir crates/ruview-offaxis/pkg \
+  target/wasm32-unknown-unknown/release/ruview_offaxis.wasm</code>
+            (install the CLI with <code>cargo install wasm-bindgen-cli --version 0.2.114</code>)<br>
+            then reload. Full steps: <code>v2/crates/ruview-offaxis/README.md</code>.
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script type="module">
+        // ADR-324 demo: the projection math lives in Rust/WASM (ruview-offaxis).
+        // This file only wires inputs (mouse SYNTHETIC sim, or /ws/sensing
+        // signal_field for the labeled Tier B coarse-parallax mode) into the
+        // WASM camera and copies its matrices onto a three.js camera.
+
+        const $ = (id) => document.getElementById(id);
+
+        // ---- Load the WASM module (not committed; user builds it once). ----
+        let wasm;
+        try {
+            wasm = await import('../../../v2/crates/ruview-offaxis/pkg/ruview_offaxis.js');
+            await wasm.default();
+            $('hud-engine').textContent = 'ruview-offaxis wasm';
+        } catch (e) {
+            console.error('ruview-offaxis pkg not found', e);
+            $('wasm-missing').style.display = 'flex';
+            throw e;
+        }
+        const { OffAxisCamera, RfParallax } = wasm;
+
+        // ---- Calibration (persisted locally; never leaves the browser). ----
+        const CAL_KEY = 'ruview-offaxis-demo-cal';
+        const saved = JSON.parse(localStorage.getItem(CAL_KEY) || 'null');
+        if (saved) { $('cal-w').value = saved.w; $('cal-h').value = saved.h; $('cal-d').value = saved.d; }
+        const cal = () => ({ w: +$('cal-w').value || 60, h: +$('cal-h').value || 34, d: +$('cal-d').value || 65 });
+
+        let cam = new OffAxisCamera(cal().w, cal().h, cal().d, 0.05, 100.0);
+        cam.set_filter(1.2, 0.4); // interactive: light smoothing, quick catch-up
+        let rf = new RfParallax(cal().d / 100);
+
+        $('apply').onclick = () => {
+            const c = cal();
+            localStorage.setItem(CAL_KEY, JSON.stringify(c));
+            cam = new OffAxisCamera(c.w, c.h, c.d, 0.05, 100.0);
+            cam.set_filter(1.2, 0.4);
+            rf = new RfParallax(c.d / 100);
+            buildRoom(); // room proportions follow the physical screen
+        };
+
+        // ---- three.js scene: a room extending behind the screen plane. ----
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0a0a0a);
+
+        // Camera is fully driven by the WASM matrices.
+        const camera = new THREE.PerspectiveCamera();
+        camera.matrixAutoUpdate = false;
+
+        let room = new THREE.Group();
+        function buildRoom() {
+            scene.remove(room);
+            room = new THREE.Group();
+            const c = cal();
+            const W = c.w / 100, H = c.h / 100, DEPTH = Math.max(W, 0.8) * 2.0;
+
+            // Wireframe box behind the screen: the classic "window" cue.
+            const boxGeo = new THREE.BoxGeometry(W, H, DEPTH);
+            const edges = new THREE.EdgesGeometry(boxGeo);
+            const box = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0xe8a634 }));
+            box.position.z = -DEPTH / 2; // screen plane is z = 0
+            room.add(box);
+
+            // Depth rails: rows of columns receding into the box.
+            const colMat = new THREE.MeshStandardMaterial({ color: 0x4a3a1a, emissive: 0x2a1f08 });
+            for (let i = 1; i <= 6; i++) {
+                for (const sx of [-1, 1]) {
+                    const col = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, H * 0.9, 12), colMat);
+                    col.position.set(sx * W * 0.42, 0, -DEPTH * i / 7);
+                    room.add(col);
+                }
+            }
+
+            // Floating objects at staggered depths (parallax targets).
+            const knotMat = new THREE.MeshStandardMaterial({ color: 0xe8a634, metalness: 0.4, roughness: 0.35 });
+            const knot = new THREE.Mesh(new THREE.TorusKnotGeometry(H * 0.18, H * 0.05, 120, 16), knotMat);
+            knot.position.set(0, 0, -DEPTH * 0.45);
+            knot.name = 'knot';
+            room.add(knot);
+
+            const orb = new THREE.Mesh(
+                new THREE.IcosahedronGeometry(H * 0.08, 1),
+                new THREE.MeshStandardMaterial({ color: 0x4cf0ff, emissive: 0x0a3540 })
+            );
+            orb.position.set(-W * 0.22, H * 0.18, -DEPTH * 0.18);
+            room.add(orb);
+
+            // One object slightly IN FRONT of the screen plane — pops "out".
+            const pop = new THREE.Mesh(
+                new THREE.OctahedronGeometry(H * 0.05),
+                new THREE.MeshStandardMaterial({ color: 0xffc04d, emissive: 0x604010 })
+            );
+            pop.position.set(W * 0.28, -H * 0.2, 0.06);
+            room.add(pop);
+
+            room.add(new THREE.AmbientLight(0xffffff, 0.35));
+            const key = new THREE.PointLight(0xffe0a0, 1.0);
+            key.position.set(0.3, 0.4, 0.5);
+            room.add(key);
+            scene.add(room);
+        }
+        buildRoom();
+
+        // ---- Input modes. ----
+        // 'mouse' — SYNTHETIC eye simulator (always available, no hardware).
+        // 'rf'    — Tier B: /ws/sensing signal_field → RfParallax.
+        //           Labeled coarse body parallax, NOT head tracking (ADR-324 §2.4).
+        let mode = 'mouse';
+        const modeLabel = $('mode-label');
+        function setMode(m) {
+            mode = m;
+            if (m === 'rf') {
+                modeLabel.textContent = 'RF COARSE BODY PARALLAX — NOT HEAD TRACKING';
+                modeLabel.classList.add('rf');
+                $('hud-input').textContent = 'rf field peak (Tier B)';
+                connectWs();
+            } else {
+                modeLabel.textContent = 'MOUSE SIM — SYNTHETIC INPUT';
+                modeLabel.classList.remove('rf');
+                $('hud-input').textContent = 'mouse (SYNTHETIC)';
+            }
+        }
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'm' || e.key === 'M') setMode('mouse');
+            if (e.key === 'r' || e.key === 'R') setMode('rf');
+        });
+
+        // Mouse sim: pointer position maps to a ±0.3 m eye excursion;
+        // wheel adjusts distance.
+        let mouseEye = { x: 0, y: 0, d: cal().d / 100 };
+        window.addEventListener('pointermove', (e) => {
+            mouseEye.x = (e.clientX / window.innerWidth - 0.5) * 0.6;
+            mouseEye.y = (0.5 - e.clientY / window.innerHeight) * 0.4;
+        });
+        window.addEventListener('wheel', (e) => {
+            mouseEye.d = Math.min(2.5, Math.max(0.2, mouseEye.d + e.deltaY * 0.0005));
+        }, { passive: true });
+
+        // ---- RF Tier B input: /ws/sensing sensing_update.signal_field. ----
+        let ws = null;
+        function connectWs() {
+            if (ws) { try { ws.close(); } catch (_) {} }
+            const url = $('ws-url').value;
+            $('hud-ws').textContent = 'connecting…';
+            try { ws = new WebSocket(url); } catch (e) {
+                $('hud-ws').textContent = 'invalid url'; return;
+            }
+            ws.onopen = () => { $('hud-ws').textContent = 'connected'; };
+            ws.onclose = () => { $('hud-ws').textContent = 'closed'; };
+            ws.onerror = () => { $('hud-ws').textContent = 'error (server up? ticket needed?)'; };
+            ws.onmessage = (ev) => {
+                try {
+                    const msg = JSON.parse(ev.data);
+                    const field = msg.signal_field || (msg.data && msg.data.signal_field);
+                    if (!field || !field.values) return;
+                    const nx = field.grid_size || field.nx || 20;
+                    const nz = field.grid_size || field.nz || 20;
+                    const values = Float32Array.from(field.values);
+                    const found = rf.update(values, nx, nz, performance.now() / 1000);
+                    $('hud-peak').textContent = found
+                        ? `value ${rf.peak_value().toFixed(2)} (≥ 0.35 gate)`
+                        : 'below 0.35 gate — holding';
+                    // Provenance surfaced verbatim (ADR-295: synthetic never
+                    // presents as live).
+                    if (msg.provenance || msg.source) {
+                        $('hud-ws').textContent = `connected · src: ${msg.provenance || msg.source}`;
+                    }
+                } catch (_) { /* non-JSON frame */ }
+            };
+        }
+
+        // ---- Render loop: one WASM call, three matrix copies, render. ----
+        const tmp = new THREE.Matrix4();
+        let frames = 0, lastFps = performance.now();
+        function animate() {
+            requestAnimationFrame(animate);
+            const t = performance.now() / 1000;
+
+            if (mode === 'mouse') {
+                cam.update_eye(mouseEye.x, mouseEye.y, mouseEye.d, t);
+            } else {
+                const e = rf.eye(); // bounded coarse-parallax eye (metres)
+                cam.update_eye(e[0], e[1], e[2], t);
+            }
+
+            // Copy the Kooima matrices onto the three.js camera.
+            camera.projectionMatrix.fromArray(cam.projection());
+            camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+            tmp.fromArray(cam.view());
+            camera.matrixWorld.copy(tmp).invert();      // world = inverse(view)
+            camera.matrixWorldInverse.copy(tmp);
+
+            const knot = room.getObjectByName('knot');
+            if (knot) { knot.rotation.y += 0.003; knot.rotation.x += 0.001; }
+
+            renderer.render(scene, camera);
+
+            const eye = cam.eye();
+            $('hud-eye').textContent = `${eye[0].toFixed(3)} / ${eye[1].toFixed(3)} / ${eye[2].toFixed(3)}`;
+            frames++;
+            const now = performance.now();
+            if (now - lastFps > 1000) {
+                $('hud-fps').textContent = String(frames);
+                frames = 0; lastFps = now;
+            }
+        }
+        animate();
+
+        window.addEventListener('resize', () => {
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            // NOTE: no camera.aspect update — the frustum is fully determined
+            // by the physical screen calibration, not the browser viewport.
+        });
+    </script>
+</body>
+</html>

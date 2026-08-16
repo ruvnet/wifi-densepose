@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Proposed |
+| **Status** | Proposed (core implemented — see §2.5) |
 | **Date** | 2026-08-16 |
 | **Deciders** | ruv |
 | **Codename** | **off-axis-mode** |
@@ -194,6 +194,21 @@ in this ADR solely so nobody ships it informally without those gates.
 4. The webcam feed never leaves the browser; no frames, landmarks, or
    embeddings are sent to the server. RF data continues to obey ADR-307's
    privacy invariants (pseudonymous, coarse, rotatable).
+
+### 2.5 Implementation status (2026-08-16 amendment)
+
+The projection core shipped as a **Rust crate compiled to WASM** rather than
+the inline JS module §2.3 anticipated — a strict upgrade with the same
+surface: `v2/crates/ruview-offaxis` (dependency-free native core; wasm-bindgen
+only on wasm32) implements the Kooima projection, the one-euro filter, the
+field-peak mapping (constants mirroring `field_localize.rs`), and the Tier B
+coarse-parallax stage with its deadband/gain/clamp bounds enforced in Rust.
+`examples/three.js/demos/07-off-axis-window.html` consumes the wasm-bindgen
+output (built locally per the crate README; generated artifacts are not
+committed). Validation and `MEASURED` benchmarks live in the crate README.
+The demo ships with a `SYNTHETIC`-labeled mouse simulator and the labeled
+Tier B RF mode; a Tier A fine tracker connects through
+`OffAxisCamera.update_normalized` and remains host-provided.
 
 ## 3. Options considered
 

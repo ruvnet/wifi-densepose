@@ -9771,6 +9771,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruview-offaxis"
+version = "0.3.1"
+dependencies = [
+ "criterion",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "ruview-ontology"
 version = "0.3.1"
 dependencies = [

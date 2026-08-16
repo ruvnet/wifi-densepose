@@ -1,0 +1,26 @@
+[package]
+name = "ruview-offaxis"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Clean-room generalized off-axis (head-coupled) perspective projection for RuView demos (ADR-324)"
+readme = "README.md"
+
+[lib]
+# cdylib for the wasm32 build (ADR-324 demo surface); rlib for native reuse.
+crate-type = ["cdylib", "rlib"]
+
+# The native core is dependency-free by design (ADR-324 §2.3): the wasm-bindgen
+# surface exists only when compiling for wasm32, so the workspace test gate
+# (`cargo test --workspace --no-default-features`) never pulls JS-interop deps.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "offaxis"
+harness = false
