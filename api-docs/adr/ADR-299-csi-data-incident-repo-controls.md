@@ -1,6 +1,6 @@
 # ADR-299: Repository CSI data-incident controls — ignore rules and a pre-commit/CI policy check
 
-- **Status**: Accepted — controls implemented; tree remediation gated on owner sign-off
+- **Status**: Accepted — controls and current-tree remediation implemented; history coordination pending
 - **Date**: 2026-08-11
 - **Deciders**: ruv
 - **Tags**: privacy, data-governance, ci, security, incident
@@ -27,20 +27,20 @@ formatting nit.
   or present as tracked files, with a message pointing here. Tests may use
   only synthetic or expressly-consented minimal fixtures.
 
-**Explicitly gated on data-owner sign-off (NOT done autonomously):**
+**Owner-authorized current-tree remediation (2026-08-15):**
 
-- Removing the existing recordings from the tree, and any history rewrite, are
-  outward-facing/destructive and require the data owner to first establish
-  provenance, consent, purpose, retention authority, and redistribution
-  rights. The review is correct that rewriting `origin` does not erase forks
-  and clones; coordination is required. This ADR records the controls and the
-  required follow-up; it does not delete the data.
+- The data owner authorized removal of the six known CSI capture and metadata
+  files from the current tree. The removal is recoverable from Git history and
+  does not claim to erase existing clones, forks, caches, or release artifacts.
+- Any history rewrite remains a separate coordinated incident-response action.
+  It requires an inventory of affected refs and releases, downstream notice,
+  credential and artifact review, and an explicit execution plan.
 
 ## Consequences
 
 - No new CSI captures can be committed (ignore + policy check).
-- The existing tracked recordings remain until the owner decides; the incident
-  is documented and the guard prevents worsening it.
+- The six known tracked recordings are absent from the current tree. Historical
+  copies remain until a separately authorized and coordinated history rewrite.
 - CI gains one fast policy job; contributors get a local pre-commit check.
 
 ## Validation
@@ -48,3 +48,5 @@ formatting nit.
 - Policy-check unit tests: a staged `*.csi.jsonl` fails; a synthetic fixture
   under an allowed test path passes; the check is deterministic and offline.
 - Manual confirmation that the new ignore globs cover both active directories.
+- `bash scripts/csi-data-policy-check.sh --tracked` passes after the authorized
+  current-tree removal.
