@@ -9695,6 +9695,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruview-cognitum-spaces"
+version = "0.3.1"
+dependencies = [
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "ruview-counterfactual"
 version = "0.3.1"
 dependencies = [
@@ -13734,6 +13746,7 @@ dependencies = [
  "predicates",
  "reqwest 0.12.28",
  "ruview-auth",
+ "ruview-cognitum-spaces",
  "serde",
  "serde_json",
  "tabled",
@@ -13744,6 +13757,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
  "wifi-densepose-calibration",
  "wifi-densepose-core",

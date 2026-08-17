@@ -24,6 +24,10 @@ pub struct LoginArgs {
     #[arg(long)]
     pub admin: bool,
 
+    /// Also activate read-only Cognitum Spaces access (`spaces:read`).
+    #[arg(long)]
+    pub spaces: bool,
+
     /// Skip the browser and use the paste-a-code flow.
     ///
     /// Detected automatically over SSH and inside containers; this forces it.
@@ -66,18 +70,21 @@ fn path_or_default(p: Option<PathBuf>) -> PathBuf {
 /// least-privilege test in the library, but this command does NOT go through
 /// that default — it builds the scope string itself, so the library test says
 /// nothing about what the CLI actually requests.
-fn requested_scope(admin: bool) -> String {
+fn requested_scope(admin: bool, spaces: bool) -> String {
+    let mut scopes = vec![scope::SENSING_READ];
     if admin {
         // Admin implies read: there is no scope hierarchy server-side, so a
         // session that needs both must consent to both explicitly.
-        format!("{} {}", scope::SENSING_READ, scope::SENSING_ADMIN)
-    } else {
-        scope::SENSING_READ.to_string()
+        scopes.push(scope::SENSING_ADMIN);
     }
+    if spaces {
+        scopes.push(scope::SPACES_READ);
+    }
+    scopes.join(" ")
 }
 
 pub async fn login_cmd(args: LoginArgs) -> anyhow::Result<()> {
-    let scope = requested_scope(args.admin);
+    let scope = requested_scope(args.admin, args.spaces);
 
     let opts = LoginOptions {
         credentials_path: path_or_default(args.credentials_path),
@@ -102,7 +109,9 @@ pub async fn logout_cmd(args: LogoutArgs) -> anyhow::Result<()> {
     }
     // Deliberately local-only. This makes the machine unable to act as you;
     // revoking the session for every device is an account-level action.
-    println!("Note: this forgets the local credential only. It does not revoke the session server-side.");
+    println!(
+        "Note: this forgets the local credential only. It does not revoke the session server-side."
+    );
     Ok(())
 }
 
@@ -157,9 +166,12 @@ mod tests {
         // poses must not carry the capability to delete recordings. If this
         // ever returns admin by default, every session silently becomes
         // destructive-capable and nothing else in the suite would notice.
-        let s = requested_scope(false);
+        let s = requested_scope(false, false);
         assert_eq!(s, scope::SENSING_READ);
-        assert!(!s.contains(scope::SENSING_ADMIN), "read-only login leaked admin: {s}");
+        assert!(
+            !s.contains(scope::SENSING_ADMIN),
+            "read-only login leaked admin: {s}"
+        );
     }
 
     #[test]
@@ -167,9 +179,22 @@ mod tests {
         // The authorization server grants exactly what is requested; admin does
         // not imply read. Asking for admin alone would produce a session that
         // cannot stream.
-        let s = requested_scope(true);
-        assert!(s.split_whitespace().any(|x| x == scope::SENSING_READ), "{s}");
-        assert!(s.split_whitespace().any(|x| x == scope::SENSING_ADMIN), "{s}");
+        let s = requested_scope(true, false);
+        assert!(
+            s.split_whitespace().any(|x| x == scope::SENSING_READ),
+            "{s}"
+        );
+        assert!(
+            s.split_whitespace().any(|x| x == scope::SENSING_ADMIN),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn spaces_activation_is_explicit_and_read_only() {
+        let s = requested_scope(false, true);
+        assert!(s.split_whitespace().any(|x| x == scope::SPACES_READ));
+        assert!(!s.split_whitespace().any(|x| x == scope::SENSING_ADMIN));
     }
 
     #[test]

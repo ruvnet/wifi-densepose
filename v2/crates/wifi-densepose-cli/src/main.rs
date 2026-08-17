@@ -27,6 +27,9 @@ async fn main() -> anyhow::Result<()> {
         Commands::Whoami(args) => {
             wifi_densepose_cli::auth::whoami_cmd(args).await?;
         }
+        Commands::Spaces(args) => {
+            wifi_densepose_cli::spaces::spaces_cmd(args).await?;
+        }
         Commands::Calibrate(args) => {
             wifi_densepose_cli::calibrate::execute(args).await?;
         }

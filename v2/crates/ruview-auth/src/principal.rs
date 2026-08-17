@@ -19,6 +19,10 @@ pub mod scope {
     /// Irreversible: a deleted model or labelled capture may represent days of
     /// collection, and a training run burns hours of CPU on a Pi.
     pub const SENSING_ADMIN: &str = "sensing:admin";
+
+    /// Read tenant-scoped P2/P3 semantic state from Cognitum Spaces.
+    /// This grants no raw sensing access and no action authority.
+    pub const SPACES_READ: &str = "spaces:read";
 }
 
 /// A verified caller. Constructed only by

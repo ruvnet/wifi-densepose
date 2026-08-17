@@ -62,9 +62,11 @@ anyhow = "1.0"
 # the sensing server depends on this same crate with default features and
 # gets only the verifier.
 ruview-auth = { path = "../ruview-auth", features = ["login"] }
+ruview-cognitum-spaces = { path = "../ruview-cognitum-spaces" }
 # Only for constructing the HTTP client  hands to Session.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 thiserror = "2.0"
+url = "2"
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
