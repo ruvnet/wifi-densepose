@@ -29,9 +29,10 @@ use clap::{Parser, Subcommand};
 pub mod auth;
 pub mod calibrate;
 pub mod calibrate_api;
-pub mod room;
 #[cfg(feature = "mat")]
 pub mod mat;
+pub mod room;
+pub mod spaces;
 
 /// WiFi-DensePose Command Line Interface
 #[derive(Parser, Debug)]
@@ -60,6 +61,9 @@ pub enum Commands {
 
     /// Show the stored Cognitum session: account, scope, and whether it is live.
     Whoami(auth::WhoamiArgs),
+
+    /// Read tenant-scoped semantic state from Cognitum Spaces (ADR-325).
+    Spaces(spaces::SpacesArgs),
 
     /// Empty-room baseline calibration (ADR-135).
     /// Captures CSI frames via UDP and saves a per-subcarrier statistical

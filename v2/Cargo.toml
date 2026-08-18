@@ -37,6 +37,7 @@ members = [
     # their Cognitum identity instead of a shared static bearer. No login flow
     # and no outbound Cognitum API calls live here — verification only.
     "crates/ruview-auth",
+    "crates/ruview-cognitum-spaces", # ADR-325 Cognitum Spaces read client
     "crates/nvsim",
     "crates/nvsim-server",
     "crates/homecore",                 # ADR-127 — HOMECORE state machine
