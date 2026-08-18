@@ -285,6 +285,8 @@ action. This ADR adds no actuator method to the Spaces client.
   relay while authenticating the private Function hop;
 - Spaces verifies the signed OAuth principal and queries by tenant + workspace;
 - legacy API-key behavior remains available;
+- bounded semantic-state `PUT` is available only to an explicitly scoped API-key
+  publisher and is not exposed by the RuView OAuth client;
 - OpenAPI documents both alternatives and RFC 9728 metadata supports discovery;
 - the Function remains gateway-only at Cloud Run IAM.
 
@@ -323,8 +325,8 @@ Rollout order is dependency-safe:
 2. deploy the Spaces Function with OAuth verification while API-key behavior
    remains unchanged;
 3. deploy the gateway relay and protected-resource metadata;
-4. verify gateway API-key access, OAuth denial matrices, direct-URL `403`, and
-   tenant isolation;
+4. verify gateway API-key access, OAuth denial matrices, direct-origin platform
+   denial (`401` or `403` before application code), and tenant isolation;
 5. merge/release the RuView client and CLI activation;
 6. enable Autogenous consumption only after its strict validation/lineage gates
    pass.
@@ -357,7 +359,8 @@ Production readback must prove:
 - valid RuView OAuth returns only its workspace;
 - wrong client, missing `spaces:read`, setup/workload token, and second-tenant
   token are denied;
-- direct Function URL returns `403` even with a valid application credential;
+- the direct Function origin is rejected by the Google platform with `401` or
+  `403` before application code, even with a valid application credential;
 - response remains `no-store` and excludes P0/P1;
 - no secret appears in logs, diffs, artifacts, or issue/PR text.
 
@@ -365,6 +368,49 @@ Performance, detection quality, and action-safety numbers are not claimed by
 this decision. Any such number requires a named reproducer and the repository's
 evidence labels. An empty production tenant is a successful isolation/read-path
 test, not sensing-quality evidence.
+
+## Production evidence (2026-08-18)
+
+The bounded Spaces read slice and RuView activation path are deployed. The exact
+production release chain is:
+
+- Spaces run `32148530629`, revision `spacesapi-00003-xij`, source
+  `fc333e634cd918b9d6fdde4eecbe7beac1043ab8`, Node 22, runtime service account
+  `spacesapi-runtime@cognitum-20260110.iam.gserviceaccount.com`, with
+  `apigateway-sa@cognitum-20260110.iam.gserviceaccount.com` as sole invoker;
+- gateway run `32151485401`, revision `apigateway-00180-peh`, source
+  `c4e99ebb4ce0d4e1407f435f905621476c1f0166`, image digest
+  `sha256:bacb81281a54256ff6fdaac253175e76ce6fc225f399163ca0a807a2839bd6a3`;
+- Identity run `32163542502`, revision `identity-00052-fid`, source
+  `fb6320827b879e481cad6caf184d3cbccd8279c4`, image digest
+  `sha256:0cd5896518bd8ecf042d2f3e9aea58a32e65a68dbddaab1e54f8ae6da2bfab06`,
+  and runtime service account
+  `identity-runtime-prod@cognitum-20260110.iam.gserviceaccount.com`.
+
+The live API-key matrix returned `200` with an empty bounded list,
+`Cache-Control: private, no-store`, and no prohibited P0/P1 projection fields.
+No credential returned `401`. A direct-origin request received a Google
+Frontend Bearer challenge (`401`) before application code.
+
+Two independent RuView Authorization Code + PKCE principals also passed the
+live matrix. Each token used ES256, exact issuer/audience/client checks,
+`sensing:read spaces:read`, signed UUID organization/workspace claims, refresh
+rotation, and revocation. Each gateway read returned `200`, an empty bounded
+list, and `private, no-store`; a corrupted signature returned `401`; and the
+principals had distinct pseudonymous tenant/workspace fingerprints. This proves
+the production empty-tenant behavior and independent claim binding. Non-empty
+cross-tenant isolation remains emulator/staging evidence because production was
+not mutated to manufacture a fixture.
+
+Identity metadata deliberately advertises `spaces:read` for RuView but not
+`spaces:write`. The deployed semantic-state `PUT` remains an API-key-only
+publisher surface. RuView therefore has no OAuth write, command, policy-approval,
+or actuator capability.
+
+This evidence does not claim implementation of sites/buildings/floors/zones,
+entities, semantic event or alert resources, tenant-scoped RuVector spatial
+history, MQTT reconciliation, governed actions, commands, or actuators. Those
+remain separately reviewed milestones.
 
 ## Consequences
 
@@ -375,8 +421,8 @@ test, not sensing-quality evidence.
 - Tenant and workspace become cryptographically bound inputs to the data query.
 - RuView and Autogenous gain useful spatial context without importing raw RF or
   inventing independent evidence.
-- RuVector can ground explanations in local/tenant history while action remains
-  separately governed.
+- The design keeps a path for RuVector-grounded explanations and separately
+  governed action without treating either as part of the deployed read slice.
 - The direct-origin bypass is closed permanently, independent of OAuth rollout.
 
 ### Costs and limitations
@@ -387,7 +433,9 @@ test, not sensing-quality evidence.
   remains staged work.
 - OAuth workspace IDs will return only documents populated with `workspaceId`;
   legacy owner-only documents require an explicit migration, never a broad query.
-- No write, command, or agent execution surface is implemented by this ADR.
+- The RuView client exposes no write, command, or agent execution surface. The
+  separate API-key semantic-state ingress is neither OAuth activation nor
+  actuator authority.
 
 ## Alternatives considered
 
@@ -416,6 +464,12 @@ the edge privacy boundary and is unnecessary for the semantic product.
 
 - Autogenous ADR-402, `docs/adr/ADR-402-ruview-cognitum-spaces-spatial-intelligence.md`
 - Cognitum API ADR-094, `docs/adr/ADR-094-cognitum-spaces-homecore-edge-boundary.md`
+- Cognitum API hierarchy/events/alerts follow-up,
+  `https://github.com/cognitum-one/api/issues/206`
+- RuVector spatial-history follow-up,
+  `https://github.com/ruvnet/RuView/issues/1640`
+- governed-action and witness-receipt follow-up,
+  `https://github.com/ruvnet/RuView/issues/1641`
 - RFC 7636, Proof Key for Code Exchange
 - RFC 8414, OAuth 2.0 Authorization Server Metadata
 - RFC 9700, OAuth 2.0 Security Best Current Practice
