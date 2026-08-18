@@ -464,6 +464,12 @@ the edge privacy boundary and is unnecessary for the semantic product.
 
 - Autogenous ADR-402, `docs/adr/ADR-402-ruview-cognitum-spaces-spatial-intelligence.md`
 - Cognitum API ADR-094, `docs/adr/ADR-094-cognitum-spaces-homecore-edge-boundary.md`
+- Cognitum API hierarchy/events/alerts follow-up,
+  `https://github.com/cognitum-one/api/issues/206`
+- RuVector spatial-history follow-up,
+  `https://github.com/ruvnet/RuView/issues/1640`
+- governed-action and witness-receipt follow-up,
+  `https://github.com/ruvnet/RuView/issues/1641`
 - RFC 7636, Proof Key for Code Exchange
 - RFC 8414, OAuth 2.0 Authorization Server Metadata
 - RFC 9700, OAuth 2.0 Security Best Current Practice
