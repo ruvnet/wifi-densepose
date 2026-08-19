@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Accepted — **implemented** (O1–O9 in `@ruvnet/ruview@0.2.0`; security/community extension in `0.3.0`, ADR-283; source-cited guidance in `0.3.1`): fail-closed schemas and MCP policy, async dispatch, zero runtime dependencies, bounded/redacted local Claude/Codex adapters, reviewed shared brain, source-checked capability guidance, and replay-verified Darwin/Flywheel gate. CI gate: `ruview-harness-flywheel.yml` |
+| **Status** | Accepted — **implemented** (O1–O9 in `@ruvnet/ruview@0.2.0`; security/community extension in `0.3.0`, ADR-283; source-cited guidance in `0.3.1`; guarded Cognitum Spaces OAuth read in `0.4.0`, ADR-325): fail-closed schemas and MCP policy, async dispatch, zero runtime dependencies, bounded/redacted local Claude/Codex adapters, reviewed shared brain, source-checked capability guidance, credential-gated external reads, and replay-verified Darwin/Flywheel gate. CI gate: `ruview-harness-flywheel.yml` |
 | **Date** | 2026-07-02 |
 | **Deciders** | ruv |
 | **Codename** | **RUVIEW-NPM-REVIEW-1** |

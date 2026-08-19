@@ -112,6 +112,17 @@ OAuth consent grants identity-bound read access. It does **not** grant device
 pairing, data publication, deployment, billing, spending, leases, learning
 promotion, automation installation, commands, or actuator authority.
 
+The contributor metaharness exposes this as CLI verb `spaces` and MCP tool
+`ruview_spaces_list`. It delegates to the same Rust client rather than parsing
+or refreshing OAuth independently. The tool never accepts a bearer token or API
+key. MCP use requires an operator-provided `credential-use` grant, and MCP calls
+cannot select the credential path or API origin. The adapter requires an
+installed `wifi-densepose` binary rather than executing Cargo build scripts
+from an auto-detected checkout while holding credential authority. Because
+refresh tokens rotate, a read may atomically update the local OAuth credential
+before contacting Spaces; this authentication side effect is disclosed and
+does not add cloud write authority.
+
 ### 2. The gateway owns the private credential relay
 
 The public gateway strips inbound `X-Cognitum-User-Authorization` and
@@ -271,6 +282,11 @@ action. This ADR adds no actuator method to the Spaces client.
   persist-before-return mechanism, verifies that the stored grant contains
   `spaces:read`, and lists validated state. `COGNITUM_SPACES_API` remains an
   explicit compatibility path.
+- the dependency-free contributor metaharness adds `spaces` /
+  `ruview_spaces_list`, invokes only the OAuth branch, bounds and revalidates
+  child output, fixes the production API origin, strips the API-key compatibility
+  environment, requires an installed binary, and default-denies MCP access
+  without `credential-use`.
 
 ### Cognitum Identity
 
@@ -466,6 +482,8 @@ the edge privacy boundary and is unnecessary for the semantic product.
 - Cognitum API ADR-094, `docs/adr/ADR-094-cognitum-spaces-homecore-edge-boundary.md`
 - Cognitum API hierarchy/events/alerts follow-up,
   `https://github.com/cognitum-one/api/issues/206`
+- RuView metaharness OAuth surface,
+  `https://github.com/ruvnet/RuView/issues/1643`
 - RuVector spatial-history follow-up,
   `https://github.com/ruvnet/RuView/issues/1640`
 - governed-action and witness-receipt follow-up,
