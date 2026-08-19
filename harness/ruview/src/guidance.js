@@ -250,7 +250,7 @@ const CAPABILITIES = Object.freeze([
       'The projection is read-only and grants no write, pairing, command, policy-approval, or actuator authority.',
       'MCP requires the credential-use grant; bearer tokens and API keys are never accepted as tool arguments.',
       'OAuth refresh may rotate the local credential file before a read returns.',
-      'Production evidence covers the legacy flat Spaces read. Versioned collections, spatial memory, and governed actions remain staged until workflow deployment/readback.',
+      'Production evidence covers legacy and versioned HTTPS reads. Spatial memory remains tenant/workspace-local, while governed actions remain separately policy-gated; neither expands OAuth authority.',
       'Persistent memory is local tenant/workspace state and governed actions expose authorization receipts only; neither expands OAuth authority.',
     ],
   },
