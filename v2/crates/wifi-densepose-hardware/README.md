@@ -13,6 +13,36 @@ hardware sources. All parsing operates on byte buffers with no C FFI or hardware
 compile time, making the crate fully portable and deterministic -- the same bytes in always produce
 the same parsed output.
 
+## RTL8720F radar simulator (ADR-263/264)
+
+Until Realtek hardware and the radar report SDK arrive, the Rust-only simulator exercises the same
+versioned CFR/Range-FFT wire codec used by the future device adapter. Every frame is marked
+`SYNTHETIC`.
+
+```powershell
+cargo run -p wifi-densepose-hardware --bin rtl8720f-sim -- `
+  --frames 100 --seed 0x8720f123456789ab `
+  --output rtl8720f-synthetic.rtr
+```
+
+Add `--udp 127.0.0.1:5005 --realtime` to stream one ADR-264 frame per UDP datagram. Replay files
+contain a little-endian `u32` frame length followed by the encoded frame.
+
+## MediaTek Filogic CSI simulator (ADR-266/267)
+
+The Rust-only simulator models bounded MIMO CSI for MT7981/MT7976,
+MT7986/MT7975, and MT7988/MT7996 profiles without claiming an undocumented
+MediaTek firmware ABI. Every frame is marked `SYNTHETIC`.
+
+```powershell
+cargo run -p wifi-densepose-hardware --bin mediatek-csi-sim -- `
+  --profile mt7981 --frames 100 --output mediatek-synthetic.mtc
+```
+
+Add `--udp 127.0.0.1:5005 --realtime` to stream one CRC-protected ADR-267
+frame per UDP datagram. Physical support remains gated on a documented `mt76`
+or MediaTek firmware channel-estimate export.
+
 ## Features
 
 - **ESP32 binary parser** -- Parses ADR-018 binary CSI frames streamed over UDP from ESP32 and

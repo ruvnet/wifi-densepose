@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/wifi-densepose-core",
+    "crates/wifi-densepose-physics", # ADR-323 bounded pose assessment/correction
     "crates/wifi-densepose-signal",
     "crates/wifi-densepose-nn",
     # wifi-densepose-api / -db / -config: removed in #578.
@@ -20,6 +21,8 @@ members = [
     "crates/wifi-densepose-mat",
     "crates/wifi-densepose-train",
     "crates/wifi-densepose-sensing-server",
+    "crates/wifi-densepose-aether",    # ADR-185 §13 — AETHER pure-compute leaf (std-only)
+    "crates/wifi-densepose-privshield", # ADR-291 — VEIL privacy shield (compliant-waveform anti-sensing; std-only leaf)
     "crates/wifi-densepose-wifiscan",
     "crates/wifi-densepose-vitals",
     "crates/wifi-densepose-ruvector",
@@ -28,6 +31,13 @@ members = [
     # geo + worldgraph extracted to ruvnet/worldgraph submodule (see crates/worldgraph)
     "crates/wifi-densepose-engine",      # ADR-135..146 integration/composition layer
     "crates/wifi-densepose-calibration", # ADR-151 — per-room calibration & specialist training
+    # ADR-271 — Cognitum OAuth access-token verification. RuView as an OAuth
+    # RESOURCE SERVER: offline ES256/JWKS verification of tokens issued by
+    # auth.cognitum.one, so a user signs in to their own sensing server with
+    # their Cognitum identity instead of a shared static bearer. No login flow
+    # and no outbound Cognitum API calls live here — verification only.
+    "crates/ruview-auth",
+    "crates/ruview-cognitum-spaces", # ADR-325 Cognitum Spaces read client
     "crates/nvsim",
     "crates/nvsim-server",
     "crates/homecore",                 # ADR-127 — HOMECORE state machine
@@ -71,11 +81,47 @@ members = [
     "crates/homecore-assist",      # ADR-133 — HOMECORE voice assistant + ruflo bridge
     "crates/homecore-server",      # iter-9 — HOMECORE integration binary (all 8 crates wired together)
     "crates/ruview-swarm",                         # ADR-148 — drone swarm control system
+    # ADR-273..277 — unified RF spatial world model: canonical RF tensor +
+    # hardware adapters, universal foundation encoder (masked-reconstruction
+    # pretraining, ≤1% task adapters), RF-aware Gaussian spatial memory,
+    # physics-guided synthetic RF worlds, edge sensing control plane.
+    "crates/ruview-unified",
     # ADR-262 P1 — anti-corruption bridge converting RuView WiFi-CSI sensing
     # output into signed RuField FieldEvents. Path-deps the `vendor/rufield`
     # submodule crates (rufield-core/-provenance/-privacy/-fusion); single
     # coupling point between RuView and the standalone RuField MFS spec.
     "crates/wifi-densepose-rufield",
+    # ADR-287 — coherent wideband RF tomography research crate: synthetic
+    # stepped-frequency multi-position measurement simulation + delay-and-sum
+    # backprojection reconstruction. Standalone leaf (nvsim pattern), zero
+    # hardware coupling, every number SYNTHETIC/L0 until real wideband RF
+    # hardware exists.
+    "crates/wifi-densepose-sar",
+    # ADR-300 phase 1 — perception substrate spine (new first-party crates):
+    "crates/ruview-ontology",   # ADR-306 canonical spatial ontology (Site..Event)
+    "crates/ruview-attest",     # ADR-305 authenticated sensor identity / RF chain of custody
+    "crates/ruview-evidence",   # ADR-304 evidence engine (per-room/device/subject ledger)
+    # ADR-300 phase 1 — dependent wave (build on the spine roots above):
+    "crates/ruview-ood",        # ADR-302 OOD KNOWN/DEGRADED/UNKNOWN gating
+    "crates/ruview-witness",    # ADR-319 witness chain (staged signed provenance)
+    "crates/ruview-certify",    # ADR-318 capability certificate
+    "crates/ruview-scorecard",  # ADR-317 multi-domain benchmark scorecard
+    "crates/ruview-policy",     # ADR-321 decision policy / action authorization
+    # ADR-300 phase 2 — unified world-model core:
+    "crates/ruview-hal",        # ADR-320 sensor HAL (any modality -> Observation)
+    "crates/ruview-groundtruth",# ADR-303 ground-truth synchronization / validation plane
+    "crates/ruview-track",      # ADR-307 persistent privacy-preserving tracking
+    "crates/ruview-fusion",     # ADR-311 uncertainty-aware fusion -> one world state
+    # ADR-300 phase 3 — higher-ceiling primitives (on the fused world state):
+    "crates/ruview-twin",          # ADR-315 digital RF twin (per-deployment model)
+    "crates/ruview-placement",     # ADR-308 sensor placement optimizer
+    "crates/ruview-memory",        # ADR-312 long-term spatial memory / anomaly
+    "crates/ruview-counterfactual",# ADR-313 counterfactual spatial inference
+    "crates/ruview-infogain",      # ADR-314 information-gain scheduler
+    "crates/ruview-active",        # ADR-309 active sensing control
+    # ADR-324 — clean-room Kooima off-axis (head-coupled perspective) projection.
+    # Dependency-free native core; wasm-bindgen surface only on wasm32.
+    "crates/ruview-offaxis",
 ]
 # ADR-040: WASM edge crate targets wasm32-unknown-unknown (no_std),
 # excluded from workspace to avoid breaking `cargo test --workspace`.
@@ -91,7 +137,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 authors = ["rUv <ruv@ruv.net>", "WiFi-DensePose Contributors"]
 license = "MIT OR Apache-2.0"
@@ -103,6 +149,10 @@ categories = ["science", "computer-vision", "wasm"]
 [workspace.dependencies]
 # Core utilities
 thiserror = "2.0"
+# WiFi Veil — compliant-waveform countermeasure against unauthorized WiFi
+# sensing (ADR-294). Dependency-free, deterministic, SYNTHETIC-only leaf;
+# pinned to an exact rev because the crate is consumed pre-crates.io-release.
+wifi-veil = { git = "https://github.com/ruvnet/wifi-veil", rev = "018468b5d2bf41f35c552910f35659830af0eb91" }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -110,6 +160,16 @@ serde_yaml = "0.9"
 tokio = { version = "1.35", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+nalgebra = "0.34"
+smallvec = "1.15"
+bitflags = "2.9"
+rapier3d = { version = "0.33", default-features = false, features = ["std", "dim3", "f32"] }
+burn-core = { version = "0.21", default-features = false, features = ["std"] }
+burn-nn = { version = "0.21", default-features = false }
+burn-ndarray = { version = "0.21", default-features = false, features = ["std"] }
+burn-train = { version = "0.21", default-features = false }
+burn-wgpu = { version = "0.21", default-features = false, features = ["std"] }
+burn-cuda = { version = "0.21", default-features = false, features = ["std"] }
 
 # Signal processing
 ndarray = { version = "0.17", features = ["serde"] }
@@ -206,6 +266,7 @@ ruvector-gnn = { version = "2.2.0", default-features = false }
 
 # Internal crates
 wifi-densepose-core = { version = "0.3.0", path = "crates/wifi-densepose-core" }
+wifi-densepose-physics = { version = "0.1.0", path = "crates/wifi-densepose-physics" }
 wifi-densepose-signal = { version = "0.3.0", path = "crates/wifi-densepose-signal" }
 wifi-densepose-nn = { version = "0.3.0", path = "crates/wifi-densepose-nn" }
 wifi-densepose-api = { version = "0.3.0", path = "crates/wifi-densepose-api" }

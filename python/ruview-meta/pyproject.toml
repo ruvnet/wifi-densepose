@@ -16,7 +16,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ruview"
-version = "2.0.0a1"
+version = "2.0.0"
 description = "RuView — ambient intelligence from WiFi CSI. Meta-package; installs `wifi-densepose` and re-exports it under the `ruview` namespace. See https://github.com/ruvnet/RuView."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -28,7 +28,7 @@ keywords = [
     "ruview",
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
@@ -43,13 +43,13 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    # Pin to the matching v2 release so an alpha-pin `pip install ruview`
-    # always gets a compatible wifi-densepose.
-    "wifi-densepose==2.0.0a1",
+    # Pin to the matching v2 release so `pip install ruview` always gets a
+    # compatible wifi-densepose.
+    "wifi-densepose==2.0.0",
 ]
 
 [project.optional-dependencies]
-client = ["wifi-densepose[client]==2.0.0a1"]
+client = ["wifi-densepose[client]==2.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/ruvnet/RuView"

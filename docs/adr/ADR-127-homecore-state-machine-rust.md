@@ -82,6 +82,11 @@ The entity registry is a `RwLock<HashMap<EntityId, EntityEntry>>` backed by an a
 
 `DeviceRegistry` mirrors HA's `core.device_registry` schema (version 13). Devices are identified by a set of `(id_type, id_value)` tuples (the `identifiers` field), which matches HA's pattern of accepting multiple identifier types per device (MAC address, serial number, integration-specific ID).
 
+`DeviceEntry` and the in-memory `DeviceRegistry` are implemented. On server
+startup, entity and device registry files are restored in deterministic key
+order with a configurable hard row bound; malformed individual entries are
+isolated and reported.
+
 ---
 
 ## 3. HA-side reference table

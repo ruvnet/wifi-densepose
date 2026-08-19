@@ -29,5 +29,5 @@ or temporal leakage. Example honest result (ADR-181):
 1. Run the mean-pose baseline on the same split.
 2. Report `(model − baseline)` in pp, with the split definition (chronological /
    blocked-gap / grouped-bucket; no leakage).
-3. `ruview.claim_check` the writeup — it flags any untagged or 100%/perfect claim.
+3. `ruview_claim_check` the writeup — it flags any untagged or 100%/perfect claim.
 4. If it's a benchmark vs SOTA, tag MEASURED-EQUIVALENT only with the reproducer.

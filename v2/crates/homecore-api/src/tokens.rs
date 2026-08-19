@@ -127,6 +127,10 @@ impl LongLivedTokenStore {
         self.inner.read().await.tokens.len()
     }
 
+    pub async fn is_empty(&self) -> bool {
+        self.inner.read().await.tokens.is_empty()
+    }
+
     /// Is the store accepting any non-empty bearer (DEV mode)?
     pub async fn is_dev_mode(&self) -> bool {
         self.inner.read().await.allow_any

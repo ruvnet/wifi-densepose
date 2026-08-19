@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "homecore": {
+      "command": "homecore",
+      "args": [
+        "mcp",
+        "start"
+      ]
+    }
+  }
+}

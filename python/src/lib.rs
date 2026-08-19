@@ -17,7 +17,13 @@
 use pyo3::prelude::*;
 
 mod bindings {
+    #[cfg(feature = "aether")]
+    pub mod aether;
     pub mod bfld;
+    #[cfg(feature = "mat")]
+    pub mod mat;
+    #[cfg(feature = "meridian")]
+    pub mod meridian;
     pub mod keypoint;
     pub mod pose;
     pub mod privacy_gate;
@@ -43,6 +49,12 @@ fn build_features() -> Vec<&'static str> {
     feats.push("p2-pose-bindings"); // BoundingBox + PersonPose + PoseEstimate
     feats.push("p3-vitals-bindings"); // BreathingExtractor + HeartRateExtractor + VitalEstimate
     feats.push("p3.5-bfld-bindings"); // BfldFrame + BfldReport + BfldKind (stub Rust)
+    #[cfg(feature = "aether")]
+    feats.push("p6-aether-bindings"); // ADR-185 P1 — AETHER contrastive embeddings
+    #[cfg(feature = "meridian")]
+    feats.push("p6-meridian-bindings"); // ADR-185 P2 — MERIDIAN domain generalization
+    #[cfg(feature = "mat")]
+    feats.push("p6-mat-bindings"); // ADR-185 P3 — MAT disaster survivor detection
     feats
 }
 
@@ -85,5 +97,23 @@ fn wifi_densepose_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // the published `wifi-densepose-bfld 0.3.0` crate, not the Python port).
     // Closes ADR-125 §2.1.d at the binding boundary.
     bindings::privacy_gate::register(m)?;
+
+    // ADR-185 P1 — AETHER contrastive CSI embedding bindings, compiled
+    // and registered only under the `aether` feature so the default
+    // wheel links none of the sensing-server dependency tree.
+    #[cfg(feature = "aether")]
+    bindings::aether::register(m)?;
+
+    // ADR-185 P2 — MERIDIAN cross-environment domain-generalization
+    // bindings (hardware normalization, geometry encoding, rapid
+    // adaptation, cross-domain eval). Gated behind `meridian`; tch-free.
+    #[cfg(feature = "meridian")]
+    bindings::meridian::register(m)?;
+
+    // ADR-185 P3 — MAT disaster-survivor detection + START triage. Gated
+    // behind `mat`, mirroring the upstream disaster/ML stack gating.
+    #[cfg(feature = "mat")]
+    bindings::mat::register(m)?;
+
     Ok(())
 }

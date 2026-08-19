@@ -3,6 +3,9 @@ name = "wifi-densepose-pointcloud"
 version = "0.1.0"
 edition = "2021"
 description = "Real-time dense point cloud from camera depth + WiFi CSI tomography"
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "ruview-pointcloud"

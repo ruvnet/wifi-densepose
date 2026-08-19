@@ -187,7 +187,10 @@ def cmd_transformer(args: argparse.Namespace) -> None:
 
     # Load VQVAE checkpoint if provided
     if args.vqvae_checkpoint:
-        ck = torch.load(args.vqvae_checkpoint, map_location="cuda")
+        # VQ-VAE checkpoints contain tensors/state dictionaries only.
+        ck = torch.load(
+            args.vqvae_checkpoint, map_location="cuda", weights_only=True
+        )
         full_model.vae.load_state_dict(ck["state_dict"])
         log.info("Loaded VQVAE checkpoint: %s", args.vqvae_checkpoint)
     full_model.vae.eval()

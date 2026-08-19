@@ -2,10 +2,43 @@
 # This configuration sets up comprehensive log aggregation and processing
 
 apiVersion: v1
+kind: Namespace
+metadata:
+  name: logging
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: logging-quota
+  namespace: logging
+spec:
+  hard:
+    pods: "500"
+    requests.cpu: "100"
+    requests.memory: 200Gi
+    limits.cpu: "200"
+    limits.memory: 400Gi
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: logging-defaults
+  namespace: logging
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        cpu: 100m
+        memory: 256Mi
+      default:
+        cpu: 200m
+        memory: 512Mi
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: fluentd-config
-  namespace: kube-system
+  namespace: logging
   labels:
     app: fluentd
     component: logging
@@ -453,7 +486,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: fluentd
-  namespace: kube-system
+  namespace: logging
   labels:
     app: fluentd
     component: logging
@@ -467,19 +500,37 @@ spec:
         app: fluentd
         component: logging
       annotations:
+        container.apparmor.security.beta.kubernetes.io/fluentd: runtime/default
         prometheus.io/scrape: "true"
         prometheus.io/port: "24231"
         prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: fluentd
+      # Required for Kubernetes metadata enrichment; the bound ClusterRole is
+      # read-only and limited to pods and namespaces.
+      # kics-scan ignore-line
+      automountServiceAccountToken: true
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       tolerations:
         - key: node-role.kubernetes.io/master
           effect: NoSchedule
         - key: node-role.kubernetes.io/control-plane
           effect: NoSchedule
       containers:
+        # Fluentd needs root to read node-owned container logs. Privilege
+        # escalation and Linux capabilities remain disabled below.
+        # kics-scan ignore-line
         - name: fluentd
-          image: fluent/fluentd-kubernetes-daemonset:v1.16-debian-elasticsearch7-1
+          image: fluent/fluentd-kubernetes-daemonset:v1.16-debian-elasticsearch7-1@sha256:4f148ebcf8a90b4f54897931f214cf6b7bb27177fb184ece558d7efb13041c0d
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           env:
             - name: FLUENT_ELASTICSEARCH_HOST
               value: "elasticsearch.logging.svc.cluster.local"
@@ -518,6 +569,8 @@ spec:
               mountPath: /fluentd/etc
             - name: fluentd-buffer
               mountPath: /var/log/fluentd-buffers
+            - name: fluentd-tmp
+              mountPath: /tmp
           ports:
             - containerPort: 24231
               name: prometheus
@@ -538,24 +591,32 @@ spec:
       volumes:
         - name: varlog
           hostPath:
+            # Required input for a node-level log collector.
+            # kics-scan ignore-line
             path: /var/log
         - name: varlibdockercontainers
           hostPath:
+            # Required input for a node-level log collector.
+            # kics-scan ignore-line
             path: /var/lib/docker/containers
         - name: fluentd-config
           configMap:
             name: fluentd-config
         - name: fluentd-buffer
           hostPath:
+            # Persistent buffer survives Fluentd pod restarts.
+            # kics-scan ignore-line
             path: /var/log/fluentd-buffers
             type: DirectoryOrCreate
+        - name: fluentd-tmp
+          emptyDir: {}
 
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: fluentd
-  namespace: kube-system
+  namespace: logging
   labels:
     app: fluentd
 
@@ -591,14 +652,14 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: fluentd
-    namespace: kube-system
+    namespace: logging
 
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: fluentd
-  namespace: kube-system
+  namespace: logging
   labels:
     app: fluentd
     component: logging

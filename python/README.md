@@ -43,6 +43,29 @@ pip install "wifi-densepose[client]"       # + WebSocket/MQTT clients
 Wheels are published for Linux (x86_64, aarch64), macOS (x86_64, arm64), and
 Windows (amd64).
 
+### SOTA extras (ADR-185)
+
+Three optional subsystems bind the Rust SOTA modules as compiled-feature
+wheels. Each raises a clear `ImportError` if you import it without the extra:
+
+| Extra | Module | What it adds |
+|-------|--------|--------------|
+| `[aether]` | `wifi_densepose.aether` | Contrastive CSI embeddings / re-identification (ADR-024) — `EmbeddingExtractor`, `cosine_similarity`, `info_nce_loss` |
+| `[meridian]` | `wifi_densepose.meridian` | Cross-environment domain generalization (ADR-027) — `HardwareNormalizer`, `GeometryEncoder`, `RapidAdaptation`, `CrossDomainEvaluator` |
+| `[mat]` | `wifi_densepose.mat` | Mass-Casualty Assessment disaster-survivor detection + START triage — `DisasterResponse`, `Survivor`, `TriageStatus` |
+| `[sota]` | all three | Convenience superset |
+
+```bash
+pip install "wifi-densepose[aether]"       # re-identification embeddings
+pip install "wifi-densepose[meridian]"     # cross-room calibration
+pip install "wifi-densepose[mat]"          # disaster triage
+pip install "wifi-densepose[sota]"         # all three
+```
+
+Runnable examples: [`examples/reid_from_csi.py`](examples/reid_from_csi.py),
+[`examples/cross_room_calibrate.py`](examples/cross_room_calibrate.py),
+[`examples/mat_triage.py`](examples/mat_triage.py).
+
 ## Usage
 
 ### Extract breathing rate from a CSI stream

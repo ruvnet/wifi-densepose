@@ -1,0 +1,10 @@
+# Weaver-forge config for the generated `semconv` module of the
+# sensing server.
+# `weaver registry generate rust v2/crates/wifi-densepose-sensing-server/src \
+#     -t templates -r semconv/registry --future`
+# renders the single template below over the whole resolved registry
+# (`--future` matches the `weaver registry check --future` validation).
+templates:
+  - pattern: semconv.rs.j2
+    filter: .
+    application_mode: single

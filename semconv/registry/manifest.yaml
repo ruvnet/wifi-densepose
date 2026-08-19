@@ -1,0 +1,6 @@
+name: ruview
+description: RuView custom OpenTelemetry semantic conventions.
+schema_url: https://raw.githubusercontent.com/ruvnet/RuView/main/semconv/schema/ruview-0.1.0.yaml
+dependencies:
+  - name: otel
+    registry_path: https://github.com/open-telemetry/semantic-conventions/archive/refs/tags/v1.42.0.zip[model]

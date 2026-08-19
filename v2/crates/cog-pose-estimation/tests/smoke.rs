@@ -5,7 +5,8 @@
 
 use cog_pose_estimation::{
     inference::{
-        InferenceEngine, SyntheticInput, INPUT_SUBCARRIERS, INPUT_TIMESTEPS, OUTPUT_KEYPOINTS,
+        ImageObservationContext, InferenceEngine, PoseOutput, SyntheticInput, INPUT_SUBCARRIERS,
+        INPUT_TIMESTEPS, OUTPUT_KEYPOINTS,
     },
     manifest::ManifestSpec,
 };
@@ -108,6 +109,8 @@ fn per_room_adapter_changes_inference_output() {
 
     assert!(!base.is_calibrated(), "base must report uncalibrated");
     assert!(cal.is_calibrated(), "adapter engine must report calibrated");
+    assert_ne!(base.artifact_hash(), [0; 32]);
+    assert_ne!(base.artifact_hash(), cal.artifact_hash());
 
     // Non-zero input — a zero window would zero the LoRA delta (x·A·B = 0).
     let win = cog_pose_estimation::inference::CsiWindow {
@@ -171,6 +174,49 @@ fn manifest_roundtrips() {
     let back: ManifestSpec = serde_json::from_str(&s).unwrap();
     assert_eq!(back.id, "pose-estimation");
     assert_eq!(back.version, "0.0.1");
+}
+
+#[test]
+fn current_observer_is_canonical_image_2d_and_never_claims_calibration() {
+    let output = PoseOutput {
+        keypoints: vec![0.5; OUTPUT_KEYPOINTS * 2],
+        confidence: 0.185,
+    };
+    let observation = output
+        .to_image_observation(ImageObservationContext {
+            timestamp_ns: 10,
+            sensor_epoch: 9,
+            sequence: 1,
+            model_id: "pose-estimation:test".into(),
+            model_artifact_hash: [4; 32],
+        })
+        .unwrap();
+    assert_eq!(
+        observation.dimensionality,
+        wifi_densepose_core::PoseDimensionality::Image2d
+    );
+    assert!(!observation.frame.metric);
+    assert!(!observation.uncertainty_calibrated);
+    assert!(!observation.source.authenticated);
+    assert!(!observation.source.replay_protected);
+    assert_eq!(observation.canonical_hash, observation.compute_canonical_hash());
+}
+
+#[test]
+fn malformed_image_pose_cannot_enter_canonical_contract() {
+    let output = PoseOutput {
+        keypoints: vec![0.5; 10],
+        confidence: 0.185,
+    };
+    assert!(output
+        .to_image_observation(ImageObservationContext {
+            timestamp_ns: 10,
+            sensor_epoch: 9,
+            sequence: 1,
+            model_id: "pose-estimation:test".into(),
+            model_artifact_hash: [4; 32],
+        })
+        .is_none());
 }
 
 /// ADR-159 §A1 — the default-config min_confidence threshold must not silently

@@ -123,7 +123,7 @@ esp_err_t c6_softap_he_start(uint8_t *out_channel)
     if (ssid_len > 32) ssid_len = 32;
     memcpy(ap_cfg.ap.ssid, ssid, ssid_len);
     ap_cfg.ap.ssid_len = (uint8_t)ssid_len;
-    strncpy((char *)ap_cfg.ap.password, psk, sizeof(ap_cfg.ap.password) - 1);
+    strlcpy((char *)ap_cfg.ap.password, psk, sizeof(ap_cfg.ap.password));
     ap_cfg.ap.channel        = s_channel;
     ap_cfg.ap.max_connection = 4;
     ap_cfg.ap.authmode       = strlen(psk) >= 8 ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;

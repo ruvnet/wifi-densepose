@@ -28,7 +28,7 @@ esptool --chip esp32s3 -p <PORT> -b 460800 write_flash \
   0xf000 ota_data_initial.bin  0x20000 esp32-csi-node-s3-8mb.bin
 ```
 
-(`ruview.node_flash` returns the exact pinned command rather than running an
+(`ruview_node_flash` returns the exact pinned command rather than running an
 unattended flash.)
 
 ## 3. Provision
@@ -44,6 +44,6 @@ Never echo or commit the WiFi password.
 
 ## 4. Confirm CSI is flowing
 
-`ruview.node_monitor {port}` — PASS criteria: serial shows `CSI cb #...` callbacks and
+`ruview_node_monitor {port}` — PASS criteria: serial shows `CSI cb #...` callbacks and
 (on a bare board) `CSI filter upgraded to MGMT+DATA`. No callbacks → the node isn't
 capturing; do not proceed to calibration.

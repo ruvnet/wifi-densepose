@@ -38,6 +38,7 @@ WiFi DensePose turns commodity WiFi signals into real-time human pose estimation
 14. [Training a Model](#training-a-model)
     - [CRV Signal-Line Protocol](#crv-signal-line-protocol)
 14. [RVF Model Containers](#rvf-model-containers)
+14. [Perception Certificate Spine (Developer Preview, ADR-300)](#perception-certificate-spine-developer-preview-adr-297)
 14. [Hardware Setup](#hardware-setup)
     - [ESP32-S3 Mesh](#esp32-s3-mesh)
     - [Intel 5300 / Atheros NIC](#intel-5300--atheros-nic)
@@ -135,7 +136,7 @@ The compiled binary is at `target/release/sensing-server`.
 
 ### From crates.io (Individual Crates)
 
-All 16 crates are published to crates.io at v0.3.0. Add individual crates to your own Rust project:
+The workspace's crates publish independently, so versions vary crate to crate (`wifi-densepose-core` is at 0.3.2, `wifi-densepose-signal` at 0.3.6, etc. as of this writing) — `cargo add` resolves each to its own latest by default, so you don't need to track exact numbers yourself. Add individual crates to your own Rust project:
 
 ```bash
 # Core types and traits
@@ -161,6 +162,11 @@ cargo add wifi-densepose-wasm
 
 # WASM edge runtime (lightweight, for embedded/IoT)
 cargo add wifi-densepose-wasm-edge
+
+# Coherent wideband RF tomography research crate (ADR-287) — synthetic
+# stepped-frequency backprojection reconstruction. SYNTHETIC/L0 evidence
+# only; not wired into any sensing pipeline above. See its own README.
+cargo add wifi-densepose-sar
 ```
 
 See the full crate list and dependency order in [CLAUDE.md](../CLAUDE.md#crate-publishing-order).
@@ -1141,7 +1147,20 @@ What it ships (and what it does not):
 | Presence detection (occupied / empty) | ✅ Trained head — v2 encoder reports 82.3% held-out temporal-triplet acc (v1's "100% on validation" was a single-class recording — retracted, [#882](https://github.com/ruvnet/RuView/issues/882)) |
 | 128-dim CSI embeddings (re-ID, similarity, downstream training) | ✅ Trained encoder |
 | Single-person breathing / heart-rate | ⚠️ Server still uses heuristic DSP — model does not replace this yet |
-| 17-keypoint full-body pose | 🔬 No keypoint weights shipped yet — pose pipeline runs but without a learned head |
+| 17-keypoint full-body pose | 🔬 This HF bundle ships no keypoint head — but real pose weights exist elsewhere; see the tier table below |
+
+### Model weights: what's real, what's not
+
+"WiFi → pose" means three different things in this repo, at three different maturity
+levels. Read the label, not the headline ([ADR-187](adr/ADR-187-archive-v1-deprecation-honest-labeling.md)):
+
+| Tier | Checkpoint(s) | Honest status |
+|------|---------------|---------------|
+| **Real & validated** | [`ruvnet/wifi-densepose-pretrained`](https://huggingface.co/ruvnet/wifi-densepose-pretrained) (encoder + presence head) · [`ruvnet/wifi-densepose-mmfi-pose`](https://huggingface.co/ruvnet/wifi-densepose-mmfi-pose) (17-keypoint pose) · `cog-person-count/count_v1` | **MEASURED / published.** Presence = 82.3% held-out temporal-triplet accuracy (the old "100% presence" figure was retracted); MM-Fi pose = 82.69% torso-PCK@20 on the `random_split` protocol. |
+| **Real but weak (honestly labeled)** | committed `v2/crates/cog-pose-estimation/cog/artifacts/pose_v1.safetensors` | First-cut on-device model. **PCK@20 = 3.0% / PCK@50 = 18.5%** on a 217-sample holdout — **below the ADR-079 target of ≥ 35%.** Learns coarse structure (`r_hip` 77% PCK@50); distal/face joints near-random. Its runtime path in `cog-pose-estimation/src/inference.rs` is still a centred-skeleton **stub returning `confidence=0`**. Full disclosure in the [cog README](../v2/crates/cog-pose-estimation/cog/README.md). Do not advertise the live single-ESP32 17-keypoint feature without this caveat. |
+| **Architecture only, no weights** | `archive/v1` `DensePoseHead` | Random `kaiming_normal_` init, **no checkpoint of any kind** (zero `.pth`/`.onnx`/`.safetensors` files under `archive/v1/`). Deprecated and superseded — see [`archive/v1/DEPRECATED.md`](../archive/v1/DEPRECATED.md). Do not expect real pose output from it. |
+
+**Does it actually run, and can a single ESP32 do pose? ([#509](https://github.com/ruvnet/RuView/issues/509), [#1125](https://github.com/ruvnet/RuView/issues/1125))** Yes, it runs, and the results are reproducible: the deterministic signal-pipeline proof (`python archive/v1/data/proof/verify.py`, must print `VERDICT: PASS`), the committed pose training dump (`v2/crates/cog-pose-estimation/cog/artifacts/train_results.json`), and the auditable MM-Fi arena all back specific numbers. But a single-antenna, 56-subcarrier CSI stream at a 20-frame window does *not* carry the fine-grained spatial information the multi-antenna NIC research relies on — so the shippable pose accuracy the project stands behind today is the **MM-Fi benchmark number**, not a live single-ESP32 number. The path to a first reproducible on-device baseline (PCK@20 ≥ 35%) is tracked in [ADR-079](adr/ADR-079-camera-ground-truth-training.md) / [#645](https://github.com/ruvnet/RuView/issues/645).
 
 ### Download
 
@@ -1472,6 +1491,101 @@ An RVF file contains: model weights, HNSW vector index, quantization codebooks, 
 | Mobile / WASM | int8 | ~6-10 MB | ~200-500ms |
 | Field (WiFi-Mat) | fp16 | ~62 MB | ~2s |
 | Server / Cloud | f32 | ~50+ MB | ~3s |
+
+---
+
+## Perception Certificate Spine (Developer Preview, ADR-300)
+
+RuView's perception substrate program (ADR-300) is building a `signal → observation →
+calibration → inference → uncertainty → evidence → certificate → policy → governed
+action` pipeline, where a downstream consumer either gets a calibrated, provenance-backed
+answer or an explicit `UNKNOWN` — never a confident-looking guess outside the sensor's
+proven operating envelope.
+
+**Status: developer preview, now wired at the crate level.** Phase 1 shipped nine new
+crates. `ruview-certify` and `ruview-policy` now depend on `ruview-ood` and provide a
+real adapter (`impl From<ruview_ood::DomainState> for _`) plus a composed entry point,
+`ruview_policy::authorize_from_certificate`, that takes a real signed
+`CapabilityCertificate` and a real `ruview_ood::DomainState` and drives them through
+`authorize()` — not a hand-built `AssuranceInputs`. A cross-crate integration test
+(`ruview-policy`'s `acceptance_test_b_real_integration` module) mints an actual signed
+certificate and proves a real post-drift `Unknown` denies a `SafetyCritical` action
+through that one composed pipeline.
+
+**What's still not done:** none of this runs automatically inside the live
+`sensing-server` request path yet — there is no continuous calibration/OOD-monitoring
+loop wired into the running server that calls this pipeline on live sensor data. Treat
+`authorize_from_certificate` as a real, tested library entry point you can call from your
+own integration today, not something the server invokes for you on every request yet.
+That remaining step is a genuinely separate, larger effort (deciding polling cadence,
+where calibration state lives, what triggers re-certification) — see ADR-300 for the
+phased plan.
+
+### The crates
+
+| Crate | Role |
+|---|---|
+| `ruview-ontology` | Canonical `Site → … → Event` types |
+| `ruview-attest` | Signed measurement / RF chain-of-custody |
+| `ruview-evidence` | Append-only per-context ledger (no pooling, no evidence upgrade) |
+| `wifi-densepose-calibration` | Signed, drift-invalidatable calibration certificate |
+| `ruview-ood` | `Known` / `Degraded` / `Unknown` staleness-guard domain gating |
+| `ruview-witness` | Hash-linked staged provenance chain |
+| `ruview-certify` | Capability certificate, conditional on a live domain signature |
+| `ruview-scorecard` | Multi-domain scorecard, worst-domain promotion gate |
+| `ruview-policy` | Fail-closed action authorization gate |
+
+### Minting and checking a certificate
+
+```rust
+use ruview_certify::{mint, CapabilityCertificate, DomainState};
+
+// `signer`, `request`, and `evidence_slice` come from your own calibration run —
+// see each crate's README for how to build them.
+let cert = mint(&signer, request, &evidence_slice)?;
+
+// A certificate is only valid at a given instant AND domain state — the same
+// signed certificate is rejected the moment the live domain degrades:
+assert!(cert.is_valid(now_ms, DomainState::Known));
+assert!(!cert.is_valid(now_ms, DomainState::Degraded));
+assert!(!cert.is_valid(now_ms, DomainState::Unknown));
+```
+
+### Gating an action from a real certificate + a real OOD reading
+
+```rust
+use ruview_policy::authorize_from_certificate;
+
+// `cert` (ruview_certify::CapabilityCertificate) and `domain`
+// (ruview_ood::DomainState) come from your own certify/OOD calls.
+let decision = authorize_from_certificate(
+    ActionClass::SafetyCritical,
+    &cert, &verifier, now_unix_s, domain,
+    certificate_class, uncertainty, evidence_level,
+);
+// Deny with a named FailedCondition (e.g. DomainNotKnown) — not a silent
+// false-positive — the moment `domain` degrades, even though `cert` itself
+// is still validly signed and unexpired.
+```
+
+`ruview_certify::DomainState` and `ruview_policy::DomainState` are still each their own
+type (`ruview-ood`'s `Degraded`/`Unknown` additionally carry a `DomainCause`), but the
+conversion between them is no longer something you have to write yourself —
+`authorize_from_certificate` does it via the crates' own `From<ruview_ood::DomainState>`
+impls.
+
+### What's genuinely enforced today, for comparison
+
+Not every ADR-295–296 remediation item is preview-only. Three are live now:
+
+- **UDP data-plane bind hardening (ADR-296)** — `sensing-server`'s `UdpSourceAllowlist`
+  is checked on every incoming packet (`main.rs`), not just defined.
+- **CSI data-incident repo controls (ADR-299)** — `scripts/csi-data-policy-check.sh`
+  runs in CI on every push/PR and fails the build on a policy violation.
+- **Synthetic-export watermarking (ADR-295)** — `start_recording` stamps a `SYNTHETIC`
+  watermark on a recording's metadata (`GET /api/v1/recordings`, the start-recording
+  response) whenever it captures while the live source is synthetic — an operator
+  browsing or scripting against recordings can't mistake generated data for a capture.
 
 ---
 
@@ -1860,6 +1974,23 @@ node scripts/eval-wiflow.js \
   --model models/wiflow-supervised/wiflow-v1.json \
   --data data/paired/*.jsonl
 ```
+
+> **Model format boundary:** `train-wiflow-supervised.js` produces the
+> JavaScript WiFlow model `wiflow-v1.json`. There is currently no supported
+> command that converts that JSON model into the sensing server's binary RVF
+> container, and renaming the file to `.rvf` does not convert it. Use the JSON
+> model with the JavaScript evaluation/inference tools. To train a model that
+> the Rust sensing server can load, use its native training path, which writes
+> RVF directly:
+>
+> ```bash
+> cargo run -p wifi-densepose-sensing-server --release -- \
+>   --train --dataset data/mmfi --dataset-type mmfi \
+>   --epochs 100 --save-rvf models/room-model.rvf
+> ```
+>
+> The camera+CSI paired JSONL workflow and the native RVF trainer are separate
+> pipelines today. A JSON-to-RVF exporter is future work.
 
 **Evaluation protocol matters.** Use `eval-wiflow.js` (torso-normalized
 PCK@20, the metric comparable to published WiFi-pose results) on a temporal

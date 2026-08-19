@@ -26,11 +26,13 @@
 
 use clap::{Parser, Subcommand};
 
+pub mod auth;
 pub mod calibrate;
 pub mod calibrate_api;
-pub mod room;
 #[cfg(feature = "mat")]
 pub mod mat;
+pub mod room;
+pub mod spaces;
 
 /// WiFi-DensePose Command Line Interface
 #[derive(Parser, Debug)]
@@ -50,6 +52,19 @@ pub struct Cli {
 /// Top-level commands
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Sign in to Cognitum (ADR-271). Stores a token this machine can present
+    /// to a RuView sensing server instead of sharing one static API token.
+    Login(auth::LoginArgs),
+
+    /// Forget the locally stored Cognitum credentials.
+    Logout(auth::LogoutArgs),
+
+    /// Show the stored Cognitum session: account, scope, and whether it is live.
+    Whoami(auth::WhoamiArgs),
+
+    /// Read tenant-scoped semantic state from Cognitum Spaces (ADR-325).
+    Spaces(spaces::SpacesArgs),
+
     /// Empty-room baseline calibration (ADR-135).
     /// Captures CSI frames via UDP and saves a per-subcarrier statistical
     /// baseline used for real-time motion z-scoring and CIR reference.

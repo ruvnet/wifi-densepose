@@ -106,7 +106,7 @@ impl Trigger {
     pub fn matches_sync(&self, ctx: &TriggerContext) -> bool {
         match self {
             Trigger::State { entity_id, from, to } => {
-                let eid_match = ctx.entity_id.as_ref().map_or(false, |e| e == entity_id);
+                let eid_match = ctx.entity_id.as_ref() == Some(entity_id);
                 if !eid_match {
                     return false;
                 }
@@ -125,7 +125,7 @@ impl Trigger {
                 true
             }
             Trigger::NumericState { entity_id, above, below } => {
-                let eid_match = ctx.entity_id.as_ref().map_or(false, |e| e == entity_id);
+                let eid_match = ctx.entity_id.as_ref() == Some(entity_id);
                 if !eid_match {
                     return false;
                 }

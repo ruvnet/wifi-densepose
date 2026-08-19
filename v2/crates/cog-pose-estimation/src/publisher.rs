@@ -42,7 +42,12 @@ impl<'a> Event<'a> {
         }
     }
 
-    pub fn pose_frame(tick: u64, n_persons: usize, persons: Value) -> Self {
+    pub fn pose_frame(
+        tick: u64,
+        n_persons: usize,
+        persons: Value,
+        observation: &wifi_densepose_core::PoseObservationV2,
+    ) -> Self {
         Self {
             ts: now_secs(),
             level: "info",
@@ -51,6 +56,7 @@ impl<'a> Event<'a> {
                 "tick": tick,
                 "n_persons": n_persons,
                 "persons": persons,
+                "observation": observation,
             }),
         }
     }

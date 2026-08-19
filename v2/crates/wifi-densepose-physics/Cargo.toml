@@ -1,0 +1,58 @@
+[package]
+name = "wifi-densepose-physics"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Bounded, provenance-preserving pose physics assessment for RuView"
+
+[features]
+default = ["kinematic"]
+kinematic = []
+dynamics = ["dep:rapier3d"]
+learned = ["dep:burn-core", "dep:burn-nn"]
+learned-cpu = ["learned", "dep:burn-ndarray"]
+learned-train = ["learned", "dep:burn-train"]
+learned-wgpu = ["learned-train", "dep:burn-wgpu"]
+learned-cuda = ["learned-train", "dep:burn-cuda"]
+deterministic = ["rapier3d?/enhanced-determinism"]
+
+[dependencies]
+wifi-densepose-core = { workspace = true, features = ["serde"] }
+nalgebra.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+smallvec.workspace = true
+bitflags.workspace = true
+tracing.workspace = true
+blake3 = "1.5"
+rapier3d = { workspace = true, optional = true }
+burn-core = { workspace = true, optional = true }
+burn-nn = { workspace = true, optional = true }
+burn-ndarray = { workspace = true, optional = true }
+burn-train = { workspace = true, optional = true }
+burn-wgpu = { workspace = true, optional = true }
+burn-cuda = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
+proptest.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "frame_latency"
+harness = false
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+missing_errors_doc = "allow"
+module_name_repetitions = "allow"
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"

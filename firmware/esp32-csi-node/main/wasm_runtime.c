@@ -786,8 +786,7 @@ esp_err_t wasm_runtime_set_manifest(uint8_t module_id, const char *module_name,
     }
 
     if (module_name) {
-        strncpy(slot->module_name, module_name, 31);
-        slot->module_name[31] = '\0';
+        strlcpy(slot->module_name, module_name, sizeof(slot->module_name));
     }
     slot->capabilities = capabilities;
     slot->manifest_budget_us = max_frame_us;

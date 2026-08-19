@@ -48,7 +48,7 @@ jobs:
     name: build · push · smoke-test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           submodules: recursive
 
@@ -56,9 +56,9 @@ jobs:
       # linux/arm64 layer below (Dockerfile.rust is arch-agnostic — no `--target`
       # flag — so buildx + QEMU is all that's needed; arm64 builds are emulated
       # by the runner, not built on a separate arm64 host).
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
 
       - name: Log in to Docker Hub
         # Bypassing docker/login-action@v3: the action kept emitting
@@ -73,7 +73,7 @@ jobs:
           printf '%s' "$DH_TOKEN" | docker login docker.io -u "$DH_USER" --password-stdin
 
       - name: Log in to ghcr.io
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -81,7 +81,7 @@ jobs:
 
       - name: Compute tags
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302
         with:
           images: |
             docker.io/ruvnet/wifi-densepose
@@ -94,7 +94,7 @@ jobs:
 
       - name: Build + push
         id: build
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
           file: docker/Dockerfile.rust
@@ -115,7 +115,7 @@ jobs:
       #      RUN guard catches missing ones at build time, this re-checks the
       #      pushed artifact post-hoc as belt-and-braces).
       #   2. /health is up.
-      #   3. /api/v1/info returns 200 with no auth (LAN-mode default).
+      #   3. /api/v1/info returns 200 with the explicit trusted-LAN opt-in.
       #   4. With RUVIEW_API_TOKEN set, /api/v1/info returns 401 without a
       #      Bearer header, 200 with the correct one (the #443 auth middleware).
       # ---------------------------------------------------------------------
@@ -124,11 +124,14 @@ jobs:
           set -euo pipefail
           IMAGE="ghcr.io/ruvnet/wifi-densepose:sha-${GITHUB_SHA::7}"
           docker pull "$IMAGE"
-          docker run --rm "$IMAGE" sh -c \
+          docker run --rm --entrypoint sh "$IMAGE" -c \
             'ls /app/ui/observatory.html /app/ui/pose-fusion.html /app/ui/index.html /app/ui/viz.html >/dev/null'
-          docker run --rm "$IMAGE" sh -c 'ls -d /app/ui/observatory /app/ui/pose-fusion >/dev/null'
+          docker run --rm --entrypoint sh "$IMAGE" -c 'ls -d /app/ui/observatory /app/ui/pose-fusion >/dev/null'
 
-          docker run -d --name sm -p 3000:3000 -e CSI_SOURCE=simulated "$IMAGE"
+          docker run -d --name sm -p 3000:3000 \
+            -e CSI_SOURCE=simulated \
+            -e RUVIEW_ALLOW_UNAUTHENTICATED=1 \
+            "$IMAGE"
           # Wait up to 30 s for /health.
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:3000/health >/dev/null 2>&1; then break; fi

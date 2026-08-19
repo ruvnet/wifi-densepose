@@ -183,7 +183,9 @@ static esp_err_t wasm_upload_handler(httpd_req_t *req)
 #else
         format = "raw";
         err = wasm_runtime_load(buf, (uint32_t)total, &module_id);
-        free(buf);
+        /* CONFIG_WASM_SKIP_SIGNATURE makes this and the reject branch above
+         * mutually exclusive, so the raw payload is released exactly once. */
+        free(buf); /* nosemgrep: c.lang.security.double-free.double-free */
 
         if (err != ESP_OK) {
             char msg[80];

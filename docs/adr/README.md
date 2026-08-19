@@ -1,6 +1,15 @@
 # Architecture Decision Records
 
-This folder contains 45 Architecture Decision Records (ADRs) that document every significant technical choice in the RuView / WiFi-DensePose project.
+Latest proposed decisions:
+
+- [ADR-187: archive/v1 deprecation + model-weights honest labeling](ADR-187-archive-v1-deprecation-honest-labeling.md) (refs #509, #1125)
+- [ADR-186: Training progress API — wire the orphaned in-server trainer to /ws/train/progress](ADR-186-training-progress-api.md) (refs #1233)
+- [ADR-185: Python P6 SOTA bindings — AETHER, MERIDIAN, MAT](ADR-185-python-p6-sota-bindings.md)
+- [ADR-184: ADR-117 completion via PyPI Trusted Publishing](ADR-184-adr117-completion-pypi-trusted-publishing.md) (refs #785)
+- [ADR-264: Versioned wire protocol for RTL8720F CFR and Range-FFT reports](ADR-264-rtl8720f-radar-wire-protocol.md)
+- [ADR-263: Adopt RTL8720F 2.4 GHz FMCW radar as an optional RuView sensing platform](ADR-263-rtl8720f-2-4ghz-fmcw-radar-platform.md)
+
+This folder contains 210 Architecture Decision Records (ADRs) that document every significant technical choice in the RuView / WiFi-DensePose project. (The index tables below list a curated subset per domain; see the directory listing for the full set.)
 
 ## Why ADRs?
 
@@ -99,6 +108,7 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-115](ADR-115-home-assistant-integration.md) | Home Assistant integration via MQTT auto-discovery + Matter bridge (HA-DISCO + HA-FABRIC + HA-MIND) | Accepted (MQTT track) / Proposed (Matter SDK P8b) |
 | [ADR-169](ADR-169-adam-mode-light-theme.md) | adam-mode — light theme toggle for the three.js realtime demo | Proposed |
 | [ADR-170](ADR-170-yoga-mode-pose-system.md) | yoga-mode — yoga pose detection, classification, and scoring for the three.js realtime demo | Proposed |
+| [ADR-324](ADR-324-off-axis-head-coupled-perspective-demo.md) | off-axis-mode — RF-assisted head-coupled perspective demo (clean-room Kooima projection; RF presence gating) | Proposed |
 
 ### Architecture and infrastructure
 
@@ -120,6 +130,57 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-097](ADR-097-adopt-rvcsi-as-ruview-csi-runtime.md) | Adopt rvCSI as RuView's primary CSI runtime (phased adoption) | Proposed |
 | [ADR-098](ADR-098-evaluate-midstream-fit.md) | Evaluate `ruvnet/midstream` for RuView's CSI / WebSocket / mesh pipeline | Rejected |
 | [ADR-099](ADR-099-midstream-introspection-tap.md) | Adopt midstream as RuView's real-time introspection + low-latency tap | Proposed |
+| [ADR-263](ADR-263-ruview-npm-harness-deep-review.md) | `@ruvnet/ruview` npm harness — deep review + optimization strategy | Proposed |
+| [ADR-264](ADR-264-rvagent-mcp-and-cli-npm-deep-review.md) | `@ruvnet/rvagent` MCP server + `@ruv/ruview-cli` — deep review + optimization strategy | Proposed |
+| [ADR-265](ADR-265-ruview-npm-distribution-strategy.md) | RuView npm distribution strategy — CI gate, provenance, version single-sourcing, namespace | Proposed |
+| [ADR-273](ADR-273-unified-rf-spatial-world-model.md) | Unified RF spatial world model — umbrella, anti-leakage protocol, acceptance gates | Accepted (P1 implemented) |
+| [ADR-274](ADR-274-universal-rf-encoder-adapter-registry.md) | Universal RF foundation encoder + hardware adapter registry | Accepted (P1 implemented) |
+| [ADR-275](ADR-275-rf-aware-gaussian-spatial-memory.md) | RF-aware Gaussian spatial memory | Accepted (P1 implemented) |
+| [ADR-276](ADR-276-physics-guided-synthetic-rf-worlds.md) | Physics-guided synthetic RF world generator | Accepted (P1 implemented) |
+| [ADR-277](ADR-277-edge-sensing-control-plane.md) | Edge sensing control plane (802.11bf / ETSI ISAC aligned) | Accepted (P1 implemented) |
+| [ADR-278](ADR-278-radar-inverse-rendering-research-program.md) | Radar inverse rendering + differentiable RF SLAM research program | Proposed |
+| [ADR-279](ADR-279-native-rf-frame-contract.md) | Native RF frame contract — `RfFrameV2` authoritative, canonical tensor derived | Accepted (implemented) |
+| [ADR-280](ADR-280-active-sensing-programmable-perception.md) | Active sensing & programmable perception control plane | Accepted (implemented) |
+| [ADR-281](ADR-281-ble-cs-delay-doppler-pose-factorization.md) | BLE Channel Sounding, delay-Doppler tensors, P3162 import, factorized pose | Accepted (implemented) |
+| [ADR-282](ADR-282-ruview-ecosystem-positioning.md) | Ecosystem positioning + mandatory L0–L5 evidence ladder | Accepted |
+| [ADR-287](ADR-287-coherent-wideband-rf-tomography-crate.md) | `wifi-densepose-sar` — coherent wideband RF tomography research crate | Accepted (implemented, published) |
+| [ADR-285](ADR-285-homecore-wasm-first-metaharness.md) | WASM-first Homecore developer metaharness via `npx homecore` | Accepted (implemented and validated) |
+| [ADR-286](ADR-286-wifi-densepose-sar-harness-via-metaharness.md) | `wifi-densepose-sar-harness` — MetaHarness with darwin/router/flywheel | Accepted (implemented, published) |
+| [ADR-288](ADR-288-veil-privacy-shield-compliant-waveform.md) | VEIL — compliant-waveform privacy shield against unauthorized WiFi sensing (`wifi-densepose-privshield`) | Proposed (implemented, P1 reference) |
+| [ADR-289](ADR-289-wifi-densepose-privshield-harness-via-metaharness.md) | `wifi-densepose-privshield-harness` — npm MetaHarness for the VEIL crate (guidance/router/flywheel) | Proposed (implemented, P1) |
+| [ADR-290](ADR-290-veil-e2e-hardware-implementation-program.md) | VEIL end-to-end hardware implementation program — portable C core + multi-provider firmware scaffolds (openwifi/openwrt/nexmon/esp32) | Proposed (P4 scaffolding; C core host-validated) |
+| [ADR-291](ADR-291-public-benchmark-evaluation-harness.md) | Public-benchmark evaluation harness — Widar3.0 ingest, split protocols, leakage guards | Accepted (initial implementation) |
+| [ADR-292](ADR-292-wideband-80211ax-csi-ingest.md) | Wideband 802.11ax CSI ingest — FeitCSI/AX210 adapter, subcarrier-agnostic plumbing | Accepted (initial implementation) |
+| [ADR-293](ADR-293-vitals-ground-truth-rig.md) | Vitals ground-truth rig — reference ingest, alignment, agreement metrics | Accepted (initial implementation) |
+| [ADR-294](ADR-294-wifi-veil-integration.md) | WiFi Veil integration — emission-shaping countermeasure as advisory BFLD dependency | Accepted (initial implementation) |
+| [ADR-295](ADR-295-source-provenance-state-machine.md) | Source provenance state machine — synthetic can never present as live | Accepted (initial implementation) |
+| [ADR-296](ADR-296-sensor-data-plane-bind-hardening.md) | Sensor data-plane hardening — UDP bind control and source allowlist (step one) | Accepted (initial implementation) |
+| [ADR-297](ADR-297-multi-node-semantic-correctness.md) | Multi-node semantic correctness — per-node inference, node-keyed rate limiting, stale state | Accepted (initial implementation) |
+| [ADR-298](ADR-298-model-release-sanity-gates.md) | Model release sanity gates — block degenerate and mislabeled model artifacts | Accepted (initial implementation) |
+| [ADR-299](ADR-299-csi-data-incident-repo-controls.md) | Repository CSI data-incident controls — ignore rules and pre-commit/CI policy check | Accepted (controls implemented; tree remediation gated) |
+| [ADR-300](ADR-300-perception-substrate-program.md) | RuView perception substrate — phased 21-primitive program (calibration, evidence, trust, deployment) | Accepted (program; children ADR-301..317) |
+| [ADR-301](ADR-301-automatic-domain-calibration.md) | Automatic domain calibration — signed, versioned, invalidatable room fingerprint | Accepted (phase 1) |
+| [ADR-302](ADR-302-out-of-distribution-detection.md) | Out-of-distribution detection — KNOWN / DEGRADED / UNKNOWN gating | Accepted (phase 1) |
+| [ADR-303](ADR-303-ground-truth-synchronization.md) | Ground-truth synchronization — reference sensors as a formal validation plane | Proposed (phase 2) |
+| [ADR-304](ADR-304-evidence-engine.md) | Evidence engine — per-(room,device,subject) accuracy ledger | Accepted (phase 1) |
+| [ADR-305](ADR-305-authenticated-sensor-identity.md) | Authenticated sensor identity — RF chain of custody | Accepted (phase 1) |
+| [ADR-306](ADR-306-canonical-spatial-ontology.md) | Canonical spatial ontology — one Site→…→Event model for every surface | Accepted (phase 1) |
+| [ADR-307](ADR-307-persistent-identity-tracking.md) | Persistent identity & tracking — privacy-preserving probabilistic tracks | Proposed (phase 2) |
+| [ADR-308](ADR-308-sensor-placement-optimizer.md) | Sensor placement optimizer — floorplan + inventory → recommended positions | Proposed (phase 3) |
+| [ADR-309](ADR-309-active-sensing.md) | Active sensing — closed-loop RF experiment control | Proposed (phase 3) |
+| [ADR-310](ADR-310-80211bf-native-architecture.md) | 802.11bf-native architecture — standardized WLAN sensing as native measurement types | Proposed (phase 2) |
+| [ADR-311](ADR-311-real-sensor-fusion.md) | Real sensor fusion — uncertainty-aware, multiple observations → one world state | Proposed (phase 2) |
+| [ADR-312](ADR-312-long-term-spatial-memory.md) | Long-term spatial memory — learn the normal physics of a location | Proposed (phase 3) |
+| [ADR-313](ADR-313-counterfactual-inference.md) | Counterfactual inference — generative spatial reasoning | Proposed (phase 3) |
+| [ADR-314](ADR-314-information-gain-scheduler.md) | Information-gain scheduler — sample the most informative radios | Proposed (phase 3) |
+| [ADR-315](ADR-315-digital-rf-twin.md) | Digital RF twin — persistent per-deployment RF model | Proposed (phase 3) |
+| [ADR-316](ADR-316-fleet-control-plane.md) | Fleet control plane — provisioning to audit trails | Proposed (phase 2) |
+| [ADR-317](ADR-317-benchmark-multi-domain-scorecard.md) | Multi-domain benchmark scorecard — regressions cannot hide behind pooled accuracy | Accepted (phase 1) |
+| [ADR-318](ADR-318-capability-certificates.md) | Capability certificates — validated-for-this-environment claims | Accepted (phase 1) |
+| [ADR-319](ADR-319-witness-chain.md) | Witness chain — staged, signed epistemic envelope | Accepted (phase 1) |
+| [ADR-320](ADR-320-sensor-hal.md) | RuView sensor HAL — abstract all sensing hardware to one Observation type | Proposed (phase 2) |
+| [ADR-321](ADR-321-decision-policy-action-authorization.md) | Decision policy — action authorization conditioned on certificate class, freshness, uncertainty, evidence | Accepted (phase 1) |
+| [ADR-323](ADR-323-native-rust-physics-constrained-pose-refinement.md) | Native Rust physics-constrained pose refinement | Proposed |
 
 ---
 

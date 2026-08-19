@@ -1,3 +1,5 @@
+import { withWsTicket } from './ws-ticket.js';
+import { apiService } from './api.service.js';
 /**
  * Sensing WebSocket Service
  *
@@ -65,7 +67,7 @@ class SensingService {
 
   /** Start the service (connect or simulate). */
   start() {
-    this._connect();
+    void this._connect();
   }
 
   /** Stop the service entirely. */
@@ -120,13 +122,26 @@ class SensingService {
 
   // ---- Connection --------------------------------------------------------
 
-  _connect() {
+  // async because the server gates `/ws/sensing` (ADR-272) and a browser
+  // cannot set an Authorization header on an upgrade — so we mint a
+  // single-use ticket first. Minted per connect attempt, never cached: a
+  // ticket is valid once and expires in seconds, so reusing one across
+  // reconnects would fail on the second attempt.
+  async _connect() {
     if (this._ws && this._ws.readyState <= WebSocket.OPEN) return;
 
     this._setState('connecting');
 
+    let url = SENSING_WS_URL;
     try {
-      this._ws = new WebSocket(SENSING_WS_URL);
+      url = await withWsTicket(SENSING_WS_URL);
+    } catch {
+      // Ticket minting is best-effort: against a server with auth off, or one
+      // predating ADR-272, connecting without a ticket is correct.
+    }
+
+    try {
+      this._ws = new WebSocket(url);
     } catch (err) {
       console.warn('[Sensing] WebSocket constructor failed:', err.message);
       this._fallbackToSimulation();
@@ -184,7 +199,7 @@ class SensingService {
 
     this._reconnectTimer = setTimeout(() => {
       this._reconnectTimer = null;
-      this._connect();
+      void this._connect();
     }, delay);
 
     // Only start simulation after several failed attempts so a brief hiccup
@@ -290,25 +305,46 @@ class SensingService {
    * hardware or simulation. Called once on WebSocket open.
    */
   async _detectServerSource() {
+    // ADR-295 (issue #1526): an unreachable or unauthorized status endpoint is
+    // an *unknown* state — it must NOT collapse to "live". Prefer the canonical
+    // `source_state` the server now returns; on any error stay conservative
+    // (server-simulated) until a real frame's `source` field promotes us.
+    //
+    // Send the bearer token via `apiService.getHeaders()` so the probe can
+    // actually succeed under the documented secure posture (API auth
+    // enabled) instead of always 401ing and relying solely on the
+    // conservative fallback below (issue #1526, suggested fix #1).
     try {
-      const resp = await fetch('/api/v1/status');
+      const resp = await fetch('/api/v1/status', { headers: apiService.getHeaders() });
       if (resp.ok) {
         const json = await resp.json();
-        this._applyServerSource(json.source);
+        this._applyServerSource(json.source, json.source_state);
       } else {
-        // Can't reach status endpoint — assume live until first frame tells us
-        this._setDataSource('live');
+        this._setDataSource('server-simulated');
       }
     } catch {
-      this._setDataSource('live');
+      this._setDataSource('server-simulated');
     }
   }
 
   /**
-   * Map a raw server source string to the UI data-source label.
+   * Map a raw server source string (and optional canonical ADR-295
+   * `source_state`) to the UI data-source label.
    */
-  _applyServerSource(rawSource) {
+  _applyServerSource(rawSource, sourceState) {
     this._serverSource = rawSource;
+    // ADR-295: only the verified/unverified live states may show "live"; any
+    // synthetic/stale/disconnected state must not.
+    if (sourceState) {
+      if (sourceState === 'live_verified' || sourceState === 'live_unverified') {
+        this._setDataSource('live');
+      } else if (sourceState === 'synthetic') {
+        this._setDataSource('server-simulated');
+      } else {
+        this._setDataSource('server-simulated');
+      }
+      return;
+    }
     if (rawSource === 'esp32' || rawSource === 'wifi' || rawSource === 'live') {
       this._setDataSource('live');
     } else if (rawSource === 'simulated' || rawSource === 'simulate') {

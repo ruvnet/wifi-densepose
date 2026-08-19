@@ -47,12 +47,21 @@ mod esp32_parser;
 // standardized report path until an OTA binding exists.
 pub mod ieee80211bf;
 pub mod sync_packet;
+/// ADR-270 capability-safe vendor RF provider contract.
+pub mod vendor_rf;
 
 // ADR-081: Rust mirror of the firmware radio abstraction layer (L1) and
 // mesh sensing plane (L3). Lets host tests, simulators, and future
 // coordinator-node Rust code drive the controller stack without
 // touching any downstream signal/ruvector/train/mat crate.
 pub mod radio_ops;
+/// ADR-267 vendor-neutral MediaTek Filogic MIMO CSI framing and simulator.
+pub mod mediatek_csi;
+/// ADR-269 vendor-neutral Qualcomm Atheros CSI framing and simulator.
+pub mod qualcomm_csi;
+/// ADR-264 host-side framing for Realtek RTL8720F CFR and FMCW radar reports.
+/// This module has no dependency on the vendor SDK.
+pub mod rtl8720f;
 
 pub use bridge::CsiData;
 pub use csi_frame::{
@@ -64,12 +73,36 @@ pub use esp32_parser::{
     RUVIEW_FEATURE_MAGIC, RUVIEW_FEATURE_STATE_MAGIC, RUVIEW_FUSED_VITALS_MAGIC,
     RUVIEW_TEMPORAL_MAGIC, RUVIEW_VITALS_MAGIC,
 };
-pub use sync_packet::{
-    SyncPacket, SyncPacketFlags, SYNC_PACKET_MAGIC, SYNC_PACKET_SIZE, SYNC_PACKET_PROTO_VER,
-};
 pub use radio_ops::{
     crc32_ieee, decode_anomaly_alert, decode_mesh, decode_node_status, encode_health, AnomalyAlert,
     AuthClass, CaptureProfile, MeshError, MeshHeader, MeshMsgType, MeshRole, MockRadio, NodeStatus,
     RadioError, RadioHealth, RadioMode, RadioOps, MESH_HEADER_SIZE, MESH_MAGIC, MESH_MAX_PAYLOAD,
     MESH_VERSION,
+};
+pub use mediatek_csi::{
+    ChipsetProfile as MediatekChipsetProfile, CsiFlags as MediatekCsiFlags,
+    CsiFrame as MediatekCsiFrame, CsiParseError as MediatekCsiParseError,
+    CsiPayload as MediatekCsiPayload, ElementFormat as MediatekElementFormat,
+    PpduType as MediatekPpduType, ReportKind as MediatekReportKind,
+    MEDIATEK_CSI_HEADER_LEN, MEDIATEK_CSI_MAGIC, MEDIATEK_CSI_VERSION,
+};
+pub use qualcomm_csi::{
+    ChipsetProfile as QualcommChipsetProfile, CsiFlags as QualcommCsiFlags,
+    CsiFrame as QualcommCsiFrame, CsiParseError as QualcommCsiParseError,
+    CsiPayload as QualcommCsiPayload, ElementFormat as QualcommElementFormat,
+    PpduType as QualcommPpduType, ReportKind as QualcommReportKind,
+    QUALCOMM_CSI_HEADER_LEN, QUALCOMM_CSI_MAGIC, QUALCOMM_CSI_VERSION,
+};
+pub use rtl8720f::{
+    ElementFormat as Rtl8720fElementFormat, RadarFlags as Rtl8720fRadarFlags,
+    RadarFrame as Rtl8720fRadarFrame, RadarParseError as Rtl8720fRadarParseError,
+    RadarPayload as Rtl8720fRadarPayload, ReportType as Rtl8720fReportType,
+    RTL8720F_RADAR_HEADER_LEN, RTL8720F_RADAR_MAGIC, RTL8720F_RADAR_VERSION,
+};
+pub use sync_packet::{
+    SyncPacket, SyncPacketFlags, SYNC_PACKET_MAGIC, SYNC_PACKET_PROTO_VER, SYNC_PACKET_SIZE,
+};
+pub use vendor_rf::{
+    ProviderAvailability, ProviderDescriptor, RfCapability, VendorEventError, VendorId,
+    VendorRfEvent, VendorRfProvider,
 };

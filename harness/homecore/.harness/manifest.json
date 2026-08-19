@@ -1,0 +1,67 @@
+{
+  "schema": 2,
+  "generator": "Homecore metaharness provenance v1",
+  "template": "vertical:repo-maintainer+homecore",
+  "name": "homecore",
+  "version": "0.1.0",
+  "hosts": [
+    "claude-code",
+    "codex"
+  ],
+  "kernel": {
+    "package": "@metaharness/kernel",
+    "version": "0.1.2",
+    "preference": "wasm-first",
+    "fallback": "native-or-js-reported"
+  },
+  "toolPolicy": "default-deny-execution",
+  "files": {
+    ".claude/settings.json": "9a8d4ea4f8deb8b7497f64d03404a6f910dd159d5feb02b383268ad96a3b022c",
+    ".claude/skills/explore/SKILL.md": "7292db0f5153d3f61f235ba6c30dd0a5257db3e4187d89d72c2337a827f48bcc",
+    ".claude/skills/migrate/SKILL.md": "1bfeaaf840f45471273fa3a23a332cf136a60af18cbbab7f5f1e06c6746f13d0",
+    ".claude/skills/operate-server/SKILL.md": "2fcba97aae9b57587a0307c976c4d2b7105052526fc1343ffebcc800f40ef796",
+    ".claude/skills/secure-plugin/SKILL.md": "d50e7fbd6c6d30fe4c2d71bc5c9fd010abcb9acdcc4572504210cc82e7aa3878",
+    ".claude/skills/verify/SKILL.md": "f932b840868dc7672ae2185bb955b7aee51f4cda68b72791f5c95ee66ed26eca",
+    ".codex/config.toml": "dad436ab18bf765d3711a6abd55506fdf73a21e2800aeb085402ab334a208ce1",
+    ".harness/claims.json": "99c153ea971eaeea92c44aeee4189470f284ca8c648b22cbbb02a9912c1660ea",
+    ".harness/mcp-policy.json": "73893df248c9a8d79da5451940b40d6b930b9b92999b52ef8bd538c527cd8a47",
+    ".mcp/servers.json": "113ba87a5b1e9bc4af27ebd516d36ce1c2c1eccc8d26d1ec751b07a4d93b3661",
+    "AGENTS.md": "247a71a6b52295516a8cc5f2154839498f2e8ca45eafeed8fd13c1cb9664cd8d",
+    "CLAUDE.md": "b60fb86fa7e8de909ab436d02ea55946fa6a01312fa60c5edd7c3a223c974f0f",
+    "LICENSE": "631f94984f626818d42ecf717aa6e8e0afd4f9f355ca706bd2effafbd1416d06",
+    "README.md": "7b4eda2e05ab35345e50ec8b8058c0bcbe0fc52e11e8b7447f3d8d231b4ca58d",
+    "bin/cli.js": "c463451f4cecebf308cbfce74c553ca44edb58462fe4e7bfacc49a3bf3aa0c49",
+    "brain/corpus/core.jsonl": "a01a42723490e8c4bcf4ceb4233e8115cb7e27fb9a17a802f279d565dc3493fb",
+    "package.json": "45d9e00dc059e84e2445e9b7a8131a04c4c0241b88908c5e849b964735833601",
+    "scripts/update-manifest.mjs": "5dbebd536a65c88dd26f6830c5a4b62b3f9058d971304c3c6c410c3e0e78faaa",
+    "scripts/verify-manifest.mjs": "787351d57f452ee58e67675e09158f17e43adba643981f5148ac144cae17fd80",
+    "skills/explore.md": "4fccb5aab3705fd0d266ae7cb98523d71cce4eed4623e9c10e46fb2136b690e3",
+    "skills/migrate.md": "519d25a203d3c00755fb384a1d8be6c516faedeef862756ddb6ed959aaf34901",
+    "skills/operate-server.md": "883bd5cfec5f10c78e05c4479290dc39a8191a6212555f8e8807cfeebaf66762",
+    "skills/secure-plugin.md": "c762e9335858428e79cdce6c582b9e91e58ebed4c55254f29ccbcce40466d36b",
+    "skills/verify.md": "5a544c716931c34054cb18431d9eaa5778f89a80ddfc538257b04c9312b9b7fe",
+    "src/brain.js": "196eb0c2144a51e8c443408fe6f4ae1166bd7b7e6b94d62b91b218c856925901",
+    "src/capabilities.js": "ae959e5e2f55c6414199f12d364c8f2e4558034481a7831fbc5ac89e5ae5109b",
+    "src/guidance.js": "f04a15f4ece3dc92ee869b6ca1fc7e2e3ff4dd408f95c49baf19d99debec7f34",
+    "src/hosts/claude-code.js": "bd844278849791b411a38d440bf076de52a2b8198274a2002f9369ff604ee0e6",
+    "src/hosts/codex.js": "8ced3e10fa44bc443172bc0814565b6dc038976b542c5316fa19c1adf778cc6b",
+    "src/hosts/index.js": "da8ba1e70f13e014f7d7d1954006fc1f1922263ae4d8be41e9c0ee3028c95c5c",
+    "src/kernel.js": "d60b2eb2700e48de82feda950971ed4654ef995f509a4fa29687e3d7212eac05",
+    "src/mcp-server.js": "beac83766ccee14e174972ff22af0ad3526e9e42d6ef485df737d66811d8ab2e",
+    "src/policy.js": "c34f1469f0c65c004c7b1c4155f48aac93e88a1d2b3725fd31c1e71afcf9e571",
+    "src/process-runner.js": "5a0a62467028c4801990ade0231b8a1236865f0d4107807ee9f4d2f44647c2ef",
+    "src/redact.js": "7ee943893b43a75fa10fb3a403bbf02af39f3bf36a3195ae2eb3384d19ad26b4",
+    "src/repo-trust.js": "c11b2255e43f7cba0c74c33e4a972f60193490821445dce8bab0f97dd47db977",
+    "src/tools.js": "1ad280eebca0688a52ae08fe5647c8e42a6a8e8e5d70534cc4361dc319c22fbf"
+  },
+  "filesDigest": "ad2340db9fc044ffe69d6a9b09a560515cee1d454a405db1b9cc3547afc868c1",
+  "brainDigest": "a01a42723490e8c4bcf4ceb4233e8115cb7e27fb9a17a802f279d565dc3493fb",
+  "policyDigest": "73893df248c9a8d79da5451940b40d6b930b9b92999b52ef8bd538c527cd8a47",
+  "dependencies": {
+    "@metaharness/kernel": "0.1.2"
+  },
+  "meta": {
+    "surface": "cli+mcp+brain+wasm+local-hosts",
+    "adr": "ADR-285"
+  }
+}

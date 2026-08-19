@@ -8,12 +8,12 @@ description: Zero-to-sensing path picker for RuView (WiFi-DensePose) — pick do
 Get a newcomer from nothing to a working RuView setup. **First fact to set:** WiFi
 sensing infers *coarse* pose/presence/breathing from Channel State Information — it
 is **not a camera**, and any accuracy number must be MEASURED against a baseline
-(use the `verify` skill / `ruview.claim_check` tool). Never present WiFi output as
+(use the `verify` skill / `ruview_claim_check` tool). Never present WiFi output as
 camera-grade.
 
 ## Pick a path
 
-Run `ruview.onboard {path}` or decide from:
+Run `ruview_onboard {path}` or decide from:
 
 1. **docker-demo** — fastest, no hardware. Replays sample CSI into the dashboard.
    `docker run -p 8000:8000 ruvnet/wifi-densepose` → open `http://localhost:8000`.
@@ -26,5 +26,5 @@ Run `ruview.onboard {path}` or decide from:
 ## Then
 
 - Live sensing → go to **provision-node**, then **calibrate-room**.
-- Evaluating a model/claim → go to **verify** and run `ruview.claim_check` on any
+- Evaluating a model/claim → go to **verify** and run `ruview_claim_check` on any
   report before you quote a number.

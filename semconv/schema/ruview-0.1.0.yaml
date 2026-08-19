@@ -1,0 +1,11 @@
+# OpenTelemetry schema file format version. This is independent of the RuView
+# semantic convention version below.
+file_format: 1.1.0
+
+# The canonical URL where this schema file is published.
+schema_url: https://raw.githubusercontent.com/ruvnet/RuView/main/semconv/schema/ruview-0.1.0.yaml
+
+versions:
+  # Initial RuView semantic convention release. There are no prior versions to
+  # transform from.
+  0.1.0:

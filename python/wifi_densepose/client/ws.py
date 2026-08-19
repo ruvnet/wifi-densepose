@@ -31,8 +31,10 @@ asyncio.run(main())
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Optional
 
@@ -46,6 +48,33 @@ except ImportError:  # pragma: no cover
 
 
 log = logging.getLogger(__name__)
+
+
+#: Environment variable the sensing-server bearer token is read from by
+#: default. Mirrors the TypeScript MCP client (tools/ruview-mcp).
+TOKEN_ENV_VAR = "RUVIEW_API_TOKEN"
+
+
+def _select_header_kwarg(connect_fn: Any) -> str:
+    """Return the ``websockets.connect`` keyword for extra request headers.
+
+    The keyword was renamed inside the ``websockets>=12`` range this
+    package supports: ``<= 13`` accepts ``extra_headers``, ``>= 14``
+    accepts ``additional_headers``. We inspect the actual signature of
+    the installed ``connect`` rather than guessing from ``__version__``,
+    so a version bump that renames the kwarg again is handled by
+    detection instead of raising ``TypeError`` at connect time.
+    """
+    try:
+        params = inspect.signature(connect_fn).parameters
+    except (TypeError, ValueError):  # pragma: no cover — no introspectable sig
+        return "additional_headers"
+    if "additional_headers" in params:
+        return "additional_headers"
+    if "extra_headers" in params:
+        return "extra_headers"
+    # Neither present (unexpected) — prefer the newer convention.
+    return "additional_headers"
 
 
 # ─── Typed messages ──────────────────────────────────────────────────
@@ -172,12 +201,18 @@ class SensingClient:
     the ``async with`` in your own retry loop. Auto-reconnect logic is
     application-specific (e.g., "retry forever" for a long-running
     automation vs "fail fast" for a CLI tool that should exit).
+
+    Auth: pass ``token=`` to send ``Authorization: Bearer <token>`` on
+    the WS upgrade, for sensing-servers started with ``RUVIEW_API_TOKEN``
+    set. If ``token`` is omitted it defaults to the ``RUVIEW_API_TOKEN``
+    environment variable; when neither is set, no header is sent.
     """
 
     def __init__(
         self,
         url: str,
         *,
+        token: Optional[str] = None,
         ping_interval: float = 20.0,
         ping_timeout: float = 20.0,
         max_size: int = 16 * 1024 * 1024,
@@ -188,18 +223,28 @@ class SensingClient:
                 "`pip install \"wifi-densepose[client]\"` to enable the client extras."
             )
         self.url = url
+        # Bearer token for auth-enabled sensing-servers. Explicit
+        # constructor argument wins; otherwise fall back to the
+        # RUVIEW_API_TOKEN environment variable. An empty value (unset
+        # env, or "") means "no auth" — no Authorization header is sent.
+        self._token = token if token is not None else os.environ.get(TOKEN_ENV_VAR)
         self._ping_interval = ping_interval
         self._ping_timeout = ping_timeout
         self._max_size = max_size
         self._ws: Any = None  # websockets.WebSocketClientProtocol — typed Any to avoid import cost
 
     async def __aenter__(self) -> "SensingClient":
-        self._ws = await websockets.connect(
-            self.url,
+        connect_kwargs: dict[str, Any] = dict(
             ping_interval=self._ping_interval,
             ping_timeout=self._ping_timeout,
             max_size=self._max_size,
         )
+        if self._token:
+            # Python (unlike the browser UI) can set Authorization
+            # directly on the WS upgrade — no ticket workaround needed.
+            header_kwarg = _select_header_kwarg(websockets.connect)
+            connect_kwargs[header_kwarg] = {"Authorization": f"Bearer {self._token}"}
+        self._ws = await websockets.connect(self.url, **connect_kwargs)
         return self
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:

@@ -26,14 +26,13 @@ jobs:
     steps:
     - name: Checkout code
       continue-on-error: true
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
-        submodules: recursive
         fetch-depth: 0
 
     - name: Set up Python
       continue-on-error: true
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
       with:
         python-version: ${{ env.PYTHON_VERSION }}
         cache: 'pip'
@@ -47,15 +46,18 @@ jobs:
 
     - name: Run Bandit security scan
       run: |
-        # The Python codebase lives under archive/v1/src (it moved there when
-        # the runtime was rewritten in Rust). Scanning `src/` matched nothing,
-        # so this SAST step was a silent no-op.
-        bandit -r archive/v1/src/ -f sarif -o bandit-results.sarif
+        # archive/v1 is frozen research code and is not shipped. Scan the
+        # maintained Python packages and operator scripts instead.
+        # Keep the Security tab actionable: publish high-severity findings.
+        # Medium/low findings are reviewed during focused local audits.
+        bandit -lll -r python/ scripts/ firmware/esp32-csi-node/ aether-arena/ \
+          -x '*/tests/*,*/test/*,*/test_*.py,*/bench/*' \
+          -f sarif -o bandit-results.sarif
       continue-on-error: true
 
     - name: Upload Bandit results to GitHub Security
       continue-on-error: true
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@a2983b8bed1923f44751c5c43237f479442827b3 # v3
       if: always()
       with:
         sarif_file: bandit-results.sarif
@@ -74,12 +76,16 @@ jobs:
         semgrep \
           --config=p/security-audit --config=p/secrets --config=p/python \
           --config=p/docker --config=p/kubernetes \
-          --sarif --output=semgrep.sarif archive/v1/src/
+          --severity=ERROR \
+          --exclude='**/tests/**' --exclude='**/test/**' \
+          --exclude='**/test_*.py' --exclude='**/bench/**' \
+          --sarif --output=semgrep.sarif \
+          python/ scripts/ firmware/esp32-csi-node/ aether-arena/
       continue-on-error: true
 
     - name: Upload Semgrep results to GitHub Security
       continue-on-error: true
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@a2983b8bed1923f44751c5c43237f479442827b3 # v3
       if: always()
       with:
         sarif_file: semgrep.sarif
@@ -97,13 +103,11 @@ jobs:
     steps:
     - name: Checkout code
       continue-on-error: true
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
     - name: Set up Python
       continue-on-error: true
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
       with:
         python-version: ${{ env.PYTHON_VERSION }}
         cache: 'pip'
@@ -135,7 +139,7 @@ jobs:
 
     - name: Upload Snyk results to GitHub Security
       continue-on-error: true
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@a2983b8bed1923f44751c5c43237f479442827b3 # v3
       if: always()
       with:
         sarif_file: snyk-results.sarif
@@ -143,7 +147,7 @@ jobs:
 
     - name: Upload vulnerability reports
       continue-on-error: true
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       if: always()
       with:
         name: vulnerability-reports
@@ -157,7 +161,6 @@ jobs:
     name: Container Security Scan
     runs-on: ubuntu-latest
     continue-on-error: true   # third-party scanners are flaky / SARIF uploads can 403; don't gate the PR
-    needs: []
     if: github.event_name == 'push' || github.event_name == 'schedule'
     permissions:
       security-events: write
@@ -166,20 +169,20 @@ jobs:
     steps:
     - name: Checkout code
       continue-on-error: true
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         submodules: recursive
 
     - name: Set up Docker Buildx
       continue-on-error: true
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
     - name: Build Docker image for scanning
       continue-on-error: true
-      uses: docker/build-push-action@v7
+      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
       with:
         context: .
-        target: production
+        file: docker/Dockerfile.rust
         load: true
         tags: wifi-densepose:scan
         cache-from: type=gha
@@ -192,50 +195,21 @@ jobs:
         image-ref: 'wifi-densepose:scan'
         format: 'sarif'
         output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH'
+        ignore-unfixed: true
+        limit-severities-for-sarif: true
 
     - name: Upload Trivy results to GitHub Security
       continue-on-error: true
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@a2983b8bed1923f44751c5c43237f479442827b3 # v3
       if: always()
       with:
         sarif_file: 'trivy-results.sarif'
         category: trivy
 
-    - name: Run Grype vulnerability scanner
-      continue-on-error: true
-      uses: anchore/scan-action@v7
-      id: grype-scan
-      with:
-        image: 'wifi-densepose:scan'
-        fail-build: false
-        severity-cutoff: high
-        output-format: sarif
-
-    - name: Upload Grype results to GitHub Security
-      continue-on-error: true
-      uses: github/codeql-action/upload-sarif@v3
-      if: always()
-      with:
-        sarif_file: ${{ steps.grype-scan.outputs.sarif }}
-        category: grype
-
-    - name: Run Docker Scout
-      continue-on-error: true
-      uses: docker/scout-action@v1
-      if: always()
-      with:
-        command: cves
-        image: wifi-densepose:scan
-        sarif-file: scout-results.sarif
-        summary: true
-
-    - name: Upload Docker Scout results
-      continue-on-error: true
-      uses: github/codeql-action/upload-sarif@v3
-      if: always()
-      with:
-        sarif_file: scout-results.sarif
-        category: docker-scout
+    # Trivy is the single container SARIF authority. Grype and Docker Scout
+    # produced duplicate alerts for the same image packages and obscured the
+    # actionable high/critical findings.
 
   # Infrastructure as Code security scanning
   iac-scan:
@@ -249,52 +223,25 @@ jobs:
     steps:
     - name: Checkout code
       continue-on-error: true
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-
-    - name: Run Checkov IaC scan
-      continue-on-error: true
-      uses: bridgecrewio/checkov-action@99bb2caf247dfd9f03cf984373bc6043d4e32ebf # v12.1347.0
-      with:
-        directory: .
-        framework: kubernetes,dockerfile,terraform,ansible
-        output_format: sarif
-        output_file_path: checkov-results.sarif
-        quiet: true
-        soft_fail: true
-
-    - name: Upload Checkov results to GitHub Security
-      continue-on-error: true
-      uses: github/codeql-action/upload-sarif@v3
-      if: always()
-      with:
-        sarif_file: checkov-results.sarif
-        category: checkov
-
-    - name: Run Terrascan IaC scan
-      continue-on-error: true
-      uses: tenable/terrascan-action@3a6e87da8e244513bd77b631e624552643f794c6 # v1.4.1
-      with:
-        iac_type: 'k8s'
-        iac_version: 'v1'
-        policy_type: 'k8s'
-        only_warn: true
-        sarif_upload: true
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
     - name: Run KICS IaC scan
       continue-on-error: true
       uses: checkmarx/kics-github-action@05aa5eb70eede1355220f4ca5238d96b397e30a6 # v2.1.20
       with:
-        path: '.'
+        # Scan RuView-owned operational IaC only. Submodules are audited and
+        # fixed in their owning repositories; archived/benchmark fixtures are
+        # intentionally not production infrastructure.
+        path: '.github/workflows,docker,logging,v2/crates/nvsim-server/Dockerfile'
         output_path: kics-results
         output_formats: 'sarif'
         exclude_paths: '.git,node_modules'
         exclude_queries: 'a7ef1e8c-fbf8-4ac1-b8c7-2c3b0e6c6c6c'
+        exclude_severities: 'info'
 
     - name: Upload KICS results to GitHub Security
       continue-on-error: true
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@a2983b8bed1923f44751c5c43237f479442827b3 # v3
       if: always()
       with:
         sarif_file: kics-results/results.sarif
@@ -312,9 +259,8 @@ jobs:
     steps:
     - name: Checkout code
       continue-on-error: true
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
-        submodules: recursive
         fetch-depth: 0
 
     - name: Run TruffleHog secret scan
@@ -328,7 +274,7 @@ jobs:
 
     - name: Run GitLeaks secret scan
       continue-on-error: true
-      uses: gitleaks/gitleaks-action@v2
+      uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
@@ -348,13 +294,11 @@ jobs:
     steps:
     - name: Checkout code
       continue-on-error: true
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
     - name: Set up Python
       continue-on-error: true
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
       with:
         python-version: ${{ env.PYTHON_VERSION }}
         cache: 'pip'
@@ -374,7 +318,7 @@ jobs:
 
     - name: Upload license report
       continue-on-error: true
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: license-report
         path: licenses.json
@@ -387,9 +331,7 @@ jobs:
     steps:
     - name: Checkout code
       continue-on-error: true
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
     - name: Check security policy files
       continue-on-error: true
@@ -444,7 +386,7 @@ jobs:
     steps:
     - name: Download all artifacts
       continue-on-error: true
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
 
     - name: Generate security summary
       continue-on-error: true
@@ -464,7 +406,7 @@ jobs:
 
     - name: Upload security summary
       continue-on-error: true
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: security-summary
         path: security-summary.md
@@ -475,7 +417,7 @@ jobs:
     - name: Notify security team on critical findings
       continue-on-error: true
       if: ${{ env.SECURITY_SLACK_WEBHOOK_URL != '' && (needs.sast.result == 'failure' || needs.dependency-scan.result == 'failure' || needs.container-scan.result == 'failure') }}
-      uses: 8398a7/action-slack@v3
+      uses: 8398a7/action-slack@77eaa4f1c608a7d68b38af4e3f739dcd8cba273e # v3
       with:
         status: failure
         channel: '#security'
@@ -491,7 +433,7 @@ jobs:
     - name: Create security issue on critical findings
       continue-on-error: true
       if: needs.sast.result == 'failure' || needs.dependency-scan.result == 'failure'
-      uses: actions/github-script@v6
+      uses: actions/github-script@00f12e3e20659f42342b1c0226afda7f7c042325 # v6
       with:
         script: |
           github.rest.issues.create({

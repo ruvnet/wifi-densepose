@@ -68,6 +68,8 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *)event_data;
+        ESP_LOGW(TAG, "WiFi disconnected, reason=%d rssi=%d", disc->reason, disc->rssi);
         if (s_retry_num < MAX_RETRY) {
             esp_wifi_connect();
             s_retry_num++;
@@ -103,13 +105,18 @@ static void wifi_init_sta(void)
 
     wifi_config_t wifi_config = {
         .sta = {
-            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+            /* WPA_PSK (not WPA2_PSK) so routers running WPA/WPA2-mixed
+             * compatibility mode aren't rejected with
+             * WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD (#1050). */
+            .threshold.authmode = WIFI_AUTH_WPA_PSK,
         },
     };
 
     /* Copy runtime SSID/password from NVS config */
-    strncpy((char *)wifi_config.sta.ssid, g_nvs_config.wifi_ssid, sizeof(wifi_config.sta.ssid) - 1);
-    strncpy((char *)wifi_config.sta.password, g_nvs_config.wifi_password, sizeof(wifi_config.sta.password) - 1);
+    strlcpy((char *)wifi_config.sta.ssid, g_nvs_config.wifi_ssid,
+            sizeof(wifi_config.sta.ssid));
+    strlcpy((char *)wifi_config.sta.password, g_nvs_config.wifi_password,
+            sizeof(wifi_config.sta.password));
 
     /* If password is empty, use open auth */
     if (strlen((char *)wifi_config.sta.password) == 0) {
@@ -446,9 +453,12 @@ void app_main(void)
             .ingest_sec    = g_nvs_config.swarm_ingest_sec,
             .enabled       = 1,
         };
-        strncpy(swarm_cfg.seed_url, g_nvs_config.seed_url, sizeof(swarm_cfg.seed_url) - 1);
-        strncpy(swarm_cfg.seed_token, g_nvs_config.seed_token, sizeof(swarm_cfg.seed_token) - 1);
-        strncpy(swarm_cfg.zone_name, g_nvs_config.zone_name, sizeof(swarm_cfg.zone_name) - 1);
+        strlcpy(swarm_cfg.seed_url, g_nvs_config.seed_url,
+                sizeof(swarm_cfg.seed_url));
+        strlcpy(swarm_cfg.seed_token, g_nvs_config.seed_token,
+                sizeof(swarm_cfg.seed_token));
+        strlcpy(swarm_cfg.zone_name, g_nvs_config.zone_name,
+                sizeof(swarm_cfg.zone_name));
         swarm_ret = swarm_bridge_init(&swarm_cfg, csi_collector_get_node_id());
         if (swarm_ret != ESP_OK) {
             ESP_LOGW(TAG, "Swarm bridge init failed: %s", esp_err_to_name(swarm_ret));

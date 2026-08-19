@@ -317,7 +317,9 @@ def generate_nvs_binary(csv_content: str, size: int) -> bytes:
             "nvs_partition_generator", "nvs_partition_gen.py"
         )
         if os.path.isfile(gen_script):
-            subprocess.check_call([
+            # Fixed interpreter/script plus an argv list (never a shell);
+            # csv_path/bin_path are private NamedTemporaryFile paths.
+            subprocess.check_call([  # nosemgrep: dangerous-subprocess-use-tainted-env-args
                 sys.executable, gen_script, "generate",
                 csv_path, bin_path, hex(size)
             ])

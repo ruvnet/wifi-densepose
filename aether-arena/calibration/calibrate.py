@@ -36,7 +36,10 @@ def main():
     dev = a.device
 
     net = PoseNet().to(dev)
-    net.load_state_dict(torch.load(a.base, map_location=dev), strict=False)
+    # Checkpoints are tensor state dictionaries; never invoke pickle object loading.
+    net.load_state_dict(
+        torch.load(a.base, map_location=dev, weights_only=True), strict=False
+    )
     net.add_lora(r=a.rank).to(dev)
     for k, p in net.named_parameters():
         p.requires_grad = k.endswith(".A") or k.endswith(".B")

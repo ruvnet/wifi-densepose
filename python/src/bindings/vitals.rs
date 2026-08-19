@@ -242,7 +242,23 @@ impl PyBreathingExtractor {
 // ─── HeartRateExtractor ──────────────────────────────────────────────
 
 /// Extracts heart rate (40–120 BPM) from per-subcarrier amplitude
-/// residuals via 0.8–2.0 Hz bandpass + autocorrelation peak detection.
+/// residuals and per-subcarrier unwrapped phases (radians) via
+/// 0.8–2.0 Hz bandpass + autocorrelation peak detection.
+///
+/// Python:
+/// ```python
+/// from wifi_densepose import HeartRateExtractor
+///
+/// hr = HeartRateExtractor.esp32_default()  # 56 subcarriers, 100 Hz, 15s window
+///
+/// # Feed residuals and matching unwrapped phases from your preprocessor.
+/// # Like BreathingExtractor's weights, phases=[] means "no per-subcarrier
+/// # coherence information available" and falls back to equal weighting
+/// # across all subcarriers -- it does NOT silently drop every frame.
+/// est = hr.extract(residuals=[0.01, -0.02, …], phases=[0.0, 0.01, …])
+/// if est is not None:
+///     print(est.value_bpm, est.confidence)
+/// ```
 #[pyclass(name = "HeartRateExtractor")]
 pub struct PyHeartRateExtractor {
     inner: HeartRateExtractor,
@@ -265,10 +281,19 @@ impl PyHeartRateExtractor {
         Self { inner: HeartRateExtractor::esp32_default() }
     }
 
-    /// Extract heart rate from per-subcarrier residuals. GIL released
-    /// during DSP.
-    fn extract(&mut self, py: Python<'_>, residuals: Vec<f64>, weights: Vec<f64>) -> Option<PyVitalEstimate> {
-        let est = py.allow_threads(|| self.inner.extract(&residuals, &weights));
+    /// Extract heart rate from per-subcarrier residuals and matching
+    /// per-subcarrier unwrapped phases (radians). A short or empty `phases`
+    /// slice falls back to equal weighting for any subcarrier missing phase
+    /// data (issue #1423) -- it does not truncate the number of subcarriers
+    /// fused, and does not silently return `None` for every frame. GIL
+    /// released during DSP.
+    fn extract(
+        &mut self,
+        py: Python<'_>,
+        residuals: Vec<f64>,
+        phases: Vec<f64>,
+    ) -> Option<PyVitalEstimate> {
+        let est = py.allow_threads(|| self.inner.extract(&residuals, &phases));
         est.map(PyVitalEstimate::from_rust)
     }
 

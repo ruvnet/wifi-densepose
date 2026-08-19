@@ -2,7 +2,9 @@
 //! runs a CSI window through the engine, emits `pose.frame` events.
 
 use crate::config::CogConfig;
-use crate::inference::{CsiWindow, InferenceEngine, INPUT_SUBCARRIERS, INPUT_TIMESTEPS};
+use crate::inference::{
+    CsiWindow, ImageObservationContext, InferenceEngine, INPUT_SUBCARRIERS, INPUT_TIMESTEPS,
+};
 use crate::publisher::{emit_event, Event};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -13,6 +15,14 @@ pub async fn run_loop(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut buffer: Vec<f32> = Vec::with_capacity(INPUT_SUBCARRIERS * INPUT_TIMESTEPS);
     let mut tick: u64 = 0;
+    let process_started = std::time::Instant::now();
+    let sensor_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_nanos()
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let model_id = format!("pose-estimation:{}", engine.backend());
+    let model_artifact_hash = engine.artifact_hash();
 
     loop {
         // Poll one frame from the sensing-server. On error, sleep and retry —
@@ -34,7 +44,24 @@ pub async fn run_loop(
                                 "keypoints": chunk_pairs(&out.keypoints),
                                 "confidence": out.confidence,
                             }]);
-                            emit_event(&Event::pose_frame(tick, 1, persons));
+                            let timestamp_ns = sensor_epoch.saturating_add(
+                                process_started
+                                    .elapsed()
+                                    .as_nanos()
+                                    .try_into()
+                                    .unwrap_or(u64::MAX),
+                            );
+                            if let Some(observation) = out.to_image_observation(
+                                ImageObservationContext {
+                                    timestamp_ns,
+                                    sensor_epoch,
+                                    sequence: tick,
+                                    model_id: model_id.clone(),
+                                    model_artifact_hash,
+                                },
+                            ) {
+                                emit_event(&Event::pose_frame(tick, 1, persons, &observation));
+                            }
                         }
                     }
                 }

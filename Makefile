@@ -51,26 +51,26 @@ verify-audit:
 
 # ─── Rust Builds ─────────────────────────────────────────────
 build-rust:
-	cd rust-port/wifi-densepose-rs && cargo build --release
+	cd v2 && cargo build --release
 
 build-wasm:
-	cd rust-port/wifi-densepose-rs && wasm-pack build crates/wifi-densepose-wasm --target web --release
+	cd v2 && wasm-pack build crates/wifi-densepose-wasm --target web --release
 
 build-wasm-mat:
-	cd rust-port/wifi-densepose-rs && wasm-pack build crates/wifi-densepose-wasm --target web --release -- --features mat
+	cd v2 && wasm-pack build crates/wifi-densepose-wasm --target web --release -- --features mat
 
 test-rust:
-	cd rust-port/wifi-densepose-rs && cargo test --workspace
+	cd v2 && cargo test --workspace --no-default-features
 
 bench:
-	cd rust-port/wifi-densepose-rs && cargo bench --package wifi-densepose-signal
+	cd v2 && cargo bench --package wifi-densepose-signal
 
 # ─── Run ─────────────────────────────────────────────────────
 run-api:
-	uvicorn v1.src.api.main:app --host 0.0.0.0 --port 8000
+	uvicorn archive.v1.src.api.main:app --host 0.0.0.0 --port 8000
 
 run-api-dev:
-	uvicorn v1.src.api.main:app --host 0.0.0.0 --port 8000 --reload
+	uvicorn archive.v1.src.api.main:app --host 0.0.0.0 --port 8000 --reload
 
 run-viz:
 	python3 -m http.server 3000 --directory ui
@@ -81,7 +81,7 @@ run-docker:
 # ─── Clean ───────────────────────────────────────────────────
 clean:
 	rm -f .install.log
-	cd rust-port/wifi-densepose-rs && cargo clean 2>/dev/null || true
+	cd v2 && cargo clean 2>/dev/null || true
 
 # ─── Help ────────────────────────────────────────────────────
 help:

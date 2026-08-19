@@ -9,7 +9,7 @@ The "prove everything" skill. Nothing ships as validated without this.
 
 ## Deterministic proof (Trust Kill Switch)
 
-`ruview.verify` runs `archive/v1/data/proof/verify.py`: it feeds a reference signal
+`ruview_verify` runs `archive/v1/data/proof/verify.py`: it feeds a reference signal
 through the production pipeline and hashes the output against
 `expected_features.sha256`. Must print **VERDICT: PASS**. If numpy/scipy changed the
 hash, regenerate with `verify.py --generate-hash` then re-verify.
@@ -28,7 +28,7 @@ crate versions — a recipient can re-verify with one command.
 
 ## Claim honesty
 
-Run `ruview.claim_check {text}` on any report, README section, PR body, or model card
+Run `ruview_claim_check {text}` on any report, README section, PR body, or model card
 before quoting accuracy. It flags:
 - untagged accuracy numbers (must be MEASURED / CLAIMED / SYNTHETIC),
 - MEASURED claims with no reproducer cited,

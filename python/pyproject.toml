@@ -10,7 +10,7 @@ build-backend = "maturin"
 
 [project]
 name = "wifi-densepose"
-version = "2.0.0a1"
+version = "2.0.0"
 description = "WiFi-based human pose estimation, vital sign extraction, and ambient intelligence from Channel State Information (CSI). PyO3 bindings for the Rust core."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,7 +23,7 @@ keywords = [
     "biometric", "ambient-intelligence", "home-assistant", "matter",
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
@@ -48,6 +48,20 @@ client = [
     "websockets>=12.0",
     "paho-mqtt>=2.1",
 ]
+# ADR-185 P1 — AETHER contrastive embeddings. Unlike `client`, this
+# extra carries no pure-Python deps: it is a marker for a *compiled*
+# feature build (`maturin ... --features aether` / a cibuildwheel
+# feature axis, ADR-185 §3.1). Installing the base wheel and importing
+# `wifi_densepose.aether` raises a clear ImportError naming this extra.
+aether = []
+# ADR-185 P2 — MERIDIAN domain generalization. Same compiled-feature
+# marker pattern as `aether` (built via `maturin ... --features meridian`).
+meridian = []
+# ADR-185 P3 — MAT disaster-survivor detection. Same compiled-feature
+# marker (built via `maturin ... --features mat`).
+mat = []
+# ADR-185 §3 convenience — all three SOTA subsystems at once.
+sota = []
 # Developer dependencies for running the test suite + lint.
 dev = [
     "pytest>=8.0",

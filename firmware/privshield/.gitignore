@@ -1,0 +1,9 @@
+core/test_veil_shield
+*.o
+
+# ESP-IDF example build output
+esp32/examples/*/build/
+esp32/examples/*/managed_components/
+esp32/examples/*/sdkconfig
+esp32/examples/*/sdkconfig.old
+esp32/examples/*/dependencies.lock

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "split": "train",
+      "sequence": "sequence-1",
+      "take": "take-1",
+      "subject": "subject-1",
+      "room": "room-1",
+      "calibration_session": "calibration-1"
+    },
+    {
+      "split": "test",
+      "sequence": "sequence-2",
+      "take": "take-2",
+      "subject": "subject-1",
+      "room": "room-2",
+      "calibration_session": "calibration-2"
+    }
+  ]
+}

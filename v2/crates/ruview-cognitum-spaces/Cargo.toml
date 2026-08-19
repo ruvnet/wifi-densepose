@@ -1,0 +1,19 @@
+[package]
+name = "ruview-cognitum-spaces"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Bounded, privacy-preserving Cognitum Spaces client for RuView"
+publish = false
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url = "2"
+
+[dev-dependencies]
+tokio.workspace = true

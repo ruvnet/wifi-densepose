@@ -15,11 +15,16 @@
 //! left as `serde_json::Value` — version-specific parsers in `storage_format`
 //! are responsible for further deserialization.
 
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
 use crate::MigrateError;
+
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Points to a HA `.storage/` directory.
 #[derive(Clone, Debug)]
@@ -64,6 +69,101 @@ pub fn read_envelope(path: &Path) -> Result<HaStorageEnvelope, MigrateError> {
         path: path.display().to_string(),
         source: e,
     })
+}
+
+/// Durably publish JSON at `target` without ever replacing an existing file.
+///
+/// Bytes are synced in a same-directory temporary file, then exposed with an
+/// atomic hard-link create. `hard_link` fails with `AlreadyExists` if another
+/// process won the destination race, unlike a POSIX rename which would replace
+/// the destination after a check-then-rename sequence.
+pub fn write_json_atomic_noclobber<T: Serialize>(
+    target: &Path,
+    value: &T,
+) -> Result<PathBuf, MigrateError> {
+    write_json_atomic(target, value, false)
+}
+
+/// Same atomic write (temp file → `sync_all` → publish), but when `force` is
+/// true an existing destination is atomically replaced via `rename` instead
+/// of refusing via `hard_link`'s `AlreadyExists`. Without `force`, an
+/// operator who re-runs an import after fixing a bad source row (or wants a
+/// fresh pass) had no way to overwrite prior output short of deleting it by
+/// hand first — this is the escape hatch for that, opt-in so the default
+/// no-clobber safety is unchanged.
+pub fn write_json_atomic<T: Serialize>(
+    target: &Path,
+    value: &T,
+    force: bool,
+) -> Result<PathBuf, MigrateError> {
+    let parent = target.parent().ok_or_else(|| MigrateError::Io {
+        path: target.display().to_string(),
+        source: std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "destination has no parent directory",
+        ),
+    })?;
+    fs::create_dir_all(parent).map_err(|source| MigrateError::Io {
+        path: parent.display().to_string(),
+        source,
+    })?;
+
+    let bytes = serde_json::to_vec_pretty(value).map_err(|source| MigrateError::JsonParse {
+        path: target.display().to_string(),
+        source,
+    })?;
+    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let name = target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("storage");
+    let temp = parent.join(format!(".{name}.{}.{}.tmp", std::process::id(), sequence));
+
+    let result = (|| -> std::io::Result<()> {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp)?;
+        file.write_all(&bytes)?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        if force {
+            // `rename`-over-existing hits real sharing-violation flakiness
+            // on Windows (ERROR_ACCESS_DENIED even with no other open
+            // handle in this process). Pre-clear the destination instead,
+            // then publish through the same hard_link step the no-clobber
+            // path uses. This briefly widens the crash window (a crash
+            // between remove and hard_link leaves no destination file
+            // rather than the old one), which is the accepted, opt-in
+            // tradeoff of explicitly requesting an overwrite — the default
+            // (non-force) path keeps its full no-clobber atomicity.
+            match fs::remove_file(target) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        fs::hard_link(&temp, target)?;
+        fs::remove_file(&temp)?;
+        Ok(())
+    })();
+
+    if let Err(source) = result {
+        let _ = fs::remove_file(&temp);
+        let source = if source.kind() == std::io::ErrorKind::AlreadyExists {
+            std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "destination exists; refusing to overwrite",
+            )
+        } else {
+            source
+        };
+        return Err(MigrateError::Io {
+            path: target.display().to_string(),
+            source,
+        });
+    }
+    Ok(target.to_path_buf())
 }
 
 #[cfg(test)]

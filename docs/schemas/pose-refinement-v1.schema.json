@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ruview.net/schemas/pose-refinement-v1.schema.json",
+  "title": "PoseRefinementV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "raw_observation_hash", "mode", "disposition", "selected", "refined_joints_m", "physics_confidence", "effective_confidence", "intervention", "residuals", "refined_residuals", "contact_hypotheses", "dynamics", "provenance", "reason", "canonical_hash"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "raw_observation_hash": { "$ref": "#/$defs/hash" },
+    "mode": { "enum": ["off", "audit", "shadow_correct", "opt_in_correct", "default_correct"] },
+    "disposition": { "enum": ["bypassed", "audited2d", "audited", "shadowed", "corrected", "abstained", "rejected"] },
+    "selected": { "type": "boolean" },
+    "refined_joints_m": { "oneOf": [{ "type": "null" }, { "type": "array", "minItems": 17, "maxItems": 17, "items": { "$ref": "#/$defs/vec3" } }] },
+    "physics_confidence": { "$ref": "#/$defs/probability" },
+    "effective_confidence": { "$ref": "#/$defs/probability" },
+    "intervention": { "$ref": "#/$defs/intervention" },
+    "residuals": { "$ref": "#/$defs/residuals" },
+    "refined_residuals": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/residuals" }] },
+    "contact_hypotheses": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "$ref": "#/$defs/contact" } },
+    "dynamics": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/dynamics" }] },
+    "provenance": { "$ref": "#/$defs/provenance" },
+    "reason": { "enum": [null, "mode_off", "unsupported_schema", "hash_mismatch", "invalid_number", "invalid_covariance", "stale_input", "coordinate_frame_mismatch", "calibration_unavailable", "uncertainty_uncalibrated", "ood_unknown", "source_unauthenticated", "replay_protection_unavailable", "correction_not_authorized", "replay_rejected", "non_monotonic_input", "too_few_known_joints", "correction_too_large", "deadline_exceeded", "track_capacity", "internal_error"] },
+    "canonical_hash": { "$ref": "#/$defs/hash" }
+  },
+  "$defs": {
+    "probability": { "type": "number", "minimum": 0, "maximum": 1 },
+    "hash": { "type": "array", "minItems": 32, "maxItems": 32, "items": { "type": "integer", "minimum": 0, "maximum": 255 } },
+    "vec3": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" } },
+    "intervention": { "type": "object", "additionalProperties": false, "required": ["max_joint_correction_m", "root_correction_m", "corrected_joint_count", "solver_iterations", "elapsed_us"], "properties": { "max_joint_correction_m": { "type": "number", "minimum": 0 }, "root_correction_m": { "type": "number", "minimum": 0 }, "corrected_joint_count": { "type": "integer", "minimum": 0, "maximum": 17 }, "solver_iterations": { "type": "integer", "minimum": 0, "maximum": 8 }, "elapsed_us": { "type": "integer", "minimum": 0 } } },
+    "residuals": { "type": "object", "additionalProperties": false, "required": ["bone_m", "joint_limit_rad", "velocity_mps", "acceleration_mps2", "temporal_jerk", "floor_penetration_m", "contact_m", "collision_m", "normalized_total"], "properties": { "bone_m": { "type": "number", "minimum": 0 }, "joint_limit_rad": { "type": "number", "minimum": 0 }, "velocity_mps": { "type": "number", "minimum": 0 }, "acceleration_mps2": { "type": "number", "minimum": 0 }, "temporal_jerk": { "type": "number", "minimum": 0 }, "floor_penetration_m": { "type": "number", "minimum": 0 }, "contact_m": { "type": "number", "minimum": 0 }, "collision_m": { "type": "number", "minimum": 0 }, "normalized_total": { "type": "number", "minimum": 0 } } },
+    "contact": { "type": "object", "additionalProperties": false, "required": ["state", "probability"], "properties": { "state": { "enum": ["hypothesis", "measured", "unknown"] }, "probability": { "$ref": "#/$defs/probability" } } },
+    "dynamics": { "type": "object", "additionalProperties": false, "required": ["stable", "segment_count", "joint_count", "contact_count", "substeps", "tracking_error_m", "joint_anchor_error_m", "floor_penetration_m", "control_effort"], "properties": { "stable": { "type": "boolean" }, "segment_count": { "type": "integer", "minimum": 0, "maximum": 255 }, "joint_count": { "type": "integer", "minimum": 0, "maximum": 255 }, "contact_count": { "type": "integer", "minimum": 0, "maximum": 65535 }, "substeps": { "type": "integer", "minimum": 1, "maximum": 8 }, "tracking_error_m": { "type": "number", "minimum": 0 }, "joint_anchor_error_m": { "type": "number", "minimum": 0 }, "floor_penetration_m": { "type": "number", "minimum": 0 }, "control_effort": { "type": "number", "minimum": 0 } } },
+    "provenance": { "type": "object", "additionalProperties": false, "required": ["engine", "engine_version", "config_hash", "rf_model_hash", "calibration_id", "learned_artifact_hash"], "properties": { "engine": { "type": "string", "minLength": 1, "maxLength": 128 }, "engine_version": { "type": "string", "minLength": 1, "maxLength": 64 }, "config_hash": { "$ref": "#/$defs/hash" }, "rf_model_hash": { "$ref": "#/$defs/hash" }, "calibration_id": { "type": "string", "minLength": 1, "maxLength": 128 }, "learned_artifact_hash": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/hash" }] } } }
+  }
+}

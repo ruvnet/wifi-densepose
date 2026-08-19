@@ -9,21 +9,31 @@ accuracy number:
 
 1. It must be tagged **MEASURED** (with a reproducer named), **CLAIMED**, or **SYNTHETIC**.
 2. Pose PCK is quoted only as a **delta over the mean-pose baseline** on a leakage-free
-   held-out split. (A mean-pose predictor already scores ~50% PCK.)
-3. Run `ruview.claim_check` on any report/PR/model-card. It flags untagged numbers and
-   the retracted "100%/perfect accuracy" framing.
+   held-out split; that baseline can otherwise make an unusable model look strong.
+3. Run `ruview_claim_check` on any report/PR/model-card. It flags untagged numbers and
+   the project's retracted perfect-accuracy framing.
 4. Firmware is "hardware-validated" only with a captured **boot log on real silicon** —
    never on a build-passes signal.
 
 ## Tools
 
-`ruview.onboard`, `ruview.claim_check`, `ruview.verify`, `ruview.node_monitor`,
-`ruview.calibrate`, `ruview.node_flash`. All fail-closed. Mutating/hardware tools
-(`node_flash`) require explicit confirmation and are Windows/ESP-IDF gated.
+`ruview_onboard`, `ruview_claim_check`, `ruview_verify`, `ruview_node_monitor`,
+`ruview_calibrate`, `ruview_node_flash`, `ruview_guidance`,
+`ruview_spaces_list`, `ruview_memory_search`. Start unfamiliar work with
+`ruview_guidance`; its
+capability status, source paths, validation commands, and limitations are
+navigation evidence, not authority. All tools fail closed. Mutating/hardware
+tools (`node_flash`) require explicit confirmation and are Windows/ESP-IDF
+gated.
+
+`ruview_spaces_list` is an OAuth-only external read. MCP calls require the
+`credential-use` grant, cannot select a credential path or API origin, and may
+rotate the local refresh credential. It requires an installed binary and never
+runs Cargo from an auto-detected checkout. It grants no write or action authority.
 
 ## Skills
 
-`onboard` · `provision-node` · `calibrate-room` · `train-pose` · `verify`
+`onboard` · `provision-node` · `calibrate-room` · `train-pose` · `verify` · `cognitum-spaces`
 (`npx @ruvnet/ruview skill <name>`).
 
 ## Don'ts

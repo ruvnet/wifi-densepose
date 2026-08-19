@@ -341,7 +341,9 @@ static void wifi_csi_callback(void *ctx, wifi_csi_info_t *info)
             memcpy(&sync[24], &s_sequence, 4);    /* high-water seq for pairing */
             uint32_t zero32 = 0;
             memcpy(&sync[28], &zero32, 4);        /* reserved (room for leader_id low32) */
-            int sr = stream_sender_send(sync, sizeof(sync));
+            /* Sync packets are 32 B at ~0.5 Hz — priority path so the CSI
+             * ENOMEM backoff can't starve cross-node time alignment (#1183). */
+            int sr = stream_sender_send_priority(sync, sizeof(sync));
             static uint32_t s_sync_count = 0;
             s_sync_count++;
             if (s_sync_count <= 3 || (s_sync_count % 60) == 0) {

@@ -1,14 +1,10 @@
 name: Continuous Deployment
 
 on:
-  push:
-    branches: [ main ]
-    tags: [ 'v*' ]
   workflow_run:
-    workflows: ["Continuous Integration"]
+    workflows: ["wifi-densepose sensing-server → Docker Hub + ghcr.io"]
     types:
       - completed
-    branches: [ main ]
   workflow_dispatch:
     inputs:
       environment:
@@ -19,6 +15,11 @@ on:
         options:
         - staging
         - production
+      image_tag:
+        description: 'Existing ghcr.io/ruvnet/wifi-densepose tag to deploy'
+        required: true
+        default: 'latest'
+        type: string
       force_deploy:
         description: 'Force deployment (skip checks)'
         required: false
@@ -27,7 +28,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: ruvnet/wifi-densepose
   KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}
 
 jobs:
@@ -35,14 +36,17 @@ jobs:
   pre-deployment:
     name: Pre-deployment Checks
     runs-on: ubuntu-latest
-    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch'
+    if: |
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      github.event_name == 'workflow_dispatch'
     outputs:
       deploy_env: ${{ steps.determine-env.outputs.environment }}
       image_tag: ${{ steps.determine-tag.outputs.tag }}
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
+        ref: ${{ github.event.workflow_run.head_sha || github.sha }}
         submodules: recursive
 
     - name: Determine deployment environment
@@ -50,14 +54,12 @@ jobs:
       env:
         # Use environment variable to prevent shell injection
         GITHUB_EVENT_NAME: ${{ github.event_name }}
-        GITHUB_REF: ${{ github.ref }}
+        PUBLISHED_REF: ${{ github.event.workflow_run.head_branch }}
         GITHUB_INPUT_ENVIRONMENT: ${{ github.event.inputs.environment }}
       run: |
         if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
           echo "environment=$GITHUB_INPUT_ENVIRONMENT" >> $GITHUB_OUTPUT
-        elif [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
-          echo "environment=staging" >> $GITHUB_OUTPUT
-        elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+        elif [[ "$PUBLISHED_REF" == v* ]]; then
           echo "environment=production" >> $GITHUB_OUTPUT
         else
           echo "environment=staging" >> $GITHUB_OUTPUT
@@ -65,16 +67,23 @@ jobs:
 
     - name: Determine image tag
       id: determine-tag
+      env:
+        GITHUB_EVENT_NAME: ${{ github.event_name }}
+        PUBLISHED_REF: ${{ github.event.workflow_run.head_branch }}
+        PUBLISHED_SHA: ${{ github.event.workflow_run.head_sha }}
+        INPUT_IMAGE_TAG: ${{ github.event.inputs.image_tag }}
       run: |
-        if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+          echo "tag=$INPUT_IMAGE_TAG" >> $GITHUB_OUTPUT
+        elif [[ "$PUBLISHED_REF" == v* ]]; then
+          echo "tag=$PUBLISHED_REF" >> $GITHUB_OUTPUT
         else
-          echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "tag=sha-${PUBLISHED_SHA:0:7}" >> $GITHUB_OUTPUT
         fi
 
     - name: Verify image exists
       run: |
-        docker manifest inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.determine-tag.outputs.tag }}
+        docker manifest inspect "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.determine-tag.outputs.tag }}"
 
   # Deploy to staging
   deploy-staging:
@@ -87,12 +96,12 @@ jobs:
       url: https://staging.wifi-densepose.com
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         submodules: recursive
 
     - name: Set up kubectl
-      uses: azure/setup-kubectl@v3
+      uses: azure/setup-kubectl@901a10e89ea615cf61f57ac05cecdf23e7de06d8
       with:
         version: 'v1.28.0'
 
@@ -129,18 +138,21 @@ jobs:
     name: Deploy to Production
     runs-on: ubuntu-latest
     needs: [pre-deployment, deploy-staging]
-    if: needs.pre-deployment.outputs.deploy_env == 'production' || (github.ref == 'refs/tags/v*' && needs.deploy-staging.result == 'success')
+    if: |
+      always() &&
+      needs.pre-deployment.result == 'success' &&
+      needs.pre-deployment.outputs.deploy_env == 'production'
     environment:
       name: production
       url: https://wifi-densepose.com
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         submodules: recursive
 
     - name: Set up kubectl
-      uses: azure/setup-kubectl@v3
+      uses: azure/setup-kubectl@901a10e89ea615cf61f57ac05cecdf23e7de06d8
       with:
         version: 'v1.28.0'
 
@@ -210,7 +222,7 @@ jobs:
         # kubectl scale rs -n wifi-densepose -l app=wifi-densepose,version!=green --replicas=0
 
     - name: Upload deployment artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: production-deployment-${{ github.run_number }}
         path: |
@@ -227,7 +239,7 @@ jobs:
       name: ${{ needs.pre-deployment.outputs.deploy_env }}
     steps:
     - name: Set up kubectl
-      uses: azure/setup-kubectl@v3
+      uses: azure/setup-kubectl@901a10e89ea615cf61f57ac05cecdf23e7de06d8
       with:
         version: 'v1.28.0'
 
@@ -260,7 +272,7 @@ jobs:
   post-deployment:
     name: Post-deployment Monitoring
     runs-on: ubuntu-latest
-    needs: [deploy-staging, deploy-production]
+    needs: [pre-deployment, deploy-staging, deploy-production]
     if: always() && (needs.deploy-staging.result == 'success' || needs.deploy-production.result == 'success')
     steps:
     - name: Monitor deployment health
@@ -281,7 +293,7 @@ jobs:
         done
 
     - name: Update deployment status
-      uses: actions/github-script@v6
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
       with:
         script: |
           const deployEnv = '${{ needs.pre-deployment.outputs.deploy_env }}';
@@ -300,12 +312,12 @@ jobs:
   notify:
     name: Notify Deployment Status
     runs-on: ubuntu-latest
-    needs: [deploy-staging, deploy-production, post-deployment]
+    needs: [pre-deployment, deploy-staging, deploy-production, post-deployment]
     if: always()
     steps:
     - name: Notify Slack on success
       if: needs.deploy-production.result == 'success' || needs.deploy-staging.result == 'success'
-      uses: 8398a7/action-slack@v3
+      uses: 8398a7/action-slack@77eaa4f1c608a7d68b38af4e3f739dcd8cba273e
       with:
         status: success
         channel: '#deployments'
@@ -319,7 +331,7 @@ jobs:
 
     - name: Notify Slack on failure
       if: needs.deploy-production.result == 'failure' || needs.deploy-staging.result == 'failure'
-      uses: 8398a7/action-slack@v3
+      uses: 8398a7/action-slack@77eaa4f1c608a7d68b38af4e3f739dcd8cba273e
       with:
         status: failure
         channel: '#deployments'
@@ -332,7 +344,7 @@ jobs:
 
     - name: Create deployment issue on failure
       if: needs.deploy-production.result == 'failure'
-      uses: actions/github-script@v6
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
       with:
         script: |
           github.rest.issues.create({

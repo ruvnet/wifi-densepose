@@ -1,14 +1,14 @@
-version: "3.9"
-
 services:
   sensing-server:
     build:
       context: ..
       dockerfile: docker/Dockerfile.rust
     image: ruvnet/wifi-densepose:latest
+    # ESP32 CSI must accept LAN UDP; TCP APIs below remain loopback-only.
+    # kics-scan ignore-line
     ports:
-      - "3000:3000"   # REST API
-      - "3001:3001"   # WebSocket
+      - "127.0.0.1:3000:3000"   # REST API
+      - "127.0.0.1:3001:3001"   # WebSocket
       # ESP32 UDP. On Linux/macOS this works with multiple ESP32 nodes out of
       # the box. On Docker Desktop for Windows, multi-source UDP is collapsed
       # to one source IP at the WSL/Hyper-V boundary, so all-but-one node's
@@ -37,6 +37,20 @@ services:
       #   volumes: ["/path/to/models:/app/models"]
       #   MODELS_DIR=/app/models
       - MODELS_DIR=${MODELS_DIR:-data/models}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
     # No explicit command needed — docker-entrypoint.sh uses CSI_SOURCE.
     # Override with: command: ["--source", "esp32", "--tick-ms", "500"]
 
@@ -46,7 +60,21 @@ services:
       dockerfile: docker/Dockerfile.python
     image: ruvnet/wifi-densepose:python
     ports:
-      - "8765:8765"   # WebSocket
-      - "8080:8080"   # UI
+      - "127.0.0.1:8765:8765"   # WebSocket
+      - "127.0.0.1:8080:8080"   # UI
     environment:
       - PYTHONUNBUFFERED=1
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8765), 2).close()"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
