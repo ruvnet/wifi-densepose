@@ -4838,6 +4838,101 @@ fn emit_rufield_event(s: &AppStateInner, update: &SensingUpdate, node_id: u8) {
     }
 }
 
+/// Configured node positions (metres) for the coarse activity-centroid
+/// localizer, indexed so `positions[node_id - 1]` is that node's position.
+/// Populated once at startup from `SENSING_NODE_POSITIONS` (ordered by ascending
+/// node_id, starting at 1). Empty/unset ⇒ the centroid localizer stays off and
+/// the field-peak fallback is used.
+static CONFIGURED_NODE_POS: std::sync::OnceLock<Vec<[f64; 3]>> = std::sync::OnceLock::new();
+
+/// Per-node rolling baseline of `motion_band_power`, keyed by node_id. Lets the
+/// centroid weight each node by how far it flares **above its own quiet level**
+/// rather than by raw magnitude — removes the per-node RF bias where one node
+/// always reads hot and would otherwise hog the blob.
+static NODE_MOTION_BASELINE: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<u8, f64>>,
+> = std::sync::OnceLock::new();
+
+/// Coarse "activity centroid" position for the Observatory figure (issue #1050
+/// follow-up). Places the person at the per-node **motion-weighted centroid** of
+/// the configured node positions, so the blob drifts toward whichever node
+/// currently sees the most CSI motion.
+///
+/// HONEST SCOPE — this is NOT calibrated triangulation. A moving person perturbs
+/// every link, so this is proximity-by-activity, not a metric (x, z) fix. It is
+/// deliberately preferred over the subcarrier-index `signal_field` peak (which
+/// clamps to room-centre for real broadband CSI) only when we actually have the
+/// geometry: `SENSING_NODE_POSITIONS` supplied ≥2 positions AND ≥2 non-stale
+/// nodes report features. `RUVIEW_LOCALIZE_POWER` (default 2.0, read live)
+/// sharpens the pull toward the most-active node — higher = crisper but jumpier.
+fn node_activity_centroid(update: &SensingUpdate) -> Option<[f64; 3]> {
+    let positions = CONFIGURED_NODE_POS.get()?;
+    if positions.len() < 2 {
+        return None;
+    }
+    let nf = update.node_features.as_ref()?;
+
+    let env_f = |k: &str, d: f64| {
+        std::env::var(k)
+            .ok()
+            .and_then(|s| s.parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+            .unwrap_or(d)
+    };
+    // `power` sharpens the pull toward the most-active node. `alpha_up` is the
+    // (slow) baseline-rise rate; falls 10× faster so the baseline tracks the
+    // quiet level and resists inflating while a node is active. `floor` guards
+    // the ratio against a near-zero baseline.
+    let power = env_f("RUVIEW_LOCALIZE_POWER", 2.0).max(0.0);
+    let alpha_up = env_f("RUVIEW_LOCALIZE_BASE_ALPHA", 0.005).clamp(0.0, 1.0);
+    let alpha_down = (alpha_up * 10.0).clamp(0.0, 1.0);
+    let floor = env_f("RUVIEW_LOCALIZE_BASE_FLOOR", 20.0).max(1e-3);
+
+    let baselines =
+        NODE_MOTION_BASELINE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut bl = baselines.lock().unwrap_or_else(|e| e.into_inner());
+
+    // (position, relative_activity) per non-stale positioned node, where
+    // relative = current_motion / its_own_baseline. A node flaring above its own
+    // quiet level wins regardless of another node's higher absolute magnitude.
+    let mut items: Vec<([f64; 3], f64)> = Vec::new();
+    for f in nf {
+        if f.stale {
+            continue;
+        }
+        let Some(idx) = (f.node_id as usize).checked_sub(1) else {
+            continue;
+        };
+        let Some(pos) = positions.get(idx) else {
+            continue;
+        };
+        let m = f.features.motion_band_power.max(0.0);
+        let b = bl.entry(f.node_id).or_insert(m);
+        let a = if m < *b { alpha_down } else { alpha_up };
+        *b += a * (m - *b);
+        let rel = m / (*b).max(floor);
+        items.push((*pos, rel));
+    }
+    drop(bl);
+    if items.len() < 2 {
+        return None;
+    }
+
+    let mut wsum = 0.0f64;
+    let mut acc = [0.0f64; 3];
+    for (pos, rel) in &items {
+        let w = (rel.max(0.0) + 1e-6).powf(power);
+        wsum += w;
+        for k in 0..3 {
+            acc[k] += pos[k] * w;
+        }
+    }
+    if !(wsum > 0.0) {
+        return None;
+    }
+    Some([acc[0] / wsum, acc[1] / wsum, acc[2] / wsum])
+}
+
 fn attach_field_positions(update: &mut SensingUpdate) {
     // Presence gate for the Observatory floor heatmap. When nobody is present
     // the signal field is just CSI noise, but generate_signal_field's per-frame
@@ -4849,6 +4944,10 @@ fn attach_field_positions(update: &mut SensingUpdate) {
             *v = 0.0;
         }
     }
+    // Compute the coarse multi-node activity centroid up-front, while only a
+    // shared borrow of `update` is held — it must precede the &mut persons borrow.
+    let centroid = node_activity_centroid(update);
+
     let Some(persons) = update.persons.as_mut() else {
         return;
     };
@@ -4868,8 +4967,13 @@ fn attach_field_positions(update: &mut SensingUpdate) {
     let motion_score = field_localize::motion_score_from_power(update.features.motion_band_power);
     let pose_label = update.posture.clone();
 
+    // Prefer the coarse multi-node activity centroid for the primary person when
+    // node geometry is configured — it actually moves with the person, unlike the
+    // subcarrier-index field peak. Falls back to the field peak per person.
     for (i, person) in persons.iter_mut().enumerate() {
-        if let Some(peak) = peaks.get(i).or_else(|| peaks.first()) {
+        if i == 0 && centroid.is_some() {
+            person.position = centroid.unwrap();
+        } else if let Some(peak) = peaks.get(i).or_else(|| peaks.first()) {
             person.position = peak.position;
         }
         person.motion_score = motion_score;
@@ -8805,6 +8909,13 @@ async fn main() {
                         "Configured {} node positions for multistatic fusion",
                         positions.len()
                     );
+                    // Also feed the coarse activity-centroid localizer (indexed by
+                    // node_id-1; positions ordered by ascending node_id from 1).
+                    let pos64: Vec<[f64; 3]> = positions
+                        .iter()
+                        .map(|p| [p[0] as f64, p[1] as f64, p[2] as f64])
+                        .collect();
+                    let _ = CONFIGURED_NODE_POS.set(pos64);
                     fuser.set_node_positions(positions);
                 }
             }
