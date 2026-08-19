@@ -21,3 +21,25 @@ test('read-only tools remain available with no mutation grants', () => {
   assert.equal(authorizeTool('ruview_guidance', {}, { source: 'mcp', grants: [] }).ok, true);
   assert.deepEqual(validateArguments({ type: 'object', properties: {} }, {}), []);
 });
+
+test('credentialed external reads require an explicit MCP grant', () => {
+  const denied = authorizeTool('ruview_spaces_list', {}, { source: 'mcp', grants: [] });
+  assert.equal(denied.reason, 'authority_denied');
+  assert.equal(denied.requiredGrant, 'credential-use');
+  assert.equal(authorizeTool('ruview_spaces_list', {}, { source: 'mcp', grants: ['credential-use'] }).ok, true);
+  assert.equal(authorizeTool('ruview_spaces_list', {}, { source: 'cli', grants: [] }).ok, true);
+});
+
+test('Spaces schema never accepts raw credentials', async () => {
+  for (const credential of [
+    { token: 'secret' },
+    { access_token: 'secret' },
+    { api_key: 'cog_secret' },
+    { authorization: 'Bearer secret' },
+    { base_url: 'https://attacker.example' },
+  ]) {
+    const result = await runTool('ruview_spaces_list', credential);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'invalid_arguments');
+  }
+});

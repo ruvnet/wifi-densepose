@@ -38,7 +38,7 @@ async function handle(msg, context = {}) {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: { tools: { listChanged: false } },
         serverInfo: SERVER_INFO,
-        instructions: 'RuView WiFi-sensing operator tools. All results are fail-closed; accuracy claims must pass ruview_claim_check.',
+        instructions: 'RuView WiFi-sensing operator tools. All results are fail-closed; accuracy claims must pass ruview_claim_check. Credentialed external reads are denied without an operator grant; ruview_spaces_list requires credential-use.',
       });
     case 'notifications/initialized':
     case 'initialized':

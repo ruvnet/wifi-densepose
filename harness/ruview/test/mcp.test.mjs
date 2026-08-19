@@ -47,14 +47,21 @@ test('MCP handshake: initialize reports the package.json version; list endpoints
     s.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
     const init = await s.next(1);
     assert.equal(init.result.serverInfo.version, pkg.version, 'ADR-263 O6: version must match package.json');
+    assert.match(init.result.instructions, /credential-use/);
 
     s.send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
     const tools = (await s.next(2)).result.tools;
-    assert.equal(tools.length, 8);
+    assert.equal(tools.length, 9);
     for (const t of tools) assert.match(t.name, /^[a-zA-Z0-9_-]{1,64}$/, `advertised name not host-safe: ${t.name}`);
     const guidance = tools.find((tool) => tool.name === 'ruview_guidance');
     assert.ok(guidance);
     assert.equal(guidance.annotations.readOnlyHint, true);
+    const spaces = tools.find((tool) => tool.name === 'ruview_spaces_list');
+    assert.ok(spaces);
+    assert.equal(spaces.annotations.readOnlyHint, false, 'OAuth refresh can update the local credential file');
+    assert.equal(spaces.annotations.idempotentHint, false);
+    assert.equal(spaces.annotations.destructiveHint, false);
+    assert.equal(spaces.annotations.openWorldHint, true);
 
     s.send({ jsonrpc: '2.0', id: 3, method: 'resources/list' });
     assert.deepEqual((await s.next(3)).result, { resources: [] });
@@ -71,6 +78,11 @@ test('MCP handshake: initialize reports the package.json version; list endpoints
     assert.equal(guided.ok, true);
     assert.equal(guided.topic, 'homecore');
     assert.ok(guided.capabilities.some(({ id }) => id === 'homecore-runtime-restore'));
+
+    s.send({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'ruview_spaces_list', arguments: {} } });
+    const deniedSpaces = JSON.parse((await s.next(7)).result.content[0].text);
+    assert.equal(deniedSpaces.reason, 'authority_denied');
+    assert.equal(deniedSpaces.requiredGrant, 'credential-use');
   } finally {
     s.close();
   }
