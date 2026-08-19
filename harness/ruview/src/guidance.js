@@ -232,9 +232,9 @@ const CAPABILITIES = Object.freeze([
     id: 'cognitum-spaces-oauth',
     name: 'Cognitum Spaces OAuth projection',
     topics: ['integrations', 'deployment', 'community'],
-    status: 'implemented-read-only-staged',
+    status: 'implemented-read-only-live',
     evidence: 'MIXED',
-    summary: 'The legacy Spaces OAuth read is live. The feature branch extends the same read-only PKCE authority across the versioned site/building/floor/space/zone/entity/event/alert collections with bounded pagination and independent metaharness validation.',
+    summary: 'The production Spaces API and RuView PKCE client expose the same read-only authority across the versioned site/building/floor/space/zone/entity/event/alert collections with bounded pagination and independent metaharness validation.',
     sources: [
       'docs/adr/ADR-325-cognitum-spaces-activation-and-governed-spatial-exchange.md',
       'v2/crates/wifi-densepose-cli/src/spaces.rs',
