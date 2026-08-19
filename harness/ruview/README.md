@@ -17,7 +17,8 @@ npx @ruvnet/ruview claim-check --file REPORT.md   # the honesty guardrail (non-z
 npx @ruvnet/ruview verify                # run the deterministic proof (VERDICT: PASS)
 npx @ruvnet/ruview doctor                # self-check (tools, adapters, local CLIs)
 npx @ruvnet/ruview guidance --topic homecore --query "Wasmtime plugins"
-npx @ruvnet/ruview spaces               # OAuth-only Cognitum Spaces read
+npx @ruvnet/ruview spaces --resource spaces
+npx @ruvnet/ruview spaces --resource events --limit 25
 npx @ruvnet/ruview --help
 ```
 
@@ -39,7 +40,7 @@ Exposed both as CLI verbs and as an MCP server (`npx @ruvnet/ruview mcp start`):
 | `ruview_calibrate` | ADR-151 room pipeline (baseline→enroll→train-room→room-watch) |
 | `ruview_node_flash` | Build+flash firmware (Windows/ESP-IDF; mutating, guarded) |
 | `ruview_guidance` | Source-cited code map, capability maturity, validation commands, and limitations |
-| `ruview_spaces_list` | OAuth-only, tenant/workspace Cognitum Spaces projection (guarded over MCP) |
+| `ruview_spaces_list` | OAuth-only paging for sites/buildings/floors/spaces/zones/entities/events/alerts (guarded over MCP) |
 | `ruview_memory_search` | Search the reviewed, source-cited contributor brain |
 
 Every tool is **fail-closed**: missing repo / python / binary / port → an honest
@@ -54,6 +55,8 @@ validated client through the metaharness:
 wifi-densepose login --spaces
 wifi-densepose whoami
 npx @ruvnet/ruview spaces
+npx @ruvnet/ruview spaces --resource sites --limit 50
+npx @ruvnet/ruview spaces --resource events --cursor '<opaque-next-cursor>'
 ```
 
 The metaharness never accepts a bearer token or API key and removes
@@ -62,9 +65,11 @@ silently fall back to the compatibility API-key path. The API origin is fixed
 to `https://api.cognitum.one`, and the credentialed adapter requires an
 installed `wifi-densepose` binary rather than running Cargo build scripts from
 an auto-detected checkout. It returns only the bounded P2/P3 semantic
-projection; an empty list is a valid authenticated result, not sensing-quality
-evidence. An expired session may rotate the stored refresh credential before
-the read completes.
+projection. `--resource` selects one of `sites`, `buildings`, `floors`,
+`spaces`, `zones`, `entities`, `events`, or `alerts`; `--limit` is 1–100 and
+`--cursor` is the opaque value from the prior page. An empty list is a valid
+authenticated result, not sensing-quality evidence. An expired session may
+rotate the stored refresh credential before the read completes.
 
 MCP use is denied unless the server operator starts it with
 `RUVIEW_MCP_GRANTS=credential-use`. Set `RUVIEW_CREDENTIALS_PATH` in the MCP

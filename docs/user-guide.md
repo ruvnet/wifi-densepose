@@ -22,6 +22,7 @@ WiFi DensePose turns commodity WiFi signals into real-time human pose estimation
    - [ESP32-S3 (Full CSI)](#esp32-s3-full-csi)
    - [ESP32 Multistatic Mesh (Advanced)](#esp32-multistatic-mesh-advanced)
    - [Connect Mesh Data to the Dashboard and Observatory](#connect-mesh-data-to-the-dashboard-and-observatory)
+   - [Cognitum Spaces activation](#cognitum-spaces-activation)
    - [Cognitum Seed Integration (ADR-069)](#cognitum-seed-integration-adr-069)
 5. [REST API Reference](#rest-api-reference)
 6. [WebSocket Streaming](#websocket-streaming)
@@ -424,6 +425,57 @@ curl http://localhost:3000/api/v1/sensing/latest
 ```
 
 If the ESP32 nodes are provisioned with `--target-ip <AGGREGATOR_HOST>`, that IP must be the machine running `sensing-server`. Only one process can receive UDP `:5005` at a time, so leave the standalone hardware `aggregator` off while the dashboard or Observatory is live.
+
+### Cognitum Spaces activation
+
+Cognitum Spaces gives RuView a tenant/workspace-scoped semantic world model
+without uploading raw RF/CSI, recordings, pose frames, vital waveforms, or
+identity observations. It represents sites, buildings, floors, bounded
+rooms/spaces, zones, anonymous entities, semantic events, and alerts.
+
+Activate the public RuView OAuth client with Authorization Code + PKCE:
+
+```bash
+wifi-densepose login --spaces
+wifi-densepose whoami
+wifi-densepose spaces --resource sites --limit 50
+wifi-densepose spaces --resource events --limit 25
+```
+
+The login requests `sensing:read spaces:read`. That consent is read-only: it
+does not grant publication, pairing, policy approval, command, or actuator
+authority. Versioned collections are `sites`, `buildings`, `floors`,
+`spaces`, `zones`, `entities`, `events`, and `alerts`. A returned
+`nextCursor` is opaque and valid only for the same collection.
+
+The dependency-free contributor harness exposes the same read path:
+
+```bash
+npx @ruvnet/ruview@0.5.0 spaces --resource alerts --limit 25
+npx @ruvnet/ruview@0.5.0 mcp start
+```
+
+Its MCP tool is `ruview_spaces_list`. MCP reads are OAuth-only, use the fixed
+Cognitum API origin, and require the explicit guarded-tool opt-in. The harness
+does not accept an arbitrary credential path or API origin.
+
+For service compatibility, `wifi-densepose spaces` can read
+`COGNITUM_SPACES_API` at request time. API-key access to a versioned collection
+also requires `--workspace <uuid>`; OAuth derives the workspace from the
+signed token. Never print or commit either credential.
+
+Every response is bounded and revalidated. Raw-sensing aliases, malformed
+hierarchy, non-anonymous person/track entities, invalid timestamps, stale
+confidence, and oversized structures fail closed. Empty data means no
+authorized state is present; it does not prove that a physical site is empty.
+
+RuVector spatial memory remains physically separated by tenant and workspace.
+Agents observe or recommend by default. Any consequential execution requires a
+separate policy/grant/approval decision and produces a signed, hash-chained
+receipt; the Spaces read token can never satisfy that gate.
+
+See ADR-325, ADR-326, and ADR-327 for the activation, memory, and governed-action
+decisions.
 
 ### Cognitum Seed Integration (ADR-069)
 

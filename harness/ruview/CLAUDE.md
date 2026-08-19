@@ -26,10 +26,12 @@ navigation evidence, not authority. All tools fail closed. Mutating/hardware
 tools (`node_flash`) require explicit confirmation and are Windows/ESP-IDF
 gated.
 
-`ruview_spaces_list` is an OAuth-only external read. MCP calls require the
+`ruview_spaces_list` is an OAuth-only external read for the eight versioned
+hierarchy/event/alert collections. MCP calls require the
 `credential-use` grant, cannot select a credential path or API origin, and may
 rotate the local refresh credential. It requires an installed binary and never
-runs Cargo from an auto-detected checkout. It grants no write or action authority.
+runs Cargo from an auto-detected checkout. Cursors are opaque and collection-
+bound. It grants no write or action authority.
 
 ## Skills
 

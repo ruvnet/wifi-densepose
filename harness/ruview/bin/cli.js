@@ -71,7 +71,7 @@ Operator tools:
   monitor --port COM8 [--seconds 12]                    assert CSI is flowing on a node
   flash --port COM8 --variant s3-8mb [--confirm]        build+flash firmware (Windows/ESP-IDF)
   guidance [--topic homecore] [--query "Wasmtime"]      source-cited code/capability map
-  spaces [--credentials-path <file>]                    list the OAuth-bound Cognitum Spaces projection
+  spaces [--resource sites|...|alerts] [--limit 50]     page OAuth-bound Cognitum spatial resources
 
 Harness:
   doctor                 verify tools, adapters, and local CLI discovery
@@ -130,6 +130,7 @@ export async function run(args) {
     if (cmd === 'spaces') {
       if (flags['credentials-path'] !== undefined) toolArgs.credentials_path = flags['credentials-path'];
       delete toolArgs['credentials-path'];
+      if (flags.limit !== undefined) toolArgs.limit = Number(flags.limit);
     }
     const res = await runTool(VERB_TO_TOOL[cmd], toolArgs, { source: 'cli' });
     pjson(res);

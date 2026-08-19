@@ -1,0 +1,20 @@
+[package]
+name = "ruview-spatial-memory"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Tenant-scoped encrypted RuVector spatial memory for Cognitum Spaces"
+
+[dependencies]
+chacha20poly1305 = "0.10"
+getrandom.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+wifi-densepose-ruvector = { path = "../wifi-densepose-ruvector" }
+zeroize = "1"
+
+[dev-dependencies]
+tempfile = "3"

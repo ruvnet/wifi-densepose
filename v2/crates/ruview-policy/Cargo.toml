@@ -13,6 +13,7 @@ ruview-evidence = { path = "../ruview-evidence" }
 ruview-ood = { path = "../ruview-ood" }
 ruview-certify = { path = "../ruview-certify" }
 ruview-attest = { path = "../ruview-attest" }
+blake3 = { version = "1.5", default-features = false }
 
 [dev-dependencies]
 serde_json.workspace = true

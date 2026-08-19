@@ -34,7 +34,13 @@ metaharness:
 ```bash
 wifi-densepose whoami
 npx @ruvnet/ruview spaces
+npx @ruvnet/ruview spaces --resource sites
+npx @ruvnet/ruview spaces --resource events --limit 25
 ```
+
+The versioned collections are `sites`, `buildings`, `floors`, `spaces`,
+`zones`, `entities`, `events`, and `alerts`. Continue a page with the returned
+opaque `nextCursor`; do not decode or reuse a cursor for another collection.
 
 Use `--credentials-path <private-file>` only from the human-invoked CLI when a
 non-default credential store is intentional. Never put a bearer token or API
@@ -54,7 +60,7 @@ npx @ruvnet/ruview mcp start
 ```
 
 MCP calls cannot choose a credential path and the tool schema has no token or
-API-key or base-URL field. The API origin is fixed to
+API-key, workspace override, or base-URL field. The API origin is fixed to
 `https://api.cognitum.one`, the adapter requires an installed
 `wifi-densepose` binary, and the child environment excludes
 `COGNITUM_SPACES_API`, so this
@@ -66,5 +72,6 @@ API-key path.
 An empty `data` list can be a valid authenticated tenant result. It proves the
 read path and isolation behavior, not sensing quality. Every accepted response
 must declare `HomeCore Edge` as authoritative and carry the complete prohibited
-field list. Any malformed, oversized, non-semantic, or raw-field response fails
-closed.
+field list. Parent lineage, schema version, anonymous person/track identity,
+event/alert fields, confidence, and cursor bounds are independently checked.
+Any malformed, oversized, non-semantic, or raw-field response fails closed.
