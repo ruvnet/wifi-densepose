@@ -11,6 +11,11 @@
       "ruview_memory_search"
     ],
     "grants": {
+      "credential-use": {
+        "tools": ["ruview_spaces_list"],
+        "requiresConfirmation": false,
+        "notes": "Allows a tenant-scoped external read; OAuth refresh may rotate the local credential file."
+      },
       "workspace-write": {
         "tools": ["ruview_calibrate"],
         "requiresConfirmation": true

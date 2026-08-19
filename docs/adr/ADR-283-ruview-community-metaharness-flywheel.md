@@ -31,6 +31,26 @@ bounded output/time, secret redaction and realpath-based RuView checkout
 validation. Write mode requires two explicit flags and never uses permission or
 sandbox bypasses.
 
+## Credentialed external reads
+
+Read-only cloud access is not equivalent to an uncredentialed local read. The
+Cognitum Spaces adapter therefore delegates OAuth and response validation to
+the Rust `wifi-densepose` client, never accepts bearer tokens or API keys, and
+removes the API-key compatibility environment from the child process. Its MCP
+tool is denied unless the server operator grants `credential-use`; MCP callers
+cannot select a credential path or API origin. The adapter uses only an
+installed `wifi-densepose` binary; it never executes Cargo build scripts from
+an auto-detected checkout while holding credential authority. The tool is
+marked open-world and independently rechecks response size, structure, privacy
+class, and prohibited raw fields.
+
+An expiring access token may rotate the stored refresh credential. The MCP
+annotation is therefore non-read-only and non-idempotent even though the cloud
+data operation is read-only. That bounded authentication side effect is
+disclosed in the schema and result. It does not change the cloud operation from
+read-only and confers no write or action authority. ADR-325 remains authoritative
+for the Spaces data and policy boundary.
+
 ## Shared brain
 
 The public brain is committed JSONL, not a shared mutable database. Canonical
@@ -67,5 +87,6 @@ autonomously promotes or publishes an evolved candidate.
 Contributors can explore RuView with either major local CLI and share durable
 findings without sharing secrets. Improvements become reproducible proposals
 with frozen evaluation evidence. The cost is a larger development-only npm
-lockfile, a 128 KiB unpacked-package budget (the current tarball is below that
-bound), and explicit maintenance of the corpus, genome and gate.
+lockfile, a 160 KiB unpacked-package budget after adding the duplicated host
+playbook and bounded OAuth adapter (the package remains runtime-dependency-free),
+and explicit maintenance of the corpus, genome and gate.

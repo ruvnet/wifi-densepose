@@ -19,15 +19,21 @@ accuracy number:
 
 `ruview_onboard`, `ruview_claim_check`, `ruview_verify`, `ruview_node_monitor`,
 `ruview_calibrate`, `ruview_node_flash`, `ruview_guidance`,
-`ruview_memory_search`. Start unfamiliar work with `ruview_guidance`; its
+`ruview_spaces_list`, `ruview_memory_search`. Start unfamiliar work with
+`ruview_guidance`; its
 capability status, source paths, validation commands, and limitations are
 navigation evidence, not authority. All tools fail closed. Mutating/hardware
 tools (`node_flash`) require explicit confirmation and are Windows/ESP-IDF
 gated.
 
+`ruview_spaces_list` is an OAuth-only external read. MCP calls require the
+`credential-use` grant, cannot select a credential path or API origin, and may
+rotate the local refresh credential. It requires an installed binary and never
+runs Cargo from an auto-detected checkout. It grants no write or action authority.
+
 ## Skills
 
-`onboard` · `provision-node` · `calibrate-room` · `train-pose` · `verify`
+`onboard` · `provision-node` · `calibrate-room` · `train-pose` · `verify` · `cognitum-spaces`
 (`npx @ruvnet/ruview skill <name>`).
 
 ## Don'ts

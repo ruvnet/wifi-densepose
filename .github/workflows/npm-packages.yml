@@ -40,8 +40,9 @@ jobs:
           - dir: harness/ruview
             build: false
             publishable: true
-            # ADR-283: brain + local hosts + replay assets; still runtime-dependency-free.
-            unpacked_budget: 131072
+            # ADR-283/325: brain + local hosts + replay assets + guarded Spaces OAuth adapter;
+            # still runtime-dependency-free. 160 KiB is the reviewed hard ceiling.
+            unpacked_budget: 163840
           - dir: harness/homecore
             build: false
             publishable: true

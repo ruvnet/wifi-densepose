@@ -67,6 +67,17 @@ test('homecore guidance exposes requested capabilities and honest boundaries', (
   );
 });
 
+test('integration guidance exposes the Cognitum OAuth surface and authority boundary', () => {
+  const result = getGuidance(
+    { topic: 'integrations', query: 'Cognitum Spaces OAuth' },
+    { repoRoot: REPO_ROOT },
+  );
+  assert.equal(result.ok, true, JSON.stringify(result.sourceCheck));
+  assert.equal(result.capabilities[0].id, 'cognitum-spaces-oauth');
+  assert.match(result.capabilities[0].limitations.join(' '), /no write|read-only/i);
+  assert.match(result.capabilities[0].limitations.join(' '), /credential-use/i);
+});
+
 test('query ranks the matching capability and searches reviewed knowledge', () => {
   const result = getGuidance(
     { topic: 'homecore', query: 'Wasmtime plugin', limit: 3 },

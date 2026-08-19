@@ -17,6 +17,7 @@ npx @ruvnet/ruview claim-check --file REPORT.md   # the honesty guardrail (non-z
 npx @ruvnet/ruview verify                # run the deterministic proof (VERDICT: PASS)
 npx @ruvnet/ruview doctor                # self-check (tools, adapters, local CLIs)
 npx @ruvnet/ruview guidance --topic homecore --query "Wasmtime plugins"
+npx @ruvnet/ruview spaces               # OAuth-only Cognitum Spaces read
 npx @ruvnet/ruview --help
 ```
 
@@ -38,10 +39,39 @@ Exposed both as CLI verbs and as an MCP server (`npx @ruvnet/ruview mcp start`):
 | `ruview_calibrate` | ADR-151 room pipeline (baseline→enroll→train-room→room-watch) |
 | `ruview_node_flash` | Build+flash firmware (Windows/ESP-IDF; mutating, guarded) |
 | `ruview_guidance` | Source-cited code map, capability maturity, validation commands, and limitations |
+| `ruview_spaces_list` | OAuth-only, tenant/workspace Cognitum Spaces projection (guarded over MCP) |
 | `ruview_memory_search` | Search the reviewed, source-cited contributor brain |
 
 Every tool is **fail-closed**: missing repo / python / binary / port → an honest
 negative, never a fabricated success.
+
+### Cognitum Spaces OAuth
+
+Activate the additional read scope through the Rust CLI, then use the same
+validated client through the metaharness:
+
+```bash
+wifi-densepose login --spaces
+wifi-densepose whoami
+npx @ruvnet/ruview spaces
+```
+
+The metaharness never accepts a bearer token or API key and removes
+`COGNITUM_SPACES_API` from the child environment, so this surface cannot
+silently fall back to the compatibility API-key path. The API origin is fixed
+to `https://api.cognitum.one`, and the credentialed adapter requires an
+installed `wifi-densepose` binary rather than running Cargo build scripts from
+an auto-detected checkout. It returns only the bounded P2/P3 semantic
+projection; an empty list is a valid authenticated result, not sensing-quality
+evidence. An expired session may rotate the stored refresh credential before
+the read completes.
+
+MCP use is denied unless the server operator starts it with
+`RUVIEW_MCP_GRANTS=credential-use`. Set `RUVIEW_CREDENTIALS_PATH` in the MCP
+server environment when a non-default store is needed; MCP calls cannot choose
+an arbitrary credential file or URL. `spaces:read` grants no write, pairing,
+command, policy-approval, spending, or actuator authority. See the bundled
+`cognitum-spaces` skill for the full playbook.
 
 ### Codebase guidance
 
@@ -65,7 +95,8 @@ as evidence.
 ## Skills
 
 Host-neutral playbooks in `skills/` (`onboard`, `provision-node`, `calibrate-room`,
-`train-pose`, `verify`). `npx @ruvnet/ruview skill <name>` prints one.
+`train-pose`, `verify`, `cognitum-spaces`). `npx @ruvnet/ruview skill <name>`
+prints one.
 
 ## Use as a Claude Code MCP server
 

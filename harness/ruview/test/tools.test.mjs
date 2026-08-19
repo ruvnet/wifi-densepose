@@ -93,7 +93,7 @@ test('summarize gives PASS/finding text', () => {
 
 test('registry exposes the documented tools with schemas (underscore-canonical)', () => {
   const names = Object.keys(TOOLS);
-  for (const n of ['ruview_onboard', 'ruview_claim_check', 'ruview_verify', 'ruview_node_monitor', 'ruview_calibrate', 'ruview_node_flash', 'ruview_guidance', 'ruview_memory_search']) {
+  for (const n of ['ruview_onboard', 'ruview_claim_check', 'ruview_verify', 'ruview_node_monitor', 'ruview_calibrate', 'ruview_node_flash', 'ruview_guidance', 'ruview_spaces_list', 'ruview_memory_search']) {
     assert.ok(names.includes(n), `missing ${n}`);
     assert.equal(TOOLS[n].inputSchema.type, 'object');
     assert.match(n, /^[a-zA-Z0-9_-]{1,64}$/, 'canonical names must satisfy host tool-name regexes');

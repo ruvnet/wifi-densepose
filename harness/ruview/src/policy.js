@@ -9,6 +9,7 @@ export const TOOL_POLICY = Object.freeze({
   ruview_calibrate: { class: 'workspace-write', writesWorkspace: true, confirmField: 'confirm' },
   ruview_node_flash: { class: 'hardware-write', writesWorkspace: true, hardware: true, confirmField: 'confirm' },
   ruview_guidance: { class: 'read', readOnly: true },
+  ruview_spaces_list: { class: 'external-read', readOnly: true, requiredGrant: 'credential-use', openWorld: true, usesCredentials: true, mayRefreshCredentials: true },
   ruview_memory_search: { class: 'read', readOnly: true },
 });
 
@@ -52,11 +53,15 @@ export function validateArguments(schema, value, path = '$') {
 export function authorizeTool(name, args, context = {}) {
   const policy = TOOL_POLICY[name] || { class: 'unknown', denied: true };
   if (policy.denied) return { ok: false, reason: 'policy_missing', policy };
-  if (context.source !== 'mcp' || policy.readOnly) return { ok: true, policy };
+  if (context.source !== 'mcp') return { ok: true, policy };
+  const grants = new Set(context.grants || []);
+  if (policy.requiredGrant && !grants.has(policy.requiredGrant)) {
+    return { ok: false, reason: 'authority_denied', requiredGrant: policy.requiredGrant, policy };
+  }
+  if (policy.readOnly) return { ok: true, policy };
   if (policy.confirmField && args?.[policy.confirmField] !== true) {
     return { ok: false, reason: 'not_confirmed', policy };
   }
-  const grants = new Set(context.grants || []);
   if (!grants.has(policy.class)) return { ok: false, reason: 'authority_denied', requiredGrant: policy.class, policy };
   return { ok: true, policy };
 }
@@ -64,9 +69,9 @@ export function authorizeTool(name, args, context = {}) {
 export function mcpAnnotations(name) {
   const policy = TOOL_POLICY[name] || {};
   return {
-    readOnlyHint: policy.readOnly === true,
+    readOnlyHint: policy.readOnly === true && policy.mayRefreshCredentials !== true,
     destructiveHint: policy.writesWorkspace === true || policy.hardware === true,
-    idempotentHint: policy.readOnly === true,
-    openWorldHint: false,
+    idempotentHint: policy.readOnly === true && policy.mayRefreshCredentials !== true,
+    openWorldHint: policy.openWorld === true,
   };
 }

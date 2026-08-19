@@ -29,7 +29,7 @@ const TOPIC_SUMMARIES = Object.freeze({
   hardware: 'ESP32-S3/C6 firmware, capture, provisioning, and hardware evidence.',
   training: 'Calibration, training, evaluation, and data-dependent capability limits.',
   homecore: 'HOMECORE runtime, restore, plugins, API compatibility, migration, HAP, and voice.',
-  integrations: 'Home Assistant, MQTT, Matter, Apple Home HAP, and related boundaries.',
+  integrations: 'Cognitum Spaces, Home Assistant, MQTT, Matter, Apple Home HAP, and related boundaries.',
   deployment: 'Runnable servers, transports, feature flags, and operational entry points.',
   community: 'Contributor harness, reviewed shared brain, local agents, and learning flywheel.',
   testing: 'Deterministic proofs, package gates, Rust CI, and hardware witness requirements.',
@@ -227,6 +227,29 @@ const CAPABILITIES = Object.freeze([
     ],
     validation: ['cargo test -p ruview-unified --no-default-features'],
     limitations: ['Accuracy evidence remains synthetic until validated against measured real-world datasets.', 'Hardware adapters do not imply equivalent sensing quality across modalities.'],
+  },
+  {
+    id: 'cognitum-spaces-oauth',
+    name: 'Cognitum Spaces OAuth projection',
+    topics: ['integrations', 'deployment', 'community'],
+    status: 'implemented-read-only',
+    evidence: 'PRODUCTION',
+    summary: 'RuView explicitly activates spaces:read through Cognitum Authorization Code + PKCE, and the contributor metaharness exposes the validated tenant/workspace projection through an OAuth-only CLI/MCP adapter.',
+    sources: [
+      'docs/adr/ADR-325-cognitum-spaces-activation-and-governed-spatial-exchange.md',
+      'v2/crates/wifi-densepose-cli/src/spaces.rs',
+      'harness/ruview/src/spaces.js',
+    ],
+    validation: [
+      'cd harness/ruview && node --test test/spaces.test.mjs test/policy.test.mjs',
+      'wifi-densepose login --spaces && node harness/ruview/bin/cli.js spaces',
+    ],
+    limitations: [
+      'The projection is read-only and grants no write, pairing, command, policy-approval, or actuator authority.',
+      'MCP requires the credential-use grant; bearer tokens and API keys are never accepted as tool arguments.',
+      'OAuth refresh may rotate the local credential file before a read returns.',
+      'The deployed slice exposes spaces only; the broader hierarchy, events, alerts, persistent spatial memory, and governed actions remain follow-up work.',
+    ],
   },
   {
     id: 'contributor-metaharness',

@@ -28,6 +28,7 @@ const VERB_TO_TOOL = {
   monitor: 'ruview_node_monitor',
   flash: 'ruview_node_flash',
   guidance: 'ruview_guidance',
+  spaces: 'ruview_spaces_list',
 };
 
 function pjson(o) { console.log(JSON.stringify(o, null, 2)); }
@@ -52,9 +53,10 @@ async function doctor() {
     which('claude') ? 'claude -p' : null,
     which('codex') ? 'codex exec' : null,
   ].filter(Boolean);
+  const spacesBackend = which('wifi-densepose') ? 'wifi-densepose binary' : 'unavailable (install wifi-densepose)';
   let ok = true;
   for (const [label, pass] of checks) { console.log(`${pass ? 'PASS' : 'FAIL'} ${label}`); if (!pass) ok = false; }
-  console.log(`\n${NAME}: ${ok ? 'all checks passed' : 'doctor found problems'} — local hosts: ${localHosts.join(', ') || 'none on PATH (optional)'}`);
+  console.log(`\n${NAME}: ${ok ? 'all checks passed' : 'doctor found problems'} — local hosts: ${localHosts.join(', ') || 'none on PATH (optional)'}; Spaces backend: ${spacesBackend}`);
   return ok ? 0 : 1;
 }
 
@@ -69,6 +71,7 @@ Operator tools:
   monitor --port COM8 [--seconds 12]                    assert CSI is flowing on a node
   flash --port COM8 --variant s3-8mb [--confirm]        build+flash firmware (Windows/ESP-IDF)
   guidance [--topic homecore] [--query "Wasmtime"]      source-cited code/capability map
+  spaces [--credentials-path <file>]                    list the OAuth-bound Cognitum Spaces projection
 
 Harness:
   doctor                 verify tools, adapters, and local CLI discovery
@@ -124,7 +127,11 @@ export async function run(args) {
     if (cmd === 'monitor' && flags.seconds) toolArgs.seconds = Number(flags.seconds);
     if (cmd === 'guidance' && flags.limit) toolArgs.limit = Number(flags.limit);
     if (cmd === 'calibrate' && typeof flags.args === 'string') toolArgs.args = flags.args.split(',');
-    const res = await runTool(VERB_TO_TOOL[cmd], toolArgs);
+    if (cmd === 'spaces') {
+      if (flags['credentials-path'] !== undefined) toolArgs.credentials_path = flags['credentials-path'];
+      delete toolArgs['credentials-path'];
+    }
+    const res = await runTool(VERB_TO_TOOL[cmd], toolArgs, { source: 'cli' });
     pjson(res);
     return res.ok ? 0 : 1;
   }
