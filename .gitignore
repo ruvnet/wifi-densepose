@@ -291,3 +291,13 @@ harness/**/ruvector.db
 # ruvector runtime/hook DB — never tracked (any depth)
 ruvector.db
 **/ruvector.db
+
+# RuView UI Tailwind build deps
+ui/node_modules/
+
+# ESP32 XIAO build artifacts
+firmware/esp32-csi-node/build_xiao/
+# claude-flow local state
+**/.claude-flow/
+# local scratch rebuild helper
+.rebuild2.sh

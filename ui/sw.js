@@ -6,7 +6,7 @@
 // deletes ALL old caches, so a single reload flushes any stale content left
 // over from the old cache-first worker.
 
-const CACHE_NAME = 'ruview-v4';
+const CACHE_NAME = 'ruview-v5';
 
 // Install — take over as soon as possible.
 self.addEventListener('install', () => {
