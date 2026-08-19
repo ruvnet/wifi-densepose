@@ -1,6 +1,6 @@
 # ADR-325: Cognitum Spaces activation and governed spatial exchange
 
-- **Status**: Accepted — legacy read live; versioned hierarchy, local memory, and governed-action implementation validated on feature branches; deployment pending
+- **Status**: Accepted — legacy and versioned reads, OAuth activation, local spatial memory, governed-action policy, metaharness support, and npm distribution are implemented; HTTPS production evidence is complete
 - **Date**: 2026-08-17
 - **Deciders**: ruv
 - **Tags**: cognitum-spaces, oauth, spatial-state, privacy, ruvector, policy, autogenous
@@ -423,41 +423,56 @@ Identity metadata deliberately advertises `spaces:read` for RuView but not
 publisher surface. RuView therefore has no OAuth write, command, policy-approval,
 or actuator capability.
 
-This production evidence does not claim deployment of sites/buildings/floors/
-zones, entities, semantic event or alert resources, tenant-scoped RuVector
-spatial history, MQTT reconciliation, governed actions, commands, or actuators.
-The first three are implemented and locally validated in the 2026-08-19 feature
-branches described below, but remain non-production until their workflow and
-readback gates pass. Commands and actuators remain out of scope.
+That receipt was for the initial flat Space slice. The following production
+expansion supersedes only its hierarchy/event/alert deferral. MQTT, commands,
+actuators, real-hardware accuracy, and the long-duration operational trial
+remain outside the completed claim.
 
-## Feature-branch implementation evidence (2026-08-19)
+## Completed implementation and production expansion (2026-08-19)
 
-- Cognitum API ADR-101 implements all eight `/v1/spatial` collections, coherent
-  transactional hierarchy checks, stable pagination, event/alert retention,
-  strict P2/P3 admission, API-key-only writes, and OAuth/API-key reads. The
-  Firestore emulator passed both the legacy and versioned verification scripts,
-  including cross-resource message replay denial.
-- `ruview-cognitum-spaces` adds a strictly decoded, paged, read-only client for
-  every versioned collection. `wifi-densepose spaces --resource ...` exposes it
-  while preserving the legacy flat command. The focused client suite and the
-  CLI no-default-features test gate pass.
-- The contributor metaharness now accepts `resource`, `limit`, and opaque
-  `cursor` on `ruview_spaces_list`, fixes the API origin, strips API-key
-  compatibility authority, and revalidates hierarchy/event/alert contracts.
-  Full metaharness, security, brain, flywheel, manifest, audit, and pack gates
-  pass for the `@ruvnet/ruview` 0.5.0 release candidate.
-- ADR-326 adds `ruview-spatial-memory`: one RuVector HNSW index per authenticated
-  tenant/workspace, replay/derivation/retention gates, cascading erasure,
-  bounded explanations, and XChaCha20-Poly1305 snapshots with reload-verified
-  key rotation. Its focused crate suite passes with `SYNTHETIC` evidence.
-- ADR-327 extends `ruview-policy` with typed observe/recommend/execute intents,
-  exact host grants, signed approvals, nonce/idempotency defense, the existing
-  ADR-321 assurance matrix, and signed hash-chained receipts. `spaces:read` is
-  explicitly denied as execution authority. Its focused crate suite passes.
-- The required whole-workspace Rust command was attempted twice on Windows:
-  parallel compilation ended in a compiler-process stack-buffer-overrun and a
-  single-job retry reached the configured timeout without a source/test
-  diagnostic. This is not recorded as a green gate; Linux CI remains required.
+- Cognitum API PRs #211 and #212 shipped the eight `/v1/spatial` collections,
+  transactional hierarchy integrity, stable pagination, event/alert retention,
+  strict P2/P3 admission, API-key-only writes, OAuth/API-key reads, and the
+  additive-only Firestore release authority. Function run `32279092861`
+  promoted active Node 22 revision `spacesapi-00005-kaf`.
+- Edge PRs #214, #215, and #216 preserved canonical UUID routing, kept SQLi
+  denial, and removed secret-valued API-key rate selection. Gateway run
+  `32284410107` promoted the reviewed immutable digest to 100% production
+  traffic. Every versioned collection returned HTTP 200 through the public
+  edge; the hierarchy composite index is `READY` and both retention TTL fields
+  are `ACTIVE`.
+- The dedicated RuView service credential was rotated to exactly
+  `spaces:read` and `spaces:write`; its predecessor returns 401. A non-mutating
+  invalid-body probe reached write validation without persisting customer data.
+  Other potentially affected owner keys and residual log retention remain
+  tracked in Cognitum API #217.
+- A live RuView Authorization Code + S256 PKCE consent requested exactly
+  `sensing:read spaces:read`. Its in-memory token read versioned `sites` with
+  HTTP 200 and schema `1.0`; the verifier then revoked the temporary refresh
+  credential and persisted no token.
+- RuView PR #1650 merged `ruview-cognitum-spaces`,
+  `ruview-spatial-memory`, the ADR-327 policy extension, CLI paging, and the
+  guarded `ruview_spaces_list` metaharness surface. PR #1651 removed stale
+  feature-branch guidance and refreshed the signed package manifest.
+- The contributor metaharness fixes the API origin, accepts bounded resource,
+  limit, and opaque-cursor inputs, strips API-key compatibility authority over
+  MCP, invokes only the hardened OAuth CLI, and rejects raw sensing or malformed
+  hierarchy/event/alert output. Its test, security, reviewed-brain, flywheel,
+  manifest, audit, exact-tarball, and claim-check gates pass.
+- Release run `32286297277` rebuilt and smoke-tested the exact package and
+  provenance-published `@ruvnet/ruview` 0.5.0. The public npm registry resolves
+  0.5.0 as `latest`; no workstation publish was used.
+- `ruview-spatial-memory` keeps one RuVector HNSW index per authenticated
+  tenant/workspace with replay, derivation, retention, cascading-erasure,
+  bounded-explanation, encrypted-snapshot, and reload-verified rotation gates.
+  This is local `SYNTHETIC` evidence, not a production sensing claim.
+- `ruview-policy` keeps observe/recommend/execute intents distinct, requires
+  exact host grants plus signed approval for consequence, rejects nonce replay,
+  and emits signed hash-chained receipts. `spaces:read` is explicitly denied as
+  execution authority.
+- Focused Rust gates and the Linux workspace/CLI/security lanes pass. Earlier
+  Windows whole-workspace attempts ended in host compiler failure or timeout;
+  those attempts are not reclassified as green evidence.
 - No OAuth write/action scope, actuator callback, MQTT deployment claim, sensing
   accuracy claim, or real-hardware claim is introduced.
 
@@ -478,8 +493,9 @@ readback gates pass. Commands and actuators remain out of scope.
 
 - Two credential types coexist during migration and must stay visibly distinct.
 - OAuth depends on Identity JWKS availability and correct key rotation.
-- Production currently exposes the legacy spaces slice; the implemented full
-  hierarchy/events/alerts model remains staged until deployment/readback.
+- Production exposes both the legacy Space twins and the versioned hierarchy,
+  anonymous entities, semantic events, and alerts over HTTPS. MQTT remains a
+  design contract without deployment evidence.
 - OAuth workspace IDs will return only documents populated with `workspaceId`;
   legacy owner-only documents require an explicit migration, never a broad query.
 - The RuView client exposes no write, command, or agent execution surface. The

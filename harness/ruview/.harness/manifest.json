@@ -3,7 +3,7 @@
   "generator": "RuView metaharness provenance v2",
   "template": "vertical:ruview",
   "name": "@ruvnet/ruview",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "hosts": [
     "claude-code",
     "codex"
@@ -31,7 +31,7 @@
     "flywheel/genome.json": "75db44a3cab70d9459fc8c07863f640ac1214bfaa243483939e1506d63f51214",
     "flywheel/replay.mjs": "0670ca0b03701f4afe0b4bca8a3d58d481676b61a94a5b98c6a425aefb1159ab",
     "flywheel/run.mjs": "6d4f97db16900c45367b6538848cbe1915af999e663720dfc51f2bb1698f1cd0",
-    "package.json": "e508476278467cbe63e836d2b42f24649393fb59ce4fe40925d4418da4e79acc",
+    "package.json": "5d29ef238f310c9ee5c57501ab651acc0f856f831b696ada187de71e4b5935a6",
     "scripts/sync-skills.mjs": "43715dab61e204dc91bbd61755810e8fdb2f66e2b0c0bd791b4bf48a2e293565",
     "scripts/update-manifest.mjs": "8f56764b8f70aed55da0c7e2417ae875b0d58d781d839b6db7f115f08af61e6b",
     "scripts/verify-manifest.mjs": "6491a221762efcfeb3e749ecab243b204f17fd5bc871f3d4025597f31b8f0f10",
@@ -43,7 +43,7 @@
     "skills/verify.md": "2d38d240e9810a7827e2ebd3717dc0f85c646cc92e46c3812fe77c5b9eb40b76",
     "src/brain.js": "0f16a75aea943acdacc430ff11d5df7ecdec9cca2ab497795ff6f33eaebdfab6",
     "src/guardrails.js": "aacc8fa6088f7f1ccea3a0b02171a5c516b95d3416ee3ba87add3879a1d6aaad",
-    "src/guidance.js": "beaa130b546fdb495ae8b17e52c46ca8bbe50c218f05705244922d3633125f4e",
+    "src/guidance.js": "583904c854eb17e98cb7d959330989c01990a71cff091515777aba8f345de1bf",
     "src/hosts/claude-code.js": "2212bc39b49822018800dfe33a471e56bbb4c5233d716bfa7aa4fff77aa23edb",
     "src/hosts/codex.js": "d41ecd132ce2db7b47aad9cebbc020d70e6810d48c3554858d099ff2e8f6608b",
     "src/hosts/index.js": "ab276c41ab722bcdf72c2d1649cecbb760ae05c41c1372aae4c2447aa7c11539",
@@ -55,7 +55,7 @@
     "src/spaces.js": "45ef786537cb2a446db5e926e5a1c10b73639d2767dec84611f914f78d4325eb",
     "src/tools.js": "55960c9a677661763e0317fd54ccc787c2edb39c87371c7fbc40cd55f0761c04"
   },
-  "filesDigest": "961357bd4458bd6fa759f0a8d5bf042c7b652dcea3700363ae25d03299aa5027",
+  "filesDigest": "28a3bbd9bbcf966df9fae8ec6ea5be3441f6ab535c1636bb1ce33f67b827d423",
   "brainDigest": "c0fb7b079ded157059b91601361429944697dae3cc42abc00dfe1a680986b0f4",
   "gateFingerprint": "6e53c784eee38310188948fc75fb49e6b4ebc04e247d01b903fa8c8a92d67bdd",
   "developmentPins": {
