@@ -9,6 +9,7 @@ description = "Bounded, privacy-preserving Cognitum Spaces client for RuView"
 publish = false
 
 [dependencies]
+chrono = { version = "0.4", default-features = false }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde.workspace = true
 serde_json.workspace = true

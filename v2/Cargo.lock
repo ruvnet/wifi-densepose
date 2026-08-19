@@ -9698,6 +9698,7 @@ dependencies = [
 name = "ruview-cognitum-spaces"
 version = "0.3.1"
 dependencies = [
+ "chrono",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -9824,6 +9825,7 @@ dependencies = [
 name = "ruview-policy"
 version = "0.3.1"
 dependencies = [
+ "blake3",
  "ruview-attest",
  "ruview-certify",
  "ruview-evidence",
@@ -9842,6 +9844,20 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ruview-spatial-memory"
+version = "0.3.1"
+dependencies = [
+ "chacha20poly1305",
+ "getrandom 0.2.17",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "wifi-densepose-ruvector",
+ "zeroize",
 ]
 
 [[package]]

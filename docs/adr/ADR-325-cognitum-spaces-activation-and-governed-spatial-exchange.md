@@ -1,6 +1,6 @@
 # ADR-325: Cognitum Spaces activation and governed spatial exchange
 
-- **Status**: Accepted — read path implemented; write path remains policy-gated
+- **Status**: Accepted — legacy read live; versioned hierarchy, local memory, and governed-action implementation validated on feature branches; deployment pending
 - **Date**: 2026-08-17
 - **Deciders**: ruv
 - **Tags**: cognitum-spaces, oauth, spatial-state, privacy, ruvector, policy, autogenous
@@ -423,10 +423,43 @@ Identity metadata deliberately advertises `spaces:read` for RuView but not
 publisher surface. RuView therefore has no OAuth write, command, policy-approval,
 or actuator capability.
 
-This evidence does not claim implementation of sites/buildings/floors/zones,
-entities, semantic event or alert resources, tenant-scoped RuVector spatial
-history, MQTT reconciliation, governed actions, commands, or actuators. Those
-remain separately reviewed milestones.
+This production evidence does not claim deployment of sites/buildings/floors/
+zones, entities, semantic event or alert resources, tenant-scoped RuVector
+spatial history, MQTT reconciliation, governed actions, commands, or actuators.
+The first three are implemented and locally validated in the 2026-08-19 feature
+branches described below, but remain non-production until their workflow and
+readback gates pass. Commands and actuators remain out of scope.
+
+## Feature-branch implementation evidence (2026-08-19)
+
+- Cognitum API ADR-101 implements all eight `/v1/spatial` collections, coherent
+  transactional hierarchy checks, stable pagination, event/alert retention,
+  strict P2/P3 admission, API-key-only writes, and OAuth/API-key reads. The
+  Firestore emulator passed both the legacy and versioned verification scripts,
+  including cross-resource message replay denial.
+- `ruview-cognitum-spaces` adds a strictly decoded, paged, read-only client for
+  every versioned collection. `wifi-densepose spaces --resource ...` exposes it
+  while preserving the legacy flat command. The focused client suite and the
+  CLI no-default-features test gate pass.
+- The contributor metaharness now accepts `resource`, `limit`, and opaque
+  `cursor` on `ruview_spaces_list`, fixes the API origin, strips API-key
+  compatibility authority, and revalidates hierarchy/event/alert contracts.
+  Full metaharness, security, brain, flywheel, manifest, audit, and pack gates
+  pass for the `@ruvnet/ruview` 0.5.0 release candidate.
+- ADR-326 adds `ruview-spatial-memory`: one RuVector HNSW index per authenticated
+  tenant/workspace, replay/derivation/retention gates, cascading erasure,
+  bounded explanations, and XChaCha20-Poly1305 snapshots with reload-verified
+  key rotation. Its focused crate suite passes with `SYNTHETIC` evidence.
+- ADR-327 extends `ruview-policy` with typed observe/recommend/execute intents,
+  exact host grants, signed approvals, nonce/idempotency defense, the existing
+  ADR-321 assurance matrix, and signed hash-chained receipts. `spaces:read` is
+  explicitly denied as execution authority. Its focused crate suite passes.
+- The required whole-workspace Rust command was attempted twice on Windows:
+  parallel compilation ended in a compiler-process stack-buffer-overrun and a
+  single-job retry reached the configured timeout without a source/test
+  diagnostic. This is not recorded as a green gate; Linux CI remains required.
+- No OAuth write/action scope, actuator callback, MQTT deployment claim, sensing
+  accuracy claim, or real-hardware claim is introduced.
 
 ## Consequences
 
@@ -445,8 +478,8 @@ remain separately reviewed milestones.
 
 - Two credential types coexist during migration and must stay visibly distinct.
 - OAuth depends on Identity JWKS availability and correct key rotation.
-- The current API exposes spaces only; the full hierarchy/events/alerts model
-  remains staged work.
+- Production currently exposes the legacy spaces slice; the implemented full
+  hierarchy/events/alerts model remains staged until deployment/readback.
 - OAuth workspace IDs will return only documents populated with `workspaceId`;
   legacy owner-only documents require an explicit migration, never a broad query.
 - The RuView client exposes no write, command, or agent execution surface. The

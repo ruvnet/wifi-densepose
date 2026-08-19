@@ -292,12 +292,15 @@ export const TOOLS = {
   },
 
   ruview_spaces_list: {
-    title: 'List Cognitum Spaces',
-    description: 'List the authenticated tenant/workspace Cognitum Spaces projection through the hardened wifi-densepose OAuth client. Never accepts tokens or API keys. MCP use requires the credential-use grant; an expired OAuth session may rotate its stored refresh credential.',
+    title: 'List Cognitum Spatial Resources',
+    description: 'Page sites, buildings, floors, spaces, zones, anonymous entities, semantic events, or alerts in the authenticated tenant/workspace through the hardened wifi-densepose OAuth client. Never accepts tokens, API keys, writes, approvals, or action authority.',
     inputSchema: {
       type: 'object',
       properties: {
         credentials_path: { type: 'string', minLength: 1, maxLength: 4096, description: 'CLI only: OAuth credential file. MCP operators must set RUVIEW_CREDENTIALS_PATH in the server environment.' },
+        resource: { type: 'string', enum: ['sites', 'buildings', 'floors', 'spaces', 'zones', 'entities', 'events', 'alerts'], description: 'Versioned spatial collection. Default: spaces.' },
+        limit: { type: 'number', minimum: 1, maximum: 100, description: 'Page size. Default: 50.' },
+        cursor: { type: 'string', minLength: 1, maxLength: 512, description: 'Opaque cursor from the prior page.' },
       },
     },
     async handler(args = {}, context = {}) {

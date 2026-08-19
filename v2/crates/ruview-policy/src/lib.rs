@@ -63,6 +63,9 @@
 use ruview_evidence::EvidenceLevel;
 use serde::{Deserialize, Serialize};
 
+/// Typed intent, approval, idempotency, and witnessed-receipt layer (ADR-327).
+pub mod governed;
+
 // ---------------------------------------------------------------------------
 // Value types owned by this crate
 // ---------------------------------------------------------------------------
@@ -479,10 +482,8 @@ pub fn authorize_from_certificate<V: ruview_attest::Verifier + ?Sized>(
     uncertainty: f64,
     evidence_level: EvidenceLevel,
 ) -> Authorization {
-    let certificate_valid =
-        cert.verify(verifier) && now_unix_s < cert.content.valid_until_unix_s;
-    let certificate_age_secs =
-        (now_unix_s - cert.content.calibrated_date_unix_s).max(0) as u64;
+    let certificate_valid = cert.verify(verifier) && now_unix_s < cert.content.valid_until_unix_s;
+    let certificate_age_secs = (now_unix_s - cert.content.calibrated_date_unix_s).max(0) as u64;
 
     authorize(
         class,

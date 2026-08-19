@@ -47,18 +47,18 @@ from the current tree when needed.
 
 ## RuView contributor harness
 
-`@ruvnet/ruview@0.4.0` is the runtime-dependency-free contributor interface
+`@ruvnet/ruview@0.5.0` is the runtime-dependency-free contributor interface
 defined by ADR-283.
 
 ```bash
-npx @ruvnet/ruview@0.4.0 doctor
-npx @ruvnet/ruview@0.4.0 guidance --topic homecore --query "restore and plugins"
-npx @ruvnet/ruview@0.4.0 agent run \
+npx @ruvnet/ruview@0.5.0 doctor
+npx @ruvnet/ruview@0.5.0 guidance --topic homecore --query "restore and plugins"
+npx @ruvnet/ruview@0.5.0 agent run \
   --host codex --repo . --prompt "Find the nearest tests and cite files"
-npx @ruvnet/ruview@0.4.0 brain search --query "community memory"
-npx @ruvnet/ruview@0.4.0 brain verify --repo .
-npx @ruvnet/ruview@0.4.0 spaces
-npx @ruvnet/ruview@0.4.0 mcp start
+npx @ruvnet/ruview@0.5.0 brain search --query "community memory"
+npx @ruvnet/ruview@0.5.0 brain verify --repo .
+npx @ruvnet/ruview@0.5.0 spaces
+npx @ruvnet/ruview@0.5.0 mcp start
 ```
 
 Start unfamiliar repository work with `ruview_guidance`. It returns reviewed

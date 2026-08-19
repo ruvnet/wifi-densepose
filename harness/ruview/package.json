@@ -1,6 +1,6 @@
 {
   "name": "@ruvnet/ruview",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "RuView WiFi-sensing operator harness — onboard, calibrate, verify, enforce evidence guardrails, and read Cognitum Spaces through explicitly granted OAuth.",
   "type": "module",
   "bin": {
