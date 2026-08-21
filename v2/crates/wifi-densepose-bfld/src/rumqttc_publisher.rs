@@ -13,7 +13,7 @@
 //! use wifi_densepose_bfld::{publish_event, RumqttPublisher};
 //! use rumqttc::MqttOptions;
 //!
-//! let opts = MqttOptions::new("seed-01", "broker.local", 1883);
+//! let opts = MqttOptions::new("seed-01", ("broker.local", 1883));
 //! let (mut publisher, mut connection) = RumqttPublisher::connect(opts, 100);
 //! thread::spawn(move || for _ in connection.iter() { /* drain */ });
 //! // ... build BfldEvent ...
@@ -22,7 +22,7 @@
 
 #![cfg(feature = "mqtt")]
 
-use rumqttc::{Client, Connection, LastWill, MqttOptions, QoS};
+use rumqttc::{Client, Connection, LastWill, MqttOptions, PublishOptions, QoS};
 
 use crate::availability::{availability_topic, PAYLOAD_NOT_AVAILABLE};
 use crate::mqtt_topics::{Publish, TopicMessage};
@@ -60,7 +60,7 @@ impl RumqttPublisher {
     /// shown in the module-level doc example).
     #[must_use]
     pub fn connect(opts: MqttOptions, capacity: usize) -> (Self, Connection) {
-        let (client, connection) = Client::new(opts, capacity);
+        let (client, connection) = Client::builder(opts).capacity(capacity).build();
         (Self::new(client, QoS::AtLeastOnce), connection)
     }
 
@@ -87,7 +87,7 @@ impl RumqttPublisher {
 /// opt in to the LWT without using `connect_with_lwt`.
 #[must_use]
 pub fn with_lwt(mut opts: MqttOptions, node_id: &str) -> MqttOptions {
-    // rumqttc 0.24 LastWill::new takes (topic, message, qos, retain).
+    // LastWill::new takes (topic, message, qos, retain).
     // retain = true so HA sees "offline" on next start even if the session
     // dropped while HA was down.
     let will = LastWill::new(
@@ -105,6 +105,10 @@ impl Publish for RumqttPublisher {
 
     fn publish(&mut self, msg: &TopicMessage) -> Result<(), Self::Error> {
         self.client
-            .publish(&msg.topic, self.qos, self.retain, msg.payload.as_bytes())
+            .publish(
+                &msg.topic,
+                msg.payload.as_bytes(),
+                PublishOptions::new(self.qos).retain(self.retain),
+            )
     }
 }

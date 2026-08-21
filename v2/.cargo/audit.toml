@@ -1,13 +1,9 @@
 # cargo-audit configuration — v2 workspace
 # Managed by security audit (fix/security-audit-rustsec-clippy branch).
 #
-# This file suppresses advisories in two categories:
-#   A) CVE-bearing advisories in TRANSITIVE deps we cannot upgrade directly
-#      because the parent published crate (ruvector-core 2.2.0) has not yet
-#      published a version with the fix.  These are tracked as issues.
-#   B) UNMAINTAINED-only advisories (no CVE) flowing through dependencies
-#      that are purely transitive / build-time and have no user-facing attack
-#      surface in this workspace.
+# This file suppresses UNMAINTAINED-only advisories (no CVE) flowing through
+# dependencies that are purely transitive / build-time and have no
+# user-facing attack surface in this workspace.
 # Each entry documents the root cause and the mitigation path.
 
 [advisories]
@@ -24,26 +20,6 @@
 # Mitigation: Accept transitively until Tauri v2 drops GTK3 or a workspace
 #   override path becomes available.
 ignore = [
-    # -----------------------------------------------------------------------
-    # CATEGORY A — transitive CVEs from ruvector-core 2.2.0 → reqwest 0.11
-    # ruvector-core 2.2.0 (latest on crates.io) depends on reqwest 0.11.27,
-    # which pulls in rustls 0.21 / rustls-webpki 0.101.7.  We cannot upgrade
-    # this without a new ruvector-core release.  Tracked in issue #812.
-    # The workspace's own TLS stack uses rustls-webpki 0.103.13 (patched);
-    # the vulnerable 0.101.7 instance is not reachable from our TLS code.
-    "RUSTSEC-2026-0098",   # rustls-webpki 0.101.7: URI name constraint bypass
-    "RUSTSEC-2026-0099",   # rustls-webpki 0.101.7: wildcard name constraint bypass
-    "RUSTSEC-2026-0104",   # rustls-webpki 0.101.7: reachable panic in CRL parsing
-    # quinn-proto 0.11.13 is also pulled through midstreamer-quic 0.3 (now
-    # upgraded).  The remaining 0.11.13 instance comes from the same
-    # ruvector-core transitive chain.  Tracked in issue #812.
-    "RUSTSEC-2026-0037",   # quinn-proto 0.11.13: DoS in Quinn endpoints
-    # CRL Distribution Point matching bug — same ruvector-core / reqwest 0.11
-    # transitive chain; rustls-webpki 0.101.7 also affected.
-    "RUSTSEC-2026-0049",   # rustls-webpki <0.103.10: CRL authority matching
-
-    # -----------------------------------------------------------------------
-    # CATEGORY B — unmaintained / no CVE
     "RUSTSEC-2024-0411",   # gdkwayland-sys: unmaintained
     "RUSTSEC-2024-0412",   # gdk: unmaintained
     "RUSTSEC-2024-0413",   # atk: unmaintained

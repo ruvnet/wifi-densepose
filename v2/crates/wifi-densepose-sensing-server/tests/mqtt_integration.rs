@@ -104,12 +104,11 @@ async fn subscribe_client(port: u16, topics: &[&str]) -> (AsyncClient, EventLoop
         .unwrap_or(0);
     let mut opts = MqttOptions::new(
         format!("ruview-test-sub-{}-{}", std::process::id(), suffix),
-        "127.0.0.1",
-        port,
+        ("127.0.0.1", port),
     );
-    opts.set_keep_alive(Duration::from_secs(10));
+    opts.set_keep_alive(10);
     opts.set_clean_session(true);
-    let (client, mut eventloop) = AsyncClient::new(opts, 256);
+    let (client, mut eventloop) = AsyncClient::builder(opts).capacity(256).build();
     for t in topics {
         client.subscribe(*t, QoS::AtLeastOnce).await.unwrap();
     }
@@ -147,7 +146,11 @@ async fn collect_published(
         let remain = until - tokio::time::Instant::now();
         match timeout(remain, eventloop.poll()).await {
             Ok(Ok(Event::Incoming(Packet::Publish(p)))) => {
-                out.push((p.topic, p.payload.to_vec(), p.retain));
+                out.push((
+                    String::from_utf8_lossy(&p.topic).to_string(),
+                    p.payload.to_vec(),
+                    p.retain,
+                ));
             }
             Ok(Ok(_)) => {} // ignore other events
             Ok(Err(e)) => {

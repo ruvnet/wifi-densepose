@@ -26,6 +26,19 @@ use homecore::StateMachine;
 use crate::dedup::fnv64a_hash;
 use crate::schema::ALL_DDL;
 
+// Preserve the narrow `sqlx::*` call surface used in this module while
+// depending only on SQLx core + SQLite. The umbrella crate resolves unused
+// database backends into Cargo.lock, including MySQL's vulnerable RSA stack.
+mod sqlx {
+    pub use sqlx_core::error::Error;
+    pub use sqlx_core::query::query;
+    pub use sqlx_core::query_as::query_as;
+
+    pub mod sqlite {
+        pub use sqlx_sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+    }
+}
+
 type SearchStateRecord = (
     i64,
     String,

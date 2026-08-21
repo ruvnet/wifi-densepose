@@ -255,7 +255,7 @@ midstreamer-attractor = "0.2"
 # ruvector integration (published on crates.io)
 # Vendored at origin/main (a083bd77f) in vendor/ruvector; using crates.io versions
 # until published. Bumps per ADR-152 §2.6 (2026-06-10 vendor sync survey).
-ruvector-core = "2.2.0"
+ruvector-core = "2.3.0"
 ruvector-mincut = "2.0.6"
 ruvector-attn-mincut = "2.0.4"
 ruvector-temporal-tensor = "2.0.6"

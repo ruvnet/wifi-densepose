@@ -5,9 +5,14 @@ PCK@20 (MultiFormer Table VII metric: `‖pred−gt‖ ≤ 0.2·‖R-shoulder �
 
 The flagship [`ruvnet/wifi-densepose-mmfi-pose`](https://huggingface.co/ruvnet/wifi-densepose-mmfi-pose)
 reaches **83.59%** torso-PCK@20 (vs MultiFormer 72.25%, CSI2Pose 68.41%). But the headline number
-isn't the whole story for **edge deployment** — on a Raspberry Pi / ESP32-class target, *params and
+isn't the whole story for **edge deployment** — on a Raspberry Pi-class edge host, *params and
 latency* matter as much as accuracy. So we swept model size to map the **accuracy-per-parameter
 frontier**: how small can a WiFi-CSI pose model be and still beat the prior published SOTA?
+
+> **Hardware compatibility boundary.** These models consume MM-Fi tensors shaped
+> `[3,114,10]`. Parameter size alone does not make that input, model architecture, or runtime
+> compatible with an ESP32-S3/C6 capture node. The measurements below are dataset and x86/GPU
+> measurements; no ESP32 inference latency or live ESP32-to-MM-Fi adapter is claimed.
 
 ## The frontier
 
@@ -38,8 +43,10 @@ Size alone isn't the claim — what matters is **accuracy at the deployed precis
 
 **The honest edge result:** `micro` is **lossless at int8 (73.5 KB, 74.70%)**, and at **int4 (36.7 KB)
 naïve post-training quantization falls below SOTA (70.21%) — but quantization-aware training fully
-recovers it to 74.46%**, still beating MultiFormer. So a **SOTA-beating WiFi-pose model genuinely runs
-in ~37 KB int4** (with QAT) or **~73 KB int8** (no retraining) — deployable on the sensing node itself.
+recovers it to 74.46%**, still beating MultiFormer. So a **SOTA-beating WiFi-pose model fits in
+~37 KB int4** (with QAT) or **~73 KB int8** (no retraining). That is a model-footprint result, not
+evidence that it runs on an ESP32 sensing node; a compatible capture adapter and embedded runtime
+still need to be implemented and measured.
 `nano` (40K params) sits at the SOTA line in fp32 and is best treated as int8.
 
 (We also tested flagship→tiny **knowledge distillation**: it did *not* help — the tiny students reach
