@@ -30,6 +30,7 @@ jobs:
 
     - name: Audit the checked-in Rust lockfile
       run: |
+        set -o pipefail
         cargo audit --file v2/Cargo.lock --json | tee v2/cargo-audit.json
 
     - name: Upload Rust advisory report
