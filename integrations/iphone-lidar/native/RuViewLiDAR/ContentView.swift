@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var capture = LiDARCaptureManager()
-    @State private var endpoint = "ws://192.168.1.10:3001/ws/lidar"
+    @State private var endpoint = "ws://HOST:8787/ws/lidar?token=TOKEN"
     @State private var streaming = false
     @State private var status = "Idle"
 
@@ -27,7 +27,7 @@ struct ContentView: View {
                         HStack {
                             Text("Depth")
                             Spacer()
-                            Text("\(frame.depth.width) × \(frame.depth.height)")
+                            Text("\(frame.depth.width) x \(frame.depth.height)")
                         }
                         HStack {
                             Text("Sequence")

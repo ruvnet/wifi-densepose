@@ -1,0 +1,70 @@
+name: iPhone LiDAR integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'integrations/iphone-lidar/**'
+      - 'docs/adr/ADR-340-iphone-lidar-sensor-bridge.md'
+      - '.github/workflows/iphone-lidar.yml'
+  pull_request:
+    paths:
+      - 'integrations/iphone-lidar/**'
+      - 'docs/adr/ADR-340-iphone-lidar-sensor-bridge.md'
+      - '.github/workflows/iphone-lidar.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    name: Node relay and codec
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: integrations/iphone-lidar/web
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: integrations/iphone-lidar/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run tests
+        run: npm test
+
+      - name: Audit runtime dependencies
+        run: npm audit --omit=optional --audit-level=high
+
+  ios:
+    name: iOS 17 compile
+    runs-on: macos-15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Compile native sources with strict concurrency
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          build_dir="$RUNNER_TEMP/ruview-lidar-build"
+          mkdir -p "$build_dir"
+          cd "$build_dir"
+          xcrun swiftc \
+            -parse-as-library \
+            -target arm64-apple-ios17.0 \
+            -sdk "$sdk" \
+            -module-name RuViewLiDAR \
+            -strict-concurrency=complete \
+            -warnings-as-errors \
+            -emit-module \
+            -emit-module-path "$build_dir/RuViewLiDAR.swiftmodule" \
+            -c "$GITHUB_WORKSPACE"/integrations/iphone-lidar/native/RuViewLiDAR/*.swift

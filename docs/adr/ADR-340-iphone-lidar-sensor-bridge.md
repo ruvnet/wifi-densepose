@@ -36,13 +36,13 @@ Rules:
 
 ## Performance target
 
-A typical 256 x 192 Float32 depth map is about 196 KB before confidence and metadata. Downsampling to 128 x 96 and encoding each sample as two byte depth plus one byte confidence yields about 36.9 KB raw. At 15 FPS the raw sensor payload is about 553 KB/s. Base64 raises this to roughly 737 KB/s before JSON metadata.
+`[SYNTHETIC]` A 256 x 192 Float32 depth map is about 196 KB before confidence and metadata. Downsampling to 128 x 96 and encoding each sample as two byte depth plus one byte confidence yields about 36.9 KB raw. At 15 FPS the raw sensor payload is about 553 KB/s. Base64 raises this to roughly 737 KB/s before JSON metadata. These values are arithmetic sizing estimates, not device measurements.
 
-Target local network latency is below 150 ms p95. A later binary WebSocket or QUIC transport can remove base64 overhead and reduce bandwidth by about 25 percent.
+The `[CLAIMED target]` for local network latency is below 150 ms p95. A later binary WebSocket or QUIC transport can remove base64 overhead; the exact end-to-end reduction must be measured before it is claimed.
 
 ## Security
 
-The development relay is intentionally local and unauthenticated. It is not a production trust boundary.
+The development relay is LAN-facing, requires a random per-run bearer token, bounds message size, and restricts the files it serves. Its default `ws://` transport is not encrypted, so it is not a production trust boundary.
 
 Production requires WSS, authenticated sensor identity, replay protection, message size limits, per tenant authorization, provenance receipts, and explicit retention policy before persistence.
 
@@ -55,3 +55,5 @@ The main limitation is that Apple provides processed scene depth rather than the
 ## Acceptance criteria
 
 A physical LiDAR capable iPhone must stream live geometry to the browser viewer with monotonically increasing sequence numbers, no RGB payload, valid confidence maps, and below 150 ms p95 local network latency over a 60 second run.
+
+CI type-checking and simulator runs do not satisfy this criterion. Until a captured physical-device run records the environment and results, the hardware behavior and latency remain unverified.

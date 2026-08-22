@@ -73,6 +73,37 @@ struct RuViewLiDARFrame: Codable, Sendable {
             schema: "ruview.lidar.depth.v1"
         )
     }
+
+    func assigningSequence(_ sequence: UInt64) -> RuViewLiDARFrame {
+        RuViewLiDARFrame(
+            type: type,
+            intrinsics: intrinsics,
+            pose: pose,
+            depth: depth,
+            provenance: Provenance(
+                sensor: provenance.sensor,
+                source: provenance.source,
+                privacyClass: provenance.privacyClass,
+                sequence: sequence,
+                timestampNs: provenance.timestampNs,
+                schema: provenance.schema
+            )
+        )
+    }
+
+    private init(
+        type: String,
+        intrinsics: Intrinsics,
+        pose: Pose,
+        depth: Depth,
+        provenance: Provenance
+    ) {
+        self.type = type
+        self.intrinsics = intrinsics
+        self.pose = pose
+        self.depth = depth
+        self.provenance = provenance
+    }
 }
 
 private extension simd_float4x4 {

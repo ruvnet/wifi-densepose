@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "start": "node relay.mjs",
-    "test": "node --test codec.test.mjs"
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
     "ws": "^8.18.3"

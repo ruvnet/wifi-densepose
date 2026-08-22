@@ -16,7 +16,7 @@ final class LiDARCaptureManager: NSObject, ObservableObject {
     @Published private(set) var framesPerSecond: Double = 0
 
     let session = ARSession()
-    var onFrame: (@Sendable (RuViewLiDARFrame) -> Void)?
+    var onFrame: (@MainActor @Sendable (RuViewLiDARFrame) -> Void)?
 
     private var sequence: UInt64 = 0
     private var lastTimestamp: TimeInterval?
@@ -53,7 +53,9 @@ final class LiDARCaptureManager: NSObject, ObservableObject {
         let depthMap = sceneDepth.depthMap
         let confidenceMap = sceneDepth.confidenceMap
 
-        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+        guard CVPixelBufferLockBaseAddress(depthMap, .readOnly) == kCVReturnSuccess else {
+            return nil
+        }
         defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
 
         guard CVPixelBufferGetPixelFormatType(depthMap) == kCVPixelFormatType_DepthFloat32,
@@ -77,8 +79,12 @@ final class LiDARCaptureManager: NSObject, ObservableObject {
         }
 
         var confidence = [UInt8](repeating: 0, count: width * height)
-        if let confidenceMap {
-            CVPixelBufferLockBaseAddress(confidenceMap, .readOnly)
+        if let confidenceMap,
+           CVPixelBufferGetPixelFormatType(confidenceMap) == kCVPixelFormatType_OneComponent8,
+           CVPixelBufferGetWidth(confidenceMap) == width,
+           CVPixelBufferGetHeight(confidenceMap) == height,
+           CVPixelBufferLockBaseAddress(confidenceMap, .readOnly) == kCVReturnSuccess {
+            defer { CVPixelBufferUnlockBaseAddress(confidenceMap, .readOnly) }
             if let confidenceBase = CVPixelBufferGetBaseAddress(confidenceMap) {
                 let confidenceStride = CVPixelBufferGetBytesPerRow(confidenceMap)
                 let confidencePointer = confidenceBase.assumingMemoryBound(to: UInt8.self)
@@ -89,7 +95,6 @@ final class LiDARCaptureManager: NSObject, ObservableObject {
                     }
                 }
             }
-            CVPixelBufferUnlockBaseAddress(confidenceMap, .readOnly)
         }
 
         return RuViewLiDARFrame(
@@ -109,26 +114,17 @@ final class LiDARCaptureManager: NSObject, ObservableObject {
 extension LiDARCaptureManager: ARSessionDelegate {
     nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
         guard let base = makeFrame(from: frame) else { return }
+        let frameTimestamp = frame.timestamp
 
         Task { @MainActor in
             sequence &+= 1
-            let corrected = RuViewLiDARFrame(
-                intrinsics: frame.camera.intrinsics,
-                imageResolution: frame.camera.imageResolution,
-                cameraTransform: frame.camera.transform,
-                depthWidth: base.depth.width,
-                depthHeight: base.depth.height,
-                depthMeters: base.depth.meters,
-                confidence: base.depth.confidence,
-                sequence: sequence,
-                timestamp: Date().timeIntervalSince1970
-            )
+            let corrected = base.assigningSequence(sequence)
 
             if let previous = lastTimestamp {
-                let delta = frame.timestamp - previous
+                let delta = frameTimestamp - previous
                 if delta > 0 { framesPerSecond = 1.0 / delta }
             }
-            lastTimestamp = frame.timestamp
+            lastTimestamp = frameTimestamp
             lastFrame = corrected
             onFrame?(corrected)
         }

@@ -29,8 +29,33 @@ test('decodes u16 millimeter depth and confidence', () => {
 test('rejects malformed payload length', () => {
   assert.throws(() => decodeLiDARPacket({
     type: 'ruview.lidar.depth.v1',
+    intrinsics: { fx: 100, fy: 100, cx: 1, cy: 1, imageWidth: 2, imageHeight: 2 },
+    pose: { matrix: Array(16).fill(0) },
     depth: { width: 2, height: 2, encoding: 'u16le-mm+u8-confidence', millimetersBase64: b64([1,2]), confidenceBase64: b64([1,1,1,1]) },
   }), /length mismatch/);
+});
+
+test('rejects invalid dimensions, intrinsics, pose, and base64', () => {
+  const valid = {
+    type: 'ruview.lidar.depth.v1',
+    intrinsics: { fx: 100, fy: 100, cx: 0, cy: 0, imageWidth: 1, imageHeight: 1 },
+    pose: { matrix: Array(16).fill(0) },
+    depth: {
+      width: 1,
+      height: 1,
+      encoding: 'u16le-mm+u8-confidence',
+      millimetersBase64: b64([0xe8, 0x03]),
+      confidenceBase64: b64([2]),
+    },
+  };
+
+  assert.throws(() => decodeLiDARPacket({ ...valid, depth: { ...valid.depth, width: 0 } }), /positive integer/);
+  assert.throws(() => decodeLiDARPacket({ ...valid, intrinsics: { ...valid.intrinsics, fx: 0 } }), /intrinsics/);
+  assert.throws(() => decodeLiDARPacket({ ...valid, pose: { matrix: [1] } }), /pose/);
+  assert.throws(() => decodeLiDARPacket({
+    ...valid,
+    depth: { ...valid.depth, millimetersBase64: '!!!!' },
+  }), /canonical base64/);
 });
 
 test('projects depth into a point cloud and honors confidence', () => {

@@ -15,8 +15,15 @@ let pitch = -0.15;
 let scale = 120;
 
 function connect() {
+  const token = new URLSearchParams(location.search).get('token');
+  if (!token) {
+    status.textContent = 'TOKEN REQUIRED';
+    status.dataset.state = 'warn';
+    return;
+  }
+
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const socket = new WebSocket(`${protocol}//${location.host}/ws/lidar`);
+  const socket = new WebSocket(`${protocol}//${location.host}/ws/lidar?token=${encodeURIComponent(token)}`);
 
   socket.addEventListener('open', () => {
     status.textContent = 'LIVE';
