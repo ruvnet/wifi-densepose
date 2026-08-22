@@ -9,7 +9,7 @@ use wifi_densepose_bfld::{
 };
 
 fn unreachable_opts(client_id: &str) -> MqttOptions {
-    MqttOptions::new(client_id, "127.0.0.1", 1)
+    MqttOptions::new(client_id, ("127.0.0.1", 1))
 }
 
 #[test]
@@ -89,7 +89,7 @@ fn caller_built_options_can_opt_in_via_with_lwt_then_pass_to_connect() {
     // Operators with custom MqttOptions (e.g., TLS, credentials) build their
     // own opts, then call with_lwt before passing to RumqttPublisher::connect.
     let mut opts = unreachable_opts("bfld-lwt-6");
-    opts.set_keep_alive(std::time::Duration::from_secs(30));
+    opts.set_keep_alive(30);
     let opts = with_lwt(opts, "seed-01");
     let (_publisher, _connection) = RumqttPublisher::connect(opts, 16);
 }

@@ -12,7 +12,7 @@ use wifi_densepose_bfld::{publish_event, BfldEvent, PrivacyClass, Publish, Rumqt
 fn unreachable_opts() -> MqttOptions {
     // Port 1 is reserved (RFC 1700) and the loopback address will refuse
     // immediately — perfect for a construction smoke test that must not block.
-    MqttOptions::new("bfld-smoke-iter23", "127.0.0.1", 1)
+    MqttOptions::new("bfld-smoke-iter23", ("127.0.0.1", 1))
 }
 
 fn sample_event() -> BfldEvent {

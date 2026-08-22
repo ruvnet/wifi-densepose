@@ -31,10 +31,16 @@ homecore = { path = "../homecore", version = "0.1.0-alpha.0" }
 # Async runtime
 tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros"] }
 
-# SQLite via sqlx — only the lite feature set; no postgres, no tls
-sqlx = { version = "0.8.1", default-features = false, features = [
-    "runtime-tokio-native-tls",
-    "sqlite",
+# SQLite-only SQLx crates, pinned in lockstep because their direct APIs are
+# semver-exempt. Depending on the umbrella `sqlx` package also resolves its
+# unused MySQL backend (and vulnerable `rsa`) into Cargo.lock.
+sqlx-core = { version = "=0.8.6", default-features = false, features = [
+    "_rt-tokio",
+    "chrono",
+    "uuid",
+] }
+sqlx-sqlite = { version = "=0.8.6", default-features = false, features = [
+    "bundled",
     "chrono",
     "uuid",
 ] }

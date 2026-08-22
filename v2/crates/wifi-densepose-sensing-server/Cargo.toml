@@ -110,7 +110,7 @@ rand = "0.8"
 # client (ADR-115 §10 references). `rustls` is preferred over openssl on
 # Windows to keep parity with the rest of the workspace (`ureq` above also
 # uses rustls).
-rumqttc   = { version = "0.24", default-features = false, features = ["use-rustls"], optional = true }
+rumqttc   = { package = "rumqttc-v4-next", version = "0.34", default-features = false, features = ["use-rustls-ring"], optional = true }
 
 # `otel` feature — OTLP log export (`telemetry` module). Same gating
 # principle as `mqtt`: the heavy exporter stack (opentelemetry SDK +

@@ -245,8 +245,8 @@ See the measured benchmarks, witness records, and one-command reproducibility ch
 |------|-------|---------|
 | **MM-Fi pose model (SOTA)** | [`ruvnet/wifi-densepose-mmfi-pose`](https://huggingface.co/ruvnet/wifi-densepose-mmfi-pose) | 82.69% torso-PCK@20 (single) · 83.59% (ensemble+TTA) · 75K-param micro variant 74.30% |
 | **AetherArena benchmark Space** | [`ruvnet/aether-arena`](https://huggingface.co/spaces/ruvnet/aether-arena) | self-correcting, auditable MM-Fi leaderboard |
-| **Full MM-Fi study (honest picture)** | [`docs/benchmarks/mmfi-wifi-sensing-study.md`](docs/benchmarks/mmfi-wifi-sensing-study.md) | pose + action; zero-shot cross-subject ~64%, +~30 s in-room calibration → 72.2% |
-| **Efficiency frontier** | [`docs/benchmarks/wifi-pose-efficiency-frontier.md`](docs/benchmarks/wifi-pose-efficiency-frontier.md) | SOTA-beating WiFi pose in a 20 KB int4 edge model |
+| **Full MM-Fi study (honest picture)** | [`docs/benchmarks/mmfi-wifi-sensing-study.md`](docs/benchmarks/mmfi-wifi-sensing-study.md) | pose + action; zero-shot cross-subject ~64%, labeled in-room calibration → 72.2% |
+| **Efficiency frontier** | [`docs/benchmarks/wifi-pose-efficiency-frontier.md`](docs/benchmarks/wifi-pose-efficiency-frontier.md) | SOTA-beating MM-Fi pose in a ~37 KB int4 model; live ESP32 compatibility not established |
 | **Pretrained encoder** | [`ruvnet/wifi-densepose-pretrained`](https://huggingface.co/ruvnet/wifi-densepose-pretrained) | 82.3% held-out temporal-triplet, 8 KB int4 |
 | **Reproducible proof (Trust Kill Switch)** | [`archive/v1/data/proof/verify.py`](archive/v1/data/proof/verify.py) + [`expected_features.sha256`](archive/v1/data/proof/expected_features.sha256) | one-command deterministic pipeline replay (SHA-256 of output vs published hash) |
 | **Benchmark-proof ADR** | [ADR-168](docs/adr/ADR-168-benchmark-proof.md) | how the numbers are produced and verified |
@@ -488,11 +488,19 @@ Neural Network: processed signals → 17 body keypoints + vital signs + room mod
 Output: real-time pose, breathing, heart rate, room fingerprint, drift alerts
 ```
 
-No training cameras required — the [Self-Learning system (ADR-024)](docs/adr/ADR-024-contrastive-csi-embedding-model.md) bootstraps from raw WiFi data alone. [MERIDIAN (ADR-027)](docs/adr/ADR-027-cross-environment-domain-generalization.md) ensures the model works in any room, not just the one it trained in.
+The [Self-Learning system (ADR-024)](docs/adr/ADR-024-contrastive-csi-embedding-model.md) provides
+camera-free representation-learning components. Cross-room pose remains a separate, data-gated
+problem: [MERIDIAN (ADR-027)](docs/adr/ADR-027-cross-environment-domain-generalization.md) is
+**Proposed**, while the measured calibration reference requires labeled CSI/keypoint pairs and
+model-specific adapters. See the [model compatibility boundary](docs/user-guide.md#model-and-capture-compatibility).
 
 ---
 
 ## 🏢 Use Cases & Applications
+
+> **Safety boundary:** these are research and prototype applications, not medical devices,
+> emergency systems, or safety-certified controls. Vital-sign and pose outputs require independent
+> validation on the exact hardware, room, subjects, and failure conditions before operational use.
 
 WiFi sensing works anywhere WiFi exists. No new hardware in most cases — just software on existing access points or a $8 ESP32 add-on. Because there are no cameras, deployments avoid privacy regulations (GDPR video, HIPAA imaging) by design.
 
@@ -528,7 +536,7 @@ WiFi sensing works anywhere WiFi exists. No new hardware in most cases — just 
 | Use Case | What It Does | Hardware | Key Metric | Edge Module |
 |----------|-------------|----------|------------|-------------|
 | **Smart home automation** | Room-level presence triggers (lights, HVAC, music) that work through walls — no dead zones, no motion-sensor timeouts | 2-3 ESP32-S3 nodes ($24) | Through-wall range ~5m | [HVAC Presence](docs/edge-modules/building.md), [Lighting Zones](docs/edge-modules/building.md) |
-| **Fitness & sports** | Rep counting, posture correction, breathing cadence during exercise — no wearable, no camera in locker rooms | 3+ ESP32-S3 mesh | Pose: 17 keypoints | [Breathing Sync](docs/edge-modules/exotic.md), [Gait Analysis](docs/edge-modules/medical.md) |
+| **Fitness & sports research** | Explore motion and breathing cadence without a wearable or camera; reliable posture correction requires a validated compatible pose model | 3+ ESP32-S3 mesh + edge host | Prototype; no live S3 pose accuracy claim | [Breathing Sync](docs/edge-modules/exotic.md), [Gait Analysis](docs/edge-modules/medical.md) |
 | **Childcare & schools** | Naptime breathing monitoring, playground headcount, restricted-area alerts — privacy-safe for minors | 2-4 ESP32-S3 per zone | Breathing: ±1 BPM | [Sleep Apnea](docs/edge-modules/medical.md), [Perimeter Breach](docs/edge-modules/security.md) |
 | **Event venues & concerts** | Crowd density mapping, crush-risk detection via breathing compression, emergency evacuation flow tracking | Multi-AP mesh (4-8 APs) | Density per m² | [Customer Flow](docs/edge-modules/retail.md), [Panic Motion](docs/edge-modules/security.md) |
 | **Stadiums & arenas** | Section-level occupancy for dynamic pricing, concession staffing, emergency egress flow modeling | Enterprise AP grid | 15-20 per AP mesh | [Dwell Heatmap](docs/edge-modules/retail.md), [Queue Length](docs/edge-modules/retail.md) |

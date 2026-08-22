@@ -23,9 +23,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rumqttc::{Client, Event, Incoming, MqttOptions, Packet, QoS};
-use wifi_densepose_bfld::{
-    publish_event, BfldEvent, PrivacyClass, RumqttPublisher,
-};
+use wifi_densepose_bfld::{publish_event, BfldEvent, PrivacyClass, RumqttPublisher};
 
 const SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(5);
 const RECEIVE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -69,9 +67,9 @@ fn spawn_subscriber(
     port: u16,
     topic_filter: &str,
 ) -> (Receiver<(String, String)>, Receiver<()>) {
-    let mut opts = MqttOptions::new(unique_client_id("bfld-sub"), host, port);
-    opts.set_keep_alive(Duration::from_secs(5));
-    let (client, mut connection) = Client::new(opts, 64);
+    let mut opts = MqttOptions::new(unique_client_id("bfld-sub"), (host, port));
+    opts.set_keep_alive(5);
+    let (client, mut connection) = Client::builder(opts).capacity(64).build();
     client
         .subscribe(topic_filter, QoS::AtLeastOnce)
         .expect("subscribe enqueue");
@@ -79,13 +77,18 @@ fn spawn_subscriber(
     let (incoming_tx, incoming_rx) = channel();
     let (suback_tx, suback_rx) = channel();
     thread::spawn(move || {
+        // rumqttc-v4-next stops the connection once every request sender is
+        // dropped. Keep the subscriber client alive for as long as its pump
+        // thread runs; otherwise the broker sees a clean disconnect directly
+        // after SUBACK and no subsequent publications can be delivered.
+        let _client_guard = client;
         for notification in connection.iter() {
             match notification {
                 Ok(Event::Incoming(Packet::SubAck(_))) => {
                     let _ = suback_tx.send(());
                 }
                 Ok(Event::Incoming(Incoming::Publish(p))) => {
-                    let topic = p.topic.clone();
+                    let topic = String::from_utf8_lossy(&p.topic).to_string();
                     let payload = String::from_utf8_lossy(&p.payload).to_string();
                     if incoming_tx.send((topic, payload)).is_err() {
                         break;
@@ -141,8 +144,8 @@ fn live_broker_anonymous_event_roundtrips_all_six_topics() {
 
     // Publisher with its own connection. Spawn a thread iterating the
     // Connection so publishes actually reach the broker.
-    let mut opts = MqttOptions::new(unique_client_id("bfld-pub"), &host, port);
-    opts.set_keep_alive(Duration::from_secs(5));
+    let mut opts = MqttOptions::new(unique_client_id("bfld-pub"), (host.as_str(), port));
+    opts.set_keep_alive(5);
     let (mut publisher, mut pub_connection) = RumqttPublisher::connect(opts, 64);
     thread::spawn(move || {
         for _ in pub_connection.iter() { /* drain protocol events */ }
@@ -197,8 +200,8 @@ fn live_broker_restricted_event_omits_identity_risk() {
         .recv_timeout(SUBSCRIBE_TIMEOUT)
         .expect("SubAck within 5s");
 
-    let mut opts = MqttOptions::new(unique_client_id("bfld-pub-r"), &host, port);
-    opts.set_keep_alive(Duration::from_secs(5));
+    let mut opts = MqttOptions::new(unique_client_id("bfld-pub-r"), (host.as_str(), port));
+    opts.set_keep_alive(5);
     let (mut publisher, mut pub_connection) = RumqttPublisher::connect(opts, 64);
     thread::spawn(move || for _ in pub_connection.iter() {});
     thread::sleep(Duration::from_millis(200));

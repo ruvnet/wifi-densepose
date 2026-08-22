@@ -31,7 +31,7 @@ use crate::PrivacyClass;
 /// };
 /// use rumqttc::MqttOptions;
 ///
-/// let opts = MqttOptions::new("seed-01", "broker.local", 1883);
+/// let opts = MqttOptions::new("seed-01", ("broker.local", 1883));
 /// let (retained_pub, _conn) = RumqttPublisher::connect(opts.clone(), 64);
 /// let mut retained_pub = retained_pub.with_retain(true);
 /// publish_discovery(&mut retained_pub, "seed-01", PrivacyClass::Anonymous)?;

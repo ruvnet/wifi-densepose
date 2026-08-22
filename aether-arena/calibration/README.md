@@ -1,8 +1,14 @@
 # RuView Calibration Service (reference implementation)
 
-Turn a **shared WiFi-CSI pose base model** into a room-specific one with a **30-second labeled
-calibration** and a **~11 KB per-room LoRA adapter**. This is the deployable resolution of the
-cross-subject / cross-environment generalization problem (full study: [ADR-150 §3.3–3.6](../../docs/adr/ADR-150-rf-foundation-encoder.md)).
+Fit a room-specific **~11 KB LoRA adapter** for a shared WiFi-CSI pose base from a short **labeled
+capture**. This is a measured MM-Fi reference path for cross-subject / cross-environment adaptation
+(full study: [ADR-150 §3.3–3.6](../../docs/adr/ADR-150-rf-foundation-encoder.md)); it is not proof of
+plug-and-play adaptation from a live ESP32 stream.
+
+> **Not the proposed MERIDIAN fast path.** Both producers below require paired CSI and keypoint
+> labels, and their tensor shapes and adapter files are model-specific. ADR-027's automatic,
+> unlabeled 10-second MERIDIAN calibration remains **Proposed** and is not implemented as an
+> end-to-end deployment command.
 
 ## Why
 
@@ -66,8 +72,8 @@ Adapters are **model-specific**. There are two calibration producers here:
 | `cog_calibrate.py` | cog **conv+MLP** (`pose_v1.safetensors`, 56×20) | `[N,56,20]` | `.safetensors` (`fc1.a`/`fc1.b`/`fc2.a`/`fc2.b`) | Rust `cog-pose-estimation run --adapter` |
 
 ```bash
-# Produce a cog-format per-room adapter for the deployed Rust pose engine:
-python cog_calibrate.py --base pose_v1.safetensors --data calib.npz --out room.safetensors
+# Produce a cog-format per-room adapter from X:[N,56,20], Y:[N,17,2]:
+python cog_calibrate.py --base pose_v1.safetensors --data cog-calib.npz --out room.safetensors
 # then in the cog runtime:
 cog-pose-estimation run --config <cfg> --adapter room.safetensors
 ```

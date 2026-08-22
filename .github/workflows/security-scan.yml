@@ -14,6 +14,33 @@ env:
   PYTHON_VERSION: '3.11'
 
 jobs:
+  # Rust dependency advisories are deterministic for the checked-in lockfile,
+  # so this job gates the PR and retains the exact machine-readable report.
+  rust-audit:
+    name: Rust Dependency Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+    - name: Install cargo-audit
+      run: cargo install cargo-audit --locked --version 0.22.2
+
+    - name: Audit the checked-in Rust lockfile
+      run: |
+        set -o pipefail
+        cargo audit --file v2/Cargo.lock --json | tee v2/cargo-audit.json
+
+    - name: Upload Rust advisory report
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      if: always()
+      with:
+        name: cargo-audit-report
+        path: v2/cargo-audit.json
+        if-no-files-found: error
+
   # Static Application Security Testing (SAST)
   sast:
     name: Static Application Security Testing

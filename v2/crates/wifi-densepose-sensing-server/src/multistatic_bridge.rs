@@ -24,7 +24,13 @@ const DEFAULT_FREQ_MHZ: u32 = 2437; // Channel 6
 
 /// Monotonic reference point for timestamp generation. All node timestamps
 /// are relative to this instant, avoiding wall-clock/monotonic mixing issues.
-static EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
+/// Backdate the lazy initialization beyond the active-node window so frames
+/// recorded just before the first bridge call retain their arrival-time skew.
+static EPOCH: LazyLock<Instant> = LazyLock::new(|| {
+    Instant::now()
+        .checked_sub(STALE_THRESHOLD + STALE_THRESHOLD)
+        .unwrap_or_else(Instant::now)
+});
 
 /// Shared length-only canonicalizer (issue #1170). The default 56-tone grid
 /// matches what `MultistaticFuser` (ADR-154) expects. Stateless and immutable,
@@ -54,10 +60,18 @@ pub fn node_frame_from_state(node_id: u8, ns: &NodeState) -> Option<MultiBandCsi
     let n_sub = amplitude.len();
     let phase = vec![0.0_f32; n_sub];
 
-    // Monotonic timestamp: microseconds since a shared process-local epoch.
-    // All nodes use the same reference so the fuser's guard_interval_us check
-    // compares apples to apples. No wall-clock mixing (immune to NTP jumps).
-    let timestamp_us = last_time.duration_since(*EPOCH).as_micros() as u64;
+    // Prefer the capture timestamp recovered from the node's mesh sync. This
+    // keeps UDP scheduling jitter out of the fuser's cross-node guard. Older
+    // firmware, stale sync state, and frames without the sync-valid bit retain
+    // the process-local host-arrival fallback.
+    let timestamp_us = ns
+        .mesh_aligned_us_for_latest_csi_frame()
+        .unwrap_or_else(|| {
+            last_time
+                .checked_duration_since(*EPOCH)
+                .unwrap_or_default()
+                .as_micros() as u64
+        });
 
     let canonical = CanonicalCsiFrame {
         amplitude,
@@ -173,6 +187,7 @@ pub fn compute_person_score_from_amplitudes(amplitudes: &[f32]) -> f64 {
 mod tests {
     use super::*;
     use std::collections::VecDeque;
+    use wifi_densepose_hardware::{SyncPacket, SyncPacketFlags};
 
     /// Helper: build a minimal NodeState for testing. Uses `NodeState::new()`
     /// then mutates the `pub(crate)` fields the bridge needs.
@@ -223,6 +238,99 @@ mod tests {
         // Phase should be all zeros
         assert!(ch.phase.iter().all(|&p| p == 0.0));
         assert_eq!(ch.hardware_type, HardwareType::Esp32S3);
+    }
+
+    fn mark_mesh_timed_frame(
+        ns: &mut NodeState,
+        node_id: u8,
+        sync_sequence: u32,
+        frame_sequence: u32,
+        mesh_epoch_us: u64,
+        host_arrival: Instant,
+    ) {
+        ns.apply_sync_packet(
+            SyncPacket {
+                node_id,
+                proto_ver: 1,
+                flags: SyncPacketFlags {
+                    is_leader: node_id == 1,
+                    is_valid: true,
+                    smoothed_used: node_id != 1,
+                },
+                local_us: 10_000_000,
+                epoch_us: mesh_epoch_us,
+                sequence: sync_sequence,
+            },
+            Instant::now(),
+        );
+        ns.observe_accepted_csi_frame(frame_sequence, true, host_arrival);
+    }
+
+    #[test]
+    fn mesh_timestamp_replaces_skewed_host_arrival_time() {
+        let mut history = VecDeque::new();
+        history.push_back(vec![10.0, 20.0, 30.0]);
+        let host_arrival = Instant::now();
+        let mut ns = make_node_state(history, None, 0);
+        mark_mesh_timed_frame(&mut ns, 1, 100, 101, 1_000_000, host_arrival);
+
+        let frame = node_frame_from_state(1, &ns).expect("mesh-timed frame");
+        assert_eq!(frame.timestamp_us, 1_050_000);
+    }
+
+    #[test]
+    fn mesh_time_allows_fusion_despite_udp_arrival_skew() {
+        let base = Instant::now() - Duration::from_millis(500);
+        let mut states = HashMap::new();
+
+        let mut first_history = VecDeque::new();
+        first_history.push_back(vec![1.0; 64]);
+        let mut first = make_node_state(first_history, None, 0);
+        mark_mesh_timed_frame(&mut first, 1, 100, 101, 1_000_000, base);
+        states.insert(1, first);
+
+        let mut second_history = VecDeque::new();
+        second_history.push_back(vec![1.1; 64]);
+        let mut second = make_node_state(second_history, None, 0);
+        mark_mesh_timed_frame(
+            &mut second,
+            2,
+            200,
+            201,
+            1_005_000,
+            base + Duration::from_millis(200),
+        );
+        states.insert(2, second);
+
+        let frames = node_frames_from_states(&states);
+        let spread = frames.iter().map(|f| f.timestamp_us).max().unwrap()
+            - frames.iter().map(|f| f.timestamp_us).min().unwrap();
+        assert_eq!(spread, 5_000, "mesh capture spread, not 200 ms UDP skew");
+        assert!(
+            MultistaticFuser::new().fuse(&frames).is_ok(),
+            "mesh-aligned frames inside the 60 ms guard must fuse"
+        );
+    }
+
+    #[test]
+    fn unsynchronized_frames_keep_host_arrival_guard() {
+        let base = Instant::now() - Duration::from_millis(500);
+        let mut states = HashMap::new();
+
+        for (node_id, arrival) in [
+            (1, base),
+            (2, base + Duration::from_millis(200)),
+        ] {
+            let mut history = VecDeque::new();
+            history.push_back(vec![1.0; 64]);
+            states.insert(node_id, make_node_state(history, Some(arrival), 0));
+        }
+
+        let frames = node_frames_from_states(&states);
+        assert!(
+            MultistaticFuser::new().fuse(&frames).is_err(),
+            "without valid mesh time, 200 ms arrival skew must still trip the 60 ms guard"
+        );
     }
 
     #[test]

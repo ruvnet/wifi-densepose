@@ -30,7 +30,10 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use rumqttc::{AsyncClient, ClientError, EventLoop, MqttOptions, QoS, Transport, TlsConfiguration};
+use rumqttc::{
+    AsyncClient, ClientError, EventLoop, MqttOptions, PublishOptions, QoS, Transport,
+    TlsConfiguration,
+};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
@@ -70,14 +73,14 @@ const NODE_SNAPSHOT_STALE_AFTER: Duration = Duration::from_secs(10);
 
 /// Build a `rumqttc::MqttOptions` from validated [`MqttConfig`].
 fn build_mqtt_options(cfg: &MqttConfig) -> MqttOptions {
-    let mut opts = MqttOptions::new(&cfg.client_id, &cfg.host, cfg.port);
-    opts.set_keep_alive(Duration::from_secs(30));
+    let mut opts = MqttOptions::new(&cfg.client_id, (cfg.host.as_str(), cfg.port));
+    opts.set_keep_alive(30);
     opts.set_clean_session(true);
 
     if let (Some(u), Some(p)) = (cfg.username.as_deref(), cfg.password.as_deref()) {
-        opts.set_credentials(u, p);
+        opts.set_credentials(u.to_owned(), p.as_bytes().to_vec());
     } else if let Some(u) = cfg.username.as_deref() {
-        opts.set_credentials(u, "");
+        opts.set_credentials(u.to_owned(), Vec::<u8>::new());
     }
 
     opts.set_transport(build_transport(&cfg.tls));
@@ -223,7 +226,8 @@ async fn run(
     mut state_rx: broadcast::Receiver<VitalsSnapshot>,
 ) {
     let opts = build_mqtt_options(&cfg);
-    let (client, mut eventloop): (AsyncClient, EventLoop) = AsyncClient::new(opts, 256);
+    let (client, mut eventloop): (AsyncClient, EventLoop) =
+        AsyncClient::builder(opts).capacity(256).build();
 
     let entities = DiscoveryBuilder::enabled_entities(
         cfg.privacy_mode,
@@ -369,7 +373,13 @@ async fn publish_all_discovery(
         let cfg = b.build(e);
         let topic = b.config_topic(e);
         let payload = serde_json::to_string(&cfg).expect("discovery payload always serialises");
-        client.publish(&topic, QoS::AtLeastOnce, true, payload).await?;
+        client
+            .publish(
+                &topic,
+                payload,
+                PublishOptions::new(QoS::AtLeastOnce).retained(),
+            )
+            .await?;
     }
     Ok(())
 }
@@ -380,7 +390,13 @@ async fn publish_availability(
     state: &str,
 ) -> Result<(), ClientError> {
     for topic in &avail.online_topics {
-        client.publish(topic, QoS::AtLeastOnce, true, state).await?;
+        client
+            .publish(
+                topic,
+                state,
+                PublishOptions::new(QoS::AtLeastOnce).retained(),
+            )
+            .await?;
     }
     Ok(())
 }
@@ -441,7 +457,13 @@ async fn publish_state(client: &AsyncClient, m: &StateMessage) -> Result<(), Cli
         1 => QoS::AtLeastOnce,
         _ => QoS::ExactlyOnce,
     };
-    client.publish(&m.topic, qos, m.retain, m.payload.clone()).await
+    client
+        .publish(
+            &m.topic,
+            m.payload.clone(),
+            PublishOptions::new(qos).retain(m.retain),
+        )
+        .await
 }
 
 #[cfg(test)]

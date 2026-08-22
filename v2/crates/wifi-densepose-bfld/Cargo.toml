@@ -39,7 +39,7 @@ serde = { workspace = true, features = ["derive"], optional = true }
 serde_json = { workspace = true, optional = true }
 # MQTT publisher backend (optional). Matches the `rumqttc` choice already in
 # `wifi-densepose-sensing-server` so both crates share TLS / version posture.
-rumqttc = { version = "0.24", default-features = false, features = ["use-rustls"], optional = true }
+rumqttc = { package = "rumqttc-v4-next", version = "0.34", default-features = false, features = ["use-rustls-ring"], optional = true }
 wifi-veil = { workspace = true, optional = true }
 
 [dev-dependencies]

@@ -286,6 +286,9 @@ struct Esp32Frame {
     /// ADR-110 byte 18: PPDU type the CSI was sampled from. Pre-ADR-110
     /// firmware sends 0 ⇒ `PpduType::HtLegacy`.
     ppdu_type: wifi_densepose_hardware::PpduType,
+    /// ADR-110 byte 19 metadata, including whether this frame was captured
+    /// while the node had a valid IEEE 802.15.4 mesh-time solution.
+    adr018_flags: wifi_densepose_hardware::Adr018Flags,
     amplitudes: Vec<f64>,
     phases: Vec<f64>,
 }
@@ -675,6 +678,12 @@ struct NodeState {
     latest_sync: Option<wifi_densepose_hardware::SyncPacket>,
     /// Last time a sync packet from this node was received (for staleness).
     latest_sync_at: Option<std::time::Instant>,
+    /// Sequence number of the newest CSI frame admitted to `frame_history`.
+    /// Kept alongside the history so multistatic fusion can timestamp the
+    /// exact sample it consumes, rather than the host's UDP arrival time.
+    latest_csi_sequence: Option<u32>,
+    /// Whether byte 19 bit 4 marked that newest admitted CSI frame as synced.
+    latest_csi_sync_valid: bool,
     /// ADR-110 iter 18: EMA-tracked CSI frame rate for this node.
     /// Replaces the hardcoded 20 Hz fallback in
     /// `mesh_aligned_us_for_csi_frame` once `csi_fps_samples ≥ 5`.
@@ -832,6 +841,9 @@ impl NodeState {
     /// staleness gate).
     pub(crate) fn mesh_aligned_us(&self, local_at_frame_us: u64) -> Option<u64> {
         let sync = self.latest_sync.as_ref()?;
+        if !sync.flags.is_valid {
+            return None;
+        }
         let seen_at = self.latest_sync_at?;
         // Drop stale syncs — firmware emits at ~0.5 Hz default, anything
         // older than 9 s likely means the mesh transport dropped.
@@ -850,8 +862,18 @@ impl NodeState {
     /// no fresh sync has been observed for this node.
     pub(crate) fn mesh_aligned_us_for_csi_frame(&self, frame_sequence: u32) -> Option<u64> {
         let sync = self.latest_sync.as_ref()?;
+        if !sync.flags.is_valid {
+            return None;
+        }
         let seen_at = self.latest_sync_at?;
         if seen_at.elapsed() > std::time::Duration::from_secs(9) {
+            return None;
+        }
+        // A recently-received sync datagram can overtake an older CSI
+        // datagram in UDP delivery order. Only extrapolate forward (including
+        // a genuine u32 wrap); otherwise fall back to host arrival time.
+        let delta_frames = frame_sequence.wrapping_sub(sync.sequence);
+        if delta_frames > i32::MAX as u32 {
             return None;
         }
         // Iter 18: use the measured per-node fps once we have ≥5 inter-frame
@@ -860,6 +882,16 @@ impl NodeState {
         // is significantly more accurate than the constant fallback.
         let fps = if self.csi_fps_samples >= 5 { self.csi_fps_ema } else { 20.0 };
         Some(sync.mesh_aligned_us_for_sequence(frame_sequence, fps))
+    }
+
+    /// Mesh timestamp for the newest CSI frame admitted to `frame_history`.
+    /// Both the frame-level sync-valid bit and a fresh, valid sync packet are
+    /// required; callers retain their existing host-arrival fallback.
+    pub(crate) fn mesh_aligned_us_for_latest_csi_frame(&self) -> Option<u64> {
+        if !self.latest_csi_sync_valid {
+            return None;
+        }
+        self.mesh_aligned_us_for_csi_frame(self.latest_csi_sequence?)
     }
 
     /// ADR-110 iter 18 — update the per-node observed-fps EMA from a fresh
@@ -927,6 +959,21 @@ impl NodeState {
         first_sensing_frame
     }
 
+    /// Record an accepted CSI sample and preserve the wire metadata needed by
+    /// the multistatic bridge to recover capture time. Grid-rejected frames
+    /// intentionally use `observe_csi_frame_arrival` directly because they do
+    /// not replace the sample at the back of `frame_history`.
+    pub(crate) fn observe_accepted_csi_frame(
+        &mut self,
+        sequence: u32,
+        sync_valid: bool,
+        now: std::time::Instant,
+    ) -> bool {
+        self.latest_csi_sequence = Some(sequence);
+        self.latest_csi_sync_valid = sync_valid;
+        self.observe_csi_frame_arrival(now)
+    }
+
     pub(crate) fn new() -> Self {
         Self {
             frame_history: VecDeque::new(),
@@ -951,6 +998,8 @@ impl NodeState {
             edge_vitals: None,
             latest_sync: None,
             latest_sync_at: None,
+            latest_csi_sequence: None,
+            latest_csi_sync_valid: false,
             csi_fps_ema: 20.0,
             csi_fps_samples: 0,
             latest_features: None,
@@ -1945,7 +1994,8 @@ fn parse_esp32_frame(buf: &[u8]) -> Option<Esp32Frame> {
     //   [12..15] sequence (u32 LE)
     //   [16]     rssi (i8)
     //   [17]     noise_floor (i8)
-    //   [18..19] reserved
+    //   [18]     PPDU type
+    //   [19]     ADR-018 flags (bit 4 = IEEE 802.15.4 sync valid)
     //   [20..]   I/Q data
     // Issue #1005: until 2026-06 this code read n_subcarriers from byte 6
     // alone (an ESP32-C6 HE-SU frame's 256 = 0x0100 LE decoded as 0 — the
@@ -1966,6 +2016,7 @@ fn parse_esp32_frame(buf: &[u8]) -> Option<Esp32Frame> {
     };
     let noise_floor = buf[17] as i8;
     let ppdu_type = wifi_densepose_hardware::PpduType::from_byte(buf[18]);
+    let adr018_flags = wifi_densepose_hardware::Adr018Flags::from_byte(buf[19]);
 
     let iq_start = 20;
     let n_pairs = n_antennas as usize * n_subcarriers as usize;
@@ -1995,6 +2046,7 @@ fn parse_esp32_frame(buf: &[u8]) -> Option<Esp32Frame> {
         rssi,
         noise_floor,
         ppdu_type,
+        adr018_flags,
         amplitudes,
         phases,
     })
@@ -2024,7 +2076,7 @@ mod issue_1009_n_subcarriers_u16_tests {
         buf[16] = (-40i8) as u8; // rssi
         buf[17] = (-90i8) as u8; // noise_floor
         buf[18] = 0; // ppdu_type
-        buf[19] = 0;
+        buf[19] = 0x10; // ADR-018: IEEE 802.15.4 sync valid
         for k in 0..n_subcarriers as usize {
             buf[20 + k * 2] = (5 + (k % 40) as i8) as u8; // i
             buf[20 + k * 2 + 1] = (k % 30) as u8; // q
@@ -2047,6 +2099,7 @@ mod issue_1009_n_subcarriers_u16_tests {
         assert_eq!(frame.node_id, 7);
         assert_eq!(frame.rssi, -40);
         assert_eq!(frame.sequence, 42);
+        assert!(frame.adr018_flags.ieee802154_sync_valid);
     }
 
     #[test]
@@ -2941,6 +2994,7 @@ async fn windows_wifi_task(state: SharedState, tick_ms: u64) {
             rssi: first_rssi.clamp(-128.0, 127.0) as i8,
             noise_floor: -90,
             ppdu_type: wifi_densepose_hardware::PpduType::HtLegacy,
+            adr018_flags: wifi_densepose_hardware::Adr018Flags::default(),
             amplitudes: multi_ap_frame.amplitudes.clone(),
             phases: multi_ap_frame.phases.clone(),
         };
@@ -3129,6 +3183,7 @@ async fn windows_wifi_fallback_tick(state: &SharedState, seq: u32) {
         rssi: rssi_dbm as i8,
         noise_floor: -90,
         ppdu_type: wifi_densepose_hardware::PpduType::HtLegacy,
+        adr018_flags: wifi_densepose_hardware::Adr018Flags::default(),
         amplitudes: vec![signal_pct],
         phases: vec![0.0],
     };
@@ -3504,6 +3559,7 @@ fn generate_simulated_frame(tick: u64) -> Esp32Frame {
         rssi: (-40.0 + 5.0 * (t * 0.2).sin()) as i8,
         noise_floor: -90,
         ppdu_type: wifi_densepose_hardware::PpduType::HtLegacy,
+        adr018_flags: wifi_densepose_hardware::Adr018Flags::default(),
         amplitudes,
         phases,
     }
@@ -6702,8 +6758,11 @@ async fn udp_receiver_task(
                     // ADR-110 iter 19 — feed the per-node fps EMA from real
                     // CSI arrivals. The helper sets `last_frame_time` as a
                     // side effect, so the previous bare assignment is gone.
-                    let first_sensing_frame =
-                        ns.observe_csi_frame_arrival(std::time::Instant::now());
+                    let first_sensing_frame = ns.observe_accepted_csi_frame(
+                        frame.sequence,
+                        frame.adr018_flags.ieee802154_sync_valid,
+                        std::time::Instant::now(),
+                    );
                     if first_sensing_frame && telemetry::curated_events_enabled() {
                         info!(name: semconv::EVENT_RUVIEW_NODE_ONLINE, { "ruview.node.id" = node_id }, "node {node_id} online (CSI)");
                     }
@@ -9325,6 +9384,31 @@ mod sync_snapshot_helper_tests {
         ns.latest_sync_at = now.checked_sub(std::time::Duration::from_secs(10));
         assert!(ns.mesh_aligned_us_for_csi_frame(20).is_none(),
                 "10 s old sync must trigger the 9 s staleness gate");
+    }
+
+    #[test]
+    fn latest_csi_mesh_time_requires_both_validity_signals() {
+        let now = std::time::Instant::now();
+        let mut ns = NodeState::new();
+        ns.apply_sync_packet(populated_sync(9), now);
+
+        ns.observe_accepted_csi_frame(21, false, now);
+        assert!(
+            ns.mesh_aligned_us_for_latest_csi_frame().is_none(),
+            "an unsynchronized CSI capture must use the host-time fallback"
+        );
+
+        ns.observe_accepted_csi_frame(21, true, now + std::time::Duration::from_millis(50));
+        assert_eq!(
+            ns.mesh_aligned_us_for_latest_csi_frame(),
+            Some(27_684_885)
+        );
+
+        ns.latest_sync.as_mut().unwrap().flags.is_valid = false;
+        assert!(
+            ns.mesh_aligned_us_for_latest_csi_frame().is_none(),
+            "an invalid sync packet must not timestamp even a flagged CSI frame"
+        );
     }
 
     #[test]
