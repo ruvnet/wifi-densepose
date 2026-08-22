@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>RuView iPhone LiDAR</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">RUVIEW SENSOR BRIDGE</p>
+        <h1>iPhone LiDAR</h1>
+      </div>
+      <span id="status">CONNECTING</span>
+    </header>
+
+    <section class="metrics">
+      <div><strong id="fps">0.0</strong><span>FPS</span></div>
+      <div><strong id="points">0</strong><span>POINTS</span></div>
+      <div><strong id="seq">0</strong><span>SEQ</span></div>
+      <div><strong id="latency">0</strong><span>MS</span></div>
+    </section>
+
+    <canvas id="view"></canvas>
+
+    <footer>
+      <span>Geometry only</span>
+      <span>No RGB upload</span>
+      <span id="sensor">Waiting for sensor</span>
+    </footer>
+  </main>
+  <script type="module" src="./app.mjs"></script>
+</body>
+</html>
