@@ -75,7 +75,7 @@ WiFi DensePose turns commodity WiFi signals into real-time human pose estimation
 
 | Option | Cost | Capabilities |
 |--------|------|-------------|
-| ESP32-S3 mesh (3-6 boards) | ~$54 | Full CSI: pose, breathing, heartbeat, presence |
+| ESP32-S3 mesh (3-6 boards) | ~$54 | CSI capture for presence, motion, and vital-sign heuristics; live 17-keypoint pose remains below-target and is not a validated capability |
 | Intel 5300 / Atheros AR9580 | $50-100 | Full CSI with 3x3 MIMO (Linux only) |
 | Any WiFi laptop | $0 | RSSI-only: coarse presence and motion detection |
 
@@ -1214,6 +1214,22 @@ levels. Read the label, not the headline ([ADR-187](adr/ADR-187-archive-v1-depre
 
 **Does it actually run, and can a single ESP32 do pose? ([#509](https://github.com/ruvnet/RuView/issues/509), [#1125](https://github.com/ruvnet/RuView/issues/1125))** Yes, it runs, and the results are reproducible: the deterministic signal-pipeline proof (`python archive/v1/data/proof/verify.py`, must print `VERDICT: PASS`), the committed pose training dump (`v2/crates/cog-pose-estimation/cog/artifacts/train_results.json`), and the auditable MM-Fi arena all back specific numbers. But a single-antenna, 56-subcarrier CSI stream at a 20-frame window does *not* carry the fine-grained spatial information the multi-antenna NIC research relies on — so the shippable pose accuracy the project stands behind today is the **MM-Fi benchmark number**, not a live single-ESP32 number. The path to a first reproducible on-device baseline (PCK@20 ≥ 35%) is tracked in [ADR-079](adr/ADR-079-camera-ground-truth-training.md) / [#645](https://github.com/ruvnet/RuView/issues/645).
 
+### Model and capture compatibility
+
+These artifacts share a pose objective, but not an input contract or adapter format. A checkpoint
+is usable only when capture preprocessing, tensor shape, architecture, and runtime all match.
+
+| Artifact/path | Required input | Measured status | Live ESP32 compatibility |
+|---------------|----------------|-----------------|--------------------------|
+| MM-Fi flagship and `micro` transformer | `[N,3,114,10]` amplitude | **MEASURED** on MM-Fi `random_split`; calibration reference is Python `.npz` LoRA | No direct S3/C6 path is validated; resampling a 56-tone SISO stream does not recreate three-antenna MM-Fi input |
+| Cog `pose_v1.safetensors` | `[N,56,20]` amplitude | **MEASURED** PCK@20 = 3.0%, below the ≥35% target; cog-format LoRA is `.safetensors` | Shape matches the canonical window, but the documented live runtime remains below-target/stub and is not a reliable pose claim |
+| Viewer `heuristic_pose_from_amplitude` | live canonical amplitude | Skeleton-layout placeholder, not a trained pose model | Renders a demonstrator skeleton only; it is not pose accuracy evidence |
+| MERIDIAN automatic unlabeled calibration | proposed ~200-frame target-room capture | **PROPOSED** in ADR-027; no validated end-to-end command | Not available. The current calibration tools require paired CSI/keypoint labels and model-specific inputs |
+
+Calibration files are not interchangeable: `calibrate.py` targets the MM-Fi transformer, while
+`cog_calibrate.py` targets the cog conv+MLP. See the
+[calibration reference](../aether-arena/calibration/README.md) for their exact schemas.
+
 ### Download
 
 ```bash
@@ -1458,7 +1474,7 @@ The pipeline runs 10 phases:
 3. Subcarrier resampling (114->56 or 30->56 via Catmull-Rom interpolation)
 4. Graph transformer construction (17 COCO keypoints, 16 bone edges)
 5. Cross-attention training (CSI features -> body pose)
-6. **Domain-adversarial training** (MERIDIAN: gradient reversal + virtual domain augmentation)
+6. Experimental domain-adversarial components (MERIDIAN research modules; not a validated automatic deployment path)
 7. Composite loss optimization (MSE + CE + UV + temporal + bone + symmetry)
 8. SONA adaptation (micro-LoRA + EWC++)
 9. Sparse inference optimization (hot/cold neuron partitioning)
@@ -1474,14 +1490,18 @@ Progressive loading enables instant startup (Layer A loads in <5ms with basic in
 
 ### Cross-Environment Adaptation (MERIDIAN)
 
-Models trained in one room typically lose 40-70% accuracy in a new room due to different WiFi multipath patterns. The MERIDIAN system (ADR-027) solves this with a 10-second automatic calibration:
+Models trained in one room can lose substantial accuracy in a new room because the multipath
+distribution changes. ADR-027 proposes an automatic adaptation design, and the Rust tree contains
+individual research components, but RuView does **not** currently provide a validated command that
+turns ~200 unlabeled frames into a working room adapter.
 
-1. **Deploy** the trained model in a new room
-2. **Collect** ~200 unlabeled CSI frames (10 seconds at 20 Hz)
-3. The system automatically generates environment-specific LoRA weights via contrastive test-time training
-4. No labels, no retraining, no user intervention
+Current, testable calibration is the separate **labeled** reference in
+`aether-arena/calibration/`: collect paired CSI/keypoint samples, then fit a model-specific LoRA
+adapter. The MM-Fi transformer expects `[N,3,114,10]`; the cog expects `[N,56,20]`. Neither adapter
+loads into the other model, and neither result establishes live ESP32 pose accuracy without a
+leakage-free held-out capture and mean-pose baseline.
 
-MERIDIAN components (all pure Rust, +12K parameters):
+ADR-027 research components:
 
 | Component | What it does |
 |-----------|-------------|
@@ -1489,7 +1509,7 @@ MERIDIAN components (all pure Rust, +12K parameters):
 | Domain Factorizer | Separates pose-relevant from room-specific features |
 | Geometry Encoder | Encodes AP positions (FiLM conditioning with DeepSets) |
 | Virtual Augmentor | Generates synthetic environments for robust training |
-| Rapid Adaptation | 10-second unsupervised calibration via contrastive TTT |
+| Rapid Adaptation | Proposed unlabeled contrastive TTT; not wired as a validated deployment workflow |
 
 See [ADR-027](adr/ADR-027-cross-environment-domain-generalization.md) for the full design.
 
@@ -1647,7 +1667,7 @@ Not every ADR-295–296 remediation item is preview-only. Three are live now:
 
 | Target | Use case | Source target flag | Notes |
 |---|---|---|---|
-| **ESP32-S3** (default) | Production CSI mesh, 17-keypoint pose | `idf.py set-target esp32s3` | Dual-core 240 MHz, PSRAM, native USB-OTG, DVP camera path |
+| **ESP32-S3** (default) | Production CSI capture mesh; presence/motion/vital heuristics | `idf.py set-target esp32s3` | Dual-core 240 MHz, PSRAM, native USB-OTG, DVP camera path; live 17-keypoint pose is not validated |
 | **ESP32-C6** ([ADR-110](adr/ADR-110-esp32-c6-firmware-extension.md)) | Wi-Fi 6 / 802.15.4 research, battery seed nodes | `idf.py set-target esp32c6` | Single-core 160 MHz, no PSRAM, 802.11ax HE PHY, 802.15.4 (Thread/Zigbee), LP-core hibernation ~5 µA |
 
 The same `firmware/esp32-csi-node` source tree builds for both. ESP-IDF picks up `sdkconfig.defaults.esp32c6` automatically when the target is set to `esp32c6`; otherwise it uses `sdkconfig.defaults` (S3). All C6-only modules are `#ifdef`-gated, so the S3 build is byte-identical to today.
@@ -2071,7 +2091,11 @@ Pre-trained models are available on HuggingFace:
 - **SOTA MM-Fi pose model** (82.69% torso-PCK@20) — https://huggingface.co/ruvnet/wifi-densepose-mmfi-pose
 - **AetherArena leaderboard Space** — https://huggingface.co/spaces/ruvnet/aether-arena
 
-Download and start sensing immediately — no datasets, no GPU, no training needed. Results are reproducible via `python archive/v1/data/proof/verify.py` (deterministic SHA-256 proof) — see [ADR-168](adr/ADR-168-benchmark-proof.md).
+The encoder artifact can be downloaded for its documented inference path without retraining. The
+MM-Fi pose checkpoint is benchmark evidence, not a drop-in live ESP32 model; it requires its exact
+input contract and runtime described in [Model and capture compatibility](#model-and-capture-compatibility).
+The deterministic signal-pipeline proof is reproducible via `python archive/v1/data/proof/verify.py`
+(see [ADR-168](adr/ADR-168-benchmark-proof.md)), but that proof does not validate pose accuracy.
 
 ### Quick Start with Pre-Trained Models
 
@@ -2636,7 +2660,12 @@ No. Run `docker run -p 3000:3000 ruvnet/wifi-densepose:latest` and open `http://
 No. Consumer WiFi exposes only RSSI (one number per access point), not CSI (56+ complex subcarrier values per frame). RSSI supports coarse presence and motion detection. Full pose estimation requires CSI-capable hardware like an ESP32-S3 ($8) or a research NIC.
 
 **Q: How accurate is the pose estimation?**
-Accuracy depends on hardware and environment. With a 3-node ESP32 mesh in a single room, the system tracks 17 COCO keypoints. The core algorithm follows the CMU "DensePose From WiFi" paper ([arXiv:2301.00250](https://arxiv.org/abs/2301.00250)). The MERIDIAN domain generalization system (ADR-027) reduces cross-environment accuracy loss from 40-70% to under 15% via 10-second automatic calibration.
+The strongest published RuView result is the MM-Fi transformer benchmark (82.69% torso-PCK@20 on
+the matched `random_split` protocol), not a live ESP32 result. The committed cog model measured
+3.0% PCK@20 on its holdout, below the ≥35% target, and the viewer's live skeleton is a heuristic
+placeholder. No measured claim currently shows a 3-node ESP32 mesh reliably tracking 17 keypoints.
+ADR-027's 10-second unlabeled MERIDIAN adaptation is Proposed; the available measured calibration
+reference uses labeled, model-specific samples.
 
 **Q: Does it work through walls?**
 Yes. WiFi signals penetrate non-metallic materials (drywall, wood, concrete up to ~30cm). Metal walls/doors significantly attenuate the signal. With a single AP the effective through-wall range is approximately 5 meters. With a 3-6 node multistatic mesh (ADR-029), attention-weighted cross-viewpoint fusion extends the effective range to ~8 meters through standard residential walls.
