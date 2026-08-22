@@ -23,9 +23,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rumqttc::{Client, Event, Incoming, MqttOptions, Packet, QoS};
-use wifi_densepose_bfld::{
-    publish_event, BfldEvent, PrivacyClass, RumqttPublisher,
-};
+use wifi_densepose_bfld::{publish_event, BfldEvent, PrivacyClass, RumqttPublisher};
 
 const SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(5);
 const RECEIVE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -79,6 +77,11 @@ fn spawn_subscriber(
     let (incoming_tx, incoming_rx) = channel();
     let (suback_tx, suback_rx) = channel();
     thread::spawn(move || {
+        // rumqttc-v4-next stops the connection once every request sender is
+        // dropped. Keep the subscriber client alive for as long as its pump
+        // thread runs; otherwise the broker sees a clean disconnect directly
+        // after SUBACK and no subsequent publications can be delivered.
+        let _client_guard = client;
         for notification in connection.iter() {
             match notification {
                 Ok(Event::Incoming(Packet::SubAck(_))) => {
