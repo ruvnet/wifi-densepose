@@ -10,6 +10,7 @@
 #define OTA_UPDATE_H
 
 #include "esp_err.h"
+#include "esp_http_server.h"
 
 /**
  * Initialize the OTA update HTTP server.
@@ -29,5 +30,8 @@ esp_err_t ota_update_init(void);
  * @return ESP_OK on success.
  */
 esp_err_t ota_update_init_ex(void **out_server);
+
+/** Return true only when the request carries the provisioned OTA PSK. */
+bool ota_check_auth(httpd_req_t *req);
 
 #endif /* OTA_UPDATE_H */

@@ -1,9 +1,12 @@
 import csv
 import importlib.util
 import io
+import json
 import types
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 PROVISION_PATH = Path(__file__).resolve().parents[1] / "provision.py"
@@ -24,6 +27,29 @@ def csv_rows(content):
 
 
 class ProvisionConfigValueTests(unittest.TestCase):
+    @patch("provision.getpass.getpass", return_value="prompted-secret")
+    def test_missing_password_uses_secure_prompt(self, getpass):
+        self.assertEqual(provision.read_wifi_password(None), "prompted-secret")
+        getpass.assert_called_once()
+
+    def test_provisioning_source_has_no_plaintext_fallback_file(self):
+        source = PROVISION_PATH.read_text(encoding="utf-8")
+        self.assertNotIn('fallback_path = "nvs_config.csv"', source)
+
+    def test_state_files_never_persist_or_reuse_passwords(self):
+        with tempfile.TemporaryDirectory() as state_dir:
+            path = provision.save_state(
+                "COM7", state_dir, {"password": "secret", "ssid": "wifi"}
+            )
+            saved = json.loads(Path(path).read_text(encoding="utf-8"))
+            self.assertNotIn("password", saved)
+
+            Path(path).write_text(
+                json.dumps({"password": "legacy-secret", "node_id": 2}),
+                encoding="utf-8",
+            )
+            self.assertNotIn("password", provision.load_state("COM7", state_dir))
+
     def test_swarm_and_hopping_flags_count_as_config_values(self):
         cases = [
             {"hop_channels": "1,6,11"},

@@ -24,11 +24,6 @@ export const countInferSchema = z.object({
     .string()
     .optional()
     .describe("Path to a CSI window JSON file. Omit to use the live sensing-server."),
-  /** Override the cog binary path for this call. */
-  cog_binary: z
-    .string()
-    .optional()
-    .describe("Path to cog-person-count binary. Default: RUVIEW_COUNT_COG_BINARY env var."),
   /**
    * Maximum number of persons to consider in the output distribution.
    * Capped at 7 per the count head's softmax over {0..7}.
@@ -84,7 +79,7 @@ export async function countInfer(
   input: CountInferInput,
   config: RuviewConfig
 ): Promise<object> {
-  const binary = input.cog_binary ?? config.countCogBinary;
+  const binary = config.countCogBinary;
   const t0 = Date.now();
 
   // M2: run `cog-person-count health` which does real inference on a synthetic

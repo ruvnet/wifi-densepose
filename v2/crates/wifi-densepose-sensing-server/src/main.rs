@@ -5445,8 +5445,18 @@ async fn start_recording(
     // `GET /api/v1/recordings` (and the success response below) sees it.
     let watermark = s.source_state().export_watermark();
 
+    // Validate the caller-controlled id before it becomes a filesystem path.
+    let rec_path = match path_safety::recording_path(&id) {
+        Ok(path) => path,
+        Err(_) => {
+            return Json(serde_json::json!({
+                "error": "invalid recording id",
+                "success": false,
+            }));
+        }
+    };
+
     // Create the recording file
-    let rec_path = PathBuf::from("data/recordings").join(format!("{}.jsonl", id));
     let file = match std::fs::File::create(&rec_path) {
         Ok(f) => f,
         Err(e) => {
@@ -8730,6 +8740,15 @@ async fn main() {
                 std::process::exit(1);
             }
         };
+    if wifi_densepose_sensing_server::bearer_auth::auth_required_for_bind(
+        bind_ip,
+        bearer_auth_state.is_enabled(),
+    ) {
+        error!(
+            "API auth is required when --bind-addr is routable; set RUVIEW_API_TOKEN or RUVIEW_OAUTH_ISSUER"
+        );
+        std::process::exit(1);
+    }
     if bearer_auth_state.is_enabled() {
         if bearer_auth_state.oauth_enabled() {
             info!("API auth: ON for /api/v1/* — Cognitum OAuth (ADR-271){}",

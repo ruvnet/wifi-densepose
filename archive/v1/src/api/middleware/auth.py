@@ -125,10 +125,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
         public_patterns = [
             "/health",
             "/metrics",
-            "/api/v1/pose/current",  # Allow anonymous access to current pose data
-            "/api/v1/pose/zones/",   # Allow anonymous access to zone data
-            "/api/v1/pose/activities",  # Allow anonymous access to activities
-            "/api/v1/pose/stats",    # Allow anonymous access to stats
             "/api/v1/stream/status"  # Allow anonymous access to stream status
         ]
         
@@ -140,6 +136,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
     
     def _is_protected_path(self, path: str) -> bool:
         """Check if path requires authentication."""
+        if path.startswith("/api/") and not self._is_public_path(path):
+            return True
         # Exact match
         if path in self.protected_paths:
             return True

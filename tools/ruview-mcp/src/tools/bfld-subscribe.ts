@@ -36,11 +36,6 @@ export const bfldSubscribeSchema = z.object({
     .positive()
     .max(3600)
     .describe("Subscription duration in seconds (max 3600)."),
-  sensing_server_url: z
-    .string()
-    .url()
-    .optional()
-    .describe("Override sensing-server URL for this call only."),
 });
 
 export type BfldSubscribeInput = z.infer<typeof bfldSubscribeSchema>;
@@ -65,7 +60,7 @@ export async function bfldSubscribe(
   input: BfldSubscribeInput,
   config: RuviewConfig
 ): Promise<object> {
-  const baseUrl = input.sensing_server_url ?? config.sensingServerUrl;
+  const baseUrl = config.sensingServerUrl;
   const nodeId = input.node_id ?? "default";
   const topic = `ruview/${nodeId}/bfld/*`;
 

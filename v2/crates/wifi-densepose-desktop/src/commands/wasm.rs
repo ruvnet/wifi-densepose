@@ -11,6 +11,7 @@ const WASM_PORT: u16 = 8033;
 
 /// Request timeout for WASM operations.
 const WASM_TIMEOUT_SECS: u64 = 30;
+const MAX_WASM_BYTES: u64 = 16 * 1024 * 1024;
 
 /// List WASM modules loaded on a specific node.
 #[tauri::command]
@@ -55,11 +56,26 @@ pub async fn wasm_upload(
     auto_start: Option<bool>,
 ) -> Result<WasmUploadResult, String> {
     // Read WASM file
-    let mut file = File::open(&wasm_path).map_err(|e| format!("Cannot read WASM file: {}", e))?;
+    let metadata = std::fs::symlink_metadata(&wasm_path)
+        .map_err(|e| format!("Cannot inspect WASM file: {}", e))?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err("WASM path must be a regular, non-symlink file".into());
+    }
+    if metadata.len() == 0 || metadata.len() > MAX_WASM_BYTES {
+        return Err(format!(
+            "WASM size must be between 1 and {} bytes",
+            MAX_WASM_BYTES
+        ));
+    }
+    let file = File::open(&wasm_path).map_err(|e| format!("Cannot read WASM file: {}", e))?;
 
     let mut wasm_data = Vec::new();
-    file.read_to_end(&mut wasm_data)
+    file.take(MAX_WASM_BYTES + 1)
+        .read_to_end(&mut wasm_data)
         .map_err(|e| format!("Failed to read WASM file: {}", e))?;
+    if wasm_data.len() as u64 > MAX_WASM_BYTES {
+        return Err(format!("WASM file exceeds {} bytes", MAX_WASM_BYTES));
+    }
 
     let wasm_size = wasm_data.len();
 

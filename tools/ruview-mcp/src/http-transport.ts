@@ -88,6 +88,11 @@ const DEFAULT_PORT = 3001;
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_MAX_SESSIONS = 64;
 const DEFAULT_SESSION_IDLE_MS = 5 * 60 * 1000;
+
+export function isLoopbackHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return normalized === "localhost" || normalized === "::1" || /^127(?:\.\d{1,3}){3}$/.test(normalized);
+}
 const DEFAULT_SWEEP_INTERVAL_MS = 60 * 1000;
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
@@ -336,8 +341,15 @@ export async function createHttpTransport(
 ): Promise<HttpTransportResult> {
   const host = opts.host ?? process.env["RVAGENT_HTTP_HOST"] ?? DEFAULT_HOST;
   const port = opts.port ?? Number(process.env["RVAGENT_HTTP_PORT"] ?? DEFAULT_PORT);
+  const bearerToken = opts.bearerToken ?? process.env["RVAGENT_HTTP_TOKEN"];
+  if (!isLoopbackHost(host) && !bearerToken) {
+    throw new Error("RVAGENT_HTTP_TOKEN is required when binding MCP HTTP to a non-loopback host");
+  }
 
-  const { httpServer, sessions } = buildHttpApp(serverFactory, opts);
+  const appOpts: HttpTransportOptions = bearerToken
+    ? { ...opts, bearerToken }
+    : opts;
+  const { httpServer, sessions } = buildHttpApp(serverFactory, appOpts);
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once("error", reject);

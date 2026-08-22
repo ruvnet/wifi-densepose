@@ -36,12 +36,6 @@ export const registryListSchema = z.object({
     .optional()
     .default(false)
     .describe("Bypass the 1-hour registry cache. Use sparingly."),
-  /** Override the sensing-server URL for this call only. */
-  sensing_server_url: z
-    .string()
-    .url()
-    .optional()
-    .describe("Override the sensing-server URL."),
 });
 
 export type RegistryListInput = z.infer<typeof registryListSchema>;
@@ -64,7 +58,7 @@ export async function registryList(
   input: RegistryListInput,
   config: RuviewConfig
 ): Promise<object> {
-  const baseUrl = input.sensing_server_url ?? config.sensingServerUrl;
+  const baseUrl = config.sensingServerUrl;
   const qs = input.refresh ? "?refresh=1" : "";
 
   const result = await sensingGet<UpstreamRegistryPayload>(

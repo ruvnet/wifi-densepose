@@ -26,9 +26,8 @@ by the watcher on every BFLD-gated feature_state packet. If absent
 or stale (> STALENESS_S seconds old), endpoints return 503 with a
 hint so the rvagent tool emits a graceful warn shape.
 
-Bearer-token auth is intentionally OFF in this dev surface — the
-Rust sensing-server adds it via the #443 middleware; that path is
-out of scope for the demo bridge.
+This development bridge binds to loopback only. Use the authenticated Rust
+sensing-server for network-accessible deployments.
 """
 from __future__ import annotations
 import json
@@ -265,8 +264,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> int:
     port = DEFAULT_PORT
-    server = HTTPServer(("0.0.0.0", port), Handler)
-    print(f"[sensing-server] listening on 0.0.0.0:{port}", flush=True)
+    server = HTTPServer(("127.0.0.1", port), Handler)
+    print(f"[sensing-server] listening on 127.0.0.1:{port}", flush=True)
     print(f"[sensing-server] feature source: {FEATURE_FILE}", flush=True)
     print(f"[sensing-server] staleness limit: {STALENESS_S} s", flush=True)
     try:

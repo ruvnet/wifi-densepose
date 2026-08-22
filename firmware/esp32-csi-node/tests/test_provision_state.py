@@ -38,7 +38,7 @@ class TestStateFile(unittest.TestCase):
         provision.save_state("COM7", self.dir, {"ssid": "x", "password": "y"})
         self.assertEqual(
             provision.load_state("COM7", self.dir),
-            {"ssid": "x", "password": "y"},
+            {"ssid": "x"},
         )
 
     def test_save_creates_per_port_files(self):

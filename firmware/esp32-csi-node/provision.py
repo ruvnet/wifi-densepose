@@ -6,9 +6,9 @@ Writes WiFi credentials and aggregator target to the ESP32's NVS partition
 so users can configure a pre-built firmware binary without recompiling.
 
 Usage:
-    python provision.py --port COM7 --ssid "MyWiFi" --password "secret" --target-ip 192.168.1.20
+    python provision.py --port COM7 --ssid "MyWiFi" --target-ip 192.168.1.20
     python provision.py --port /dev/ttyUSB0 --chip esp32c6 --ssid "..." \\
-        --password "..." --target-ip 192.168.1.20
+        --target-ip 192.168.1.20  # password is read securely from the prompt
 
 Requirements:
     pip install 'esptool>=5.0' nvs-partition-gen
@@ -41,6 +41,7 @@ ADDITIVE-BY-DEFAULT (issue #391, #574 phase 1):
 
 import argparse
 import csv
+import getpass
 import io
 import json
 import os
@@ -88,6 +89,13 @@ def has_config_value(args):
         check(getattr(args, name, None))
         for name, check in CONFIG_VALUE_CHECKS
     )
+
+
+def read_wifi_password(current):
+    """Return an existing password or read it without exposing it in argv."""
+    if current is not None:
+        return current
+    return getpass.getpass("WiFi password: ")
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +146,8 @@ def load_state(port: str, state_dir: str) -> dict:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict):
+            # Passwords are never reused from or written to local state files.
+            data.pop("password", None)
             return data
     except (OSError, json.JSONDecodeError) as exc:
         print(f"WARNING: could not read state file {path}: {exc}", file=sys.stderr)
@@ -150,8 +160,9 @@ def save_state(port: str, state_dir: str, state: dict) -> str:
     path = _state_path_for(port, state_dir)
     # Sort keys for deterministic on-disk content (easier to diff).
     tmp = path + ".tmp"
+    safe_state = {key: value for key, value in state.items() if key != "password"}
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2, sort_keys=True)
+        json.dump(safe_state, f, indent=2, sort_keys=True)
         f.write("\n")
     os.replace(tmp, path)
     return path
@@ -310,7 +321,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Provision CSI node NVS (WiFi + aggregator); works on S3, C6, etc.",
         epilog=(
-            "Example: python provision.py --port COM7 --ssid MyWiFi --password secret "
+            "Example: python provision.py --port COM7 --ssid MyWiFi "
             "--target-ip 192.168.1.20\n"
             "ESP32-C6: same, or pass --chip esp32c6 if auto-detect fails "
             "(default chip is auto for esptool v5+)."
@@ -324,7 +335,6 @@ def main():
     )
     parser.add_argument("--baud", type=int, default=460800, help="Flash baud rate (default: 460800)")
     parser.add_argument("--ssid", help="WiFi SSID")
-    parser.add_argument("--password", help="WiFi password")
     parser.add_argument("--target-ip", help="Aggregator host IP (e.g. 192.168.1.20)")
     parser.add_argument("--target-port", type=int, help="Aggregator UDP port (default: 5005)")
     parser.add_argument("--node-id", type=int, help="Node ID 0-255 (default: 1)")
@@ -370,6 +380,7 @@ def main():
                         "Useful for debugging which keys are about to land on the device.")
 
     args = parser.parse_args()
+    args.password = None
 
     # --- Per-port state load + merge (additive-by-default, #391 / #574) ---
     if args.reset:
@@ -382,8 +393,12 @@ def main():
         prior = load_state(args.port, args.state_dir)
     merged = merge_state_into_args(args, prior)
 
+    if args.password is None and not args.force_partial and has_config_value(args) and not args.state:
+        args.password = read_wifi_password(None)
+
     if args.state:
-        print(json.dumps(merged, indent=2, sort_keys=True))
+        visible_state = {key: value for key, value in merged.items() if key != "password"}
+        print(json.dumps(visible_state, indent=2, sort_keys=True))
         return
 
     if not has_config_value(args):
@@ -398,7 +413,7 @@ def main():
     wifi_trio_missing = [
         name for name, val in [
             ("--ssid", args.ssid),
-            ("--password", args.password),
+            ("WiFi password prompt", args.password),
             ("--target-ip", args.target_ip),
         ] if val is None or val == ""
     ]
@@ -408,7 +423,7 @@ def main():
             f"{', '.join(wifi_trio_missing)}.\n"
             f"\n"
             f"  No per-port state file at {_state_path_for(args.port, args.state_dir)}\n"
-            f"  and the CLI didn't include them. Either pass --ssid + --password + --target-ip\n"
+            f"  and the CLI didn't include them. Provide --ssid + --target-ip and answer the password prompt,\n"
             f"  on this run, or add --force-partial to flash without WiFi.\n"
         )
     if args.force_partial and wifi_trio_missing:
@@ -485,14 +500,7 @@ def main():
         nvs_bin = generate_nvs_binary(csv_content, NVS_PARTITION_SIZE)
     except Exception as e:
         print(f"\nError generating NVS binary: {e}", file=sys.stderr)
-        print("\nFallback: save CSV and flash manually with ESP-IDF tools.", file=sys.stderr)
-        fallback_path = "nvs_config.csv"
-        with open(fallback_path, "w") as f:
-            f.write(csv_content)
-        print(f"Saved NVS CSV to {fallback_path}", file=sys.stderr)
-        print(f"Flash with: python $IDF_PATH/components/nvs_flash/"
-              f"nvs_partition_generator/nvs_partition_gen.py generate "
-              f"{fallback_path} nvs.bin 0x6000", file=sys.stderr)
+        print("No plaintext CSV fallback was written because it contains credentials.", file=sys.stderr)
         sys.exit(1)
 
     if args.dry_run:
