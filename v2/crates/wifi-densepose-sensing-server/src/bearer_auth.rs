@@ -46,6 +46,7 @@
 //! to `sensing:read` or `sensing:admin` — see its docs for the split and why it
 //! is drawn where it is.
 
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use axum::{
@@ -118,6 +119,11 @@ fn allowed_client_ids() -> Vec<String> {
 /// in tests, but it is NO LONGER the rule. The gate is [`is_anonymous`] —
 /// deny-by-default. See that function for why.
 pub const PROTECTED_PREFIX: &str = "/api/v1/";
+
+/// A routable bind must never silently downgrade to an unauthenticated API.
+pub fn auth_required_for_bind(bind_ip: IpAddr, auth_enabled: bool) -> bool {
+    !auth_enabled && !bind_ip.is_loopback()
+}
 
 /// Paths that stay reachable with no credential when auth is enabled.
 ///
@@ -889,6 +895,16 @@ mod tests {
             status(r, "GET", "/ui/index.html", None).await,
             StatusCode::OK
         );
+    }
+
+    #[test]
+    fn routable_bind_requires_configured_auth() {
+        let loopback: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+        let routable: std::net::IpAddr = "0.0.0.0".parse().unwrap();
+
+        assert!(!auth_required_for_bind(loopback, false));
+        assert!(auth_required_for_bind(routable, false));
+        assert!(!auth_required_for_bind(routable, true));
     }
 
     #[tokio::test]

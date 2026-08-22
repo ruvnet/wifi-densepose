@@ -16,6 +16,7 @@
 //! `format!()` that builds a path under a fixed parent directory.
 
 use std::fmt;
+use std::path::PathBuf;
 
 /// Maximum length for a safe identifier. 64 is generous for human-typed
 /// session names while keeping the resulting filename well under
@@ -102,9 +103,16 @@ pub fn safe_id(input: &str) -> Result<&str, PathSafetyError> {
     Ok(input)
 }
 
+/// Build a recording filename only after validating its caller-controlled id.
+pub fn recording_path(input: &str) -> Result<PathBuf, PathSafetyError> {
+    let safe = safe_id(input)?;
+    Ok(PathBuf::from("data/recordings").join(format!("{safe}.jsonl")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn accepts_simple_alphanumeric() {
@@ -199,5 +207,15 @@ mod tests {
     fn boundary_max_len() {
         let at_max = "a".repeat(MAX_ID_LEN);
         assert!(safe_id(&at_max).is_ok());
+    }
+
+    #[test]
+    fn recording_path_is_confined_to_recordings_root() {
+        assert_eq!(
+            recording_path("capture_1").unwrap(),
+            PathBuf::from("data/recordings/capture_1.jsonl")
+        );
+        assert!(recording_path("../../etc/passwd").is_err());
+        assert!(recording_path("capture/escape").is_err());
     }
 }

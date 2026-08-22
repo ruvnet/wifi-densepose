@@ -18,6 +18,7 @@
 
 #include "sdkconfig.h"
 #include "wasm_upload.h"
+#include "ota_update.h"
 
 #if defined(CONFIG_WASM_ENABLE)
 
@@ -31,6 +32,13 @@
 #include "esp_heap_caps.h"
 
 static const char *TAG = "wasm_upload";
+
+static bool wasm_require_ota_auth(httpd_req_t *req)
+{
+    if (ota_check_auth(req)) return true;
+    httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "Authentication required");
+    return false;
+}
 
 /* Max upload size: RVF overhead + max WASM binary. */
 #define MAX_UPLOAD_SIZE (RVF_HEADER_SIZE + RVF_MANIFEST_SIZE + \
@@ -84,6 +92,7 @@ static uint8_t *receive_body(httpd_req_t *req, int *out_len)
 
 static esp_err_t wasm_upload_handler(httpd_req_t *req)
 {
+    if (!wasm_require_ota_auth(req)) return ESP_FAIL;
     int total = 0;
     uint8_t *buf = receive_body(req, &total);
     if (buf == NULL) return ESP_FAIL;
@@ -233,6 +242,7 @@ static const char *state_name(wasm_module_state_t state)
 
 static esp_err_t wasm_list_handler(httpd_req_t *req)
 {
+    if (!wasm_require_ota_auth(req)) return ESP_FAIL;
     wasm_module_info_t info[WASM_MAX_MODULES];
     uint8_t count = 0;
     wasm_runtime_get_info(info, &count);
@@ -289,6 +299,7 @@ static int parse_module_id_from_uri(const char *uri, const char *prefix)
 
 static esp_err_t wasm_start_handler(httpd_req_t *req)
 {
+    if (!wasm_require_ota_auth(req)) return ESP_FAIL;
     int id = parse_module_id_from_uri(req->uri, "/wasm/start/");
     if (id < 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid module ID");
@@ -315,6 +326,7 @@ static esp_err_t wasm_start_handler(httpd_req_t *req)
 
 static esp_err_t wasm_stop_handler(httpd_req_t *req)
 {
+    if (!wasm_require_ota_auth(req)) return ESP_FAIL;
     int id = parse_module_id_from_uri(req->uri, "/wasm/stop/");
     if (id < 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid module ID");
@@ -341,6 +353,7 @@ static esp_err_t wasm_stop_handler(httpd_req_t *req)
 
 static esp_err_t wasm_delete_handler(httpd_req_t *req)
 {
+    if (!wasm_require_ota_auth(req)) return ESP_FAIL;
     int id = parse_module_id_from_uri(req->uri, "/wasm/");
     if (id < 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid module ID");
