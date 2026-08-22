@@ -2,7 +2,7 @@
 
 - **Date**: 2026-08-16
 - **Status**: Research survey (no RuView hardware evidence yet)
-- **Related ADRs**: ADR-324 (micro-LLM research spike), ADR-325 (flash-resident
+- **Related ADRs**: ADR-322 (micro-LLM research spike), ADR-328 (flash-resident
   weight streaming), ADR-028 (ESP32 capability audit), ADR-039 (edge
   intelligence tiers), ADR-040 (WASM programmable sensing), ADR-045 (8 MB
   partition table), ADR-110 (ESP32-C6 extension), ADR-175 (INT8 quantization,
@@ -45,7 +45,7 @@ TinyStories model has no useful task capability for RF perception. The
 *techniques*, however — flash-resident memory-mapped quantized weights, PLE-
 style table lookup, ESP-DSP SIMD kernels, dual-core scheduling — are directly
 transferable to RuView's own edge models and are the durable value of this
-research. ADR-324 and ADR-325 turn those two conclusions into decisions.
+research. ADR-322 and ADR-328 turn those two conclusions into decisions.
 
 ## 2. Landscape and timeline
 
@@ -170,7 +170,7 @@ server-side semantics. Candidate LLM uses on-node and their honest status:
 The durable value is the **memory architecture**, not the language model:
 flash-resident memory-mapped quantized weights + PLE-style tables would let
 RuView's *own* future neural presence/pose edge models grow well beyond
-current RAM budgets on 8 MB parts (ADR-325).
+current RAM budgets on 8 MB parts (ADR-328).
 
 ## 5. Risks and honest-labeling obligations
 
@@ -188,7 +188,7 @@ current RAM budgets on 8 MB parts (ADR-325).
   overclaiming. Any public statement must carry the demo framing and
   evidence tags.
 
-## 6. Recommended validation plan (if the ADR-324 spike is funded)
+## 6. Recommended validation plan (if the ADR-322 spike is funded)
 
 1. Acquire an ESP32-S3 N16R8 (16 MB flash / 8 MB PSRAM) devkit — companion
    hardware, not a fleet SKU.
@@ -200,7 +200,7 @@ current RAM budgets on 8 MB parts (ADR-325).
    to characterize the quality cliff (`SYNTHETIC` sizing above).
 5. Separately benchmark the transferable kernels (ESP-DSP SIMD matmul,
    memory-mapped flash weight streaming) against RuView's own edge-model
-   workloads — this feeds ADR-325 regardless of the LLM outcome.
+   workloads — this feeds ADR-328 regardless of the LLM outcome.
 
 ## 7. Sources
 

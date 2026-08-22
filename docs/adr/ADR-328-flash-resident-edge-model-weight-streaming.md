@@ -1,17 +1,17 @@
-# ADR-325: Flash-resident weight streaming for RuView edge models
+# ADR-328: Flash-resident weight streaming for RuView edge models
 
 - **Status**: Proposed
 - **Date**: 2026-08-16
 - **Deciders**: ruv
 - **Owners**: RuView firmware and edge runtime maintainers
 - **Tags**: esp32, memory, quantization, edge, inference, firmware, wasm
-- **Numbering note**: ADR-325 follows ADR-324 in the authoring checkout.
-  Re-run the ADR index/collision check immediately before merge and rename if
-  needed.
+- **Numbering note**: originally authored as ADR-325; renumbered to ADR-328 on
+  2026-08-22 to resolve a collision with ADR-325 (Cognitum Spaces activation)
+  merged in the interim. See ADR-322 for the companion renumbering.
 - **Extends**: ADR-028, ADR-039, ADR-040, ADR-045, ADR-102, ADR-163, ADR-175
 - **Supersedes**: None
 - **Companion research**: `docs/research/esp32-micro-llm-inference.md`
-- **Companion ADR**: ADR-324 (micro-LLM research spike)
+- **Companion ADR**: ADR-322 (micro-LLM research spike)
 
 ## Executive decision
 
@@ -57,7 +57,7 @@ evidence. This ADR composes them.
 2. **Fit the fleet, not the demo.** All designs must fit the ADR-045 8 MB
    partition map's current free space (1.875 MB SPIFFS region or a future
    dedicated `model` data partition of comparable size). Designs requiring a
-   16 MB SKU are research-only under ADR-324.
+   16 MB SKU are research-only under ADR-322.
 3. **Benchmark before build.** The first deliverable is a microbenchmark
    suite on real S3 silicon measuring: memory-mapped flash gather latency and
    bandwidth (sequential vs. strided), ESP-DSP SIMD matmul throughput
@@ -99,7 +99,7 @@ evidence. This ADR composes them.
   measured, not assumed; MMU mapping bugs are a new failure class at the
   hardware boundary (input validation at the mount path is mandatory);
   benchmark effort is spent even if no neural edge model ever ships.
-- The ADR-324 spike and this benchmark share kernels; either can proceed
+- The ADR-322 spike and this benchmark share kernels; either can proceed
   without the other.
 
 ## References

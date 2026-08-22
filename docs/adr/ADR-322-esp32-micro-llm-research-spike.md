@@ -1,17 +1,19 @@
-# ADR-324: ESP32-S3 micro-LLM inference — bounded research spike, production non-goal
+# ADR-322: ESP32-S3 micro-LLM inference — bounded research spike, production non-goal
 
 - **Status**: Proposed
 - **Date**: 2026-08-16
 - **Deciders**: ruv
 - **Owners**: RuView firmware and edge runtime maintainers
 - **Tags**: esp32, llm, edge, research, evidence-labeling, firmware
-- **Numbering note**: ADR-324 is the next free number in the authoring
-  checkout (highest existing: ADR-323; ADR-322 is an observed gap). Re-run the
-  ADR index/collision check immediately before merge and rename if needed.
+- **Numbering note**: originally authored as ADR-324/ADR-325; renumbered to
+  ADR-322/ADR-328 on 2026-08-22 to resolve a collision after ADR-324 through
+  ADR-327 were assigned to unrelated work merged in the interim. ADR-322 fills
+  an observed gap in the index; ADR-328 is the next free number after
+  ADR-327.
 - **Extends**: ADR-028, ADR-039, ADR-040, ADR-045, ADR-110, ADR-175, ADR-304
 - **Supersedes**: None
 - **Companion research**: `docs/research/esp32-micro-llm-inference.md`
-- **Companion ADR**: ADR-325 (flash-resident weight streaming)
+- **Companion ADR**: ADR-328 (flash-resident weight streaming)
 
 ## Executive decision
 
@@ -47,7 +49,7 @@ The material facts are:
    Every on-node use case we examined is served better by deterministic
    templates or is blocked on datasets that do not exist.
 4. **The memory techniques are genuinely valuable** — for RuView's own edge
-   models, which is split out as ADR-325 so its fate is independent of the
+   models, which is split out as ADR-328 so its fate is independent of the
    LLM demo's.
 
 The rejected premise is: "an LLM now runs on our chip, therefore our product
@@ -88,7 +90,7 @@ appliance.
   impossibility on deployed SKUs, core/PSRAM contention with sensing,
   no task capability at this model scale, safety-path hallucination risk.
 - **Companion-hardware research spike (chosen).** Isolates risk, produces
-  `MEASURED` data, feeds ADR-325.
+  `MEASURED` data, feeds ADR-328.
 - **Server-side LLM only.** Remains the correct place for any real language
   capability; this ADR does not change server architecture.
 
@@ -108,4 +110,4 @@ appliance.
   analysis)
 - ADR-028 (capability audit / witness discipline), ADR-039 (edge tiers),
   ADR-045 (partition map), ADR-175 (measured quantization precedent),
-  ADR-304 (evidence engine), ADR-325 (companion decision)
+  ADR-304 (evidence engine), ADR-328 (companion decision)
