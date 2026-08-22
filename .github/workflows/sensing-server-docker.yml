@@ -28,6 +28,7 @@ on:
       - 'v2/crates/wifi-densepose-wifiscan/**'
       - 'v2/crates/wifi-densepose-bfld/**'
       - 'v2/crates/cog-ha-matter/**'
+      - 'v2/crates/homecore*/**'
       - 'v2/Cargo.toml'
       - 'v2/Cargo.lock'
       - 'ui/**'

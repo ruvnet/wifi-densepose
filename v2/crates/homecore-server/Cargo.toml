@@ -50,7 +50,7 @@ tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
 # requires every crate that pulls reqwest to align on rustls-only (tracked in
 # CHANGELOG / ADR-131 security note).
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_yaml = "0.9"
 # Concurrent fan-out of per-bank RoomState fetches in the gateway (§11 perf).
 futures = "0.3"
