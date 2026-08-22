@@ -80,12 +80,13 @@ describe("ruview.bfld.last_scan schema (BfldLastScanInputSchema)", () => {
     expect(() => BfldLastScanInputSchema.parse({ node_id: "" })).toThrow();
   });
 
-  it("accepts node_id + sensing_server_url", () => {
+  it("does not expose a per-call sensing-server override", () => {
     const r = BfldLastScanInputSchema.parse({
       node_id: "cognitum-seed-1",
       sensing_server_url: "http://localhost:3000",
     });
     expect(r.node_id).toBe("cognitum-seed-1");
+    expect(r).not.toHaveProperty("sensing_server_url");
   });
 });
 

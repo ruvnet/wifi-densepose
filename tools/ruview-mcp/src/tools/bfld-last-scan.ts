@@ -29,11 +29,6 @@ export const bfldLastScanSchema = z.object({
     .min(1)
     .optional()
     .describe("Target node id. Omit to use the single active node."),
-  sensing_server_url: z
-    .string()
-    .url()
-    .optional()
-    .describe("Override sensing-server URL for this call only."),
 });
 
 export type BfldLastScanInput = z.infer<typeof bfldLastScanSchema>;
@@ -65,7 +60,7 @@ export async function bfldLastScan(
   input: BfldLastScanInput,
   config: RuviewConfig
 ): Promise<object> {
-  const baseUrl = input.sensing_server_url ?? config.sensingServerUrl;
+  const baseUrl = config.sensingServerUrl;
   const nodeId = input.node_id ?? "default";
 
   const result = await sensingGet<BfldScanResponse>(

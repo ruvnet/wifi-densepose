@@ -1,5 +1,7 @@
 use std::fs::File;
 use std::io::Read;
+use std::net::IpAddr;
+use std::path::Path;
 use std::time::Duration;
 
 use hmac::{Hmac, Mac};
@@ -16,8 +18,57 @@ const OTA_PATH: &str = "/ota/upload";
 
 /// Request timeout for OTA uploads.
 const OTA_TIMEOUT_SECS: u64 = 120;
+const MAX_FIRMWARE_BYTES: u64 = 32 * 1024 * 1024;
 
 type HmacSha256 = Hmac<Sha256>;
+
+fn validate_ota_target(node_ip: &str) -> Result<IpAddr, String> {
+    let ip: IpAddr = node_ip
+        .parse()
+        .map_err(|_| "Node address must be an IP address".to_string())?;
+    let allowed = match ip {
+        IpAddr::V4(v4) => v4.is_private() || v4.is_link_local() || v4.is_loopback(),
+        IpAddr::V6(v6) => v6.is_unique_local() || v6.is_unicast_link_local() || v6.is_loopback(),
+    };
+    if !allowed {
+        return Err("OTA target must be a local or private network address".into());
+    }
+    Ok(ip)
+}
+
+fn read_firmware(path: &str) -> Result<Vec<u8>, String> {
+    let path = Path::new(path);
+    if path
+        .extension()
+        .and_then(|v| v.to_str())
+        .map(|v| v.eq_ignore_ascii_case("bin"))
+        != Some(true)
+    {
+        return Err("Firmware file must use the .bin extension".into());
+    }
+    let metadata = path
+        .symlink_metadata()
+        .map_err(|e| format!("Cannot inspect firmware: {}", e))?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err("Firmware path must be a regular, non-symlink file".into());
+    }
+    if metadata.len() == 0 || metadata.len() > MAX_FIRMWARE_BYTES {
+        return Err(format!(
+            "Firmware size must be between 1 and {} bytes",
+            MAX_FIRMWARE_BYTES
+        ));
+    }
+    let mut data = Vec::with_capacity(metadata.len() as usize);
+    File::open(path)
+        .map_err(|e| format!("Cannot read firmware: {}", e))?
+        .take(MAX_FIRMWARE_BYTES + 1)
+        .read_to_end(&mut data)
+        .map_err(|e| format!("Failed to read firmware: {}", e))?;
+    if data.len() as u64 > MAX_FIRMWARE_BYTES || data.first() != Some(&0xE9) {
+        return Err("Invalid or oversized ESP firmware image".into());
+    }
+    Ok(data)
+}
 
 /// Push firmware to a single node via HTTP OTA (port 8032).
 ///
@@ -35,6 +86,7 @@ pub async fn ota_update(
     psk: Option<String>,
 ) -> Result<OtaResult, String> {
     let start_time = std::time::Instant::now();
+    let node_ip = validate_ota_target(&node_ip)?.to_string();
 
     // Emit progress
     let _ = app.emit(
@@ -48,12 +100,7 @@ pub async fn ota_update(
     );
 
     // Read firmware file
-    let mut file =
-        File::open(&firmware_path).map_err(|e| format!("Cannot read firmware: {}", e))?;
-
-    let mut firmware_data = Vec::new();
-    file.read_to_end(&mut firmware_data)
-        .map_err(|e| format!("Failed to read firmware: {}", e))?;
+    let firmware_data = read_firmware(&firmware_path)?;
 
     let firmware_size = firmware_data.len();
 

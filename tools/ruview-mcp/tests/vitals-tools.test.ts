@@ -6,8 +6,8 @@
  *   - Field projection correctness from a fixture EdgeVitalsMessage
  *   - Schema acceptance / rejection
  *
- * The fixture is injected via a custom sensing_server_url that points to a
- * port with nothing listening — identical to the BFLD tests pattern.
+ * The test config points to a port with nothing listening, identical to the
+ * BFLD tests pattern.
  */
 
 import os from "node:os";

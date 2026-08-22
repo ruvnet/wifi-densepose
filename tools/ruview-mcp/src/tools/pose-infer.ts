@@ -27,11 +27,6 @@ export const poseInferSchema = z.object({
     .string()
     .optional()
     .describe("Path to a CSI window JSON file. Omit to use the live sensing-server."),
-  /** Override the cog binary path for this call. */
-  cog_binary: z
-    .string()
-    .optional()
-    .describe("Path to cog-pose-estimation binary. Default: RUVIEW_POSE_COG_BINARY env var."),
 });
 
 export type PoseInferInput = z.infer<typeof poseInferSchema>;
@@ -81,7 +76,7 @@ export async function poseInfer(
   input: PoseInferInput,
   config: RuviewConfig
 ): Promise<object> {
-  const binary = input.cog_binary ?? config.poseCogBinary;
+  const binary = config.poseCogBinary;
   const t0 = Date.now();
 
   // M2: run `cog-pose-estimation health` which does real inference on a synthetic

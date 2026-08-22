@@ -15,7 +15,7 @@
  */
 
 import * as http from "node:http";
-import { isOriginAllowed, buildHttpApp } from "../src/http-transport.js";
+import { isOriginAllowed, isLoopbackHost, buildHttpApp } from "../src/http-transport.js";
 import { Server as McpServer } from "@modelcontextprotocol/sdk/server/index.js";
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -125,6 +125,19 @@ describe("isOriginAllowed()", () => {
 
   it("is case-sensitive for non-local allowlist entries per RFC 6454", () => {
     expect(isOriginAllowed("HTTPS://Partner.Example.com", ["https://partner.example.com"])).toBe(false);
+  });
+});
+
+describe("isLoopbackHost()", () => {
+  it("accepts loopback names and addresses", () => {
+    expect(isLoopbackHost("localhost")).toBe(true);
+    expect(isLoopbackHost("127.0.0.1")).toBe(true);
+    expect(isLoopbackHost("::1")).toBe(true);
+  });
+
+  it("rejects wildcard and network addresses", () => {
+    expect(isLoopbackHost("0.0.0.0")).toBe(false);
+    expect(isLoopbackHost("192.168.1.20")).toBe(false);
   });
 });
 

@@ -172,7 +172,7 @@ def require_permission(permission: str):
 # Zone access dependencies
 async def validate_zone_access(
     zone_id: str,
-    current_user: Optional[Dict[str, Any]] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(get_current_active_user)
 ) -> str:
     """Validate user access to a specific zone."""
     domain_config = get_domain_config()
@@ -193,18 +193,17 @@ async def validate_zone_access(
         )
     
     # If authentication is enabled, check user access
-    if current_user:
-        # Admin users have access to all zones
-        if current_user.get("is_admin", False):
-            return zone_id
-        
-        # Check user's zone permissions
-        user_zones = current_user.get("zones", [])
-        if user_zones and zone_id not in user_zones:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied to zone '{zone_id}'"
-            )
+    # Admin users have access to all zones
+    if current_user.get("is_admin", False):
+        return zone_id
+
+    # Check user's zone permissions
+    user_zones = current_user.get("zones", [])
+    if user_zones and zone_id not in user_zones:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access denied to zone '{zone_id}'"
+        )
     
     return zone_id
 

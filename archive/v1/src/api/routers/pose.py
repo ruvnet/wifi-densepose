@@ -14,6 +14,8 @@ from src.api.dependencies import (
     get_pose_service,
     get_hardware_service,
     get_current_user,
+    get_current_active_user,
+    validate_zone_access,
     require_auth
 )
 from src.services.pose_service import PoseService
@@ -116,7 +118,7 @@ class HistoricalDataRequest(BaseModel):
 async def get_current_pose_estimation(
     request: PoseEstimationRequest = Depends(),
     pose_service: PoseService = Depends(get_pose_service),
-    current_user: Optional[Dict] = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_active_user)
 ):
     """Get current pose estimation from WiFi signals."""
     try:
@@ -180,9 +182,8 @@ async def analyze_pose_data(
 
 @router.get("/zones/{zone_id}/occupancy")
 async def get_zone_occupancy(
-    zone_id: str,
+    zone_id: str = Depends(validate_zone_access),
     pose_service: PoseService = Depends(get_pose_service),
-    current_user: Optional[Dict] = Depends(get_current_user)
 ):
     """Get current occupancy for a specific zone."""
     try:
@@ -215,7 +216,7 @@ async def get_zone_occupancy(
 @router.get("/zones/summary")
 async def get_zones_summary(
     pose_service: PoseService = Depends(get_pose_service),
-    current_user: Optional[Dict] = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_active_user)
 ):
     """Get occupancy summary for all zones."""
     try:
@@ -294,7 +295,7 @@ async def get_detected_activities(
     zone_id: Optional[str] = Query(None, description="Filter by zone ID"),
     limit: int = Query(10, ge=1, le=100, description="Maximum number of activities"),
     pose_service: PoseService = Depends(get_pose_service),
-    current_user: Optional[Dict] = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_active_user)
 ):
     """Get recently detected activities."""
     try:
@@ -391,7 +392,7 @@ async def get_calibration_status(
 async def get_pose_statistics(
     hours: int = Query(24, ge=1, le=168, description="Hours of data to analyze"),
     pose_service: PoseService = Depends(get_pose_service),
-    current_user: Optional[Dict] = Depends(get_current_user)
+    current_user: Dict = Depends(get_current_active_user)
 ):
     """Get pose estimation statistics."""
     try:

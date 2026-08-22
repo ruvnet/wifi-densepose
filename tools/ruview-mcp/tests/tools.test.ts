@@ -41,10 +41,7 @@ describe("ruview_pose_infer", () => {
 
   it("result shape contains expected fields on success (stub)", async () => {
     // Point to a real binary that returns exit 0 on any argument (using 'node').
-    const result = await poseInfer(
-      { cog_binary: "node" },
-      { ...testConfig, poseCogBinary: "node" }
-    ) as Record<string, unknown>;
+    const result = await poseInfer({}, { ...testConfig, poseCogBinary: "node" }) as Record<string, unknown>;
     // node --help exits 0, so health passes, but output may be unexpected.
     // We just verify the response is shaped correctly.
     expect(typeof result["ok"]).toBe("boolean");

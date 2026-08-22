@@ -13,16 +13,7 @@ import type { RuviewConfig, SensingLatestResponse } from "../types.js";
 import { sensingGet } from "../http.js";
 import { validateSensingLatestResponse } from "../validate.js";
 
-export const csiLatestSchema = z.object({
-  /** Override the sensing-server URL for this call only. */
-  sensing_server_url: z
-    .string()
-    .url()
-    .optional()
-    .describe(
-      "Base URL of the sensing-server (default: RUVIEW_SENSING_SERVER_URL or http://localhost:3000)"
-    ),
-});
+export const csiLatestSchema = z.object({});
 
 export type CsiLatestInput = z.infer<typeof csiLatestSchema>;
 
@@ -30,7 +21,7 @@ export async function csiLatest(
   input: CsiLatestInput,
   config: RuviewConfig
 ): Promise<object> {
-  const baseUrl = input.sensing_server_url ?? config.sensingServerUrl;
+  const baseUrl = config.sensingServerUrl;
 
   const result = await sensingGet<SensingLatestResponse>(
     baseUrl,
