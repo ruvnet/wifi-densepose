@@ -164,6 +164,10 @@ pub struct VitalsSnapshot {
     pub n_persons: u32,
     pub rssi_dbm: Option<f64>,
     pub vital_confidence: f64,   // 0.0–1.0
+    /// #1542: associated-AP identity riding the RSSI entity's payload.
+    pub link_bssid: Option<String>,
+    pub link_channel: Option<u8>,
+    pub link_reassoc_count: Option<u32>,
 }
 
 #[derive(Serialize, Debug)]
@@ -201,6 +205,14 @@ struct PresenceScorePayload {
 struct RssiPayload {
     dbm: f64,
     ts: String,
+    /// #1542: associated-AP identity (lowercase colon-separated BSSID).
+    /// Optional so pre-link-firmware nodes keep the exact old payload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bssid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channel: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reassoc_count: Option<u32>,
 }
 
 #[derive(Serialize, Debug)]
@@ -278,7 +290,13 @@ impl<'a> StateEncoder<'a> {
             }).ok()?,
             EntityKind::Rssi => {
                 let dbm = snap.rssi_dbm?;
-                serde_json::to_value(RssiPayload { dbm, ts: ts.clone() }).ok()?
+                serde_json::to_value(RssiPayload {
+                    dbm,
+                    ts: ts.clone(),
+                    bssid: snap.link_bssid.clone(),
+                    channel: snap.link_channel,
+                    reassoc_count: snap.link_reassoc_count,
+                }).ok()?
             }
             _ => return None,
         };
@@ -363,7 +381,34 @@ mod tests {
             n_persons: 1,
             rssi_dbm: Some(-52.0),
             vital_confidence: 0.87,
+            link_bssid: None,
+            link_channel: None,
+            link_reassoc_count: None,
         }
+    }
+
+    /// #1542: with no link info the RSSI payload must be byte-identical to
+    /// the pre-link format (no new keys), and with link info present the
+    /// BSSID/channel/reassoc ride along.
+    #[test]
+    fn rssi_payload_link_fields_are_optional_and_additive() {
+        let b = builder();
+        let enc = StateEncoder { builder: &b };
+
+        let plain = enc.numeric(EntityKind::Rssi, &snap()).unwrap();
+        assert!(!plain.payload.contains("bssid"),
+                "pre-link nodes must keep the exact old payload");
+
+        let mut with_link = snap();
+        with_link.link_bssid = Some("6c:ae:f6:b6:52:c7".into());
+        with_link.link_channel = Some(6);
+        with_link.link_reassoc_count = Some(2);
+        let msg = enc.numeric(EntityKind::Rssi, &with_link).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&msg.payload).unwrap();
+        assert_eq!(v["bssid"], "6c:ae:f6:b6:52:c7");
+        assert_eq!(v["channel"], 6);
+        assert_eq!(v["reassoc_count"], 2);
+        assert_eq!(v["dbm"], -52.0);
     }
 
     // ─── Rate limiter ────────────────────────────────────────────────
