@@ -101,7 +101,7 @@ final class LiDARCaptureManager: NSObject, ObservableObject {
             depthMeters: meters,
             confidence: confidence,
             sequence: 0,
-            timestamp: frame.timestamp
+            timestamp: Date().timeIntervalSince1970
         )
     }
 }
@@ -121,7 +121,7 @@ extension LiDARCaptureManager: ARSessionDelegate {
                 depthMeters: base.depth.meters,
                 confidence: base.depth.confidence,
                 sequence: sequence,
-                timestamp: frame.timestamp
+                timestamp: Date().timeIntervalSince1970
             )
 
             if let previous = lastTimestamp {
