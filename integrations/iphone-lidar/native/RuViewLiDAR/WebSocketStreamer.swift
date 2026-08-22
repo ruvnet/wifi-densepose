@@ -80,7 +80,7 @@ actor WebSocketStreamer {
             type: frame.type,
             intrinsics: frame.intrinsics,
             pose: frame.pose,
-            depth: Depth(
+            depth: WirePacket.Depth(
                 width: width,
                 height: height,
                 encoding: "u16le-mm+u8-confidence",
