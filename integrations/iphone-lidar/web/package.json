@@ -1,0 +1,13 @@
+{
+  "name": "@ruview/iphone-lidar-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "node relay.mjs",
+    "test": "node --test codec.test.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}
