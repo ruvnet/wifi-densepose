@@ -4,6 +4,11 @@
 /evidence/policies/ @ruvnet
 /.github/workflows/model-release-gate.yml @ruvnet
 /v2/crates/wifi-densepose-train/ @ruvnet
+/v2/Cargo.toml @ruvnet
+/v2/Cargo.lock @ruvnet
+/v2/rust-toolchain.toml @ruvnet
+/v2/.cargo/ @ruvnet
+/.cargo/ @ruvnet
 /README.md @ruvnet
 /benchmarks/ @ruvnet
 /docs/benchmarks/ @ruvnet

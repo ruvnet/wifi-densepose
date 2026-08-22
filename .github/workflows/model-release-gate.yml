@@ -30,6 +30,11 @@ on:
       - master
     paths:
       - "v2/crates/wifi-densepose-train/**"
+      - "v2/Cargo.toml"
+      - "v2/Cargo.lock"
+      - "v2/rust-toolchain.toml"
+      - "v2/.cargo/**"
+      - ".cargo/**"
       - "evidence/claims/**"
       - "evidence/fixtures/**"
       - "evidence/policies/**"
@@ -46,6 +51,11 @@ on:
   pull_request:
     paths:
       - "v2/crates/wifi-densepose-train/**"
+      - "v2/Cargo.toml"
+      - "v2/Cargo.lock"
+      - "v2/rust-toolchain.toml"
+      - "v2/.cargo/**"
+      - ".cargo/**"
       - "evidence/claims/**"
       - "evidence/fixtures/**"
       - "evidence/policies/**"
