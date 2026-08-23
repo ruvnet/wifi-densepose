@@ -35,6 +35,18 @@ public struct AppleNLOSCapabilityReport: Equatable, Sendable {
     }
 }
 
+public extension AppleNLOSCapabilityReport {
+    var visibleDepthDiagnosticFlags: VisibleDepthCapabilityFlags {
+        VisibleDepthCapabilityFlags(
+            worldTracking: worldPose == .available,
+            sceneDepth: sceneDepth == .available,
+            smoothedSceneDepth: smoothedSceneDepth == .available,
+            sceneMesh: sceneMesh == .available,
+            rawPhotonHistograms: false
+        )
+    }
+}
+
 public enum AppleCapabilityProbe {
     public static func probe() -> AppleNLOSCapabilityReport {
         #if canImport(ARKit)

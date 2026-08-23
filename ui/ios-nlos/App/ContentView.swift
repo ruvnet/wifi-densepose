@@ -6,12 +6,20 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
+    @State private var exportConsent = false
+    @State private var diagnosticURL: URL?
+    @State private var exportError: String?
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 18) {
-                    maturityCard
+                    onboardingCard
+                    visibleDepthCard
+                    Text("NLOS MONITOR")
+                        .font(.caption.bold().monospaced())
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     connectionCard
                     statusCard
                     visualizationCard
@@ -30,16 +38,33 @@ struct ContentView: View {
         }
     }
 
-    private var maturityCard: some View {
-        card(title: "Software preview") {
-            Text("The software path is implemented and locally validated. Research readiness remains blocked on these evidence gates:")
+    private var onboardingCard: some View {
+        card(title: "Beta tester setup") {
+            Label("Validate your iPhone's public ARKit LiDAR capabilities before opening the NLOS monitor.", systemImage: "iphone.gen3.radiowaves.left.and.right")
                 .font(.subheadline)
-            maturityGate("macOS native compilation")
-            maturityGate("Physical VL53L8CH reproduction at 27 fps or better")
-            maturityGate("Measured CSI fusion improvement of at least 25 percent")
-            Text("Builds, simulators, and synthetic replay do not close hardware or measured-fusion evidence gates.")
+            Text("This test measures only visible surfaces. Every result is labeled direct_depth and is never presented as around the corner evidence.")
                 .font(.caption.bold())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.orange)
+            Link(destination: URL(string: "https://ruview-nlos.ruv.chatgpt.site")!) {
+                Label("Open the visual explainer", systemImage: "safari")
+            }
+            Link(destination: URL(string: "https://github.com/ruvnet/RuView/issues/1690")!) {
+                Label("Read the test guide and provide feedback", systemImage: "bubble.left.and.exclamationmark.bubble.right")
+            }
+        }
+    }
+
+    private var visibleDepthCard: some View {
+        card(title: "Visible depth validation") {
+            VisibleDepthValidationView(
+                session: model.visibleDepthSession,
+                exportConsent: $exportConsent,
+                diagnosticURL: $diagnosticURL,
+                exportError: $exportError,
+                start: model.startVisibleDepthValidation,
+                cancel: model.cancelVisibleDepthValidation,
+                prepareExport: model.prepareDiagnosticExport
+            )
         }
     }
 
@@ -243,12 +268,6 @@ struct ContentView: View {
         .font(.subheadline)
     }
 
-    private func maturityGate(_ title: String) -> some View {
-        Label("OPEN · \(title)", systemImage: "circle.dashed")
-            .font(.subheadline)
-            .foregroundStyle(.orange)
-    }
-
     private func badge(_ text: String, color: Color) -> some View {
         Text(text)
             .font(.caption2.bold().monospaced())
@@ -272,5 +291,151 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(uiColor: .secondarySystemGroupedBackground))
         .clipShape(RoundedRectangle(cornerRadius: 18))
+    }
+}
+
+private struct VisibleDepthValidationView: View {
+    @ObservedObject var session: VisibleDepthValidationSession
+    @Binding var exportConsent: Bool
+    @Binding var diagnosticURL: URL?
+    @Binding var exportError: String?
+    let start: () -> Void
+    let cancel: () -> Void
+    let prepareExport: (Bool) throws -> URL
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("DIRECT_DEPTH")
+                    .font(.caption.bold().monospaced())
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.orange.opacity(0.15), in: Capsule())
+                    .foregroundStyle(.orange)
+                Spacer()
+                Text(phaseLabel)
+                    .font(.caption.bold().monospacedDigit())
+            }
+
+            Text(session.statusMessage)
+                .font(.subheadline)
+
+            if isRunning {
+                ProgressView(value: phaseProgress)
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                    metric("FPS", String(format: "%.1f", session.metrics.fps))
+                    metric("Depth coverage", "\(Int(session.metrics.depthCoverage * 100))%")
+                    metric("Tracking", session.metrics.trackingState)
+                    metric("Movement", String(format: "%.3f m/s", session.metrics.movementMetersPerSecond))
+                    metric("Thermal", session.metrics.thermalState)
+                    metric("Remaining", "\(session.metrics.phaseSecondsRemaining)s")
+                }
+                Button("Cancel validation", role: .cancel, action: cancel)
+                    .buttonStyle(.bordered)
+            } else {
+                Button {
+                    exportConsent = false
+                    diagnosticURL = nil
+                    exportError = nil
+                    start()
+                } label: {
+                    Label(session.diagnostic == nil ? "Start 45 second validation" : "Run again", systemImage: "sensor.tag.radiowaves.forward")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
+            if session.diagnostic != nil {
+                Divider()
+                diagnosticPreview
+                Toggle(isOn: $exportConsent) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("I choose to export aggregate diagnostics")
+                        Text("The JSON contains no images, raw depth, endpoint, token, or raw samples.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .onChange(of: exportConsent) { consent in
+                    if !consent { diagnosticURL = nil }
+                }
+
+                if let diagnosticURL {
+                    ShareLink(item: diagnosticURL) {
+                        Label("Share diagnostic JSON", systemImage: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    Button("Prepare local JSON") {
+                        do {
+                            diagnosticURL = try prepareExport(exportConsent)
+                            exportError = nil
+                        } catch {
+                            exportError = error.localizedDescription
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!exportConsent)
+                }
+                if let exportError {
+                    Text(exportError).font(.caption).foregroundStyle(.red)
+                }
+                Link("Open issue 1690 to submit feedback", destination: URL(string: "https://github.com/ruvnet/RuView/issues/1690")!)
+                    .font(.caption)
+            }
+        }
+    }
+
+    private var isRunning: Bool {
+        session.state == .requestingPermission || session.state == .calibration || session.state == .wallScan
+    }
+
+    private var phaseLabel: String {
+        switch session.state {
+        case .idle: return "READY"
+        case .requestingPermission: return "PERMISSION"
+        case .calibration: return "CALIBRATION 15S"
+        case .wallScan: return "WALL SCAN 30S"
+        case .completed: return "COMPLETED"
+        case .cancelled: return "CANCELLED"
+        case .failed: return "FAILED"
+        }
+    }
+
+    private var phaseProgress: Double {
+        let total = session.state == .calibration ? 15.0 : 30.0
+        return max(0, min(1, (total - Double(session.metrics.phaseSecondsRemaining)) / total))
+    }
+
+    private func metric(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.subheadline.bold().monospacedDigit()).lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(uiColor: .tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    @ViewBuilder
+    private var diagnosticPreview: some View {
+        if let diagnostic = session.diagnostic {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Diagnostic preview")
+                    .font(.subheadline.bold())
+                Text("Evidence: \(diagnostic.evidenceLabel.rawValue)")
+                Text("Physical NLOS: \(diagnostic.physicalNLOSStatus)")
+                Text("Permission: \(diagnostic.cameraPermission)")
+                Text("Phases: \(diagnostic.phases.count) aggregate summaries")
+                if let byteCount = try? diagnostic.encodedJSON().count {
+                    Text("Encoded size: \(byteCount) bytes of 65,536 maximum")
+                }
+                Text("Raw sensor export: false")
+            }
+            .font(.caption.monospaced())
+            .foregroundStyle(.secondary)
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(uiColor: .tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+        }
     }
 }

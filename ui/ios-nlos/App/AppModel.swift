@@ -2,6 +2,7 @@ import Combine
 import Foundation
 import RuViewNLOSApple
 import RuViewNLOSCore
+import UIKit
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -27,9 +28,11 @@ final class AppModel: ObservableObject {
     @Published private(set) var frame: TrackDisplayFrame?
 
     let capabilities = AppleCapabilityProbe.probe()
+    let visibleDepthSession = VisibleDepthValidationSession()
 
     private let client = NLOSWebSocketClient()
     private let tokenStore = KeychainPairingTokenStore()
+    private var diagnosticFileURL: URL?
 
     init() {
         client.onEvent = { [weak self] event in
@@ -39,6 +42,36 @@ final class AppModel: ObservableObject {
 
     var tracks: [NLOSTrack] { frame?.tracks ?? [] }
     var isConnected: Bool { transportActive }
+
+    func startVisibleDepthValidation() {
+        let shortVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+        let buildVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+        visibleDepthSession.start(
+            deviceModelFamily: UIDevice.current.model,
+            osVersion: "iOS \(UIDevice.current.systemVersion)",
+            appVersion: "\(shortVersion) (\(buildVersion))"
+        )
+    }
+
+    func cancelVisibleDepthValidation() {
+        visibleDepthSession.cancel()
+    }
+
+    func prepareDiagnosticExport(consent: Bool) throws -> URL {
+        guard consent else { throw DiagnosticExportError.consentRequired }
+        visibleDepthSession.setExportConsent(true)
+        guard let diagnostic = visibleDepthSession.diagnostic else {
+            throw DiagnosticExportError.noDiagnostic
+        }
+        if let diagnosticFileURL {
+            try? FileManager.default.removeItem(at: diagnosticFileURL)
+        }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ruview-visible-depth-\(diagnostic.sessionId).json")
+        try diagnostic.encodedJSON().write(to: url, options: [.atomic, .completeFileProtection])
+        diagnosticFileURL = url
+        return url
+    }
 
     func connect() {
         if transportActive {
@@ -84,6 +117,11 @@ final class AppModel: ObservableObject {
     }
 
     func suspendForPrivacy() {
+        if visibleDepthSession.state == .requestingPermission ||
+            visibleDepthSession.state == .calibration ||
+            visibleDepthSession.state == .wallScan {
+            visibleDepthSession.cancel()
+        }
         guard isConnected || frame != nil else { return }
         client.disconnect()
     }
@@ -143,5 +181,17 @@ final class AppModel: ObservableObject {
 
     private func clearFrame() {
         frame = nil
+    }
+}
+
+enum DiagnosticExportError: LocalizedError {
+    case consentRequired
+    case noDiagnostic
+
+    var errorDescription: String? {
+        switch self {
+        case .consentRequired: return "Explicit export consent is required."
+        case .noDiagnostic: return "Complete or cancel a validation run before exporting."
+        }
     }
 }

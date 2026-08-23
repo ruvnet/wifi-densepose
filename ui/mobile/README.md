@@ -50,6 +50,27 @@ The NLOS tab is a cross-platform **track client**, not an iPhone LiDAR capture i
 
 Unknown, expired, out-of-order, malformed, oversized, depth-only, or unauthenticated data is never presented as live NLOS. A native host can provide an ephemeral credential with `configureNlosBearerToken`, or an operator can paste a 32-to-512-character pairing credential into the masked NLOS screen input. The credential remains in memory, is sent only in the ticket request `Authorization` header, and is never persisted by this client.
 
+### Beta tester setup
+
+The NLOS screen now starts with a platform-aware setup card. It links directly to the [interactive explainer](https://ruview-nlos.ruv.chatgpt.site) and the [step-by-step test and feedback issue](https://github.com/ruvnet/RuView/issues/1690).
+
+#### Native iOS through TestFlight
+
+1. On the test iPhone or iPad, install [Apple TestFlight](https://apps.apple.com/app/testflight/id899247664).
+2. Open the private RuView invitation supplied by the beta coordinator. Installing TestFlight alone does not grant access to the beta build.
+3. Install RuView NLOS Beta, open the **NLOS** tab, and allow only the permissions required by the assigned test.
+4. Run **USE SYNTHETIC REPLAY** first to verify rendering and provenance labels.
+5. Use **CONNECT AUTHENTICATED LIVE** only when the coordinator supplies an ephemeral pairing credential. The credential remains in memory and is never stored.
+
+#### iPhone web app through Safari
+
+1. Open the hosted web build in Safari on the iPhone.
+2. Tap **Share**, choose **Add to Home Screen**, then open the installed RuView icon.
+3. Run synthetic replay or connect to an authenticated RuView reconstruction server.
+4. Submit the device model, app version, evidence label, and observed result to [issue 1690](https://github.com/ruvnet/RuView/issues/1690). Do not post credentials or private captures.
+
+The web client cannot capture ARKit LiDAR, Apple depth maps, or raw photon timing data. It is an installable viewer for synthetic replay and validated server-produced tracks. Any LiDAR-equipped iPhone Pro or iPad Pro requirement applies only to separately assigned hardware capability checks. Evidence must remain labeled `L0 SYNTHETIC`, `L1 MEASURED`, `L2 CALIBRATED`, or `L3 CORROBORATED`, with freshness shown as `FRESH`, `STALE`, or `UNKNOWN`. Depth-only input is never evidence of physical around-the-corner reconstruction.
+
 ---
 
 ## Prerequisites

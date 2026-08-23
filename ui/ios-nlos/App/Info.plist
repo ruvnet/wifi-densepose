@@ -24,6 +24,8 @@
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>RuView connects to an explicitly configured, authenticated NLOS processing server on your network.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>RuView uses the camera and LiDAR only during an explicit visible depth validation. Images and raw depth samples are never saved.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

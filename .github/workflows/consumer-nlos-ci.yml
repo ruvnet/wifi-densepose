@@ -10,8 +10,11 @@ on:
       - 'harness/ruview/**'
       - 'docs/adr/ADR-32[8-9]*'
       - 'docs/adr/ADR-33[0-1]*'
+      - 'docs/adr/ADR-341-consumer-nlos-beta-tester-delivery-and-diagnostics.md'
       - 'docs/research/consumer-nlos-acceptance-protocol.md'
+      - 'docs/research/consumer-nlos-beta-test-protocol.md'
       - 'docs/schemas/ruview-nlos-*.schema.json'
+      - 'docs/schemas/ruview-ios-visible-depth-diagnostic-v1.schema.json'
       - 'docs/security/consumer-nlos-threat-model.md'
       - '.github/workflows/consumer-nlos-ci.yml'
       - 'v2/Cargo.toml'
@@ -24,6 +27,7 @@ on:
       - 'ui/mobile/**'
       - 'harness/ruview/**'
       - 'docs/**consumer-nlos*'
+      - 'docs/schemas/ruview-ios-visible-depth-diagnostic-v1.schema.json'
       - '.github/workflows/consumer-nlos-ci.yml'
       - 'v2/Cargo.toml'
       - 'v2/Cargo.lock'
@@ -133,8 +137,8 @@ jobs:
           JS
 
   native-ios:
-    name: Native Swift and iOS Simulator build
-    runs-on: macos-15
+    name: Native Swift, simulator, and unsigned archive dry gate
+    runs-on: macos-26
     defaults:
       run:
         working-directory: ui/ios-nlos
@@ -142,8 +146,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
+      - name: Require Xcode 26
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcode_major="$(xcodebuild -version | awk '/^Xcode / {split($2, version, "."); print version[1]}')"
+          test "$xcode_major" = "26"
+
       - name: Swift protocol and security tests
-        run: swift test -Xswiftc -strict-concurrency=complete -Xswiftc -warnings-as-errors
+        run: swift test
 
       - name: Unsigned iOS Simulator build
         run: >-
@@ -157,6 +169,154 @@ jobs:
           SWIFT_SUPPRESS_WARNINGS=NO
           SWIFT_TREAT_WARNINGS_AS_ERRORS=YES
           build
+
+      - name: Unsigned generic iOS archive dry gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive_path="$RUNNER_TEMP/RuViewNLOS.xcarchive"
+          xcodebuild \
+            -project RuViewNLOS.xcodeproj \
+            -scheme RuViewNLOS \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$archive_path" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            SWIFT_STRICT_CONCURRENCY=complete \
+            SWIFT_SUPPRESS_WARNINGS=NO \
+            SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+            archive
+          test -f "$archive_path/Info.plist"
+          if find "$archive_path" -name embedded.mobileprovision -print -quit | grep -q .; then
+            echo "Unsigned dry archive unexpectedly contains a provisioning profile" >&2
+            exit 1
+          fi
+
+  release-governance:
+    name: Beta release governance contract
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate ADR, protocol, workflow, and diagnostic boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          adr_path = Path("docs/adr/ADR-341-consumer-nlos-beta-tester-delivery-and-diagnostics.md")
+          protocol_path = Path("docs/research/consumer-nlos-beta-test-protocol.md")
+          workflow_path = Path(".github/workflows/consumer-nlos-ci.yml")
+          schema_path = Path("docs/schemas/ruview-ios-visible-depth-diagnostic-v1.schema.json")
+
+          adr = adr_path.read_text(encoding="utf-8")
+          protocol = protocol_path.read_text(encoding="utf-8")
+          workflow = workflow_path.read_text(encoding="utf-8")
+          schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+          required_adr_sections = (
+              "## Specification",
+              "## Pseudocode and state transitions",
+              "## Architecture",
+              "## Release architecture",
+              "## Alternatives considered",
+              "## Refinement and failure handling",
+              "## Requirement-to-evidence mapping",
+              "## Acceptance test",
+          )
+          for section in required_adr_sections:
+              assert section in adr, f"missing ADR section: {section}"
+
+          required_contract = (
+              "under five minutes",
+              "15 second calibration",
+              "30 second wall scan",
+              "65,536 bytes",
+              "blocked_raw_transients_unavailable",
+              "No raw capture",
+          )
+          combined = adr + "\n" + protocol
+          for phrase in required_contract:
+              assert phrase in combined, f"missing beta contract: {phrase}"
+
+          assert "runs-on: macos-26" in workflow
+          assert 'test "$xcode_major" = "26"' in workflow
+          assert "CODE_SIGNING_ALLOWED=NO" in workflow
+          assert "CODE_SIGNING_REQUIRED=NO" in workflow
+          assert ("sec" + "rets.") not in workflow
+          assert ("upload" + "-app-store") not in workflow.lower()
+          assert ("al" + "tool") not in workflow.lower()
+
+          phase = {
+              "phase": "calibration",
+              "plannedDurationSeconds": 15,
+              "observedDurationSeconds": 15.0,
+              "frameCount": 450,
+              "averageFPS": 30.0,
+              "averageDepthCoverage": 0.91,
+              "averageMovementMetersPerSecond": 0.08,
+              "finalTrackingState": "normal",
+              "peakThermalState": "nominal",
+          }
+          diagnostic = {
+              "schema": "ruview.ios.visible-depth-diagnostic.v1",
+              "sessionId": "00000000-0000-4000-8000-000000000000",
+              "createdAt": "2026-08-23T00:00:00Z",
+              "deviceModelFamily": "iPhone",
+              "osVersion": "iOS 26.0",
+              "appVersion": "1.0 (1)",
+              "capabilities": {
+                  "worldTracking": True,
+                  "sceneDepth": True,
+                  "smoothedSceneDepth": True,
+                  "sceneMesh": True,
+                  "rawPhotonHistograms": False,
+              },
+              "phases": [phase, {**phase, "phase": "wall_scan", "plannedDurationSeconds": 30}],
+              "consent": {
+                  "localValidation": True,
+                  "diagnosticExport": True,
+                  "rawSensorExport": False,
+              },
+              "evidenceLabel": "direct_depth",
+              "physicalNLOSStatus": "blocked_raw_transients_unavailable",
+              "cameraPermission": "granted",
+              "completionStatus": "completed",
+          }
+          encoded = json.dumps(
+              diagnostic, sort_keys=True, separators=(",", ":"), allow_nan=False
+          ).encode("utf-8")
+          assert len(encoded) <= 65_536
+          assert set(diagnostic) == set(schema["required"])
+          assert diagnostic["consent"]["rawSensorExport"] is False
+          assert diagnostic["capabilities"]["rawPhotonHistograms"] is False
+          assert diagnostic["physicalNLOSStatus"] == (
+              "blocked_raw_transients_unavailable"
+          )
+
+          forbidden = {
+              "image", "images", "rgb", "depth", "depth_map", "point_cloud",
+              "csi", "transient", "histogram", "token", "authorization",
+              "latitude", "longitude", "location", "trajectory", "raw",
+          }
+
+          def walk(value):
+              if isinstance(value, dict):
+                  for key, child in value.items():
+                      assert key.lower() not in forbidden, f"forbidden diagnostic key: {key}"
+                      walk(child)
+              elif isinstance(value, list):
+                  for child in value:
+                      walk(child)
+
+          walk(diagnostic)
+          print(f"Validated beta governance contract and {len(encoded)} byte fixture")
+          PY
 
   metaharness:
     name: Advisory MetaHarness

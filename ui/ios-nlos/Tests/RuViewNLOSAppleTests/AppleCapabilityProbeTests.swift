@@ -7,6 +7,25 @@ final class AppleCapabilityProbeTests: XCTestCase {
 
         XCTAssertEqual(report.rawPhotonHistograms, .unavailable)
         XCTAssertFalse(report.rawPhotonHistogramReason.isEmpty)
+        XCTAssertFalse(report.visibleDepthDiagnosticFlags.rawPhotonHistograms)
+    }
+
+    func testDiagnosticFlagsPreservePublicCapabilityBoundary() {
+        let report = AppleNLOSCapabilityReport(
+            sceneDepth: .available,
+            smoothedSceneDepth: .unavailable,
+            sceneMesh: .available,
+            worldPose: .available,
+            rawPhotonHistograms: .available,
+            rawPhotonHistogramReason: "fixture"
+        )
+
+        let flags = report.visibleDepthDiagnosticFlags
+        XCTAssertTrue(flags.worldTracking)
+        XCTAssertTrue(flags.sceneDepth)
+        XCTAssertFalse(flags.smoothedSceneDepth)
+        XCTAssertTrue(flags.sceneMesh)
+        XCTAssertFalse(flags.rawPhotonHistograms)
     }
 
     #if !canImport(ARKit)

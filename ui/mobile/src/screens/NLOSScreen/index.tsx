@@ -6,6 +6,7 @@ import { useNlosStream } from '@/hooks/useNlosStream';
 import { colors } from '@/theme/colors';
 import { spacing } from '@/theme/spacing';
 import { HiddenTargetVisualization, type NlosViewMode } from './HiddenTargetVisualization';
+import { BetaSetupCard } from './BetaSetupCard';
 import { ProvenancePanel } from './ProvenancePanel';
 
 const ViewModePicker = ({ value, onChange }: { value: NlosViewMode; onChange: (value: NlosViewMode) => void }) => (
@@ -75,22 +76,11 @@ export const NLOSScreen = () => {
           <ThemedText preset="labelMd" style={{ color: colors.accent }}>LABS</ThemedText>
         </View>
 
+        <BetaSetupCard />
+
         <View style={styles.notice}>
           <ThemedText preset="bodySm" style={{ color: colors.warn }}>
             This client does not access raw iPhone LiDAR timing data. Safari and Expo display authenticated RuView track frames or visibly watermarked synthetic replay only.
-          </ThemedText>
-        </View>
-
-        <View testID="nlos-maturity-boundary" style={styles.maturityCard}>
-          <ThemedText preset="labelMd" style={{ color: colors.accent }}>SOFTWARE PREVIEW</ThemedText>
-          <ThemedText preset="bodySm">
-            The software path is implemented and locally validated. Research readiness remains blocked on:
-          </ThemedText>
-          <ThemedText preset="bodySm" color="textSecondary">OPEN · macOS native compilation</ThemedText>
-          <ThemedText preset="bodySm" color="textSecondary">OPEN · Physical VL53L8CH reproduction at 27 fps or better</ThemedText>
-          <ThemedText preset="bodySm" color="textSecondary">OPEN · Measured CSI fusion improvement of at least 25 percent</ThemedText>
-          <ThemedText preset="bodySm" color="textSecondary">
-            Builds, simulators, and synthetic replay do not close hardware or measured-fusion evidence gates.
           </ThemedText>
         </View>
 
@@ -206,14 +196,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 10,
     padding: spacing.md,
-  },
-  maturityCard: {
-    backgroundColor: colors.surface,
-    borderColor: colors.accentDim,
-    borderWidth: 1,
-    borderRadius: 12,
-    padding: spacing.md,
-    gap: spacing.sm,
   },
   visualizationCard: {
     position: 'relative',

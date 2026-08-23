@@ -109,6 +109,7 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-169](ADR-169-adam-mode-light-theme.md) | adam-mode — light theme toggle for the three.js realtime demo | Proposed |
 | [ADR-170](ADR-170-yoga-mode-pose-system.md) | yoga-mode — yoga pose detection, classification, and scoring for the three.js realtime demo | Proposed |
 | [ADR-324](ADR-324-off-axis-head-coupled-perspective-demo.md) | off-axis-mode — RF-assisted head-coupled perspective demo (clean-room Kooima projection; RF presence gating) | Proposed |
+| [ADR-341](ADR-341-consumer-nlos-beta-tester-delivery-and-diagnostics.md) | Consumer NLOS beta delivery via TestFlight, post-install setup, and privacy-bounded diagnostics | Proposed |
 
 ### Architecture and infrastructure
 

@@ -1,13 +1,13 @@
 # RuView NLOS for iOS
 
-RuView NLOS is a native SwiftUI monitor for authenticated hidden target hypotheses produced by the RuView consumer time of flight pipeline. It is deliberately a display and transport adapter. It does not claim that Apple LiDAR or ARKit can perform optical non line of sight reconstruction.
+RuView NLOS is a native SwiftUI beta tester assistant and monitor for authenticated hidden target hypotheses produced by the RuView consumer time of flight pipeline. The first screen guides a tester through a real ARKit visible depth validation before the monitor. It does not claim that Apple LiDAR or ARKit can perform optical non line of sight reconstruction.
 
 The package has two libraries:
 
 | Product | Responsibility |
 |---|---|
-| `RuViewNLOSCore` | Typed wire model, strict validation, freshness policy, sequence and replay guard, secure endpoint validation |
-| `RuViewNLOSApple` | Apple capability probe, Keychain credential storage, authenticated WebSocket transport |
+| `RuViewNLOSCore` | Typed wire model, strict validation, freshness policy, sequence and replay guard, secure endpoint validation, bounded diagnostic model and aggregate phase metrics |
+| `RuViewNLOSApple` | Apple capability probe, active ARKit visible depth validator, Keychain credential storage, authenticated WebSocket transport |
 
 `RuViewNLOS.xcodeproj` contains the directly buildable iOS SwiftUI app and links both local package products.
 
@@ -38,7 +38,53 @@ The native probe reports these capabilities separately:
 | World pose | Probed with `ARWorldTrackingConfiguration.isSupported` | Motion and registration context only |
 | Raw photon timing histograms | Reported unavailable | Required from an external supported transient sensor for this pipeline |
 
-The app never upgrades ARKit depth, mesh, or pose into optical NLOS evidence. The current monitor performs only static capability checks, does not start an `ARSession`, and does not request camera permission.
+The app never upgrades ARKit depth, mesh, or pose into optical NLOS evidence. The beta setup starts an `ARSession` only after the tester presses the start button and grants camera permission. It uses public `ARWorldTrackingConfiguration`, scene depth, camera pose, and tracking state APIs.
+
+## Beta tester flow
+
+The opening setup card links to the [interactive explainer](https://ruview-nlos.ruv.chatgpt.site) and [feedback issue 1690](https://github.com/ruvnet/RuView/issues/1690). The run takes 45 seconds after ARKit begins delivering frames:
+
+1. Press **Start 45 second validation**. No sensor access begins before this action.
+2. Grant camera permission. The camera is required by ARKit, but images are never displayed, stored, exported, or uploaded.
+3. For 15 seconds, point at a well lit, textured, directly visible surface and move the phone slowly. This calibrates world tracking and visible depth coverage.
+4. For 30 seconds, keep a directly visible wall in frame and move slowly from side to side. This tests sustained scene depth and pose stability.
+5. Watch live frames per second, depth coverage, ARKit tracking state, movement in metres per second, thermal state, and remaining time.
+6. On completion, optionally enable the explicit export consent toggle, prepare the local JSON, and use the iOS share sheet. Share it with issue 1690 only if you choose to do so.
+
+Cancellation and ARKit interruption stop the session, preserve only bounded aggregate phase summaries, and produce a locally shareable cancellation or failure diagnostic. A new run always uses a new random session identifier.
+
+Every validation result has evidence label `direct_depth`. It is visible surface evidence only and never NLOS evidence.
+
+### Diagnostic contract
+
+The JSON is capped at 64 KiB and contains only:
+
+* Random session identifier
+* Creation time
+* Device model family
+* OS and app versions
+* Public capability flags
+* At most two aggregate phase summaries
+* Peak coarse thermal state and camera permission outcome
+* Local validation and export consent flags
+* Completion status and a bounded failure reason
+* The invariant evidence label `direct_depth`
+* The invariant physical NLOS status `blocked_raw_transients_unavailable`
+
+It contains no image, raw depth map, camera transform, raw sample, hostname, endpoint, credential, token, or analytics identifier. The app has no upload endpoint. Preparing an export writes only this diagnostic JSON to the app's protected temporary directory so iOS can present its local share sheet.
+
+### Troubleshooting
+
+| Symptom | Likely cause | Action |
+|---|---|---|
+| Scene depth unavailable | Device has no supported LiDAR scene depth API | Use a LiDAR equipped iPhone Pro or iPad Pro and confirm with the capability card |
+| Camera permission declined | Permission was denied or restricted | Open Settings, select RuView NLOS, enable Camera, return, and start a new run |
+| Tracking says `limited_insufficient_features` | Blank wall, darkness, or too little texture | Include a textured visible object at the wall edge and improve room lighting |
+| Tracking says `limited_excessive_motion` | Phone movement is too fast | Move at roughly 5 to 15 centimetres per second |
+| Depth coverage is near zero | Reflective, transparent, distant, or poorly lit surface | Use a matte wall within approximately 0.5 to 4 metres |
+| Thermal state is serious or critical | Sustained sensing has heated the device | Cancel, let the phone cool for 5 to 10 minutes, then retry without a case |
+| Session interrupted | App backgrounded, phone call, or ARKit interruption | Keep the app foregrounded and start a new run |
+| Share button is unavailable | Export consent is off or no result exists | Complete or cancel a run, enable the consent toggle, then prepare the JSON |
 
 ## Security model
 
@@ -48,14 +94,14 @@ On Apple platforms, the token is stored as a generic password with `kSecAttrAcce
 
 The visualization is advisory. It must not directly trigger physical actuation or safety critical decisions.
 
-The app has no analytics or position telemetry and its privacy manifest declares no tracking or collected data. Track frames remain in memory only and are replaced by the newest valid frame. Leaving the active foreground disconnects the stream and clears track state; the visualization is also marked privacy sensitive for system snapshots.
+The app has no analytics or position telemetry and its privacy manifest declares no tracking or collected data. ARKit images, depth maps, and poses remain transient in memory and are never persisted. Only aggregate numeric phase summaries can be exported after explicit opt in. Track frames remain in memory only and are replaced by the newest valid frame. Leaving the active foreground disconnects the monitor stream and clears track state; the visualization is also marked privacy sensitive for system snapshots.
 
 ## Build and test
 
 Requirements:
 
 1. Swift 5.9 or newer for the package tests.
-2. Xcode 15 or newer for the iOS app.
+2. Xcode 15 or newer for local development; Xcode 26 or newer for App Store Connect uploads after Apple's April 2026 requirement.
 3. iOS 16 or newer for deployment.
 
 Run the deterministic protocol and security tests on macOS or Linux:
@@ -78,8 +124,8 @@ xcodebuild \
   build
 ```
 
-For a physical iPhone, open `RuViewNLOS.xcodeproj`, choose a development team and a unique bundle identifier, then build to the device. Enter an explicitly provisioned `wss` track endpoint and pairing token. Do not put the token in the endpoint query string.
+For a physical iPhone, open `RuViewNLOS.xcodeproj`, choose a development team and a unique bundle identifier, then build to the device. Complete the opening visible depth validation before configuring the optional monitor. Enter an explicitly provisioned `wss` track endpoint and pairing token. Do not put the token in the endpoint query string.
 
 ## Validation limits
 
-A successful Swift test or simulator build is software evidence only. It is not evidence that Apple hardware exposes photon timing histograms and it is not a reproduction of the MIT consumer NLOS result. Real hardware validation requires both an external supported time of flight sensor and captured RuView server output with reviewed calibration and provenance. The simulator normally reports ARKit sensor capabilities as unavailable.
+A successful Swift test, simulator build, or completed `direct_depth` run is software and visible depth evidence only. It is not evidence that Apple hardware exposes photon timing histograms and it is not a reproduction of the MIT consumer NLOS result. Real NLOS hardware validation requires both an external supported time of flight sensor and captured RuView server output with reviewed calibration and provenance. The simulator normally reports ARKit sensor capabilities as unavailable.

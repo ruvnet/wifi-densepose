@@ -1,8 +1,14 @@
 import React from 'react';
+import { Linking } from 'react-native';
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import { createSyntheticNlosFrame } from '@/services/nlos.service';
 import { createLiveNlosFrameFixture } from '@/testUtils/nlosFixtures';
 import { ThemeProvider } from '@/theme/ThemeContext';
+import {
+  getBetaPlatformGuidance,
+  NLOS_EXPLAINER_URL,
+  NLOS_FEEDBACK_URL,
+} from '@/screens/NLOSScreen/BetaSetupCard';
 
 const syntheticFrame = createSyntheticNlosFrame(0, 1_700_000_000_000);
 const mockNlosResult: Record<string, any> = {
@@ -55,9 +61,45 @@ describe('NLOSScreen', () => {
     render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
     expect(screen.getByText('RuView NLOS')).toBeTruthy();
     expect(screen.getByText(/does not access raw iPhone LiDAR timing data/)).toBeTruthy();
-    expect(screen.getByTestId('nlos-maturity-boundary')).toBeTruthy();
-    expect(screen.getByText(/Physical VL53L8CH reproduction at 27 fps or better/)).toBeTruthy();
-    expect(screen.getByText(/Measured CSI fusion improvement of at least 25 percent/)).toBeTruthy();
+    expect(screen.getByText(/web client cannot capture ARKit LiDAR or raw timing data/)).toBeTruthy();
+  });
+
+  it('provides platform-specific beta setup without browser API assumptions', () => {
+    const ios = getBetaPlatformGuidance('ios');
+    const web = getBetaPlatformGuidance('web');
+
+    expect(ios.label).toBe('NATIVE IOS BETA');
+    expect(ios.showTestFlightButton).toBe(true);
+    expect(ios.steps.join(' ')).toMatch(/TestFlight/);
+    expect(web.label).toBe('IPHONE WEB BETA');
+    expect(web.showTestFlightButton).toBe(false);
+    expect(web.steps.join(' ')).toMatch(/Safari/);
+    expect(web.steps.join(' ')).toMatch(/Add to Home Screen/);
+  });
+
+  it('exposes the explainer, feedback issue, and evidence boundary', () => {
+    const { NLOSScreen } = require('@/screens/NLOSScreen');
+    render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
+
+    expect(NLOS_EXPLAINER_URL).toBe('https://ruview-nlos.ruv.chatgpt.site');
+    expect(NLOS_FEEDBACK_URL).toBe('https://github.com/ruvnet/RuView/issues/1690');
+    expect(screen.getByRole('link', { name: 'OPEN EXPLAINER' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'TEST STEPS AND FEEDBACK' })).toBeTruthy();
+    expect(screen.getByText(/Depth only input is never physical NLOS evidence/)).toBeTruthy();
+    expect(screen.getByText(/No credentials are saved by setup/)).toBeTruthy();
+  });
+
+  it('opens only the fixed explainer and feedback links', () => {
+    const openUrl = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+    const { NLOSScreen } = require('@/screens/NLOSScreen');
+    render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
+
+    fireEvent.press(screen.getByRole('link', { name: 'OPEN EXPLAINER' }));
+    fireEvent.press(screen.getByRole('link', { name: 'TEST STEPS AND FEEDBACK' }));
+
+    expect(openUrl).toHaveBeenNthCalledWith(1, NLOS_EXPLAINER_URL);
+    expect(openUrl).toHaveBeenNthCalledWith(2, NLOS_FEEDBACK_URL);
+    openUrl.mockRestore();
   });
 
   it('always watermarks synthetic replay', () => {
