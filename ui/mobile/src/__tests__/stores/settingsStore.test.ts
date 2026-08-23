@@ -5,6 +5,7 @@ describe('useSettingsStore', () => {
     // Reset to defaults by manually setting all values
     useSettingsStore.setState({
       serverUrl: 'http://localhost:3000',
+      nlosServerUrl: 'http://localhost:3000',
       rssiScanEnabled: false,
       theme: 'system',
       alertSoundEnabled: true,
@@ -38,6 +39,29 @@ describe('useSettingsStore', () => {
     it('handles empty string', () => {
       useSettingsStore.getState().setServerUrl('');
       expect(useSettingsStore.getState().serverUrl).toBe('');
+    });
+  });
+
+  describe('setNlosServerUrl', () => {
+    it('updates NLOS independently from the CSI server URL', () => {
+      useSettingsStore.getState().setNlosServerUrl('https://nlos.example');
+      expect(useSettingsStore.getState().nlosServerUrl).toBe('https://nlos.example');
+      expect(useSettingsStore.getState().serverUrl).toBe('http://localhost:3000');
+    });
+
+    it('never persists credentials or URL components outside the server origin', () => {
+      const initial = useSettingsStore.getState().nlosServerUrl;
+      for (const unsafe of [
+        'https://user:secret@nlos.example',
+        'https://nlos.example/path',
+        'https://nlos.example?token=secret',
+        'https://nlos.example#secret',
+      ]) {
+        useSettingsStore.getState().setNlosServerUrl(unsafe);
+        expect(useSettingsStore.getState().nlosServerUrl).toBe(initial);
+      }
+      useSettingsStore.getState().setNlosServerUrl('https://nlos.example:443/');
+      expect(useSettingsStore.getState().nlosServerUrl).toBe('https://nlos.example');
     });
   });
 

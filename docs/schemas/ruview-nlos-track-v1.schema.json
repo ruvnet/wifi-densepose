@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ruview.ai/schemas/ruview-nlos-track-v1.schema.json",
+  "title": "RuView NLOS track envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "sessionId", "sequence", "capturedAtUnixMs", "expiresAtUnixMs",
+    "source", "evidenceLevel", "algorithmVersion", "calibrationHash", "provenance", "tracks"
+  ],
+  "properties": {
+    "schema": { "const": "ruview.nlos.track.v1" },
+    "sessionId": { "$ref": "#/$defs/label" },
+    "sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "capturedAtUnixMs": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "expiresAtUnixMs": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "source": { "enum": ["live", "replay", "synthetic"] },
+    "evidenceLevel": { "enum": ["l0_synthetic", "l1_measured", "l2_calibrated"] },
+    "algorithmVersion": { "$ref": "#/$defs/label" },
+    "calibrationHash": { "$ref": "#/$defs/sha256" },
+    "provenance": { "$ref": "#/$defs/provenance" },
+    "tracks": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "$ref": "#/$defs/track" }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "source": { "const": "synthetic" } }, "required": ["source"] },
+      "then": {
+        "properties": {
+          "evidenceLevel": { "const": "l0_synthetic" },
+          "calibrationHash": { "const": "0000000000000000000000000000000000000000000000000000000000000000" },
+          "provenance": {
+            "properties": {
+              "transientKind": { "const": "replay" },
+              "transport": { "const": "replay" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "source": { "const": "live" } }, "required": ["source"] },
+      "then": {
+        "properties": {
+          "evidenceLevel": { "enum": ["l1_measured", "l2_calibrated"] },
+          "provenance": {
+            "properties": {
+              "transientKind": { "enum": ["raw_histogram", "compact_normalized_histogram"] },
+              "histogramPreserved": { "const": true },
+              "transport": { "enum": ["usb_serial", "ruview_server"] }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "source": { "const": "replay" } }, "required": ["source"] },
+      "then": {
+        "properties": {
+          "provenance": {
+            "properties": {
+              "transientKind": { "const": "replay" },
+              "histogramPreserved": { "const": true },
+              "transport": { "const": "replay" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "evidenceLevel": { "const": "l2_calibrated" } },
+        "required": ["evidenceLevel"]
+      },
+      "then": {
+        "properties": {
+          "calibrationHash": {
+            "not": { "const": "0000000000000000000000000000000000000000000000000000000000000000" }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "label": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9_.:-]+$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "unit": { "type": "number", "minimum": 0, "maximum": 1 },
+    "vector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "z"],
+      "properties": { "x": { "type": "number" }, "y": { "type": "number" }, "z": { "type": "number" } }
+    },
+    "positionVector": {
+      "type": "object", "additionalProperties": false, "required": ["x", "y", "z"],
+      "properties": {
+        "x": { "type": "number", "minimum": -100, "maximum": 100 },
+        "y": { "type": "number", "minimum": -100, "maximum": 100 },
+        "z": { "type": "number", "minimum": -100, "maximum": 100 }
+      }
+    },
+    "velocityVector": {
+      "type": "object", "additionalProperties": false, "required": ["x", "y", "z"],
+      "properties": {
+        "x": { "type": "number", "minimum": -20, "maximum": 20 },
+        "y": { "type": "number", "minimum": -20, "maximum": 20 },
+        "z": { "type": "number", "minimum": -20, "maximum": 20 }
+      }
+    },
+    "covarianceVector": {
+      "type": "object", "additionalProperties": false, "required": ["x", "y", "z"],
+      "properties": {
+        "x": { "type": "number", "minimum": 0, "maximum": 10 },
+        "y": { "type": "number", "minimum": 0, "maximum": 10 },
+        "z": { "type": "number", "minimum": 0, "maximum": 10 }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sensorId", "sensorModel", "firmwareVersion", "transientKind", "histogramPreserved", "transport"],
+      "properties": {
+        "sensorId": { "$ref": "#/$defs/label" },
+        "sensorModel": { "$ref": "#/$defs/label" },
+        "firmwareVersion": { "$ref": "#/$defs/label" },
+        "transientKind": { "enum": ["raw_histogram", "compact_normalized_histogram", "depth_only", "replay"] },
+        "histogramPreserved": { "type": "boolean" },
+        "transport": { "enum": ["usb_serial", "ruview_server", "replay"] }
+      }
+    },
+    "track": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trackId", "state", "positionM", "velocityMps", "covarianceDiagonalM2",
+        "confidence", "posteriorEntropy", "signalQuality", "modalityContributions"
+      ],
+      "properties": {
+        "trackId": { "$ref": "#/$defs/label" },
+        "state": { "enum": ["tracking", "degraded", "unknown"] },
+        "positionM": { "$ref": "#/$defs/positionVector" },
+        "velocityMps": { "$ref": "#/$defs/velocityVector" },
+        "covarianceDiagonalM2": { "$ref": "#/$defs/covarianceVector" },
+        "confidence": { "$ref": "#/$defs/unit" },
+        "posteriorEntropy": { "type": "number", "minimum": 0 },
+        "signalQuality": { "$ref": "#/$defs/unit" },
+        "modalityContributions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["lidar", "csi"],
+          "properties": { "lidar": { "$ref": "#/$defs/unit" }, "csi": { "$ref": "#/$defs/unit" } }
+        }
+      }
+    }
+  }
+}

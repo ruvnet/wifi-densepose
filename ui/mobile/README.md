@@ -7,6 +7,7 @@ WiFi-DensePose Mobile is a React Native / Expo companion app for the [WiFi-Dense
 > | Screen | What It Shows |
 > |--------|---------------|
 > | **Live** | 3D Gaussian splat body rendering with FPS counter, signal strength, confidence HUD |
+> | **NLOS** | Authenticated hidden-target hypotheses with 2D plan / 3D perspective views, evidence provenance, freshness, and bounded synthetic replay |
 > | **Vitals** | Breathing rate (6-30 BPM) and heart rate (40-120 BPM) arc gauges with sparkline history |
 > | **Zones** | SVG floor plan with occupancy grid, zone legend, presence heatmap |
 > | **MAT** | Mass casualty assessment: survivor counter, triage alerts, zone management |
@@ -29,6 +30,7 @@ npx expo start --web
 | | Feature | Details |
 |---|---------|---------|
 | **3D Live View** | Gaussian splat rendering | Three.js via WebView (native) or iframe (web), real-time pose overlay |
+| **RuView NLOS Labs** | Hidden-target tracks | Authenticated `ruview.nlos.track.v1` frames, strict bounds, replay rejection, staleness, and visible provenance |
 | **Vital Signs** | Breathing + heart rate | Arc gauge components with sparkline 60-sample history, confidence indicators |
 | **Disaster Response** | WiFi-MAT dashboard | Survivor detection, START triage classification, priority alerts, zone scan tracking |
 | **Floor Plan** | SVG occupancy grid | Zone-level presence visualization, color-coded density, interactive legend |
@@ -38,6 +40,15 @@ npx expo start --web
 | **Dark Theme** | Cyan accent (#32B8C6) | Dark-first design system with consistent color tokens, spacing scale, and monospace typography |
 | **Persistent State** | Zustand + AsyncStorage | Settings, connection preferences, and theme survive app restarts |
 | **Platform WiFi** | Native RSSI scanning | Android: `react-native-wifi-reborn`, iOS: stub (requires entitlement), Web: synthetic values |
+
+### RuView NLOS on iOS and the web
+
+The NLOS tab is a cross-platform **track client**, not an iPhone LiDAR capture implementation. Apple Safari, Expo, and ordinary App Store APIs do not expose the raw photon timing histograms required by the research reconstruction pipeline. The client therefore accepts only:
+
+1. Live track frames from an authenticated RuView NLOS server session, after a transport-layer Bearer token is exchanged for a single-use WebSocket ticket.
+2. Deterministic `SYNTHETIC` replay, always labeled `l0_synthetic` and always covered by a visible watermark.
+
+Unknown, expired, out-of-order, malformed, oversized, depth-only, or unauthenticated data is never presented as live NLOS. A native host can provide an ephemeral credential with `configureNlosBearerToken`, or an operator can paste a 32-to-512-character pairing credential into the masked NLOS screen input. The credential remains in memory, is sent only in the ticket request `Authorization` header, and is never persisted by this client.
 
 ---
 
@@ -133,6 +144,7 @@ ui/mobile/
       websocket.ts                 WS path, reconnect delays, max attempts
     hooks/
       usePoseStream.ts             Subscribe to live or simulated sensing frames
+      useNlosStream.ts             Authenticated NLOS / deterministic replay lifecycle
       useRssiScanner.ts            Platform RSSI scanning hook
       useServerReachability.ts     HTTP health check polling
       useTheme.ts                  Dark/light/system theme resolution
@@ -148,6 +160,10 @@ ui/mobile/
         GaussianSplatWebView.web.tsx  Web iframe renderer
         LiveHUD.tsx                FPS, RSSI, confidence, person count overlay
         useGaussianBridge.ts       WebView message protocol
+      NLOSScreen/
+        index.tsx                  NLOS evidence, controls, metrics, and safe fallback UI
+        HiddenTargetVisualization.tsx  Memoized plan / perspective SVG renderer
+        ProvenancePanel.tsx        Source, evidence, histogram, and freshness disclosure
       VitalsScreen/
         index.tsx                  Breathing + heart rate dashboard
         BreathingGauge.tsx         Arc gauge for breathing BPM
@@ -172,6 +188,8 @@ ui/mobile/
         ThemePicker.tsx            Dark / light / system theme selector
     services/
       ws.service.ts               WebSocket client with auto-reconnect + simulation fallback
+      nlos.service.ts             Bearer ticket exchange, bounded WebSocket, replay rejection
+      nlos.validation.ts          Strict versioned NLOS track frame validation
       api.service.ts              REST client (Axios) with retry logic
       rssi.service.ts             Platform-agnostic RSSI scanner interface
       rssi.service.android.ts     Android: react-native-wifi-reborn integration
@@ -180,6 +198,7 @@ ui/mobile/
       simulation.service.ts       Generates synthetic SensingFrame data
     stores/
       poseStore.ts                Pose frames, connection status, frame history (Zustand)
+      nlosStore.ts                NLOS frame ordering, provenance, rejection, and staleness
       matStore.ts                 MAT survivors, zones, alerts, disaster events (Zustand)
       settingsStore.ts            Server URL, theme, RSSI toggle (Zustand + persist)
     theme/
@@ -190,6 +209,7 @@ ui/mobile/
       index.ts                    Theme barrel export
     types/
       sensing.ts                  SensingFrame, SensingNode, VitalsData, Classification
+      nlos.ts                     Canonical `ruview.nlos.track.v1` wire contract
       mat.ts                      Survivor, Alert, ScanZone, TriageStatus, DisasterType
       api.ts                      PoseStatus, ZoneConfig, HistoricalFrames, ApiError
       navigation.ts               Navigation param lists
@@ -249,6 +269,12 @@ The primary visualization screen. Renders a 3D Gaussian splat representation of 
 
 Displays real-time breathing rate and heart rate extracted from CSI signal processing. Each vital sign is shown as an animated arc gauge (`GaugeArc` component) with the current BPM value, a 60-sample sparkline history (`SparklineChart`), and a confidence percentage. Normal ranges: breathing 6-30 BPM, heart rate 40-120 BPM.
 
+### NLOS
+
+Displays hidden-target hypotheses produced upstream by RuView NLOS. The 2D plan and lightweight 3D perspective views render at most 16 tracks and covariance ellipses. The provenance card reports evidence level, transient kind, histogram preservation, sensor model, sequence, and freshness. Stale tracks remain visible only as muted historical context beneath a `STALE FRAME` overlay.
+
+The NLOS server URL is configured separately from the CSI socket. Live authentication uses `POST /api/v1/nlos/ws-ticket` with a Bearer credential; the response supplies a short-lived single-use `wss` URL. If no ephemeral credential is available, the tab starts in deterministic synthetic replay rather than silently relabeling simulated data as live.
+
 ### Zones
 
 A floor plan view that maps WiFi sensing coverage to physical space. Uses SVG rendering (`react-native-svg`) to draw zones with color-coded occupancy density. The `useOccupancyGrid` hook computes grid cell values from incoming sensing frames. A legend shows the color scale from empty to high-density zones.
@@ -259,8 +285,9 @@ Mass Casualty Assessment Tool for disaster response. Displays a survivor counter
 
 ### Settings
 
-Configuration panel with four controls:
+Configuration panel with separate sensing and NLOS controls:
 - **Server URL** — text input with URL validation; changes trigger WebSocket reconnect
+- **RuView NLOS server URL** — separate base URL used only for the authenticated ticket exchange
 - **Theme** — dark / light / system picker
 - **RSSI Scanning** — toggle for platform-native WiFi RSSI scanning
 - **Alert Sound** — toggle for MAT alert audio notifications
@@ -314,6 +341,22 @@ The REST client (`api.service.ts`) provides:
 
 All requests use Axios with a 5-second timeout and automatic retry (2 attempts).
 
+### RuView NLOS protocol
+
+The NLOS client exchanges its in-memory Bearer credential at `POST /api/v1/nlos/ws-ticket`. The ticket response is capped at 8 KiB and must be exactly:
+
+```json
+{
+  "schema": "ruview.nlos.ws-ticket.v1",
+  "webSocketUrl": "wss://ruview.example/api/v1/nlos/ws?ticket=single-use",
+  "expiresAtUnixMs": 1770000000000
+}
+```
+
+The first WebSocket message must be `ruview.nlos.authenticated.v1`. Only then can the socket deliver `ruview.nlos.track.v1` frames for the same session. Track JSON is capped at 256 KiB and 16 tracks. Positions are bounded to ±100 m, velocity to ±20 m/s, covariance to 10 m², and expiration to five seconds. Sequence values must increase monotonically.
+
+Live frames require at least `l1_measured` evidence, preserved raw or compact normalized histograms, and `ruview_server` transport provenance. `depth_only` data cannot be labeled live NLOS. Synthetic frames require `l0_synthetic`, replay transport, the zero calibration hash, and the on-screen `SYNTHETIC` watermark.
+
 </details>
 
 ---
@@ -332,10 +375,10 @@ Runs the Jest test suite via `jest-expo`. Tests cover:
 | Category | Files | What Is Tested |
 |----------|-------|----------------|
 | Components | 7 | `ConnectionBanner`, `GaugeArc`, `HudOverlay`, `OccupancyGrid`, `SignalBar`, `SparklineChart`, `StatusDot` |
-| Screens | 5 | `LiveScreen`, `VitalsScreen`, `ZonesScreen`, `MATScreen`, `SettingsScreen` |
-| Services | 4 | `ws.service`, `api.service`, `rssi.service`, `simulation.service` |
-| Stores | 3 | `poseStore`, `matStore`, `settingsStore` |
-| Hooks | 3 | `usePoseStream`, `useRssiScanner`, `useServerReachability` |
+| Screens | 6 | Existing screens plus `NLOSScreen` |
+| Services | 6 | Existing services plus NLOS transport and protocol validation |
+| Stores | 4 | Existing stores plus NLOS ordering, provenance, and staleness state |
+| Hooks | 4 | Existing hooks plus the NLOS authenticated/replay lifecycle |
 | Utils | 3 | `colorMap`, `ringBuffer`, `urlValidator` |
 
 ### End-to-End Tests (Maestro)

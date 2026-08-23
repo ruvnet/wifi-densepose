@@ -8,6 +8,8 @@
       "ruview_verify",
       "ruview_node_monitor",
       "ruview_guidance",
+      "ruview_nlos_plan",
+      "ruview_nlos_verify",
       "ruview_memory_search"
     ],
     "grants": {

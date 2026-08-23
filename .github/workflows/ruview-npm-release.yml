@@ -104,8 +104,9 @@ jobs:
         run: |
           set -euo pipefail
           case "${{ inputs.package }}" in
-            # ADR-283/325: brain + hosts + replay + guarded Spaces OAuth; no runtime deps.
-            harness/ruview) export UNPACKED_BUDGET=163840 ;;
+            # ADR-283/325/331: brain + hosts + replay + guarded Spaces OAuth +
+            # bounded consumer-NLOS verifier; no runtime dependencies.
+            harness/ruview) export UNPACKED_BUDGET=225280 ;;
             # ADR-285: CLI + MCP + reviewed brain + WASM-kernel adapter.
             harness/homecore) export UNPACKED_BUDGET=180000 ;;
             # ADR-264 O2: map-free tarball (was 188 kB with maps).

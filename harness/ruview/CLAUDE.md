@@ -19,6 +19,7 @@ accuracy number:
 
 `ruview_onboard`, `ruview_claim_check`, `ruview_verify`, `ruview_node_monitor`,
 `ruview_calibrate`, `ruview_node_flash`, `ruview_guidance`,
+`ruview_nlos_plan`, `ruview_nlos_verify`,
 `ruview_spaces_list`, `ruview_memory_search`. Start unfamiliar work with
 `ruview_guidance`; its
 capability status, source paths, validation commands, and limitations are
@@ -35,8 +36,13 @@ bound. It grants no write or action authority.
 
 ## Skills
 
-`onboard` · `provision-node` · `calibrate-room` · `train-pose` · `verify` · `cognitum-spaces`
+`onboard` · `provision-node` · `calibrate-room` · `train-pose` · `verify` · `cognitum-spaces` · `consumer-nlos`
 (`npx @ruvnet/ruview skill <name>`).
+
+The NLOS tools are advisory repository/research gates. They never capture a
+sensor or turn `SYNTHETIC` replay/build evidence into a live-hardware claim.
+Consumer NLOS requires per-zone photon timing histograms; ARKit depth and CSI
+are context/fusion inputs, not substitutes for that measurement.
 
 ## Don'ts
 

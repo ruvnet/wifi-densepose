@@ -51,11 +51,17 @@ test('MCP handshake: initialize reports the package.json version; list endpoints
 
     s.send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
     const tools = (await s.next(2)).result.tools;
-    assert.equal(tools.length, 9);
+    assert.equal(tools.length, 11);
     for (const t of tools) assert.match(t.name, /^[a-zA-Z0-9_-]{1,64}$/, `advertised name not host-safe: ${t.name}`);
     const guidance = tools.find((tool) => tool.name === 'ruview_guidance');
     assert.ok(guidance);
     assert.equal(guidance.annotations.readOnlyHint, true);
+    const nlosPlan = tools.find((tool) => tool.name === 'ruview_nlos_plan');
+    const nlosVerify = tools.find((tool) => tool.name === 'ruview_nlos_verify');
+    assert.ok(nlosPlan);
+    assert.ok(nlosVerify);
+    assert.equal(nlosPlan.annotations.readOnlyHint, true);
+    assert.equal(nlosVerify.annotations.readOnlyHint, true);
     const spaces = tools.find((tool) => tool.name === 'ruview_spaces_list');
     assert.ok(spaces);
     assert.equal(spaces.annotations.readOnlyHint, false, 'OAuth refresh can update the local credential file');

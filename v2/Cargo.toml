@@ -123,6 +123,9 @@ members = [
     # ADR-324 — clean-room Kooima off-axis (head-coupled perspective) projection.
     # Dependency-free native core; wasm-bindgen surface only on wasm32.
     "crates/ruview-offaxis",
+    # ADR-328..331 — consumer ToF transient NLOS capture, motion-induced
+    # aperture tracking, governed CSI fusion, and native/web client contract.
+    "crates/ruview-nlos",
 ]
 # ADR-040: WASM edge crate targets wasm32-unknown-unknown (no_std),
 # excluded from workspace to avoid breaking `cargo test --workspace`.

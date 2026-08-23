@@ -1,0 +1,48 @@
+[package]
+name = "ruview-nlos"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Governed consumer ToF transient NLOS tracking and CSI fusion for RuView"
+
+[features]
+default = ["server"]
+server = [
+    "dep:axum",
+    "dep:clap",
+    "dep:getrandom",
+    "dep:tokio",
+    "dep:tracing",
+    "dep:tracing-subscriber",
+    "dep:tower-http",
+]
+hardware = ["dep:serialport"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+axum = { workspace = true, optional = true }
+clap = { workspace = true, optional = true }
+getrandom = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+tower-http = { workspace = true, optional = true, features = ["limit"] }
+serialport = { version = "4.3", default-features = false, optional = true }
+
+[dev-dependencies]
+tokio.workspace = true
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[[bin]]
+name = "ruview-nlos"
+path = "src/bin/ruview-nlos.rs"
+required-features = ["server"]
+
+[lints.rust]
+unsafe_code = "forbid"

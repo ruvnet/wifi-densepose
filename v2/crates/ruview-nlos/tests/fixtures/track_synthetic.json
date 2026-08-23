@@ -1,0 +1,32 @@
+{
+  "schema": "ruview.nlos.track.v1",
+  "sessionId": "synthetic-contract-1",
+  "sequence": 42,
+  "capturedAtUnixMs": 1800000000000,
+  "expiresAtUnixMs": 1800000000250,
+  "source": "synthetic",
+  "evidenceLevel": "l0_synthetic",
+  "algorithmVersion": "motion-aperture-canonical-v1",
+  "calibrationHash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "provenance": {
+    "sensorId": "sim-vl53l8ch",
+    "sensorModel": "VL53L8CH-simulator",
+    "firmwareVersion": "sim-v1",
+    "transientKind": "replay",
+    "histogramPreserved": true,
+    "transport": "replay"
+  },
+  "tracks": [
+    {
+      "trackId": "hidden-target-0",
+      "state": "tracking",
+      "positionM": { "x": 0.2, "y": -0.1, "z": 1.0 },
+      "velocityMps": { "x": 0.01, "y": 0.0, "z": 0.0 },
+      "covarianceDiagonalM2": { "x": 0.01, "y": 0.02, "z": 0.03 },
+      "confidence": 0.75,
+      "posteriorEntropy": 2.0,
+      "signalQuality": 0.7,
+      "modalityContributions": { "lidar": 0.6, "csi": 0.4 }
+    }
+  ]
+}

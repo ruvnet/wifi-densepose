@@ -43,7 +43,7 @@ const WebLiveViewer = ({ frame, onReady, onFps, onError }: ViewerProps) => {
   return <Viewer frame={frame} onReady={onReady} onFps={onFps} onError={onError} />;
 };
 
-const NativeLiveViewer = ({ frame, onReady, onFps, onError }: ViewerProps) => {
+const NativeLiveViewer = ({ onReady, onFps, onError }: ViewerProps) => {
   const webViewRef = useRef(null);
   const [WVComponent, setWVComponent] = useState<React.ComponentType<any> | null>(null);
 

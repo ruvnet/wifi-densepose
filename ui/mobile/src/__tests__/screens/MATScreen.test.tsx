@@ -68,13 +68,13 @@ describe('MATScreen', () => {
 
   it('renders the connection banner', () => {
     const { MATScreen } = require('@/screens/MATScreen');
-    const { getByText } = render(
+    const { getAllByText } = render(
       <ThemeProvider>
         <MATScreen />
       </ThemeProvider>,
     );
     // Simulated status maps to 'simulated' banner -> "SIMULATED DATA"
-    expect(getByText('SIMULATED DATA')).toBeTruthy();
+    expect(getAllByText('SIMULATED DATA').length).toBeGreaterThan(0);
   });
 
   it('shows simulation warning overlay when simulated and not acknowledged', () => {

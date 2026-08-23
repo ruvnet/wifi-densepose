@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ruview.ai/schemas/ruview-nlos-transient-v1.schema.json",
+  "title": "RuView raw optical transient frame v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "sessionId", "sequence", "capturedAtUnixMs", "monotonicNs", "source",
+    "evidenceLevel", "binWidthPs", "startBin", "sensorPose", "calibrationHash", "provenance", "zones"
+  ],
+  "properties": {
+    "schema": { "const": "ruview.nlos.transient.v1" },
+    "sessionId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9_.:-]+$" },
+    "sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "capturedAtUnixMs": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "monotonicNs": { "type": "integer", "minimum": 0 },
+    "source": { "enum": ["live", "replay", "synthetic"] },
+    "evidenceLevel": { "enum": ["l0_synthetic", "l1_measured", "l2_calibrated"] },
+    "binWidthPs": { "type": "number", "minimum": 1, "maximum": 10000 },
+    "startBin": { "type": "integer", "minimum": 0, "maximum": 65535 },
+    "sensorPose": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["translationM", "quaternionXyzw"],
+      "properties": {
+        "translationM": { "$ref": "#/$defs/vector" },
+        "quaternionXyzw": {
+          "type": "array", "minItems": 4, "maxItems": 4,
+          "items": { "type": "number", "minimum": -1, "maximum": 1 }
+        }
+      }
+    },
+    "calibrationHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sensorId", "sensorModel", "firmwareVersion", "transientKind", "histogramPreserved", "transport"],
+      "properties": {
+        "sensorId": { "$ref": "#/$defs/label" },
+        "sensorModel": { "$ref": "#/$defs/label" },
+        "firmwareVersion": { "$ref": "#/$defs/label" },
+        "transientKind": { "enum": ["raw_histogram", "compact_normalized_histogram", "depth_only", "replay"] },
+        "histogramPreserved": { "type": "boolean" },
+        "transport": { "enum": ["usb_serial", "ruview_server", "replay"] }
+      }
+    },
+    "zones": {
+      "type": "array", "minItems": 1, "maxItems": 64,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["zoneId", "wallPointM", "distanceM", "ambient", "histogram"],
+        "properties": {
+          "zoneId": { "type": "integer", "minimum": 0, "maximum": 63 },
+          "wallPointM": { "$ref": "#/$defs/vector" },
+          "distanceM": { "type": "number", "minimum": 0.01, "maximum": 10 },
+          "ambient": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+          "histogram": {
+            "type": "array", "minItems": 8, "maxItems": 128,
+            "items": { "type": "integer", "minimum": 0, "maximum": 65535 }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "source": { "const": "synthetic" } }, "required": ["source"] },
+      "then": {
+        "properties": {
+          "evidenceLevel": { "const": "l0_synthetic" },
+          "calibrationHash": { "const": "0000000000000000000000000000000000000000000000000000000000000000" },
+          "provenance": {
+            "properties": {
+              "transientKind": { "const": "replay" },
+              "transport": { "const": "replay" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "source": { "const": "live" } }, "required": ["source"] },
+      "then": {
+        "properties": {
+          "evidenceLevel": { "enum": ["l1_measured", "l2_calibrated"] },
+          "provenance": {
+            "properties": {
+              "transientKind": { "enum": ["raw_histogram", "compact_normalized_histogram"] },
+              "histogramPreserved": { "const": true },
+              "transport": { "enum": ["usb_serial", "ruview_server"] }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "source": { "const": "replay" } }, "required": ["source"] },
+      "then": {
+        "properties": {
+          "provenance": {
+            "properties": {
+              "transientKind": { "const": "replay" },
+              "histogramPreserved": { "const": true },
+              "transport": { "const": "replay" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "evidenceLevel": { "const": "l2_calibrated" } },
+        "required": ["evidenceLevel"]
+      },
+      "then": {
+        "properties": {
+          "calibrationHash": {
+            "not": { "const": "0000000000000000000000000000000000000000000000000000000000000000" }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "label": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9_.:-]+$" },
+    "vector": {
+      "type": "object", "additionalProperties": false,
+      "required": ["x", "y", "z"],
+      "properties": { "x": { "type": "number" }, "y": { "type": "number" }, "z": { "type": "number" } }
+    }
+  }
+}

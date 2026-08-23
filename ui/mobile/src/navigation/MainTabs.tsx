@@ -56,6 +56,7 @@ const wrapLazy = (
 };
 
 const LiveScreen = wrapLazy(() => import('../screens/LiveScreen'), 'Live');
+const NLOSScreen = wrapLazy(() => import('../screens/NLOSScreen'), 'NLOS');
 const VitalsScreen = wrapLazy(() => import('../screens/VitalsScreen'), 'Vitals');
 const ZonesScreen = wrapLazy(() => import('../screens/ZonesScreen'), 'Zones');
 const MATScreen = wrapLazy(() => import('../screens/MATScreen'), 'MAT');
@@ -65,6 +66,8 @@ const toIconName = (routeName: keyof MainTabsParamList) => {
   switch (routeName) {
     case 'Live':
       return 'wifi';
+    case 'NLOS':
+      return 'scan';
     case 'Vitals':
       return 'heart';
     case 'Zones':
@@ -80,6 +83,7 @@ const toIconName = (routeName: keyof MainTabsParamList) => {
 
 const screens: ReadonlyArray<{ name: keyof MainTabsParamList; component: React.ComponentType }> = [
   { name: 'Live', component: LiveScreen },
+  { name: 'NLOS', component: NLOSScreen },
   { name: 'Vitals', component: VitalsScreen },
   { name: 'Zones', component: ZonesScreen },
   { name: 'MAT', component: MATScreen },
