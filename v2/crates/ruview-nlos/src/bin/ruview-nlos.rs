@@ -2,7 +2,7 @@
 //! protocol; this binary never promotes its synthetic benchmark.
 
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -128,33 +128,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Command::ValidateTrack { input } => {
-            let count = read_jsonl::<TrackEnvelope, ruview_nlos::protocol::ContractError>(
-                &input,
-                |frame| frame.validate(),
-            )?;
+            let count = read_jsonl::<TrackEnvelope>(&input, |frame| Ok(frame.validate()?))?;
             println!("validated {count} bounded track frames");
         }
         Command::TrackJsonl {
             input,
             background_frames,
         } => {
-            let frames = load_transients(&input)?;
-            if background_frames < 2 || background_frames >= frames.len() {
-                return Err("background-frames must leave at least one tracking frame".into());
-            }
-            let calibration = Calibration::from_background(
-                &frames[..background_frames],
-                CalibrationConfig::default(),
-            )?;
-            let mut tracker = MotionApertureTracker::new(
-                calibration,
-                CanonicalObject::point(),
-                TrackerConfig::default(),
-            )?;
-            for frame in &frames[background_frames..] {
-                let output = tracker.update(frame, None)?;
-                println!("{}", serde_json::to_string(&output)?);
-            }
+            track_jsonl(&input, background_frames, std::io::stdout().lock())?;
         }
         #[cfg(feature = "hardware")]
         Command::CaptureSt {
@@ -236,7 +217,6 @@ fn capture_st(
     start_bin: u16,
     frequency_hz: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use std::io::Write;
     use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
     if !(1..=1_000_000).contains(&frame_limit) || !(1..=30).contains(&frequency_hz) {
@@ -341,7 +321,7 @@ fn valid_cli_label(value: &str) -> bool {
 #[cfg(feature = "hardware")]
 fn load_sensor_poses(path: &PathBuf) -> Result<Vec<SensorPose>, Box<dyn std::error::Error>> {
     let mut poses = Vec::new();
-    read_jsonl::<SensorPose, ruview_nlos::protocol::ContractError>(path, |pose| {
+    read_jsonl::<SensorPose>(path, |pose| {
         pose.validate()?;
         poses.push(*pose);
         Ok(())
@@ -383,13 +363,48 @@ fn spawn_synthetic(hub: NlosHub) {
     });
 }
 
-fn load_transients(path: &PathBuf) -> Result<Vec<TransientFrame>, Box<dyn std::error::Error>> {
-    let mut frames = Vec::new();
-    read_jsonl::<TransientFrame, ruview_nlos::protocol::ContractError>(path, |frame| {
-        frames.push(as_offline_replay(frame.clone())?);
+fn track_jsonl(
+    path: &PathBuf,
+    background_frames: usize,
+    mut output_writer: impl Write,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let calibration_config = CalibrationConfig::default();
+    if !(2..=calibration_config.max_background_frames).contains(&background_frames) {
+        return Err("background-frames must be between 2 and 256".into());
+    }
+
+    let mut background = Vec::with_capacity(background_frames);
+    let mut tracker = None;
+    let mut tracked_frames = 0_usize;
+    read_jsonl::<TransientFrame>(path, |frame| {
+        let frame = as_offline_replay(frame.clone())?;
+        if background.len() < background_frames {
+            background.push(frame);
+            return Ok(());
+        }
+        if tracker.is_none() {
+            let calibration_frames = std::mem::take(&mut background);
+            let calibration =
+                Calibration::from_background(&calibration_frames, calibration_config)?;
+            tracker = Some(MotionApertureTracker::new(
+                calibration,
+                CanonicalObject::point(),
+                TrackerConfig::default(),
+            )?);
+        }
+        let tracked = tracker
+            .as_mut()
+            .ok_or("tracker initialization failed")?
+            .update(&frame, None)?;
+        serde_json::to_writer(&mut output_writer, &tracked)?;
+        output_writer.write_all(b"\n")?;
+        tracked_frames = tracked_frames.saturating_add(1);
         Ok(())
     })?;
-    Ok(frames)
+    if tracked_frames == 0 {
+        return Err("background-frames must leave at least one tracking frame".into());
+    }
+    Ok(tracked_frames)
 }
 
 fn as_offline_replay(
@@ -406,13 +421,12 @@ fn as_offline_replay(
     Ok(frame)
 }
 
-fn read_jsonl<T, E>(
+fn read_jsonl<T>(
     path: &PathBuf,
-    mut validate: impl FnMut(&T) -> Result<(), E>,
+    mut validate: impl FnMut(&T) -> Result<(), Box<dyn std::error::Error>>,
 ) -> Result<usize, Box<dyn std::error::Error>>
 where
     T: serde::de::DeserializeOwned,
-    E: std::error::Error + 'static,
 {
     let metadata = std::fs::metadata(path)?;
     if metadata.len() > 512 * 1024 * 1024 {
@@ -461,9 +475,12 @@ fn read_bounded_line<R: BufRead>(
 
 #[cfg(test)]
 mod tests {
-    use super::{as_offline_replay, read_bounded_line};
+    use super::{as_offline_replay, read_bounded_line, track_jsonl};
     use ruview_nlos::{EvidenceLevel, FrameSource, SyntheticScene, TransientKind, Vec3};
-    use std::io::Cursor;
+    use std::fs::{remove_file, File};
+    use std::io::{Cursor, Write};
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn bounded_reader_rejects_before_growing_past_limit() {
@@ -492,5 +509,42 @@ mod tests {
         assert_eq!(replay.source, FrameSource::Replay);
         assert_eq!(replay.provenance.transient_kind, TransientKind::Replay);
         assert_eq!(replay.provenance.transport, "replay");
+    }
+
+    #[test]
+    fn track_jsonl_streams_after_bounded_background_window() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "ruview-nlos-track-{}-{nonce}.jsonl",
+            std::process::id()
+        ));
+        let mut scene = SyntheticScene::default();
+        let mut frames = scene.background_frames(2);
+        frames.push(scene.frame(Some(Vec3::new(0.1, 0.0, 1.0)), 1.0, 2));
+        let mut input = File::create(&path).unwrap();
+        for frame in frames {
+            serde_json::to_writer(&mut input, &frame).unwrap();
+            input.write_all(b"\n").unwrap();
+        }
+        drop(input);
+
+        let mut output = Vec::new();
+        let tracked = track_jsonl(&path, 2, &mut output).unwrap();
+        remove_file(&path).unwrap();
+
+        assert_eq!(tracked, 1);
+        assert_eq!(output.iter().filter(|byte| **byte == b'\n').count(), 1);
+        let envelope: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(envelope["source"], "synthetic");
+    }
+
+    #[test]
+    fn track_jsonl_rejects_unbounded_calibration_window_before_io() {
+        let error =
+            track_jsonl(&PathBuf::from("does-not-exist.jsonl"), 257, Vec::new()).unwrap_err();
+        assert!(error.to_string().contains("between 2 and 256"));
     }
 }

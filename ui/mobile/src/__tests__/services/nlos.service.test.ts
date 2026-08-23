@@ -21,6 +21,7 @@ class MockSocket {
 
 const NOW = 1_700_000_000_100;
 const BEARER_TOKEN = 'e'.repeat(32);
+const activeServices = new Set<NlosService>();
 
 const createHarness = () => {
   const socket = new MockSocket();
@@ -42,7 +43,9 @@ const createHarness = () => {
     setTimeout: globalThis.setTimeout.bind(globalThis),
     clearTimeout: globalThis.clearTimeout.bind(globalThis),
   };
-  return { service: new NlosService(dependencies), socket, fetchMock, dependencies };
+  const service = new NlosService(dependencies);
+  activeServices.add(service);
+  return { service, socket, fetchMock, dependencies };
 };
 
 const authenticate = (socket: MockSocket) => {
@@ -57,6 +60,8 @@ const authenticate = (socket: MockSocket) => {
 
 describe('NlosService', () => {
   afterEach(() => {
+    for (const service of activeServices) service.disconnect();
+    activeServices.clear();
     configureNlosBearerToken(null);
   });
 

@@ -84,10 +84,10 @@ Complete and sign this table before scored capture:
 
 | Item | Frozen value |
 |---|---|
-| ST kit and sensor | exact board and silicon read from hardware; raw/CNH API compatibility witnessed; scoped enrollment/certificate reference stored in the restricted manifest rather than a guessable raw-serial hash |
+| ST kit and sensor | VL53L8CH silicon read from hardware; raw/CNH API compatibility witnessed; scoped enrollment/certificate reference stored in the restricted manifest rather than a guessable raw-serial hash |
 | Firmware | source/release, compiler/toolchain, binary SHA-256 |
 | Sensor configuration | zones, bins, bin width, requested rate, integration/subsampling, ambient settings |
-| Upstream baseline | `sidsoma/consumer-nlos` full commit SHA and clean/patch manifest |
+| Upstream baseline | `sidsoma/consumer-nlos` commit `15314de422a765a2d1b72ea7037dfafb2f908d7c` and clean/patch manifest |
 | RuView | full Git commit SHA; `ruview-nlos` crate feature/config digest |
 | CSI nodes | authenticated IDs, hardware/firmware, channel/bandwidth/subcarrier configuration |
 | Optical calibration | wall points/plane, direct-return masks/peaks, background, timestamps, SHA-256, expiry |
@@ -399,10 +399,10 @@ placeholders, not results:
   "security_review_passed": true,
   "los_exclusion_verified": true,
   "independent_csi_verified": true,
-  "sensor_model": "<actual-enrolled-external-ST-VL53L8-series-model>",
+  "sensor_model": "VL53L8CH",
   "transient_kind": "COMPACT_NORMALIZED_HISTOGRAM",
   "sensor_configured_max_hz": "<frozen-number>",
-  "upstream_commit": "<full-40-hex-sha1>",
+  "upstream_commit": "15314de422a765a2d1b72ea7037dfafb2f908d7c",
   "protocol_sha256": "<nonzero-64-hex>",
   "capture_manifest_sha256": "<nonzero-64-hex>",
   "sensor_identity_sha256": "<nonzero-64-hex-scoped-enrollment-reference>",

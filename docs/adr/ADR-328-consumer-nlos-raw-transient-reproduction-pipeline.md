@@ -46,7 +46,8 @@ photon path, relay geometry, ambient-light behavior, or target reflectivity.
 
 ### 1. Reproduce upstream before modifying its inference state
 
-Phase 1 uses a pinned commit of the upstream implementation and a documented,
+Phase 1 uses upstream commit
+`15314de422a765a2d1b72ea7037dfafb2f908d7c` and a documented,
 upstream-compatible ST assembly with verified raw or compact-normalized
 histogram access. The current reference adapter targets VL53L8CH framing, but
 the acceptance record stores the observed board/silicon identity and never

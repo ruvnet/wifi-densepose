@@ -4,12 +4,17 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { evaluateResearchEvidence, NLOS_EVIDENCE_SCHEMA, NLOS_TRACK_SCHEMA } from '../src/nlos.js';
+import {
+  evaluateResearchEvidence,
+  NLOS_EVIDENCE_SCHEMA,
+  NLOS_REFERENCE_SENSOR_MODEL,
+  NLOS_TRACK_SCHEMA,
+  NLOS_UPSTREAM_COMMIT,
+} from '../src/nlos.js';
 import { runTool } from '../src/tools.js';
 import { run as cliRun } from '../bin/cli.js';
 
 const DIGEST = 'a'.repeat(64);
-const UPSTREAM_COMMIT = '0123456789abcdef0123456789abcdef01234567';
 
 function arm(updateHz, positionErrorM, lostTrackRate) {
   const evaluableDurationS = 100;
@@ -50,10 +55,10 @@ function passingEvidence(overrides = {}) {
     security_review_passed: true,
     los_exclusion_verified: true,
     independent_csi_verified: true,
-    sensor_model: 'VL53L8CH',
+    sensor_model: NLOS_REFERENCE_SENSOR_MODEL,
     transient_kind: 'COMPACT_NORMALIZED_HISTOGRAM',
     sensor_configured_max_hz: 30,
-    upstream_commit: UPSTREAM_COMMIT,
+    upstream_commit: NLOS_UPSTREAM_COMMIT,
     protocol_sha256: DIGEST,
     capture_manifest_sha256: DIGEST,
     sensor_identity_sha256: DIGEST,
@@ -179,13 +184,21 @@ test('research evidence rejects unknown and incomplete fields', () => {
   assert.ok(bounded.findings.includes('sensor_identity_sha256:invalid-or-zero'));
   assert.ok(bounded.findings.includes('lidar_only.update_hz:above-maximum'));
 
-  const appleClaim = evaluateResearchEvidence(passingEvidence({ sensor_model: 'iPhone15Pro' }));
-  assert.equal(appleClaim.pass, false);
-  assert.ok(appleClaim.findings.includes('sensor_model:v1-requires-enrolled-external-ST-VL53L8-series'));
+  for (const sensorModel of ['VL53L8CX', 'iPhone15Pro']) {
+    const wrongSensor = evaluateResearchEvidence(passingEvidence({ sensor_model: sensorModel }));
+    assert.equal(wrongSensor.pass, false);
+    assert.ok(wrongSensor.findings.includes('sensor_model:v1-requires-VL53L8CH'));
+  }
 
   const zeroCommit = evaluateResearchEvidence(passingEvidence({ upstream_commit: '0'.repeat(40) }));
   assert.equal(zeroCommit.pass, false);
   assert.ok(zeroCommit.findings.includes('upstream_commit:expected-nonzero-full-sha1'));
+
+  const wrongCommit = evaluateResearchEvidence(passingEvidence({
+    upstream_commit: '0123456789abcdef0123456789abcdef01234567',
+  }));
+  assert.equal(wrongCommit.pass, false);
+  assert.ok(wrongCommit.findings.includes('upstream_commit:must-match-pinned-baseline'));
 });
 
 test('research evidence recomputes loss and requires powered paired endpoint coverage', () => {

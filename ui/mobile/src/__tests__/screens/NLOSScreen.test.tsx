@@ -55,6 +55,9 @@ describe('NLOSScreen', () => {
     render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
     expect(screen.getByText('RuView NLOS')).toBeTruthy();
     expect(screen.getByText(/does not access raw iPhone LiDAR timing data/)).toBeTruthy();
+    expect(screen.getByTestId('nlos-maturity-boundary')).toBeTruthy();
+    expect(screen.getByText(/Physical VL53L8CH reproduction at 27 fps or better/)).toBeTruthy();
+    expect(screen.getByText(/Measured CSI fusion improvement of at least 25 percent/)).toBeTruthy();
   });
 
   it('always watermarks synthetic replay', () => {

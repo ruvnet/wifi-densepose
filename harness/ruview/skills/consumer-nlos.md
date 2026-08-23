@@ -18,10 +18,11 @@ WiFi CSI frame, or synthetic replay. Those inputs may provide pose, context,
 RF likelihoods, or deterministic software tests, but they do not contain the
 delayed optical multipath samples needed for NLOS inversion.
 
-The supported reproduction target is a pinned, upstream-compatible ST assembly
+The supported reproduction target is VL53L8CH on the pinned upstream commit
+`15314de422a765a2d1b72ea7037dfafb2f908d7c`, using a compatible ST assembly
 with verified raw or compact-normalized histogram access. Record the actual
 board/silicon/firmware/API identity rather than inferring it from the kit name.
-Pin the full upstream `sidsoma/consumer-nlos` commit, scoped enrollment
+Verify the full upstream `sidsoma/consumer-nlos` commit, scoped enrollment
 reference, firmware/configuration, calibration, capture manifests, analysis and
 RuView commit before comparing results.
 

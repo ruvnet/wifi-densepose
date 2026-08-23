@@ -81,6 +81,19 @@ export const NLOSScreen = () => {
           </ThemedText>
         </View>
 
+        <View testID="nlos-maturity-boundary" style={styles.maturityCard}>
+          <ThemedText preset="labelMd" style={{ color: colors.accent }}>SOFTWARE PREVIEW</ThemedText>
+          <ThemedText preset="bodySm">
+            The software path is implemented and locally validated. Research readiness remains blocked on:
+          </ThemedText>
+          <ThemedText preset="bodySm" color="textSecondary">OPEN · macOS native compilation</ThemedText>
+          <ThemedText preset="bodySm" color="textSecondary">OPEN · Physical VL53L8CH reproduction at 27 fps or better</ThemedText>
+          <ThemedText preset="bodySm" color="textSecondary">OPEN · Measured CSI fusion improvement of at least 25 percent</ThemedText>
+          <ThemedText preset="bodySm" color="textSecondary">
+            Builds, simulators, and synthetic replay do not close hardware or measured-fusion evidence gates.
+          </ThemedText>
+        </View>
+
         <ProvenancePanel frame={frame} freshness={freshness} streamStatus={streamStatus} />
 
         <View style={styles.visualizationCard}>
@@ -193,6 +206,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 10,
     padding: spacing.md,
+  },
+  maturityCard: {
+    backgroundColor: colors.surface,
+    borderColor: colors.accentDim,
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: spacing.md,
+    gap: spacing.sm,
   },
   visualizationCard: {
     position: 'relative',

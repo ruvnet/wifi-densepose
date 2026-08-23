@@ -11,6 +11,7 @@ struct ContentView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 18) {
+                    maturityCard
                     connectionCard
                     statusCard
                     visualizationCard
@@ -26,6 +27,19 @@ struct ContentView: View {
                     model.suspendForPrivacy()
                 }
             }
+        }
+    }
+
+    private var maturityCard: some View {
+        card(title: "Software preview") {
+            Text("The software path is implemented and locally validated. Research readiness remains blocked on these evidence gates:")
+                .font(.subheadline)
+            maturityGate("macOS native compilation")
+            maturityGate("Physical VL53L8CH reproduction at 27 fps or better")
+            maturityGate("Measured CSI fusion improvement of at least 25 percent")
+            Text("Builds, simulators, and synthetic replay do not close hardware or measured-fusion evidence gates.")
+                .font(.caption.bold())
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -227,6 +241,12 @@ struct ContentView: View {
             .foregroundStyle(availability == .available ? .green : .secondary)
         }
         .font(.subheadline)
+    }
+
+    private func maturityGate(_ title: String) -> some View {
+        Label("OPEN · \(title)", systemImage: "circle.dashed")
+            .font(.subheadline)
+            .foregroundStyle(.orange)
     }
 
     private func badge(_ text: String, color: Color) -> some View {

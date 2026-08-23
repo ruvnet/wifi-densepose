@@ -143,7 +143,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Swift protocol and security tests
-        run: swift test
+        run: swift test -Xswiftc -strict-concurrency=complete -Xswiftc -warnings-as-errors
 
       - name: Unsigned iOS Simulator build
         run: >-
@@ -153,6 +153,8 @@ jobs:
           -sdk iphonesimulator
           -destination 'generic/platform=iOS Simulator'
           CODE_SIGNING_ALLOWED=NO
+          SWIFT_STRICT_CONCURRENCY=complete
+          SWIFT_TREAT_WARNINGS_AS_ERRORS=YES
           build
 
   metaharness:

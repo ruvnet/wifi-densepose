@@ -13,6 +13,8 @@ import { redact } from './redact.js';
 
 export const NLOS_EVIDENCE_SCHEMA = 'ruview.nlos.acceptance.v1';
 export const NLOS_TRACK_SCHEMA = 'ruview.nlos.track.v1';
+export const NLOS_REFERENCE_SENSOR_MODEL = 'VL53L8CH';
+export const NLOS_UPSTREAM_COMMIT = '15314de422a765a2d1b72ea7037dfafb2f908d7c';
 
 const MAX_EVIDENCE_BYTES = 1024 * 1024;
 const MAX_SURFACE_FILE_BYTES = 4 * 1024 * 1024;
@@ -466,8 +468,8 @@ export function evaluateResearchEvidence(evidence) {
     'los_exclusion_verified', 'independent_csi_verified',
   ]) if (evidence[field] !== true) findings.push(`${field}:must-be-true`);
   if (!SAFE_LABEL.test(String(evidence.sensor_model || ''))) findings.push('sensor_model:invalid');
-  if (!/^VL53L8[A-Za-z0-9._:+-]*$/.test(String(evidence.sensor_model || ''))) {
-    findings.push('sensor_model:v1-requires-enrolled-external-ST-VL53L8-series');
+  if (evidence.sensor_model !== NLOS_REFERENCE_SENSOR_MODEL) {
+    findings.push(`sensor_model:v1-requires-${NLOS_REFERENCE_SENSOR_MODEL}`);
   }
   if (evidence.transient_kind !== 'COMPACT_NORMALIZED_HISTOGRAM'
     && evidence.transient_kind !== 'RAW_PHOTON_HISTOGRAM') {
@@ -480,6 +482,8 @@ export function evaluateResearchEvidence(evidence) {
   if (!GIT_SHA1.test(String(evidence.upstream_commit || ''))
     || ZERO_GIT_SHA1.test(String(evidence.upstream_commit || ''))) {
     findings.push('upstream_commit:expected-nonzero-full-sha1');
+  } else if (evidence.upstream_commit !== NLOS_UPSTREAM_COMMIT) {
+    findings.push('upstream_commit:must-match-pinned-baseline');
   }
   for (const field of [
     'protocol_sha256', 'capture_manifest_sha256', 'sensor_identity_sha256',
@@ -650,7 +654,7 @@ export function makeNlosPlan({ repoRoot = null } = {}) {
     phases: [
       {
         id: 1, name: 'Upstream reproduction',
-        input: 'Pinned upstream-compatible ST kit with verified compact normalized histogram access and recorded silicon identity',
+        input: `Pinned ${NLOS_REFERENCE_SENSOR_MODEL} baseline at ${NLOS_UPSTREAM_COMMIT} with verified compact normalized histogram access and recorded silicon identity`,
         exit: 'LIVE_HARDWARE hidden-target tracking at >=27 Hz with frozen capture provenance',
       },
       {

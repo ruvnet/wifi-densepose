@@ -132,8 +132,9 @@ does not embed, sensitive captures. Required fields include:
 1. exact schema, `LIVE_HARDWARE` provenance, `MEASURED` claim tag, L2 evidence
    level, and `EXTERNAL` ground truth;
 2. protocol-frozen-before-capture flag;
-3. enrolled external ST VL53L8-series sensor-model label for v1, verified raw/CNH transient kind, full
-   upstream SHA-1, and SHA-256 digests for protocol, firmware/API, combined and
+3. enrolled external ST VL53L8CH sensor-model label for v1, verified raw/CNH
+   transient kind, pinned upstream SHA-1, and SHA-256 digests for protocol,
+   firmware/API, combined and
    CSI capture manifests, scoped enrolled identities, calibration and analysis;
 4. zero synthetic frames and zero replay frames in the scored set;
 5. independently verified CSI, a CSI-only ablation, at least one CSI source and

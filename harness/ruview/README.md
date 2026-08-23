@@ -68,9 +68,10 @@ checkout: the environment is allowlisted and tails redacted, but Cargo/Swift/
 Jest/Expo execution is not a sandbox.
 
 The research gate accepts only a preregistered `LIVE_HARDWARE` record with an
-external ground-truth capture manifest. It requires the LiDAR-only arm to run at
-least 27 Hz and CSI fusion to reduce mean position error or lost-track rate by
-at least 25 percent over 100 or more paired sequences, with adjusted confidence,
+external ground-truth capture manifest. It requires the pinned VL53L8CH
+baseline to run at least 27 Hz and CSI fusion to reduce mean position error or
+lost-track rate by at least 25 percent over 100 or more paired sequences, with
+adjusted confidence,
 paired aggregate arithmetic, independent CSI ablation, frozen guardrails, and
 witness/privacy/security report digests. `SYNTHETIC` and replay
 frames can validate software, but can never pass that gate:
