@@ -45,6 +45,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
+          toolchain: '1.89'
           components: rustfmt, clippy
 
       - name: Cache Cargo
