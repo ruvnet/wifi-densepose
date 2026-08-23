@@ -1,6 +1,6 @@
 import { Linking, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { InstrumentPanel, instrumentColors } from '@/components/InstrumentPanel';
 import { ThemedText } from '@/components/ThemedText';
-import { colors } from '@/theme/colors';
 import { spacing } from '@/theme/spacing';
 
 export const NLOS_EXPLAINER_URL = 'https://ruview-nlos.ruv.chatgpt.site';
@@ -65,8 +65,19 @@ const openTrustedUrl = async (url: string): Promise<void> => {
   }
 };
 
-const LinkButton = ({ label, url, primary = false }: { label: string; url: string; primary?: boolean }) => (
+const LinkButton = ({
+  label,
+  url,
+  primary = false,
+  testID,
+}: {
+  label: string;
+  url: string;
+  primary?: boolean;
+  testID?: string;
+}) => (
   <Pressable
+    testID={testID}
     accessibilityRole="link"
     accessibilityLabel={label}
     accessibilityHint="Opens in your browser"
@@ -83,13 +94,18 @@ export const BetaSetupCard = () => {
   const guidance = getBetaPlatformGuidance(currentBetaPlatform());
 
   return (
-    <View testID="nlos-beta-setup" style={styles.card} accessibilityLabel="RuView NLOS beta setup">
+    <InstrumentPanel
+      testID="nlos-beta-setup"
+      eyebrow="Governed beta protocol"
+      style={styles.card}
+      accessibilityLabel="RuView NLOS beta setup"
+    >
       <View style={styles.headingRow}>
-        <ThemedText preset="labelLg">BETA SETUP</ThemedText>
+        <ThemedText preset="labelLg" style={styles.sectionLabel}>BETA SETUP</ThemedText>
         <ThemedText preset="labelMd" style={styles.platformBadge}>{guidance.label}</ThemedText>
       </View>
 
-      <ThemedText preset="bodyLg" style={styles.title}>Start a governed test in about five minutes</ThemedText>
+      <ThemedText preset="displayMd" style={styles.title}>Start a governed test in about five minutes</ThemedText>
 
       <View style={styles.steps}>
         {guidance.steps.map((step, index) => (
@@ -102,41 +118,53 @@ export const BetaSetupCard = () => {
 
       <View style={styles.boundary}>
         <ThemedText preset="labelMd" style={styles.boundaryLabel}>CAPABILITY BOUNDARY</ThemedText>
-        <ThemedText preset="bodyMd">
+        <ThemedText preset="bodyMd" style={styles.boundaryCopy}>
           The web client cannot capture ARKit LiDAR or raw timing data. It only displays synthetic replay or validated tracks produced by a RuView server.
         </ThemedText>
       </View>
 
-      <ThemedText preset="bodyMd" color="textSecondary">
-        Compatibility: any supported device can view tracks. A LiDAR equipped iPhone Pro or iPad Pro is needed only for separately assigned hardware capability checks.
-      </ThemedText>
-      <ThemedText preset="bodyMd" color="textSecondary">
-        Evidence labels: L0 synthetic, L1 measured, L2 calibrated, or L3 corroborated, plus fresh, stale, or unknown. Depth only input is never physical NLOS evidence.
-      </ThemedText>
+      <View style={styles.compatibilityGrid}>
+        <View style={styles.compatibilityCell}>
+          <ThemedText preset="mono" style={styles.cellLabel}>DEVICE</ThemedText>
+          <ThemedText preset="bodySm" style={styles.cellCopy}>
+            Compatibility: any supported device can view tracks. A LiDAR equipped iPhone Pro or iPad Pro is needed only for separately assigned hardware capability checks.
+          </ThemedText>
+        </View>
+        <View style={styles.compatibilityCell}>
+          <ThemedText preset="mono" style={styles.cellLabel}>EVIDENCE</ThemedText>
+          <ThemedText preset="bodySm" style={styles.cellCopy}>
+            Evidence labels: L0 synthetic, L1 measured, L2 calibrated, or L3 corroborated, plus fresh, stale, or unknown. Depth only input is never physical NLOS evidence.
+          </ThemedText>
+        </View>
+      </View>
 
       <View style={styles.links}>
         {guidance.showTestFlightButton && (
           <LinkButton label="INSTALL TESTFLIGHT" url={TESTFLIGHT_APP_URL} primary />
         )}
-        <LinkButton label="OPEN EXPLAINER" url={NLOS_EXPLAINER_URL} primary={!guidance.showTestFlightButton} />
-        <LinkButton label="TEST STEPS AND FEEDBACK" url={NLOS_FEEDBACK_URL} />
+        <LinkButton
+          testID="nlos-explainer-link"
+          label="OPEN EXPLAINER"
+          url={NLOS_EXPLAINER_URL}
+          primary={!guidance.showTestFlightButton}
+        />
+        <LinkButton
+          testID="nlos-feedback-link"
+          label="TEST STEPS AND FEEDBACK"
+          url={NLOS_FEEDBACK_URL}
+        />
       </View>
 
-      <ThemedText preset="bodySm" color="textSecondary">
+      <ThemedText preset="bodySm" style={styles.retentionNote}>
         No credentials are saved by setup. Live pairing credentials remain in memory only and can be forgotten at any time.
       </ThemedText>
-    </View>
+    </InstrumentPanel>
   );
 };
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: colors.surface,
-    borderColor: colors.accentDim,
-    borderWidth: 1,
-    borderRadius: 12,
-    padding: spacing.lg,
-    gap: spacing.md,
+    backgroundColor: instrumentColors.panelRaised,
   },
   headingRow: {
     flexDirection: 'row',
@@ -145,48 +173,84 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: spacing.sm,
   },
+  sectionLabel: { color: instrumentColors.text },
   platformBadge: {
-    color: colors.accent,
-    borderColor: colors.accentDim,
+    color: instrumentColors.cyan,
+    borderColor: instrumentColors.cyanDim,
     borderWidth: 1,
     borderRadius: 999,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
-  title: { lineHeight: 23 },
+  title: {
+    maxWidth: 300,
+    color: instrumentColors.text,
+    fontSize: 25,
+    lineHeight: 30,
+    letterSpacing: -0.45,
+  },
   steps: { gap: spacing.sm },
-  stepRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
+  stepRow: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    borderBottomColor: instrumentColors.grid,
+    borderBottomWidth: 1,
+    paddingBottom: spacing.sm,
+  },
   stepNumber: {
-    color: colors.bg,
-    backgroundColor: colors.accent,
+    color: instrumentColors.background,
+    backgroundColor: instrumentColors.cyan,
     borderRadius: 999,
-    width: 24,
-    height: 24,
-    lineHeight: 24,
+    width: 28,
+    height: 28,
+    lineHeight: 28,
     textAlign: 'center',
   },
-  stepText: { flex: 1, lineHeight: 21 },
+  stepText: { flex: 1, lineHeight: 21, color: instrumentColors.text },
   boundary: {
-    backgroundColor: 'rgba(255, 165, 2, 0.08)',
-    borderLeftColor: colors.warn,
+    backgroundColor: 'rgba(255, 182, 92, 0.07)',
+    borderColor: 'rgba(255, 182, 92, 0.24)',
+    borderWidth: 1,
+    borderLeftColor: instrumentColors.warning,
     borderLeftWidth: 3,
+    borderRadius: 10,
     padding: spacing.md,
     gap: spacing.xs,
   },
-  boundaryLabel: { color: colors.warn },
+  boundaryLabel: { color: instrumentColors.warning },
+  boundaryCopy: { color: instrumentColors.text },
+  compatibilityGrid: { gap: spacing.sm },
+  compatibilityCell: {
+    backgroundColor: 'rgba(5, 9, 13, 0.38)',
+    borderColor: instrumentColors.border,
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: spacing.md,
+    gap: spacing.xs,
+  },
+  cellLabel: {
+    color: instrumentColors.green,
+    fontSize: 10,
+    letterSpacing: 1.2,
+  },
+  cellCopy: { color: instrumentColors.textSecondary, lineHeight: 18 },
   links: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   linkButton: {
-    minHeight: 44,
+    minHeight: 48,
     flexGrow: 1,
+    flexBasis: 150,
     alignItems: 'center',
     justifyContent: 'center',
-    borderColor: colors.accent,
+    borderColor: instrumentColors.cyanDim,
     borderWidth: 1,
-    borderRadius: 8,
+    borderRadius: 10,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
-  linkButtonPrimary: { backgroundColor: colors.accent },
-  linkButtonText: { color: colors.accent, textAlign: 'center' },
-  linkButtonPrimaryText: { color: colors.bg, textAlign: 'center' },
+  linkButtonPrimary: { backgroundColor: instrumentColors.cyan },
+  linkButtonText: { color: instrumentColors.cyan, textAlign: 'center' },
+  linkButtonPrimaryText: { color: instrumentColors.background, textAlign: 'center' },
+  retentionNote: { color: instrumentColors.textSecondary, lineHeight: 18 },
 });

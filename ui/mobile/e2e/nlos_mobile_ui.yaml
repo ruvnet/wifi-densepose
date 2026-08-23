@@ -1,0 +1,39 @@
+appId: com.ruvnet.wifidensepose
+name: RuView NLOS instrument UI evidence flow
+---
+- launchApp:
+    clearState: true
+- tapOn: "NLOS"
+- assertVisible:
+    id: "nlos-evidence-state"
+- scrollUntilVisible:
+    element:
+      id: "nlos-start-synthetic"
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: "nlos-start-synthetic"
+- extendedWaitUntil:
+    visible:
+      id: "nlos-synthetic-watermark"
+    timeout: 5000
+- assertVisible:
+    id: "nlos-synthetic-watermark"
+- assertVisible:
+    id: "nlos-evidence-state"
+- scrollUntilVisible:
+    element:
+      id: "nlos-beta-setup"
+    direction: DOWN
+    timeout: 10000
+- assertVisible:
+    id: "nlos-beta-setup"
+- scrollUntilVisible:
+    element:
+      id: "nlos-feedback-link"
+    direction: DOWN
+    timeout: 10000
+- assertVisible:
+    id: "nlos-feedback-link"
+- assertVisible:
+    id: "nlos-explainer-link"

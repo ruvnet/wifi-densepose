@@ -11,8 +11,10 @@ on:
       - 'docs/adr/ADR-32[8-9]*'
       - 'docs/adr/ADR-33[0-1]*'
       - 'docs/adr/ADR-341-consumer-nlos-beta-tester-delivery-and-diagnostics.md'
+      - 'docs/adr/ADR-342-cognitum-inspired-mobile-instrument-ui.md'
       - 'docs/research/consumer-nlos-acceptance-protocol.md'
       - 'docs/research/consumer-nlos-beta-test-protocol.md'
+      - 'docs/screenshots/consumer-nlos-mobile-ui/**'
       - 'docs/schemas/ruview-nlos-*.schema.json'
       - 'docs/schemas/ruview-ios-visible-depth-diagnostic-v1.schema.json'
       - 'docs/security/consumer-nlos-threat-model.md'
@@ -27,6 +29,8 @@ on:
       - 'ui/mobile/**'
       - 'harness/ruview/**'
       - 'docs/**consumer-nlos*'
+      - 'docs/adr/ADR-342-cognitum-inspired-mobile-instrument-ui.md'
+      - 'docs/screenshots/consumer-nlos-mobile-ui/**'
       - 'docs/schemas/ruview-ios-visible-depth-diagnostic-v1.schema.json'
       - '.github/workflows/consumer-nlos-ci.yml'
       - 'v2/Cargo.toml'
@@ -118,6 +122,20 @@ jobs:
       - run: npm test -- --runInBand
       - run: npx tsc --noEmit
       - run: npm run lint
+      - name: Install pinned Playwright Chromium
+        run: ./node_modules/.bin/playwright install --with-deps chromium
+      - name: Run production browser E2E and reproduce mobile screenshots
+        run: npm run e2e:web
+      - name: Upload browser E2E review evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: consumer-nlos-mobile-ui-browser-${{ github.sha }}
+          path: |
+            docs/screenshots/consumer-nlos-mobile-ui
+            ui/mobile/test-results/playwright
+          if-no-files-found: warn
+          retention-days: 14
       - name: Export browser bundle
         run: npx expo export --platform web
       - name: Export Expo iOS bundle
@@ -135,6 +153,142 @@ jobs:
           }
           console.log(JSON.stringify(report.metadata?.vulnerabilities ?? {}, null, 2));
           JS
+
+  mobile-ui-contract:
+    name: Mobile UI ADR, E2E, and screenshot contract
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate UI-only architecture and deterministic review evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import re
+          import struct
+          from pathlib import Path
+
+          adr_path = Path(
+              "docs/adr/ADR-342-cognitum-inspired-mobile-instrument-ui.md"
+          )
+          flow_path = Path("ui/mobile/e2e/nlos_mobile_ui.yaml")
+          screenshot_dir = Path("docs/screenshots/consumer-nlos-mobile-ui")
+
+          adr = adr_path.read_text(encoding="utf-8")
+          required_sections = (
+              "## Context",
+              "## Specification",
+              "## Pseudocode and state transitions",
+              "## Architecture",
+              "## Decision",
+              "## Alternatives with quantified tradeoffs",
+              "## Accessibility",
+              "## Security and privacy",
+              "## Performance budgets",
+              "## Refinement and failure handling",
+              "## Requirement to evidence mapping",
+              "## Rollout and rollback",
+              "## Acceptance test",
+          )
+          for section in required_sections:
+              assert section in adr, f"missing ADR section: {section}"
+
+          required_adr_contract = (
+              "UI-only",
+              "feat/consumer-nlos-ruview",
+              "Cognitum Explain",
+              "No Cognitum name, logo, wordmark",
+              "SYNTHETIC",
+              "LIVE VERIFIED",
+              "LIVE UNVERIFIED",
+              "STALE",
+              "DISCONNECTED",
+              "390 by 844",
+              "44 by 44 points",
+              "under 1.5 seconds",
+              "under 100 milliseconds",
+              "zero runtime dependency",
+              "physical iPhone validation pending",
+          )
+          for phrase in required_adr_contract:
+              assert phrase in adr, f"missing mobile UI contract: {phrase}"
+
+          flow = flow_path.read_text(encoding="utf-8")
+          required_flow_contract = (
+              "appId:",
+              "---",
+              "launchApp:",
+              "tapOn:",
+              "assertVisible:",
+              "nlos-evidence-state",
+              "nlos-synthetic-watermark",
+              "nlos-beta-setup",
+          )
+          for token in required_flow_contract:
+              assert token in flow, f"missing Maestro UI contract token: {token}"
+
+          screen_sources = "\n".join(
+              path.read_text(encoding="utf-8")
+              for path in sorted(Path("ui/mobile/src/screens/NLOSScreen").glob("*.tsx"))
+          )
+          for test_id in (
+              "nlos-evidence-state",
+              "nlos-synthetic-watermark",
+              "nlos-beta-setup",
+          ):
+              assert test_id in screen_sources, f"missing screen contract: {test_id}"
+          for state in (
+              "SYNTHETIC",
+              "LIVE VERIFIED",
+              "LIVE UNVERIFIED",
+              "STALE",
+              "DISCONNECTED",
+          ):
+              assert state in screen_sources, f"missing evidence state: {state}"
+
+          state_type = re.search(
+              r"export type NlosEvidenceState\s*=\s*(.*?);",
+              screen_sources,
+              re.DOTALL,
+          )
+          assert state_type, "missing NlosEvidenceState type contract"
+          actual_states = set(re.findall(r"'([^']+)'", state_type.group(1)))
+          expected_states = {
+              "SYNTHETIC",
+              "LIVE VERIFIED",
+              "LIVE UNVERIFIED",
+              "STALE",
+              "DISCONNECTED",
+          }
+          assert actual_states == expected_states, (
+              f"evidence state taxonomy drift: {sorted(actual_states)}"
+          )
+
+          def png_dimensions(path):
+              data = path.read_bytes()
+              assert data.startswith(b"\x89PNG\r\n\x1a\n"), f"not a PNG: {path}"
+              assert data[12:16] == b"IHDR", f"missing PNG IHDR: {path}"
+              return struct.unpack(">II", data[16:24])
+
+          expected_screenshots = (
+              "overview-390x844.png",
+              "synthetic-390x844.png",
+              "setup-390x844.png",
+          )
+          for name in expected_screenshots:
+              path = screenshot_dir / name
+              assert path.is_file(), f"missing screenshot baseline: {path}"
+              assert png_dimensions(path) == (390, 844), (
+                  f"wrong screenshot dimensions for {path}: {png_dimensions(path)}"
+              )
+
+          print(
+              "Validated ADR 342, Maestro UI contract, five evidence states, "
+              "and three 390x844 PNG baselines"
+          )
+          PY
 
   native-ios:
     name: Native Swift, simulator, and unsigned archive dry gate

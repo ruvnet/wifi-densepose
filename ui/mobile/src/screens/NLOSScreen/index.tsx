@@ -1,32 +1,63 @@
 import { useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
+import {
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  useWindowDimensions,
+  View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  InstrumentGrid,
+  InstrumentPanel,
+  instrumentColors,
+} from '@/components/InstrumentPanel';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useNlosStream } from '@/hooks/useNlosStream';
-import { colors } from '@/theme/colors';
 import { spacing } from '@/theme/spacing';
-import { HiddenTargetVisualization, type NlosViewMode } from './HiddenTargetVisualization';
 import { BetaSetupCard } from './BetaSetupCard';
-import { ProvenancePanel } from './ProvenancePanel';
+import { HiddenTargetVisualization, type NlosViewMode } from './HiddenTargetVisualization';
+import { ProvenancePanel, resolveNlosEvidenceState } from './ProvenancePanel';
 
-const ViewModePicker = ({ value, onChange }: { value: NlosViewMode; onChange: (value: NlosViewMode) => void }) => (
-  <View style={styles.picker}>
+const ViewModePicker = ({
+  value,
+  onChange,
+}: {
+  value: NlosViewMode;
+  onChange: (value: NlosViewMode) => void;
+}) => (
+  <View accessibilityRole="tablist" style={styles.picker}>
     {(['plan', 'perspective'] as const).map((option) => {
       const selected = option === value;
       return (
         <Pressable
           key={option}
+          testID={`nlos-view-${option}`}
           accessibilityRole="button"
           accessibilityState={{ selected }}
           onPress={() => onChange(option)}
           style={[styles.pickerButton, selected && styles.pickerButtonSelected]}
         >
-          <ThemedText preset="labelMd" style={{ color: selected ? colors.accent : colors.textSecondary }}>
+          <ThemedText
+            preset="mono"
+            style={{ color: selected ? instrumentColors.cyan : instrumentColors.textSecondary }}
+          >
             {option === 'plan' ? '2D PLAN' : '3D VIEW'}
           </ThemedText>
         </Pressable>
       );
     })}
+  </View>
+);
+
+const ScopeChip = ({ label, accent = false }: { label: string; accent?: boolean }) => (
+  <View style={[styles.scopeChip, accent && styles.scopeChipAccent]}>
+    <View style={[styles.scopeDot, accent && styles.scopeDotAccent]} />
+    <ThemedText preset="mono" style={[styles.scopeLabel, accent && styles.scopeLabelAccent]}>
+      {label}
+    </ThemedText>
   </View>
 );
 
@@ -47,14 +78,26 @@ export const NLOSScreen = () => {
   const [credentialDraft, setCredentialDraft] = useState('');
   const [credentialError, setCredentialError] = useState(false);
   const { width } = useWindowDimensions();
-  const visualizationWidth = useMemo(() => width - spacing.md * 2, [width]);
+  const safeAreaInsets = useSafeAreaInsets();
+  const visualizationWidth = useMemo(
+    () => Math.max(
+      260,
+      Math.min(width - safeAreaInsets.left - safeAreaInsets.right - spacing.xxxl - 4, 520),
+    ),
+    [safeAreaInsets.left, safeAreaInsets.right, width],
+  );
+  const evidenceState = resolveNlosEvidenceState(frame, freshness, streamStatus);
   const isSynthetic = frame?.source === 'synthetic';
+  const geometryDisplayable = evidenceState === 'SYNTHETIC' || evidenceState === 'LIVE VERIFIED';
   const visibleTracks = useMemo(
-    () => freshness === 'fresh'
+    () => geometryDisplayable
       ? frame?.tracks.filter((track) => track.state !== 'unknown') ?? []
       : [],
-    [frame, freshness],
+    [frame, geometryDisplayable],
   );
+  const meanConfidence = visibleTracks.length
+    ? `${Math.round(visibleTracks.reduce((sum, track) => sum + track.confidence, 0) / visibleTracks.length * 100)}%`
+    : 'N/A';
   const credentialLengthValid = credentialDraft.length >= 32 && credentialDraft.length <= 512;
 
   const handleConfigureCredential = () => {
@@ -65,77 +108,139 @@ export const NLOSScreen = () => {
 
   return (
     <ThemedView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.header}>
-          <View style={{ flex: 1 }}>
-            <ThemedText preset="displayMd">RuView NLOS</ThemedText>
-            <ThemedText preset="bodySm" color="textSecondary">
-              Hidden target hypotheses from a RuView reconstruction server
-            </ThemedText>
+      <InstrumentGrid />
+      <ScrollView
+        testID="nlos-scroll-view"
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[
+          styles.content,
+          {
+            paddingTop: spacing.xxl + safeAreaInsets.top,
+            paddingRight: spacing.lg + safeAreaInsets.right,
+            paddingBottom: 72 + safeAreaInsets.bottom,
+            paddingLeft: spacing.lg + safeAreaInsets.left,
+          },
+        ]}
+      >
+        <View style={styles.brandBar}>
+          <View style={styles.brandIdentity}>
+            <View style={styles.brandMark}>
+              <View style={styles.brandMarkCore} />
+            </View>
+            <View>
+              <ThemedText preset="labelLg" style={styles.brandName}>RuView NLOS</ThemedText>
+              <ThemedText preset="mono" style={styles.brandCaption}>MOBILE INSTRUMENT / 01</ThemedText>
+            </View>
           </View>
-          <ThemedText preset="labelMd" style={{ color: colors.accent }}>LABS</ThemedText>
+          <ThemedText preset="mono" style={styles.labsBadge}>LABS</ThemedText>
         </View>
 
-        <BetaSetupCard />
-
-        <View style={styles.notice}>
-          <ThemedText preset="bodySm" style={{ color: colors.warn }}>
-            This client does not access raw iPhone LiDAR timing data. Safari and Expo display authenticated RuView track frames or visibly watermarked synthetic replay only.
+        <InstrumentPanel eyebrow="Consumer NLOS / field viewer" style={styles.hero}>
+          <ThemedText preset="displayLg" style={styles.heroTitle}>Track hidden space</ThemedText>
+          <ThemedText preset="displayLg" style={styles.heroAccent}>hypotheses.</ThemedText>
+          <ThemedText preset="bodyLg" style={styles.heroCopy}>
+            Inspect validated reconstruction frames with explicit source, freshness, and confidence. No camera equivalence is implied.
           </ThemedText>
+          <View style={styles.scopeRow}>
+            <ScopeChip label="VIEWER ONLY" />
+            <ScopeChip label="FAIL CLOSED" accent />
+          </View>
+        </InstrumentPanel>
+
+        <View testID="nlos-capability-boundary" style={styles.notice}>
+          <View style={styles.noticeIcon}>
+            <ThemedText preset="mono" style={styles.noticeIconText}>!</ThemedText>
+          </View>
+          <View style={styles.noticeCopy}>
+            <ThemedText preset="mono" style={styles.noticeLabel}>SENSOR BOUNDARY</ThemedText>
+            <ThemedText preset="bodySm" style={styles.noticeText}>
+              This client does not access raw iPhone LiDAR timing data. Safari and Expo display authenticated RuView track frames or visibly watermarked synthetic replay only.
+            </ThemedText>
+          </View>
         </View>
 
         <ProvenancePanel frame={frame} freshness={freshness} streamStatus={streamStatus} />
 
-        <View style={styles.visualizationCard}>
+        <InstrumentPanel
+          eyebrow="Spatial return"
+          accessory={<ThemedText preset="mono" style={styles.panelIndex}>FRAME / 01</ThemedText>}
+          style={styles.visualizationCard}
+        >
           <ViewModePicker value={viewMode} onChange={setViewMode} />
-          <HiddenTargetVisualization
-            tracks={visibleTracks}
-            freshness={freshness}
-            mode={viewMode}
-            width={visualizationWidth}
-          />
-          {isSynthetic && (
-            <View testID="nlos-synthetic-watermark" pointerEvents="none" style={styles.watermark}>
-              <ThemedText preset="displayMd" style={styles.watermarkText}>SYNTHETIC</ThemedText>
-            </View>
-          )}
-          {freshness === 'stale' && (
-            <View testID="nlos-stale-overlay" pointerEvents="none" style={styles.staleOverlay}>
-              <ThemedText preset="labelLg" style={{ color: colors.danger }}>STALE FRAME</ThemedText>
-            </View>
-          )}
-        </View>
+          <View style={styles.visualizationStage}>
+            <HiddenTargetVisualization
+              tracks={visibleTracks}
+              freshness={freshness}
+              mode={viewMode}
+              width={visualizationWidth}
+            />
+            {isSynthetic && (
+              <View testID="nlos-synthetic-watermark" pointerEvents="none" style={styles.watermark}>
+                <ThemedText preset="displayMd" style={styles.watermarkText}>SYNTHETIC</ThemedText>
+              </View>
+            )}
+            {freshness === 'stale' && (
+              <View testID="nlos-stale-overlay" pointerEvents="none" style={styles.staleOverlay}>
+                <ThemedText preset="labelLg" style={styles.staleText}>STALE FRAME</ThemedText>
+                <ThemedText preset="bodySm" style={styles.staleCaption}>Targets hidden until fresh evidence arrives</ThemedText>
+              </View>
+            )}
+          </View>
 
-        <View style={styles.summaryRow}>
-          <View style={styles.metric}>
-            <ThemedText testID="nlos-track-count" preset="displayMd">{visibleTracks.length}</ThemedText>
-            <ThemedText preset="bodySm" color="textSecondary">TRACKS</ThemedText>
+          <View style={styles.summaryRow}>
+            <View style={styles.metric}>
+              <ThemedText testID="nlos-track-count" preset="displayMd" style={styles.metricValue}>
+                {visibleTracks.length}
+              </ThemedText>
+              <ThemedText preset="mono" style={styles.metricLabel}>GATED TRACKS</ThemedText>
+            </View>
+            <View style={styles.metricDivider} />
+            <View style={styles.metric}>
+              <ThemedText testID="nlos-mean-confidence" preset="displayMd" style={styles.metricValue}>
+                {meanConfidence}
+              </ThemedText>
+              <ThemedText preset="mono" style={styles.metricLabel}>MEAN CONF.</ThemedText>
+            </View>
           </View>
-          <View style={styles.metric}>
-            <ThemedText testID="nlos-mean-confidence" preset="displayMd">
-              {visibleTracks.length ? `${Math.round(visibleTracks.reduce((sum, track) => sum + track.confidence, 0) / visibleTracks.length * 100)}%` : 'N/A'}
-            </ThemedText>
-            <ThemedText preset="bodySm" color="textSecondary">MEAN CONFIDENCE</ThemedText>
-          </View>
-        </View>
+        </InstrumentPanel>
 
         <View style={styles.actions}>
-          <Pressable accessibilityRole="button" onPress={startReplay} style={styles.secondaryButton}>
-            <ThemedText preset="labelMd">USE SYNTHETIC REPLAY</ThemedText>
+          <Pressable
+            testID="nlos-start-synthetic"
+            accessibilityRole="button"
+            accessibilityLabel="USE SYNTHETIC REPLAY"
+            onPress={startReplay}
+            style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
+          >
+            <View style={styles.buttonLabelRow}>
+              <View style={styles.syntheticButtonDot} />
+              <ThemedText preset="labelMd" style={styles.secondaryButtonText}>USE SYNTHETIC REPLAY</ThemedText>
+            </View>
+            <ThemedText preset="bodySm" style={styles.buttonCaption}>Deterministic and watermarked</ThemedText>
           </Pressable>
           <Pressable
+            testID="nlos-connect-live"
             accessibilityRole="button"
+            accessibilityLabel="CONNECT AUTHENTICATED LIVE"
             disabled={!liveCredentialAvailable}
             onPress={connectLive}
-            style={[styles.liveButton, !liveCredentialAvailable && styles.disabledButton]}
+            style={({ pressed }) => [
+              styles.liveButton,
+              !liveCredentialAvailable && styles.disabledButton,
+              pressed && liveCredentialAvailable && styles.buttonPressed,
+            ]}
           >
-            <ThemedText preset="labelMd" style={{ color: colors.bg }}>CONNECT AUTHENTICATED LIVE</ThemedText>
+            <ThemedText preset="labelMd" style={styles.liveButtonText}>CONNECT AUTHENTICATED LIVE</ThemedText>
+            <ThemedText preset="bodySm" style={styles.liveButtonCaption}>Ephemeral credential required</ThemedText>
           </Pressable>
         </View>
 
         {!liveCredentialAvailable ? (
-          <View style={styles.credentialCard}>
-            <ThemedText preset="labelMd">EPHEMERAL LIVE CREDENTIAL</ThemedText>
+          <InstrumentPanel eyebrow="Secure live pairing" style={styles.credentialCard}>
+            <ThemedText preset="bodyMd" style={styles.credentialIntro}>
+              Enter a coordinator supplied credential to unlock the authenticated stream for this session.
+            </ThemedText>
             <TextInput
               testID="nlos-credential-input"
               accessibilityLabel="Ephemeral NLOS Bearer credential"
@@ -151,34 +256,60 @@ export const NLOSScreen = () => {
               textContentType="oneTimeCode"
               maxLength={512}
               placeholder="32 to 512 character pairing credential"
-              placeholderTextColor={colors.textSecondary}
+              placeholderTextColor={instrumentColors.textSecondary}
               style={[styles.credentialInput, credentialError && styles.credentialInputError]}
             />
             <Pressable
+              testID="nlos-unlock-live"
               accessibilityRole="button"
+              accessibilityLabel="UNLOCK AUTHENTICATED LIVE"
               disabled={!credentialLengthValid}
               onPress={handleConfigureCredential}
-              style={[styles.credentialButton, !credentialLengthValid && styles.disabledButton]}
+              style={({ pressed }) => [
+                styles.credentialButton,
+                !credentialLengthValid && styles.disabledButton,
+                pressed && credentialLengthValid && styles.buttonPressed,
+              ]}
             >
-              <ThemedText preset="labelMd">UNLOCK AUTHENTICATED LIVE</ThemedText>
+              <ThemedText preset="labelMd" style={styles.credentialButtonText}>UNLOCK AUTHENTICATED LIVE</ThemedText>
             </Pressable>
-            <ThemedText preset="bodySm" color="textSecondary">
+            <ThemedText preset="bodySm" style={styles.credentialNote}>
               A native host or signed in web session may supply this credential automatically. It is held in memory only, sent solely in the ticket request Authorization header, and never stored by this client.
             </ThemedText>
-          </View>
+          </InstrumentPanel>
         ) : (
           <View style={styles.credentialReadyRow}>
-            <ThemedText preset="bodySm" style={{ color: colors.success }}>EPHEMERAL CREDENTIAL READY</ThemedText>
-            <Pressable accessibilityRole="button" onPress={forgetCredential}>
-              <ThemedText preset="labelMd" color="textSecondary">FORGET</ThemedText>
+            <View style={styles.readyIdentity}>
+              <View style={styles.readyDot} />
+              <ThemedText preset="bodySm" style={styles.readyText}>EPHEMERAL CREDENTIAL READY</ThemedText>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Forget ephemeral credential"
+              onPress={forgetCredential}
+              style={styles.forgetButton}
+            >
+              <ThemedText preset="labelMd" style={styles.forgetText}>FORGET</ThemedText>
             </Pressable>
           </View>
         )}
+
         {lastRejectedReason && (
-          <ThemedText testID="nlos-rejection" preset="bodySm" style={{ color: colors.danger }}>
-            Rejected {rejectedFrameCount} frame{rejectedFrameCount === 1 ? '' : 's'}; latest reason: {lastRejectedReason}
-          </ThemedText>
+          <View style={styles.rejectionCard}>
+            <ThemedText testID="nlos-rejection" preset="bodySm" style={styles.rejectionText}>
+              Rejected {rejectedFrameCount} frame{rejectedFrameCount === 1 ? '' : 's'}; latest reason: {lastRejectedReason}
+            </ThemedText>
+          </View>
         )}
+
+        <BetaSetupCard />
+
+        <View testID="nlos-privacy-legend" style={styles.privacyLegend}>
+          <ThemedText preset="mono" style={styles.privacyLabel}>PRIVACY DEFAULTS</ThemedText>
+          <ThemedText preset="bodySm" style={styles.privacyCopy}>
+            Viewer retention: raw RF off, audio off, pairing credential memory only. Connected servers require their own consent and retention controls.
+          </ThemedText>
+        </View>
       </ScrollView>
     </ThemedView>
   );
@@ -187,40 +318,257 @@ export const NLOSScreen = () => {
 export default NLOSScreen;
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: spacing.md, paddingBottom: spacing.xxxl, gap: spacing.md },
-  header: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-  notice: {
-    backgroundColor: 'rgba(255, 165, 2, 0.08)',
-    borderColor: 'rgba(255, 165, 2, 0.4)',
-    borderWidth: 1,
-    borderRadius: 10,
-    padding: spacing.md,
+  container: { flex: 1, backgroundColor: instrumentColors.background },
+  content: {
+    width: '100%',
+    maxWidth: 620,
+    alignSelf: 'center',
+    gap: spacing.md,
   },
-  visualizationCard: {
-    position: 'relative',
-    overflow: 'hidden',
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
+  brandBar: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  brandIdentity: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  brandMark: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderColor: instrumentColors.cyanDim,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  brandMarkCore: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: instrumentColors.green,
+    shadowColor: instrumentColors.green,
+    shadowOpacity: 0.75,
+    shadowRadius: 8,
+  },
+  brandName: { color: instrumentColors.text, fontSize: 14, letterSpacing: 0.8 },
+  brandCaption: { color: instrumentColors.textSecondary, fontSize: 9, letterSpacing: 1.1 },
+  labsBadge: {
+    color: instrumentColors.cyan,
+    borderColor: instrumentColors.cyanDim,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    fontSize: 10,
+    letterSpacing: 1.3,
+  },
+  hero: { paddingTop: spacing.xl, paddingBottom: spacing.xl },
+  heroTitle: {
+    color: instrumentColors.text,
+    fontSize: 32,
+    lineHeight: 36,
+    letterSpacing: -0.8,
+  },
+  heroAccent: {
+    color: instrumentColors.cyan,
+    fontSize: 32,
+    lineHeight: 36,
+    letterSpacing: -0.8,
+    textShadowColor: 'rgba(36, 211, 229, 0.3)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 14,
+  },
+  heroCopy: {
+    maxWidth: 470,
+    color: instrumentColors.textSecondary,
+    lineHeight: 23,
+  },
+  scopeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.xs },
+  scopeChip: {
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderColor: instrumentColors.border,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: spacing.md,
+    gap: spacing.sm,
+  },
+  scopeChipAccent: { borderColor: instrumentColors.greenDim },
+  scopeDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: instrumentColors.textSecondary },
+  scopeDotAccent: { backgroundColor: instrumentColors.green },
+  scopeLabel: { color: instrumentColors.textSecondary, fontSize: 9, letterSpacing: 1 },
+  scopeLabelAccent: { color: instrumentColors.green },
+  notice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    backgroundColor: 'rgba(255, 182, 92, 0.055)',
+    borderColor: 'rgba(255, 182, 92, 0.2)',
     borderWidth: 1,
     borderRadius: 12,
-    paddingTop: spacing.sm,
+    padding: spacing.md,
   },
-  picker: { flexDirection: 'row', paddingHorizontal: spacing.sm, gap: spacing.sm },
-  pickerButton: { flex: 1, alignItems: 'center', paddingVertical: spacing.sm, borderBottomWidth: 2, borderBottomColor: colors.border },
-  pickerButtonSelected: { borderBottomColor: colors.accent },
-  watermark: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center', transform: [{ rotate: '-18deg' }] },
-  watermarkText: { color: 'rgba(255, 165, 2, 0.18)', letterSpacing: 5 },
-  staleOverlay: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(10, 14, 26, 0.7)', alignItems: 'center', justifyContent: 'center' },
-  summaryRow: { flexDirection: 'row', gap: spacing.md },
-  metric: { flex: 1, backgroundColor: colors.surface, borderRadius: 10, padding: spacing.md },
-  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  secondaryButton: { flexGrow: 1, alignItems: 'center', borderColor: colors.border, borderWidth: 1, borderRadius: 8, padding: spacing.md },
-  liveButton: { flexGrow: 1, alignItems: 'center', backgroundColor: colors.accent, borderRadius: 8, padding: spacing.md },
-  disabledButton: { opacity: 0.35 },
-  credentialCard: { backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: 10, padding: spacing.md, gap: spacing.sm },
-  credentialInput: { borderColor: colors.border, borderWidth: 1, borderRadius: 8, padding: spacing.md, color: colors.textPrimary, backgroundColor: colors.bg },
-  credentialInputError: { borderColor: colors.danger },
-  credentialButton: { alignItems: 'center', borderColor: colors.accent, borderWidth: 1, borderRadius: 8, padding: spacing.md },
-  credentialReadyRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.surface, borderRadius: 10, padding: spacing.md },
+  noticeIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 182, 92, 0.12)',
+    borderColor: 'rgba(255, 182, 92, 0.34)',
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  noticeIconText: { color: instrumentColors.warning, fontSize: 13 },
+  noticeCopy: { flex: 1, gap: spacing.xs },
+  noticeLabel: { color: instrumentColors.warning, fontSize: 9, letterSpacing: 1.25 },
+  noticeText: { color: instrumentColors.textSecondary, lineHeight: 18 },
+  panelIndex: { color: instrumentColors.textSecondary, fontSize: 9, letterSpacing: 1 },
+  visualizationCard: { paddingHorizontal: 0, paddingBottom: 0 },
+  picker: {
+    flexDirection: 'row',
+    marginHorizontal: spacing.md,
+    padding: 3,
+    gap: 3,
+    backgroundColor: 'rgba(5, 9, 13, 0.7)',
+    borderColor: instrumentColors.border,
+    borderWidth: 1,
+    borderRadius: 12,
+  },
+  pickerButton: {
+    minHeight: 44,
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 9,
+  },
+  pickerButtonSelected: {
+    backgroundColor: 'rgba(36, 211, 229, 0.1)',
+    borderColor: instrumentColors.cyanDim,
+    borderWidth: 1,
+  },
+  visualizationStage: { position: 'relative', overflow: 'hidden' },
+  watermark: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    transform: [{ rotate: '-18deg' }],
+  },
+  watermarkText: {
+    color: 'rgba(255, 182, 92, 0.19)',
+    fontSize: 26,
+    letterSpacing: 6,
+  },
+  staleOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: instrumentColors.dimOverlay,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+  },
+  staleText: { color: instrumentColors.danger },
+  staleCaption: { color: instrumentColors.textSecondary },
+  summaryRow: {
+    minHeight: 86,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(5, 9, 13, 0.58)',
+    borderTopColor: instrumentColors.border,
+    borderTopWidth: 1,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  metric: { flex: 1, gap: spacing.xs },
+  metricValue: { color: instrumentColors.text, fontSize: 26 },
+  metricLabel: { color: instrumentColors.textSecondary, fontSize: 9, letterSpacing: 1.1 },
+  metricDivider: { width: 1, height: 42, backgroundColor: instrumentColors.border, marginHorizontal: spacing.md },
+  actions: { gap: spacing.sm },
+  secondaryButton: {
+    minHeight: 62,
+    justifyContent: 'center',
+    borderColor: 'rgba(255, 182, 92, 0.36)',
+    borderWidth: 1,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 182, 92, 0.065)',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    gap: spacing.xs,
+  },
+  buttonLabelRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  syntheticButtonDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: instrumentColors.warning },
+  secondaryButtonText: { color: instrumentColors.warning },
+  buttonCaption: { color: instrumentColors.textSecondary },
+  liveButton: {
+    minHeight: 62,
+    justifyContent: 'center',
+    borderRadius: 12,
+    backgroundColor: instrumentColors.cyan,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    gap: spacing.xs,
+  },
+  liveButtonText: { color: instrumentColors.background },
+  liveButtonCaption: { color: 'rgba(5, 9, 13, 0.68)' },
+  disabledButton: { opacity: 0.36 },
+  buttonPressed: { opacity: 0.72, transform: [{ scale: 0.992 }] },
+  credentialCard: { backgroundColor: instrumentColors.panelRaised },
+  credentialIntro: { color: instrumentColors.textSecondary, lineHeight: 20 },
+  credentialInput: {
+    minHeight: 50,
+    borderColor: instrumentColors.borderStrong,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    color: instrumentColors.text,
+    backgroundColor: instrumentColors.background,
+    fontFamily: 'Courier New',
+    fontSize: 14,
+  },
+  credentialInputError: { borderColor: instrumentColors.danger },
+  credentialButton: {
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderColor: instrumentColors.cyanDim,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: spacing.md,
+  },
+  credentialButtonText: { color: instrumentColors.cyan, textAlign: 'center' },
+  credentialNote: { color: instrumentColors.textSecondary, lineHeight: 18 },
+  credentialReadyRow: {
+    minHeight: 60,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: instrumentColors.panelRaised,
+    borderColor: instrumentColors.greenDim,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingLeft: spacing.lg,
+    gap: spacing.md,
+  },
+  readyIdentity: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  readyDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: instrumentColors.green },
+  readyText: { color: instrumentColors.green },
+  forgetButton: { minWidth: 72, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  forgetText: { color: instrumentColors.textSecondary },
+  rejectionCard: {
+    backgroundColor: 'rgba(255, 100, 120, 0.07)',
+    borderColor: 'rgba(255, 100, 120, 0.25)',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: spacing.md,
+  },
+  rejectionText: { color: instrumentColors.danger, lineHeight: 18 },
+  privacyLegend: {
+    borderTopColor: instrumentColors.border,
+    borderTopWidth: 1,
+    paddingTop: spacing.lg,
+    gap: spacing.xs,
+  },
+  privacyLabel: { color: instrumentColors.green, fontSize: 10, letterSpacing: 1.2 },
+  privacyCopy: { color: instrumentColors.textSecondary, lineHeight: 18 },
 });

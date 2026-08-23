@@ -9,7 +9,16 @@ const typescriptFiles = ['**/*.{ts,tsx}'];
 
 module.exports = [
   {
-    ignores: ['node_modules/**', 'dist/**', '.expo/**', 'coverage/**', 'src/assets/webview/**'],
+    ignores: [
+      'node_modules/**',
+      'dist/**',
+      'dist-e2e/**',
+      '.expo/**',
+      'coverage/**',
+      'playwright-report/**',
+      'test-results/**',
+      'src/assets/webview/**',
+    ],
   },
   {
     files: sourceFiles,

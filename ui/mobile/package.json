@@ -9,7 +9,10 @@
     "web": "expo start --web",
     "test": "jest",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "build:web:e2e": "expo export --platform web --output-dir dist-e2e",
+    "serve:web:e2e": "node e2e/web/serve.mjs",
+    "e2e:web": "playwright test --config playwright.config.ts"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
@@ -37,6 +40,7 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.62.1",
     "@testing-library/jest-native": "^5.4.3",
     "@testing-library/react-native": "^13.3.3",
     "@types/jest": "29.5.14",
