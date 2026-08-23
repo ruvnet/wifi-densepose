@@ -28,7 +28,7 @@ final class AppleCapabilityProbeTests: XCTestCase {
         XCTAssertFalse(flags.rawPhotonHistograms)
     }
 
-    #if !canImport(ARKit)
+    #if !os(iOS) || !canImport(ARKit)
     func testNonAppleBuildHostReportsARKitSignalsUnavailable() {
         let report = AppleCapabilityProbe.probe()
 

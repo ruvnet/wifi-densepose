@@ -1,7 +1,7 @@
 import Foundation
 import RuViewNLOSCore
 
-#if canImport(ARKit) && canImport(AVFoundation) && canImport(Combine)
+#if os(iOS) && canImport(ARKit) && canImport(AVFoundation) && canImport(Combine)
 @preconcurrency import ARKit
 @preconcurrency import AVFoundation
 import Combine

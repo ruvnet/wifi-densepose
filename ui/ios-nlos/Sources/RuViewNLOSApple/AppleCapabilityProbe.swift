@@ -1,7 +1,7 @@
 import Foundation
 import RuViewNLOSCore
 
-#if canImport(ARKit)
+#if os(iOS) && canImport(ARKit)
 import ARKit
 #endif
 
@@ -49,7 +49,7 @@ public extension AppleNLOSCapabilityReport {
 
 public enum AppleCapabilityProbe {
     public static func probe() -> AppleNLOSCapabilityReport {
-        #if canImport(ARKit)
+        #if os(iOS) && canImport(ARKit)
         let sceneDepth = ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
         let smoothedDepth = ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth)
         let mesh = ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
