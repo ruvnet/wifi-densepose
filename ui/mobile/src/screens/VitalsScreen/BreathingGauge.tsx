@@ -26,7 +26,10 @@ const deriveBreathingValue = (
 
 export const BreathingGauge = () => {
   const breathingBand = usePoseStore((state) => state.features?.breathing_band_power);
-  const breathingBpm = usePoseStore((state) => state.lastFrame?.vital_signs?.breathing_bpm);
+  const breathingBpm = usePoseStore((state) => {
+    const vitals = state.lastFrame?.vital_signs;
+    return vitals?.breathing_bpm ?? vitals?.breathing_rate_bpm;
+  });
 
   const value = useMemo(
     () => deriveBreathingValue(breathingBand, breathingBpm),

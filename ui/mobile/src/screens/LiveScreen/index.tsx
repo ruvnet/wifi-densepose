@@ -107,7 +107,7 @@ export const LiveScreen = () => {
   const handleRetry = useCallback(() => { setError(null); setReady(false); setFps(0); setViewerKey((v) => v + 1); }, []);
 
   const rssi = lastFrame?.features?.mean_rssi;
-  const personCount = lastFrame?.classification?.presence ? 1 : 0;
+  const personCount = lastFrame?.estimated_persons ?? (lastFrame?.classification?.presence ? 1 : 0);
   const mode = getMode(connectionStatus, isSimulated, lastFrame);
 
   if (error) {

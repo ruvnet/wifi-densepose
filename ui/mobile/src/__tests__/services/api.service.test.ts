@@ -90,7 +90,7 @@ describe('ApiService', () => {
     it('returns response data on success', async () => {
       apiService.setBaseUrl('http://localhost:3000');
       mockRequest.mockResolvedValueOnce({ data: { status: 'ok' } });
-      const result = await apiService.get('/api/v1/pose/status');
+      const result = await apiService.get('/api/v1/status');
       expect(result).toEqual({ status: 'ok' });
     });
 
@@ -113,7 +113,7 @@ describe('ApiService', () => {
       expect(mockRequest).toHaveBeenCalledWith(
         expect.objectContaining({
           method: 'GET',
-          url: 'http://draft.example:8080/api/v1/pose/status',
+          url: 'http://draft.example:8080/api/v1/status',
         }),
       );
     });
@@ -124,7 +124,7 @@ describe('ApiService', () => {
       await apiService.getStatusAt('wss://draft.example');
 
       expect(mockRequest).toHaveBeenCalledWith(
-        expect.objectContaining({ url: 'https://draft.example/api/v1/pose/status' }),
+        expect.objectContaining({ url: 'https://draft.example/api/v1/status' }),
       );
     });
   });

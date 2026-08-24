@@ -319,6 +319,25 @@
           }
 
           processFrame(frame) {
+            const estimated = Number.isFinite(frame?.estimated_persons)
+              ? Math.max(0, Math.min(16, Math.floor(frame.estimated_persons)))
+              : frame?.classification?.presence ? 1 : 0;
+
+            while (this.survivors.size > estimated) {
+              const lastId = [...this.survivors.keys()].pop();
+              if (lastId) this.survivors.delete(lastId);
+            }
+            while (this.survivors.size < estimated) {
+              this.processSurvivorDetection(
+                null,
+                Number(frame?.classification?.confidence || 0),
+                {
+                  breathing_rate: frame?.vital_signs?.breathing_rate_bpm,
+                  heart_rate: frame?.vital_signs?.heart_rate_bpm,
+                },
+              );
+            }
+
             const motion = Number(frame?.features?.motion_band_power || 0);
             const xDelta = isNumber(motion) ? (motion - 0.1) * 4 : 0;
             const yDelta = isNumber(frame?.features?.breathing_band_power || 0)
@@ -333,6 +352,11 @@
               survivor.y = Math.max(5, Math.min(280, survivor.y + this.motionVector.y + jitterY));
               survivor.last_updated = new Date().toISOString();
             }
+
+            this.postMessage({
+              type: 'SURVIVORS_SYNC',
+              payload: [...this.survivors.values()],
+            });
           }
 
           renderZones(ctx) {
@@ -445,9 +469,6 @@
           dashboard.createEvent('earthquake', 37.7749, -122.4194, 'Training Scenario');
           dashboard.addRectangleZone('Zone A', 60, 45, 170, 120);
           dashboard.addCircleZone('Zone B', 300, 170, 70);
-          dashboard.processSurvivorDetection('Zone A', 0.94, { breathing_rate: 11, hr: 128 });
-          dashboard.processSurvivorDetection('Zone A', 0.88, { breathing_rate: 16, hr: 118 });
-          dashboard.processSurvivorDetection('Zone B', 0.71, { breathing_rate: 9, hr: 142 });
           status.textContent = 'MAT dashboard ready';
           dashboard.postMessage({ type: 'READY' });
         };

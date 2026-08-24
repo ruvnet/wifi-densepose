@@ -34,7 +34,8 @@ export const ZonesScreen = () => {
   const lastFrame = usePoseStore((state) => state.lastFrame);
   const signalField = usePoseStore((state) => state.signalField);
 
-  const { gridValues, personPositions } = useOccupancyGrid(signalField);
+  const estimatedPersonCount = lastFrame?.estimated_persons ?? (lastFrame?.classification?.presence ? 1 : 0);
+  const { gridValues, personPositions } = useOccupancyGrid(signalField, estimatedPersonCount);
 
   const { width } = useWindowDimensions();
   const mapSize = useMemo(() => Math.max(240, Math.min(width - spacing.md * 2, 520)), [width]);

@@ -1,76 +1,18 @@
-import React, { Suspense } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import React from 'react';
+import { StyleSheet, View } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedText } from '../components/ThemedText';
-import { ThemedView } from '../components/ThemedView';
 import { colors } from '../theme/colors';
 import { useMatStore } from '../stores/matStore';
 import { MainTabsParamList } from './types';
-
-const createPlaceholder = (label: string) => {
-  const Placeholder = () => (
-    <ThemedView style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-      <ThemedText preset="bodyLg">{label} screen not implemented yet</ThemedText>
-      <ThemedText preset="bodySm" color="textSecondary">
-        Placeholder shell
-      </ThemedText>
-    </ThemedView>
-  );
-  const LazyPlaceholder = React.lazy(async () => ({ default: Placeholder }));
-
-  const Wrapped = () => (
-    <Suspense
-      fallback={
-        <ThemedView style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-          <ActivityIndicator color={colors.accent} />
-          <ThemedText preset="bodySm" color="textSecondary" style={{ marginTop: 8 }}>
-            Loading {label}
-          </ThemedText>
-        </ThemedView>
-      }
-    >
-      <LazyPlaceholder />
-    </Suspense>
-  );
-
-  return Wrapped;
-};
-
-const wrapLazy = (
-  loader: () => Promise<{ default: React.ComponentType }>,
-  label: string,
-) => {
-  const fallback = createPlaceholder(label);
-  return React.lazy(async () => {
-    try {
-      const module = await loader();
-      if (module?.default) {
-        return module;
-      }
-    } catch {
-      // keep fallback for shell-only screens
-    }
-    return { default: fallback } as { default: React.ComponentType };
-  });
-};
-
-const withSuspense = (Component: React.ComponentType) => {
-  const SuspendedScreen = () => (
-    <Suspense fallback={<ActivityIndicator color={colors.accent} />}>
-      <Component />
-    </Suspense>
-  );
-  return SuspendedScreen;
-};
-
-const LiveScreen = withSuspense(wrapLazy(() => import('../screens/LiveScreen'), 'Live'));
-const NLOSScreen = withSuspense(wrapLazy(() => import('../screens/NLOSScreen'), 'NLOS'));
-const VitalsScreen = withSuspense(wrapLazy(() => import('../screens/VitalsScreen'), 'Vitals'));
-const ZonesScreen = withSuspense(wrapLazy(() => import('../screens/ZonesScreen'), 'Zones'));
-const MATScreen = withSuspense(wrapLazy(() => import('../screens/MATScreen'), 'MAT'));
-const SettingsScreen = withSuspense(wrapLazy(() => import('../screens/SettingsScreen'), 'Settings'));
+import LiveScreen from '../screens/LiveScreen';
+import NLOSScreen from '../screens/NLOSScreen';
+import VitalsScreen from '../screens/VitalsScreen';
+import ZonesScreen from '../screens/ZonesScreen';
+import MATScreen from '../screens/MATScreen';
+import SettingsScreen from '../screens/SettingsScreen';
 
 const toIconName = (routeName: keyof MainTabsParamList) => {
   switch (routeName) {

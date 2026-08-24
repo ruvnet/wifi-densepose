@@ -1,6 +1,6 @@
 export const API_ROOT = '/api/v1';
 
-export const API_POSE_STATUS_PATH = '/api/v1/pose/status';
+export const API_POSE_STATUS_PATH = '/api/v1/status';
 export const API_POSE_FRAMES_PATH = '/api/v1/pose/frames';
 export const API_POSE_ZONES_PATH = '/api/v1/pose/zones';
 export const API_POSE_CURRENT_PATH = '/api/v1/pose/current';

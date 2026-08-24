@@ -47,6 +47,7 @@ export const MATScreen = () => {
   const survivors = useMatStore((state) => state.survivors);
   const alerts = useMatStore((state) => state.alerts);
   const upsertSurvivor = useMatStore((state) => state.upsertSurvivor);
+  const setSurvivors = useMatStore((state) => state.setSurvivors);
   const addAlert = useMatStore((state) => state.addAlert);
   const upsertEvent = useMatStore((state) => state.upsertEvent);
   const dataSource = useMatStore((state) => state.dataSource);
@@ -64,6 +65,9 @@ export const MATScreen = () => {
       if (isSurvivor(survivor)) {
         upsertSurvivor(survivor);
       }
+    },
+    onSurvivorsSync: (nextSurvivors) => {
+      setSurvivors(nextSurvivors.filter(isSurvivor));
     },
     onAlertGenerated: (alert) => {
       if (isAlert(alert)) {

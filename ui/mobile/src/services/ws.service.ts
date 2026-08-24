@@ -5,6 +5,22 @@ import { generateSimulatedData } from '@/services/simulation.service';
 import type { ConnectionStatus, SensingFrame } from '@/types/sensing';
 
 type FrameListener = (frame: SensingFrame) => void;
+const PRESENTATION_FRAME_INTERVAL_MS = 250;
+
+export const normalizeFrameTimestamp = (frame: SensingFrame): SensingFrame => {
+  const timestamp = frame.timestamp;
+  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) {
+    return frame;
+  }
+
+  // The Rust sensing server emits Unix seconds while simulation and React
+  // Native use Unix milliseconds. Keep one unit inside the mobile app.
+  if (timestamp > 0 && timestamp < 100_000_000_000) {
+    return { ...frame, timestamp: timestamp * 1000 };
+  }
+
+  return frame;
+};
 
 class WsService {
   private ws: WebSocket | null = null;
@@ -15,6 +31,7 @@ class WsService {
   private targetUrl = '';
   private active = false;
   private status: ConnectionStatus = 'disconnected';
+  private lastFrameDeliveryAt = 0;
 
   connect(url: string): void {
     const wasActive = this.active;
@@ -55,6 +72,7 @@ class WsService {
 
       socket.onopen = () => {
         this.reconnectAttempt = 0;
+        this.lastFrameDeliveryAt = 0;
         this.stopSimulation();
         this.handleStatusChange('connected');
       };
@@ -62,7 +80,12 @@ class WsService {
       socket.onmessage = (evt) => {
         try {
           const raw = typeof evt.data === 'string' ? evt.data : JSON.stringify(evt.data);
-          const frame = JSON.parse(raw) as SensingFrame;
+          const frame = normalizeFrameTimestamp(JSON.parse(raw) as SensingFrame);
+          const now = Date.now();
+          if (now - this.lastFrameDeliveryAt < PRESENTATION_FRAME_INTERVAL_MS) {
+            return;
+          }
+          this.lastFrameDeliveryAt = now;
           this.listeners.forEach((listener) => listener(frame));
         } catch {
           // ignore malformed frames
@@ -73,7 +96,7 @@ class WsService {
         // handled by onclose
       };
 
-      socket.onclose = (evt) => {
+      socket.onclose = () => {
         this.ws = null;
         if (!this.active) {
           this.handleStatusChange('disconnected');

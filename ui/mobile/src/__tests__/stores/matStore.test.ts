@@ -67,6 +67,19 @@ describe('useMatStore', () => {
     });
   });
 
+  it('reconciles the authoritative survivor list from a hardware frame', () => {
+    const survivor = {
+      id: 'hardware-1', zone_id: 'zone-a', x: 1, y: 2, depth: -1,
+      triage_status: 2, triage_color: '#0f0', confidence: 0.8,
+      breathing_rate: 12, heart_rate: 72, first_detected: 'now',
+      last_updated: 'now', is_deteriorating: false,
+    };
+    useMatStore.getState().setSurvivors([survivor]);
+    expect(useMatStore.getState().survivors).toEqual([survivor]);
+    useMatStore.getState().setSurvivors([]);
+    expect(useMatStore.getState().survivors).toEqual([]);
+  });
+
   describe('initial state', () => {
     it('has empty events array', () => {
       expect(useMatStore.getState().events).toEqual([]);

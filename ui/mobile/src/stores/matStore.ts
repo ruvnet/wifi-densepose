@@ -14,6 +14,7 @@ export interface MatState {
   upsertEvent: (event: DisasterEvent) => void;
   addZone: (zone: ScanZone) => void;
   upsertSurvivor: (survivor: Survivor) => void;
+  setSurvivors: (survivors: Survivor[]) => void;
   addAlert: (alert: Alert) => void;
   setSelectedEvent: (id: string | null) => void;
   setDataSource: (source: 'real' | 'simulated') => void;
@@ -63,6 +64,10 @@ export const useMatStore = create<MatState>((set) => ({
       survivors[index] = survivor;
       return { survivors };
     });
+  },
+
+  setSurvivors: (survivors) => {
+    set({ survivors });
   },
 
   addAlert: (alert) => {

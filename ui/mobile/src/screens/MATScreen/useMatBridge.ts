@@ -5,7 +5,7 @@ import type { SensingFrame } from '@/types/sensing';
 
 type MatBridgeMessageType = 'CREATE_EVENT' | 'ADD_ZONE' | 'FRAME_UPDATE';
 
-type MatIncomingType = 'READY' | 'SURVIVOR_DETECTED' | 'ALERT_GENERATED';
+type MatIncomingType = 'READY' | 'SURVIVOR_DETECTED' | 'SURVIVORS_SYNC' | 'ALERT_GENERATED';
 
 type MatIncomingMessage = {
   type: MatIncomingType;
@@ -19,6 +19,7 @@ type MatOutgoingMessage = {
 
 type UseMatBridgeOptions = {
   onSurvivorDetected?: (survivor: Survivor) => void;
+  onSurvivorsSync?: (survivors: Survivor[]) => void;
   onAlertGenerated?: (alert: Alert) => void;
 };
 
@@ -30,7 +31,7 @@ const safeParseJson = (value: string): unknown | null => {
   }
 };
 
-export const useMatBridge = ({ onAlertGenerated, onSurvivorDetected }: UseMatBridgeOptions = {}) => {
+export const useMatBridge = ({ onAlertGenerated, onSurvivorDetected, onSurvivorsSync }: UseMatBridgeOptions = {}) => {
   const webViewRef = useRef<WebView | null>(null);
   const isReadyRef = useRef(false);
   const queuedMessages = useRef<string[]>([]);
@@ -100,11 +101,18 @@ export const useMatBridge = ({ onAlertGenerated, onSurvivorDetected }: UseMatBri
         return;
       }
 
+      if (message.type === 'SURVIVORS_SYNC') {
+        if (Array.isArray(message.payload)) {
+          onSurvivorsSync?.(message.payload as Survivor[]);
+        }
+        return;
+      }
+
       if (message.type === 'ALERT_GENERATED') {
         onAlertGenerated?.(message.payload as Alert);
       }
     },
-    [flush, onAlertGenerated, onSurvivorDetected],
+    [flush, onAlertGenerated, onSurvivorDetected, onSurvivorsSync],
   );
 
   return {

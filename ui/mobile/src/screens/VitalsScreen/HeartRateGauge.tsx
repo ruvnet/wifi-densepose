@@ -29,7 +29,10 @@ const deriveHeartRate = (
 };
 
 export const HeartRateGauge = () => {
-  const heartProxyBpm = usePoseStore((state) => state.lastFrame?.vital_signs?.hr_proxy_bpm);
+  const heartProxyBpm = usePoseStore((state) => {
+    const vitals = state.lastFrame?.vital_signs;
+    return vitals?.hr_proxy_bpm ?? vitals?.heart_rate_bpm;
+  });
   const motionBand = usePoseStore((state) => state.features?.motion_band_power);
   const breathingBand = usePoseStore((state) => state.features?.breathing_band_power);
 

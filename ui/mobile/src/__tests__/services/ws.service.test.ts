@@ -69,7 +69,7 @@ describe('WsService', () => {
 
         // Test with port 3000
         ws.connect('http://192.168.1.10:3000');
-        expect(capturedUrls[capturedUrls.length - 1]).toBe('ws://192.168.1.10:3000/api/v1/stream/pose');
+        expect(capturedUrls[capturedUrls.length - 1]).toBe('ws://192.168.1.10:3000/ws/sensing');
 
         // Clean up, create another service
         ws.disconnect();
@@ -77,19 +77,19 @@ describe('WsService', () => {
 
         // Test with port 8080
         ws2.connect('http://myserver.local:8080');
-        expect(capturedUrls[capturedUrls.length - 1]).toBe('ws://myserver.local:8080/api/v1/stream/pose');
+        expect(capturedUrls[capturedUrls.length - 1]).toBe('ws://myserver.local:8080/ws/sensing');
         ws2.disconnect();
 
         // Test HTTPS -> WSS upgrade (port 443 is default for HTTPS so host drops it)
         const ws3 = createWsService();
         ws3.connect('https://secure.example.com:443');
-        expect(capturedUrls[capturedUrls.length - 1]).toBe('wss://secure.example.com/api/v1/stream/pose');
+        expect(capturedUrls[capturedUrls.length - 1]).toBe('wss://secure.example.com/ws/sensing');
         ws3.disconnect();
 
         // Test WSS input
         const ws4 = createWsService();
         ws4.connect('wss://secure.example.com');
-        expect(capturedUrls[capturedUrls.length - 1]).toBe('wss://secure.example.com/api/v1/stream/pose');
+        expect(capturedUrls[capturedUrls.length - 1]).toBe('wss://secure.example.com/ws/sensing');
         ws4.disconnect();
 
         // Verify port 3001 is NOT hardcoded anywhere
@@ -99,6 +99,20 @@ describe('WsService', () => {
       } finally {
         globalThis.WebSocket = OrigWebSocket;
       }
+    });
+  });
+
+  describe('timestamp normalization', () => {
+    it('converts Rust Unix seconds to React Native milliseconds', () => {
+      const { normalizeFrameTimestamp } = require('@/services/ws.service');
+      const frame = { timestamp: 1_787_587_655, nodes: [], features: {}, classification: {}, signal_field: {} };
+      expect(normalizeFrameTimestamp(frame).timestamp).toBe(1_787_587_655_000);
+    });
+
+    it('leaves millisecond timestamps unchanged', () => {
+      const { normalizeFrameTimestamp } = require('@/services/ws.service');
+      const frame = { timestamp: 1_787_587_655_000, nodes: [], features: {}, classification: {}, signal_field: {} };
+      expect(normalizeFrameTimestamp(frame)).toBe(frame);
     });
   });
 
@@ -114,7 +128,7 @@ describe('WsService', () => {
   describe('connection fallback', () => {
     it('uses simulation when an active server connection closes normally', () => {
       const OrigWebSocket = globalThis.WebSocket;
-      let socket: any;
+      const sockets: any[] = [];
 
       class MockWebSocket {
         static OPEN = 1;
@@ -126,7 +140,7 @@ describe('WsService', () => {
         onmessage: (() => void) | null = null;
         close() {}
         constructor() {
-          socket = this;
+          sockets.push(this);
         }
       }
 
@@ -134,7 +148,7 @@ describe('WsService', () => {
       try {
         const ws = createWsService();
         ws.connect('http://localhost:3000');
-        socket.onclose?.({ code: 1000 });
+        sockets[0].onclose?.({ code: 1000 });
 
         expect(ws.getStatus()).toBe('simulated');
         ws.disconnect();
@@ -171,6 +185,48 @@ describe('WsService', () => {
 
         expect(ws.getStatus()).toBe('simulated');
         expect(sockets).toHaveLength(2);
+        ws.disconnect();
+      } finally {
+        globalThis.WebSocket = OrigWebSocket;
+      }
+    });
+  });
+
+  describe('hardware presentation rate', () => {
+    it('drops burst frames above 4 fps so native screens stay current', () => {
+      const OrigWebSocket = globalThis.WebSocket;
+      const sockets: any[] = [];
+
+      class MockWebSocket {
+        static OPEN = 1;
+        static CONNECTING = 0;
+        readyState = 0;
+        onopen: (() => void) | null = null;
+        onclose: (() => void) | null = null;
+        onerror: (() => void) | null = null;
+        onmessage: ((event: { data: string }) => void) | null = null;
+        close() {}
+        constructor() { sockets.push(this); }
+      }
+
+      globalThis.WebSocket = MockWebSocket as any;
+      try {
+        const ws = createWsService();
+        const listener = jest.fn();
+        ws.subscribe(listener);
+        ws.connect('http://localhost:3000');
+        sockets[0].onopen?.();
+        const frame = JSON.stringify({
+          timestamp: Date.now(), nodes: [], features: {}, classification: {}, signal_field: {},
+        });
+
+        sockets[0].onmessage?.({ data: frame });
+        sockets[0].onmessage?.({ data: frame });
+        expect(listener).toHaveBeenCalledTimes(1);
+
+        jest.advanceTimersByTime(250);
+        sockets[0].onmessage?.({ data: frame });
+        expect(listener).toHaveBeenCalledTimes(2);
         ws.disconnect();
       } finally {
         globalThis.WebSocket = OrigWebSocket;

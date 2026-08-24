@@ -21,7 +21,7 @@ export interface FeatureSet {
 }
 
 export interface Classification {
-  motion_level: 'absent' | 'present_still' | 'active';
+  motion_level: 'absent' | 'present_still' | 'present_moving' | 'active';
   presence: boolean;
   confidence: number;
 }
@@ -54,6 +54,7 @@ export interface PersonDetection {
   id?: number;
   confidence: number;
   keypoints: PoseKeypoint[];
+  position?: [number, number, number];
 }
 
 export interface SensingFrame {

@@ -49,7 +49,7 @@ export default function VitalsScreen() {
   }));
 
   const classificationColor =
-    classification?.motion_level === 'active'
+    classification?.motion_level === 'active' || classification?.motion_level === 'present_moving'
       ? colors.success
       : classification?.motion_level === 'present_still'
         ? colors.warn

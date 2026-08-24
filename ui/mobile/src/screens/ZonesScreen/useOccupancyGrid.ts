@@ -66,7 +66,36 @@ const readClassificationPositions = (classification: Classification | undefined)
   );
 };
 
-export const useOccupancyGrid = (signalField: SignalField | null): { gridValues: number[]; personPositions: Point[] } => {
+export const deriveFieldPositions = (values: number[], requestedCount: number): Point[] => {
+  const count = Math.max(0, Math.min(16, Math.floor(requestedCount)));
+  if (count === 0 || values.length === 0) return [];
+
+  const candidates = values
+    .slice(0, CELL_COUNT)
+    .map((value, index) => ({
+      x: index % GRID_SIZE,
+      y: Math.floor(index / GRID_SIZE),
+      value: parseNumber(value) ?? 0,
+    }))
+    .sort((a, b) => b.value - a.value);
+
+  const positions: Point[] = [];
+  for (const candidate of candidates) {
+    const separated = positions.every(({ x, y }) => {
+      const dx = candidate.x - x;
+      const dy = candidate.y - y;
+      return dx * dx + dy * dy >= 9;
+    });
+    if (separated) positions.push({ x: candidate.x, y: candidate.y });
+    if (positions.length === count) break;
+  }
+  return positions;
+};
+
+export const useOccupancyGrid = (
+  signalField: SignalField | null,
+  estimatedPersonCount = 0,
+): { gridValues: number[]; personPositions: Point[] } => {
   const classification = usePoseStore((state) => state.classification) as Classification | undefined;
 
   const gridValues = useMemo(() => {
@@ -99,8 +128,8 @@ export const useOccupancyGrid = (signalField: SignalField | null): { gridValues:
         .slice(0, 16);
     }
 
-    return [] as Point[];
-  }, [classification]);
+    return deriveFieldPositions(gridValues, estimatedPersonCount);
+  }, [classification, estimatedPersonCount, gridValues]);
 
   return {
     gridValues,
