@@ -20,6 +20,7 @@
 
 /** Maximum channels in the hop list (must match CSI_HOP_CHANNELS_MAX). */
 #define NVS_CFG_HOP_MAX      6
+#define NVS_CFG_BLE_SECRET_SIZE 32
 
 /** Runtime configuration loaded from NVS or Kconfig defaults. */
 typedef struct {
@@ -62,6 +63,24 @@ typedef struct {
     char     zone_name[16];              /**< Zone name for this node (e.g. "lobby"). */
     uint16_t swarm_heartbeat_sec;        /**< Heartbeat interval (seconds, default 30). */
     uint16_t swarm_ingest_sec;           /**< Vector ingest interval (seconds, default 5). */
+
+    /* ADR-341: Authenticated, rotating BLE identity tokens. */
+    uint8_t  ble_identity_enabled;        /**< Runtime opt-in; default 0. */
+    uint8_t  ble_key_id;                  /**< Provisioned shared-key selector. */
+    uint8_t  ble_secret[NVS_CFG_BLE_SECRET_SIZE]; /**< HMAC key; never logged. */
+    uint8_t  ble_secret_valid;            /**< Exact 32-byte secret was loaded. */
+
+    /* ADR-341: authenticated external Channel Sounding companion. */
+    uint8_t  cs_ingress_enabled;          /**< Runtime opt-in; default 0. */
+    uint8_t  cs_key_id;                   /**< Separate companion key selector. */
+    uint8_t  cs_secret[NVS_CFG_BLE_SECRET_SIZE]; /**< Separate HMAC key. */
+    uint8_t  cs_secret_valid;              /**< Exact 32-byte key loaded. */
+    uint32_t cs_enrolled_source_id;        /**< Exact authenticated companion source. */
+
+    /* ADR-341: ESP32 gateway authentication around both radio payloads. */
+    uint8_t  radio_envelope_key_id;        /**< Gateway HMAC key selector. */
+    uint8_t  radio_envelope_secret[NVS_CFG_BLE_SECRET_SIZE]; /**< Gateway HMAC key. */
+    uint8_t  radio_envelope_secret_valid;  /**< Exact 32-byte key loaded. */
 } nvs_config_t;
 
 /**

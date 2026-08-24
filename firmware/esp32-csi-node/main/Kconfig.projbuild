@@ -87,6 +87,159 @@ menu "Edge Intelligence (ADR-039)"
 
 endmenu
 
+menu "BLE identity anchors and external Channel Sounding (ADR-341)"
+
+    config RADIO_GATEWAY_QUEUE_DEPTH
+        int "Authenticated radio-envelope queue depth"
+        default 16
+        range 4 64
+        help
+            Fixed nonblocking queue between radio callbacks and HMAC plus UDP
+            egress. A full queue drops evidence instead of blocking NimBLE or
+            UART ingest. Runtime radio_key_id and an exact 32-byte
+            radio_secret are required whenever either radio path is enabled.
+
+    config BLE_IDENTITY_SCAN_ENABLE
+        bool "Enable authenticated RuView BLE identity-token scanning"
+        default n
+        depends on BT_ENABLED && BT_NIMBLE_ENABLED && BT_NIMBLE_ROLE_OBSERVER
+        depends on BT_NIMBLE_EXT_SCAN
+        depends on BT_NIMBLE_EXT_ADV
+        depends on BT_NIMBLE_TRANSPORT_EVT_SIZE >= 257
+        help
+            Passive extended scanning for the RuView 128-bit service-data
+            token. The 50-byte token cannot fit in a legacy advertising or
+            scan-response payload. This does not inspect arbitrary phone
+            advertisements, expose BLE MAC addresses, acquire CTE IQ, or infer
+            vital signs. Runtime NVS key ble_enable and a 32-byte ble_secret
+            are also required, so a binary compiled with this option still
+            fails closed until provisioned. A 257-byte NimBLE transport event
+            buffer is required so the 50-byte service record plus the extended
+            report header arrives without controller truncation. ESP-IDF 5.4
+            also gates the extended-report event structure behind
+            BT_NIMBLE_EXT_ADV, so both extended scan and advertising support
+            must be compiled even though this node never advertises.
+
+    config BLE_IDENTITY_SCAN_INTERVAL_MS
+        int "BLE scan interval (ms)"
+        default 1000
+        range 100 10000
+        depends on BLE_IDENTITY_SCAN_ENABLE
+        help
+            Controller scan interval. The scan window below must remain at or
+            below one quarter of this value to bound WiFi/BLE coexistence cost.
+
+    config BLE_IDENTITY_SCAN_WINDOW_MS
+        int "BLE scan window (ms)"
+        default 50
+        range 5 250
+        depends on BLE_IDENTITY_SCAN_ENABLE
+        help
+            Passive scan window. Firmware rejects configurations above a 25
+            percent duty ceiling. Default is 5 percent.
+
+    config BLE_IDENTITY_TTL_MS
+        int "Forwarded BLE anchor TTL (ms)"
+        default 3000
+        range 250 5000
+        depends on BLE_IDENTITY_SCAN_ENABLE
+        help
+            Maximum host association lifetime. Expired anchors must abstain.
+
+    config BLE_IDENTITY_TOKEN_SKEW_MIN
+        int "Authenticated token clock-skew allowance (minutes)"
+        default 2
+        range 0 10
+        depends on BLE_IDENTITY_SCAN_ENABLE
+
+    config BLE_IDENTITY_MIN_CSI_PPS
+        int "Warn below this CSI callback rate when BLE starts"
+        default 5
+        range 0 100
+        depends on BLE_IDENTITY_SCAN_ENABLE
+        help
+            Coexistence diagnostic only. Operators should disable BLE if the
+            deployment's measured CSI yield regresses.
+
+    config BLE_IDENTITY_MAX_REPORTS_PER_SEC
+        int "Maximum BLE token reports admitted per second"
+        default 40
+        range 1 200
+        depends on BLE_IDENTITY_SCAN_ENABLE
+        help
+            Global bound before token HMAC and enqueue. Excess reports are
+            dropped and counted, limiting valid-token or replay floods.
+
+    config CHANNEL_SOUNDING_INGRESS_ENABLE
+        bool "Enable external Bluetooth 6 Channel Sounding UART ingress"
+        default n
+        depends on IDF_TARGET_ESP32S3
+        help
+            Accept calibrated phase and timing primitives from a separate
+            Channel Sounding-capable radio. ESP32-S3 does not acquire these
+            primitives itself. The gateway validates framing, CRC, bounds,
+            age, quality, session, procedure and sequence, then places the
+            exact primitive in an authenticated gateway envelope.
+
+    config CHANNEL_SOUNDING_UART_NUM
+        int "Companion UART controller"
+        default 2
+        range 1 2
+        depends on CHANNEL_SOUNDING_INGRESS_ENABLE
+        help
+            UART1 is used by the optional mmWave probe. UART2 is the default on
+            ESP32-S3. Confirm the board pinout before enabling.
+
+    config CHANNEL_SOUNDING_UART_BAUD
+        int "Companion UART baud"
+        default 921600
+        range 115200 2000000
+        depends on CHANNEL_SOUNDING_INGRESS_ENABLE
+
+    config CHANNEL_SOUNDING_UART_TX_GPIO
+        int "Companion UART TX GPIO"
+        default 15
+        range 0 48
+        depends on CHANNEL_SOUNDING_INGRESS_ENABLE
+
+    config CHANNEL_SOUNDING_UART_RX_GPIO
+        int "Companion UART RX GPIO"
+        default 16
+        range 0 48
+        depends on CHANNEL_SOUNDING_INGRESS_ENABLE
+
+    config CHANNEL_SOUNDING_MAX_AGE_MS
+        int "Maximum companion measurement age (ms)"
+        default 2000
+        range 50 10000
+        depends on CHANNEL_SOUNDING_INGRESS_ENABLE
+
+    config CHANNEL_SOUNDING_MIN_QUALITY_PERMILLE
+        int "Minimum companion quality (per mille)"
+        default 600
+        range 1 1000
+        depends on CHANNEL_SOUNDING_INGRESS_ENABLE
+
+    config CHANNEL_SOUNDING_MAX_FRAMES_PER_SEC
+        int "Maximum companion frames admitted per second"
+        default 100
+        range 1 500
+        depends on CHANNEL_SOUNDING_INGRESS_ENABLE
+
+    config CHANNEL_SOUNDING_SESSION_RETIRE_MS
+        int "Retire oldest companion replay session after inactivity (ms)"
+        default 600000
+        range 10000 86400000
+        depends on CHANNEL_SOUNDING_INGRESS_ENABLE
+        help
+            The gateway keeps eight recent authenticated companion sessions.
+            When the table is full, only a sequence-one frame may replace the
+            oldest session after this inactivity horizon. The host remains the
+            durable replay authority and must checkpoint all retired session
+            high-water marks.
+
+endmenu
+
 menu "Adaptive Controller (ADR-081)"
 
     config ADAPTIVE_FAST_LOOP_MS

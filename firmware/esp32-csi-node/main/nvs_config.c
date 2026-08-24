@@ -8,6 +8,7 @@
 
 #include "nvs_config.h"
 
+#include <stdbool.h>
 #include <string.h>
 #include "esp_log.h"
 #include "nvs_flash.h"
@@ -15,6 +16,13 @@
 #include "sdkconfig.h"
 
 static const char *TAG = "nvs_config";
+
+static bool secret_has_nonzero_byte(const uint8_t *secret, size_t len)
+{
+    uint8_t combined = 0u;
+    for (size_t index = 0u; index < len; index++) combined |= secret[index];
+    return combined != 0u;
+}
 
 void nvs_config_load(nvs_config_t *cfg)
 {
@@ -93,6 +101,21 @@ void nvs_config_load(nvs_config_t *cfg)
     cfg->csi_channel = 0;  /* 0 = auto-detect from connected AP. */
     cfg->filter_mac_set = 0;
     memset(cfg->filter_mac, 0, 6);
+
+    /* ADR-341: BLE identity is runtime-off even in an enabled build. */
+    cfg->ble_identity_enabled = 0;
+    cfg->ble_key_id = 0;
+    cfg->ble_secret_valid = 0;
+    memset(cfg->ble_secret, 0, sizeof(cfg->ble_secret));
+    cfg->cs_ingress_enabled = 0;
+    cfg->cs_key_id = 0;
+    cfg->cs_secret_valid = 0;
+    memset(cfg->cs_secret, 0, sizeof(cfg->cs_secret));
+    cfg->cs_enrolled_source_id = 0u;
+    cfg->radio_envelope_key_id = 0u;
+    cfg->radio_envelope_secret_valid = 0u;
+    memset(cfg->radio_envelope_secret, 0,
+           sizeof(cfg->radio_envelope_secret));
 
     /* Try to override from NVS */
     nvs_handle_t handle;
@@ -315,6 +338,81 @@ void nvs_config_load(nvs_config_t *cfg)
     }
     if (nvs_get_u16(handle, "swarm_ingest", &cfg->swarm_ingest_sec) != ESP_OK) {
         cfg->swarm_ingest_sec = 5;
+    }
+
+    /* ADR-341: BLE identity anchor. The secret is never printed. */
+    uint8_t ble_enable_val;
+    if (nvs_get_u8(handle, "ble_enable", &ble_enable_val) == ESP_OK) {
+        cfg->ble_identity_enabled = ble_enable_val ? 1u : 0u;
+        ESP_LOGI(TAG, "NVS override: ble_identity_enabled=%u",
+                 (unsigned)cfg->ble_identity_enabled);
+    }
+    if (nvs_get_u8(handle, "ble_key_id", &cfg->ble_key_id) == ESP_OK) {
+        ESP_LOGI(TAG, "NVS override: ble_key_id=%u", (unsigned)cfg->ble_key_id);
+    }
+    size_t ble_secret_len = sizeof(cfg->ble_secret);
+    if (nvs_get_blob(handle, "ble_secret", cfg->ble_secret, &ble_secret_len) == ESP_OK
+        && ble_secret_len == sizeof(cfg->ble_secret)
+        && secret_has_nonzero_byte(cfg->ble_secret, sizeof(cfg->ble_secret))) {
+        cfg->ble_secret_valid = 1u;
+        ESP_LOGI(TAG, "NVS: ble_secret loaded (32 bytes)");
+    } else if (cfg->ble_identity_enabled) {
+        ESP_LOGW(TAG, "ble_enable=1 but exact 32-byte ble_secret is absent; scanner will fail closed");
+    }
+
+    uint8_t cs_enable_val;
+    if (nvs_get_u8(handle, "cs_enable", &cs_enable_val) == ESP_OK) {
+        cfg->cs_ingress_enabled = cs_enable_val ? 1u : 0u;
+        ESP_LOGI(TAG, "NVS override: cs_ingress_enabled=%u",
+                 (unsigned)cfg->cs_ingress_enabled);
+    }
+    if (nvs_get_u8(handle, "cs_key_id", &cfg->cs_key_id) == ESP_OK) {
+        ESP_LOGI(TAG, "NVS override: cs_key_id=%u", (unsigned)cfg->cs_key_id);
+    }
+    size_t cs_secret_len = sizeof(cfg->cs_secret);
+    if (nvs_get_blob(handle, "cs_secret", cfg->cs_secret, &cs_secret_len) == ESP_OK
+        && cs_secret_len == sizeof(cfg->cs_secret)
+        && secret_has_nonzero_byte(cfg->cs_secret, sizeof(cfg->cs_secret))) {
+        cfg->cs_secret_valid = 1u;
+        ESP_LOGI(TAG, "NVS: cs_secret loaded (32 bytes)");
+    } else if (cfg->cs_ingress_enabled) {
+        ESP_LOGW(TAG, "cs_enable=1 but exact 32-byte cs_secret is absent; ingress will fail closed");
+    }
+    if (nvs_get_u32(handle, "cs_source_id", &cfg->cs_enrolled_source_id) == ESP_OK) {
+        ESP_LOGI(TAG, "NVS: enrolled Channel Sounding source id loaded");
+    }
+
+    if (nvs_get_u8(handle, "radio_key_id", &cfg->radio_envelope_key_id) == ESP_OK) {
+        ESP_LOGI(TAG, "NVS override: radio envelope key id=%u",
+                 (unsigned)cfg->radio_envelope_key_id);
+    }
+    size_t radio_secret_len = sizeof(cfg->radio_envelope_secret);
+    if (nvs_get_blob(handle, "radio_secret", cfg->radio_envelope_secret,
+                     &radio_secret_len) == ESP_OK
+        && radio_secret_len == sizeof(cfg->radio_envelope_secret)
+        && secret_has_nonzero_byte(cfg->radio_envelope_secret,
+                                   sizeof(cfg->radio_envelope_secret))) {
+        cfg->radio_envelope_secret_valid = 1u;
+        ESP_LOGI(TAG, "NVS: radio envelope secret loaded (32 bytes)");
+    } else if (cfg->ble_identity_enabled || cfg->cs_ingress_enabled) {
+        ESP_LOGW(TAG, "radio evidence enabled but gateway envelope key is absent; both paths fail closed");
+    }
+
+    bool reused_radio_key =
+        (cfg->ble_secret_valid && cfg->cs_secret_valid
+         && memcmp(cfg->ble_secret, cfg->cs_secret,
+                   sizeof(cfg->ble_secret)) == 0)
+        || (cfg->ble_secret_valid && cfg->radio_envelope_secret_valid
+            && memcmp(cfg->ble_secret, cfg->radio_envelope_secret,
+                      sizeof(cfg->ble_secret)) == 0)
+        || (cfg->cs_secret_valid && cfg->radio_envelope_secret_valid
+            && memcmp(cfg->cs_secret, cfg->radio_envelope_secret,
+                      sizeof(cfg->cs_secret)) == 0);
+    if (reused_radio_key) {
+        ESP_LOGE(TAG, "BLE, Channel Sounding and gateway envelope keys must be distinct");
+        cfg->ble_secret_valid = 0u;
+        cfg->cs_secret_valid = 0u;
+        cfg->radio_envelope_secret_valid = 0u;
     }
 
     /* Validate tdm_slot_index < tdm_node_count */

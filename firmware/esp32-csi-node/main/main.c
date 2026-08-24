@@ -38,6 +38,9 @@
 #include "c6_lp_core.h"            /* ADR-110: LP-core hibernation (no-op on S3) */
 #include "c6_sync_espnow.h"        /* ADR-110 D1 workaround: ESP-NOW sync */
 #include "c6_softap_he.h"          /* ADR-110 B1/B2: HE/TWT soft-AP (no-op when disabled) */
+#include "ble_identity.h"          /* ADR-341: authenticated BLE anchors, no CTE IQ */
+#include "channel_sounding_ingress.h" /* ADR-341: external BT6 CS primitives */
+#include "radio_gateway_sender.h"  /* ADR-341: bounded authenticated egress */
 #ifdef CONFIG_CSI_MOCK_ENABLED
 #include "mock_csi.h"
 #endif
@@ -501,12 +504,32 @@ void app_main(void)
         csi_collector_enable_data_capture();
     }
 
-    ESP_LOGI(TAG, "CSI streaming active → %s:%d (edge_tier=%u, OTA=%s, WASM=%s, mmWave=%s, swarm=%s, adapt=%s)",
+    /* ADR-341: both capabilities are opt-in. BLE uses bounded passive scan
+     * duty and forwards only authenticated rotating pseudonyms. Channel
+     * Sounding data can only arrive from a separate capable radio over UART;
+     * the ESP32-S3 itself exposes neither CTE IQ nor BT6 CS measurements. */
+    esp_err_t gateway_ret = radio_gateway_sender_init();
+    if (gateway_ret != ESP_OK && gateway_ret != ESP_ERR_NOT_SUPPORTED) {
+        ESP_LOGW(TAG, "Radio gateway envelope init failed: %s",
+                 esp_err_to_name(gateway_ret));
+    }
+    esp_err_t ble_ret = ble_identity_init();
+    if (ble_ret != ESP_OK && ble_ret != ESP_ERR_NOT_SUPPORTED) {
+        ESP_LOGW(TAG, "BLE identity init failed: %s", esp_err_to_name(ble_ret));
+    }
+    esp_err_t cs_ret = channel_sounding_ingress_init();
+    if (cs_ret != ESP_OK && cs_ret != ESP_ERR_NOT_SUPPORTED) {
+        ESP_LOGW(TAG, "Channel Sounding companion init failed: %s", esp_err_to_name(cs_ret));
+    }
+
+    ESP_LOGI(TAG, "CSI streaming active → %s:%d (edge_tier=%u, OTA=%s, WASM=%s, mmWave=%s, BLE-anchor=%s, BT6-CS=%s, swarm=%s, adapt=%s)",
              g_nvs_config.target_ip, g_nvs_config.target_port,
              g_nvs_config.edge_tier,
              (ota_ret == ESP_OK) ? "ready" : "off",
              (wasm_ret == ESP_OK) ? "ready" : "off",
              (mmwave_ret == ESP_OK) ? "active" : "off",
+             (ble_ret == ESP_OK) ? "starting" : "off",
+             (cs_ret == ESP_OK) ? "external" : "off",
              (swarm_ret == ESP_OK) ? g_nvs_config.seed_url : "off",
              (adapt_ret == ESP_OK) ? "on" : "off");
 

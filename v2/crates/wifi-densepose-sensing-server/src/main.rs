@@ -121,6 +121,72 @@ struct Args {
     #[arg(long, env = "RUVIEW_UDP_INSECURE_LAN")]
     udp_insecure_lan: bool,
 
+    /// Primary ESP32-S3 node enrolled to submit authenticated RVAE envelopes.
+    #[arg(long, env = "RUVIEW_RADIO_GATEWAY_NODE_ID")]
+    radio_gateway_node_id: Option<u8>,
+
+    /// Primary gateway HMAC key selector.
+    #[arg(long, env = "RUVIEW_RADIO_GATEWAY_KEY_ID")]
+    radio_gateway_key_id: Option<u8>,
+
+    /// File containing exactly 32 raw primary gateway secret bytes.
+    #[arg(long, value_name = "PATH", env = "RUVIEW_RADIO_GATEWAY_SECRET_FILE")]
+    radio_gateway_secret_file: Option<PathBuf>,
+
+    /// Additional gateway enrollment as `NODE,KEY,SECRET_PATH`. Repeat for
+    /// independent gateways; node and key pairs and secrets must be unique.
+    #[arg(long = "radio-gateway", value_name = "NODE,KEY,SECRET_PATH")]
+    radio_additional_gateways: Vec<String>,
+
+    /// Distinct 32 byte deployment key used to derive host scoped `blep:`
+    /// tokens. Raw BLE pseudonyms are never exported or persisted.
+    #[arg(
+        long,
+        value_name = "PATH",
+        env = "RUVIEW_RADIO_HOST_PSEUDONYM_SECRET_FILE"
+    )]
+    radio_host_pseudonym_secret_file: Option<PathBuf>,
+
+    /// Private durable replay state for authenticated radio envelopes.
+    #[arg(
+        long,
+        value_name = "PATH",
+        env = "RUVIEW_RADIO_REPLAY_STATE",
+        default_value = "data/radio-replay-v2.json"
+    )]
+    radio_replay_state: PathBuf,
+
+    /// One-shot creation of a missing replay snapshot. Remove this option after
+    /// creation. If state was lost, rotate all enrolled keys before using it.
+    #[arg(long, env = "RUVIEW_RADIO_INITIALIZE_REPLAY_STATE")]
+    radio_initialize_replay_state: bool,
+
+    /// HMAC key selector for a separately enrolled Channel Sounding radio.
+    #[arg(long, env = "RUVIEW_RADIO_CS_KEY_ID")]
+    radio_cs_key_id: Option<u8>,
+
+    /// Nonzero opaque identifier for the Channel Sounding companion.
+    #[arg(long, env = "RUVIEW_RADIO_CS_SOURCE_ID")]
+    radio_cs_source_id: Option<u32>,
+
+    /// File containing exactly 32 raw companion HMAC secret bytes.
+    #[arg(long, value_name = "PATH", env = "RUVIEW_RADIO_CS_SECRET_FILE")]
+    radio_cs_secret_file: Option<PathBuf>,
+
+    /// Local deployment override for P5 BLE anchor export. This is not a
+    /// subject consent receipt and is accepted only with loopback, auth, and audit.
+    #[arg(long, env = "RUVIEW_RADIO_UNSAFE_EXPORT_P5_IDENTITY")]
+    radio_unsafe_export_p5_identity: bool,
+
+    /// Local deployment override for P4 aggregate respiration export. Exact
+    /// P0 phase, RTT, frequency offset, and step vectors never leave the edge.
+    #[arg(long, env = "RUVIEW_RADIO_UNSAFE_EXPORT_P4_BIOLOGICAL")]
+    radio_unsafe_export_p4_biological: bool,
+
+    /// Private append-only audit log required by either radio export override.
+    #[arg(long, value_name = "PATH", env = "RUVIEW_RADIO_EXPORT_AUDIT_LOG")]
+    radio_export_audit_log: Option<PathBuf>,
+
     /// Path to UI static files (repo `ui/`; from `v2/` use `../ui` or rely on auto-detect)
     #[arg(long, default_value = "../ui")]
     ui_path: PathBuf,
@@ -6210,11 +6276,14 @@ async fn udp_receiver_task(
     bind_ip: std::net::IpAddr,
     udp_port: u16,
     allowlist: std::sync::Arc<wifi_densepose_sensing_server::udp_bind::UdpSourceAllowlist>,
+    radio_sender: Option<
+        std::sync::mpsc::SyncSender<wifi_densepose_sensing_server::radio_ingress::RadioDatagram>,
+    >,
 ) {
     let addr = format!("{bind_ip}:{udp_port}");
     let socket = match UdpSocket::bind(&addr).await {
         Ok(s) => {
-            info!("UDP listening on {addr} for ESP32, MediaTek, Qualcomm CSI, and RTL8720F radar frames");
+            info!("UDP listening on {addr} for ESP32, authenticated radio evidence, MediaTek, Qualcomm CSI, and RTL8720F radar frames");
             s
         }
         Err(e) => {
@@ -6224,6 +6293,10 @@ async fn udp_receiver_task(
     };
 
     let mut buf = vec![0u8; wifi_densepose_hardware::rtl8720f::RTL8720F_RADAR_MAX_FRAME_LEN];
+    let mut radio_queue_drops = 0u64;
+    let mut radio_invalid_length_drops = 0u64;
+    let mut radio_worker_unhealthy = false;
+    let mut last_radio_queue_warning = std::time::Instant::now();
     loop {
         match socket.recv_from(&mut buf).await {
             Ok((len, src)) => {
@@ -6234,6 +6307,65 @@ async fn udp_receiver_task(
                         "Dropped UDP frame from disallowed source {src} (allowlist active; total dropped={})",
                         allowlist.dropped()
                     );
+                    continue;
+                }
+                if len >= 4
+                    && u32::from_le_bytes(buf[..4].try_into().expect("four-byte slice"))
+                        == ruview_fusion::radio_fusion::GATEWAY_ENVELOPE_MAGIC
+                {
+                    if !wifi_densepose_sensing_server::radio_ingress::is_supported_rvae_datagram_len(
+                        len,
+                    ) {
+                        radio_invalid_length_drops = radio_invalid_length_drops.saturating_add(1);
+                        if last_radio_queue_warning.elapsed() >= std::time::Duration::from_secs(1) {
+                            warn!(
+                                dropped = radio_invalid_length_drops,
+                                received_len = len,
+                                "RVAE datagrams with unsupported lengths were dropped before allocation and authentication"
+                            );
+                            radio_invalid_length_drops = 0;
+                            last_radio_queue_warning = std::time::Instant::now();
+                        }
+                        continue;
+                    }
+                    let queued = match radio_sender.as_ref() {
+                        Some(sender) => {
+                            let datagram =
+                                wifi_densepose_sensing_server::radio_ingress::RadioDatagram {
+                                    frame: buf[..len].to_vec(),
+                                    host_received_at_unix_us: chrono::Utc::now().timestamp_micros(),
+                                    source: src,
+                                };
+                            match sender.try_send(datagram) {
+                                Ok(()) => true,
+                                Err(std::sync::mpsc::TrySendError::Full(_)) => false,
+                                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                                    radio_worker_unhealthy = true;
+                                    false
+                                }
+                            }
+                        }
+                        None => false,
+                    };
+                    if !queued {
+                        radio_queue_drops = radio_queue_drops.saturating_add(1);
+                        if last_radio_queue_warning.elapsed() >= std::time::Duration::from_secs(1) {
+                            if radio_worker_unhealthy {
+                                error!(
+                                    dropped = radio_queue_drops,
+                                    "RVAE ingress worker is unhealthy and its queue is disconnected"
+                                );
+                            } else {
+                                warn!(
+                                    dropped = radio_queue_drops,
+                                    configured = radio_sender.is_some(),
+                                    "RVAE ingress queue unavailable or full; datagrams were dropped before authentication"
+                                );
+                            }
+                            radio_queue_drops = 0;
+                            last_radio_queue_warning = std::time::Instant::now();
+                        }
+                    }
                     continue;
                 }
                 if len > 0 && buf[0] == b'{' {
@@ -7708,6 +7840,114 @@ fn coalesce_ui_path(initial: std::path::PathBuf) -> std::path::PathBuf {
     initial
 }
 
+fn parse_radio_gateway(
+    value: &str,
+) -> Result<wifi_densepose_sensing_server::radio_ingress::GatewayRuntimeOptions, String> {
+    let mut fields = value.splitn(3, ',');
+    let node_id = fields
+        .next()
+        .ok_or_else(|| "radio gateway requires NODE,KEY,SECRET_PATH".to_string())?
+        .parse::<u8>()
+        .map_err(|_| "radio gateway NODE must be an integer from 1 through 255".to_string())?;
+    let key_id = fields
+        .next()
+        .ok_or_else(|| "radio gateway requires NODE,KEY,SECRET_PATH".to_string())?
+        .parse::<u8>()
+        .map_err(|_| "radio gateway KEY must be an integer from 0 through 255".to_string())?;
+    let secret = fields
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "radio gateway SECRET_PATH must not be empty".to_string())?;
+    if node_id == 0 {
+        return Err("radio gateway NODE must be nonzero".to_string());
+    }
+    Ok(
+        wifi_densepose_sensing_server::radio_ingress::GatewayRuntimeOptions {
+            node_id,
+            key_id,
+            secret_file: PathBuf::from(secret),
+        },
+    )
+}
+
+fn open_radio_ingress(
+    args: &Args,
+) -> Result<Option<wifi_densepose_sensing_server::radio_ingress::RadioIngressRuntime>, String> {
+    use wifi_densepose_sensing_server::radio_ingress::{
+        ChannelSoundingRuntimeOptions, GatewayRuntimeOptions, RadioIngressOptions,
+        RadioIngressRuntime,
+    };
+
+    let mut gateways = Vec::new();
+    match (
+        args.radio_gateway_node_id,
+        args.radio_gateway_key_id,
+        args.radio_gateway_secret_file.as_ref(),
+    ) {
+        (None, None, None) => {}
+        (Some(node_id), Some(key_id), Some(secret_file)) => gateways.push(GatewayRuntimeOptions {
+            node_id,
+            key_id,
+            secret_file: secret_file.clone(),
+        }),
+        _ => {
+            return Err(
+                "primary radio gateway node id, key id, and secret file must be supplied together"
+                    .to_string(),
+            )
+        }
+    }
+    for value in &args.radio_additional_gateways {
+        gateways.push(parse_radio_gateway(value)?);
+    }
+
+    let companion = match (
+        args.radio_cs_key_id,
+        args.radio_cs_source_id,
+        args.radio_cs_secret_file.as_ref(),
+    ) {
+        (None, None, None) => None,
+        (Some(key_id), Some(source_id), Some(secret_file)) => Some(ChannelSoundingRuntimeOptions {
+            key_id,
+            source_id,
+            secret_file: secret_file.clone(),
+        }),
+        _ => {
+            return Err(
+                "Channel Sounding key id, source id, and secret file must be supplied together"
+                    .to_string(),
+            )
+        }
+    };
+
+    if gateways.is_empty() {
+        if companion.is_some() || args.radio_host_pseudonym_secret_file.is_some() {
+            return Err(
+                "Channel Sounding and host pseudonym configuration require at least one RVAE gateway"
+                    .to_string(),
+            );
+        }
+        return Ok(None);
+    }
+    let host_pseudonym_secret_file = args
+        .radio_host_pseudonym_secret_file
+        .clone()
+        .ok_or_else(|| "radio gateways require a host pseudonym secret file".to_string())?;
+
+    RadioIngressRuntime::open(
+        RadioIngressOptions {
+            gateways,
+            host_pseudonym_secret_file,
+            replay_state_file: args.radio_replay_state.clone(),
+            initialize_replay_state: args.radio_initialize_replay_state,
+            channel_sounding: companion,
+        },
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .map(Some)
+    .map_err(|error| error.to_string())
+}
+
 #[tokio::main]
 async fn main() {
     // Initialize tracing; with the `otel` feature and
@@ -8315,6 +8555,66 @@ async fn main() {
         plan.bind_udp, plan.run_simulator, plan.run_wifi
     );
 
+    let radio_requested = args.radio_gateway_node_id.is_some()
+        || args.radio_gateway_key_id.is_some()
+        || args.radio_gateway_secret_file.is_some()
+        || !args.radio_additional_gateways.is_empty()
+        || args.radio_host_pseudonym_secret_file.is_some()
+        || args.radio_cs_key_id.is_some()
+        || args.radio_cs_source_id.is_some()
+        || args.radio_cs_secret_file.is_some();
+    if radio_requested && !plan.bind_udp {
+        error!("Authenticated radio ingress requires a source mode that binds UDP");
+        std::process::exit(1);
+    }
+    let radio_runtime = match open_radio_ingress(&args) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            error!("Authenticated radio ingress configuration failed: {error}");
+            std::process::exit(1);
+        }
+    };
+    if args.radio_initialize_replay_state && radio_runtime.is_none() {
+        error!("Replay initialization requires at least one complete gateway enrollment");
+        std::process::exit(1);
+    }
+    let radio_export_policy = wifi_densepose_sensing_server::radio_ingress::RadioExportPolicy {
+        allow_biological_p4: args.radio_unsafe_export_p4_biological,
+        allow_identity_p5: args.radio_unsafe_export_p5_identity,
+    };
+    if radio_export_policy.any() {
+        let export_bind = args
+            .bind_addr
+            .parse::<std::net::IpAddr>()
+            .unwrap_or_else(|_| {
+                error!("Invalid --bind-addr '{}'", args.bind_addr);
+                std::process::exit(1);
+            });
+        let auth_configured = ["RUVIEW_API_TOKEN", "RUVIEW_OAUTH_ISSUER"]
+            .iter()
+            .any(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()));
+        if radio_runtime.is_none()
+            || !export_bind.is_loopback()
+            || !auth_configured
+            || args.radio_export_audit_log.is_none()
+        {
+            error!(
+                "Radio P4/P5 export overrides require authenticated radio ingress, a loopback bind, configured bearer or OAuth authentication, and a private audit log"
+            );
+            std::process::exit(1);
+        }
+    }
+    if let Some(runtime) = radio_runtime.as_ref() {
+        info!(
+            "Authenticated RVAE ingress enabled; durable replay state: {}",
+            runtime.replay_state_file().display()
+        );
+        info!(
+            "Radio WebSocket export overrides: P4 biological={}, P5 identity={}",
+            radio_export_policy.allow_biological_p4, radio_export_policy.allow_identity_p5
+        );
+    }
+
     // Shared state
     // Vital sign sample rate derives from tick interval (e.g. 500ms tick => 2 Hz)
     let vital_sample_rate = 1000.0 / args.tick_ms as f64;
@@ -8445,6 +8745,23 @@ async fn main() {
     };
 
     let (tx, _) = broadcast::channel::<String>(256);
+    let radio_sender = match radio_runtime {
+        Some(runtime) => {
+            match wifi_densepose_sensing_server::radio_ingress::spawn_radio_ingress_worker(
+                runtime,
+                radio_export_policy,
+                args.radio_export_audit_log.clone(),
+                tx.clone(),
+            ) {
+                Ok(sender) => Some(sender),
+                Err(error) => {
+                    error!("Authenticated radio worker failed to start: {error}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        None => None,
+    };
     // ADR-099: parallel broadcast for the per-frame introspection snapshot stream
     // consumed by `/ws/introspection`. Same ring size as `tx` (256) — slow
     // clients drop oldest, identical backpressure shape.
@@ -8691,6 +9008,7 @@ async fn main() {
             udp_bind_ip,
             args.udp_port,
             udp_allowlist,
+            radio_sender,
         ));
         tokio::spawn(broadcast_tick_task(state.clone(), args.tick_ms));
     }

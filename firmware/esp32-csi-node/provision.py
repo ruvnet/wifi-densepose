@@ -79,7 +79,22 @@ CONFIG_VALUE_CHECKS = [
     ("zone", lambda value: value is not None),
     ("swarm_hb", lambda value: value is not None),
     ("swarm_ingest", lambda value: value is not None),
+    ("ble_identity_enable", lambda value: value is not None),
+    ("ble_key_id", lambda value: value is not None),
+    ("cs_ingress_enable", lambda value: value is not None),
+    ("cs_key_id", lambda value: value is not None),
+    ("cs_source_id", lambda value: value is not None),
+    ("radio_envelope_key_id", lambda value: value is not None),
 ]
+
+
+SECRET_VALUE_ATTRS = (
+    "password",
+    "seed_token",
+    "ble_secret_bytes",
+    "cs_secret_bytes",
+    "radio_envelope_secret_bytes",
+)
 
 
 def has_config_value(args):
@@ -108,6 +123,9 @@ MERGEABLE_ATTRS = [
     "channel", "filter_mac",
     "hop_channels", "hop_dwell",
     "seed_url", "seed_token", "zone", "swarm_hb", "swarm_ingest",
+    "ble_identity_enable", "ble_key_id",
+    "cs_ingress_enable", "cs_key_id", "cs_source_id",
+    "radio_envelope_key_id",
 ]
 
 
@@ -148,12 +166,26 @@ def save_state(port: str, state_dir: str, state: dict) -> str:
     """Write `state` to the per-port file, creating dirs as needed. Returns path."""
     os.makedirs(state_dir, exist_ok=True)
     path = _state_path_for(port, state_dir)
-    # Sort keys for deterministic on-disk content (easier to diff).
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2, sort_keys=True)
-        f.write("\n")
-    os.replace(tmp, path)
+    # The merge state can contain a WiFi password or bearer token. Create the
+    # temporary file atomically at 0600 and re-assert that mode after replace,
+    # including when an older, overly broad file already existed.
+    fd, tmp = tempfile.mkstemp(prefix=".provision-state-", dir=state_dir, text=True)
+    try:
+        _restrict_file_permissions(fd=fd)
+        with os.fdopen(fd, "w", encoding="utf-8") as state_file:
+            fd = None
+            json.dump(state, state_file, indent=2, sort_keys=True)
+            state_file.write("\n")
+            state_file.flush()
+            os.fsync(state_file.fileno())
+        os.replace(tmp, path)
+        _restrict_file_permissions(path=path)
+    except Exception:
+        if fd is not None:
+            os.close(fd)
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
     return path
 
 
@@ -172,6 +204,39 @@ def merge_state_into_args(args, prior: dict) -> dict:
         elif name in merged:
             setattr(args, name, merged[name])
     return merged
+
+
+def has_secret_value(args):
+    """Return True if generated output would contain credential material."""
+    return any(getattr(args, name, None) is not None for name in SECRET_VALUE_ATTRS)
+
+
+def _secret_hex(secret, purpose):
+    """Validate an in-memory HMAC secret before adding it to NVS CSV."""
+    if not isinstance(secret, (bytes, bytearray)) or len(secret) != 32:
+        raise ValueError(f"{purpose} secret must be exactly 32 bytes")
+    if not any(secret):
+        raise ValueError(f"{purpose} secret must not be all zero")
+    return bytes(secret).hex()
+
+
+def validate_distinct_radio_secrets(ble_secret, cs_secret, radio_secret):
+    """Reject absent key separation before any secret reaches generated NVS."""
+    named = [
+        ("BLE", ble_secret),
+        ("Channel Sounding", cs_secret),
+        ("Gateway envelope", radio_secret),
+    ]
+    present = [(name, bytes(secret)) for name, secret in named if secret is not None]
+    for name, secret in present:
+        if len(secret) != 32 or not any(secret):
+            raise ValueError(f"{name} secret must be a nonzero 32-byte key")
+    for index, (left_name, left_secret) in enumerate(present):
+        for right_name, right_secret in present[index + 1:]:
+            if left_secret == right_secret:
+                raise ValueError(
+                    f"{left_name} and {right_name} secrets must be independently generated"
+                )
 
 
 def build_nvs_csv(args):
@@ -234,16 +299,137 @@ def build_nvs_csv(args):
         writer.writerow(["swarm_hb", "data", "u16", str(args.swarm_hb)])
     if args.swarm_ingest is not None:
         writer.writerow(["swarm_ingest", "data", "u16", str(args.swarm_ingest)])
+    # ADR-341: BLE identity is opt-in and requires a 32-byte secret supplied
+    # for this invocation. The secret is written to NVS but never to the
+    # additive JSON state file.
+    if getattr(args, "ble_identity_enable", None) is not None:
+        writer.writerow(["ble_enable", "data", "u8", str(args.ble_identity_enable)])
+    if getattr(args, "ble_key_id", None) is not None:
+        writer.writerow(["ble_key_id", "data", "u8", str(args.ble_key_id)])
+    ble_secret = getattr(args, "ble_secret_bytes", None)
+    if ble_secret is not None:
+        writer.writerow([
+            "ble_secret", "data", "hex2bin", _secret_hex(ble_secret, "BLE")
+        ])
+    if getattr(args, "cs_ingress_enable", None) is not None:
+        writer.writerow(["cs_enable", "data", "u8", str(args.cs_ingress_enable)])
+    if getattr(args, "cs_key_id", None) is not None:
+        writer.writerow(["cs_key_id", "data", "u8", str(args.cs_key_id)])
+    cs_secret = getattr(args, "cs_secret_bytes", None)
+    if cs_secret is not None:
+        writer.writerow([
+            "cs_secret", "data", "hex2bin",
+            _secret_hex(cs_secret, "Channel Sounding")
+        ])
+    if getattr(args, "cs_source_id", None) is not None:
+        writer.writerow(["cs_source_id", "data", "u32", str(args.cs_source_id)])
+    if getattr(args, "radio_envelope_key_id", None) is not None:
+        writer.writerow([
+            "radio_key_id", "data", "u8", str(args.radio_envelope_key_id)
+        ])
+    radio_secret = getattr(args, "radio_envelope_secret_bytes", None)
+    if radio_secret is not None:
+        writer.writerow([
+            "radio_secret", "data", "hex2bin",
+            _secret_hex(radio_secret, "Gateway envelope")
+        ])
     return buf.getvalue()
+
+
+def load_ble_secret(path, purpose="BLE"):
+    """Read an exact 32-byte HMAC key without persisting or printing it.
+
+    Accepted forms are exactly 32 raw bytes or 64 ASCII hexadecimal
+    characters, optionally followed by one LF or CRLF. No other whitespace or
+    trailing bytes are accepted, and EOF is checked explicitly.
+    """
+    if path is None:
+        return None
+    with open(path, "rb") as secret_file:
+        # CRLF makes 66 bytes the largest accepted representation. Read one
+        # byte beyond that bound to prove the file ended.
+        raw = secret_file.read(66)
+        trailing = secret_file.read(1)
+    if trailing:
+        raise ValueError(f"{purpose} secret file contains trailing data")
+    if len(raw) == 32:
+        decoded = raw
+        if not any(decoded):
+            raise ValueError(f"{purpose} secret must not be all zero")
+        return decoded
+
+    if len(raw) == 65 and raw.endswith(b"\n"):
+        encoded = raw[:-1]
+    elif len(raw) == 66 and raw.endswith(b"\r\n"):
+        encoded = raw[:-2]
+    elif len(raw) == 64:
+        encoded = raw
+    else:
+        raise ValueError(
+            f"{purpose} secret file must contain exactly 32 raw bytes or 64 hex characters"
+        )
+
+    if not all(byte in b"0123456789abcdefABCDEF" for byte in encoded):
+        raise ValueError(f"{purpose} secret file is not valid hexadecimal")
+    decoded = bytes.fromhex(encoded.decode("ascii"))
+    if not any(decoded):
+        raise ValueError(f"{purpose} secret must not be all zero")
+    return decoded
+
+
+def _restrict_file_permissions(path=None, fd=None):
+    """Apply owner-read/write-only permissions to a secret-bearing file."""
+    if fd is not None and hasattr(os, "fchmod"):
+        os.fchmod(fd, 0o600)
+    elif path is not None:
+        os.chmod(path, 0o600)
+
+
+def _write_private_bytes(path, content):
+    """Create or replace a binary output without a world-readable interval."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags, 0o600)
+    try:
+        _restrict_file_permissions(fd=fd)
+        with os.fdopen(fd, "wb") as output_file:
+            fd = None
+            output_file.write(content)
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _write_private_text(path, content):
+    """Create or replace a text output without a world-readable interval."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags, 0o600)
+    try:
+        _restrict_file_permissions(fd=fd)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as output_file:
+            fd = None
+            output_file.write(content)
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 def generate_nvs_binary(csv_content, size):
     """Generate an NVS partition binary from CSV using nvs_partition_gen.py."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f_csv:
+        _restrict_file_permissions(fd=f_csv.fileno())
         f_csv.write(csv_content)
         csv_path = f_csv.name
 
     bin_path = csv_path.replace(".csv", ".bin")
+    # Pre-create the generator output privately. Generators truncate this
+    # regular file in place, preserving 0600 throughout its lifetime.
+    _write_private_bytes(bin_path, b"")
 
     try:
         # Method 1: subprocess invocation (most reliable across package versions)
@@ -254,6 +440,7 @@ def generate_nvs_binary(csv_content, size):
                      csv_path, bin_path, hex(size)],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
+                _restrict_file_permissions(path=bin_path)
                 with open(bin_path, "rb") as f:
                     return f.read()
             except (subprocess.CalledProcessError, FileNotFoundError):
@@ -270,6 +457,7 @@ def generate_nvs_binary(csv_content, size):
                 sys.executable, gen_script, "generate",
                 csv_path, bin_path, hex(size)
             ])
+            _restrict_file_permissions(path=bin_path)
             with open(bin_path, "rb") as f:
                 return f.read()
 
@@ -287,6 +475,7 @@ def generate_nvs_binary(csv_content, size):
 def flash_nvs(port, baud, nvs_bin, chip):
     """Flash the NVS partition binary to the ESP32."""
     with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+        _restrict_file_permissions(fd=f.fileno())
         f.write(nvs_bin)
         bin_path = f.name
 
@@ -304,6 +493,17 @@ def flash_nvs(port, baud, nvs_bin, chip):
         print("NVS provisioning complete!")
     finally:
         os.unlink(bin_path)
+
+
+def _nonzero_u32(value):
+    """Argparse converter for an enrolled, nonzero uint32 identifier."""
+    try:
+        parsed = int(value, 0)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if not 1 <= parsed <= 0xFFFFFFFF:
+        raise argparse.ArgumentTypeError("must be between 1 and 4294967295")
+    return parsed
 
 
 def main():
@@ -354,6 +554,28 @@ def main():
     parser.add_argument("--zone", type=str, help="Zone name for this node (e.g. lobby, hallway)")
     parser.add_argument("--swarm-hb", type=int, help="Swarm heartbeat interval in seconds (default 30)")
     parser.add_argument("--swarm-ingest", type=int, help="Swarm vector ingest interval in seconds (default 5)")
+    # ADR-341: authenticated rotating BLE service tokens. The secret path and
+    # bytes are intentionally excluded from MERGEABLE_ATTRS/state JSON.
+    parser.add_argument("--ble-identity-enable", type=int, choices=[0, 1],
+                        help="Runtime BLE identity scanner switch; firmware build option is also required")
+    parser.add_argument("--ble-key-id", type=int, choices=range(0, 256), metavar="0..255",
+                        help="Shared BLE HMAC key selector")
+    parser.add_argument("--ble-secret-file", type=str,
+                        help="File containing exactly 32 raw key bytes or 64 hex characters; never persisted")
+    parser.add_argument("--cs-ingress-enable", type=int, choices=[0, 1],
+                        help="Runtime external Channel Sounding UART switch; firmware build option is also required")
+    parser.add_argument("--cs-key-id", type=int, choices=range(0, 256), metavar="0..255",
+                        help="Separate Channel Sounding companion HMAC key selector")
+    parser.add_argument("--cs-secret-file", type=str,
+                        help="File containing the separate 32-byte companion key; never persisted")
+    parser.add_argument("--cs-source-id", type=_nonzero_u32, metavar="1..4294967295",
+                        help="Enrolled nonzero Channel Sounding companion source identifier")
+    parser.add_argument("--radio-envelope-key-id", "--gateway-envelope-key-id",
+                        dest="radio_envelope_key_id", type=int, choices=range(0, 256),
+                        metavar="0..255", help="Gateway radio-envelope HMAC key selector")
+    parser.add_argument("--radio-envelope-secret-file", "--gateway-envelope-secret-file",
+                        dest="radio_envelope_secret_file", type=str,
+                        help="File containing the separate 32-byte gateway envelope key; never persisted")
     parser.add_argument("--dry-run", action="store_true", help="Generate NVS binary but don't flash")
     parser.add_argument("--force-partial", action="store_true",
                         help="[deprecated since #391/#574] Suppress the missing-WiFi-trio "
@@ -385,6 +607,94 @@ def main():
     if args.state:
         print(json.dumps(merged, indent=2, sort_keys=True))
         return
+
+    try:
+        args.ble_secret_bytes = load_ble_secret(args.ble_secret_file, "BLE")
+        args.cs_secret_bytes = load_ble_secret(args.cs_secret_file, "Channel Sounding")
+        args.radio_envelope_secret_bytes = load_ble_secret(
+            args.radio_envelope_secret_file, "Gateway envelope"
+        )
+    except (OSError, ValueError) as exc:
+        parser.error(f"Could not load radio HMAC secret: {exc}")
+
+    try:
+        validate_distinct_radio_secrets(
+            args.ble_secret_bytes,
+            args.cs_secret_bytes,
+            args.radio_envelope_secret_bytes,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    for option, value in [
+        ("--ble-identity-enable", args.ble_identity_enable),
+        ("--cs-ingress-enable", args.cs_ingress_enable),
+    ]:
+        if value is not None and (type(value) is not int or value not in (0, 1)):
+            parser.error(f"{option} must be either 0 or 1")
+    for option, value in [
+        ("--ble-key-id", args.ble_key_id),
+        ("--cs-key-id", args.cs_key_id),
+        ("--radio-envelope-key-id", args.radio_envelope_key_id),
+    ]:
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 255
+        ):
+            parser.error(f"{option} must be between 0 and 255")
+    if args.cs_source_id is not None and (
+        isinstance(args.cs_source_id, bool)
+        or not isinstance(args.cs_source_id, int)
+        or not 1 <= args.cs_source_id <= 0xFFFFFFFF
+    ):
+        parser.error("--cs-source-id must be a nonzero 32-bit integer")
+
+    if args.ble_identity_enable == 1:
+        if args.ble_key_id is None:
+            parser.error("--ble-key-id is required when BLE identity is enabled")
+        if args.ble_secret_bytes is None:
+            parser.error(
+                "--ble-secret-file is required on every provisioning run while BLE identity is enabled; "
+                "the key is intentionally not stored in the local merge-state JSON"
+            )
+    if args.cs_ingress_enable == 1:
+        if args.cs_key_id is None:
+            parser.error("--cs-key-id is required when Channel Sounding ingress is enabled")
+        if args.cs_secret_bytes is None:
+            parser.error(
+                "--cs-secret-file is required on every provisioning run while Channel Sounding ingress is enabled; "
+                "the key is intentionally not stored in the local merge-state JSON"
+            )
+        if args.cs_source_id is None:
+            parser.error(
+                "--cs-source-id is required and must be nonzero when Channel Sounding ingress is enabled"
+            )
+
+    radio_evidence_enabled = (
+        args.ble_identity_enable == 1 or args.cs_ingress_enable == 1
+    )
+    if radio_evidence_enabled:
+        if args.radio_envelope_key_id is None:
+            parser.error(
+                "--radio-envelope-key-id is required when BLE identity or Channel Sounding ingress is enabled"
+            )
+        if args.radio_envelope_secret_bytes is None:
+            parser.error(
+                "--radio-envelope-secret-file is required on every provisioning run while radio evidence is enabled; "
+                "the gateway key is intentionally not stored in local merge-state JSON"
+            )
+
+    for key_option, key_id, secret_option, secret in [
+        ("--ble-key-id", args.ble_key_id, "--ble-secret-file", args.ble_secret_bytes),
+        ("--cs-key-id", args.cs_key_id, "--cs-secret-file", args.cs_secret_bytes),
+        (
+            "--radio-envelope-key-id",
+            args.radio_envelope_key_id,
+            "--radio-envelope-secret-file",
+            args.radio_envelope_secret_bytes,
+        ),
+    ]:
+        if secret is not None and key_id is None:
+            parser.error(f"{key_option} is required when {secret_option} is supplied")
 
     if not has_config_value(args):
         parser.error(
@@ -478,6 +788,24 @@ def main():
         print(f"  Swarm HB:      {args.swarm_hb}s")
     if args.swarm_ingest is not None:
         print(f"  Swarm Ingest:  {args.swarm_ingest}s")
+    if args.ble_identity_enable is not None:
+        print(f"  BLE Identity:  {'enabled' if args.ble_identity_enable else 'disabled'}")
+    if args.ble_key_id is not None:
+        print(f"  BLE Key ID:    {args.ble_key_id}")
+    if args.ble_secret_bytes is not None:
+        print("  BLE Secret:    (32-byte key loaded; not persisted locally)")
+    if args.cs_ingress_enable is not None:
+        print(f"  CS Ingress:    {'enabled' if args.cs_ingress_enable else 'disabled'}")
+    if args.cs_key_id is not None:
+        print(f"  CS Key ID:     {args.cs_key_id}")
+    if args.cs_secret_bytes is not None:
+        print("  CS Secret:     (separate 32-byte key loaded; not persisted locally)")
+    if args.cs_source_id is not None:
+        print(f"  CS Source ID:  {args.cs_source_id}")
+    if args.radio_envelope_key_id is not None:
+        print(f"  Radio Key ID:  {args.radio_envelope_key_id}")
+    if args.radio_envelope_secret_bytes is not None:
+        print("  Radio Secret:  (separate 32-byte key loaded; not persisted locally)")
 
     csv_content = build_nvs_csv(args)
 
@@ -485,10 +813,15 @@ def main():
         nvs_bin = generate_nvs_binary(csv_content, NVS_PARTITION_SIZE)
     except Exception as e:
         print(f"\nError generating NVS binary: {e}", file=sys.stderr)
+        if has_secret_value(args):
+            print(
+                "Refusing to persist fallback NVS CSV because the configuration contains secrets.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         print("\nFallback: save CSV and flash manually with ESP-IDF tools.", file=sys.stderr)
         fallback_path = "nvs_config.csv"
-        with open(fallback_path, "w") as f:
-            f.write(csv_content)
+        _write_private_text(fallback_path, csv_content)
         print(f"Saved NVS CSV to {fallback_path}", file=sys.stderr)
         print(f"Flash with: python $IDF_PATH/components/nvs_flash/"
               f"nvs_partition_generator/nvs_partition_gen.py generate "
@@ -497,8 +830,7 @@ def main():
 
     if args.dry_run:
         out = "nvs_provision.bin"
-        with open(out, "wb") as f:
-            f.write(nvs_bin)
+        _write_private_bytes(out, nvs_bin)
         print(f"NVS binary saved to {out} ({len(nvs_bin)} bytes)")
         print(f"Flash manually: python -m esptool --chip {args.chip} --port {args.port} "
               f"write_flash 0x9000 {out}")

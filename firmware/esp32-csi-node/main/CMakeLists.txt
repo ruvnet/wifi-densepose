@@ -3,6 +3,13 @@ set(SRCS
     "edge_processing.c" "ota_update.c" "power_mgmt.c"
     "wasm_runtime.c" "wasm_upload.c" "rvf_parser.c"
     "mmwave_sensor.c"
+    # ADR-341 — privacy-minimized BLE anchors + external BT6 CS ingress
+    "ble_identity_protocol.c"
+    "ble_identity.c"
+    "channel_sounding_protocol.c"
+    "channel_sounding_ingress.c"
+    "radio_gateway_protocol.c"
+    "radio_gateway_sender.c"
     "swarm_bridge.c"
     # ADR-081 — adaptive CSI mesh firmware kernel
     "rv_radio_ops_esp32.c"
@@ -38,6 +45,10 @@ set(REQUIRES
     driver
     lwip
     mbedtls
+    # The BLE translation unit compiles to stubs when disabled.  Keep the
+    # component dependency explicit so a feature-enabled clean configure gets
+    # the public NimBLE headers during component discovery.
+    bt
 )
 
 # ADR-110: C6-only components — pulled in when building for esp32c6.
