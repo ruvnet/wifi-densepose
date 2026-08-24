@@ -119,7 +119,10 @@ test.describe('RuView NLOS mobile instrument UI', () => {
     await expect(cloud).toBeVisible();
     await expect(page.getByTestId('nlos-lidar-point-cloud-canvas')).toHaveAttribute('data-ready', 'true');
     await expect(page.getByTestId('nlos-cloud-target-count')).toHaveText('96');
+    await expect(page.getByTestId('nlos-cloud-boundary-label')).toHaveText('RECONSTRUCTION / NOT RAW SCAN');
     await expect(page.getByText('THREE.JS / WEBGL')).toBeVisible();
+    await expect(page.getByText('01 TRACK LOCK')).toBeVisible();
+    await expect(page.getByText('72% CONFIDENCE')).toBeVisible();
     await expect(page.getByTestId('nlos-synthetic-watermark')).toBeVisible();
 
     const dimensions = await cloud.evaluate((element) => ({

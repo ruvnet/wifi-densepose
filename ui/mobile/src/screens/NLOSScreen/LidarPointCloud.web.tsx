@@ -4,7 +4,11 @@ import * as THREE from 'three';
 import { instrumentColors } from '@/components/InstrumentPanel';
 import { ThemedText } from '@/components/ThemedText';
 import type { NlosFreshness, NlosTrack } from '@/types/nlos';
-import { buildLidarPointCloud } from './lidarPointCloud';
+import {
+  buildLidarPointCloud,
+  LIDAR_MAX_TRACKS,
+  resolveLidarTrackCenter,
+} from './lidarPointCloud';
 
 interface LidarPointCloudProps {
   tracks: NlosTrack[];
@@ -19,6 +23,8 @@ const CANVAS_ASPECT_RATIO = 360 / 260;
 interface WebSceneState {
   geometry: THREE.BufferGeometry;
   material: THREE.PointsMaterial;
+  markerGroup: THREE.Group;
+  markerSignature: string;
   points: THREE.Points;
   render: () => void;
 }
@@ -26,6 +32,16 @@ interface WebSceneState {
 const disposeMaterial = (material: THREE.Material | THREE.Material[]) => {
   if (Array.isArray(material)) material.forEach((entry) => entry.dispose());
   else material.dispose();
+};
+
+const clearGroup = (group: THREE.Group) => {
+  group.traverse((entry) => {
+    if (entry instanceof THREE.Mesh || entry instanceof THREE.Line) {
+      entry.geometry.dispose();
+      disposeMaterial(entry.material);
+    }
+  });
+  group.clear();
 };
 
 const rgb = (red: number, green: number, blue: number) => (
@@ -114,6 +130,9 @@ export const LidarPointCloud = memo(({ tracks, freshness, width }: LidarPointClo
       const points = new THREE.Points(geometry, material);
       scene.add(points);
 
+      const markerGroup = new THREE.Group();
+      scene.add(markerGroup);
+
       const floorGrid = new THREE.GridHelper(8, 16, 0x174957, 0x102934);
       floorGrid.position.y = -0.04;
       floorGrid.position.z = -1.25;
@@ -160,7 +179,14 @@ export const LidarPointCloud = memo(({ tracks, freshness, width }: LidarPointClo
         renderer.render(scene, camera);
       };
 
-      sceneRef.current = { geometry, material, points, render: renderScene };
+      sceneRef.current = {
+        geometry,
+        markerGroup,
+        markerSignature: '',
+        material,
+        points,
+        render: renderScene,
+      };
 
       const onPointerDown = (event: PointerEvent) => {
         dragging = true;
@@ -245,7 +271,8 @@ export const LidarPointCloud = memo(({ tracks, freshness, width }: LidarPointClo
         window.cancelAnimationFrame(animationFrame);
         resizeObserver?.disconnect();
         listeners.forEach((remove) => remove());
-        scene.remove(points, floorGrid, relayPlane, sensor, ray);
+        scene.remove(points, markerGroup, floorGrid, relayPlane, sensor, ray);
+        clearGroup(markerGroup);
         geometry.dispose();
         material.dispose();
         floorGrid.geometry.dispose();
@@ -296,8 +323,63 @@ export const LidarPointCloud = memo(({ tracks, freshness, width }: LidarPointClo
     state.geometry.computeBoundingSphere();
     state.material.opacity = freshness === 'fresh' ? 0.92 : 0.34;
     state.material.needsUpdate = true;
+
+    const markerTracks = tracks.slice(0, LIDAR_MAX_TRACKS);
+    const markerSignature = markerTracks.map((track) => track.state).join('|');
+    if (markerSignature !== state.markerSignature) {
+      clearGroup(state.markerGroup);
+      state.markerSignature = markerSignature;
+      markerTracks.forEach((track) => {
+        const degraded = track.state === 'degraded';
+        const color = degraded ? 0xffb65c : 0x58f28b;
+        const opacity = freshness === 'fresh' ? 0.82 : 0.28;
+        const horizontalRing = new THREE.Mesh(
+          new THREE.TorusGeometry(0.31, 0.016, 5, 40),
+          new THREE.MeshBasicMaterial({ color, opacity, transparent: true }),
+        );
+        horizontalRing.rotation.x = Math.PI / 2;
+        state.markerGroup.add(horizontalRing);
+
+        const core = new THREE.Mesh(
+          new THREE.OctahedronGeometry(0.08, 0),
+          new THREE.MeshBasicMaterial({ color, wireframe: true }),
+        );
+        state.markerGroup.add(core);
+
+        const pillarGeometry = new THREE.BufferGeometry();
+        pillarGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+        const pillar = new THREE.Line(
+          pillarGeometry,
+          new THREE.LineBasicMaterial({ color, opacity: opacity * 0.62, transparent: true }),
+        );
+        state.markerGroup.add(pillar);
+      });
+    }
+
+    markerTracks.forEach((track, index) => {
+      const [x, y, z] = resolveLidarTrackCenter(track);
+      const degraded = track.state === 'degraded';
+      const opacity = freshness === 'fresh' ? 0.82 : 0.28;
+      const horizontalRing = state.markerGroup.children[index * 3] as THREE.Mesh;
+      horizontalRing.position.set(x, y, z);
+      (horizontalRing.material as THREE.MeshBasicMaterial).opacity = opacity;
+
+      const core = state.markerGroup.children[index * 3 + 1] as THREE.Mesh;
+      core.position.set(x, y, z);
+      (core.material as THREE.MeshBasicMaterial).opacity = degraded ? 0.82 : 1;
+      (core.material as THREE.MeshBasicMaterial).transparent = degraded;
+
+      const pillar = state.markerGroup.children[index * 3 + 2] as THREE.Line;
+      const pillarPosition = pillar.geometry.getAttribute('position') as THREE.BufferAttribute;
+      (pillarPosition.array as Float32Array).set([
+        x, Math.max(0.02, y - 0.52), z,
+        x, y + 0.52, z,
+      ]);
+      pillarPosition.needsUpdate = true;
+      (pillar.material as THREE.LineBasicMaterial).opacity = opacity * 0.62;
+    });
     state.render();
-  }, [cloud, freshness]);
+  }, [cloud, freshness, tracks]);
 
   return (
     <View
@@ -321,11 +403,39 @@ export const LidarPointCloud = memo(({ tracks, freshness, width }: LidarPointClo
         </View>
       ) : null}
       <View pointerEvents="none" style={styles.topHud}>
-        <ThemedText preset="mono" style={styles.hudTitle}>LIDAR POINT CLOUD</ThemedText>
-        <ThemedText preset="mono" style={styles.rendererLabel}>
-          {rendererState === 'fallback' ? 'STATIC FALLBACK' : 'THREE.JS / WEBGL'}
-        </ThemedText>
+        <View style={styles.titleStack}>
+          <ThemedText preset="mono" style={styles.hudTitle}>LIDAR POINT CLOUD</ThemedText>
+          <ThemedText testID="nlos-cloud-boundary-label" preset="mono" style={styles.boundaryLabel}>
+            RECONSTRUCTION / NOT RAW SCAN
+          </ThemedText>
+        </View>
+        <View style={styles.rendererStack}>
+          <ThemedText preset="mono" style={styles.rendererLabel}>
+            {rendererState === 'fallback' ? 'STATIC FALLBACK' : 'THREE.JS / WEBGL'}
+          </ThemedText>
+          <ThemedText preset="mono" style={styles.lockLabel}>
+            {tracks.length ? `${String(tracks.length).padStart(2, '0')} TRACK LOCK` : 'NO TARGET LOCK'}
+          </ThemedText>
+        </View>
       </View>
+      <View pointerEvents="none" style={styles.depthScale}>
+        <ThemedText preset="mono" style={styles.depthLabel}>RELAY</ThemedText>
+        <View style={styles.depthLine} />
+        <ThemedText preset="mono" style={styles.depthLabel}>HIDDEN</ThemedText>
+      </View>
+      {tracks[0] ? (
+        <View pointerEvents="none" style={styles.trackChip}>
+          <View style={styles.trackChipDot} />
+          <View>
+            <ThemedText preset="mono" style={styles.trackChipId}>
+              {tracks[0].trackId.toUpperCase()}
+            </ThemedText>
+            <ThemedText preset="mono" style={styles.trackChipMeta}>
+              {Math.round(tracks[0].confidence * 100)}% CONFIDENCE
+            </ThemedText>
+          </View>
+        </View>
+      ) : null}
       <View pointerEvents="none" style={styles.bottomHud}>
         <View>
           <ThemedText testID="nlos-cloud-target-count" preset="labelLg" style={styles.metricValue}>
@@ -370,12 +480,46 @@ const styles = StyleSheet.create({
     right: 12,
     zIndex: 2,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: 8,
   },
+  titleStack: { gap: 3 },
   hudTitle: { color: instrumentColors.cyan, fontSize: 9, letterSpacing: 1.15 },
+  boundaryLabel: { color: instrumentColors.warning, fontSize: 6.5, letterSpacing: 0.7 },
+  rendererStack: { alignItems: 'flex-end', gap: 3 },
   rendererLabel: { color: instrumentColors.textSecondary, fontSize: 8, letterSpacing: 0.8 },
+  lockLabel: { color: instrumentColors.green, fontSize: 7, letterSpacing: 0.7 },
+  depthScale: {
+    position: 'absolute',
+    left: 12,
+    top: 70,
+    bottom: 54,
+    zIndex: 2,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  depthLine: { flex: 1, width: 1, marginVertical: 5, backgroundColor: instrumentColors.cyanDim },
+  depthLabel: { color: instrumentColors.textSecondary, fontSize: 6, letterSpacing: 0.55 },
+  trackChip: {
+    position: 'absolute',
+    top: 54,
+    right: 12,
+    zIndex: 2,
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderColor: instrumentColors.greenDim,
+    borderWidth: 1,
+    backgroundColor: 'rgba(5, 14, 18, 0.76)',
+  },
+  trackChipDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: instrumentColors.green },
+  trackChipId: { color: instrumentColors.text, fontSize: 7, letterSpacing: 0.65 },
+  trackChipMeta: { color: instrumentColors.green, fontSize: 6.5, letterSpacing: 0.5 },
   bottomHud: {
     position: 'absolute',
     left: 12,

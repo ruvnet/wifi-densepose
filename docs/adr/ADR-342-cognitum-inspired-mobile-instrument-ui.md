@@ -337,6 +337,13 @@ consume only the existing fail-closed displayable track list. Do not add
 `expo-gl`, React Three Fiber, a WebView, a raw point-cloud schema, or a new sensor
 adapter in this UI-only decision.
 
+Render explicit target-lock reticles, a relay-to-hidden depth scale, confidence,
+and a persistent `RECONSTRUCTION / NOT RAW SCAN` boundary in the cloud surface.
+The reticle geometry reuses bounded marker objects and updates their positions in
+place so frame changes do not create a new WebGL context or allocate new marker
+meshes. These cues improve operator target acquisition without promoting the
+schematic cloud into physical sensor evidence.
+
 ## Alternatives with quantified tradeoffs
 
 Alternatives are scored from 1, poor, to 5, strong. Weighted score is out of

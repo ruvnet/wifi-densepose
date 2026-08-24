@@ -34,6 +34,12 @@ const writePoint = (
   colors[offset + 2] = color[2];
 };
 
+export const resolveLidarTrackCenter = (track: NlosTrack): readonly [number, number, number] => [
+  clamp(track.positionM.x, -6, 6) * 0.55,
+  0.45 + clamp(track.positionM.y, 0, 4) * 0.5,
+  0.35 - clamp(track.positionM.z, 0, 8) * 0.58,
+];
+
 export const buildLidarPointCloud = (tracks: readonly NlosTrack[]): LidarPointCloudData => {
   const visibleTracks = tracks.slice(0, LIDAR_MAX_TRACKS);
   const targetPointCount = visibleTracks.length * LIDAR_POINTS_PER_TRACK;
@@ -79,9 +85,7 @@ export const buildLidarPointCloud = (tracks: readonly NlosTrack[]): LidarPointCl
     const uncertaintyX = clamp(Math.sqrt(track.covarianceDiagonalM2.x), 0.08, 0.85);
     const uncertaintyY = clamp(Math.sqrt(track.covarianceDiagonalM2.y), 0.08, 0.85);
     const uncertaintyZ = clamp(Math.sqrt(track.covarianceDiagonalM2.z), 0.08, 0.85);
-    const centerX = clamp(track.positionM.x, -6, 6) * 0.55;
-    const centerY = 0.45 + clamp(track.positionM.y, 0, 4) * 0.5;
-    const centerZ = 0.35 - clamp(track.positionM.z, 0, 8) * 0.58;
+    const [centerX, centerY, centerZ] = resolveLidarTrackCenter(track);
     const degraded = track.state === 'degraded';
     const intensity = 0.58 + clamp(track.confidence, 0, 1) * 0.42;
 

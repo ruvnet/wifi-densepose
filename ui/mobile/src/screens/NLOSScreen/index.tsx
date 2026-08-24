@@ -30,10 +30,10 @@ const ViewModePicker = ({
 }) => (
   <View accessibilityRole="tablist" style={styles.picker}>
     {([
-      ['plan', '2D PLAN'],
-      ['perspective', '3D VIEW'],
-      ['cloud', 'LIDAR CLOUD'],
-    ] as const).map(([option, label]) => {
+      ['plan', '2D', 'PLAN'],
+      ['perspective', '3D', 'SCENE'],
+      ['cloud', 'LIDAR', 'CLOUD'],
+    ] as const).map(([option, eyebrow, label]) => {
       const selected = option === value;
       return (
         <Pressable
@@ -44,6 +44,15 @@ const ViewModePicker = ({
           onPress={() => onChange(option)}
           style={[styles.pickerButton, selected && styles.pickerButtonSelected]}
         >
+          <ThemedText
+            preset="mono"
+            style={[
+              styles.pickerEyebrow,
+              { color: selected ? instrumentColors.green : instrumentColors.textSecondary },
+            ]}
+          >
+            {eyebrow}
+          </ThemedText>
           <ThemedText
             preset="mono"
             style={[
@@ -448,6 +457,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 2,
     borderRadius: 9,
   },
   pickerButtonSelected: {
@@ -455,8 +465,9 @@ const styles = StyleSheet.create({
     borderColor: instrumentColors.cyanDim,
     borderWidth: 1,
   },
-  pickerLabel: { fontSize: 9, letterSpacing: 0.55, textAlign: 'center' },
-  visualizationStage: { position: 'relative', overflow: 'hidden' },
+  pickerEyebrow: { fontSize: 7, letterSpacing: 0.8, textAlign: 'center' },
+  pickerLabel: { fontSize: 10, letterSpacing: 0.7, textAlign: 'center' },
+  visualizationStage: { position: 'relative', overflow: 'hidden', paddingTop: spacing.xs },
   watermark: {
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',

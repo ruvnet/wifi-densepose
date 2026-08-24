@@ -14,6 +14,7 @@ import {
   buildLidarPointCloud,
   LIDAR_POINTS_PER_TRACK,
   LIDAR_RELAY_POINT_COUNT,
+  resolveLidarTrackCenter,
 } from '@/screens/NLOSScreen/lidarPointCloud';
 
 const mockSafeAreaInsets = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -310,6 +311,7 @@ describe('NLOSScreen', () => {
     expect(Array.from(first.positions)).toEqual(Array.from(second.positions));
     expect(Array.from(first.colors)).toEqual(Array.from(second.colors));
     expect(Array.from(first.positions).every(Number.isFinite)).toBe(true);
+    expect(resolveLidarTrackCenter(syntheticFrame.tracks[0]).every(Number.isFinite)).toBe(true);
   });
 
   it('keeps privacy, setup, explainer, and feedback controls visible in the screen tree', () => {
@@ -333,6 +335,7 @@ describe('NLOSScreen', () => {
     fireEvent.press(screen.getByTestId('nlos-view-cloud'));
     expect(screen.getByTestId('nlos-view-cloud').props.accessibilityState.selected).toBe(true);
     expect(screen.getByTestId('nlos-lidar-point-cloud')).toBeTruthy();
+    expect(screen.getByText('RECONSTRUCTION / NOT RAW SCAN')).toBeTruthy();
     expect(screen.getByTestId('nlos-cloud-target-count').props.children).toBe(
       syntheticFrame.tracks.length * LIDAR_POINTS_PER_TRACK,
     );

@@ -4,7 +4,8 @@ These images are deterministic review captures from the production Expo web
 export at a 390 by 844 viewport. The Playwright flow navigates the real mobile
 application, exercises the synthetic replay control, verifies provenance and
 watermark requirements, opens the deterministic Three.js LiDAR point cloud,
-and writes the PNG files in this directory.
+verifies the reconstruction boundary, target lock, and confidence HUD, and
+writes the PNG files in this directory.
 
 The captures contain only the disconnected state, governed setup copy, and the
 built in synthetic fixture. The point cloud is generated locally from gated

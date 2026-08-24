@@ -112,13 +112,47 @@ struct TrackCanvas: View {
                     with: .color(color.opacity(0.82))
                 )
             }
+
+            var lockLine = Path()
+            lockLine.move(to: CGPoint(x: centerX, y: centerY - radiusY - 10))
+            lockLine.addLine(to: CGPoint(x: centerX, y: centerY + radiusY + 10))
+            context.stroke(lockLine, with: .color(color.opacity(0.55)), lineWidth: 1)
+            context.stroke(
+                Path(ellipseIn: CGRect(
+                    x: centerX - radiusX - 5,
+                    y: centerY - radiusY - 5,
+                    width: (radiusX + 5) * 2,
+                    height: (radiusY + 5) * 2
+                )),
+                with: .color(color.opacity(0.86)),
+                style: StrokeStyle(lineWidth: 1.2, dash: [4, 3])
+            )
+            context.fill(
+                Path(ellipseIn: CGRect(x: centerX - 3, y: centerY - 3, width: 6, height: 6)),
+                with: .color(color)
+            )
+            context.draw(
+                Text("\(String(track.trackId.prefix(12)).uppercased())  \(Int((track.confidence * 100).rounded()))%")
+                    .font(.caption2.bold().monospaced())
+                    .foregroundColor(color),
+                at: CGPoint(
+                    x: min(size.width - 62, centerX + radiusX + 34),
+                    y: max(44, centerY - radiusY - 8)
+                )
+            )
         }
 
         context.draw(
-            Text("LIDAR POINT CLOUD / NATIVE SWIFTUI CANVAS")
+            Text("LIDAR POINT CLOUD / RECONSTRUCTION")
                 .font(.caption2.bold().monospaced())
                 .foregroundColor(cyan),
             at: CGPoint(x: size.width / 2, y: 18)
+        )
+        context.draw(
+            Text("NOT RAW IPHONE LIDAR")
+                .font(.caption2.bold().monospaced())
+                .foregroundColor(orange.opacity(0.82)),
+            at: CGPoint(x: size.width / 2, y: 34)
         )
         context.draw(
             Text("\(tracks.count * 72) GATED TARGET RETURNS")
