@@ -1,7 +1,10 @@
 import { StyleProp, ViewStyle } from 'react-native';
 import WebView, { type WebViewMessageEvent } from 'react-native-webview';
+import { Asset } from 'expo-asset';
 import type { RefObject } from 'react';
 import MAT_DASHBOARD_HTML from '@/assets/webview/mat-dashboard.html';
+
+const matDashboardAsset = Asset.fromModule(MAT_DASHBOARD_HTML);
 
 type MatWebViewProps = {
   webViewRef: RefObject<WebView | null>;
@@ -15,7 +18,7 @@ export const MatWebView = ({ webViewRef, onMessage, style }: MatWebViewProps) =>
       ref={webViewRef}
       originWhitelist={["*"]}
       style={style}
-      source={{ html: MAT_DASHBOARD_HTML }}
+      source={{ uri: matDashboardAsset.uri }}
       onMessage={onMessage}
       javaScriptEnabled
       domStorageEnabled
