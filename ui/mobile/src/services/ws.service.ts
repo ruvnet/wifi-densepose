@@ -17,9 +17,16 @@ class WsService {
   private status: ConnectionStatus = 'disconnected';
 
   connect(url: string): void {
+    const wasActive = this.active;
+    const targetChanged = url !== this.targetUrl;
     this.targetUrl = url;
     this.active = true;
-    this.reconnectAttempt = 0;
+
+    // A scheduled reconnect must preserve its attempt count. Resetting it on
+    // every call traps an unavailable installation in an infinite first retry.
+    if (!wasActive || targetChanged) {
+      this.reconnectAttempt = 0;
+    }
 
     if (!url) {
       this.handleStatusChange('simulated');
@@ -31,10 +38,18 @@ class WsService {
       return;
     }
 
-    this.handleStatusChange('connecting');
+    this.openConnection();
+  }
+
+  private openConnection(): void {
+    // When simulation is already providing frames, keep that honest status in
+    // the UI while the real endpoint is probed in the background.
+    if (!this.simulationTimer) {
+      this.handleStatusChange('connecting');
+    }
 
     try {
-      const endpoint = this.buildWsUrl(url);
+      const endpoint = this.buildWsUrl(this.targetUrl);
       const socket = new WebSocket(endpoint);
       this.ws = socket;
 
@@ -64,10 +79,8 @@ class WsService {
           this.handleStatusChange('disconnected');
           return;
         }
-        if (evt.code === 1000) {
-          this.handleStatusChange('disconnected');
-          return;
-        }
+        // A server is allowed to close with 1000. It is only an intentional
+        // client disconnect when `active` is false (handled above).
         this.scheduleReconnect();
       };
     } catch {
@@ -125,12 +138,13 @@ class WsService {
 
     const delay = RECONNECT_DELAYS[Math.min(this.reconnectAttempt, RECONNECT_DELAYS.length - 1)];
     this.reconnectAttempt += 1;
+    this.startSimulation();
+    this.handleStatusChange('simulated');
     this.clearReconnectTimer();
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      this.connect(this.targetUrl);
+      this.openConnection();
     }, delay);
-    this.startSimulation();
   }
 
   private startSimulation(): void {

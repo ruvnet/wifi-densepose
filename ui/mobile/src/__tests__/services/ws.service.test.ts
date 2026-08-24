@@ -111,6 +111,73 @@ describe('WsService', () => {
     });
   });
 
+  describe('connection fallback', () => {
+    it('uses simulation when an active server connection closes normally', () => {
+      const OrigWebSocket = globalThis.WebSocket;
+      let socket: any;
+
+      class MockWebSocket {
+        static OPEN = 1;
+        static CONNECTING = 0;
+        readyState = 0;
+        onopen: (() => void) | null = null;
+        onclose: ((event: { code: number }) => void) | null = null;
+        onerror: (() => void) | null = null;
+        onmessage: (() => void) | null = null;
+        close() {}
+        constructor() {
+          socket = this;
+        }
+      }
+
+      globalThis.WebSocket = MockWebSocket as any;
+      try {
+        const ws = createWsService();
+        ws.connect('http://localhost:3000');
+        socket.onclose?.({ code: 1000 });
+
+        expect(ws.getStatus()).toBe('simulated');
+        ws.disconnect();
+      } finally {
+        globalThis.WebSocket = OrigWebSocket;
+      }
+    });
+
+    it('preserves retry progress instead of restarting the first attempt', () => {
+      const OrigWebSocket = globalThis.WebSocket;
+      const sockets: any[] = [];
+
+      class MockWebSocket {
+        static OPEN = 1;
+        static CONNECTING = 0;
+        readyState = 0;
+        onopen: (() => void) | null = null;
+        onclose: ((event: { code: number }) => void) | null = null;
+        onerror: (() => void) | null = null;
+        onmessage: (() => void) | null = null;
+        close() {}
+        constructor() {
+          sockets.push(this);
+        }
+      }
+
+      globalThis.WebSocket = MockWebSocket as any;
+      try {
+        const ws = createWsService();
+        ws.connect('http://localhost:3000');
+        sockets[0].onclose?.({ code: 1006 });
+        jest.runOnlyPendingTimers();
+        sockets[1].onclose?.({ code: 1006 });
+
+        expect(ws.getStatus()).toBe('simulated');
+        expect(sockets).toHaveLength(2);
+        ws.disconnect();
+      } finally {
+        globalThis.WebSocket = OrigWebSocket;
+      }
+    });
+  });
+
   describe('subscribe and unsubscribe', () => {
     it('adds a listener and returns an unsubscribe function', () => {
       const ws = createWsService();
