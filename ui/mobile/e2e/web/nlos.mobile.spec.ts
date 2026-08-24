@@ -106,4 +106,28 @@ test.describe('RuView NLOS mobile instrument UI', () => {
 
     await capture(page, 'synthetic-390x844.png');
   });
+
+  test('renders a gated Three.js LiDAR point cloud without horizontal overflow', async ({ page }) => {
+    await openNlos(page);
+    const replay = page.getByRole('button', { name: 'USE SYNTHETIC REPLAY' });
+    await replay.scrollIntoViewIfNeeded();
+    await replay.click();
+
+    await page.getByTestId('nlos-view-cloud').click();
+    const cloud = page.getByTestId('nlos-lidar-point-cloud');
+    await cloud.scrollIntoViewIfNeeded();
+    await expect(cloud).toBeVisible();
+    await expect(page.getByTestId('nlos-lidar-point-cloud-canvas')).toHaveAttribute('data-ready', 'true');
+    await expect(page.getByTestId('nlos-cloud-target-count')).toHaveText('96');
+    await expect(page.getByText('THREE.JS / WEBGL')).toBeVisible();
+    await expect(page.getByTestId('nlos-synthetic-watermark')).toBeVisible();
+
+    const dimensions = await cloud.evaluate((element) => ({
+      viewport: element.clientWidth,
+      content: element.scrollWidth,
+    }));
+    expect(dimensions.content).toBeLessThanOrEqual(dimensions.viewport + 1);
+
+    await capture(page, 'point-cloud-390x844.png');
+  });
 });

@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var exportConsent = false
     @State private var diagnosticURL: URL?
     @State private var exportError: String?
+    @State private var spatialMode: TrackCanvasMode = .targets
 
     var body: some View {
         NavigationStack {
@@ -186,13 +187,24 @@ struct ContentView: View {
 
     private var visualizationCard: some View {
         instrumentCard(eyebrow: "02 / SPATIAL", title: "Hidden target hypotheses", accent: RuViewTheme.cyan) {
-            Text("Only validated, fresh tracks are shown. Uncertainty rings represent the reported position covariance.")
+            Picker("Spatial visualization", selection: $spatialMode) {
+                Text("TRACKS").tag(TrackCanvasMode.targets)
+                Text("POINT CLOUD").tag(TrackCanvasMode.pointCloud)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("nlos-spatial-mode")
+
+            Text(
+                spatialMode == .pointCloud
+                    ? "The point cloud is a deterministic rendering of gated reconstruction tracks and relay geometry. It is not raw iPhone LiDAR output."
+                    : "Only validated, fresh tracks are shown. Uncertainty rings represent the reported position covariance."
+            )
                 .font(.caption)
                 .foregroundStyle(RuViewTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             ZStack {
-                TrackCanvas(tracks: displayableTracks)
+                TrackCanvas(tracks: displayableTracks, mode: spatialMode)
                     .frame(height: 310)
                     .privacySensitive()
 

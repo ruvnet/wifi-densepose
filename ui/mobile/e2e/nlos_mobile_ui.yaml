@@ -23,6 +23,22 @@ name: RuView NLOS instrument UI evidence flow
     id: "nlos-evidence-state"
 - scrollUntilVisible:
     element:
+      id: "nlos-view-cloud"
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: "nlos-view-cloud"
+- scrollUntilVisible:
+    element:
+      id: "nlos-lidar-point-cloud"
+    direction: DOWN
+    timeout: 10000
+- assertVisible:
+    id: "nlos-lidar-point-cloud"
+- assertVisible:
+    id: "nlos-cloud-target-count"
+- scrollUntilVisible:
+    element:
       id: "nlos-beta-setup"
     direction: DOWN
     timeout: 10000

@@ -3,8 +3,9 @@ import { View } from 'react-native';
 import Svg, { Circle, Ellipse, Line, Polygon, Rect, Text as SvgText } from 'react-native-svg';
 import { instrumentColors } from '@/components/InstrumentPanel';
 import type { NlosFreshness, NlosTrack } from '@/types/nlos';
+import { LidarPointCloud } from './LidarPointCloud';
 
-export type NlosViewMode = 'plan' | 'perspective';
+export type NlosViewMode = 'plan' | 'perspective' | 'cloud';
 
 interface HiddenTargetVisualizationProps {
   tracks: NlosTrack[];
@@ -118,6 +119,10 @@ export const HiddenTargetVisualization = memo(({
     [mode, tracks],
   );
   const displayWidth = Math.max(260, Math.min(width, 560));
+
+  if (mode === 'cloud') {
+    return <LidarPointCloud tracks={tracks} freshness={freshness} width={displayWidth} />;
+  }
 
   return (
     <View

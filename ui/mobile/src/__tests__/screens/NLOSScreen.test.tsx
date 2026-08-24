@@ -10,6 +10,11 @@ import {
   NLOS_FEEDBACK_URL,
 } from '@/screens/NLOSScreen/BetaSetupCard';
 import { resolveNlosEvidenceState } from '@/screens/NLOSScreen/ProvenancePanel';
+import {
+  buildLidarPointCloud,
+  LIDAR_POINTS_PER_TRACK,
+  LIDAR_RELAY_POINT_COUNT,
+} from '@/screens/NLOSScreen/lidarPointCloud';
 
 const mockSafeAreaInsets = { top: 0, right: 0, bottom: 0, left: 0 };
 
@@ -241,6 +246,8 @@ describe('NLOSScreen', () => {
     expect(screen.getByTestId('nlos-evidence-state').props.children).toBe('LIVE UNVERIFIED');
     expect(screen.getByTestId('nlos-track-count').props.children).toBe(0);
     expect(screen.queryByText(live.tracks[0].trackId)).toBeNull();
+    fireEvent.press(screen.getByTestId('nlos-view-cloud'));
+    expect(screen.getByTestId('nlos-cloud-target-count').props.children).toBe(0);
 
     Object.assign(mockNlosResult, {
       frame: { ...live, source: 'replay' },
@@ -293,6 +300,18 @@ describe('NLOSScreen', () => {
     expect(resolveNlosEvidenceState(usbFrame, 'fresh', 'live')).toBe('LIVE VERIFIED');
   });
 
+  it('builds a deterministic bounded LiDAR reconstruction cloud from gated tracks', () => {
+    const first = buildLidarPointCloud(syntheticFrame.tracks);
+    const second = buildLidarPointCloud(syntheticFrame.tracks);
+
+    expect(first.relayPointCount).toBe(LIDAR_RELAY_POINT_COUNT);
+    expect(first.targetPointCount).toBe(syntheticFrame.tracks.length * LIDAR_POINTS_PER_TRACK);
+    expect(first.totalPointCount).toBe(first.relayPointCount + first.targetPointCount);
+    expect(Array.from(first.positions)).toEqual(Array.from(second.positions));
+    expect(Array.from(first.colors)).toEqual(Array.from(second.colors));
+    expect(Array.from(first.positions).every(Number.isFinite)).toBe(true);
+  });
+
   it('keeps privacy, setup, explainer, and feedback controls visible in the screen tree', () => {
     const { NLOSScreen } = require('@/screens/NLOSScreen');
     render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
@@ -311,5 +330,11 @@ describe('NLOSScreen', () => {
     expect(screen.getByTestId('nlos-view-plan').props.accessibilityState.selected).toBe(true);
     fireEvent.press(screen.getByTestId('nlos-view-perspective'));
     expect(screen.getByTestId('nlos-view-perspective').props.accessibilityState.selected).toBe(true);
+    fireEvent.press(screen.getByTestId('nlos-view-cloud'));
+    expect(screen.getByTestId('nlos-view-cloud').props.accessibilityState.selected).toBe(true);
+    expect(screen.getByTestId('nlos-lidar-point-cloud')).toBeTruthy();
+    expect(screen.getByTestId('nlos-cloud-target-count').props.children).toBe(
+      syntheticFrame.tracks.length * LIDAR_POINTS_PER_TRACK,
+    );
   });
 });

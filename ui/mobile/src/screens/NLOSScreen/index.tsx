@@ -29,7 +29,11 @@ const ViewModePicker = ({
   onChange: (value: NlosViewMode) => void;
 }) => (
   <View accessibilityRole="tablist" style={styles.picker}>
-    {(['plan', 'perspective'] as const).map((option) => {
+    {([
+      ['plan', '2D PLAN'],
+      ['perspective', '3D VIEW'],
+      ['cloud', 'LIDAR CLOUD'],
+    ] as const).map(([option, label]) => {
       const selected = option === value;
       return (
         <Pressable
@@ -42,9 +46,12 @@ const ViewModePicker = ({
         >
           <ThemedText
             preset="mono"
-            style={{ color: selected ? instrumentColors.cyan : instrumentColors.textSecondary }}
+            style={[
+              styles.pickerLabel,
+              { color: selected ? instrumentColors.cyan : instrumentColors.textSecondary },
+            ]}
           >
-            {option === 'plan' ? '2D PLAN' : '3D VIEW'}
+            {label}
           </ThemedText>
         </Pressable>
       );
@@ -448,6 +455,7 @@ const styles = StyleSheet.create({
     borderColor: instrumentColors.cyanDim,
     borderWidth: 1,
   },
+  pickerLabel: { fontSize: 9, letterSpacing: 0.55, textAlign: 'center' },
   visualizationStage: { position: 'relative', overflow: 'hidden' },
   watermark: {
     ...StyleSheet.absoluteFillObject,

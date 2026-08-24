@@ -5,7 +5,7 @@
 | **Status** | Proposed; software implementation and deterministic review evidence are part of a stacked UI-only pull request, while physical-device validation remains operator-gated |
 | **Date** | 2026-08-23 |
 | **Owners** | RuView Labs mobile, iOS, design, accessibility, privacy, security, and research maintainers |
-| **Scope** | Presentation, responsive layout, evidence-state projection, accessibility semantics, mobile end-to-end review flow, and screenshot baselines for the Expo and native SwiftUI NLOS clients |
+| **Scope** | Presentation, responsive layout, evidence-state projection, accessible target and LiDAR point-cloud views, mobile end-to-end review flow, and screenshot baselines for the Expo and native SwiftUI NLOS clients |
 | **Depends on** | ADR-295, ADR-318, ADR-319, ADR-330, ADR-340, ADR-341 |
 | **Stacked pull request base** | `feat/consumer-nlos-ruview`, the head branch for pull request 1687; retarget to `main` after the dependency merges |
 | **Implementation boundary** | `ui/mobile` presentation and tests, `ui/ios-nlos/App` presentation, the mobile UI screenshot baselines, and the UI validation portion of `.github/workflows/consumer-nlos-ci.yml` |
@@ -73,7 +73,8 @@ design reviewers, privacy and security reviewers, and the release operator.
    existing validation and freshness boundary.
 3. Setup, provenance, privacy, and interpretation guidance in a stable reading
    order.
-4. Reviewable screenshot baselines for overview, synthetic, and setup states.
+4. Reviewable screenshot baselines for overview, synthetic, setup, and Three.js
+   point-cloud states.
 5. A production-browser Playwright end-to-end suite and a mobile Maestro flow
    that verify navigation, state visibility, synthetic watermarking, setup
    affordances, and the primary local action.
@@ -115,6 +116,11 @@ UNVERIFIED` only when an authenticated live attempt is active. It resolves to
    setup without collecting credentials or diagnostics.
 7. Motion is decorative and bounded. Reduced-motion mode removes continuous
    orbit, sweep, pulse, and parallax effects without removing information.
+8. The web point-cloud mode uses the already installed Three.js runtime. It
+   renders only deterministic relay samples and target returns derived from
+   tracks that have already passed the display gate. The native surface uses an
+   equivalent SwiftUI Canvas projection. Both identify the view as a rendered
+   reconstruction rather than raw iPhone LiDAR output.
 
 ### Performance budgets
 
@@ -129,6 +135,10 @@ UNVERIFIED` only when an authenticated live attempt is active. It resolves to
    client, sensor subscription, or background timer.
 5. Screenshot rendering is deterministic: fixed viewport, fixed fixtures,
    reduced motion, local assets, and no dependency on a live endpoint.
+6. Point-cloud geometry is bounded to 288 schematic relay points plus 96
+   target-return points for each of at most 16 validated tracks, or 1,824 total
+   points. Browser device pixel ratio is capped at 1.5. GPU resources, animation
+   frames, resize observers, and pointer listeners are released on unmount.
 
 The timing budgets are targets until a physical iPhone report records device,
 OS, build commit, build mode, browser, network conditioning, repetition count,
@@ -188,6 +198,12 @@ onRender:
     render no hidden-target geometry
     render safe recovery guidance for the current state
 
+  if selectedView == pointCloud:
+    build bounded deterministic cloud from the same displayable tracks only
+    render schematic relay points as non-evidence context
+    label the surface as a reconstruction view, not raw LiDAR
+    use Three.js WebGL on web and SwiftUI Canvas on native
+
   preserve setup, privacy, interpretation, and feedback paths
   disable decorative motion when reduced motion is requested
 ```
@@ -245,7 +261,9 @@ hold.
 | Component | Responsibility | May change in this decision | Must not change |
 |---|---|---|---|
 | Expo NLOS screen and presentation components | Responsive hierarchy, tokens, evidence-state label, accessible controls, instrument composition | Yes | Store semantics, service requests, credential lifecycle |
+| Expo Three.js point-cloud adapter | Deterministic bounded BufferGeometry, local WebGL rendering, orbit input, reduced motion, resize, and disposal | Yes | Raw sensor access, network fetches, provenance promotion, persistence |
 | Native SwiftUI shell and presentation helpers | Equivalent hierarchy, tokens, state labels, Dynamic Type, reduced motion, hit targets | Yes | `AppModel`, Apple capability probe, stream guard, Keychain, diagnostics |
+| Native SwiftUI point-cloud projection | Accessible Canvas rendering from the same displayable track list | Yes | Three.js embedding, WebView, raw ARKit depth, or new entitlement |
 | Existing Expo store and hooks | Authoritative source, freshness, frame, rejection, and connection inputs | No | Any sensing or transport behavior |
 | Existing native model and core packages | Authoritative connection, frame, track, diagnostic, and capability inputs | No | Any sensing, validation, persistence, or permission behavior |
 | Playwright production-browser suite | Black-box responsive navigation, overflow assertions, local state actions, and screenshot reproduction | Yes | Live endpoint use, credentials, or physical-device claims |
@@ -275,7 +293,8 @@ pixel identity between React Native Web and SwiftUI is not.
 ```text
 existing validated domain state
   -> pure evidence-state projection
-  -> local presentation tree
+  -> displayable track allowlist
+  -> local target view or deterministic point-cloud projection
   -> pixels and accessibility semantics
 ```
 
@@ -311,6 +330,13 @@ screenshots as cross-platform review references, not as proof of native pixel
 output. Require an Xcode 26 build gate and a named physical-device review before
 accepting native behavior or performance claims.
 
+For the point-cloud surface, use Three.js directly in the Expo web build because
+it is already a locked runtime dependency and can render bounded BufferGeometry
+without a remote asset. Use SwiftUI Canvas for the native counterpart. Both
+consume only the existing fail-closed displayable track list. Do not add
+`expo-gl`, React Three Fiber, a WebView, a raw point-cloud schema, or a new sensor
+adapter in this UI-only decision.
+
 ## Alternatives with quantified tradeoffs
 
 Alternatives are scored from 1, poor, to 5, strong. Weighted score is out of
@@ -332,6 +358,17 @@ zero runtime dependency. The cost is duplicated token maintenance. The control
 is a screenshot review plus identical state names and accessibility assertions
 on both platforms.
 
+### Point-cloud renderer alternatives
+
+The same weights apply to the narrower renderer choice.
+
+| Alternative | Clarity 25% | Epistemic safety 25% | Delivery cost 15% | Native accessibility 20% | Maintainability 15% | Weighted score | Decision |
+|---|---:|---:|---:|---:|---:|---:|---|
+| Three.js web plus SwiftUI Canvas native | 5 | 5 | 4 | 4 | 4 | 4.50 | Selected because it satisfies the requested Three.js view while preserving platform-native accessibility and adding zero runtime dependency |
+| Three.js inside a native WebView | 5 | 4 | 3 | 2 | 4 | 3.70 | Rejected because focus, Dynamic Type, startup, memory, and lifecycle behavior are weaker |
+| Add `expo-gl` and React Three Fiber for native Expo | 5 | 4 | 2 | 3 | 3 | 3.60 | Rejected because new native dependencies and build risk are disproportionate to a UI-only change |
+| Static SVG or Canvas cloud on every platform | 3 | 5 | 5 | 4 | 5 | 4.30 | Rejected as the sole implementation because it does not provide the requested interactive Three.js web experience |
+
 ## Accessibility
 
 1. Every interactive element has a descriptive label, role or trait, and a hit
@@ -350,6 +387,10 @@ on both platforms.
    the accessibility tree.
 8. The synthetic watermark has a programmatic label in addition to its visual
    rendering.
+9. The WebGL canvas is hidden from the accessibility tree and its containing
+   view exposes one concise label with evidence freshness, hypothesis count,
+   and gated target-return count. Orbit gestures are optional and convey no
+   exclusive information.
 
 ## Security and privacy
 
@@ -360,9 +401,11 @@ on both platforms.
    ephemeral credential in memory, while the approved native client uses its
    existing Keychain boundary. UI code cannot log, render, snapshot, export, or
    persist the credential.
-3. Screenshot and E2E fixtures are synthetic and contain no CSI, image, depth,
-   point-cloud, location, person, device identifier, token, endpoint, or private
-   diagnostic data.
+3. Screenshot and E2E fixtures are synthetic and contain no CSI, image, raw
+   depth, captured point cloud, location, person, device identifier, token,
+   endpoint, or private diagnostic data. The displayed point cloud is generated
+   locally from the deterministic synthetic track fixture and schematic relay
+   geometry.
 4. Stale, malformed, unauthenticated, replayed, unknown, or contradictory input
    fails closed through the existing validation layer and the state projection.
 5. The synthetic watermark remains visible in every synthetic visualization
@@ -374,6 +417,9 @@ on both platforms.
    credentials, diagnostics, or scene context.
 8. CI uses read-only repository permission and receives no signing, App Store
    Connect, endpoint, or test-user secret for the UI contract.
+9. Three.js receives no URL, shader text, texture, model, worker, or external
+   input. It allocates local typed arrays from already gated numeric track data
+   and releases WebGL resources when the view changes or unmounts.
 
 ## Performance budgets
 
@@ -400,12 +446,15 @@ claim. A threshold without a completed physical run remains `TARGET`.
    stale, disconnected, contradiction, and synthetic watermark cases.
 3. Recompose the Expo NLOS screen at the reference viewport and add the
    production-browser Playwright suite plus Maestro mobile flow.
-4. Recompose the native SwiftUI surface using equivalent semantics, Dynamic
+4. Add the bounded Three.js point-cloud adapter, deterministic generator,
+   accessible fallback, and fail-closed zero-return tests.
+5. Recompose the native SwiftUI surface using equivalent semantics, Dynamic
    Type, and reduced-motion behavior.
-5. Capture deterministic Expo overview, synthetic, and setup baselines.
-6. Run type, lint, unit, bundle, Swift package, Xcode 26, contract, accessibility,
+6. Capture deterministic Expo overview, synthetic, setup, and point-cloud
+   baselines.
+7. Run type, lint, unit, bundle, Swift package, Xcode 26, contract, accessibility,
    security, and diff-scope review gates.
-7. Complete the named physical iPhone gate before calling native behavior or
+8. Complete the named physical iPhone gate before calling native behavior or
    mobile performance validated.
 
 ### Failure handling
@@ -416,7 +465,8 @@ claim. A threshold without a completed physical run remains `TARGET`.
 2. If a frame becomes stale, remove its geometry on the same committed state
    transition. Reconnection alone does not restore it.
 3. If decorative rendering fails, retain plain text state, controls, privacy,
-   and provenance. Decoration cannot block operation.
+   and provenance. Decoration cannot block operation. If WebGL creation or its
+   context fails, identify the static fallback without promoting evidence.
 4. If the viewport overflows, stack secondary content and remove nonessential
    decoration before reducing essential text or hit areas.
 5. If the performance target fails, profile render count, SVG complexity,
@@ -436,15 +486,16 @@ claim. A threshold without a completed physical run remains `TARGET`.
 | Requirement | Automated evidence | Human or physical evidence | Pass condition |
 |---|---|---|---|
 | UI-only scope | Pull-request diff allowlist and service or model tests | Reviewer checks no sensing, transport, permissions, persistence, or retention diff | Zero out-of-scope behavior changes |
-| Cognitum-inspired, RuView-owned language | Three screenshot baselines and token review | Product reviewer compares hierarchy and general visual language | Requested characteristics present; zero Cognitum branding or private assets |
+| Cognitum-inspired, RuView-owned language | Four screenshot baselines and token review | Product reviewer compares hierarchy and general visual language | Requested characteristics present; zero Cognitum branding or private assets |
 | Five honest states | Unit tests plus `nlos-evidence-state` Playwright and Maestro selectors | Reviewer verifies wording and fail-closed hierarchy | All five exact labels are representable; unknown never becomes verified |
 | Synthetic safety | Unit and E2E assertions for `nlos-synthetic-watermark` | Screenshot review of synthetic baseline | Label and watermark both visible |
+| LiDAR point-cloud UI | Deterministic generator tests, exact point budgets, Three.js canvas readiness, reduced-motion capture, and zero-return fail-closed assertion | Browser and native visual review plus physical iPhone GPU check | WebGL renders 288 schematic relay points plus 96 returns per gated track; unverified states render zero target returns; native equivalent is labeled as a projection |
 | 390 by 844 layout | PNG dimension contract and browser overflow assertion | Screenshot review | Exact dimensions and no horizontal overflow |
 | 44 point targets | Style and interaction assertions where supported | iPhone accessibility inspector and manual target review | Every interactive hit rectangle is at least 44 by 44 points |
 | Accessibility | Semantic tests, lint, and reduced-motion fixture | VoiceOver, Dynamic Type at 200 percent, contrast, and reduced-motion review | State and primary actions remain understandable and operable |
 | Initial usable render under 1.5 seconds | Production build and instrumentation contract | Named modern iPhone run with recorded conditions | Measured usable render is below 1.5 seconds |
 | Local interaction p95 under 100 milliseconds | Deterministic action loop instrumentation | Named iPhone run over at least 30 repetitions | Recorded p95 is below 100 milliseconds |
-| Screenshot baselines | CI validates PNG format, names, dimensions, and synthetic marker contract | Reviewer approves overview, synthetic, and setup compositions | All three approved and traceable to the commit |
+| Screenshot baselines | CI validates PNG format, names, dimensions, and synthetic marker contract | Reviewer approves overview, synthetic, setup, and point-cloud compositions | All four approved and traceable to the commit |
 | No security or privacy expansion | Unit suite, dependency audit, secret scan, workflow permission review | Privacy and security diff review | No new collection, permission, storage, network, secret, or retention path |
 | Native equivalence | Swift tests and Xcode 26 unsigned simulator build | Named physical iPhone inspection | Equivalent hierarchy and state semantics; no pixel-equivalence claim |
 
@@ -486,14 +537,18 @@ full iPhone validation.
    motion and deterministic fixtures. Assert `scrollWidth <= clientWidth`.
 3. Capture and review:
    `docs/screenshots/consumer-nlos-mobile-ui/overview-390x844.png`,
-   `docs/screenshots/consumer-nlos-mobile-ui/synthetic-390x844.png`, and
-   `docs/screenshots/consumer-nlos-mobile-ui/setup-390x844.png`.
+   `docs/screenshots/consumer-nlos-mobile-ui/synthetic-390x844.png`,
+   `docs/screenshots/consumer-nlos-mobile-ui/setup-390x844.png`, and
+   `docs/screenshots/consumer-nlos-mobile-ui/point-cloud-390x844.png`.
 4. Assert each PNG is exactly 390 by 844. Assert the synthetic baseline and E2E
    flow preserve the `SYNTHETIC` label and watermark.
-5. Exercise `SYNTHETIC`, `LIVE VERIFIED`, `LIVE UNVERIFIED`, `STALE`, and
+5. Select LiDAR cloud, assert the Three.js canvas reports ready, assert the
+   deterministic fixture renders 96 gated target returns, and confirm the
+   390-wide cloud has no horizontal overflow.
+6. Exercise `SYNTHETIC`, `LIVE VERIFIED`, `LIVE UNVERIFIED`, `STALE`, and
    `DISCONNECTED` projections. Assert stale, unverified, and disconnected states
-   render no hidden-target geometry.
-6. Run Swift package tests and the Xcode 26 unsigned simulator build. Confirm
+   render no hidden-target geometry or point-cloud target returns.
+7. Run Swift package tests and the Xcode 26 unsigned simulator build. Confirm
    zero changes to core packages, sensing, transport, credentials, permissions,
    diagnostic schema, or retention.
 

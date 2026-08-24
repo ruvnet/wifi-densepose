@@ -2,8 +2,16 @@ import Foundation
 import RuViewNLOSCore
 import SwiftUI
 
+enum TrackCanvasMode: String, CaseIterable, Identifiable {
+    case targets
+    case pointCloud
+
+    var id: String { rawValue }
+}
+
 struct TrackCanvas: View {
     let tracks: [NLOSTrack]
+    let mode: TrackCanvasMode
 
     var body: some View {
         Canvas { context, size in
@@ -14,20 +22,24 @@ struct TrackCanvas: View {
                 with: .color(Color(red: 0.014, green: 0.029, blue: 0.043))
             )
             drawGrid(context: &context, size: size)
-            drawRadar(context: &context, size: size)
+            if mode == .pointCloud {
+                drawPointCloud(context: &context, size: size)
+            } else {
+                drawRadar(context: &context, size: size)
 
-            let radiusMeters = max(
-                5,
-                min(100, tracks.flatMap { [abs($0.positionM.x), abs($0.positionM.z)] }.max() ?? 5)
-            )
-
-            for track in tracks {
-                draw(
-                    track: track,
-                    context: &context,
-                    size: size,
-                    radiusMeters: radiusMeters
+                let radiusMeters = max(
+                    5,
+                    min(100, tracks.flatMap { [abs($0.positionM.x), abs($0.positionM.z)] }.max() ?? 5)
                 )
+
+                for track in tracks {
+                    draw(
+                        track: track,
+                        context: &context,
+                        size: size,
+                        radiusMeters: radiusMeters
+                    )
+                }
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -36,7 +48,84 @@ struct TrackCanvas: View {
                 .stroke(Color.cyan.opacity(0.24), lineWidth: 1)
         }
         .shadow(color: Color.cyan.opacity(0.08), radius: 16)
-        .accessibilityHidden(true)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            mode == .pointCloud
+                ? "Projected LiDAR reconstruction cloud with \(tracks.count) gated hidden target hypotheses"
+                : "Plan view with \(tracks.count) gated hidden target hypotheses"
+        )
+    }
+
+    private func drawPointCloud(context: inout GraphicsContext, size: CGSize) {
+        let cyan = Color(red: 0.129, green: 0.831, blue: 0.906)
+        let green = Color(red: 0.345, green: 0.949, blue: 0.545)
+        let orange = Color(red: 1.000, green: 0.714, blue: 0.361)
+
+        for row in 0..<10 {
+            for column in 0..<16 {
+                let x = size.width * (0.08 + CGFloat(column) / 17)
+                let floorY = size.height * (0.58 + CGFloat(row) * 0.032)
+                let wallY = size.height * (0.12 + CGFloat(row) * 0.039)
+                let wallX = x + CGFloat(row - 5) * 1.8
+                let floorOpacity = 0.28 + Double(row) * 0.025
+                let wallColor = row > 7 ? orange : cyan
+                context.fill(
+                    Path(ellipseIn: CGRect(x: x - 1.1, y: floorY - 1.1, width: 2.2, height: 2.2)),
+                    with: .color(cyan.opacity(floorOpacity))
+                )
+                context.fill(
+                    Path(ellipseIn: CGRect(x: wallX - 1.15, y: wallY - 1.15, width: 2.3, height: 2.3)),
+                    with: .color(wallColor.opacity(0.52))
+                )
+            }
+        }
+
+        let goldenAngle = Double.pi * (3 - sqrt(5.0))
+        for (trackIndex, track) in tracks.prefix(16).enumerated() {
+            let centerX = size.width / 2
+                + CGFloat(max(-6, min(6, track.positionM.x))) * size.width * 0.055
+                - CGFloat(max(0, min(8, track.positionM.z))) * size.width * 0.012
+            let centerY = size.height * 0.63
+                - CGFloat(max(0, min(4, track.positionM.y))) * size.height * 0.10
+                + CGFloat(max(0, min(8, track.positionM.z))) * size.height * 0.018
+            let radiusX = max(8, min(34, CGFloat(sqrt(track.covarianceDiagonalM2.x)) * 28))
+            let radiusY = max(8, min(38, CGFloat(sqrt(track.covarianceDiagonalM2.y)) * 30))
+            let color = track.state == .degraded ? orange : green
+
+            for sample in 0..<72 {
+                let normalizedY = 1 - 2 * ((Double(sample) + 0.5) / 72)
+                let radial = sqrt(max(0, 1 - normalizedY * normalizedY))
+                let theta = Double(sample) * goldenAngle + Double(trackIndex) * 0.73
+                let shell = 0.5 + Double((sample * 37 + trackIndex * 17) % 47) / 94
+                let point = CGPoint(
+                    x: centerX + CGFloat(cos(theta) * radial * shell) * radiusX,
+                    y: centerY + CGFloat(normalizedY * shell) * radiusY
+                )
+                let diameter: CGFloat = sample.isMultiple(of: 5) ? 3.2 : 2.1
+                context.fill(
+                    Path(ellipseIn: CGRect(
+                        x: point.x - diameter / 2,
+                        y: point.y - diameter / 2,
+                        width: diameter,
+                        height: diameter
+                    )),
+                    with: .color(color.opacity(0.82))
+                )
+            }
+        }
+
+        context.draw(
+            Text("LIDAR POINT CLOUD / NATIVE SWIFTUI CANVAS")
+                .font(.caption2.bold().monospaced())
+                .foregroundColor(cyan),
+            at: CGPoint(x: size.width / 2, y: 18)
+        )
+        context.draw(
+            Text("\(tracks.count * 72) GATED TARGET RETURNS")
+                .font(.caption2.bold().monospaced())
+                .foregroundColor(Color.white.opacity(0.64)),
+            at: CGPoint(x: size.width / 2, y: size.height - 16)
+        )
     }
 
     private func draw(

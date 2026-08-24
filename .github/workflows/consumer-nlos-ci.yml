@@ -210,6 +210,7 @@ jobs:
               "under 1.5 seconds",
               "under 100 milliseconds",
               "zero runtime dependency",
+              "Three.js",
               "physical iPhone validation pending",
           )
           for phrase in required_adr_contract:
@@ -225,6 +226,8 @@ jobs:
               "nlos-evidence-state",
               "nlos-synthetic-watermark",
               "nlos-beta-setup",
+              "nlos-lidar-point-cloud",
+              "nlos-cloud-target-count",
           )
           for token in required_flow_contract:
               assert token in flow, f"missing Maestro UI contract token: {token}"
@@ -276,6 +279,7 @@ jobs:
               "overview-390x844.png",
               "synthetic-390x844.png",
               "setup-390x844.png",
+              "point-cloud-390x844.png",
           )
           for name in expected_screenshots:
               path = screenshot_dir / name
@@ -286,7 +290,7 @@ jobs:
 
           print(
               "Validated ADR 342, Maestro UI contract, five evidence states, "
-              "and three 390x844 PNG baselines"
+              "and four 390x844 PNG baselines"
           )
           PY
 
