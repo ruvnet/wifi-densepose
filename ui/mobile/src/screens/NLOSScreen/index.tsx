@@ -132,26 +132,13 @@ export const NLOSScreen = () => {
         contentContainerStyle={[
           styles.content,
           {
-            paddingTop: spacing.xxl + safeAreaInsets.top,
+            paddingTop: spacing.lg,
             paddingRight: spacing.lg + safeAreaInsets.right,
             paddingBottom: 72 + safeAreaInsets.bottom,
             paddingLeft: spacing.lg + safeAreaInsets.left,
           },
         ]}
       >
-        <View style={styles.brandBar}>
-          <View style={styles.brandIdentity}>
-            <View style={styles.brandMark}>
-              <View style={styles.brandMarkCore} />
-            </View>
-            <View>
-              <ThemedText preset="labelLg" style={styles.brandName}>RuView NLOS</ThemedText>
-              <ThemedText preset="mono" style={styles.brandCaption}>MOBILE INSTRUMENT / 01</ThemedText>
-            </View>
-          </View>
-          <ThemedText preset="mono" style={styles.labsBadge}>LABS</ThemedText>
-        </View>
-
         <InstrumentPanel eyebrow="Consumer NLOS / field viewer" style={styles.hero}>
           <ThemedText preset="displayLg" style={styles.heroTitle}>Track hidden space</ThemedText>
           <ThemedText preset="displayLg" style={styles.heroAccent}>hypotheses.</ThemedText>

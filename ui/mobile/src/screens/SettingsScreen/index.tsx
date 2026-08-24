@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { Alert, Linking, Platform, Pressable, ScrollView, Switch, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { colors } from '@/theme/colors';
@@ -130,15 +129,14 @@ export const SettingsScreen = () => {
   };
 
   return (
-    <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: colors.bg }}>
-      <ThemedView style={{ flex: 1, backgroundColor: colors.bg }}>
-        <ScrollView
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{
-            paddingHorizontal: spacing.md,
-            paddingBottom: spacing.xxl,
-          }}
-        >
+    <ThemedView style={{ flex: 1, backgroundColor: colors.bg }}>
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{
+          paddingHorizontal: spacing.md,
+          paddingBottom: spacing.xxl,
+        }}
+      >
         <View style={{ paddingVertical: spacing.md }}>
           <ThemedText preset="displayMd">Settings</ThemedText>
           <ThemedText preset="bodySm" style={{ color: colors.textSecondary, marginTop: spacing.xs }}>
@@ -211,9 +209,8 @@ export const SettingsScreen = () => {
             Triage priority mapping: Immediate/Delayed/Minor/Deceased/Unknown
           </ThemedText>
         </GlowCard>
-        </ScrollView>
-      </ThemedView>
-    </SafeAreaView>
+      </ScrollView>
+    </ThemedView>
   );
 };
 

@@ -83,7 +83,7 @@ describe('NLOSScreen', () => {
   it('renders the RuView NLOS screen and iPhone API boundary', () => {
     const { NLOSScreen } = require('@/screens/NLOSScreen');
     render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
-    expect(screen.getByText('RuView NLOS')).toBeTruthy();
+    expect(screen.getByText('Consumer NLOS / field viewer')).toBeTruthy();
     expect(screen.getByText(/does not access raw iPhone LiDAR timing data/)).toBeTruthy();
     expect(screen.getByText(/web client cannot capture ARKit LiDAR or raw timing data/)).toBeTruthy();
   });
@@ -96,7 +96,7 @@ describe('NLOSScreen', () => {
     const contentStyle = StyleSheet.flatten(
       screen.getByTestId('nlos-scroll-view').props.contentContainerStyle,
     );
-    expect(contentStyle.paddingTop).toBe(71);
+    expect(contentStyle.paddingTop).toBe(16);
     expect(contentStyle.paddingRight).toBe(19);
     expect(contentStyle.paddingBottom).toBe(106);
     expect(contentStyle.paddingLeft).toBe(19);
