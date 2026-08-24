@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import {
   runOnJS,
@@ -40,6 +40,13 @@ export const MetricCard = ({ label, value, unit, color = colors.accent, sparklin
     [numericValue],
   );
 
+  const updateDisplayValue = useCallback(
+    (current: number) => {
+      setDisplayValue(formatMetricValue(current, unit));
+    },
+    [unit],
+  );
+
   useEffect(() => {
     if (numericValue === null) {
       setDisplayValue(String(value ?? '--'));
@@ -56,9 +63,9 @@ export const MetricCard = ({ label, value, unit, color = colors.accent, sparklin
   useAnimatedReaction(
     () => valueAnimation.value,
     (current) => {
-      runOnJS(setDisplayValue)(formatMetricValue(current, unit));
+      runOnJS(updateDisplayValue)(current);
     },
-    [unit],
+    [updateDisplayValue],
   );
 
   return (
