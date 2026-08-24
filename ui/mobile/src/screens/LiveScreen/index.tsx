@@ -43,9 +43,17 @@ const WebLiveViewer = ({ frame, onReady, onFps, onError }: ViewerProps) => {
   return <Viewer frame={frame} onReady={onReady} onFps={onFps} onError={onError} />;
 };
 
-const NativeLiveViewer = ({ onReady, onFps, onError }: ViewerProps) => {
-  const webViewRef = useRef(null);
+const NativeLiveViewer = ({ frame, onReady, onFps, onError }: ViewerProps) => {
+  const webViewRef = useRef<{ postMessage: (message: string) => void } | null>(null);
+  const readyRef = useRef(false);
   const [WVComponent, setWVComponent] = useState<React.ComponentType<any> | null>(null);
+
+  const sendFrame = useCallback((nextFrame: SensingFrame) => {
+    webViewRef.current?.postMessage(JSON.stringify({
+      type: 'FRAME_UPDATE',
+      payload: nextFrame,
+    }));
+  }, []);
 
   useEffect(() => {
     try {
@@ -55,6 +63,12 @@ const NativeLiveViewer = ({ onReady, onFps, onError }: ViewerProps) => {
       onError('WebView not available on this platform');
     }
   }, [onError]);
+
+  useEffect(() => {
+    if (readyRef.current && frame) {
+      sendFrame(frame);
+    }
+  }, [frame, sendFrame]);
 
   if (!WVComponent) return null;
 
@@ -66,7 +80,11 @@ const NativeLiveViewer = ({ onReady, onFps, onError }: ViewerProps) => {
           const data = typeof event.nativeEvent.data === 'string'
             ? JSON.parse(event.nativeEvent.data)
             : event.nativeEvent.data;
-          if (data.type === 'READY') onReady();
+          if (data.type === 'READY') {
+            readyRef.current = true;
+            onReady();
+            if (frame) sendFrame(frame);
+          }
           else if (data.type === 'FPS_TICK') onFps(data.payload?.fps ?? 0);
           else if (data.type === 'ERROR') onError(data.payload?.message ?? 'Unknown error');
         } catch { /* ignore */ }

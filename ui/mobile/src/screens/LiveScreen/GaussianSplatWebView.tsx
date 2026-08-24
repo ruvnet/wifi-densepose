@@ -1,7 +1,10 @@
 import { LayoutChangeEvent, StyleSheet } from 'react-native';
 import type { RefObject } from 'react';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
+import { Asset } from 'expo-asset';
 import GAUSSIAN_SPLATS_HTML from '@/assets/webview/gaussian-splats.html';
+
+const gaussianSplatsAsset = Asset.fromModule(GAUSSIAN_SPLATS_HTML);
 
 type GaussianSplatWebViewProps = {
   onMessage: (event: WebViewMessageEvent) => void;
@@ -16,14 +19,12 @@ export const GaussianSplatWebView = ({
   webViewRef,
   onLayout,
 }: GaussianSplatWebViewProps) => {
-  const html = typeof GAUSSIAN_SPLATS_HTML === 'string' ? GAUSSIAN_SPLATS_HTML : '';
-
   return (
     <WebView
       ref={webViewRef}
-      source={{ html }}
+      source={{ uri: gaussianSplatsAsset.uri }}
       originWhitelist={['*']}
-      allowFileAccess={false}
+      allowFileAccess
       javaScriptEnabled
       onMessage={onMessage}
       onError={onError}
