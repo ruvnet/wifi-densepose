@@ -3,21 +3,21 @@ import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { ThemedText } from './ThemedText';
 
 export const instrumentColors = {
-  background: '#05090D',
-  panel: '#091218',
-  panelRaised: '#0C171E',
-  cyan: '#24D3E5',
-  green: '#58F28B',
-  cyanDim: 'rgba(36, 211, 229, 0.38)',
-  greenDim: 'rgba(88, 242, 139, 0.36)',
-  border: 'rgba(65, 204, 219, 0.22)',
-  borderStrong: 'rgba(65, 204, 219, 0.42)',
-  grid: 'rgba(92, 151, 162, 0.065)',
-  text: '#F3F8FA',
-  textSecondary: '#91A4AE',
+  background: '#0B0E13',
+  panel: '#14181F',
+  panelRaised: '#181D25',
+  cyan: '#19D4E6',
+  green: '#26D968',
+  cyanDim: 'rgba(25, 212, 230, 0.34)',
+  greenDim: 'rgba(38, 217, 104, 0.32)',
+  border: 'rgba(39, 44, 53, 0.92)',
+  borderStrong: 'rgba(25, 212, 230, 0.30)',
+  grid: 'rgba(25, 212, 230, 0.045)',
+  text: '#E7EBEF',
+  textSecondary: '#7B899D',
   warning: '#FFB65C',
   danger: '#FF6478',
-  dimOverlay: 'rgba(5, 9, 13, 0.78)',
+  dimOverlay: 'rgba(11, 14, 19, 0.82)',
 } as const;
 
 interface InstrumentPanelProps {
@@ -58,16 +58,15 @@ export const InstrumentPanel = ({
   accessibilityLabel,
 }: InstrumentPanelProps) => (
   <View testID={testID} accessibilityLabel={accessibilityLabel} style={[styles.panel, style]}>
+    <View pointerEvents="none" style={styles.ambientGlow} />
     <View pointerEvents="none" style={styles.accentRail}>
       <View style={styles.accentRailCyan} />
       <View style={styles.accentRailGreen} />
     </View>
-    <View pointerEvents="none" style={[styles.corner, styles.cornerTopLeft]} />
-    <View pointerEvents="none" style={[styles.corner, styles.cornerBottomRight]} />
     {(eyebrow || accessory) && (
       <View style={styles.headingRow}>
         {eyebrow ? (
-          <ThemedText preset="mono" style={styles.eyebrow}>{eyebrow}</ThemedText>
+          <ThemedText preset="labelMd" style={styles.eyebrow}>{eyebrow}</ThemedText>
         ) : <View />}
         {accessory}
       </View>
@@ -100,14 +99,23 @@ const styles = StyleSheet.create({
     backgroundColor: instrumentColors.panel,
     borderColor: instrumentColors.border,
     borderWidth: 1,
-    borderRadius: 18,
+    borderRadius: 16,
     padding: 16,
     gap: 12,
-    shadowColor: instrumentColors.cyan,
+    shadowColor: '#020306',
     shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.07,
-    shadowRadius: 24,
-    elevation: 2,
+    shadowOpacity: 0.72,
+    shadowRadius: 20,
+    elevation: 3,
+  },
+  ambientGlow: {
+    position: 'absolute',
+    top: -76,
+    right: -54,
+    width: 190,
+    height: 190,
+    borderRadius: 95,
+    backgroundColor: 'rgba(25, 212, 230, 0.045)',
   },
   accentRail: {
     position: 'absolute',
@@ -119,24 +127,6 @@ const styles = StyleSheet.create({
   },
   accentRailCyan: { flex: 2, backgroundColor: instrumentColors.cyan },
   accentRailGreen: { flex: 1, backgroundColor: instrumentColors.green },
-  corner: {
-    position: 'absolute',
-    width: 11,
-    height: 11,
-    borderColor: instrumentColors.cyanDim,
-  },
-  cornerTopLeft: {
-    top: 7,
-    left: 7,
-    borderTopWidth: 1,
-    borderLeftWidth: 1,
-  },
-  cornerBottomRight: {
-    right: 7,
-    bottom: 7,
-    borderRightWidth: 1,
-    borderBottomWidth: 1,
-  },
   headingRow: {
     minHeight: 22,
     flexDirection: 'row',
@@ -147,9 +137,9 @@ const styles = StyleSheet.create({
   },
   eyebrow: {
     color: instrumentColors.cyan,
-    fontSize: 11,
+    fontSize: 12,
     lineHeight: 16,
-    letterSpacing: 1.4,
+    letterSpacing: 1.15,
     textTransform: 'uppercase',
   },
 });

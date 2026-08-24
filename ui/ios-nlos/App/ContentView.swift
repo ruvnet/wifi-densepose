@@ -52,7 +52,7 @@ struct ContentView: View {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 7) {
                     Text("RUVIEW / MOBILE FIELD LAB")
-                        .font(.caption.bold().monospaced())
+                        .font(RuViewTypography.mono(11))
                         .tracking(1.6)
                         .foregroundStyle(RuViewTheme.muted)
                     HStack(spacing: 7) {
@@ -61,7 +61,7 @@ struct ContentView: View {
                             .frame(width: 8, height: 8)
                             .shadow(color: evidenceState.color.opacity(0.8), radius: 5)
                         Text(evidenceState.label)
-                            .font(.caption.bold().monospaced())
+                            .font(RuViewTypography.mono(11))
                             .foregroundStyle(evidenceState.color)
                             .lineLimit(2)
                     }
@@ -85,13 +85,13 @@ struct ContentView: View {
                         )
                     )
             }
-            .font(.system(size: heroFontSize, weight: .black, design: .rounded))
+            .font(RuViewTypography.outfit(heroFontSize, weight: .bold))
             .tracking(-1.4)
             .minimumScaleFactor(0.72)
             .accessibilityElement(children: .combine)
 
             Text("Review authenticated evidence, sensor provenance, and privacy controls in one fail closed instrument.")
-                .font(.subheadline)
+                .font(RuViewTypography.outfit(16))
                 .foregroundStyle(RuViewTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -112,11 +112,11 @@ struct ContentView: View {
                 Image(systemName: "lock.shield.fill")
                     .foregroundStyle(RuViewTheme.green)
                 Text("PRIVACY GUARD ACTIVE")
-                    .font(.caption.bold().monospaced())
+                    .font(RuViewTypography.mono(11))
                     .tracking(0.7)
                 Spacer()
                 Text("FAIL CLOSED")
-                    .font(.caption2.bold().monospaced())
+                    .font(RuViewTypography.mono(10))
                     .foregroundStyle(RuViewTheme.muted)
             }
             .padding(.horizontal, 12)
@@ -144,10 +144,10 @@ struct ContentView: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(evidenceState.label)
-                        .font(.headline.bold().monospaced())
+                        .font(RuViewTypography.mono(16))
                         .foregroundStyle(evidenceState.color)
                     Text(evidenceState.detail)
-                        .font(.caption)
+                        .font(RuViewTypography.outfit(12))
                         .foregroundStyle(RuViewTheme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -156,7 +156,7 @@ struct ContentView: View {
             .accessibilityElement(children: .combine)
 
             Text(model.statusMessage)
-                .font(.subheadline)
+                .font(RuViewTypography.outfit(14))
                 .foregroundStyle(.white)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(12)
@@ -199,7 +199,7 @@ struct ContentView: View {
                     ? "The point cloud is a deterministic rendering of gated reconstruction tracks and relay geometry. It is not raw iPhone LiDAR output."
                     : "Only validated, fresh tracks are shown. Uncertainty rings represent the reported position covariance."
             )
-                .font(.caption)
+                .font(RuViewTypography.outfit(12))
                 .foregroundStyle(RuViewTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -210,7 +210,7 @@ struct ContentView: View {
 
                 if let watermark = model.frame?.watermark {
                     Text(watermark)
-                        .font(.system(size: 35, weight: .black, design: .rounded))
+                        .font(RuViewTypography.outfit(35, weight: .bold))
                         .tracking(2)
                         .foregroundStyle(RuViewTheme.orange.opacity(0.48))
                         .rotationEffect(.degrees(-18))
@@ -222,7 +222,7 @@ struct ContentView: View {
                         Image(systemName: "scope")
                             .font(.title2)
                         Text("NO DISPLAYABLE TRACKS")
-                            .font(.caption.bold().monospaced())
+                            .font(RuViewTypography.mono(11))
                     }
                     .foregroundStyle(RuViewTheme.muted)
                     .padding(.horizontal, 14)
@@ -539,11 +539,11 @@ struct ContentView: View {
     private func headerMetric(eyebrow: String, value: String, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(eyebrow)
-                .font(.caption2.bold().monospaced())
+                .font(RuViewTypography.mono(10))
                 .tracking(0.8)
                 .foregroundStyle(RuViewTheme.muted)
             Text(value)
-                .font(.caption.bold().monospaced())
+                .font(RuViewTypography.mono(11))
                 .foregroundStyle(color)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
@@ -569,7 +569,7 @@ struct ContentView: View {
                 )
             VStack(alignment: .leading, spacing: 4) {
                 Text(track.trackId)
-                    .font(.subheadline.bold().monospaced())
+                    .font(RuViewTypography.mono(14))
                     .lineLimit(1)
                 Text(String(
                     format: "x %.2f  y %.2f  z %.2f m",
@@ -577,13 +577,13 @@ struct ContentView: View {
                     track.positionM.y,
                     track.positionM.z
                 ))
-                .font(.caption.monospacedDigit())
+                .font(RuViewTypography.mono(11, medium: false))
                 .foregroundStyle(RuViewTheme.textSecondary)
             }
             Spacer(minLength: 4)
             VStack(alignment: .trailing, spacing: 4) {
                 Text("\(Int(track.confidence * 100))%")
-                    .font(.headline.monospacedDigit())
+                    .font(RuViewTypography.mono(17))
                 badge(
                     track.state.rawValue.uppercased(),
                     color: track.state == .degraded ? RuViewTheme.orange : RuViewTheme.cyan
@@ -606,13 +606,13 @@ struct ContentView: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Text(title)
-                    .font(.subheadline)
+                    .font(RuViewTypography.outfit(14))
                 Spacer()
                 Label(
                     availability.rawValue.capitalized,
                     systemImage: availability == .available ? "checkmark.circle.fill" : "xmark.circle.fill"
                 )
-                .font(.caption.bold().monospaced())
+                .font(RuViewTypography.mono(11))
                 .foregroundStyle(availability == .available ? RuViewTheme.green : RuViewTheme.muted)
             }
             .padding(.horizontal, 12)
@@ -631,12 +631,12 @@ struct ContentView: View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text(label)
-                    .font(.caption2.bold().monospaced())
+                    .font(RuViewTypography.mono(10))
                     .tracking(0.6)
                     .foregroundStyle(RuViewTheme.muted)
                 Spacer()
                 Text(value)
-                    .font(.caption.monospaced())
+                    .font(RuViewTypography.mono(11, medium: false))
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.trailing)
             }
@@ -660,7 +660,7 @@ struct ContentView: View {
             Image(systemName: icon)
                 .foregroundStyle(color)
         }
-        .font(.caption)
+        .font(RuViewTypography.outfit(12))
         .foregroundStyle(RuViewTheme.textSecondary)
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -675,14 +675,14 @@ struct ContentView: View {
         HStack(spacing: 5) {
             Circle().fill(color).frame(width: 6, height: 6)
             Text(label)
-                .font(.caption2.bold().monospaced())
+                .font(RuViewTypography.mono(10))
                 .foregroundStyle(RuViewTheme.textSecondary)
         }
     }
 
     private func badge(_ text: String, color: Color) -> some View {
         Text(text)
-            .font(.caption2.bold().monospaced())
+            .font(RuViewTypography.mono(10))
             .lineLimit(1)
             .minimumScaleFactor(0.72)
             .padding(.horizontal, 8)
@@ -707,23 +707,23 @@ struct ContentView: View {
                     .frame(width: 22, height: 2)
                     .shadow(color: accent.opacity(0.8), radius: 4)
                 Text(eyebrow)
-                    .font(.caption2.bold().monospaced())
+                    .font(RuViewTypography.mono(10))
                     .tracking(1.1)
                     .foregroundStyle(accent)
             }
             Text(title)
-                .font(.title3.bold())
+                .font(RuViewTypography.outfit(20, weight: .medium))
                 .foregroundStyle(.white)
             content()
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RuViewTheme.panel, in: RoundedRectangle(cornerRadius: 20))
+        .background(RuViewTheme.panel, in: RoundedRectangle(cornerRadius: 16))
         .overlay {
-            RoundedRectangle(cornerRadius: 20)
+            RoundedRectangle(cornerRadius: 16)
                 .stroke(RuViewTheme.border, lineWidth: 1)
         }
-        .shadow(color: accent.opacity(0.06), radius: 18, y: 8)
+        .shadow(color: Color.black.opacity(0.5), radius: 18, y: 8)
     }
 }
 
@@ -934,19 +934,19 @@ private struct EvidencePresentation {
 }
 
 private enum RuViewTheme {
-    static let background = Color(red: 0.020, green: 0.035, blue: 0.051)
-    static let panel = Color(red: 0.036, green: 0.061, blue: 0.078)
-    static let panelStrong = Color(red: 0.049, green: 0.082, blue: 0.102)
-    static let surface = Color(red: 0.050, green: 0.082, blue: 0.102)
-    static let cyan = Color(red: 0.129, green: 0.831, blue: 0.906)
-    static let green = Color(red: 0.361, green: 1.000, blue: 0.561)
+    static let background = Color(red: 0.043, green: 0.055, blue: 0.075)
+    static let panel = Color(red: 0.078, green: 0.094, blue: 0.122)
+    static let panelStrong = Color(red: 0.094, green: 0.114, blue: 0.145)
+    static let surface = Color(red: 0.113, green: 0.129, blue: 0.169)
+    static let cyan = Color(red: 0.098, green: 0.831, blue: 0.902)
+    static let green = Color(red: 0.149, green: 0.851, blue: 0.408)
     static let orange = Color(red: 1.000, green: 0.612, blue: 0.231)
     static let yellow = Color(red: 1.000, green: 0.827, blue: 0.318)
     static let red = Color(red: 1.000, green: 0.353, blue: 0.384)
     static let indigo = Color(red: 0.490, green: 0.584, blue: 1.000)
-    static let muted = Color(red: 0.494, green: 0.596, blue: 0.651)
-    static let textSecondary = Color(red: 0.665, green: 0.733, blue: 0.769)
-    static let border = cyan.opacity(0.18)
+    static let muted = Color(red: 0.482, green: 0.537, blue: 0.616)
+    static let textSecondary = Color(red: 0.482, green: 0.537, blue: 0.616)
+    static let border = Color(red: 0.153, green: 0.173, blue: 0.208)
 }
 
 private struct InstrumentGrid: View {

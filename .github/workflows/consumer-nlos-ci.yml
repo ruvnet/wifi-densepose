@@ -166,6 +166,7 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
+          import json
           import re
           import struct
           from pathlib import Path
@@ -209,12 +210,35 @@ jobs:
               "44 by 44 points",
               "under 1.5 seconds",
               "under 100 milliseconds",
-              "zero runtime dependency",
+              "Outfit",
+              "JetBrains Mono",
+              "0288734c3426ca9125ef4cb2e067ef057c09f3ce",
+              "two pinned font asset packages",
               "Three.js",
               "physical iPhone validation pending",
           )
           for phrase in required_adr_contract:
               assert phrase in adr, f"missing mobile UI contract: {phrase}"
+
+          package = json.loads(Path("ui/mobile/package.json").read_text(encoding="utf-8"))
+          assert package["dependencies"]["@expo-google-fonts/outfit"] == "0.4.3"
+          assert package["dependencies"]["@expo-google-fonts/jetbrains-mono"] == "0.4.1"
+          assert package["dependencies"]["expo-font"] == "~55.0.8"
+          typography = Path("ui/mobile/src/theme/typography.ts").read_text(encoding="utf-8")
+          assert "Outfit_700Bold" in typography
+          assert "Outfit_400Regular" in typography
+          assert "JetBrainsMono_500Medium" in typography
+          native_fonts = (
+              "Outfit-Regular.ttf",
+              "Outfit-Medium.ttf",
+              "Outfit-Bold.ttf",
+              "JetBrainsMono-Regular.ttf",
+              "JetBrainsMono-Medium.ttf",
+          )
+          info_plist = Path("ui/ios-nlos/App/Info.plist").read_text(encoding="utf-8")
+          for font in native_fonts:
+              assert Path("ui/ios-nlos/App/Fonts", font).is_file(), f"missing native font: {font}"
+              assert font in info_plist, f"native font not registered: {font}"
 
           flow = flow_path.read_text(encoding="utf-8")
           required_flow_contract = (

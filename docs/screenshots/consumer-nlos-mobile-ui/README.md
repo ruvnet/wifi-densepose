@@ -7,6 +7,12 @@ watermark requirements, opens the deterministic Three.js LiDAR point cloud,
 verifies the reconstruction boundary, target lock, and confidence HUD, and
 writes the PNG files in this directory.
 
+The visual system is pinned to `cognitum-one/website` commit
+`0288734c3426ca9125ef4cb2e067ef057c09f3ce`. Outfit supplies display and body
+roles, while JetBrains Mono supplies instrumentation and metric roles. Both
+font families are bundled locally. Screenshot generation makes no runtime font
+request.
+
 The captures contain only the disconnected state, governed setup copy, and the
 built in synthetic fixture. The point cloud is generated locally from gated
 track hypotheses and schematic relay geometry. It is not a raw sensor point

@@ -19,22 +19,23 @@ most important state can consequently compete with setup copy, controls, and
 technical detail on a narrow phone viewport.
 
 The requested direction is similar to the visual language of Cognitum Explain
-Studio: a near-black technical canvas, fine grid, restrained cyan and green
-accents, compact monospaced labels, thin luminous outlines, and an orbital or
-radar motif. This decision adopts that visual language as design provenance,
-not as a product or code dependency. No Cognitum name, logo, wordmark, copy,
-source code, private asset, authentication behavior, or investor-deck branding
-is reused. RuView keeps its own name, logo, evidence vocabulary, information
+Studio and the public `cognitum-one/website`: a near-black technical canvas,
+soft blue-black cards, restrained cyan and green accents, Outfit display and
+body typography, JetBrains Mono instrumentation, medium-weight headings, and
+12 to 16 pixel radii. This decision adopts that visual language as explicit
+design provenance. The authoritative token review is pinned to website commit
+`0288734c3426ca9125ef4cb2e067ef057c09f3ce`, specifically `src/index.css`,
+`tailwind.config.ts`, and `creative-brief.md`. No Cognitum name, logo, wordmark,
+copy, private asset, authentication behavior, or investor-deck branding is
+reused. RuView keeps its own name, logo, evidence vocabulary, information
 architecture, and privacy boundary.
 
-The authenticated Studio route was not available to the automated cloud review
-session. The initial contract is therefore derived from the product owner's
-direction and the visual characteristics observable on the available hosted
-Cognitum Explain reference surface. Pixel equivalence with the authenticated
-Studio route is neither claimed nor required. A maintainer with authorized
-Studio access can later provide an approved reference screenshot and request a
-bounded visual refinement without changing the epistemic or privacy rules in
-this decision.
+The authenticated Studio route was not required for this refinement because
+the public website source defines the typography, colors, radii, borders, and
+surface treatment. Pixel equivalence with Studio is neither claimed nor
+required. A maintainer with authorized Studio access can later provide an
+approved reference screenshot and request a bounded visual refinement without
+changing the epistemic or privacy rules in this decision.
 
 This is a UI-only decision. It must not change sensing, reconstruction,
 filtering, transport, credential storage, permissions, diagnostic contents,
@@ -131,11 +132,15 @@ UNVERIFIED` only when an authenticated live attempt is active. It resolves to
    100 milliseconds over at least 30 repetitions on the same device.
 3. Continuous decorative animation must not be required for state recognition.
    It pauses when the app or page is inactive and honors reduced motion.
-4. The redesign adds no network request, remote font, remote image, analytics
-   client, sensor subscription, or background timer.
-5. Screenshot rendering is deterministic: fixed viewport, fixed fixtures,
+4. The redesign adds no runtime network request, remote font, remote image,
+   analytics client, sensor subscription, or background timer. Outfit and
+   JetBrains Mono are bundled locally from two pinned font asset packages.
+5. The production web export contains only four selected Outfit weights and
+   two selected JetBrains Mono weights. Their combined uncompressed font asset
+   size is 456 KB. The native target bundles five TTF files totaling 400 KB.
+6. Screenshot rendering is deterministic: fixed viewport, fixed fixtures,
    reduced motion, local assets, and no dependency on a live endpoint.
-6. Point-cloud geometry is bounded to 288 schematic relay points plus 96
+7. Point-cloud geometry is bounded to 288 schematic relay points plus 96
    target-return points for each of at most 16 validated tracks, or 1,824 total
    points. Browser device pixel ratio is capped at 1.5. GPU resources, animation
    frames, resize observers, and pointer listeners are released on unmount.
@@ -359,11 +364,12 @@ and 15 percent respectively.
 | Create a cross-platform generated token and component package now | 5 | 5 | 1 | 4 | 3 | 3.90 | Deferred because generation infrastructure is disproportionate to one screen and would expand the UI-only diff materially |
 | Keep the current generic card layout | 2 | 4 | 5 | 4 | 4 | 3.65 | Rejected because the evidence state remains visually subordinate and does not meet the requested design outcome |
 
-The selected approach is expected to add roughly two small platform-specific
-presentation implementations and one shared behavioral contract, while adding
-zero runtime dependency. The cost is duplicated token maintenance. The control
-is a screenshot review plus identical state names and accessibility assertions
-on both platforms.
+The selected approach adds two small platform-specific presentation
+implementations, one shared behavioral contract, and two pinned font asset
+packages. The 456 KB web and 400 KB native uncompressed font costs replace
+runtime font requests with deterministic local loading. The remaining cost is
+duplicated token maintenance. The control is a screenshot review plus identical
+state names and accessibility assertions on both platforms.
 
 ### Point-cloud renderer alternatives
 
@@ -371,7 +377,7 @@ The same weights apply to the narrower renderer choice.
 
 | Alternative | Clarity 25% | Epistemic safety 25% | Delivery cost 15% | Native accessibility 20% | Maintainability 15% | Weighted score | Decision |
 |---|---:|---:|---:|---:|---:|---:|---|
-| Three.js web plus SwiftUI Canvas native | 5 | 5 | 4 | 4 | 4 | 4.50 | Selected because it satisfies the requested Three.js view while preserving platform-native accessibility and adding zero runtime dependency |
+| Three.js web plus SwiftUI Canvas native | 5 | 5 | 4 | 4 | 4 | 4.50 | Selected because it satisfies the requested Three.js view while preserving platform-native accessibility and adding no renderer dependency |
 | Three.js inside a native WebView | 5 | 4 | 3 | 2 | 4 | 3.70 | Rejected because focus, Dynamic Type, startup, memory, and lifecycle behavior are weaker |
 | Add `expo-gl` and React Three Fiber for native Expo | 5 | 4 | 2 | 3 | 3 | 3.60 | Rejected because new native dependencies and build risk are disproportionate to a UI-only change |
 | Static SVG or Canvas cloud on every platform | 3 | 5 | 5 | 4 | 5 | 4.30 | Rejected as the sole implementation because it does not provide the requested interactive Three.js web experience |
@@ -401,9 +407,9 @@ The same weights apply to the narrower renderer choice.
 
 ## Security and privacy
 
-1. The redesign adds no permission, entitlement, endpoint, network request,
-   storage key, cookie, analytics event, remote asset, background mode, or data
-   retention path.
+1. The redesign adds no permission, entitlement, endpoint, runtime network
+   request, storage key, cookie, analytics event, remote asset, background mode,
+   or data retention path. Locally bundled font files are the only new assets.
 2. Existing credential rules remain unchanged: the Expo client holds an
    ephemeral credential in memory, while the approved native client uses its
    existing Keychain boundary. UI code cannot log, render, snapshot, export, or
@@ -493,7 +499,7 @@ claim. A threshold without a completed physical run remains `TARGET`.
 | Requirement | Automated evidence | Human or physical evidence | Pass condition |
 |---|---|---|---|
 | UI-only scope | Pull-request diff allowlist and service or model tests | Reviewer checks no sensing, transport, permissions, persistence, or retention diff | Zero out-of-scope behavior changes |
-| Cognitum-inspired, RuView-owned language | Four screenshot baselines and token review | Product reviewer compares hierarchy and general visual language | Requested characteristics present; zero Cognitum branding or private assets |
+| Cognitum-inspired, RuView-owned language | Four screenshot baselines, Outfit and JetBrains Mono token assertions, pinned source review, and local font asset contract | Product reviewer compares hierarchy and general visual language | Requested characteristics present; zero Cognitum branding or private assets; no runtime font request |
 | Five honest states | Unit tests plus `nlos-evidence-state` Playwright and Maestro selectors | Reviewer verifies wording and fail-closed hierarchy | All five exact labels are representable; unknown never becomes verified |
 | Synthetic safety | Unit and E2E assertions for `nlos-synthetic-watermark` | Screenshot review of synthetic baseline | Label and watermark both visible |
 | LiDAR point-cloud UI | Deterministic generator tests, exact point budgets, Three.js canvas readiness, reduced-motion capture, and zero-return fail-closed assertion | Browser and native visual review plus physical iPhone GPU check | WebGL renders 288 schematic relay points plus 96 returns per gated track; unverified states render zero target returns; native equivalent is labeled as a projection |
@@ -558,6 +564,9 @@ full iPhone validation.
 7. Run Swift package tests and the Xcode 26 unsigned simulator build. Confirm
    zero changes to core packages, sensing, transport, credentials, permissions,
    diagnostic schema, or retention.
+8. Assert the production web export contains only four Outfit and two JetBrains
+   Mono files totaling no more than 500 KB uncompressed. Confirm the native
+   target registers its five local TTF files and makes no font network request.
 
 ### Physical iPhone gate
 

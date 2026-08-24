@@ -4,6 +4,7 @@ import { fireEvent, render, screen } from '@testing-library/react-native';
 import { createSyntheticNlosFrame } from '@/services/nlos.service';
 import { createLiveNlosFrameFixture } from '@/testUtils/nlosFixtures';
 import { ThemeProvider } from '@/theme/ThemeContext';
+import { typography } from '@/theme/typography';
 import {
   getBetaPlatformGuidance,
   NLOS_EXPLAINER_URL,
@@ -71,6 +72,12 @@ describe('NLOSScreen', () => {
     mockNlosResult.forgetCredential.mockClear();
     mockNlosResult.startReplay.mockClear();
     mockNlosResult.connectLive.mockClear();
+  });
+
+  it('uses the pinned Cognitum typography roles', () => {
+    expect(typography.displayLg.fontFamily).toBe('Outfit_700Bold');
+    expect(typography.bodyMd.fontFamily).toBe('Outfit_400Regular');
+    expect(typography.mono.fontFamily).toBe('JetBrainsMono_500Medium');
   });
 
   it('renders the RuView NLOS screen and iPhone API boundary', () => {

@@ -87,7 +87,7 @@ export const GaugeArc = ({ value, min = 0, max, label, unit, color, colorTo, siz
           y={size / 2 - 8}
           fill="#E2E8F0"
           fontSize={Math.round(size * 0.16)}
-          fontFamily="Courier New"
+          fontFamily="JetBrainsMono_500Medium"
           fontWeight="700"
           textAnchor="middle"
         >
@@ -98,7 +98,7 @@ export const GaugeArc = ({ value, min = 0, max, label, unit, color, colorTo, siz
           y={size / 2 + 18}
           fill="#94A3B8"
           fontSize={Math.round(size * 0.085)}
-          fontFamily="Courier New"
+          fontFamily="JetBrainsMono_500Medium"
           textAnchor="middle"
           letterSpacing="0.6"
         >

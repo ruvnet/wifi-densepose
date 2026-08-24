@@ -133,7 +133,7 @@ struct TrackCanvas: View {
             )
             context.draw(
                 Text("\(String(track.trackId.prefix(12)).uppercased())  \(Int((track.confidence * 100).rounded()))%")
-                    .font(.caption2.bold().monospaced())
+                    .font(RuViewTypography.mono(9))
                     .foregroundColor(color),
                 at: CGPoint(
                     x: min(size.width - 62, centerX + radiusX + 34),
@@ -144,19 +144,19 @@ struct TrackCanvas: View {
 
         context.draw(
             Text("LIDAR POINT CLOUD / RECONSTRUCTION")
-                .font(.caption2.bold().monospaced())
+                .font(RuViewTypography.mono(9))
                 .foregroundColor(cyan),
             at: CGPoint(x: size.width / 2, y: 18)
         )
         context.draw(
             Text("NOT RAW IPHONE LIDAR")
-                .font(.caption2.bold().monospaced())
+                .font(RuViewTypography.mono(9))
                 .foregroundColor(orange.opacity(0.82)),
             at: CGPoint(x: size.width / 2, y: 34)
         )
         context.draw(
             Text("\(tracks.count * 72) GATED TARGET RETURNS")
-                .font(.caption2.bold().monospaced())
+                .font(RuViewTypography.mono(9))
                 .foregroundColor(Color.white.opacity(0.64)),
             at: CGPoint(x: size.width / 2, y: size.height - 16)
         )
@@ -206,7 +206,7 @@ struct TrackCanvas: View {
         )
         context.draw(
             Text(String(track.trackId.prefix(12)).uppercased())
-                .font(.caption2.bold().monospaced())
+                .font(RuViewTypography.mono(9))
                 .foregroundColor(.white),
             at: labelPoint
         )
@@ -269,7 +269,7 @@ struct TrackCanvas: View {
 
         context.draw(
             Text("RELAY ORIGIN")
-                .font(.caption2.bold().monospaced())
+                .font(RuViewTypography.mono(9))
                 .foregroundColor(Color.white.opacity(0.5)),
             at: CGPoint(x: center.x, y: center.y + 17)
         )

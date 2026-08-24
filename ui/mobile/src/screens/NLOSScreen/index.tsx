@@ -542,7 +542,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     color: instrumentColors.text,
     backgroundColor: instrumentColors.background,
-    fontFamily: 'Courier New',
+    fontFamily: 'JetBrainsMono_400Regular',
     fontSize: 14,
   },
   credentialInputError: { borderColor: instrumentColors.danger },

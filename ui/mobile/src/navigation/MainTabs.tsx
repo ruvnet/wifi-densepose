@@ -114,7 +114,7 @@ export const MainTabs = () => {
         },
         tabBarIcon: ({ color, size }) => <Ionicons name={toIconName(route.name)} size={size} color={color} />,
         tabBarLabelStyle: {
-          fontFamily: 'Courier New',
+          fontFamily: 'JetBrainsMono_500Medium',
           textTransform: 'uppercase',
           fontSize: 10,
         },
