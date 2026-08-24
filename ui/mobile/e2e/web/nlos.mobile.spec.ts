@@ -45,6 +45,9 @@ test.beforeEach(async ({ page }) => {
 
 const openNlos = async (page: Page) => {
   await page.goto('/');
+  for (const tab of ['Live', 'NLOS', 'Vitals', 'Zones', 'MAT', 'Settings']) {
+    await expect(page.getByText(tab, { exact: true }).last()).toBeVisible();
+  }
   await page.getByText('NLOS', { exact: true }).last().click();
   await expect(page.getByText('RuView NLOS', { exact: true })).toBeVisible();
   await expect(page.getByTestId('nlos-evidence-state')).toBeVisible();

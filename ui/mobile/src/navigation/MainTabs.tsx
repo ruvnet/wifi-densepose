@@ -55,12 +55,21 @@ const wrapLazy = (
   });
 };
 
-const LiveScreen = wrapLazy(() => import('../screens/LiveScreen'), 'Live');
-const NLOSScreen = wrapLazy(() => import('../screens/NLOSScreen'), 'NLOS');
-const VitalsScreen = wrapLazy(() => import('../screens/VitalsScreen'), 'Vitals');
-const ZonesScreen = wrapLazy(() => import('../screens/ZonesScreen'), 'Zones');
-const MATScreen = wrapLazy(() => import('../screens/MATScreen'), 'MAT');
-const SettingsScreen = wrapLazy(() => import('../screens/SettingsScreen'), 'Settings');
+const withSuspense = (Component: React.ComponentType) => {
+  const SuspendedScreen = () => (
+    <Suspense fallback={<ActivityIndicator color={colors.accent} />}>
+      <Component />
+    </Suspense>
+  );
+  return SuspendedScreen;
+};
+
+const LiveScreen = withSuspense(wrapLazy(() => import('../screens/LiveScreen'), 'Live'));
+const NLOSScreen = withSuspense(wrapLazy(() => import('../screens/NLOSScreen'), 'NLOS'));
+const VitalsScreen = withSuspense(wrapLazy(() => import('../screens/VitalsScreen'), 'Vitals'));
+const ZonesScreen = withSuspense(wrapLazy(() => import('../screens/ZonesScreen'), 'Zones'));
+const MATScreen = withSuspense(wrapLazy(() => import('../screens/MATScreen'), 'MAT'));
+const SettingsScreen = withSuspense(wrapLazy(() => import('../screens/SettingsScreen'), 'Settings'));
 
 const toIconName = (routeName: keyof MainTabsParamList) => {
   switch (routeName) {
@@ -92,17 +101,12 @@ const screens: ReadonlyArray<{ name: keyof MainTabsParamList; component: React.C
 
 const Tab = createBottomTabNavigator<MainTabsParamList>();
 
-const Suspended = ({ component: Component }: { component: React.ComponentType }) => (
-  <Suspense fallback={<ActivityIndicator color={colors.accent} />}>
-    <Component />
-  </Suspense>
-);
-
 export const MainTabs = () => {
   const matAlertCount = useMatStore((state) => state.alerts.length);
 
   return (
     <Tab.Navigator
+      initialRouteName="NLOS"
       screenOptions={({ route }) => ({
         headerShown: false,
         tabBarActiveTintColor: colors.accent,
@@ -115,10 +119,8 @@ export const MainTabs = () => {
         tabBarIcon: ({ color, size }) => <Ionicons name={toIconName(route.name)} size={size} color={color} />,
         tabBarLabelStyle: {
           fontFamily: 'JetBrainsMono_500Medium',
-          textTransform: 'uppercase',
           fontSize: 10,
         },
-        tabBarLabel: ({ children, color }) => <ThemedText style={{ color }}>{children}</ThemedText>,
       })}
     >
       {screens.map(({ name, component }) => (
@@ -128,7 +130,7 @@ export const MainTabs = () => {
           options={{
             tabBarBadge: name === 'MAT' ? (matAlertCount > 0 ? matAlertCount : undefined) : undefined,
           }}
-          component={() => <Suspended component={component} />}
+          component={component}
         />
       ))}
     </Tab.Navigator>

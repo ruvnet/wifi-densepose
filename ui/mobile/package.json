@@ -4,8 +4,8 @@
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "web": "expo start --web",
     "test": "jest",
     "typecheck": "tsc --noEmit",
@@ -21,6 +21,7 @@
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-navigation/bottom-tabs": "^7.15.10",
     "@react-navigation/native": "^7.1.31",
+    "@shopify/react-native-skia": "2.4.18",
     "@types/three": "^0.183.1",
     "axios": "^1.15.2",
     "expo": "~55.0.4",

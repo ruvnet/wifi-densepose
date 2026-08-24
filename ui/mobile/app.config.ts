@@ -8,12 +8,24 @@ export default {
   icon: './assets/icon.png',
   backgroundColor: '#0A0E1A',
   primaryColor: '#32B8C6',
+  splash: {
+    image: './assets/splash-icon.png',
+    resizeMode: 'contain',
+    backgroundColor: '#0B0E13',
+  },
   ios: {
     bundleIdentifier: 'com.ruvnet.wifidensepose',
     supportsTablet: true,
   },
   android: {
     package: 'com.ruvnet.wifidensepose',
+    adaptiveIcon: {
+      backgroundColor: '#E6F4FE',
+      foregroundImage: './assets/android-icon-foreground.png',
+      backgroundImage: './assets/android-icon-background.png',
+      monochromeImage: './assets/android-icon-monochrome.png',
+    },
+    predictiveBackGestureEnabled: false,
   },
   web: {
     favicon: './assets/favicon.png',
