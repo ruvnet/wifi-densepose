@@ -14,6 +14,12 @@
 		A00000000000000000000005 /* RuViewNLOSCore in Frameworks */ = {isa = PBXBuildFile; productRef = J00000000000000000000001 /* RuViewNLOSCore */; };
 		A00000000000000000000006 /* RuViewNLOSApple in Frameworks */ = {isa = PBXBuildFile; productRef = J00000000000000000000002 /* RuViewNLOSApple */; };
 		A00000000000000000000007 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000007 /* PrivacyInfo.xcprivacy */; };
+		A00000000000000000000008 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000008 /* DesignSystem.swift */; };
+		A00000000000000000000009 /* Outfit-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000009 /* Outfit-Regular.ttf */; };
+		A0000000000000000000000A /* Outfit-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000A /* Outfit-Medium.ttf */; };
+		A0000000000000000000000B /* Outfit-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000B /* Outfit-Bold.ttf */; };
+		A0000000000000000000000C /* JetBrainsMono-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000C /* JetBrainsMono-Regular.ttf */; };
+		A0000000000000000000000D /* JetBrainsMono-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000D /* JetBrainsMono-Medium.ttf */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,6 +30,12 @@
 		B00000000000000000000005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B00000000000000000000006 /* RuViewNLOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RuViewNLOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B00000000000000000000007 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		B00000000000000000000008 /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
+		B00000000000000000000009 /* Outfit-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Outfit-Regular.ttf"; sourceTree = "<group>"; };
+		B0000000000000000000000A /* Outfit-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Outfit-Medium.ttf"; sourceTree = "<group>"; };
+		B0000000000000000000000B /* Outfit-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Outfit-Bold.ttf"; sourceTree = "<group>"; };
+		B0000000000000000000000C /* JetBrainsMono-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "JetBrainsMono-Regular.ttf"; sourceTree = "<group>"; };
+		B0000000000000000000000D /* JetBrainsMono-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "JetBrainsMono-Medium.ttf"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -54,6 +66,8 @@
 				B00000000000000000000002 /* AppModel.swift */,
 				B00000000000000000000003 /* ContentView.swift */,
 				B00000000000000000000004 /* TrackCanvas.swift */,
+				B00000000000000000000008 /* DesignSystem.swift */,
+				C00000000000000000000003 /* Fonts */,
 				B00000000000000000000005 /* Info.plist */,
 				B00000000000000000000007 /* PrivacyInfo.xcprivacy */,
 			);
@@ -66,6 +80,18 @@
 				B00000000000000000000006 /* RuViewNLOS.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		C00000000000000000000003 /* Fonts */ = {
+			isa = PBXGroup;
+			children = (
+				B00000000000000000000009 /* Outfit-Regular.ttf */,
+				B0000000000000000000000A /* Outfit-Medium.ttf */,
+				B0000000000000000000000B /* Outfit-Bold.ttf */,
+				B0000000000000000000000C /* JetBrainsMono-Regular.ttf */,
+				B0000000000000000000000D /* JetBrainsMono-Medium.ttf */,
+			);
+			path = Fonts;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -134,6 +160,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				A00000000000000000000007 /* PrivacyInfo.xcprivacy in Resources */,
+				A00000000000000000000009 /* Outfit-Regular.ttf in Resources */,
+				A0000000000000000000000A /* Outfit-Medium.ttf in Resources */,
+				A0000000000000000000000B /* Outfit-Bold.ttf in Resources */,
+				A0000000000000000000000C /* JetBrainsMono-Regular.ttf in Resources */,
+				A0000000000000000000000D /* JetBrainsMono-Medium.ttf in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -148,6 +179,7 @@
 				A00000000000000000000002 /* AppModel.swift in Sources */,
 				A00000000000000000000003 /* ContentView.swift in Sources */,
 				A00000000000000000000004 /* TrackCanvas.swift in Sources */,
+				A00000000000000000000008 /* DesignSystem.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

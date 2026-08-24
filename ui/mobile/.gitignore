@@ -6,6 +6,9 @@ node_modules/
 # Expo
 .expo/
 dist/
+dist-e2e/
+test-results/
+playwright-report/
 web-build/
 expo-env.d.ts
 

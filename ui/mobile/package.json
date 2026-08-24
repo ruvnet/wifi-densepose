@@ -9,9 +9,14 @@
     "web": "expo start --web",
     "test": "jest",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "build:web:e2e": "expo export --platform web --output-dir dist-e2e",
+    "serve:web:e2e": "node e2e/web/serve.mjs",
+    "e2e:web": "playwright test --config playwright.config.ts"
   },
   "dependencies": {
+    "@expo-google-fonts/jetbrains-mono": "0.4.1",
+    "@expo-google-fonts/outfit": "0.4.3",
     "@expo/vector-icons": "^15.0.2",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-navigation/bottom-tabs": "^7.15.10",
@@ -19,6 +24,7 @@
     "@types/three": "^0.183.1",
     "axios": "^1.15.2",
     "expo": "~55.0.4",
+    "expo-font": "~55.0.8",
     "expo-status-bar": "~55.0.6",
     "react": "19.2.0",
     "react-dom": "19.2.0",
@@ -37,6 +43,7 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.62.1",
     "@testing-library/jest-native": "^5.4.3",
     "@testing-library/react-native": "^13.3.3",
     "@types/jest": "29.5.14",

@@ -7,7 +7,12 @@ module.exports = {
     ...(expoPreset.setupFiles || []),
   ],
   setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
-  testPathIgnorePatterns: ['/node_modules/', '/__mocks__/', '<rootDir>/src/__tests__/test-utils.tsx'],
+  testPathIgnorePatterns: [
+    '/node_modules/',
+    '/__mocks__/',
+    '<rootDir>/e2e/web/',
+    '<rootDir>/src/__tests__/test-utils.tsx',
+  ],
   transformIgnorePatterns: [
     'node_modules/(?!(expo|expo-.+|react-native|@react-native|react-native-webview|react-native-reanimated|react-native-svg|react-native-safe-area-context|react-native-screens|@react-navigation|@expo|@unimodules|expo-modules-core|react-native-worklets)/)',
   ],
