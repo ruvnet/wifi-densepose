@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react-native';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { ThemeProvider } from '@/theme/ThemeContext';
 import { apiService } from '@/services/api.service';
 import { wsService } from '@/services/ws.service';
@@ -20,6 +20,7 @@ jest.mock('@/services/api.service', () => ({
     get: jest.fn(),
     post: jest.fn(),
     getStatus: jest.fn(),
+    getStatusAt: jest.fn(),
   },
 }));
 
@@ -30,6 +31,7 @@ describe('SettingsScreen', () => {
       serverUrl: 'http://localhost:3000',
       nlosServerUrl: 'http://localhost:3000',
       rssiScanEnabled: false,
+      rssiScanIntervalSeconds: 2,
       theme: 'system',
       alertSoundEnabled: true,
     });
@@ -119,6 +121,24 @@ describe('SettingsScreen', () => {
     expect(useSettingsStore.getState().nlosServerUrl).toBe('https://nlos.example.com');
   });
 
+  it('tests the draft sensing endpoint without saving it', async () => {
+    (apiService.getStatusAt as jest.Mock).mockResolvedValue({ status: 'ok' });
+    const { SettingsScreen } = require('@/screens/SettingsScreen');
+    render(
+      <ThemeProvider>
+        <SettingsScreen />
+      </ThemeProvider>,
+    );
+
+    fireEvent.changeText(screen.getByTestId('sensing-server-url-input'), 'http://10.0.0.8:8080');
+    fireEvent.press(screen.getByText('Test Connection'));
+
+    await waitFor(() => {
+      expect(apiService.getStatusAt).toHaveBeenCalledWith('http://10.0.0.8:8080');
+    });
+    expect(useSettingsStore.getState().serverUrl).toBe('http://localhost:3000');
+  });
+
   it('updates sensing and appearance controls', () => {
     const { SettingsScreen } = require('@/screens/SettingsScreen');
     render(
@@ -127,12 +147,15 @@ describe('SettingsScreen', () => {
       </ThemeProvider>,
     );
 
-    fireEvent(screen.getByRole('switch'), 'valueChange', true);
+    fireEvent(screen.getByLabelText('RSSI scanning'), 'valueChange', true);
     fireEvent.press(screen.getByText('5s'));
     fireEvent.press(screen.getByText('DARK'));
+    fireEvent(screen.getByLabelText('MAT alert sounds'), 'valueChange', false);
 
     expect(useSettingsStore.getState().rssiScanEnabled).toBe(true);
+    expect(useSettingsStore.getState().rssiScanIntervalSeconds).toBe(5);
     expect(useSettingsStore.getState().theme).toBe('dark');
+    expect(useSettingsStore.getState().alertSoundEnabled).toBe(false);
     expect(screen.getByText('Active interval: 5s')).toBeTruthy();
   });
 });

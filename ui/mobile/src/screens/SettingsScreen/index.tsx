@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Linking, ScrollView, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { Alert, Linking, Platform, Pressable, ScrollView, Switch, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { colors } from '@/theme/colors';
@@ -7,8 +8,7 @@ import { spacing } from '@/theme/spacing';
 import { WS_PATH } from '@/constants/websocket';
 import { apiService } from '@/services/api.service';
 import { wsService } from '@/services/ws.service';
-import { useSettingsStore } from '@/stores/settingsStore';
-import { Alert, Pressable, Platform } from 'react-native';
+import { type RssiScanIntervalSeconds, useSettingsStore } from '@/stores/settingsStore';
 import { ThemePicker } from './ThemePicker';
 import { RssiToggle } from './RssiToggle';
 import { ServerUrlInput } from './ServerUrlInput';
@@ -43,10 +43,10 @@ const ScanIntervalPicker = ({
   value,
   onChange,
 }: {
-  value: number;
-  onChange: (value: number) => void;
+  value: RssiScanIntervalSeconds;
+  onChange: (value: RssiScanIntervalSeconds) => void;
 }) => {
-  const options = [1, 2, 5];
+  const options: RssiScanIntervalSeconds[] = [1, 2, 5];
 
   return (
     <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm }}>
@@ -85,15 +85,18 @@ export const SettingsScreen = () => {
   const serverUrl = useSettingsStore((state) => state.serverUrl);
   const nlosServerUrl = useSettingsStore((state) => state.nlosServerUrl);
   const rssiScanEnabled = useSettingsStore((state) => state.rssiScanEnabled);
+  const rssiScanIntervalSeconds = useSettingsStore((state) => state.rssiScanIntervalSeconds);
   const theme = useSettingsStore((state) => state.theme);
+  const alertSoundEnabled = useSettingsStore((state) => state.alertSoundEnabled);
   const setServerUrl = useSettingsStore((state) => state.setServerUrl);
   const setNlosServerUrl = useSettingsStore((state) => state.setNlosServerUrl);
   const setRssiScanEnabled = useSettingsStore((state) => state.setRssiScanEnabled);
+  const setRssiScanIntervalSeconds = useSettingsStore((state) => state.setRssiScanIntervalSeconds);
   const setTheme = useSettingsStore((state) => state.setTheme);
+  const setAlertSoundEnabled = useSettingsStore((state) => state.setAlertSoundEnabled);
 
   const [draftUrl, setDraftUrl] = useState(serverUrl);
   const [draftNlosUrl, setDraftNlosUrl] = useState(nlosServerUrl);
-  const [scanInterval, setScanInterval] = useState(2);
 
   useEffect(() => {
     setDraftUrl(serverUrl);
@@ -103,10 +106,9 @@ export const SettingsScreen = () => {
     setDraftNlosUrl(nlosServerUrl);
   }, [nlosServerUrl]);
 
-  const intervalSummary = useMemo(() => `${scanInterval}s`, [scanInterval]);
-
   const handleSaveUrl = () => {
-    const newUrl = draftUrl.trim();
+    const newUrl = draftUrl.trim().replace(/\/+$/, '');
+    setDraftUrl(newUrl);
     setServerUrl(newUrl);
     wsService.disconnect();
     wsService.connect(newUrl);
@@ -128,12 +130,21 @@ export const SettingsScreen = () => {
   };
 
   return (
-    <ThemedView style={{ flex: 1, backgroundColor: colors.bg, padding: spacing.md }}>
-      <ScrollView
-        contentContainerStyle={{
-          paddingBottom: spacing.xl,
-        }}
-      >
+    <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: colors.bg }}>
+      <ThemedView style={{ flex: 1, backgroundColor: colors.bg }}>
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{
+            paddingHorizontal: spacing.md,
+            paddingBottom: spacing.xxl,
+          }}
+        >
+        <View style={{ paddingVertical: spacing.md }}>
+          <ThemedText preset="displayMd">Settings</ThemedText>
+          <ThemedText preset="bodySm" style={{ color: colors.textSecondary, marginTop: spacing.xs }}>
+            Configure sensing, NLOS access, alerts, and appearance.
+          </ThemedText>
+        </View>
         <GlowCard title="SERVER">
           <ServerUrlInput value={draftUrl} onChange={setDraftUrl} onSave={handleSaveUrl} />
         </GlowCard>
@@ -151,15 +162,33 @@ export const SettingsScreen = () => {
           <ThemedText preset="bodyMd" style={{ marginTop: spacing.md }}>
             Scan interval
           </ThemedText>
-          <ScanIntervalPicker value={scanInterval} onChange={setScanInterval} />
+          <ScanIntervalPicker value={rssiScanIntervalSeconds} onChange={setRssiScanIntervalSeconds} />
           <ThemedText preset="bodySm" style={{ color: colors.textSecondary, marginTop: spacing.sm }}>
-            Active interval: {intervalSummary}
+            Active interval: {rssiScanIntervalSeconds}s
           </ThemedText>
           {Platform.OS === 'ios' && (
             <ThemedText preset="bodySm" style={{ color: colors.textSecondary, marginTop: spacing.sm }}>
               iOS: RSSI scanning uses stubbed telemetry in this build.
             </ThemedText>
           )}
+        </GlowCard>
+
+        <GlowCard title="ALERTS">
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <View style={{ flex: 1, paddingRight: spacing.md }}>
+              <ThemedText preset="bodyMd">MAT alert sounds</ThemedText>
+              <ThemedText preset="bodySm" style={{ color: colors.textSecondary, marginTop: spacing.xs }}>
+                Play an audible notification for new triage alerts.
+              </ThemedText>
+            </View>
+            <Switch
+              accessibilityLabel="MAT alert sounds"
+              value={alertSoundEnabled}
+              onValueChange={setAlertSoundEnabled}
+              trackColor={{ true: colors.accent, false: colors.surfaceAlt }}
+              thumbColor={colors.textPrimary}
+            />
+          </View>
         </GlowCard>
 
         <GlowCard title="APPEARANCE">
@@ -182,8 +211,9 @@ export const SettingsScreen = () => {
             Triage priority mapping: Immediate/Delayed/Minor/Deceased/Unknown
           </ThemedText>
         </GlowCard>
-      </ScrollView>
-    </ThemedView>
+        </ScrollView>
+      </ThemedView>
+    </SafeAreaView>
   );
 };
 

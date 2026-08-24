@@ -7,6 +7,7 @@ describe('useSettingsStore', () => {
       serverUrl: 'http://localhost:3000',
       nlosServerUrl: 'http://localhost:3000',
       rssiScanEnabled: false,
+      rssiScanIntervalSeconds: 2,
       theme: 'system',
       alertSoundEnabled: true,
     });
@@ -19,6 +20,10 @@ describe('useSettingsStore', () => {
 
     it('has rssiScanEnabled false by default', () => {
       expect(useSettingsStore.getState().rssiScanEnabled).toBe(false);
+    });
+
+    it('has a two second RSSI scan interval by default', () => {
+      expect(useSettingsStore.getState().rssiScanIntervalSeconds).toBe(2);
     });
 
     it('has theme as system by default', () => {
@@ -75,6 +80,13 @@ describe('useSettingsStore', () => {
       useSettingsStore.getState().setRssiScanEnabled(true);
       useSettingsStore.getState().setRssiScanEnabled(false);
       expect(useSettingsStore.getState().rssiScanEnabled).toBe(false);
+    });
+  });
+
+  describe('setRssiScanIntervalSeconds', () => {
+    it('updates the persisted scan interval', () => {
+      useSettingsStore.getState().setRssiScanIntervalSeconds(5);
+      expect(useSettingsStore.getState().rssiScanIntervalSeconds).toBe(5);
     });
   });
 

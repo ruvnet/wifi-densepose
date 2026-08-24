@@ -30,6 +30,7 @@ export default function App() {
   });
   const serverUrl = useSettingsStore((state) => state.serverUrl);
   const rssiScanEnabled = useSettingsStore((state) => state.rssiScanEnabled);
+  const rssiScanIntervalSeconds = useSettingsStore((state) => state.rssiScanIntervalSeconds);
 
   useEffect(() => {
     apiService.setBaseUrl(serverUrl);
@@ -51,13 +52,13 @@ export default function App() {
     const unsubscribe = rssiService.subscribe(() => {
       // Consumers can subscribe elsewhere for RSSI events.
     });
-    rssiService.startScanning(2000);
+    rssiService.startScanning(rssiScanIntervalSeconds * 1000);
 
     return () => {
       unsubscribe();
       rssiService.stopScanning();
     };
-  }, [rssiScanEnabled]);
+  }, [rssiScanEnabled, rssiScanIntervalSeconds]);
 
   useEffect(() => {
     (globalThis as { __appStartTime?: number }).__appStartTime = Date.now();

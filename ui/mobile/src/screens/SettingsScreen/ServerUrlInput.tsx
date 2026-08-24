@@ -25,7 +25,7 @@ export const ServerUrlInput = ({ value, onChange, onSave }: ServerUrlInputProps)
 
     const start = Date.now();
     try {
-      await apiService.getStatus();
+      await apiService.getStatusAt(value.trim());
       setTestResult(`✓ ${Date.now() - start}ms`);
     } catch {
       setTestResult('✗ Failed');
@@ -38,6 +38,8 @@ export const ServerUrlInput = ({ value, onChange, onSave }: ServerUrlInputProps)
         Server URL
       </ThemedText>
       <TextInput
+        testID="sensing-server-url-input"
+        accessibilityLabel="Sensing server URL"
         value={value}
         onChangeText={onChange}
         autoCapitalize="none"

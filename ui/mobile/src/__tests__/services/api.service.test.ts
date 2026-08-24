@@ -103,6 +103,32 @@ describe('ApiService', () => {
     });
   });
 
+  describe('getStatusAt', () => {
+    it('tests a draft HTTP endpoint without changing the saved base URL', async () => {
+      apiService.setBaseUrl('http://saved.example');
+      mockRequest.mockResolvedValueOnce({ data: { status: 'ok' } });
+
+      await apiService.getStatusAt('http://draft.example:8080');
+
+      expect(mockRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: 'GET',
+          url: 'http://draft.example:8080/api/v1/pose/status',
+        }),
+      );
+    });
+
+    it('maps a WebSocket endpoint to HTTP for its status check', async () => {
+      mockRequest.mockResolvedValueOnce({ data: { status: 'ok' } });
+
+      await apiService.getStatusAt('wss://draft.example');
+
+      expect(mockRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ url: 'https://draft.example/api/v1/pose/status' }),
+      );
+    });
+  });
+
   describe('post', () => {
     it('sends body data', () => {
       apiService.setBaseUrl('http://localhost:3000');

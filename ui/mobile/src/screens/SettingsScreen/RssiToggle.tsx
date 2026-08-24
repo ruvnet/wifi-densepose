@@ -19,6 +19,7 @@ export const RssiToggle = ({ enabled, onChange }: RssiToggleProps) => {
           </ThemedText>
         </View>
         <Switch
+          accessibilityLabel="RSSI scanning"
           value={enabled}
           onValueChange={onChange}
           trackColor={{ true: colors.accent, false: colors.surfaceAlt }}

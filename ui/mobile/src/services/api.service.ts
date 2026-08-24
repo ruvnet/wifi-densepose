@@ -80,6 +80,14 @@ class ApiService {
     return this.get<PoseStatus>(API_POSE_STATUS_PATH);
   }
 
+  getStatusAt(rawBaseUrl: string): Promise<PoseStatus> {
+    const parsed = new URL(rawBaseUrl);
+    if (parsed.protocol === 'ws:') parsed.protocol = 'http:';
+    if (parsed.protocol === 'wss:') parsed.protocol = 'https:';
+    const endpoint = new URL(API_POSE_STATUS_PATH, `${parsed.origin}/`).toString();
+    return this.requestWithRetry<PoseStatus>({ method: 'GET', url: endpoint }, 0);
+  }
+
   getZones(): Promise<ZoneConfig[]> {
     return this.get<ZoneConfig[]>(API_POSE_ZONES_PATH);
   }

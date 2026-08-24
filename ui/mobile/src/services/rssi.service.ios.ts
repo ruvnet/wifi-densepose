@@ -5,7 +5,6 @@ class IosRssiService implements RssiService {
   private listeners = new Set<(networks: WifiNetwork[]) => void>();
 
   startScanning(intervalMs: number): void {
-    console.warn('iOS RSSI scanning not available; returning synthetic network data.');
     this.stopScanning();
     this.timer = setInterval(() => {
       this.broadcast([{ ssid: 'WiFi-DensePose', bssid: undefined, level: -60 }]);
