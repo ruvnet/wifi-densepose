@@ -16,7 +16,7 @@ import {
   LIDAR_POINTS_PER_TRACK,
   LIDAR_RELAY_POINT_COUNT,
   resolveLidarTrackCenter,
-} from '@/screens/NLOSScreen/lidarPointCloud';
+} from '@/screens/NLOSScreen/lidarPointCloudData';
 
 const mockSafeAreaInsets = { top: 0, right: 0, bottom: 0, left: 0 };
 

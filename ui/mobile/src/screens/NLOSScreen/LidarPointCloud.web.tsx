@@ -8,7 +8,7 @@ import {
   buildLidarPointCloud,
   LIDAR_MAX_TRACKS,
   resolveLidarTrackCenter,
-} from './lidarPointCloud';
+} from './lidarPointCloudData';
 
 interface LidarPointCloudProps {
   tracks: NlosTrack[];
