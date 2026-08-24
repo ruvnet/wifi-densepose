@@ -3,6 +3,7 @@ import { View, ViewStyle } from 'react-native';
 import Svg, { Circle, Polygon, Rect } from 'react-native-svg';
 import Animated, {
   createAnimatedComponent,
+  interpolateColor,
   useAnimatedProps,
   useAnimatedStyle,
   useDerivedValue,
@@ -16,7 +17,6 @@ import {
 } from 'react-native-gesture-handler';
 import { colors } from '@/theme/colors';
 import { spacing } from '@/theme/spacing';
-import { valueToColor } from '@/utils/colorMap';
 
 const GRID_SIZE = 20;
 const CELL_COUNT = GRID_SIZE * GRID_SIZE;
@@ -34,11 +34,6 @@ type FloorPlanSvgProps = {
 };
 
 const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
-
-const colorToRgba = (value: number): string => {
-  const [r, g, b] = valueToColor(clamp01(value));
-  return `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, 1)`;
-};
 
 const normalizeGrid = (values: number[]): number[] => {
   const normalized = new Array(CELL_COUNT).fill(0);
@@ -72,7 +67,11 @@ const Cell = ({
   const y = Math.floor(index / GRID_SIZE) * cellSize;
 
   const animatedProps = useAnimatedProps(() => {
-    const fill = colorToRgba(values.value[index] ?? 0);
+    const fill = interpolateColor(
+      values.value[index] ?? 0,
+      [0, 0.5, 1],
+      ['rgb(0, 0, 255)', 'rgb(0, 255, 0)', 'rgb(255, 0, 0)'],
+    );
     return {
       fill,
       opacity: 0.95 + (progress.value - 1) * 0.05,
