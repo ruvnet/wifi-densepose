@@ -57,7 +57,19 @@ pub fn node_frame_from_state(node_id: u8, ns: &NodeState) -> Option<MultiBandCsi
     // Monotonic timestamp: microseconds since a shared process-local epoch.
     // All nodes use the same reference so the fuser's guard_interval_us check
     // compares apples to apples. No wall-clock mixing (immune to NTP jumps).
-    let timestamp_us = last_time.duration_since(*EPOCH).as_micros() as u64;
+    //
+    // Issue #1194: `last_time` can predate this process-global EPOCH (state
+    // created between socket start and the first fusion call). Rust >=1.60
+    // saturates `duration_since` to ZERO for such stamps, which poisoned
+    // every mixed cycle with an uptime-sized TimestampMismatch. Clamp to the
+    // epoch floor and drop frames that carry no positive monotonic offset.
+    let timestamp_us = last_time
+        .max(&*EPOCH)
+        .duration_since(*EPOCH)
+        .as_micros() as u64;
+    if timestamp_us == 0 {
+        return None;
+    }
 
     let canonical = CanonicalCsiFrame {
         amplitude,
