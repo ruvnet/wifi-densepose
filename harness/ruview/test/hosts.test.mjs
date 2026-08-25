@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runClaudeCode, buildClaudeCodeArgs } from '../src/hosts/claude-code.js';
@@ -9,7 +9,7 @@ import { runProcess, scrubEnvironment } from '../src/process-runner.js';
 import { redact } from '../src/redact.js';
 import { assertTrustedRuViewRepo } from '../src/repo-trust.js';
 function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), 'ruview-hosts-'));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ruview-hosts-')));
   mkdirSync(join(dir, '.git')); mkdirSync(join(dir, 'v2')); mkdirSync(join(dir, 'firmware'));
   writeFileSync(join(dir, 'README.md'), '# RuView\nWiFi DensePose repository\n');
   const cli = join(dir, 'fake-cli.mjs');
@@ -24,7 +24,7 @@ test('environment is an explicit allowlist', () => {
   assert.deepEqual(scrubEnvironment({ PATH: 'ok', TEST_SECRET: 'no', HOME: 'yes' }), { PATH: 'ok', HOME: 'yes' });
 });
 test('trust preflight rejects a different anchor', () => {
-  const { dir } = fixture(); const other = mkdtempSync(join(tmpdir(), 'ruview-anchor-'));
+  const { dir } = fixture(); const other = realpathSync(mkdtempSync(join(tmpdir(), 'ruview-anchor-')));
   try { assert.equal(assertTrustedRuViewRepo(dir), dir); assert.throws(() => assertTrustedRuViewRepo(dir, { trustedRoot: other }), /trusted root/); }
   finally { rmSync(dir, { recursive: true, force: true }); rmSync(other, { recursive: true, force: true }); }
 });
