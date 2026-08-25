@@ -821,21 +821,23 @@ impl FieldModel {
             Err(_) => return Ok(0), // SVD failure = can't estimate
         };
 
-        // Marcenko-Pastur noise estimate: median of POSITIVE eigenvalues
-        // in the bottom half. Excludes zeros from rank-deficient matrices
-        // (common when n_subcarriers > n_frames, e.g. 56 subcarriers / 50 frames).
+        // Marcenko-Pastur noise estimate: mean of POSITIVE eigenvalues.
+        // Issue #1195: the previous bottom-half-of-spectrum average sits far
+        // below sigma^2 for genuinely white input (most of the MP bulk lies
+        // under its own mean), which dragged the significance threshold
+        // INSIDE the noise bulk and made the largest 1-2 noise eigenvalues
+        // read as phantom occupants. The mean of all positive eigenvalues
+        // equals tr(Sigma)/r — an unbiased sigma^2 whether the matrix is
+        // full-rank or rank-deficient (zeros excluded, which matters when
+        // n_subcarriers > n_frames, e.g. 56 subcarriers / 50 frames).
         let local_noise_var = {
             let mut positive: Vec<f64> =
                 eigenvalues.iter().copied().filter(|&e| e > 1e-10).collect();
-            positive.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            if positive.len() >= 4 {
-                let half = positive.len() / 2;
-                positive[..half].iter().sum::<f64>() / half as f64
-            } else if !positive.is_empty() {
-                positive[0]
-            } else {
+            if positive.is_empty() {
                 return Ok(0); // All zero eigenvalues — can't estimate
             }
+            let sum: f64 = positive.iter().sum();
+            sum / positive.len() as f64
         };
 
         // Issue #942: anchor the noise floor to the calibration's noise_var
@@ -1390,19 +1392,30 @@ mod tests {
         }
         model.finalize_calibration(1_000_000, 0).unwrap();
 
-        // Estimate occupancy with similar noise-only frames
+        // Estimate occupancy with i.i.d. noise-only frames.
+        // Issue #1195: the previous input reused structured sinusoids, whose
+        // eigenspectrum legitimately exceeds the calibration baseline on some
+        // BLAS backends (deterministically reporting phantom occupants). True
+        // white noise around the same means is the correct "noise-only"
+        // fixture: the Marcenko-Pastur threshold guarantees no significant
+        // eigenvalues for isotropic input regardless of backend. Deterministic
+        // LCG keeps the fixture reproducible without a rand dev-dependency.
+        let mut seed: u32 = 0x1234_5678;
+        let mut lcg_unit = move || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f64 / 8_388_608.0 - 1.0 // [-1, 1)
+        };
         let frames: Vec<Vec<f64>> = (0..20)
-            .map(|i| {
-                let t = (i + 50) as f64 * 0.1;
+            .map(|_| {
                 vec![
-                    1.0 + 0.01 * t.sin(),
-                    2.0 + 0.01 * t.cos(),
-                    3.0 + 0.01 * (2.0 * t).sin(),
-                    4.0 + 0.01 * (2.0 * t).cos(),
-                    5.0 + 0.01 * (3.0 * t).sin(),
-                    6.0 + 0.01 * (3.0 * t).cos(),
-                    7.0 + 0.01 * (4.0 * t).sin(),
-                    8.0 + 0.01 * (4.0 * t).cos(),
+                    1.0 + 0.05 * lcg_unit(),
+                    2.0 + 0.05 * lcg_unit(),
+                    3.0 + 0.05 * lcg_unit(),
+                    4.0 + 0.05 * lcg_unit(),
+                    5.0 + 0.05 * lcg_unit(),
+                    6.0 + 0.05 * lcg_unit(),
+                    7.0 + 0.05 * lcg_unit(),
+                    8.0 + 0.05 * lcg_unit(),
                 ]
             })
             .collect();
