@@ -2639,13 +2639,43 @@ fn raw_classify(score: f64) -> String {
 }
 
 /// Debounce frames required before state transition (at ~10 FPS = ~0.4s).
+/// Used only by [`smooth_and_classify`] (simulated / WiFi-scan sources,
+/// which run on a fixed tick cadence close to this design point).
 const DEBOUNCE_FRAMES: u32 = 4;
 /// EMA alpha for motion smoothing (~1s time constant at 10 FPS).
+/// Used only by [`smooth_and_classify`]; see above.
 const MOTION_EMA_ALPHA: f64 = 0.15;
 /// EMA alpha for slow-adapting baseline (~30s time constant at 10 FPS).
+/// Used only by [`smooth_and_classify`]; see above.
 const BASELINE_EMA_ALPHA: f64 = 0.003;
 /// Number of warm-up frames before baseline subtraction kicks in.
+/// Used only by [`smooth_and_classify`]; see above.
 const BASELINE_WARMUP: u64 = 50;
+
+/// Debounce duration required before [`smooth_and_classify_node`] accepts a
+/// state transition. Equivalent to the original `DEBOUNCE_FRAMES = 4` at the
+/// assumed 10 FPS design point.
+const NODE_DEBOUNCE_DURATION_SECS: f64 = 0.4;
+/// Time constant for [`smooth_and_classify_node`]'s motion-score EMA,
+/// derived from `MOTION_EMA_ALPHA` at the assumed 10 FPS design point
+/// (τ = -T / ln(1-α)) so behavior is unchanged for a node running at
+/// exactly 10 FPS.
+///
+/// Frame-count/fixed-alpha smoothing silently scales with actual CSI
+/// arrival rate. ESP32-C6 boards observed in the field run CSI at
+/// ~48-50 FPS, not the assumed 10 FPS — ~5x faster — which made the
+/// debounce trigger in ~0.08s instead of ~0.4s and compressed the "1s"
+/// motion EMA to ~0.2s of real smoothing, letting raw per-frame noise
+/// flip the reported label almost directly (the reported UI "seizure").
+/// Deriving a per-frame alpha from the node's actual measured
+/// `csi_fps_ema` makes the smoothing strength invariant to arrival rate.
+const NODE_MOTION_TIME_CONSTANT_SECS: f64 = 0.6154;
+/// Time constant for [`smooth_and_classify_node`]'s baseline EMA, same
+/// derivation as `NODE_MOTION_TIME_CONSTANT_SECS` from `BASELINE_EMA_ALPHA`.
+const NODE_BASELINE_TIME_CONSTANT_SECS: f64 = 33.28;
+/// Baseline warm-up duration before baseline subtraction kicks in for
+/// [`smooth_and_classify_node`] (originally 50 frames at 10 FPS = 5s).
+const NODE_BASELINE_WARMUP_SECS: f64 = 5.0;
 
 /// Apply EMA smoothing, adaptive baseline subtraction, and hysteresis debounce
 /// to the raw classification.  Mutates the smoothing state in `AppStateInner`.
@@ -2700,18 +2730,27 @@ fn smooth_and_classify(state: &mut AppStateInner, raw: &mut ClassificationInfo, 
 /// Per-node variant of `smooth_and_classify` that operates on a `NodeState`
 /// instead of `AppStateInner` (issue #249).
 fn smooth_and_classify_node(ns: &mut NodeState, raw: &mut ClassificationInfo, raw_motion: f64) {
+    // Derive this frame's effective time step from the node's actual
+    // measured CSI rate (already EMA-tracked, burst-filtered elsewhere —
+    // see `observe_csi_frame_arrival`) rather than assuming 10 FPS.
+    let fps = ns.csi_fps_ema.max(1.0);
+    let dt = 1.0 / fps;
+    let motion_alpha = 1.0 - (-dt / NODE_MOTION_TIME_CONSTANT_SECS).exp();
+    let baseline_alpha = 1.0 - (-dt / NODE_BASELINE_TIME_CONSTANT_SECS).exp();
+    let debounce_frames_needed = ((NODE_DEBOUNCE_DURATION_SECS * fps).round() as u32).max(1);
+    let warmup_frames_needed = ((NODE_BASELINE_WARMUP_SECS * fps).round() as u64).max(1);
+
     ns.baseline_frames += 1;
-    if ns.baseline_frames < BASELINE_WARMUP {
+    if ns.baseline_frames < warmup_frames_needed {
         ns.baseline_motion = ns.baseline_motion * 0.9 + raw_motion * 0.1;
     } else if raw_motion < ns.smoothed_motion + 0.05 {
         ns.baseline_motion =
-            ns.baseline_motion * (1.0 - BASELINE_EMA_ALPHA) + raw_motion * BASELINE_EMA_ALPHA;
+            ns.baseline_motion * (1.0 - baseline_alpha) + raw_motion * baseline_alpha;
     }
 
     let adjusted = (raw_motion - ns.baseline_motion * 0.7).max(0.0);
 
-    ns.smoothed_motion =
-        ns.smoothed_motion * (1.0 - MOTION_EMA_ALPHA) + adjusted * MOTION_EMA_ALPHA;
+    ns.smoothed_motion = ns.smoothed_motion * (1.0 - motion_alpha) + adjusted * motion_alpha;
     let sm = ns.smoothed_motion;
 
     let candidate = raw_classify(sm);
@@ -2721,7 +2760,7 @@ fn smooth_and_classify_node(ns: &mut NodeState, raw: &mut ClassificationInfo, ra
         ns.debounce_candidate = candidate;
     } else if candidate == ns.debounce_candidate {
         ns.debounce_counter += 1;
-        if ns.debounce_counter >= DEBOUNCE_FRAMES {
+        if ns.debounce_counter >= debounce_frames_needed {
             ns.current_motion_level = candidate;
             ns.debounce_counter = 0;
         }
