@@ -4083,10 +4083,148 @@ fn emit_rufield_event(s: &AppStateInner, update: &SensingUpdate, node_id: u8) {
 }
 
 fn attach_field_positions(update: &mut SensingUpdate) {
+    // ── Adaptive empty-room presence gate ────────────────────────────────────
+    // The 50Hz self-ping keeps the CSI field energetic even in an empty room, so
+    // the raw classifier saturates and reports `presence=true` 30/30 with nobody
+    // there. Measured empty floor (boards next to the router): variance ~184±11,
+    // motion_band ~151±5 — high but very steady (~3-6% CV). We learn that quiet
+    // floor as a slow baseline and only call the room occupied when the live
+    // features rise clearly above it (a human body is a large reflector, so the
+    // rise is far bigger than the empty jitter). When unoccupied we emit
+    // `absent` and drop the skeleton entirely so an empty room shows no phantom.
+    {
+        // Occupied when either temporal feature exceeds its learned quiet floor
+        // by this factor. Measured separation at boards-near-router geometry:
+        // empty peaks ~+15%, a moving occupant spikes ~+25-45%. 1.22 sits in that
+        // gap; a still occupant (~+14%) reads as empty — the honest physical limit
+        // (a motionless body barely perturbs a strong direct path).
+        // Per-node temporal-variance ratios: empty jitters to ~1.4x on the clean
+        // crossing node; a moving occupant pushes it to ~1.7-2.9x (variance is
+        // std², so a +30% std move is a +70% variance jump). These sit in that gap.
+        const OCCUPIED_RATIO: f64 = 1.45;
+        const MOVING_RATIO: f64 = 1.75; // bigger spike => active motion
+        // Asymmetric baseline tracking: fall FAST toward a lower reading (quickly
+        // finds the empty floor and recovers from a bad seed) and rise SLOWLY
+        // toward a higher one (won't absorb a moving occupant, whose signal spikes
+        // above the floor and dips back between moves — the fast-down term latches
+        // onto those dips so the baseline stays at the quiet floor).
+        const ALPHA_DOWN: f64 = 0.10;
+        const ALPHA_UP: f64 = 0.02;
+        // Hysteresis: the person's signal is spiky (it triggers on each movement
+        // and falls back between moves). Once triggered, hold "occupied" for this
+        // long so presence reads as one steady "someone active here" instead of
+        // flickering on every pause.
+        const HOLD_SECS: f64 = 3.0;
+
+        static BASELINES: std::sync::Mutex<Option<std::collections::HashMap<u8, (f64, f64)>>> =
+            std::sync::Mutex::new(None);
+        static LAST_TRIGGER: std::sync::Mutex<Option<std::time::Instant>> =
+            std::sync::Mutex::new(None);
+
+        // Per-node detection: each board keeps its OWN quiet baseline, and we take
+        // the BEST (largest) ratio across boards. Averaging the boards lets a noisy
+        // near-router node (short direct path, poor SNR) bury the clean signal of a
+        // well-placed node whose router link crosses the room — the occupant shows
+        // up strongly on the crossing node, so max-ratio surfaces them. Each
+        // baseline updates asymmetrically (fast down to find the floor / recover
+        // from a bad seed, slow up so a moving occupant is never absorbed).
+        let mut bl = BASELINES.lock().unwrap_or_else(|e| e.into_inner());
+        let map = bl.get_or_insert_with(std::collections::HashMap::new);
+        let mut var_ratio = 1.0_f64;
+        let mut mb_ratio = 1.0_f64;
+        let mut update_baseline = |node_id: u8, var: f64, mb: f64| {
+            let entry = map.entry(node_id).or_insert((var.max(1.0), mb.max(1.0)));
+            let vr = if entry.0 > 1e-6 { var / entry.0 } else { 1.0 };
+            let mr = if entry.1 > 1e-6 { mb / entry.1 } else { 1.0 };
+            var_ratio = var_ratio.max(vr);
+            mb_ratio = mb_ratio.max(mr);
+            let av = if var < entry.0 { ALPHA_DOWN } else { ALPHA_UP };
+            let am = if mb < entry.1 { ALPHA_DOWN } else { ALPHA_UP };
+            entry.0 += av * (var - entry.0);
+            entry.1 += am * (mb - entry.1);
+        };
+        match update.node_features.as_ref() {
+            Some(nf) if nf.iter().any(|n| !n.stale) => {
+                for n in nf.iter().filter(|n| !n.stale) {
+                    update_baseline(
+                        n.node_id,
+                        n.features.variance.max(0.0),
+                        n.features.motion_band_power.max(0.0),
+                    );
+                }
+            }
+            // No per-node breakdown yet — fall back to the aggregate feature.
+            _ => update_baseline(
+                0,
+                update.features.variance.max(0.0),
+                update.features.motion_band_power.max(0.0),
+            ),
+        }
+        drop(bl);
+
+        let raw_occupied = var_ratio > OCCUPIED_RATIO || mb_ratio > OCCUPIED_RATIO;
+        let moving_now = var_ratio > MOVING_RATIO || mb_ratio > MOVING_RATIO;
+
+        // Apply the hold: a fresh trigger refreshes the timer; otherwise stay
+        // occupied until the hold window elapses.
+        let now = std::time::Instant::now();
+        let mut lt = LAST_TRIGGER.lock().unwrap_or_else(|e| e.into_inner());
+        if raw_occupied {
+            *lt = Some(now);
+        }
+        let occupied = match *lt {
+            Some(t) => now.duration_since(t).as_secs_f64() < HOLD_SECS,
+            None => false,
+        };
+        drop(lt);
+        let moving = moving_now || (occupied && raw_occupied);
+
+        update.classification.presence = occupied;
+        update.classification.motion_level = if moving {
+            "present_moving".to_string()
+        } else if occupied {
+            "present_still".to_string()
+        } else {
+            "absent".to_string()
+        };
+        if occupied {
+            // We can't reliably count bodies from this signal; a demo has one
+            // occupant, so pin it to 1 and let the downstream clamp drop the pose
+            // tracker's phantom extra tracks.
+            update.estimated_persons = Some(1);
+        } else {
+            // Empty room: no occupant, no skeleton, no phantom vitals target.
+            update.persons = None;
+            update.estimated_persons = Some(0);
+        }
+    }
+
+    // Process-global low-pass state for the primary occupant's position. There
+    // is effectively one tracked room here, so a single smoother is enough and
+    // it keeps this a drop-in with no signature/call-site churn. Calls are
+    // already serialized behind the app-state lock, so contention is nil.
+    static SMOOTHED_POS: std::sync::Mutex<Option<[f64; 3]>> = std::sync::Mutex::new(None);
+    let mut smoothed_guard = SMOOTHED_POS.lock().unwrap_or_else(|e| e.into_inner());
+    let smoothed_pos: &mut Option<[f64; 3]> = &mut smoothed_guard;
+    // Clamp rendered skeletons to the presence-gated, dedup/ground-truth-
+    // calibrated person count. On display-less S3 nodes the 50Hz self-ping
+    // keeps the CSI field churning, so the pose tracker fragments a single
+    // occupant into several ghost tracks that otherwise render as phantom
+    // "people" moving fast. This is the single choke point every publish path
+    // calls right after `tracker_update`, so the cap applies uniformly.
+    let cap = update.estimated_persons.unwrap_or(1).max(1);
+    if let Some(persons) = update.persons.as_mut() {
+        if persons.len() > cap {
+            persons.truncate(cap);
+        }
+    }
+
     let Some(persons) = update.persons.as_mut() else {
+        *smoothed_pos = None;
         return;
     };
     if persons.is_empty() {
+        *smoothed_pos = None;
         return;
     }
 
@@ -4106,6 +4244,32 @@ fn attach_field_positions(update: &mut SensingUpdate) {
         if let Some(peak) = peaks.get(i).or_else(|| peaks.first()) {
             person.position = peak.position;
         }
+
+        // Low-pass the *primary* occupant's position so a single person reads as
+        // one steady body instead of teleporting between competing field peaks.
+        // A raw peak jump beyond ~1.5 m in a single 100 ms tick is almost
+        // certainly noise (the self-ping field re-picking a far cell), so it is
+        // followed only very slowly; small moves track promptly.
+        if i == 0 {
+            let target = person.position;
+            let next = match *smoothed_pos {
+                Some(prev) => {
+                    let dx = target[0] - prev[0];
+                    let dz = target[2] - prev[2];
+                    let dist = (dx * dx + dz * dz).sqrt();
+                    let alpha = if dist > 1.5 { 0.12_f64 } else { 0.30_f64 };
+                    [
+                        prev[0] + alpha * (target[0] - prev[0]),
+                        prev[1] + alpha * (target[1] - prev[1]),
+                        prev[2] + alpha * (target[2] - prev[2]),
+                    ]
+                }
+                None => target,
+            };
+            *smoothed_pos = Some(next);
+            person.position = next;
+        }
+
         person.motion_score = motion_score;
         person.pose = pose_label.clone();
     }
