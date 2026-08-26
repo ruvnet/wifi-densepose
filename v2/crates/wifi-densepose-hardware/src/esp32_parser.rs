@@ -58,6 +58,8 @@ pub const RUVIEW_COMPRESSED_CSI_MAGIC: u32 = 0xC5110005;
 pub const RUVIEW_FEATURE_STATE_MAGIC: u32 = 0xC5110006;
 /// ADR-095 / #513 on-device temporal-classification packet.
 pub const RUVIEW_TEMPORAL_MAGIC: u32 = 0xC5110007;
+/// ADR-341 authenticated BLE and Channel Sounding gateway envelope (`RVAE`).
+pub const RUVIEW_RADIO_ENVELOPE_MAGIC: u32 = 0x45415652;
 
 /// If `magic` is a recognized RuView wire packet other than the ADR-018 raw
 /// CSI frame, return a human-readable name for it; otherwise `None`.
@@ -72,6 +74,7 @@ pub fn ruview_sibling_packet_name(magic: u32) -> Option<&'static str> {
         RUVIEW_COMPRESSED_CSI_MAGIC => Some("ADR-039 compressed CSI"),
         RUVIEW_FEATURE_STATE_MAGIC => Some("ADR-081 feature state"),
         RUVIEW_TEMPORAL_MAGIC => Some("ADR-095 temporal classification"),
+        RUVIEW_RADIO_ENVELOPE_MAGIC => Some("ADR-341 authenticated radio envelope"),
         _ => None,
     }
 }
@@ -491,6 +494,7 @@ mod tests {
             RUVIEW_COMPRESSED_CSI_MAGIC,
             RUVIEW_FEATURE_STATE_MAGIC,
             RUVIEW_TEMPORAL_MAGIC,
+            RUVIEW_RADIO_ENVELOPE_MAGIC,
         ] {
             assert!(
                 ruview_sibling_packet_name(m).is_some(),

@@ -110,6 +110,7 @@
 pub mod estimate;
 mod engine;
 mod observation;
+pub mod radio_fusion;
 mod world;
 
 pub use engine::{FusionConfig, FusionEngine};

@@ -61,6 +61,13 @@ wifi-densepose-signal = { version = "0.3.1", path = "../wifi-densepose-signal", 
 # Hardware crate — SyncPacket decoder for ADR-110 §A0.12 mesh-aligned timestamps.
 wifi-densepose-hardware = { version = "0.3.0", path = "../wifi-densepose-hardware" }
 
+# ADR-341: authenticated RVAE ingress, short-lived BLE anchors, and bounded
+# Channel Sounding respiration estimates.  The sensing server owns durable
+# replay storage; the fusion crate owns wire verification and estimation.
+ruview-fusion = { path = "../ruview-fusion" }
+fs2 = "0.4"
+libc.workspace = true
+
 # Governed streaming engine (ADR-135..146): fusion + privacy demotion +
 # WorldGraph belief + deterministic witness. The live server data runs through
 # this as a governed path whose Restricted-class decision strips per-node raw

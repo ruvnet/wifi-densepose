@@ -71,7 +71,7 @@ pub use error::ParseError;
 pub use esp32_parser::{
     ruview_sibling_packet_name, Esp32CsiParser, ESP32_CSI_MAGIC, RUVIEW_COMPRESSED_CSI_MAGIC,
     RUVIEW_FEATURE_MAGIC, RUVIEW_FEATURE_STATE_MAGIC, RUVIEW_FUSED_VITALS_MAGIC,
-    RUVIEW_TEMPORAL_MAGIC, RUVIEW_VITALS_MAGIC,
+    RUVIEW_RADIO_ENVELOPE_MAGIC, RUVIEW_TEMPORAL_MAGIC, RUVIEW_VITALS_MAGIC,
 };
 pub use radio_ops::{
     crc32_ieee, decode_anomaly_alert, decode_mesh, decode_node_status, encode_health, AnomalyAlert,

@@ -7,9 +7,12 @@
 
 #include "stream_sender.h"
 
+#include <stdatomic.h>
 #include <string.h>
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
 #include "sdkconfig.h"
@@ -18,6 +21,8 @@ static const char *TAG = "stream_sender";
 
 static int s_sock = -1;
 static struct sockaddr_in s_dest_addr;
+static SemaphoreHandle_t s_send_lock;
+static atomic_uint_fast32_t s_lock_contention_drops;
 
 /**
  * ENOMEM backoff state.
@@ -39,6 +44,13 @@ static uint32_t s_enomem_streak = 0;
 
 static int sender_init_internal(const char *ip, uint16_t port)
 {
+    if (s_send_lock == NULL) {
+        s_send_lock = xSemaphoreCreateMutex();
+        if (s_send_lock == NULL) {
+            ESP_LOGE(TAG, "Failed to create UDP sender mutex");
+            return -1;
+        }
+    }
     s_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (s_sock < 0) {
         ESP_LOGE(TAG, "Failed to create socket: errno %d", errno);
@@ -72,9 +84,22 @@ int stream_sender_init_with(const char *ip, uint16_t port)
 
 int stream_sender_send(const uint8_t *data, size_t len)
 {
-    if (s_sock < 0) {
+    if (data == NULL || len == 0u || s_send_lock == NULL) {
         return -1;
     }
+    /* CSI, edge DSP, WASM and ADR-341 tasks share one socket and one backoff
+     * state machine. Never block a radio callback behind UDP I/O. */
+    if (xSemaphoreTake(s_send_lock, 0) != pdTRUE) {
+        uint_fast32_t drops = atomic_fetch_add_explicit(
+            &s_lock_contention_drops, 1u, memory_order_relaxed) + 1u;
+        if ((drops % ENOMEM_LOG_INTERVAL) == 1u) {
+            ESP_LOGW(TAG, "concurrent UDP send dropped (%lu total)",
+                     (unsigned long)drops);
+        }
+        return -1;
+    }
+    int result = -1;
+    if (s_sock < 0) goto done;
 
     /* ENOMEM backoff: if we recently exhausted lwIP buffers, skip sends
      * until the cooldown expires.  This prevents the cascade of failed
@@ -87,7 +112,7 @@ int stream_sender_send(const uint8_t *data, size_t len)
                 ESP_LOGW(TAG, "sendto suppressed (ENOMEM backoff, %lu dropped)",
                          (unsigned long)s_enomem_suppressed);
             }
-            return -1;
+            goto done;
         }
         /* Cooldown expired — resume sending */
         ESP_LOGI(TAG, "ENOMEM backoff expired, resuming sends (%lu were suppressed)",
@@ -113,17 +138,30 @@ int stream_sender_send(const uint8_t *data, size_t len)
         } else {
             ESP_LOGW(TAG, "sendto failed: errno %d", errno);
         }
-        return -1;
+        goto done;
     }
 
     /* A send got through — buffer pressure cleared; reset the backoff streak. */
     s_enomem_streak = 0;
-    return sent;
+    result = sent;
+
+done:
+    xSemaphoreGive(s_send_lock);
+    return result;
 }
 
 int stream_sender_send_priority(const uint8_t *data, size_t len)
 {
+    if (data == NULL || len == 0u || s_send_lock == NULL) {
+        return -1;
+    }
+    if (xSemaphoreTake(s_send_lock, 0) != pdTRUE) {
+        (void)atomic_fetch_add_explicit(
+            &s_lock_contention_drops, 1u, memory_order_relaxed);
+        return -1;
+    }
     if (s_sock < 0) {
+        xSemaphoreGive(s_send_lock);
         return -1;
     }
 
@@ -144,16 +182,22 @@ int stream_sender_send_priority(const uint8_t *data, size_t len)
         if (errno != ENOMEM) {
             ESP_LOGW(TAG, "priority sendto failed: errno %d", errno);
         }
+        xSemaphoreGive(s_send_lock);
         return -1;
     }
+    xSemaphoreGive(s_send_lock);
     return sent;
 }
 
 void stream_sender_deinit(void)
 {
+    if (s_send_lock != NULL && xSemaphoreTake(s_send_lock, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
     if (s_sock >= 0) {
         close(s_sock);
         s_sock = -1;
         ESP_LOGI(TAG, "UDP sender closed");
     }
+    if (s_send_lock != NULL) xSemaphoreGive(s_send_lock);
 }

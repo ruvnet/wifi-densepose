@@ -28,6 +28,9 @@ pub mod pose_physics;
 /// ADR-295: canonical source-provenance state machine (synthetic can never
 /// present as live).
 pub mod provenance;
+/// ADR-341: live authenticated BLE and Channel Sounding ingress with durable
+/// replay state. Exact phase and timing samples never leave this edge module.
+pub mod radio_ingress;
 pub mod semantic;
 /// ADR-262 P3: the live RuField surface — turns the governed sensing cycle into
 /// signed RuField `FieldEvent`s on the additive `/api/field` + `/ws/field`

@@ -29,7 +29,7 @@ FEATURE_STATE_SRCS := $(MAIN_DIR)/rv_feature_state.c
 # before including the .c. The decide() body itself has no ESP-IDF deps.
 # Simpler: just recompile decide() here via a small shim.
 
-TESTS := test_adaptive_controller test_rv_feature_state test_rv_mesh
+TESTS := test_adaptive_controller test_rv_feature_state test_rv_mesh test_ble_cs_protocol
 
 all: $(TESTS)
 
@@ -46,12 +46,23 @@ test_rv_mesh: test_rv_mesh.c $(MAIN_DIR)/rv_mesh.c $(MAIN_DIR)/rv_mesh.h $(FEATU
 	    test_rv_mesh.c $(MAIN_DIR)/rv_mesh.c $(FEATURE_STATE_SRCS) \
 	    -o $@ $(LDLIBS)
 
+test_ble_cs_protocol: test_ble_cs_protocol.c \
+		$(MAIN_DIR)/ble_identity_protocol.c $(MAIN_DIR)/ble_identity_protocol.h \
+		$(MAIN_DIR)/channel_sounding_protocol.c $(MAIN_DIR)/channel_sounding_protocol.h \
+		$(MAIN_DIR)/radio_gateway_protocol.c $(MAIN_DIR)/radio_gateway_protocol.h
+	$(CC) $(CFLAGS) test_ble_cs_protocol.c \
+		$(MAIN_DIR)/ble_identity_protocol.c $(MAIN_DIR)/channel_sounding_protocol.c \
+		$(MAIN_DIR)/radio_gateway_protocol.c \
+		-o $@ $(LDLIBS)
+
 check: all
 	./test_adaptive_controller
 	@echo ""
 	./test_rv_feature_state
 	@echo ""
 	./test_rv_mesh
+	@echo ""
+	./test_ble_cs_protocol
 
 clean:
 	rm -f $(TESTS) *.o

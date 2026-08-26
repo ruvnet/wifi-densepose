@@ -203,6 +203,9 @@ All packets are sent over UDP to the configured aggregator. The magic number in 
 | `0xC5110001` | CSI Frame (ADR-018) | ~20 Hz | Variable | Raw I/Q per subcarrier per antenna |
 | `0xC5110002` | Vitals Packet | 1 Hz | 32 bytes | Presence, breathing BPM, heart rate, fall flag, occupancy |
 | `0xC5110004` | WASM Output | Event-driven | Variable | Custom events from WASM modules (u8 type + f32 value) |
+| `RVAE` (`0x45415652`) | Authenticated radio envelope v1 | Bounded worker | 92 or 128 bytes | Gateway-authenticated wrapper sent over UDP |
+| `0xC51100B1` | BLE Identity Evidence v1 | Bounded passive scan | 36 bytes inner payload | Rotating pseudonym, RSSI, TTL and evidence quality; never sent bare |
+| `RVCS` (`0x53435652`) | External Channel Sounding v1 | Companion-defined | 72 bytes inner payload | HMAC-authenticated phase and RTT primitives; never sent bare |
 
 ### ADR-018 Binary Frame Format
 
@@ -237,6 +240,92 @@ Offset  Size  Field
 24      4     Timestamp (ms since boot)
 28      4     Reserved
 ```
+
+### Optional BLE and Bluetooth 6 companion path (ADR-341)
+
+Both paths are disabled by default. ESP32-S3 can scan ordinary BLE advertising
+metadata and RSSI, but this firmware does **not** claim that the S3 exposes raw
+CTE IQ or native Bluetooth 6 Channel Sounding.
+
+The BLE path accepts only the RuView vendor service token authenticated with a
+provisioned 32-byte HMAC key. It discards the advertiser address and raw packet,
+then forwards a rotating eight-byte pseudonym with an explicit TTL. Ordinary
+iPhone background advertisements do not satisfy this contract and are not an
+identity source.
+
+The Channel Sounding path uses a separate capable radio on UART2. Its fixed v1
+frame carries sample age, timing uncertainty, phase, RTT, frequency offset,
+quality, source session, procedure metadata, sequence, a domain-separated
+128-bit HMAC tag and CRC32. The S3 validates these primitives. Both radio paths
+then enter a bounded queue and a second HMAC-protected gateway envelope carrying
+the node, random boot nonce, gateway sequence and receive time. Respiration
+inference and motion abstention happen on the host. See
+[`ADR-341`](../../docs/adr/ADR-341-authenticated-ble-and-channel-sounding-fusion.md)
+for exact layouts and the rvCSI mapping.
+
+To compile the BLE scanner, first enable ESP-IDF Bluetooth, NimBLE, the observer
+role, `CONFIG_BT_NIMBLE_EXT_SCAN=y`, `CONFIG_BT_NIMBLE_EXT_ADV=y`, and
+`CONFIG_BT_NIMBLE_TRANSPORT_EVT_SIZE=257`, then set
+`CONFIG_BLE_IDENTITY_SCAN_ENABLE=y`. The 50-byte token requires extended
+advertising and cannot fit in a legacy advertisement or scan response. The
+advertiser should keep its complete advertising data at or below 200 bytes;
+incomplete or truncated reports are rejected rather than authenticating a
+fragment. The
+default scan window is 50 ms per 1000 ms, or 5 percent duty. Firmware refuses
+settings above 25 percent. To compile the companion ingress on ESP32-S3, set
+`CONFIG_CHANNEL_SOUNDING_INGRESS_ENABLE=y` and verify the UART and GPIO choices
+against the specific board.
+
+Runtime activation requires separate secrets and remains fail closed:
+
+```bash
+python firmware/esp32-csi-node/provision.py --port COM7 \
+  --ssid "YourSSID" --password "YourPass" --target-ip 192.168.1.20 \
+  --ble-identity-enable 1 --ble-key-id 7 --ble-secret-file ble-key.bin \
+  --cs-ingress-enable 1 --cs-key-id 9 --cs-source-id 270544960 \
+  --cs-secret-file cs-key.bin --radio-envelope-key-id 12 \
+  --radio-envelope-secret-file gateway-key.bin
+```
+
+Each of the three independent key files contains exactly 32 raw bytes or 64
+hexadecimal characters. Key
+contents are written to NVS but are never printed or persisted in the local
+additive provisioning-state JSON. Production devices also require secure boot,
+flash encryption and NVS encryption. Re-supply the secret files on every later
+provisioning run while either feature remains enabled. Provisioning fails closed
+instead of writing a fallback CSV when any secret is present.
+
+The sensing server requires a fourth independent 32-byte host pseudonym key.
+On the first boot only, explicitly create the replay snapshot:
+
+```bash
+RUVIEW_API_TOKEN="replace-with-a-long-local-token" \
+cargo run -p wifi-densepose-sensing-server -- --source auto \
+  --radio-gateway-node-id 7 --radio-gateway-key-id 12 \
+  --radio-gateway-secret-file gateway-key.bin \
+  --radio-host-pseudonym-secret-file host-pseudonym-key.bin \
+  --radio-replay-state data/radio-replay-v2.json \
+  --radio-initialize-replay-state \
+  --radio-cs-key-id 9 --radio-cs-source-id 270544960 \
+  --radio-cs-secret-file cs-key.bin
+```
+
+Omit `--radio-initialize-replay-state` on every subsequent boot. If an
+established replay snapshot is lost, rotate all gateway, advertiser, and
+companion keys before creating a replacement. Add independent gateways with a
+repeatable `--radio-gateway NODE,KEY,SECRET_PATH` argument. P4 respiration and
+P5 pseudonymous anchor WebSocket exports remain closed by default. Their local
+overrides require loopback binding, configured bearer or OAuth authentication,
+and a private audit log. The override is deployment authorization, not a
+subject consent receipt.
+
+The gateway envelope authenticates integrity and source but does not encrypt
+UDP. Use WireGuard, DTLS, or an equivalent confidential transport if observers
+on the LAN must not see rotating pseudonyms or Channel Sounding primitives.
+
+The included C and Rust replays are **SYNTHETIC**. They are not evidence that a
+specific board, companion, room, respiration rate or identity-association
+accuracy has been validated.
 
 ---
 
