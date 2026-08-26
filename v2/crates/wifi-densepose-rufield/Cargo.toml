@@ -19,6 +19,10 @@ rufield-core = { version = "0.1.0", path = "../../../vendor/rufield/crates/rufie
 rufield-provenance = { version = "0.1.0", path = "../../../vendor/rufield/crates/rufield-provenance" }
 rufield-privacy = { version = "0.1.0", path = "../../../vendor/rufield/crates/rufield-privacy" }
 rufield-fusion = { version = "0.1.0", path = "../../../vendor/rufield/crates/rufield-fusion" }
+# ADR-262 P4 second modality: UltrasonicReplayAdapter parses, validates and
+# signs BatVu range profiles upstream, so RuView only has to decide what it is
+# willing to put on a wire. Same pure-Rust constraint as the four above.
+rufield-adapters = { version = "0.1.0", path = "../../../vendor/rufield/crates/rufield-adapters" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

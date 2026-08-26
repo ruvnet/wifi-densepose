@@ -8969,6 +8969,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rufield-adapters"
+version = "0.1.0"
+dependencies = [
+ "rufield-core",
+ "rufield-provenance",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "rufield-core"
 version = "0.1.0"
 dependencies = [
@@ -13377,6 +13388,7 @@ version = "0.1.0"
 name = "wifi-densepose-rufield"
 version = "0.3.0"
 dependencies = [
+ "rufield-adapters",
  "rufield-core",
  "rufield-fusion",
  "rufield-privacy",
