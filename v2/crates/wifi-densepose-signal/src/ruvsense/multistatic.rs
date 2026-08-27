@@ -272,6 +272,17 @@ impl MultistaticFuser {
         self.node_positions = positions;
     }
 
+    /// Return the configured hard timestamp guard in microseconds.
+    ///
+    /// Callers that assemble frames before invoking [`Self::fuse`] use this
+    /// to select one temporally coherent sensing cohort. Keeping selection and
+    /// validation on the same guard prevents stale low-rate nodes from making
+    /// every otherwise-live fusion cycle fail.
+    #[must_use]
+    pub fn guard_interval_us(&self) -> u64 {
+        self.config.guard_interval_us
+    }
+
     /// Return the current node positions.
     pub fn node_positions(&self) -> &[[f32; 3]] {
         &self.node_positions
