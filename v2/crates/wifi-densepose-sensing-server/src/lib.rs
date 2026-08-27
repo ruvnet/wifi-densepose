@@ -13,6 +13,7 @@ pub mod browser_session;
 pub mod ws_ticket;
 pub mod cli;
 pub mod dataset;
+pub mod discovery;
 pub mod edge_registry;
 pub mod error_response;
 pub mod host_validation;
