@@ -19,6 +19,7 @@
 #include "esp_app_desc.h"
 #include "sdkconfig.h"
 #include "led_strip.h"
+#include "driver/gpio.h"
 
 #include "csi_collector.h"
 #include "stream_sender.h"
@@ -216,6 +217,25 @@ void app_main(void)
      * g_nvs_config. See #232/#375/#390: WiFi driver init clobbers the struct
      * on some devices, reverting node_id to the Kconfig default of 1. */
     csi_collector_set_node_id(g_nvs_config.node_id);
+
+    /* Seeed XIAO ESP32-C6 antenna select — must run BEFORE any radio init so
+     * the first RF activity already uses the chosen path. The XIAO-C6 has a
+     * software RF switch: GPIO3 powers it, GPIO14 selects on-board (LOW) vs the
+     * external u.FL/IPEX socket (HIGH). Choice comes from NVS (cfg->ext_antenna,
+     * set by the flasher's "external u.FL antenna" checkbox; Kconfig sets the
+     * default). Compiled only on ESP32-C6; a no-op on S3. Note: external only
+     * helps with an antenna actually attached to the u.FL connector. */
+#if defined(CONFIG_IDF_TARGET_ESP32C6)
+    {
+        const bool ext_ant = g_nvs_config.ext_antenna != 0;
+        gpio_set_direction(GPIO_NUM_3, GPIO_MODE_OUTPUT);
+        gpio_set_level(GPIO_NUM_3, 0);                     /* power/enable the RF switch */
+        vTaskDelay(pdMS_TO_TICKS(100));
+        gpio_set_direction(GPIO_NUM_14, GPIO_MODE_OUTPUT);
+        gpio_set_level(GPIO_NUM_14, ext_ant ? 1 : 0);      /* 1 = external u.FL, 0 = on-board */
+        ESP_LOGI(TAG, "XIAO ESP32-C6 antenna: %s", ext_ant ? "external u.FL" : "on-board");
+    }
+#endif
 
     const esp_app_desc_t *app_desc = esp_app_get_description();
 #if defined(CONFIG_IDF_TARGET_ESP32C6)
@@ -496,6 +516,22 @@ void app_main(void)
     bool has_display = display_is_active();   /* runtime panel probe result */
 #else
     bool has_display = false;                 /* display support not compiled in */
+#endif
+#if CONFIG_DISPLAY_PANEL_ST7789
+    /* The ST7789 (Waveshare 1.47") is a light 1-line SPI panel (~1 MB/s) on a
+     * dedicated SPI host — it does NOT cause the QSPI/flash-cache contention the
+     * MGMT-only workaround (RuView#396/#893) was guarding the AMOLED against. So
+     * keep full MGMT+DATA capture for proper CSI yield even with the display on. */
+    has_display = false;
+#endif
+#ifdef CONFIG_CSI_FORCE_DATA_CAPTURE
+    /* Sensing-quality override: the AMOLED build normally captures MGMT-only
+     * (self-ping OFDM floor keeps yield alive), but a single node↔router link is
+     * a poor sensing channel — empty vs occupied is nearly indistinguishable. This
+     * forces MGMT+DATA promiscuous even on the AMOLED so the CSI sees the room's
+     * multipath. Trades against the #893 QSPI/flash-cache contention the AMOLED
+     * guard was avoiding — watch for display glitches / dropped CSI. */
+    has_display = false;
 #endif
     if (!has_display) {
         csi_collector_enable_data_capture();

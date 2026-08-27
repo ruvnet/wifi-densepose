@@ -28,6 +28,7 @@ typedef struct {
     char     target_ip[NVS_CFG_IP_MAX];
     uint16_t target_port;
     uint8_t  node_id;
+    uint8_t  ext_antenna;                     /**< XIAO ESP32-C6: 1 = external u.FL antenna, 0 = on-board. */
 
     /* ADR-029: Channel hopping and TDM configuration */
     uint8_t  channel_hop_count;               /**< Number of channels to hop (1 = no hop). */

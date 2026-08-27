@@ -25,10 +25,19 @@ export const DEFAULTS = {
   wireColor: '#00d878', jointColor: '#ff4060', aura: 0.02,
   field: 0.45, waves: 0.4, ambient: 0.7, reflect: 0.2,
   fov: 50, orbitSpeed: 0.15, grid: true, room: true,
-  scenario: 'auto', cycle: 30, dataSource: 'demo', wsUrl: '',
+  scenario: 'auto', cycle: 30, dataSource: 'ws', wsUrl: '',
+  // Room dimensions in metres
+  roomX: 4, roomY: 5,
+  // Nodes are fully dynamic — discovered from the live feed by node_id. We know
+  // nothing about hardware type. These two maps hold OPTIONAL user overrides,
+  // keyed by node_id:
+  //   nodeLabels[id]    = "Friendly name"          (else "Node <id>")
+  //   nodePositions[id] = { x, y, z } in metres    (else auto-layout)
+  nodeLabels: {},
+  nodePositions: {},
 };
 
-export const SETTINGS_VERSION = '6';
+export const SETTINGS_VERSION = '9';
 
 export const PRESETS = {
   foundation: {},
@@ -281,8 +290,161 @@ export class HudController {
       if (p) this.applyPreset({ ...DEFAULTS, ...p });
     });
 
+    // Room & Nodes section
+    this._bindRoomNodes();
+
     obs._grid.visible = s.grid;
     obs._roomWire.visible = s.room;
+  }
+
+  // ============================================================
+  // Room & Nodes binding
+  // ============================================================
+
+  _bindRoomNodes() {
+    const obs = this._obs;
+    const s = obs.settings;
+
+    // Ensure defensive defaults
+    if (!Number.isFinite(s.roomX) || s.roomX <= 0) s.roomX = DEFAULTS.roomX;
+    if (!Number.isFinite(s.roomY) || s.roomY <= 0) s.roomY = DEFAULTS.roomY;
+    if (!s.nodeLabels || typeof s.nodeLabels !== 'object') s.nodeLabels = {};
+    if (!s.nodePositions || typeof s.nodePositions !== 'object') s.nodePositions = {};
+
+    const bindNum = (id, getRef, setRef) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.value = getRef();
+      el.addEventListener('input', (e) => {
+        const v = parseFloat(e.target.value);
+        if (Number.isFinite(v)) {
+          setRef(v);
+          if (obs._rebuildRoomAndNodes) obs._rebuildRoomAndNodes();
+          this.saveSettings();
+        }
+      });
+    };
+
+    bindNum('opt-room-x', () => s.roomX, (v) => { s.roomX = v; });
+    bindNum('opt-room-y', () => s.roomY, (v) => { s.roomY = v; });
+
+    // Build the dynamic per-node list now and keep it in sync with the live
+    // reporting set on a low-frequency timer (never per-frame — avoids thrash).
+    this._nodeListIdsKey = null;
+    this.refreshNodeList();
+    if (this._nodeListTimer) clearInterval(this._nodeListTimer);
+    this._nodeListTimer = setInterval(() => {
+      try { this.refreshNodeList(); } catch {}
+    }, 1000);
+  }
+
+  // Currently-reporting node ids (sorted, numeric where possible). Source of
+  // truth = the latest live data frame's `nodes[]`. Empty when no live nodes.
+  _reportingNodeIds() {
+    const data = this._obs._currentData;
+    if (!data || !Array.isArray(data.nodes)) return [];
+    const ids = [];
+    for (const n of data.nodes) {
+      if (n && n.node_id != null) ids.push(n.node_id);
+    }
+    // Stable, de-duplicated order
+    const uniq = [...new Set(ids)];
+    uniq.sort((a, b) => {
+      const na = Number(a), nb = Number(b);
+      if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+      return String(a).localeCompare(String(b));
+    });
+    return uniq;
+  }
+
+  // Rebuild the settings node-list DOM only when the reporting id set changes.
+  // Each row: friendly-name text input + x/y/z metre number inputs, persisted
+  // to settings.nodeLabels / settings.nodePositions keyed by node_id.
+  refreshNodeList() {
+    const container = document.getElementById('node-list-container');
+    const hint = document.getElementById('node-list-hint');
+    if (!container) return;
+
+    const obs = this._obs;
+    const s = obs.settings;
+    if (!s.nodeLabels || typeof s.nodeLabels !== 'object') s.nodeLabels = {};
+    if (!s.nodePositions || typeof s.nodePositions !== 'object') s.nodePositions = {};
+
+    const ids = this._reportingNodeIds();
+    const key = ids.join(',');
+    if (key === this._nodeListIdsKey) return; // no change — skip rebuild
+    this._nodeListIdsKey = key;
+
+    if (hint) hint.style.display = ids.length === 0 ? 'block' : 'none';
+    container.innerHTML = '';
+
+    ids.forEach((id, i) => {
+      const auto = obs._autoLayoutPos ? obs._autoLayoutPos(i, ids.length) : { x: 0, y: 0, z: 1 };
+      const pos = (s.nodePositions[id] && typeof s.nodePositions[id] === 'object')
+        ? s.nodePositions[id] : null;
+      const px = pos && Number.isFinite(pos.x) ? pos.x : auto.x;
+      const py = pos && Number.isFinite(pos.y) ? pos.y : auto.y;
+      const pz = pos && Number.isFinite(pos.z) ? pos.z : auto.z;
+      const label = (s.nodeLabels[id] != null && String(s.nodeLabels[id]).length)
+        ? s.nodeLabels[id] : `Node ${id}`;
+
+      const subtitle = document.createElement('div');
+      subtitle.className = 'setting-subtitle';
+      subtitle.textContent = `Node ${id}`;
+      container.appendChild(subtitle);
+
+      // Name row
+      const nameRow = document.createElement('label');
+      nameRow.className = 'setting-row';
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = 'Name';
+      const nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.value = label;
+      nameInput.placeholder = `Node ${id}`;
+      nameInput.addEventListener('input', (e) => {
+        const v = e.target.value;
+        if (v && v.length) s.nodeLabels[id] = v; else delete s.nodeLabels[id];
+        if (obs._rebuildRoomAndNodes) obs._rebuildRoomAndNodes();
+        this.saveSettings();
+      });
+      nameRow.appendChild(nameSpan);
+      nameRow.appendChild(nameInput);
+      container.appendChild(nameRow);
+
+      // X / Y / Z row
+      const xyzRow = document.createElement('label');
+      xyzRow.className = 'setting-row';
+      const xyzSpan = document.createElement('span');
+      xyzSpan.textContent = 'X / Y / Z (m)';
+      const xyzWrap = document.createElement('span');
+      xyzWrap.className = 'node-xyz';
+
+      const mkNum = (axis, val) => {
+        const inp = document.createElement('input');
+        inp.type = 'number';
+        inp.step = '0.1';
+        inp.value = val;
+        inp.addEventListener('input', (e) => {
+          const v = parseFloat(e.target.value);
+          if (!Number.isFinite(v)) return;
+          if (!s.nodePositions[id] || typeof s.nodePositions[id] !== 'object') {
+            // Seed from auto-layout so the other axes stay sensible
+            s.nodePositions[id] = { x: px, y: py, z: pz };
+          }
+          s.nodePositions[id][axis] = v;
+          if (obs._rebuildRoomAndNodes) obs._rebuildRoomAndNodes();
+          this.saveSettings();
+        });
+        return inp;
+      };
+      xyzWrap.appendChild(mkNum('x', px));
+      xyzWrap.appendChild(mkNum('y', py));
+      xyzWrap.appendChild(mkNum('z', pz));
+      xyzRow.appendChild(xyzSpan);
+      xyzRow.appendChild(xyzWrap);
+      container.appendChild(xyzRow);
+    });
   }
 
   // ============================================================
@@ -323,6 +485,13 @@ export class HudController {
   applyPreset(preset) {
     const obs = this._obs;
     Object.assign(obs.settings, preset);
+    // Deep-copy the node override maps so we never alias DEFAULTS objects
+    if (preset.nodeLabels && typeof preset.nodeLabels === 'object') {
+      obs.settings.nodeLabels = { ...preset.nodeLabels };
+    }
+    if (preset.nodePositions && typeof preset.nodePositions === 'object') {
+      obs.settings.nodePositions = { ...preset.nodePositions };
+    }
     this.saveSettings();
     const rangeMap = {
       'opt-bloom': 'bloom', 'opt-bloom-radius': 'bloomRadius', 'opt-bloom-thresh': 'bloomThresh',
@@ -353,6 +522,18 @@ export class HudController {
     obs._camera.updateProjectionMatrix();
     obs._demoData.setCycleDuration(obs.settings.cycle);
     obs._applyColors();
+
+    // Refresh Room inputs and rebuild markers if room/node keys changed.
+    if (preset.roomX !== undefined || preset.roomY !== undefined ||
+        preset.nodeLabels || preset.nodePositions) {
+      const setVal = (id, v) => { const el = document.getElementById(id); if (el && Number.isFinite(v)) el.value = v; };
+      setVal('opt-room-x', obs.settings.roomX);
+      setVal('opt-room-y', obs.settings.roomY);
+      // Force the dynamic node list to rebuild against current values.
+      this._nodeListIdsKey = null;
+      this.refreshNodeList();
+      if (obs._rebuildRoomAndNodes) obs._rebuildRoomAndNodes();
+    }
   }
 
   // ============================================================

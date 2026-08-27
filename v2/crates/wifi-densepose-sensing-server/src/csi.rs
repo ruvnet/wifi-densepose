@@ -484,7 +484,7 @@ pub fn extract_features_from_frame(
 
     let raw_classification = ClassificationInfo {
         motion_level: raw_classify(motion_score),
-        presence: motion_score > 0.04,
+        presence: motion_score > presence_floor(),
         confidence: (0.4 + signal_quality * 0.3 + motion_score * 0.3).clamp(0.0, 1.0),
     };
 
@@ -499,12 +499,32 @@ pub fn extract_features_from_frame(
 
 // ── Classification ──────────────────────────────────────────────────────────
 
+/// Smoothed-motion floor below which the scene is classified "absent" / no
+/// presence. The empty-room noise floor is environment-specific (2-node CSI in
+/// an RF-noisy room can sit at sm≈0.15), so this is tunable via the
+/// `RUVIEW_PRESENCE_FLOOR` env var. Default 0.03 preserves the original
+/// behaviour; raise it above the measured empty-room sm to suppress false
+/// presence (at the cost of possibly missing a perfectly motionless person).
+pub fn presence_floor() -> f64 {
+    static FLOOR: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    *FLOOR.get_or_init(|| {
+        std::env::var("RUVIEW_PRESENCE_FLOOR")
+            .ok()
+            .and_then(|s| s.parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v >= 0.0)
+            .unwrap_or(0.03)
+    })
+}
+
 pub fn raw_classify(score: f64) -> String {
-    if score > 0.25 {
+    // Bands are rebased on the presence floor so "absent" extends up to it;
+    // the +0.08 / +0.21 offsets preserve the original band widths.
+    let f = presence_floor();
+    if score > f + 0.21 {
         "active".into()
-    } else if score > 0.12 {
+    } else if score > f + 0.08 {
         "present_moving".into()
-    } else if score > 0.04 {
+    } else if score > f {
         "present_still".into()
     } else {
         "absent".into()
@@ -542,7 +562,7 @@ pub fn smooth_and_classify(
         state.debounce_counter = 1;
     }
     raw.motion_level = state.current_motion_level.clone();
-    raw.presence = sm > 0.03;
+    raw.presence = sm > presence_floor();
     raw.confidence = (0.4 + sm * 0.6).clamp(0.0, 1.0);
 }
 
@@ -573,7 +593,7 @@ pub fn smooth_and_classify_node(ns: &mut NodeState, raw: &mut ClassificationInfo
         ns.debounce_counter = 1;
     }
     raw.motion_level = ns.current_motion_level.clone();
-    raw.presence = sm > 0.03;
+    raw.presence = sm > presence_floor();
     raw.confidence = (0.4 + sm * 0.6).clamp(0.0, 1.0);
 }
 

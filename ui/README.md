@@ -1,50 +1,45 @@
-# WiFi DensePose UI
+# RuView Operator UI
 
-A modular, modern web interface for the WiFi DensePose human tracking system. Provides real-time monitoring, WiFi sensing visualization, and pose estimation from CSI (Channel State Information).
+A mobile-first, function-first web console for the WiFi-DensePose sensing system. Real-time presence, vital-sign, signal-field and pose monitoring from CSI (Channel State Information), plus node health and model/training control.
 
 ## Architecture
 
-The UI follows a modular architecture with clear separation of concerns:
+Presentation is a small vanilla-JS SPA styled with a **compiled Tailwind build** (no runtime CDN — works offline on the Pi appliance). The proven data layer in `services/` is reused as-is; views bind directly to the live `/api/v1/*` REST endpoints and the `/ws/sensing` stream.
 
 ```
 ui/
-├── app.js                    # Main application entry point
-├── index.html                # HTML shell with tab structure
-├── style.css                 # Complete CSS design system
-├── config/
-│   └── api.config.js         # API endpoints and configuration
-├── services/
-│   ├── api.service.js        # HTTP API client
-│   ├── websocket.service.js  # WebSocket connection manager
-│   ├── websocket-client.js   # Low-level WebSocket client
-│   ├── pose.service.js       # Pose estimation API wrapper
-│   ├── sensing.service.js    # WiFi sensing data service (live + simulation fallback)
-│   ├── health.service.js     # Health monitoring API wrapper
-│   ├── stream.service.js     # Streaming API wrapper
-│   └── data-processor.js     # Signal data processing utilities
-├── components/
-│   ├── TabManager.js         # Tab navigation component
-│   ├── DashboardTab.js       # Dashboard with live system metrics
-│   ├── SensingTab.js         # WiFi sensing visualization (3D signal field, metrics)
-│   ├── LiveDemoTab.js        # Live pose detection with setup guide
-│   ├── HardwareTab.js        # Hardware configuration
-│   ├── SettingsPanel.js      # Settings panel
-│   ├── PoseDetectionCanvas.js # Canvas-based pose skeleton renderer
-│   ├── gaussian-splats.js    # 3D Gaussian splat signal field renderer (Three.js)
-│   ├── body-model.js         # 3D body model
-│   ├── scene.js              # Three.js scene management
-│   ├── signal-viz.js         # Signal visualization utilities
-│   ├── environment.js        # Environment/room visualization
-│   └── dashboard-hud.js      # Dashboard heads-up display
-├── utils/
-│   ├── backend-detector.js   # Auto-detect backend availability
-│   ├── mock-server.js        # Mock server for testing
-│   └── pose-renderer.js      # Pose rendering utilities
-└── tests/
-    ├── test-runner.html       # Test runner UI
-    ├── test-runner.js         # Test framework and cases
-    └── integration-test.html  # Integration testing page
+├── index.html                # Responsive shell (sidebar / bottom tab bar)
+├── package.json              # Tailwind + jsdom dev deps, build scripts
+├── tailwind.config.js        # Theme tokens (brand teal, ink surfaces)
+├── src/input.css             # Tailwind directives + component layer (source)
+├── assets/app.css            # COMPILED CSS — committed, served at runtime
+├── app/
+│   ├── main.js               # Entry: layout, hash router, status header
+│   ├── lib.js                # DOM + formatting helpers, toast, sparkline
+│   ├── icons.js              # Inline SVG icon set
+│   └── views/
+│       ├── dashboard.js      # Live operator overview (presence, vitals, system)
+│       ├── sensing.js        # CSI features + classification + field heatmap
+│       ├── nodes.js          # Per-node health, mesh, hardware reference
+│       ├── demo.js           # Live pose / detection canvas
+│       ├── training.js       # Models, recordings, training-run control
+│       └── about.js          # Folded Architecture/Performance/Applications
+├── services/                 # Reused data layer (sensing/health/pose/api/ws…)
+└── sw.js, manifest.json      # PWA (network-first service worker)
 ```
+
+Navigation is function-first: **Dashboard · Sensing · Nodes · Live Demo · Training**, with **About** (the former marketing/info pages) demoted to the end. The standalone Three.js pages — `pose-fusion.html` and `observatory.html` — are linked from the nav, not re-implemented.
+
+## Build
+
+```bash
+cd ui
+npm install            # tailwindcss + jsdom (dev only)
+npm run build:css      # src/input.css -> assets/app.css (commit the output)
+npm run watch:css      # rebuild on change during development
+```
+
+`assets/app.css` is checked in so the server can serve the UI without a build step on the target.
 
 ## Features
 
@@ -190,7 +185,7 @@ Test categories: API configuration, API service, WebSocket, pose service, health
 
 ## Styling
 
-Uses a CSS design system with custom properties, dark/light mode, responsive layout, and component-based styling. Key variables in `:root` of `style.css`.
+Tailwind CSS, dark-first. Theme tokens (brand teal ramp, `ink` surface ramp, status colours) live in `tailwind.config.js`; reusable component classes (`.card`, `.btn-*`, `.nav-link`, `.stat`, `.badge-*`, `.meter`) are defined in the `@layer components` block of `src/input.css`. Edit those, then `npm run build:css`. The layout is mobile-first: a desktop sidebar (`md:` and up) collapses to a fixed bottom tab bar on small screens, with `env(safe-area-inset-*)` padding for notched devices.
 
 ## License
 

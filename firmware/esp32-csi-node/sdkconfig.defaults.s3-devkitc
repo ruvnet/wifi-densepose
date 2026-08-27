@@ -1,0 +1,18 @@
+# ESP32-S3-DevKitC-1 N16R8 — headless CSI sensor node.
+# Overlay on sdkconfig.defaults. Build:
+#   SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.s3-devkitc" \
+#     idf.py set-target esp32s3 && idf.py build
+#
+# No display → display_is_active() path is compiled out, so csi_collector runs
+# the full MGMT+DATA promiscuous filter natively (RuView#893) — the rich
+# multipath capture the AMOLED build can't do. This is the recommended SENSOR.
+# N16 = 16MB flash. R8 octal PSRAM is present but unused (sensing is light;
+# AMOLED build also runs PSRAM-less), so no SPIRAM config needed.
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_display.csv"
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=n
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_ESP_WIFI_CSI_ENABLED=y
+CONFIG_DISPLAY_ENABLE=n

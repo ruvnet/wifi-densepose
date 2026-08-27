@@ -40,11 +40,22 @@ const ENERGY_THRESH_3: f64 = 25.0;
 /// reliable — genuine higher counts come from the multistatic fusion path.
 const MAX_SINGLE_LINK_OCCUPANCY: usize = 3;
 
-/// Create a FieldModelConfig for single-link mode (one ESP32 node = one link).
-/// This avoids the DimensionMismatch error when feeding single-frame observations.
-pub fn single_link_config() -> FieldModelConfig {
+/// Create a FieldModelConfig for single-link mode (one ESP32 node = one link),
+/// sized to the actual CSI subcarrier width of the frames that will be fed.
+///
+/// `n_subcarriers` MUST equal the width of the incoming CSI frames (ESP32-S3
+/// HT40 = 256, ESP32-C6 = 64, ...). The previous code left this at the
+/// `FieldModelConfig::default()` value of 56, so `feed_calibration` rejected
+/// every real frame and calibration never collected anything.
+///
+/// Also lowers `min_calibration_frames` from the 12_000 long-baseline default
+/// to a value suitable for an interactive (~10-30 s) empty-room baseline,
+/// otherwise `/calibration/stop` can never finalise.
+pub fn single_link_config(n_subcarriers: usize) -> FieldModelConfig {
     FieldModelConfig {
         n_links: 1,
+        n_subcarriers,
+        min_calibration_frames: 200,
         ..FieldModelConfig::default()
     }
 }
@@ -124,10 +135,12 @@ pub fn maybe_feed_calibration(field: &mut FieldModel, frame_history: &VecDeque<V
     }
     if let Some(latest) = frame_history.back() {
         // Resample the raw amplitude vector onto the FieldModel's canonical
-        // 56-tone grid before feeding. Real HT40 nodes stream 128-wide frames;
-        // feeding those raw made every `feed_calibration` fail DimensionMismatch
+        // 56-tone grid before feeding. Heterogeneous nodes (S3, C6) and real
+        // HT40 nodes stream frames of differing width (e.g. 128-wide); feeding
+        // those raw made every `feed_calibration` fail DimensionMismatch
         // (swallowed at debug level), pinning frame_count at 0 even after the
-        // status-gate deadlock was fixed. Single-link observation: [1][56].
+        // status-gate deadlock was fixed. Resampling accepts every node width
+        // instead of skipping mismatches. Single-link observation: [1][56].
         let canonical = CALIB_NORMALIZER.resample_to_canonical(latest);
         let observations = vec![canonical];
         if let Err(e) = field.feed_calibration(&observations) {

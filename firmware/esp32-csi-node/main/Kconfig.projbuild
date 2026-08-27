@@ -1,5 +1,17 @@
 menu "CSI Node Configuration"
 
+    config RV_XIAO_C6_EXT_ANTENNA
+        bool "Use external u.FL antenna (Seeed XIAO ESP32-C6)"
+        default n
+        depends on IDF_TARGET_ESP32C6
+        help
+            The Seeed XIAO ESP32-C6 has a software RF switch feeding either the
+            on-board ceramic antenna or the external u.FL/IPEX socket. Enable to
+            drive that switch to the EXTERNAL antenna at boot (GPIO3 powers the
+            switch, GPIO14 selects the path). Leave off for stock ESP32-C6 dev
+            boards, which have no such switch. Only helps with an antenna
+            actually attached to the u.FL connector.
+
     config CSI_NODE_ID
         int "Node ID (0-255)"
         default 1
@@ -38,6 +50,21 @@ menu "CSI Node Configuration"
         range 1 13
         help
             WiFi channel to listen on for CSI data.
+
+    config CSI_FORCE_DATA_CAPTURE
+        bool "Force MGMT+DATA promiscuous capture even on AMOLED display boards"
+        default n
+        help
+            The AMOLED (SH8601) build normally runs MGMT-only promiscuous
+            capture (RuView#396/#893) to avoid QSPI/flash-cache contention with
+            the display, relying on the #954 self-ping for CSI yield. But a
+            single node->router link is a poor sensing channel: empty vs
+            occupied is nearly indistinguishable in the features. Enabling this
+            forces the full MGMT+DATA promiscuous filter on the AMOLED too, so
+            the CSI sees the room's multipath and a moving person registers.
+            Trade-off: reintroduces the #893 contention risk (possible display
+            glitches or dropped CSI). Leave off on display-less / ST7789 boards
+            (they already capture DATA). Experimental.
 
 endmenu
 
@@ -248,6 +275,55 @@ menu "AMOLED Display (ADR-045)"
         int "Backlight PWM GPIO"
         default 38
         depends on DISPLAY_ENABLE
+
+    # ---- ST7789 SPI panel (Waveshare ESP32-S3-LCD-1.47, 172x320) ----
+    config DISPLAY_PANEL_ST7789
+        bool "Use ST7789 SPI panel (Waveshare ESP32-S3-LCD-1.47) instead of SH8601 AMOLED"
+        default n
+        depends on DISPLAY_ENABLE
+        help
+            Selects the onboard 172x320 ST7789 SPI LCD on the Waveshare
+            ESP32-S3-LCD-1.47 board, driven by the built-in esp_lcd ST7789
+            driver. When unset, the default SH8601 QSPI AMOLED HAL is used.
+            Pins (fixed): SCLK=40 MOSI=45 DC=41 CS=42 RST=39 BL=48.
+
+    config DISPLAY_ST7789_X_GAP
+        int "ST7789 column (x) offset"
+        default 34
+        depends on DISPLAY_PANEL_ST7789
+        help
+            Column offset of the visible 172px window within the ST7789's
+            240-column GRAM ((240-172)/2 = 34).
+
+    config DISPLAY_ST7789_Y_GAP
+        int "ST7789 row (y) offset"
+        default 0
+        depends on DISPLAY_PANEL_ST7789
+
+    config DISPLAY_ST7789_INVERT
+        bool "ST7789 invert colors (IPS panels need this)"
+        default y
+        depends on DISPLAY_PANEL_ST7789
+
+    config DISPLAY_ST7789_BGR
+        bool "ST7789 BGR colour order (vs RGB)"
+        default y
+        depends on DISPLAY_PANEL_ST7789
+
+    config DISPLAY_ST7789_MIRROR_X
+        bool "ST7789 mirror X"
+        default n
+        depends on DISPLAY_PANEL_ST7789
+
+    config DISPLAY_ST7789_MIRROR_Y
+        bool "ST7789 mirror Y"
+        default n
+        depends on DISPLAY_PANEL_ST7789
+
+    config DISPLAY_ST7789_SWAP_XY
+        bool "ST7789 swap XY"
+        default n
+        depends on DISPLAY_PANEL_ST7789
 
 endmenu
 

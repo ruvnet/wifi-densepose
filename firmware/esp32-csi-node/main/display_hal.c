@@ -28,6 +28,201 @@
 #include "driver/i2c.h"
 #include "esp_heap_caps.h"
 
+#if CONFIG_DISPLAY_PANEL_ST7789
+/* =====================================================================
+ * ST7789 SPI HAL — Waveshare ESP32-S3-LCD-1.47 (172x320, no touch)
+ * ---------------------------------------------------------------------
+ * Drives the onboard ST7789 over standard 1-line SPI using the built-in
+ * esp_lcd ST7789 driver. Pins per Waveshare schematic / TFT_eSPI setup:
+ *   SCLK=40 MOSI=45 DC=41 CS=42 RST=39 BL=48 (BL active-high).
+ * Orientation/colour knobs are Kconfig-tunable (set blind; verify on glass).
+ * ===================================================================== */
+#include "esp_lcd_panel_vendor.h"
+#include "esp_lcd_panel_ops.h"
+#include "esp_idf_version.h"
+#include "freertos/semphr.h"
+
+static const char *TAG = "disp_hal";
+
+#define ST7789_PIN_SCLK   40
+#define ST7789_PIN_MOSI   45
+#define ST7789_PIN_DC     41
+#define ST7789_PIN_CS     42
+#define ST7789_PIN_RST    39
+#define ST7789_PIN_BL     48
+#define ST7789_H_RES      172
+#define ST7789_V_RES      320
+#define ST7789_HOST       SPI2_HOST
+
+/* Big-endian RGB565 (panel is MSB-first; matches LV_COLOR_16_SWAP=1). */
+#define BE565(c)          ((uint16_t)((((uint16_t)(c) & 0xFF) << 8) | (((uint16_t)(c) >> 8) & 0xFF)))
+
+/* Kconfig bools are *undefined* (not 0) when set to 'n', so give the optional
+ * orientation/colour knobs explicit fallbacks for use in C expressions. */
+#ifndef CONFIG_DISPLAY_ST7789_INVERT
+#define CONFIG_DISPLAY_ST7789_INVERT   0
+#endif
+#ifndef CONFIG_DISPLAY_ST7789_BGR
+#define CONFIG_DISPLAY_ST7789_BGR      0
+#endif
+#ifndef CONFIG_DISPLAY_ST7789_SWAP_XY
+#define CONFIG_DISPLAY_ST7789_SWAP_XY  0
+#endif
+#ifndef CONFIG_DISPLAY_ST7789_MIRROR_X
+#define CONFIG_DISPLAY_ST7789_MIRROR_X 0
+#endif
+#ifndef CONFIG_DISPLAY_ST7789_MIRROR_Y
+#define CONFIG_DISPLAY_ST7789_MIRROR_Y 0
+#endif
+
+static esp_lcd_panel_io_handle_t s_io_handle = NULL;
+static esp_lcd_panel_handle_t    s_panel     = NULL;
+static SemaphoreHandle_t         s_trans_done = NULL;
+
+/* esp_lcd color transfers are async; this fires (in ISR) when a draw_bitmap
+ * colour transaction completes, letting display_hal_draw() block until the
+ * pixel DMA is finished so the shared LVGL flush can safely reuse the buffer. */
+static bool st7789_trans_done_cb(esp_lcd_panel_io_handle_t io,
+                                 esp_lcd_panel_io_event_data_t *edata,
+                                 void *user_ctx)
+{
+    (void)io; (void)edata; (void)user_ctx;
+    BaseType_t hp_task_woken = pdFALSE;
+    if (s_trans_done) {
+        xSemaphoreGiveFromISR(s_trans_done, &hp_task_woken);
+    }
+    return hp_task_woken == pdTRUE;
+}
+
+esp_err_t display_hal_init_panel(void)
+{
+    ESP_LOGI(TAG, "Initializing ST7789 SPI panel (Waveshare 1.47\", %dx%d)...",
+             ST7789_H_RES, ST7789_V_RES);
+
+    s_trans_done = xSemaphoreCreateBinary();
+
+    /* Backlight pin off during init */
+    gpio_config_t bk_cfg = {
+        .mode         = GPIO_MODE_OUTPUT,
+        .pin_bit_mask = (1ULL << ST7789_PIN_BL),
+    };
+    gpio_config(&bk_cfg);
+    gpio_set_level(ST7789_PIN_BL, 0);
+
+    spi_bus_config_t bus_cfg = {
+        .sclk_io_num     = ST7789_PIN_SCLK,
+        .mosi_io_num     = ST7789_PIN_MOSI,
+        .miso_io_num     = -1,
+        .quadwp_io_num   = -1,
+        .quadhd_io_num   = -1,
+        .max_transfer_sz = ST7789_H_RES * 80 * (int)sizeof(uint16_t) + 8,
+    };
+    esp_err_t ret = spi_bus_initialize(ST7789_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "SPI bus init failed: %s", esp_err_to_name(ret));
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    esp_lcd_panel_io_spi_config_t io_cfg = {
+        .dc_gpio_num       = ST7789_PIN_DC,
+        .cs_gpio_num       = ST7789_PIN_CS,
+        .pclk_hz           = 40 * 1000 * 1000,
+        .lcd_cmd_bits      = 8,
+        .lcd_param_bits    = 8,
+        .spi_mode          = 0,
+        .trans_queue_depth = 10,
+        .on_color_trans_done = st7789_trans_done_cb,
+    };
+    ret = esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)ST7789_HOST, &io_cfg, &s_io_handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "panel IO init failed: %s", esp_err_to_name(ret));
+        spi_bus_free(ST7789_HOST);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    esp_lcd_panel_dev_config_t panel_cfg = {
+        .reset_gpio_num = ST7789_PIN_RST,
+        /* esp_lcd renamed rgb_endian -> rgb_ele_order in IDF v5.3. */
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0)
+        .rgb_ele_order  = CONFIG_DISPLAY_ST7789_BGR ? LCD_RGB_ELEMENT_ORDER_BGR
+                                                    : LCD_RGB_ELEMENT_ORDER_RGB,
+#else
+        .rgb_endian     = CONFIG_DISPLAY_ST7789_BGR ? LCD_RGB_ENDIAN_BGR
+                                                    : LCD_RGB_ENDIAN_RGB,
+#endif
+        .bits_per_pixel = 16,
+    };
+    ret = esp_lcd_new_panel_st7789(s_io_handle, &panel_cfg, &s_panel);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "st7789 panel create failed: %s", esp_err_to_name(ret));
+        esp_lcd_panel_io_del(s_io_handle);
+        spi_bus_free(ST7789_HOST);
+        s_io_handle = NULL;
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    esp_lcd_panel_reset(s_panel);
+    esp_lcd_panel_init(s_panel);
+    esp_lcd_panel_invert_color(s_panel, CONFIG_DISPLAY_ST7789_INVERT ? true : false);
+    esp_lcd_panel_swap_xy(s_panel, CONFIG_DISPLAY_ST7789_SWAP_XY ? true : false);
+    esp_lcd_panel_mirror(s_panel,
+                         CONFIG_DISPLAY_ST7789_MIRROR_X ? true : false,
+                         CONFIG_DISPLAY_ST7789_MIRROR_Y ? true : false);
+    esp_lcd_panel_set_gap(s_panel, CONFIG_DISPLAY_ST7789_X_GAP, CONFIG_DISPLAY_ST7789_Y_GAP);
+    esp_lcd_panel_disp_on_off(s_panel, true);
+
+    /* Backlight on */
+    gpio_set_level(ST7789_PIN_BL, 1);
+
+    /* Boot test pattern — R/G/B horizontal thirds with a 2px white frame, so
+     * colour order, orientation and offset are verifiable by eye before the
+     * LVGL UI takes over. Drawn one row at a time to avoid a large alloc. */
+    uint16_t *line = heap_caps_malloc(ST7789_H_RES * sizeof(uint16_t), MALLOC_CAP_DMA);
+    if (line) {
+        for (int y = 0; y < ST7789_V_RES; y++) {
+            uint16_t c = (y < ST7789_V_RES / 3)       ? BE565(0xF800)   /* red   */
+                       : (y < 2 * ST7789_V_RES / 3)   ? BE565(0x07E0)   /* green */
+                                                      : BE565(0x001F);  /* blue  */
+            for (int x = 0; x < ST7789_H_RES; x++) {
+                bool frame = (x < 2 || x >= ST7789_H_RES - 2 ||
+                              y < 2 || y >= ST7789_V_RES - 2);
+                line[x] = frame ? BE565(0xFFFF) : c;
+            }
+            esp_lcd_panel_draw_bitmap(s_panel, 0, y, ST7789_H_RES, y + 1, line);
+            if (s_trans_done) xSemaphoreTake(s_trans_done, pdMS_TO_TICKS(100));
+        }
+        free(line);
+        ESP_LOGI(TAG, "ST7789 test pattern drawn");
+    }
+
+    ESP_LOGI(TAG, "ST7789 panel init OK (%dx%d, x_gap=%d y_gap=%d, invert=%d, bgr=%d)",
+             ST7789_H_RES, ST7789_V_RES,
+             CONFIG_DISPLAY_ST7789_X_GAP, CONFIG_DISPLAY_ST7789_Y_GAP,
+             CONFIG_DISPLAY_ST7789_INVERT, CONFIG_DISPLAY_ST7789_BGR);
+    return ESP_OK;
+}
+
+void display_hal_draw(int x_start, int y_start, int x_end, int y_end,
+                      const void *color_data)
+{
+    if (!s_panel) return;
+    esp_lcd_panel_draw_bitmap(s_panel, x_start, y_start, x_end, y_end, color_data);
+    /* Block until the pixel DMA finishes so LVGL can safely reuse the buffer
+     * (display_task's flush_cb calls lv_disp_flush_ready immediately after). */
+    if (s_trans_done) xSemaphoreTake(s_trans_done, pdMS_TO_TICKS(100));
+}
+
+/* No touch controller on the 1.47" board. */
+esp_err_t display_hal_init_touch(void) { return ESP_ERR_NOT_FOUND; }
+bool display_hal_touch_read(uint16_t *x, uint16_t *y) { (void)x; (void)y; return false; }
+
+void display_hal_set_brightness(uint8_t percent)
+{
+    gpio_set_level(ST7789_PIN_BL, percent > 0 ? 1 : 0);
+}
+
+#else /* !CONFIG_DISPLAY_PANEL_ST7789 — original SH8601 QSPI AMOLED HAL */
+
 static const char *TAG = "disp_hal";
 
 /* ---- QSPI Pin Definitions (Waveshare board) ---- */
@@ -378,5 +573,7 @@ void display_hal_set_brightness(uint8_t percent)
     uint8_t val = (uint8_t)((uint32_t)percent * 255 / 100);
     panel_write_cmd(0x51, &val, 1);
 }
+
+#endif /* CONFIG_DISPLAY_PANEL_ST7789 */
 
 #endif /* CONFIG_DISPLAY_ENABLE */

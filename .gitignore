@@ -300,6 +300,16 @@ harness/**/ruvector.db
 ruvector.db
 **/ruvector.db
 
+# RuView UI Tailwind build deps
+ui/node_modules/
+
+# ESP32 XIAO build artifacts
+firmware/esp32-csi-node/build_xiao/
+# claude-flow local state
+**/.claude-flow/
+# local scratch rebuild helper
+.rebuild2.sh
+
 # sensing-server runtime artifacts written by its test suite (trained model
 # snapshots + the generated session-secret) — never tracked
 v2/crates/wifi-densepose-sensing-server/data/

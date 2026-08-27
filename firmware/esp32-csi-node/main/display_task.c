@@ -29,8 +29,13 @@ bool display_is_active(void) { return s_display_active; }
 #include "display_hal.h"
 #include "display_ui.h"
 
+#if CONFIG_DISPLAY_PANEL_ST7789
+#define DISP_H_RES  172
+#define DISP_V_RES  320
+#else
 #define DISP_H_RES  368
 #define DISP_V_RES  448
+#endif
 
 static const char *TAG = "disp_task";
 
@@ -121,11 +126,17 @@ esp_err_t display_task_start(void)
      * positive on a display-less DevKit: bail to headless so display_is_active() stays
      * false and CSI upgrades to MGMT+DATA capture instead of starving at MGMT-only
      * (RuView#1000). */
+#if !CONFIG_DISPLAY_PANEL_ST7789
     if (touch_ret != ESP_OK) {
         ESP_LOGW(TAG, "No FT3168 touch readback — SH8601 probe was a false-positive on a "
                       "display-less board; running headless so CSI captures (#1000)");
         return ESP_OK;
     }
+#else
+    /* ST7789 (Waveshare 1.47") is a real, known panel with no touch IC — the
+     * init above genuinely talks to it (DC/CS/RST wired), so do NOT treat the
+     * absent touch as a false-positive. Keep going and light the display. */
+#endif
 
     /* Initialize LVGL */
     lv_init();

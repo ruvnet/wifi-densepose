@@ -258,6 +258,21 @@
           <span>Show Room Boundary</span>
           <input type="checkbox" id="opt-room" checked>
         </label>
+
+        <div class="setting-section-title">Room &amp; Nodes</div>
+        <label class="setting-row">
+          <span>Room Width X (m)</span>
+          <input type="number" id="opt-room-x" min="1" max="30" step="0.1" value="4">
+        </label>
+        <label class="setting-row">
+          <span>Room Length Y (m)</span>
+          <input type="number" id="opt-room-y" min="1" max="30" step="0.1" value="5">
+        </label>
+
+        <!-- Per-node rows are built dynamically from the live reporting set
+             (one row per node_id currently in the feed). -->
+        <div id="node-list-container"></div>
+        <div id="node-list-hint" class="setting-hint">Waiting for nodes&hellip;</div>
       </div>
 
       <!-- Data tab -->

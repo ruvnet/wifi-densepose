@@ -437,6 +437,12 @@ impl FieldModel {
         self.status
     }
 
+    /// Subcarrier width this model was configured for. Callers must feed
+    /// observations of exactly this length (see `feed_calibration`).
+    pub fn n_subcarriers(&self) -> usize {
+        self.config.n_subcarriers
+    }
+
     /// Access the computed field normal modes, if available.
     pub fn modes(&self) -> Option<&FieldNormalMode> {
         self.modes.as_ref()

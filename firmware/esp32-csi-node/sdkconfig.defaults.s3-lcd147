@@ -1,0 +1,44 @@
+# ESP32-S3 CSI Node — Waveshare ESP32-S3-LCD-1.47 (ST7789 172x320) variant
+# Same as sdkconfig.defaults but selects the ST7789 SPI panel HAL.
+
+# Target: ESP32-S3
+CONFIG_IDF_TARGET="esp32s3"
+
+# Use custom partition table (8MB flash with OTA — ADR-045)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_display.csv"
+
+# Flash configuration: 8MB (Quad SPI)
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+
+# Compiler optimization: optimize for size to reduce binary
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# Enable CSI (Channel State Information) in WiFi driver
+CONFIG_ESP_WIFI_CSI_ENABLED=y
+
+# Onboard 1.47" ST7789 SPI display (Waveshare ESP32-S3-LCD-1.47)
+CONFIG_DISPLAY_ENABLE=y
+CONFIG_DISPLAY_PANEL_ST7789=y
+
+# Disable unused features to reduce binary size
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# LWIP: enable extended socket options for UDP multicast
+CONFIG_LWIP_SO_RCVBUF=y
+
+# UDP/WiFi pool bumps (ENOMEM backoff fix — see sdkconfig.defaults)
+CONFIG_LWIP_UDP_RECVMBOX_SIZE=32
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=64
+
+# FreeRTOS: increase task stack for CSI processing
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Extra WiFi IRAM placement (defense-in-depth for RuView#396 SPI cache race)
+CONFIG_ESP_WIFI_EXTRA_IRAM_OPT=y
+
+# adaptive_controller runs network I/O inside Timer Svc callbacks
+CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH=8192

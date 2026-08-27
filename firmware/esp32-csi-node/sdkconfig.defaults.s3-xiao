@@ -1,0 +1,19 @@
+# Seeed Studio XIAO ESP32S3 — headless CSI sensor node (8MB flash).
+# Overlay on sdkconfig.defaults. Build:
+#   idf.py -B build_xiao -D SDKCONFIG=build_xiao/sdkconfig \
+#     -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.s3-xiao" \
+#     set-target esp32s3 build
+#
+# Same headless profile as sdkconfig.defaults.s3-devkitc: no display, so
+# csi_collector runs the full MGMT+DATA promiscuous filter (RuView#893).
+# The XIAO ESP32S3 has 8MB flash (vs the DevKitC N16R8's 16MB), which the
+# base defaults already target, and 8MB octal PSRAM that sensing doesn't
+# need — so the only change is compiling the display path out.
+# The XIAO ESP32S3 Plus (16MB flash) uses the s3-devkitc build unchanged.
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_display.csv"
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+CONFIG_ESP_WIFI_CSI_ENABLED=y
+CONFIG_DISPLAY_ENABLE=n

@@ -405,6 +405,10 @@ struct NodeInfo {
 struct NodeSyncSnapshot {
     /// Smoothed local-vs-mesh offset in µs (negative when this node's clock
     /// is behind the leader's — see §A0.10's measured -1.16 s on the bench).
+    /// NOTE: this is the *node-reported* ESP-NOW mesh offset and is unreliable
+    /// when leader election doesn't converge (issue #503) — it reflects boot
+    /// deltas, not fusion alignment. The mesh endpoint's `arrival_lag_us` /
+    /// `server_skew_us` (host arrival-time spread) is the real alignment.
     offset_us: i64,
     /// True when this node is the elected mesh leader.
     is_leader: bool,
@@ -677,6 +681,11 @@ struct NodeState {
     debounce_candidate: String,
     baseline_motion: f64,
     baseline_frames: u64,
+    /// EMA of this node's per-frame presence (1.0 present / 0.0 absent), used by
+    /// `aggregate_person_count` for spatial node-agreement counting. A node only
+    /// "votes" as an occupant when it *sustains* presence, so a flickering node
+    /// (e.g. one seeing a person only intermittently) doesn't inflate the count.
+    presence_ema: f64,
     smoothed_hr: f64,
     smoothed_br: f64,
     smoothed_hr_conf: f64,
@@ -753,6 +762,12 @@ const NOVELTY_HISTORY_CAPACITY: usize = 64;
 /// subcarrier ordering / normalisation so banks reject stale data.
 const NOVELTY_SKETCH_VERSION: u16 = 1;
 
+/// Fix #503 — a node's last CSI frame is "active" (part of the live fusion
+/// set) if it arrived within this window. Mirrors `multistatic_bridge`'s
+/// `STALE_THRESHOLD` so the mesh card's sync verdict matches what the fuser
+/// actually feeds on.
+const ARRIVAL_ACTIVE_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Lower plausibility floor (seconds) for a CSI inter-frame delta.
 ///
 /// The firmware caps CSI sends at `CSI_MIN_SEND_INTERVAL_US = 20 ms`
@@ -783,6 +798,45 @@ pub(crate) fn update_csi_fps_ema(prev_fps: f64, dt_sec: f64) -> Option<f64> {
     let instantaneous = 1.0 / dt_sec;
     // y[n] = y[n-1] + (x - y[n-1]) / 8
     Some(prev_fps + (instantaneous - prev_fps) / 8.0)
+}
+
+/// Fix #503 — fleet arrival-time skew: `max − min` of the per-node ages
+/// (µs since each node's last CSI frame reached the host). The multistatic
+/// fuser stamps every node frame with its HOST ARRIVAL time
+/// (`multistatic_bridge`), never the node's own clock, so this spread — not
+/// any node-reported ESP-NOW offset — is exactly what the fusion guard
+/// checks. Small spread = the fleet is aligned = "in sync", independent of
+/// boot order or whether the mesh ever elects a leader. `None` with fewer
+/// than two active nodes (nothing to compare).
+///
+/// Pure + free for testability (same pattern as [`update_csi_fps_ema`]).
+pub(crate) fn arrival_skew_us(ages_us: &[u64]) -> Option<u64> {
+    if ages_us.len() < 2 {
+        return None;
+    }
+    let lo = ages_us.iter().copied().min().unwrap();
+    let hi = ages_us.iter().copied().max().unwrap();
+    Some(hi - lo)
+}
+
+#[cfg(test)]
+mod arrival_skew_tests {
+    use super::arrival_skew_us;
+
+    #[test]
+    fn skew_is_spread_of_frame_ages() {
+        // Freshest frame 20 ms ago, oldest 95 ms ago → 75 ms spread. This is
+        // the real fusion-relevant skew, and stays tiny even when the nodes
+        // booted seconds/minutes apart (which is why the ESP-NOW offset was
+        // the wrong signal in #503).
+        assert_eq!(arrival_skew_us(&[20_000, 95_000, 40_000]), Some(75_000));
+    }
+
+    #[test]
+    fn fewer_than_two_active_nodes_has_no_skew() {
+        assert_eq!(arrival_skew_us(&[]), None);
+        assert_eq!(arrival_skew_us(&[12_000]), None);
+    }
 }
 
 #[cfg(test)]
@@ -1002,6 +1056,7 @@ impl NodeState {
             debounce_candidate: "absent".to_string(),
             baseline_motion: 0.0,
             baseline_frames: 0,
+            presence_ema: 0.0,
             smoothed_hr: 0.0,
             smoothed_br: 0.0,
             smoothed_hr_conf: 0.0,
@@ -2568,7 +2623,7 @@ fn extract_features_from_frame(
     // `smooth_and_classify()` which has access to EMA state and hysteresis.
     let raw_classification = ClassificationInfo {
         motion_level: raw_classify(motion_score),
-        presence: motion_score > 0.04,
+        presence: motion_score > csi::presence_floor(),
         confidence: (0.4 + signal_quality * 0.3 + motion_score * 0.3).clamp(0.0, 1.0),
     };
 
@@ -2582,24 +2637,41 @@ fn extract_features_from_frame(
 }
 
 /// Simple threshold classification (no smoothing) — used as the "raw" input.
+/// Bands are rebased on `csi::presence_floor()` (env `RUVIEW_PRESENCE_FLOOR`)
+/// so the empty-room noise floor can be tuned per environment; the +0.08/+0.21
+/// offsets preserve the original band widths.
 fn raw_classify(score: f64) -> String {
-    if score > 0.25 {
+    let f = csi::presence_floor();
+    if score > f + 0.21 {
         "active".into()
-    } else if score > 0.12 {
+    } else if score > f + 0.08 {
         "present_moving".into()
-    } else if score > 0.04 {
+    } else if score > f {
         "present_still".into()
     } else {
         "absent".into()
     }
 }
 
-/// Debounce frames required before state transition (at ~10 FPS = ~0.4s).
-const DEBOUNCE_FRAMES: u32 = 4;
+/// Debounce frames required before a motion/presence state transition (~10 FPS).
+/// Env-tunable via RUVIEW_DEBOUNCE_FRAMES so operators can trade responsiveness
+/// for stability against brief empty-room sm spikes WITHOUT a rebuild. Default 6
+/// (~0.6s). Presence is derived from this debounced level (not raw sm>floor), so
+/// a single-frame noise spike over the floor no longer flips presence.
+fn debounce_frames() -> u32 {
+    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("RUVIEW_DEBOUNCE_FRAMES")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .filter(|v| *v >= 1)
+            .unwrap_or(6)
+    })
+}
 /// EMA alpha for motion smoothing (~1s time constant at 10 FPS).
 const MOTION_EMA_ALPHA: f64 = 0.15;
 /// EMA alpha for slow-adapting baseline (~30s time constant at 10 FPS).
-const BASELINE_EMA_ALPHA: f64 = 0.003;
+const BASELINE_EMA_ALPHA: f64 = 0.02;
 /// Number of warm-up frames before baseline subtraction kicks in.
 const BASELINE_WARMUP: u64 = 50;
 
@@ -2611,9 +2683,12 @@ fn smooth_and_classify(state: &mut AppStateInner, raw: &mut ClassificationInfo, 
     //    (i.e. during calm periods) so walking doesn't inflate the baseline.
     state.baseline_frames += 1;
     if state.baseline_frames < BASELINE_WARMUP {
-        // During warm-up, aggressively learn the baseline.
+        // During warm-up, aggressively learn the baseline (calibrate the floor).
         state.baseline_motion = state.baseline_motion * 0.9 + raw_motion * 0.1;
     } else if raw_motion < state.smoothed_motion + 0.05 {
+        // Continuously track the quiet-room floor (but not during motion bursts,
+        // so walking doesn't inflate the baseline). This tracks the empty-room
+        // noise floor of these RF-noisy nodes so an empty room reads absent.
         state.baseline_motion =
             state.baseline_motion * (1.0 - BASELINE_EMA_ALPHA) + raw_motion * BASELINE_EMA_ALPHA;
     }
@@ -2636,7 +2711,7 @@ fn smooth_and_classify(state: &mut AppStateInner, raw: &mut ClassificationInfo, 
         state.debounce_candidate = candidate;
     } else if candidate == state.debounce_candidate {
         state.debounce_counter += 1;
-        if state.debounce_counter >= DEBOUNCE_FRAMES {
+        if state.debounce_counter >= debounce_frames() {
             // Transition accepted.
             state.current_motion_level = candidate;
             state.debounce_counter = 0;
@@ -2649,7 +2724,9 @@ fn smooth_and_classify(state: &mut AppStateInner, raw: &mut ClassificationInfo, 
 
     // 6. Write the smoothed result back into the classification.
     raw.motion_level = state.current_motion_level.clone();
-    raw.presence = sm > 0.03;
+    // Presence follows the DEBOUNCED motion level, not the raw sm>floor: a brief
+    // empty-room sm spike over the floor no longer flips presence for one frame.
+    raw.presence = state.current_motion_level != "absent";
     raw.confidence = (0.4 + sm * 0.6).clamp(0.0, 1.0);
 }
 
@@ -2660,6 +2737,7 @@ fn smooth_and_classify_node(ns: &mut NodeState, raw: &mut ClassificationInfo, ra
     if ns.baseline_frames < BASELINE_WARMUP {
         ns.baseline_motion = ns.baseline_motion * 0.9 + raw_motion * 0.1;
     } else if raw_motion < ns.smoothed_motion + 0.05 {
+        // Continuously track this node's quiet-room floor (see smooth_and_classify).
         ns.baseline_motion =
             ns.baseline_motion * (1.0 - BASELINE_EMA_ALPHA) + raw_motion * BASELINE_EMA_ALPHA;
     }
@@ -2677,7 +2755,7 @@ fn smooth_and_classify_node(ns: &mut NodeState, raw: &mut ClassificationInfo, ra
         ns.debounce_candidate = candidate;
     } else if candidate == ns.debounce_candidate {
         ns.debounce_counter += 1;
-        if ns.debounce_counter >= DEBOUNCE_FRAMES {
+        if ns.debounce_counter >= debounce_frames() {
             ns.current_motion_level = candidate;
             ns.debounce_counter = 0;
         }
@@ -2687,8 +2765,12 @@ fn smooth_and_classify_node(ns: &mut NodeState, raw: &mut ClassificationInfo, ra
     }
 
     raw.motion_level = ns.current_motion_level.clone();
-    raw.presence = sm > 0.03;
+    // Presence follows the DEBOUNCED motion level (see smooth_and_classify) so a
+    // one-frame empty-room sm spike over the floor no longer flips presence.
+    raw.presence = ns.current_motion_level != "absent";
     raw.confidence = (0.4 + sm * 0.6).clamp(0.0, 1.0);
+    // Track sustained presence for spatial node-agreement counting.
+    ns.presence_ema = ns.presence_ema * 0.9 + if raw.presence { 0.1 } else { 0.0 };
 }
 
 /// If an adaptive model is loaded, override the classification with the
@@ -2741,6 +2823,13 @@ const BR_DEAD_BAND: f64 = 0.5;
 /// Mutates `state.smoothed_hr`, `state.smoothed_br`, etc.
 /// Returns the smoothed VitalSigns to broadcast.
 fn smooth_vitals(state: &mut AppStateInner, raw: &VitalSigns) -> VitalSigns {
+    // Gate on presence: with no one in the scene (smoothed motion below the
+    // tunable floor) any HR/RR is noise the extractor latched onto. Emit empty
+    // vitals so the UI doesn't show phantom heart/breathing rates on an empty
+    // room. Uses the same floor as the presence decision.
+    if state.smoothed_motion <= csi::presence_floor() {
+        return VitalSigns::default();
+    }
     let raw_hr = raw.heart_rate_bpm.unwrap_or(0.0);
     let raw_br = raw.breathing_rate_bpm.unwrap_or(0.0);
 
@@ -2811,6 +2900,10 @@ fn smooth_vitals(state: &mut AppStateInner, raw: &VitalSigns) -> VitalSigns {
 
 /// Per-node variant of `smooth_vitals` that operates on a `NodeState` (issue #249).
 fn smooth_vitals_node(ns: &mut NodeState, raw: &VitalSigns) -> VitalSigns {
+    // Gate on presence (see smooth_vitals): no presence -> no vitals.
+    if ns.smoothed_motion <= csi::presence_floor() {
+        return VitalSigns::default();
+    }
     let raw_hr = raw.heart_rate_bpm.unwrap_or(0.0);
     let raw_br = raw.breathing_rate_bpm.unwrap_or(0.0);
 
@@ -4403,7 +4496,60 @@ fn aggregate_person_count(
         .map(|n| n.prev_person_count)
         .max()
         .unwrap_or(0);
-    activity_count.max(node_max)
+
+    // Spatial node-agreement: each non-stale node that *sustains* independent
+    // presence counts as evidence of one occupant in its vicinity. With a node
+    // beside each person (e.g. one each side of a couch), two side-nodes each
+    // hold presence while a node merely *near* both flickers and doesn't clear
+    // the sustain bar — so two still people read as 2 where the motion-intensity
+    // score alone pins at 1. A lone person mostly lights one node strongly, so
+    // this stays at 1. Vote bar is tunable via RUVIEW_NODE_VOTE (default 0.55).
+    let vote_bar = node_vote_threshold();
+    let nonvoting = nonvoting_nodes();
+    let now = std::time::Instant::now();
+    let spatial_count = node_states
+        .iter()
+        .filter(|(id, n)| {
+            !nonvoting.contains(*id)
+                && n.last_frame_time
+                    .is_some_and(|t| now.duration_since(t).as_secs() < 10)
+                && n.presence_ema >= vote_bar
+        })
+        .count();
+
+    activity_count.max(node_max).max(spatial_count)
+}
+
+/// Node IDs that participate in presence/fusion but do NOT cast a person-vote in
+/// spatial node-agreement counting (e.g. a "front" node that sees every occupant
+/// and would otherwise inflate the count by one). Comma-separated via
+/// `RUVIEW_NONVOTING_NODES` (e.g. "1" or "1,4").
+fn nonvoting_nodes() -> &'static std::collections::HashSet<u8> {
+    static SET: std::sync::OnceLock<std::collections::HashSet<u8>> = std::sync::OnceLock::new();
+    SET.get_or_init(|| {
+        std::env::var("RUVIEW_NONVOTING_NODES")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .filter_map(|t| t.trim().parse::<u8>().ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    })
+}
+
+/// Sustained-presence EMA a node must reach to "vote" as a distinct occupant in
+/// spatial node-agreement counting. Lower → more sensitive (more likely to read
+/// the full node count); higher → stricter. Tunable via `RUVIEW_NODE_VOTE`.
+fn node_vote_threshold() -> f64 {
+    static BAR: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    *BAR.get_or_init(|| {
+        std::env::var("RUVIEW_NODE_VOTE")
+            .ok()
+            .and_then(|s| s.parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0 && *v <= 1.0)
+            .unwrap_or(0.55)
+    })
 }
 
 #[cfg(test)]
@@ -4765,7 +4911,116 @@ fn emit_rufield_event(s: &AppStateInner, update: &SensingUpdate, node_id: u8) {
     }
 }
 
+/// Configured node positions (metres) for the coarse activity-centroid
+/// localizer, indexed so `positions[node_id - 1]` is that node's position.
+/// Populated once at startup from `SENSING_NODE_POSITIONS` (ordered by ascending
+/// node_id, starting at 1). Empty/unset ⇒ the centroid localizer stays off and
+/// the field-peak fallback is used.
+static CONFIGURED_NODE_POS: std::sync::OnceLock<Vec<[f64; 3]>> = std::sync::OnceLock::new();
+
+/// Per-node rolling baseline of `motion_band_power`, keyed by node_id. Lets the
+/// centroid weight each node by how far it flares **above its own quiet level**
+/// rather than by raw magnitude — removes the per-node RF bias where one node
+/// always reads hot and would otherwise hog the blob.
+static NODE_MOTION_BASELINE: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<u8, f64>>,
+> = std::sync::OnceLock::new();
+
+/// Coarse "activity centroid" position for the Observatory figure (issue #1050
+/// follow-up). Places the person at the per-node **motion-weighted centroid** of
+/// the configured node positions, so the blob drifts toward whichever node
+/// currently sees the most CSI motion.
+///
+/// HONEST SCOPE — this is NOT calibrated triangulation. A moving person perturbs
+/// every link, so this is proximity-by-activity, not a metric (x, z) fix. It is
+/// deliberately preferred over the subcarrier-index `signal_field` peak (which
+/// clamps to room-centre for real broadband CSI) only when we actually have the
+/// geometry: `SENSING_NODE_POSITIONS` supplied ≥2 positions AND ≥2 non-stale
+/// nodes report features. `RUVIEW_LOCALIZE_POWER` (default 2.0, read live)
+/// sharpens the pull toward the most-active node — higher = crisper but jumpier.
+fn node_activity_centroid(update: &SensingUpdate) -> Option<[f64; 3]> {
+    let positions = CONFIGURED_NODE_POS.get()?;
+    if positions.len() < 2 {
+        return None;
+    }
+    let nf = update.node_features.as_ref()?;
+
+    let env_f = |k: &str, d: f64| {
+        std::env::var(k)
+            .ok()
+            .and_then(|s| s.parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+            .unwrap_or(d)
+    };
+    // `power` sharpens the pull toward the most-active node. `alpha_up` is the
+    // (slow) baseline-rise rate; falls 10× faster so the baseline tracks the
+    // quiet level and resists inflating while a node is active. `floor` guards
+    // the ratio against a near-zero baseline.
+    let power = env_f("RUVIEW_LOCALIZE_POWER", 2.0).max(0.0);
+    let alpha_up = env_f("RUVIEW_LOCALIZE_BASE_ALPHA", 0.005).clamp(0.0, 1.0);
+    let alpha_down = (alpha_up * 10.0).clamp(0.0, 1.0);
+    let floor = env_f("RUVIEW_LOCALIZE_BASE_FLOOR", 20.0).max(1e-3);
+
+    let baselines =
+        NODE_MOTION_BASELINE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut bl = baselines.lock().unwrap_or_else(|e| e.into_inner());
+
+    // (position, relative_activity) per non-stale positioned node, where
+    // relative = current_motion / its_own_baseline. A node flaring above its own
+    // quiet level wins regardless of another node's higher absolute magnitude.
+    let mut items: Vec<([f64; 3], f64)> = Vec::new();
+    for f in nf {
+        if f.stale {
+            continue;
+        }
+        let Some(idx) = (f.node_id as usize).checked_sub(1) else {
+            continue;
+        };
+        let Some(pos) = positions.get(idx) else {
+            continue;
+        };
+        let m = f.features.motion_band_power.max(0.0);
+        let b = bl.entry(f.node_id).or_insert(m);
+        let a = if m < *b { alpha_down } else { alpha_up };
+        *b += a * (m - *b);
+        let rel = m / (*b).max(floor);
+        items.push((*pos, rel));
+    }
+    drop(bl);
+    if items.len() < 2 {
+        return None;
+    }
+
+    let mut wsum = 0.0f64;
+    let mut acc = [0.0f64; 3];
+    for (pos, rel) in &items {
+        let w = (rel.max(0.0) + 1e-6).powf(power);
+        wsum += w;
+        for k in 0..3 {
+            acc[k] += pos[k] * w;
+        }
+    }
+    if !(wsum > 0.0) {
+        return None;
+    }
+    Some([acc[0] / wsum, acc[1] / wsum, acc[2] / wsum])
+}
+
 fn attach_field_positions(update: &mut SensingUpdate) {
+    // Presence gate for the Observatory floor heatmap. When nobody is present
+    // the signal field is just CSI noise, but generate_signal_field's per-frame
+    // max-normalisation stretches that noise to full [0,1] scale, so the floor
+    // squares flicker hard on an empty room. Zero the field when absent so it
+    // renders calm. Runs on every publish path (this is the shared chokepoint).
+    if !update.classification.presence {
+        for v in update.signal_field.values.iter_mut() {
+            *v = 0.0;
+        }
+    }
+    // Compute the coarse multi-node activity centroid up-front, while only a
+    // shared borrow of `update` is held — it must precede the &mut persons borrow.
+    let centroid = node_activity_centroid(update);
+
     let Some(persons) = update.persons.as_mut() else {
         return;
     };
@@ -4785,8 +5040,13 @@ fn attach_field_positions(update: &mut SensingUpdate) {
     let motion_score = field_localize::motion_score_from_power(update.features.motion_band_power);
     let pose_label = update.posture.clone();
 
+    // Prefer the coarse multi-node activity centroid for the primary person when
+    // node geometry is configured — it actually moves with the person, unlike the
+    // subcarrier-index field peak. Falls back to the field peak per person.
     for (i, person) in persons.iter_mut().enumerate() {
-        if let Some(peak) = peaks.get(i).or_else(|| peaks.first()) {
+        if i == 0 && centroid.is_some() {
+            person.position = centroid.unwrap();
+        } else if let Some(peak) = peaks.get(i).or_else(|| peaks.first()) {
             person.position = peak.position;
         }
         person.motion_score = motion_score;
@@ -5756,12 +6016,36 @@ async fn calibration_start(State(state): State<SharedState>) -> Json<serde_json:
             _ => {} // Stale/Expired/Uncalibrated — ok to recalibrate
         }
     }
-    match FieldModel::new(field_bridge::single_link_config()) {
+    // Size the FieldModel to the actual live CSI subcarrier width — without this
+    // it defaults to 56 and feed_calibration rejects every real ESP32 frame
+    // (S3 HT40 = 256, C6 = 64). With heterogeneous nodes, pick the most common
+    // width so the largest matched set contributes; mismatched frames are skipped
+    // in maybe_feed_calibration.
+    let detected_width = {
+        let mut counts: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for ns in s.node_states.values() {
+            if let Some(latest) = ns.frame_history.back() {
+                if !latest.is_empty() {
+                    *counts.entry(latest.len()).or_insert(0) += 1;
+                }
+            }
+        }
+        counts.into_iter().max_by_key(|&(_, c)| c).map(|(w, _)| w)
+    };
+    let Some(width) = detected_width else {
+        return Json(serde_json::json!({
+            "success": false,
+            "error": "No CSI frames yet — ensure at least one node is streaming before calibrating.",
+        }));
+    };
+    match FieldModel::new(field_bridge::single_link_config(width)) {
         Ok(fm) => {
             s.field_model = Some(fm);
             Json(serde_json::json!({
                 "success": true,
-                "message": "Calibration started — keep room empty while frames accumulate.",
+                "message": format!(
+                    "Calibration started ({width}-subcarrier link) — keep the room empty while ~200 frames accumulate."
+                ),
             }))
         }
         // ADR-080 #2: FieldModel init error chain stays server-side only.
@@ -6126,6 +6410,24 @@ async fn mesh_metrics_endpoint(State(state): State<SharedState>) -> impl IntoRes
     let _ = writeln!(body, "wifi_densepose_mesh_node_total{{state=\"follower\"}} {followers}");
     let _ = writeln!(body, "wifi_densepose_mesh_node_total{{state=\"no_sync\"}} {no_sync}");
 
+    // Fix #503 — fleet alignment from host arrival-time spread (what the fuser
+    // guards on), the single number an operator watches: small skew = the
+    // fleet is in sync regardless of ESP-NOW leader state.
+    let now = std::time::Instant::now();
+    let ages: Vec<u64> = s.node_states.values()
+        .filter_map(|ns| ns.last_frame_time)
+        .filter_map(|t| {
+            let age = now.duration_since(t);
+            (age <= ARRIVAL_ACTIVE_WINDOW).then(|| age.as_micros() as u64)
+        })
+        .collect();
+    if let Some(skew) = arrival_skew_us(&ages) {
+        let _ = writeln!(body,
+            "# HELP wifi_densepose_server_skew_us Fix #503: host arrival-time spread across active nodes, microseconds");
+        let _ = writeln!(body, "# TYPE wifi_densepose_server_skew_us gauge");
+        let _ = writeln!(body, "wifi_densepose_server_skew_us {skew}");
+    }
+
     for (name, help, kind) in metrics {
         let _ = writeln!(body, "# HELP {name} {help}");
         let _ = writeln!(body, "# TYPE {name} {kind}");
@@ -6160,16 +6462,51 @@ pub(crate) fn fleet_role_counts(snaps: &[(u8, NodeSyncSnapshot)]) -> (u64, u64) 
 
 async fn mesh_endpoint(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
+    let now = std::time::Instant::now();
+    // Fix #503 — collect each node's frame age (µs since its last CSI frame
+    // reached the host). Only "active" nodes (fresh within ARRIVAL_ACTIVE_WINDOW)
+    // count toward alignment — a silent/offline node is handled by its own
+    // staleness, not by dragging the skew.
+    let mut ages: std::collections::HashMap<u8, u64> = std::collections::HashMap::new();
+    for (&id, ns) in s.node_states.iter() {
+        if let Some(t) = ns.last_frame_time {
+            let age = now.duration_since(t);
+            if age <= ARRIVAL_ACTIVE_WINDOW {
+                ages.insert(id, age.as_micros() as u64);
+            }
+        }
+    }
+    let min_age = ages.values().copied().min();
+
     let mut nodes = serde_json::Map::new();
     for (&id, ns) in s.node_states.iter() {
         if let Some(snap) = ns.sync_snapshot() {
-            nodes.insert(id.to_string(), serde_json::to_value(snap).unwrap());
+            let mut v = serde_json::to_value(&snap).unwrap();
+            // Fix #503 — per-node arrival lag: how far this node's latest frame
+            // trailed the freshest node's, i.e. its contribution to the fusion
+            // skew. This is the meaningful "offset" now that frames are
+            // arrival-anchored — the mesh `offset_us` is boot-delta noise.
+            if let (Some(obj), Some(min), Some(&age)) = (v.as_object_mut(), min_age, ages.get(&id)) {
+                obj.insert("arrival_lag_us".to_string(), serde_json::json!(age.saturating_sub(min)));
+            }
+            nodes.insert(id.to_string(), v);
         }
     }
     let total = nodes.len();
+    // Fix #503 — fleet alignment from host arrival times (what the fuser guards
+    // on), NOT the ESP-NOW clock offset. `synced` = the spread is inside the
+    // fusion guard window, so the fleet fuses regardless of leader election.
+    let age_vec: Vec<u64> = ages.values().copied().collect();
+    let server_skew_us = arrival_skew_us(&age_vec);
+    let guard_us = multistatic_guard_config_from_env().guard_interval_us;
+    let synced = server_skew_us.map(|sk| sk <= guard_us);
     Json(serde_json::json!({
         "nodes": serde_json::Value::Object(nodes),
         "total": total,
+        "server_skew_us": server_skew_us,
+        "active_nodes": age_vec.len(),
+        "guard_interval_us": guard_us,
+        "synced": synced,
     }))
 }
 
@@ -6805,6 +7142,20 @@ async fn udp_receiver_task(
                         raw_motion,
                     ) = extract_features_from_frame(&frame, &ns.frame_history, sample_rate_hz);
                     smooth_and_classify_node(ns, &mut classification, raw_motion);
+                    // TEMP DIAG: surface the real motion pipeline values per node
+                    // (throttled ~every 20 frames) so empty vs walking can be
+                    // compared on raw_motion / smoothed / baseline, not variance.
+                    if ns.baseline_frames % 20 == 0 {
+                        info!(
+                            "DIAG node={} raw_motion={:.3} sm={:.3} base={:.3} var={:.0} level={}",
+                            node_id,
+                            raw_motion,
+                            ns.smoothed_motion,
+                            ns.baseline_motion,
+                            features.variance,
+                            classification.motion_level
+                        );
+                    }
 
                     // Adaptive override using cloned model (safe, no raw pointers).
                     if let Some(ref model) = adaptive_model_clone {
@@ -6883,8 +7234,19 @@ async fn udp_receiver_task(
                     };
 
                     // Aggregate person count: gate on presence first (matching WiFi path).
+                    // Presence is OR'd across all non-stale nodes (via their
+                    // sustained-presence EMA) rather than keyed to whichever
+                    // node's frame happened to arrive last — otherwise the count
+                    // dropped to "none" every time a quieter node's frame landed
+                    // while the side nodes clearly saw someone.
                     let now = std::time::Instant::now();
-                    let total_persons = if classification.presence {
+                    let any_node_present = classification.presence
+                        || s.node_states.values().any(|n| {
+                            n.last_frame_time
+                                .is_some_and(|t| now.duration_since(t).as_secs() < 10)
+                                && n.presence_ema >= 0.5
+                        });
+                    let total_persons = if any_node_present {
                         let dedup = s.dedup_factor;
                         let (fused, fallback_count) = multistatic_bridge::fuse_or_fallback(
                             &s.multistatic_fuser,
@@ -8623,6 +8985,13 @@ async fn main() {
                         "Configured {} node positions for multistatic fusion",
                         positions.len()
                     );
+                    // Also feed the coarse activity-centroid localizer (indexed by
+                    // node_id-1; positions ordered by ascending node_id from 1).
+                    let pos64: Vec<[f64; 3]> = positions
+                        .iter()
+                        .map(|p| [p[0] as f64, p[1] as f64, p[2] as f64])
+                        .collect();
+                    let _ = CONFIGURED_NODE_POS.set(pos64);
                     fuser.set_node_positions(positions);
                 }
             }
@@ -8641,7 +9010,11 @@ async fn main() {
         ),
         field_model: if args.calibrate {
             info!("Field model calibration enabled — room should be empty during startup");
-            FieldModel::new(field_bridge::single_link_config()).ok()
+            // No frames at boot, so width is unknown here; default to the common
+            // 64-subcarrier (HT20 / ESP32-C6) width. The runtime API path
+            // (/api/v1/calibration/start) sizes the model to the live width
+            // instead — prefer that for mixed/HT40 (256-wide) deployments.
+            FieldModel::new(field_bridge::single_link_config(64)).ok()
         } else {
             None
         },
@@ -9177,7 +9550,7 @@ mod node_sync_snapshot_serialization_tests {
     fn sync_present_serializes_all_seven_fields() {
         let v = serde_json::to_value(sample_node(Some(sample_sync()))).unwrap();
         let s = v.get("sync").expect("sync key must be present");
-        // All eight contract fields named exactly as iter 23/34 documented.
+        // All contract fields named exactly as iter 23/34 documented.
         for key in ["offset_us", "is_leader", "is_valid", "smoothed",
                     "sequence", "csi_fps_ema", "csi_fps_samples",
                     "staleness_ms"] {
@@ -9386,8 +9759,8 @@ mod sync_snapshot_helper_tests {
         // Local fixture rather than reaching across test modules.
         fn snap(is_leader: bool) -> NodeSyncSnapshot {
             NodeSyncSnapshot {
-                offset_us: 0, is_leader, is_valid: true, smoothed: true,
-                sequence: 0, csi_fps_ema: 10.0, csi_fps_samples: 10,
+                offset_us: 0, is_leader, is_valid: true,
+                smoothed: true, sequence: 0, csi_fps_ema: 10.0, csi_fps_samples: 10,
                 staleness_ms: Some(0),
             }
         }
@@ -9397,6 +9770,7 @@ mod sync_snapshot_helper_tests {
         // Edge: all leaders (election would prevent this but gauge math must hold).
         assert_eq!(super::fleet_role_counts(&[(1u8, snap(true)), (2, snap(true))]), (2, 0));
     }
+
 
     #[test]
     fn bool_metric_returns_zero_or_one_as_text() {
