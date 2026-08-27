@@ -13450,6 +13450,7 @@ dependencies = [
  "futures-util",
  "hmac",
  "jsonwebtoken",
+ "mdns-sd",
  "midstreamer-attractor",
  "midstreamer-temporal-compare",
  "opentelemetry-appender-tracing",

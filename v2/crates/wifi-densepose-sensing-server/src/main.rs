@@ -133,6 +133,23 @@ struct Args {
     #[arg(long, default_value = "127.0.0.1", env = "SENSING_BIND_ADDR")]
     bind_addr: String,
 
+    /// Disable local `_ruview._tcp` discovery. Discovery is automatically
+    /// skipped for loopback-only binds and never carries sensor data.
+    #[arg(long, env = "RUVIEW_NO_MDNS")]
+    no_mdns: bool,
+
+    /// Stable, non-secret installation routing hint published over mDNS.
+    #[arg(long, env = "RUVIEW_INSTALLATION_ID")]
+    installation_id: Option<String>,
+
+    /// Human-readable local service name shown by commissioning clients.
+    #[arg(
+        long,
+        default_value = "RuView Installation",
+        env = "RUVIEW_INSTALLATION_NAME"
+    )]
+    installation_name: String,
+
     /// Additional hostname (with or without `:PORT`) to permit in the `Host`
     /// header — defends loopback-bound deployments against DNS rebinding.
     /// Loopback names (`localhost`, `127.0.0.1`, `[::1]`) are always permitted
@@ -8762,9 +8779,15 @@ async fn main() {
         );
         wifi_densepose_sensing_server::host_validation::HostAllowlist::disabled()
     } else {
+        let discovery_label = args.installation_id.as_deref().unwrap_or("installation");
+        let discovery_host =
+            wifi_densepose_sensing_server::discovery::discovery_hostname(discovery_label);
         let allowlist =
             wifi_densepose_sensing_server::host_validation::HostAllowlist::from_cli_and_env(
-                args.allowed_hosts.iter().cloned(),
+                args.allowed_hosts
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(discovery_host)),
             );
         info!(
             "Host-header validation ON ({} entries; loopback names always included)",
@@ -8977,6 +9000,32 @@ async fn main() {
         "Open http://localhost:{}/ui/index.html in your browser",
         args.http_port
     );
+
+    let discovery_label = args.installation_id.as_deref().unwrap_or("installation");
+    let discovery_hostname =
+        wifi_densepose_sensing_server::discovery::discovery_hostname(discovery_label);
+    let _discovery_advertiser = if args.no_mdns || bind_ip.is_loopback() {
+        if bind_ip.is_loopback() && !args.no_mdns {
+            info!("RuView discovery skipped for loopback-only HTTP bind");
+        }
+        None
+    } else {
+        match wifi_densepose_sensing_server::discovery::start_advertiser(
+            &args.installation_name,
+            discovery_label,
+            &discovery_hostname,
+            args.http_port,
+        ) {
+            Ok(advertiser) => {
+                info!(hostname = %discovery_hostname, port = args.http_port, "RuView local discovery advertised");
+                Some(advertiser)
+            }
+            Err(error) => {
+                warn!(%error, "RuView local discovery unavailable; manual origin remains usable");
+                None
+            }
+        }
+    };
 
     // Run the HTTP server with graceful shutdown support
     let shutdown_state = state.clone();
