@@ -491,6 +491,57 @@ fn classification_from_room(room: &RoomInference) -> ClassificationInfo {
     }
 }
 
+/// Minimum time a candidate room-level classification must be observed
+/// *consistently* before the debounced room state actually flips to it.
+///
+/// `fuse_room` recomputes its plurality vote fresh every cycle with no
+/// memory of its own — unlike each node's own classification, which is
+/// individually debounced (`smooth_and_classify_node`). Confirmed live
+/// (2026-08-28) as a real source of "flapping": with per-node confidences
+/// sitting near the classification boundary (44%/83%/53% observed), whichever
+/// 2 of 3 nodes happen to agree can flip cycle-to-cycle even while each
+/// node's own reading is individually stable. This adds the missing
+/// room-level hysteresis, same idea as the per-node debounce, one layer up.
+const ROOM_DEBOUNCE_DURATION_SECS: f64 = 1.5;
+
+/// Debounced counterpart to [`classification_from_room`] — apply this at
+/// live call sites instead, so the room's `presence`/`motion_level` only
+/// flips after `raw`'s new candidate class has been observed continuously
+/// for [`ROOM_DEBOUNCE_DURATION_SECS`], not on the very first cycle it wins
+/// `fuse_room`'s plurality vote. `confidence` is passed through un-debounced
+/// (it's a continuous value, not a discrete state, so there's nothing to
+/// flap) — only `motion_level`/`presence` are held back.
+fn debounce_room_classification(state: &mut AppStateInner, raw: &RoomInference) -> ClassificationInfo {
+    let candidate = if raw.classification == "unavailable" {
+        "absent"
+    } else {
+        raw.classification.as_str()
+    };
+    let now = std::time::Instant::now();
+
+    if candidate == state.room_debounced_level {
+        // Already stable in this state — reset any in-flight candidate.
+        state.room_debounce_candidate = candidate.to_string();
+        state.room_debounce_since = None;
+    } else if candidate == state.room_debounce_candidate {
+        let since = *state.room_debounce_since.get_or_insert(now);
+        if now.duration_since(since).as_secs_f64() >= ROOM_DEBOUNCE_DURATION_SECS {
+            state.room_debounced_level = candidate.to_string();
+            state.room_debounce_since = None;
+        }
+    } else {
+        // New candidate — restart the hold timer.
+        state.room_debounce_candidate = candidate.to_string();
+        state.room_debounce_since = Some(now);
+    }
+
+    ClassificationInfo {
+        motion_level: state.room_debounced_level.clone(),
+        presence: state.room_debounced_level != "absent",
+        confidence: raw.confidence,
+    }
+}
+
 /// ADR-297 — the window a node may be silent before it stops contributing to
 /// the fused room aggregate (its entities go stale/unavailable rather than
 /// holding a frozen online value). Mirrors the 10 s active-node filter used to
@@ -609,6 +660,98 @@ mod issue_1554_room_classification_tests {
         };
         let b = a.clone();
         assert_eq!(classification_from_room(&a), classification_from_room(&b));
+    }
+}
+
+#[cfg(test)]
+mod debounce_room_classification_tests {
+    //! `fuse_room`'s plurality vote has no memory of its own — confirmed live
+    //! (2026-08-28) as a real "flapping" source when per-node confidences sit
+    //! near the classification boundary: whichever 2 of 3 nodes happen to
+    //! agree on a given cycle can flip the room result even while each
+    //! node's own reading is individually stable. `debounce_room_classification`
+    //! adds the missing room-level hysteresis (same idea as each node's own
+    //! debounce, one layer up).
+    use super::{debounce_room_classification, AppStateInner, RoomInference};
+    use std::time::{Duration, Instant};
+
+    fn room(classification: &str, confidence: f64) -> RoomInference {
+        RoomInference {
+            classification: classification.to_string(),
+            confidence,
+            contributing_nodes: 3,
+        }
+    }
+
+    #[test]
+    fn single_cycle_candidate_does_not_flip_immediately() {
+        let mut state = AppStateInner::minimal();
+        let c = debounce_room_classification(&mut state, &room("present_still", 0.6));
+        assert_eq!(c.motion_level, "absent", "one cycle must not be enough to flip");
+        assert!(!c.presence);
+    }
+
+    #[test]
+    fn repeated_but_recent_candidate_still_does_not_flip() {
+        let mut state = AppStateInner::minimal();
+        debounce_room_classification(&mut state, &room("present_still", 0.6));
+        // Second cycle, essentially no time elapsed — still under the hold duration.
+        let c = debounce_room_classification(&mut state, &room("present_still", 0.6));
+        assert_eq!(c.motion_level, "absent");
+    }
+
+    #[test]
+    fn candidate_sustained_past_hold_duration_flips() {
+        let mut state = AppStateInner::minimal();
+        // Simulate "present_still" having already been the candidate for 2s
+        // (> ROOM_DEBOUNCE_DURATION_SECS = 1.5s) without needing to sleep in
+        // the test.
+        state.room_debounce_candidate = "present_still".to_string();
+        state.room_debounce_since = Some(Instant::now() - Duration::from_secs(2));
+
+        let c = debounce_room_classification(&mut state, &room("present_still", 0.7));
+        assert_eq!(c.motion_level, "present_still");
+        assert!(c.presence);
+    }
+
+    #[test]
+    fn flapping_candidate_resets_the_hold_timer() {
+        let mut state = AppStateInner::minimal();
+        // "present_still" has been pending 1s (not yet enough to flip).
+        state.room_debounce_candidate = "present_still".to_string();
+        state.room_debounce_since = Some(Instant::now() - Duration::from_secs(1));
+
+        // A different candidate arrives — this is exactly the flapping
+        // pattern (2-of-3 node agreement flipping cycle to cycle). The hold
+        // timer must restart for the new candidate, not carry over.
+        let c = debounce_room_classification(&mut state, &room("active", 0.5));
+        assert_eq!(c.motion_level, "absent", "still debounced to the old stable state");
+        assert_eq!(state.room_debounce_candidate, "active");
+        assert!(
+            state.room_debounce_since.unwrap().elapsed() < Duration::from_millis(100),
+            "hold timer must have restarted for the new candidate"
+        );
+    }
+
+    #[test]
+    fn already_stable_state_reports_immediately_without_waiting() {
+        let mut state = AppStateInner::minimal();
+        state.room_debounced_level = "present_moving".to_string();
+        let c = debounce_room_classification(&mut state, &room("present_moving", 0.9));
+        assert_eq!(c.motion_level, "present_moving", "no need to re-debounce an already-stable state");
+        assert!(c.presence);
+    }
+
+    #[test]
+    fn unavailable_room_debounces_toward_absent_like_any_other_candidate() {
+        let mut state = AppStateInner::minimal();
+        state.room_debounced_level = "present_still".to_string();
+        state.room_debounce_candidate = "absent".to_string();
+        state.room_debounce_since = Some(Instant::now() - Duration::from_secs(2));
+
+        let c = debounce_room_classification(&mut state, &RoomInference::unavailable());
+        assert_eq!(c.motion_level, "absent");
+        assert!(!c.presence);
     }
 }
 
@@ -1410,6 +1553,15 @@ struct AppStateInner {
     /// Per-node sensing state for multi-node deployments.
     /// Keyed by `node_id` from the ESP32 frame header.
     node_states: HashMap<u8, NodeState>,
+    /// Debounced room-level classification state — see
+    /// `debounce_room_classification`. `fuse_room` is a fresh, memoryless
+    /// plurality vote every cycle with no debounce of its own (unlike each
+    /// node's own classification, which is debounced individually), so with
+    /// per-node confidences sitting near a boundary the room-level result
+    /// can flip cycle-to-cycle even though each node's own reading is stable.
+    room_debounced_level: String,
+    room_debounce_candidate: String,
+    room_debounce_since: Option<std::time::Instant>,
     // ── Accuracy sprint: Kalman tracker, multistatic fusion, eigenvalue counting ──
     /// Global Kalman-based pose tracker for stable person IDs and smoothed keypoints.
     pose_tracker: PoseTracker,
@@ -1675,6 +1827,9 @@ impl AppStateInner {
             training_progress_tx: broadcast::channel::<String>(256).0,
             adaptive_model: None,
             node_states: HashMap::new(),
+            room_debounced_level: "absent".to_string(),
+            room_debounce_candidate: "absent".to_string(),
+            room_debounce_since: None,
             pose_tracker: PoseTracker::new(),
             last_tracker_instant: None,
             multistatic_fuser: MultistaticFuser::new(),
@@ -6607,7 +6762,7 @@ async fn udp_receiver_task(
                     // node's own reading no longer overwrites the room's. The
                     // old ad-hoc "boost confidence by node count" is replaced by
                     // `room_inference`'s freshness-weighted multi-node confidence.
-                    let classification = classification_from_room(&room_inference);
+                    let classification = debounce_room_classification(&mut s, &room_inference);
 
                     let signal_field = generate_signal_field(
                         fused_features.mean_rssi,
@@ -7076,6 +7231,7 @@ async fn udp_receiver_task(
                         active_nodes.iter().filter_map(|ni| ni.node_inference.as_ref()),
                         NODE_STALE_AFTER_MS,
                     );
+                    let room_classification = debounce_room_classification(&mut s, &room_inference);
 
                     let mut update = SensingUpdate {
                         msg_type: "sensing_update".to_string(),
@@ -7089,7 +7245,7 @@ async fn udp_receiver_task(
                         // `classification` (this node's own smoothed reading)
                         // still drives `motion_score`/`total_persons` above,
                         // which are legitimately this-packet-local.
-                        classification: classification_from_room(&room_inference),
+                        classification: room_classification,
                         signal_field: generate_signal_field(
                             fused_features.mean_rssi,
                             motion_score,
@@ -8686,6 +8842,9 @@ async fn main() {
                     );
                 }),
         node_states: HashMap::new(),
+        room_debounced_level: "absent".to_string(),
+        room_debounce_candidate: "absent".to_string(),
+        room_debounce_since: None,
         // Accuracy sprint
         pose_tracker: PoseTracker::new(),
         last_tracker_instant: None,
