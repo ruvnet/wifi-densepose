@@ -317,3 +317,6 @@ v2/crates/ruview-offaxis/pkg/
 scripts/fal-visual-teacher/training-data/
 scripts/fal-visual-teacher/training-data.zip
 scripts/fal-visual-teacher/output/
+# Board identity index — MACs of physical hardware, not secret, but not useful
+# to anyone else and it churns per fleet. Keep it local.
+firmware/esp32-csi-node/board_index.json
