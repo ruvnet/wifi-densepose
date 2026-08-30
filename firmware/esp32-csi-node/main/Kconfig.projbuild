@@ -534,6 +534,19 @@ config THERMAL_MONITOR
       transition (~55-60 C) and sags slowly under its own weight, which never
       announces itself.
 
+config THERMAL_THROTTLE
+    bool "Act on the temperature by reducing transmit power"
+    depends on THERMAL_MONITOR
+    default n
+    help
+      Separate from monitoring on purpose. Reading the sensor is inert;
+      reducing transmit power moves every RSSI the node has, and doing that
+      mid-experiment gives any surprise two candidate causes.
+
+      Leave off until the fleet is stable and the logs show a node genuinely
+      running hot. If none ever does -- which is the likely outcome -- this
+      never needs enabling, and the thresholds below cost nothing.
+
 config THERMAL_WARN_C
     int "Warn above this die temperature (C)"
     depends on THERMAL_MONITOR

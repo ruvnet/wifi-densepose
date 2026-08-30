@@ -133,12 +133,20 @@ void thermal_tick(void)
         s_state = next;
     }
 
+#ifdef CONFIG_THERMAL_THROTTLE
+    /* Acting on the reading is separate from taking it. Measuring is inert;
+     * changing transmit power mid-experiment moves every RSSI this node has,
+     * which is not something to introduce during a fleet bring-up when any
+     * surprise needs a single candidate cause. Turn this on once the fleet is
+     * stable AND the logs show a node actually gets hot -- if none ever does,
+     * it never needs turning on at all. */
     switch (s_state) {
     case THERMAL_CRITICAL:  apply_tx_power(TXP_MIN);   break;
     case THERMAL_THROTTLED: apply_tx_power(TXP_STEP2); break;
     case THERMAL_WARN:      apply_tx_power(TXP_STEP1); break;
     case THERMAL_OK:        apply_tx_power(TXP_FULL);  break;
     }
+#endif
 
     static int64_t s_last_log_us;
     int64_t now = esp_timer_get_time();
