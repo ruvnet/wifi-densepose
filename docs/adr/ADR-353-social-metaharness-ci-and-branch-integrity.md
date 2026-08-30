@@ -48,6 +48,11 @@ unrelated submodule changes, and unrelated product changes fail the scope gate.
 A contaminated commit remains quarantined for incident response and cannot be
 merged or used as release evidence.
 
+The sensing server can resolve its browser session signing secret under either
+`data/session-secret` or `v2/data/session-secret`, depending on its launch
+directory. Repository policy must ignore both exact runtime paths and test both
+rules. This prevents recurrence without hiding other tracked datasets.
+
 Branch repair must preserve forensic reachability until credential rotation and
 remote remediation are complete. Clean work continues from the reviewed local
 `main` commit containing the governed Phase 1 package. Rewriting a shared remote
@@ -104,6 +109,6 @@ and macOS checks as required before this gate can block merge.
 Open a pull request that changes one packaged social source file. Acceptance
 requires two green Linux Node checks, one green macOS network denial check, a
 clean dependency audit, an unchanged or intentionally updated manifest, and a
-diff containing only reviewed social, workflow, lockfile, and ADR paths. Confirm
-that the repository rejects merge when any one required check is forced to
-fail.
+diff containing only reviewed social, workflow, lockfile, repository policy
+test, and ADR paths. Confirm that the repository rejects merge when any one
+required check is forced to fail.
