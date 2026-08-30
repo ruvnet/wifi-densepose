@@ -21,6 +21,7 @@
 #include "led_strip.h"
 
 #include "csi_collector.h"
+#include "thermal.h"
 #include "stream_sender.h"
 #include "nvs_config.h"
 #include "edge_processing.h"
@@ -318,6 +319,36 @@ void app_main(void)
         ESP_LOGI(TAG, "Mock CSI active (scenario=%d)", CONFIG_CSI_MOCK_SCENARIO);
     }
 #else
+    /* Why did we just start? Nothing recorded this before, and it is the
+     * single most useful line in a fleet log: a node that reboots tells you
+     * almost nothing, but a node that reboots with ESP_RST_BROWNOUT tells you
+     * its supply sagged, which on shared outlets is a wiring problem rather
+     * than a firmware one. Three nodes dropping together on 2026-08-28 would
+     * have been answered by this line. */
+    {
+        esp_reset_reason_t rr = esp_reset_reason();
+        const char *why =
+            rr == ESP_RST_POWERON  ? "power-on" :
+            rr == ESP_RST_EXT      ? "external reset" :
+            rr == ESP_RST_SW       ? "software restart" :
+            rr == ESP_RST_PANIC    ? "PANIC (crash)" :
+            rr == ESP_RST_INT_WDT  ? "interrupt watchdog" :
+            rr == ESP_RST_TASK_WDT ? "task watchdog" :
+            rr == ESP_RST_WDT      ? "other watchdog" :
+            rr == ESP_RST_BROWNOUT ? "BROWNOUT (supply sagged)" :
+            rr == ESP_RST_DEEPSLEEP? "deep-sleep wake" : "unknown";
+        if (rr == ESP_RST_PANIC || rr == ESP_RST_BROWNOUT ||
+            rr == ESP_RST_INT_WDT || rr == ESP_RST_TASK_WDT) {
+            ESP_LOGW(TAG, "reset reason: %s (%d) <-- not a clean start", why, (int)rr);
+        } else {
+            ESP_LOGI(TAG, "reset reason: %s (%d)", why, (int)rr);
+        }
+    }
+
+    /* Bring thermal monitoring up before the radio is loaded, so the first
+     * reading is taken against a known-idle baseline rather than mid-burst. */
+    thermal_init();
+
     csi_collector_init();
 
     /* ADR-073: Start multi-frequency channel hopping if configured in NVS. */

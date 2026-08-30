@@ -517,3 +517,56 @@ menu "Onboard LED (ADR-183)"
             colormap, in milli-units (250 = 0.25). Lower = more sensitive
             (reaches yellow with less motion).
 endmenu
+
+menu "Thermal monitoring"
+
+config THERMAL_MONITOR
+    bool "Read the on-chip temperature sensor and throttle the radio"
+    depends on IDF_TARGET_ESP32C6
+    default y
+    help
+      The C6 has a temperature sensor this firmware otherwise never reads.
+      Harmless on a bare bench board; not once a node is sealed in a printed
+      enclosure on a wall with the radio transmitting continuously.
+
+      What is being protected is the ENCLOSURE, not the silicon. The part is
+      rated far past anything it sees here, but PLA softens at its glass
+      transition (~55-60 C) and sags slowly under its own weight, which never
+      announces itself.
+
+config THERMAL_WARN_C
+    int "Warn above this die temperature (C)"
+    depends on THERMAL_MONITOR
+    range 40 100
+    default 65
+
+config THERMAL_THROTTLE_C
+    int "Reduce transmit power above this die temperature (C)"
+    depends on THERMAL_MONITOR
+    range 45 105
+    default 72
+    help
+      Die temperature, not enclosure temperature -- the sensor is on the chip
+      and runs hotter than the plastic around it. ~72 C on the die in a small
+      vented box is roughly a 50-55 C enclosure, which is where PLA begins to
+      matter. Setting this at 55 would throttle a perfectly healthy node.
+
+      PETG (glass transition ~80 C) removes the concern; raise this if the
+      whole fleet is printed in it.
+
+config THERMAL_CRITICAL_C
+    int "Minimum transmit power above this die temperature (C)"
+    depends on THERMAL_MONITOR
+    range 50 110
+    default 80
+
+config THERMAL_HYSTERESIS_C
+    int "Degrees below the throttle point before recovering"
+    depends on THERMAL_MONITOR
+    range 1 20
+    default 8
+    help
+      Recovering at the same threshold that tripped would oscillate, and every
+      oscillation is a visible RSSI step on every link the node has.
+
+endmenu
