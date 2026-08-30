@@ -1,106 +1,47 @@
 import React from 'react';
-import { render } from '@testing-library/react-native';
+import { render, waitFor } from '@testing-library/react-native';
 import { ThemeProvider } from '@/theme/ThemeContext';
-
-jest.mock('@/hooks/usePoseStream', () => ({
-  usePoseStream: () => ({
-    connectionStatus: 'simulated' as const,
-    lastFrame: null,
-    isSimulated: true,
-  }),
-}));
+import { useMatStore } from '@/stores/matStore';
 
 jest.mock('react-native-svg', () => {
   const { View } = require('react-native');
-  return {
-    __esModule: true,
-    default: View,
-    Svg: View,
-    Circle: View,
-    G: View,
-    Text: View,
-    Rect: View,
-    Line: View,
-    Path: View,
-  };
+  return { __esModule: true, default: View, Circle: View, G: View, Line: View, Polygon: View, Rect: View, Text: View };
 });
-
-// Mock the MatWebView which uses react-native-webview
-jest.mock('@/screens/MATScreen/MatWebView', () => {
+jest.mock('@expo/vector-icons', () => {
   const { View } = require('react-native');
-  return {
-    MatWebView: (props: any) => require('react').createElement(View, { testID: 'mat-webview', ...props }),
-  };
+  return { Ionicons: View };
 });
-
-// Mock the useMatBridge hook
-jest.mock('@/screens/MATScreen/useMatBridge', () => ({
-  useMatBridge: () => ({
-    webViewRef: { current: null },
-    ready: false,
-    onMessage: jest.fn(),
-    sendFrameUpdate: jest.fn(),
-    postEvent: jest.fn(() => jest.fn()),
-  }),
+const mockFetchSnapshot = jest.fn(async () => ({
+  events: [], selectedEventId: null, zones: [], survivors: [], alerts: [],
+  pipeline: { scanning: false, buffer_duration_secs: 0, ml_enabled: true, ml_ready: false, sample_rate: 1000, heartbeat_enabled: false, min_confidence: .7 },
 }));
+jest.mock('@/services/mat.service', () => ({
+  matService: { configure: jest.fn(), fetchSnapshot: mockFetchSnapshot, openStream: jest.fn(() => jest.fn()), setScanning: jest.fn(), acknowledgeAlert: jest.fn() },
+}));
+jest.mock('@/services/worldGraph.service', () => ({ worldGraphService: {
+  connect: jest.fn(), disconnect: jest.fn(), fetchSnapshot: jest.fn(async () => ({
+    graph: { schema_version: 1, nodes: [], edges: [] }, epoch: 'test', seq: 0,
+  })),
+} }));
 
 describe('MATScreen', () => {
-  it('module exports MATScreen component', () => {
-    const mod = require('@/screens/MATScreen');
-    expect(mod.MATScreen).toBeDefined();
-    expect(typeof mod.MATScreen).toBe('function');
-  });
+  beforeEach(() => { useMatStore.getState().reset(); mockFetchSnapshot.mockClear(); });
 
-  it('default export is also available', () => {
-    const mod = require('@/screens/MATScreen');
-    expect(mod.default).toBeDefined();
-  });
-
-  it('renders without crashing', () => {
+  it('renders the source-honest incident dashboard', async () => {
     const { MATScreen } = require('@/screens/MATScreen');
-    const { toJSON } = render(
-      <ThemeProvider>
-        <MATScreen />
-      </ThemeProvider>,
-    );
-    expect(toJSON()).not.toBeNull();
+    const view = render(<ThemeProvider><MATScreen /></ThemeProvider>);
+    expect(view.getByText('MISSION-AWARE TRIAGE / VERIFIED INPUTS')).toBeTruthy();
+    expect(view.getByTestId('worldgraph-map')).toBeTruthy();
+    await waitFor(() => expect(mockFetchSnapshot).toHaveBeenCalled());
+    expect(view.getByText('No incident events returned. Create an event through the MAT API before scanning.')).toBeTruthy();
   });
 
-  it('renders the connection banner', () => {
+  it('does not seed training incidents or simulated detections', async () => {
     const { MATScreen } = require('@/screens/MATScreen');
-    const { getAllByText } = render(
-      <ThemeProvider>
-        <MATScreen />
-      </ThemeProvider>,
-    );
-    // Simulated status maps to 'simulated' banner -> "SIMULATED DATA"
-    expect(getAllByText('SIMULATED DATA').length).toBeGreaterThan(0);
-  });
-
-  it('shows simulation warning overlay when simulated and not acknowledged', () => {
-    // Reset store to ensure overlay is shown
-    const { useMatStore } = require('@/stores/matStore');
-    useMatStore.setState({ dataSource: 'simulated', simulationAcknowledged: false });
-
-    const { MATScreen } = require('@/screens/MATScreen');
-    const { getByText } = render(
-      <ThemeProvider>
-        <MATScreen />
-      </ThemeProvider>,
-    );
-    expect(getByText('I UNDERSTAND')).toBeTruthy();
-  });
-
-  it('hides overlay after acknowledgment', () => {
-    const { useMatStore } = require('@/stores/matStore');
-    useMatStore.setState({ dataSource: 'simulated', simulationAcknowledged: true });
-
-    const { MATScreen } = require('@/screens/MATScreen');
-    const { queryByText } = render(
-      <ThemeProvider>
-        <MATScreen />
-      </ThemeProvider>,
-    );
-    expect(queryByText('I UNDERSTAND')).toBeNull();
+    const view = render(<ThemeProvider><MATScreen /></ThemeProvider>);
+    expect(view.queryByText('Training Scenario')).toBeNull();
+    expect(view.queryByText('SIMULATED DATA')).toBeNull();
+    expect(useMatStore.getState().survivors).toEqual([]);
+    await waitFor(() => expect(mockFetchSnapshot).toHaveBeenCalled());
   });
 });

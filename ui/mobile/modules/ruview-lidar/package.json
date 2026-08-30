@@ -1,0 +1,12 @@
+{
+  "name": "@ruview/ruview-lidar",
+  "version": "0.1.0",
+  "description": "Bounded ARKit and RoomPlan capture for RuView commissioning",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "private": true,
+  "peerDependencies": {
+    "expo": "*",
+    "react-native": "*"
+  }
+}

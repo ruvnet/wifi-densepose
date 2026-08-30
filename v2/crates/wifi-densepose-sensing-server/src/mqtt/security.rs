@@ -36,11 +36,8 @@ pub const MAX_PUBLISH_BYTES: usize = 32 * 1024;
 
 /// Reject characters that have MQTT-wildcard or NUL meaning.
 pub fn topic_segment_is_safe(s: &str) -> bool {
-    !s.is_empty()
-        && !s.contains('+')
-        && !s.contains('#')
-        && !s.contains('\0')
-        && !s.contains('/')   // segments must not embed separators
+    !s.is_empty() && !s.contains('+') && !s.contains('#') && !s.contains('\0') && !s.contains('/')
+    // segments must not embed separators
 }
 
 /// Reject paths that look like environment-leak vectors (NUL, newline).
@@ -81,7 +78,9 @@ pub fn audit(cfg: &MqttConfig) -> Result<(), MqttConfigError> {
     }
 
     // Path safety.
-    if let Some(p) = &cfg.password { let _ = p; }
+    if let Some(p) = &cfg.password {
+        let _ = p;
+    }
     if let Some(client_id) = Some(&cfg.client_id) {
         if !topic_segment_is_safe(client_id) {
             return Err(MqttConfigError::EmptyHost); // reuse: replace once dedicated variant added
@@ -89,9 +88,11 @@ pub fn audit(cfg: &MqttConfig) -> Result<(), MqttConfigError> {
     }
 
     // Topic prefix safety.
-    if !cfg.discovery_prefix.chars().all(|c| {
-        c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '/'
-    }) {
+    if !cfg
+        .discovery_prefix
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '/')
+    {
         return Err(MqttConfigError::EmptyHost);
     }
 

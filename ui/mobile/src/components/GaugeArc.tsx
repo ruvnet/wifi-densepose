@@ -16,7 +16,7 @@ type GaugeArcProps = {
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
-const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+const clamp = (value: number, min: number, max: number) => Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : min;
 
 export const GaugeArc = ({ value, min = 0, max, label, unit, color, colorTo, size = 140 }: GaugeArcProps) => {
   const radius = (size - 20) / 2;
@@ -57,7 +57,7 @@ export const GaugeArc = ({ value, min = 0, max, label, unit, color, colorTo, siz
   });
 
   return (
-    <View style={styles.wrapper}>
+    <View style={styles.wrapper} accessibilityRole="summary" accessibilityLabel={`${label}: ${displayValue}`}>
       <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         <G transform={`rotate(-135 ${size / 2} ${size / 2})`}>
           <Circle

@@ -96,7 +96,9 @@ pub struct TicketStore {
 impl std::fmt::Debug for TicketStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let n = self.inner.lock().map(|m| m.len()).unwrap_or(0);
-        f.debug_struct("TicketStore").field("outstanding", &n).finish()
+        f.debug_struct("TicketStore")
+            .field("outstanding", &n)
+            .finish()
     }
 }
 
@@ -173,10 +175,12 @@ fn prune(map: &mut HashMap<String, Entry>) {
 
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
-    bytes.iter().fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
-        s
-    })
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
 }
 
 /// Extract `ticket` from a raw query string.
@@ -248,7 +252,10 @@ mod tests {
             let mut map = store.inner.lock().unwrap();
             map.get_mut(&t).unwrap().expires_at = Instant::now() - Duration::from_secs(1);
         }
-        assert!(store.consume(&t).is_none(), "expired ticket must be refused");
+        assert!(
+            store.consume(&t).is_none(),
+            "expired ticket must be refused"
+        );
         assert_eq!(store.outstanding(), 0, "and must not linger");
     }
 
@@ -273,7 +280,10 @@ mod tests {
             subject: Some("u".into()),
         };
         let t = store.issue(g.clone()).unwrap();
-        assert_eq!(store.consume(&t).unwrap().scopes.as_deref(), Some("sensing:read"));
+        assert_eq!(
+            store.consume(&t).unwrap().scopes.as_deref(),
+            Some("sensing:read")
+        );
     }
 
     #[test]
@@ -360,7 +370,10 @@ mod tests {
 
     #[test]
     fn parses_a_ticket_from_a_query_string() {
-        assert_eq!(ticket_from_query("ticket=abc123").as_deref(), Some("abc123"));
+        assert_eq!(
+            ticket_from_query("ticket=abc123").as_deref(),
+            Some("abc123")
+        );
         assert_eq!(
             ticket_from_query("foo=1&ticket=abc123&bar=2").as_deref(),
             Some("abc123")

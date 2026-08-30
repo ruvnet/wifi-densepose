@@ -2,7 +2,7 @@ import { View } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
 import { colors } from '@/theme/colors';
 import { spacing } from '@/theme/spacing';
-import { AlertPriority, type Alert } from '@/types/mat';
+import type { Alert } from '@/types/mat';
 
 type SeverityLevel = 'URGENT' | 'HIGH' | 'NORMAL';
 
@@ -17,7 +17,7 @@ type SeverityMeta = {
 };
 
 const resolveSeverity = (alert: Alert): SeverityMeta => {
-  if (alert.priority === AlertPriority.Critical) {
+  if (alert.priority === 'Critical') {
     return {
       label: 'URGENT',
       icon: '‼',
@@ -25,7 +25,7 @@ const resolveSeverity = (alert: Alert): SeverityMeta => {
     };
   }
 
-  if (alert.priority === AlertPriority.High) {
+  if (alert.priority === 'High') {
     return {
       label: 'HIGH',
       icon: '⚠',

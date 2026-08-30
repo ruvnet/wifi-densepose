@@ -40,6 +40,7 @@ mod gateway;
 mod hap;
 mod plugins;
 mod restore;
+mod ruview_ingest;
 use gateway::{GatewayConfig, GatewayState};
 
 /// Compile-time default location of the HOMECORE-UI assets (ADR-131).
@@ -47,7 +48,7 @@ use gateway::{GatewayConfig, GatewayState};
 /// `HOMECORE_UI_DIR`.
 const DEFAULT_UI_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/ui");
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Clone)]
 #[command(name = "homecore-server", version)]
 struct Cli {
     /// Bind address for the HA-compat REST + WS API.
@@ -177,6 +178,44 @@ struct Cli {
         default_value = ".homecore/hap/pairings.json"
     )]
     hap_pairing_store: std::path::PathBuf,
+
+    /// Opt in to privacy-bounded RuView semantic/vitals ingestion. Disabled by
+    /// default; requires a node id and least-privilege read token.
+    #[arg(long, env = "HOMECORE_RUVIEW_INGEST", default_value_t = false)]
+    ruview_ingest: bool,
+
+    /// RuView sensing-server origin. Only the per-node semantic-events and
+    /// vitals projection endpoints are requested.
+    #[arg(
+        long,
+        env = "HOMECORE_RUVIEW_URL",
+        default_value = "http://127.0.0.1:3000"
+    )]
+    ruview_url: String,
+
+    /// Exact RuView node identifier to ingest.
+    #[arg(long, env = "HOMECORE_RUVIEW_NODE_ID")]
+    ruview_node_id: Option<String>,
+
+    /// Least-privilege RuView sensing read token. Never logged.
+    #[arg(long, env = "HOMECORE_RUVIEW_TOKEN", hide_env_values = true)]
+    ruview_token: Option<String>,
+
+    /// Poll interval for the bounded RuView projection endpoints.
+    #[arg(long, env = "HOMECORE_RUVIEW_POLL_MS", default_value_t = 1_000)]
+    ruview_poll_ms: u64,
+
+    /// Per-request RuView timeout.
+    #[arg(long, env = "HOMECORE_RUVIEW_TIMEOUT_MS", default_value_t = 2_000)]
+    ruview_timeout_ms: u64,
+
+    /// Maximum accepted age of RuView evidence.
+    #[arg(
+        long,
+        env = "HOMECORE_RUVIEW_MAX_STALENESS_MS",
+        default_value_t = 10_000
+    )]
+    ruview_max_staleness_ms: u64,
 }
 
 #[tokio::main]
@@ -213,6 +252,26 @@ async fn main() -> Result<()> {
     // ── 1. HomeCore runtime ─────────────────────────────────────────
     let hc = HomeCore::new();
     info!("HomeCore state machine + event bus + service registry online");
+
+    let ruview_config = if cli.ruview_ingest {
+        let node_id = cli.ruview_node_id.take().ok_or_else(|| {
+            anyhow::anyhow!("--ruview-node-id is required when RuView ingest is enabled")
+        })?;
+        let token = cli.ruview_token.take().ok_or_else(|| {
+            anyhow::anyhow!("--ruview-token is required when RuView ingest is enabled")
+        })?;
+        Some(ruview_ingest::RuViewIngestConfig::validate(
+            &cli.ruview_url,
+            node_id,
+            token,
+            std::time::Duration::from_millis(cli.ruview_poll_ms),
+            std::time::Duration::from_millis(cli.ruview_timeout_ms),
+            std::time::Duration::from_millis(cli.ruview_max_staleness_ms),
+        )?)
+    } else {
+        info!("RuView semantic ingest disabled (use --ruview-ingest to opt in)");
+        None
+    };
 
     let recorder = if cli.no_recorder {
         None
@@ -325,6 +384,7 @@ async fn main() -> Result<()> {
         "Assist intent endpoint ready with {} handlers",
         assist.handler_count()
     );
+    let ruview_runtime = ruview_config.map(|config| ruview_ingest::start(hc.clone(), config));
     let hap_runtime = hap::start(
         &hc,
         hap::HapRuntimeConfig {
@@ -388,6 +448,9 @@ async fn main() -> Result<()> {
             info!("Shutdown requested; draining active HTTP connections");
         })
         .await?;
+    if let Some(runtime) = ruview_runtime {
+        runtime.shutdown().await;
+    }
     hap_runtime.shutdown().await?;
     server_plugins.shutdown().await;
     Ok(())
@@ -720,6 +783,14 @@ mod ui_tests {
     use homecore::HomeCore;
     use homecore_api::{LongLivedTokenStore, SharedState};
     use tower::ServiceExt; // for `oneshot`
+
+    #[test]
+    fn ruview_ingest_is_explicitly_disabled_by_default() {
+        let cli = Cli::try_parse_from(["homecore-server"]).unwrap();
+        assert!(!cli.ruview_ingest);
+        assert!(cli.ruview_node_id.is_none());
+        assert!(cli.ruview_token.is_none());
+    }
 
     fn test_state() -> SharedState {
         SharedState::with_tokens(

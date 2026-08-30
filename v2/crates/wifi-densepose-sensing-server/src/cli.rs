@@ -364,15 +364,22 @@ mod tests {
         let args = Args::parse_from([
             "sensing-server",
             "--mqtt",
-            "--mqtt-host", "broker.example.com",
-            "--mqtt-port", "8883",
-            "--mqtt-username", "ruview",
-            "--mqtt-prefix", "homeassistant",
+            "--mqtt-host",
+            "broker.example.com",
+            "--mqtt-port",
+            "8883",
+            "--mqtt-username",
+            "ruview",
+            "--mqtt-prefix",
+            "homeassistant",
             "--mqtt-tls",
-            "--mqtt-refresh-secs", "300",
-            "--mqtt-rate-vitals", "0.5",
+            "--mqtt-refresh-secs",
+            "300",
+            "--mqtt-rate-vitals",
+            "0.5",
             "--mqtt-publish-pose",
-            "--mqtt-rate-pose", "2.0",
+            "--mqtt-rate-pose",
+            "2.0",
             "--privacy-mode",
         ]);
         assert!(args.mqtt);
@@ -391,9 +398,12 @@ mod tests {
     fn no_semantic_repeatable() {
         let args = Args::parse_from([
             "sensing-server",
-            "--no-semantic", "sleeping",
-            "--no-semantic", "meeting",
-            "--no-semantic", "fall_risk",
+            "--no-semantic",
+            "sleeping",
+            "--no-semantic",
+            "meeting",
+            "--no-semantic",
+            "fall_risk",
         ]);
         assert_eq!(args.no_semantic, vec!["sleeping", "meeting", "fall_risk"]);
     }

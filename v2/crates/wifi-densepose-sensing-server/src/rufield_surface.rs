@@ -1,11 +1,13 @@
 //! ADR-262 **P3** — the live RuField surface.
 //!
 //! This is the data-path wiring that turns RuView's governed sensing cycle into
-//! signed RuField [`FieldEvent`]s on two **additive** network endpoints:
+//! signed RuField [`FieldEvent`]s on three **additive** network endpoints:
 //!
 //! - `GET /api/field`  — the most recent surfaced `FieldEvent`(s) as JSON;
 //! - `GET /ws/field`   — a WebSocket that streams each cycle's `FieldEvent`
 //!   (mirrors the `/ws/sensing` broadcast-subscribe pattern).
+//! - `GET /ws/lidar`   — an admin-scoped native ingest that immediately
+//!   reduces explicitly exported Apple depth to a signed P1 summary.
 //!
 //! It is purely additive: `/ws/sensing` and every existing endpoint are
 //! unchanged. The conversion itself lives entirely in the P1
@@ -45,8 +47,9 @@ use tokio::sync::{broadcast, RwLock};
 // Re-export the bridge input types `main.rs` needs to build a snapshot, so the
 // server-side call site depends only on `rufield_surface` (the server seam).
 pub use wifi_densepose_rufield::{
-    network_egress_allowed, snapshot_to_field_event, FieldEvent, RuViewPrivacyClass,
-    SensingClass, SensingFeatures, SensingSnapshot, Signer, SignalField,
+    lidar_packet_to_field_event, network_egress_allowed, snapshot_to_field_event, FieldEvent,
+    LidarBridgeError, LidarDepthPacket, RuViewPrivacyClass, SensingClass, SensingFeatures,
+    SensingSnapshot, SignalField, Signer,
 };
 
 /// How many recent surfaced `FieldEvent`s the ring buffer retains. Small and
@@ -58,6 +61,9 @@ pub const FIELD_RING_CAPACITY: usize = 64;
 /// channel size (256) so a slow field client drops messages rather than
 /// stalling the sensing loop.
 pub const FIELD_BROADCAST_CAPACITY: usize = 256;
+
+/// Maximum serialized LiDAR ingest message accepted from a native client.
+pub const MAX_LIDAR_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
 
 /// Environment variable carrying the 32-byte hex/raw signing seed for the
 /// dedicated RuField sensing signer. When unset, a deterministic dev default is
@@ -107,7 +113,10 @@ impl FieldSurface {
     /// key.
     #[must_use]
     pub fn from_env() -> Self {
-        match std::env::var(SIGNING_SEED_ENV).ok().and_then(|v| parse_seed(&v)) {
+        match std::env::var(SIGNING_SEED_ENV)
+            .ok()
+            .and_then(|v| parse_seed(&v))
+        {
             Some(seed) => {
                 tracing::info!(
                     "ADR-262 P3: RuField surface using signing seed from {SIGNING_SEED_ENV} \
@@ -185,15 +194,33 @@ impl FieldSurface {
             return None;
         }
 
+        self.publish(event.clone());
+        Some(event)
+    }
+
+    /// Normalize an explicitly exported Apple depth packet and publish only a
+    /// signed P1 visible-geometry summary. Raw depth is not retained.
+    pub fn emit_lidar(
+        &mut self,
+        packet: &LidarDepthPacket,
+    ) -> Result<FieldEvent, LidarBridgeError> {
+        let event = lidar_packet_to_field_event(packet, &self.signer)?;
+        debug_assert!(network_egress_allowed(
+            event.observation.privacy_class,
+            false
+        ));
+        self.publish(event.clone());
+        Ok(event)
+    }
+
+    fn publish(&mut self, event: FieldEvent) {
         if self.recent.len() == FIELD_RING_CAPACITY {
             self.recent.pop_front();
         }
         self.recent.push_back(event.clone());
-
         if let Ok(json) = serde_json::to_string(&event) {
             let _ = self.tx.send(json);
         }
-        Some(event)
     }
 }
 
@@ -307,6 +334,52 @@ pub async fn ws_field(ws: WebSocketUpgrade, State(state): State<FieldState>) -> 
     ws.on_upgrade(move |socket| handle_ws_field_client(socket, rx))
 }
 
+/// `GET /ws/lidar` — authenticated native ingest for explicit per-session
+/// export. `bearer_auth` treats this write stream as `sensing:admin`.
+pub async fn ws_lidar(ws: WebSocketUpgrade, State(state): State<FieldState>) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_ws_lidar_client(socket, state))
+}
+
+async fn handle_ws_lidar_client(mut socket: WebSocket, state: FieldState) {
+    while let Some(message) = socket.recv().await {
+        let Ok(message) = message else { break };
+        match message {
+            Message::Text(text) if text.len() <= MAX_LIDAR_MESSAGE_BYTES => {
+                let result = serde_json::from_str::<LidarDepthPacket>(&text)
+                    .map_err(|_| "invalid_json")
+                    .and_then(|packet| {
+                        state
+                            .try_write()
+                            .map_err(|_| "busy")?
+                            .emit_lidar(&packet)
+                            .map(|event| event.event_id)
+                            .map_err(|_| "invalid_lidar")
+                    });
+                let reply = match result {
+                    Ok(event_id) => serde_json::json!({"type":"lidar_ack","event_id":event_id}),
+                    Err(reason) => serde_json::json!({"type":"lidar_rejected","reason":reason}),
+                };
+                if socket.send(Message::Text(reply.to_string())).await.is_err() {
+                    break;
+                }
+            }
+            Message::Text(_) | Message::Binary(_) => {
+                let _ = socket.send(Message::Text(
+                    serde_json::json!({"type":"lidar_rejected","reason":"message_too_large_or_binary"}).to_string()
+                )).await;
+                break;
+            }
+            Message::Close(_) => break,
+            Message::Ping(bytes) => {
+                if socket.send(Message::Pong(bytes)).await.is_err() {
+                    break;
+                }
+            }
+            Message::Pong(_) => {}
+        }
+    }
+}
+
 async fn handle_ws_field_client(mut socket: WebSocket, mut rx: broadcast::Receiver<String>) {
     // Forward broadcast events; exit on client close or fatal lag.
     loop {
@@ -334,6 +407,7 @@ pub fn router(state: FieldState) -> axum::Router {
     axum::Router::new()
         .route("/api/field", get(api_field))
         .route("/ws/field", get(ws_field))
+        .route("/ws/lidar", get(ws_lidar))
         .with_state(state)
 }
 
@@ -390,7 +464,10 @@ mod tests {
         );
         let ev = surface.emit(&snap).expect("anonymous P2 cycle is surfaced");
         assert_eq!(ev.observation.privacy_class, PrivacyClass::P2);
-        assert!(is_fusable(&ev), "live event must be ed25519-signed & fusable");
+        assert!(
+            is_fusable(&ev),
+            "live event must be ed25519-signed & fusable"
+        );
         assert_eq!(surface.recent().len(), 1);
     }
 
@@ -415,7 +492,10 @@ mod tests {
                 "Derived cycle (identity_bound={identity_bound}) must be held edge-local"
             );
         }
-        assert!(surface.recent().is_empty(), "no Derived event may reach the surface");
+        assert!(
+            surface.recent().is_empty(),
+            "no Derived event may reach the surface"
+        );
     }
 
     #[test]

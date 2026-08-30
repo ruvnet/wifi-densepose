@@ -57,4 +57,16 @@ describe('LiveScreen', () => {
     // The screen shows "Loading live renderer" when not ready
     expect(getByText('Loading live renderer')).toBeTruthy();
   });
+
+  it('fails closed when raw transient histograms are unavailable', () => {
+    const { LiveScreen } = require('@/screens/LiveScreen');
+    const { getByText } = render(
+      <ThemeProvider>
+        <LiveScreen />
+      </ThemeProvider>,
+    );
+    expect(getByText('CO-RENDERED / NOT FUSED')).toBeTruthy();
+    expect(getByText('CSI SIM · 0 NODES')).toBeTruthy();
+    expect(getByText('TRANSIENT/SPAD BLOCKED · RAW PHOTON HISTOGRAMS REQUIRED')).toBeTruthy();
+  });
 });

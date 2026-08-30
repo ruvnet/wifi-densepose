@@ -5,20 +5,17 @@
 //!
 //! This crate is the **single coupling point** (ADR-262 §5.4) between RuView and
 //! the standalone RuField MFS spec (`vendor/rufield`, ADR-260). It depends on
-//! the four pure-Rust rufield crates **via path** — `rufield-core`,
-//! `-provenance`, `-privacy`, `-fusion` — and on **no** RuView internal crate.
-//! Inputs are owned primitives ([`SensingSnapshot`]) that mirror what RuView's
-//! sensing cycle produces, so the bridge never imports `SensingUpdate` /
-//! `TrustedOutput` directly.
+//! the four pure-Rust RuField crates **via path** and, for hardware modalities,
+//! on RuView's canonical HAL/ontology boundary. CSI inputs remain owned
+//! primitives ([`SensingSnapshot`]); Apple depth is decoded as a bounded
+//! [`LidarDepthPacket`] and must pass the HAL before becoming a P1 summary.
 //!
 //! ## What P1 ships (honesty — ADR-262 §0 / §6)
 //!
-//! This is **P1 plumbing**: a tested `SensingSnapshot → FieldEvent` conversion
-//! plus the **fail-closed privacy mapping** that is the §3.3 correctness item.
-//! It is **not** wired into the live server (that is P3) and makes **no accuracy
-//! claim** — RuField v0.1 is synthetic end-to-end and RuView's single-link CSI
-//! carries its own caveats. The gates here are round-trip / fusability /
-//! privacy-safety / determinism, not validated F1.
+//! This provides tested `SensingSnapshot → FieldEvent` and
+//! `LidarDepthPacket → HAL → FieldEvent` conversions plus fail-closed privacy
+//! mapping. The live server wires them to governed surfaces. No localization or
+//! NLOS accuracy claim follows from this plumbing.
 //!
 //! ## The critical correctness item: the privacy mapping (§3.3)
 //!
@@ -69,10 +66,12 @@
 #![forbid(unsafe_code)]
 
 pub mod bridge;
+pub mod lidar;
 pub mod privacy;
 pub mod snapshot;
 
 pub use bridge::{snapshot_egress_class, snapshot_to_field_event};
+pub use lidar::{lidar_packet_to_field_event, LidarBridgeError, LidarDepthPacket};
 pub use privacy::{apply_demotion_floor, egress_class, map_privacy};
 pub use snapshot::{
     RuViewPrivacyClass, SensingClass, SensingFeatures, SensingSnapshot, SignalField,

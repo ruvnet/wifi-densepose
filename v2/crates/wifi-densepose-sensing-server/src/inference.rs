@@ -153,7 +153,11 @@ where
     }
 
     let (class, weight, conf_weight) = best.expect("contributing > 0 guarantees a winner");
-    let confidence = if weight > 0.0 { clamp01(conf_weight / weight) } else { 0.0 };
+    let confidence = if weight > 0.0 {
+        clamp01(conf_weight / weight)
+    } else {
+        0.0
+    };
     RoomInference {
         classification: class.to_string(),
         confidence,
@@ -185,7 +189,10 @@ mod tests {
     fn new_clamps_confidence() {
         assert_eq!(NodeInference::new("absent", 1.7, Some(0)).confidence, 1.0);
         assert_eq!(NodeInference::new("absent", -0.5, Some(0)).confidence, 0.0);
-        assert_eq!(NodeInference::new("absent", f64::NAN, Some(0)).confidence, 0.0);
+        assert_eq!(
+            NodeInference::new("absent", f64::NAN, Some(0)).confidence,
+            0.0
+        );
     }
 
     #[test]
@@ -225,7 +232,10 @@ mod tests {
     #[test]
     fn migration_accessor_matches_single_node_fusion() {
         let n = node("present_still", 0.6, 250);
-        assert_eq!(RoomInference::from_single_node(&n, STALE), fuse_room([&n], STALE));
+        assert_eq!(
+            RoomInference::from_single_node(&n, STALE),
+            fuse_room([&n], STALE)
+        );
     }
 
     // ── Deterministic, order-independent fusion ──────────────────────────

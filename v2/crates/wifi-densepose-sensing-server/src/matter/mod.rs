@@ -34,7 +34,5 @@ mod clusters;
 mod commissioning;
 
 pub use bridge::{build_bridge_tree, BridgeTree, Endpoint, EndpointRef, NodeBranch};
-pub use clusters::{
-    matter_mapping, ClusterId, EndpointTypeId, MatterClusterMapping,
-};
+pub use clusters::{matter_mapping, ClusterId, EndpointTypeId, MatterClusterMapping};
 pub use commissioning::{DecodedManualCode, ManualPairingCode, SetupCodeInput};

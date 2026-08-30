@@ -15,12 +15,138 @@
 //! SYNTHETIC / L0: they prove the abstraction, not a fielded device, and make
 //! no MEASURED claim (CLAUDE.md; ADR-320 "Category and honesty discipline").
 
-use ruview_ontology::{Container, EvidenceLevel, Observation, ObservationId, SemanticProvenance, SensorId};
+use ruview_ontology::{
+    Container, EvidenceLevel, Observation, ObservationId, SemanticProvenance, SensorId,
+};
 
 use crate::descriptor::{SamplingSpec, SensorDescriptor};
 use crate::label::CapabilityTag;
 use crate::modality::Modality;
 use crate::observation::{HalObservation, Uncertainty};
+
+/// Maximum number of depth pixels accepted from one Apple scene-depth packet.
+/// The mobile producer currently sends 128×96; this larger bound leaves room
+/// for future devices while keeping hostile allocation and compute bounded.
+pub const MAX_LIDAR_DEPTH_SAMPLES: usize = 262_144;
+
+/// One native ARKit scene-depth sample. Values remain in the device's native
+/// millimetre/confidence representation until this HAL boundary validates them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AppleLidarDepthSample {
+    /// Downsampled depth image width.
+    pub width: u32,
+    /// Downsampled depth image height.
+    pub height: u32,
+    /// Little-endian values decoded by the wire boundary, in millimetres.
+    pub millimeters: Vec<u16>,
+    /// ARKit confidence values (`0`, `1`, or `2`), one per depth value.
+    pub confidences: Vec<u8>,
+    /// Camera intrinsics in column-major order.
+    pub intrinsics: [f32; 9],
+    /// Camera-to-world transform in column-major order.
+    pub camera_transform: [f32; 16],
+    /// Content-addressed evidence handle over the received packet bytes.
+    pub evidence_hash: String,
+}
+
+/// Normalizes an authenticated Apple ARKit scene-depth stream. A valid frame
+/// is L2 single-surface evidence: it measures directly visible surfaces only
+/// and does not establish person presence or any NLOS fact.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppleLidarDepthAdapter {
+    /// Authenticated ontology sensor identity.
+    pub sensor_id: SensorId,
+    /// Spatial calibration artifact/digest active for this capture.
+    pub calibration_version: String,
+}
+
+impl SensorHal for AppleLidarDepthAdapter {
+    type Raw = AppleLidarDepthSample;
+
+    fn describe(&self) -> SensorDescriptor {
+        SensorDescriptor {
+            sensor_id: self.sensor_id.clone(),
+            modality: Modality::Lidar,
+            capabilities: vec![
+                CapabilityTag::new("direct-depth").expect("static tag is valid"),
+                CapabilityTag::new("confidence").expect("static tag is valid"),
+                CapabilityTag::new("world-pose").expect("static tag is valid"),
+            ],
+            sampling: SamplingSpec {
+                sample_rate_hz: None,
+                unit: "millimeters".to_string(),
+                dimensions: 0,
+            },
+        }
+    }
+
+    fn normalize(&self, raw: Self::Raw, ctx: &NormalizeCtx) -> HalObservation {
+        let expected = usize::try_from(raw.width).ok().and_then(|w| {
+            usize::try_from(raw.height)
+                .ok()
+                .and_then(|h| w.checked_mul(h))
+        });
+        let finite_geometry = raw
+            .intrinsics
+            .iter()
+            .chain(raw.camera_transform.iter())
+            .all(|v| v.is_finite());
+        let malformed = expected.is_none()
+            || expected == Some(0)
+            || expected.is_some_and(|count| count > MAX_LIDAR_DEPTH_SAMPLES)
+            || expected != Some(raw.millimeters.len())
+            || raw.confidences.len() != raw.millimeters.len()
+            || raw.confidences.iter().any(|&value| value > 2)
+            || !finite_geometry
+            || raw.evidence_hash.is_empty()
+            || self.calibration_version.is_empty();
+
+        let valid_count = raw
+            .millimeters
+            .iter()
+            .zip(&raw.confidences)
+            .filter(|(millimeters, confidence)| {
+                **millimeters >= 150 && **millimeters <= 12_000 && **confidence >= 1
+            })
+            .count();
+        let confidence = expected
+            .filter(|&count| count > 0)
+            .map(|count| valid_count as f64 / count as f64)
+            .unwrap_or(0.0);
+
+        let observation = Observation {
+            id: ctx.observation_id.clone(),
+            sensor: self.sensor_id.clone(),
+            located_in: ctx.located_in.clone(),
+            at_unix_ms: ctx.at_unix_ms,
+            evidence_level: if malformed {
+                EvidenceLevel::L0
+            } else {
+                EvidenceLevel::L2
+            },
+            provenance: SemanticProvenance {
+                evidence: if malformed {
+                    Vec::new()
+                } else {
+                    vec![raw.evidence_hash]
+                },
+                model_version: "apple-arkit-scene-depth@1".to_string(),
+                calibration_version: self.calibration_version.clone(),
+                privacy_decision: "p1-derived-visible-geometry".to_string(),
+            },
+        };
+
+        HalObservation {
+            modality: Modality::Lidar,
+            uncertainty: if malformed || valid_count == 0 {
+                Uncertainty::degraded()
+            } else {
+                Uncertainty::known(confidence)
+            },
+            observation,
+        }
+    }
+}
 
 /// Injected context a HAL adapter needs to build a canonical observation.
 ///
@@ -136,7 +262,8 @@ impl SensorHal for SyntheticCsiAdapter {
     }
 
     fn normalize(&self, raw: Self::Raw, ctx: &NormalizeCtx) -> HalObservation {
-        let observation = synthetic_observation(self.sensor_id.clone(), ctx, "synthetic-csi-adapter@0");
+        let observation =
+            synthetic_observation(self.sensor_id.clone(), ctx, "synthetic-csi-adapter@0");
 
         // Boundary validation: empty, mismatched, over-bounded, or non-finite
         // input degrades to UNKNOWN rather than panicking or fabricating a
@@ -206,9 +333,14 @@ impl SensorHal for SyntheticImuAdapter {
     }
 
     fn normalize(&self, raw: Self::Raw, ctx: &NormalizeCtx) -> HalObservation {
-        let observation = synthetic_observation(self.sensor_id.clone(), ctx, "synthetic-imu-adapter@0");
+        let observation =
+            synthetic_observation(self.sensor_id.clone(), ctx, "synthetic-imu-adapter@0");
 
-        let finite = raw.accel.iter().chain(raw.gyro.iter()).all(|v| v.is_finite());
+        let finite = raw
+            .accel
+            .iter()
+            .chain(raw.gyro.iter())
+            .all(|v| v.is_finite());
 
         let uncertainty = if !finite {
             Uncertainty::degraded()

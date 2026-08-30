@@ -2,7 +2,7 @@ import { View } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
 import { colors } from '@/theme/colors';
 import { spacing } from '@/theme/spacing';
-import { valueToColor } from '@/utils/colorMap';
+import { instrumentColors } from '@/components/InstrumentPanel';
 
 type LegendStop = {
   label: string;
@@ -10,17 +10,12 @@ type LegendStop = {
 };
 
 const LEGEND_STOPS: LegendStop[] = [
-  { label: 'Quiet', color: colorToRgba(0) },
-  { label: 'Low', color: colorToRgba(0.25) },
-  { label: 'Medium', color: colorToRgba(0.5) },
-  { label: 'High', color: colorToRgba(0.75) },
-  { label: 'Active', color: colorToRgba(1) },
+  { label: 'Quiet', color: '#07151B' },
+  { label: 'Trace', color: '#116A76' },
+  { label: 'Medium', color: instrumentColors.cyan },
+  { label: 'Strong', color: '#23D89B' },
+  { label: 'Peak', color: instrumentColors.green },
 ];
-
-function colorToRgba(value: number): string {
-  const [r, g, b] = valueToColor(value);
-  return `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, 1)`;
-}
 
 export const ZoneLegend = () => {
   return (

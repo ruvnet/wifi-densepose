@@ -43,15 +43,25 @@ origin preference and requires two failed configured probes plus two healthy
 fallback probes before switching. Credentials remain scoped to their saved
 origin.
 
+When `--installation-id` is configured, the server returns that same bounded,
+non-secret value as `installation_id` from public `/api/v1/status`. A recovered
+route is eligible only when its discovery value, status value, and the mobile
+client's previously pinned installation identity match. Omitting the status
+identity while advertising one is a contract failure, not a degraded success.
+
 The recovery ladder is:
 
 1. configured private-LAN or HTTPS origin;
-2. verified Bonjour local origin;
-3. physically qualified Apple peer-to-peer local path;
-4. explicit, authenticated HTTPS relay for bounded derived frames only;
-5. optional administrator-managed WireGuard/Tailscale access.
+2. low-rate authenticated `/api/v1/sensing/latest` snapshots at that same
+   verified authority when only WebSocket delivery is unavailable (mobile
+   presentation only; never full-rate training or calibration);
+3. verified Bonjour local origin;
+4. physically qualified Apple peer-to-peer local path;
+5. explicit, authenticated HTTPS relay for bounded derived frames only;
+6. optional administrator-managed WireGuard/Tailscale access.
 
-Only levels 1 and 2 are implemented and software-validated by this decision.
+Levels 1 through 3 are implemented and software-validated by this decision and
+the paired mobile ADR.
 Peer-to-peer browsing is enabled on Apple platforms, but it is not a qualified
 peer-link data plane. This repository does not provide a hosted relay and must
 fail closed when no local endpoint is healthy.

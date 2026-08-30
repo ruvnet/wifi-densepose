@@ -232,6 +232,41 @@ describe('WsService', () => {
         globalThis.WebSocket = OrigWebSocket;
       }
     });
+
+    it('does not replace the screen with partial edge-vitals events', () => {
+      const OrigWebSocket = globalThis.WebSocket;
+      const sockets: any[] = [];
+
+      class MockWebSocket {
+        static OPEN = 1;
+        static CONNECTING = 0;
+        readyState = 0;
+        onopen: (() => void) | null = null;
+        onclose: (() => void) | null = null;
+        onerror: (() => void) | null = null;
+        onmessage: ((event: { data: string }) => void) | null = null;
+        close() {}
+        constructor() { sockets.push(this); }
+      }
+
+      globalThis.WebSocket = MockWebSocket as any;
+      try {
+        const ws = createWsService();
+        const listener = jest.fn();
+        ws.subscribe(listener);
+        ws.connect('http://localhost:3000');
+        sockets[0].onopen?.();
+
+        sockets[0].onmessage?.({ data: JSON.stringify({
+          type: 'edge_vitals', node_id: 7, breathing_rate_bpm: 18, heartrate_bpm: 72,
+        }) });
+
+        expect(listener).not.toHaveBeenCalled();
+        ws.disconnect();
+      } finally {
+        globalThis.WebSocket = OrigWebSocket;
+      }
+    });
   });
 
   describe('subscribe and unsubscribe', () => {

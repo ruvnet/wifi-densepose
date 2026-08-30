@@ -7,7 +7,7 @@ import {
   type NlosTrackFrame,
 } from '@/types/nlos';
 import { parseNlosTrackFrame, utf8ByteLength } from './nlos.validation';
-import { normalizeNlosServerUrl } from '@/utils/nlosServerUrl';
+import { isPrivateLanHost, normalizeNlosServerUrl } from '@/utils/nlosServerUrl';
 
 export const NLOS_WS_TICKET_PATH = '/api/v1/nlos/ws-ticket';
 export const NLOS_TICKET_SCHEMA = 'ruview.nlos.ws-ticket.v1' as const;
@@ -125,16 +125,12 @@ const parseWebSocketUrl = (raw: string, serverUrl: URL): string | null => {
   try {
     const url = new URL(raw);
     const secure = url.protocol === 'wss:';
-    const loopback = url.protocol === 'ws:' &&
-      (url.hostname === 'localhost' ||
-        url.hostname === '127.0.0.1' ||
-        url.hostname === '[::1]' ||
-        url.hostname === '::1');
+    const localInstallation = url.protocol === 'ws:' && isPrivateLanHost(url.hostname);
     const expectedProtocol = serverUrl.protocol === 'https:' ? 'wss:' : 'ws:';
     const ticketKeys = Array.from(url.searchParams.keys());
     const ticket = url.searchParams.get('ticket');
     if (
-      (!secure && !loopback) ||
+      (!secure && !localInstallation) ||
       url.protocol !== expectedProtocol ||
       url.hostname !== serverUrl.hostname ||
       effectivePort(url) !== effectivePort(serverUrl) ||

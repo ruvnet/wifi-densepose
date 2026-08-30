@@ -1,5 +1,5 @@
 {
-  "name": "mobile",
+  "name": "ruview-mobile",
   "version": "1.0.0",
   "main": "index.ts",
   "scripts": {
@@ -25,8 +25,13 @@
     "@types/three": "^0.183.1",
     "axios": "^1.15.2",
     "expo": "~55.0.4",
+    "expo-build-properties": "~55.0.17",
+    "expo-crypto": "~55.0.18",
     "expo-font": "~55.0.8",
+    "expo-secure-store": "~55.0.17",
     "expo-status-bar": "~55.0.6",
+    "expo-system-ui": "~55.0.21",
+    "expo-web-browser": "~55.0.19",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "react-native": "0.83.10",

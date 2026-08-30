@@ -83,8 +83,9 @@ mod observation;
 pub const SYNTHETIC_CALIBRATION: &str = "synthetic";
 
 pub use adapter::{
-    synthetic_provenance, CsiSample, ImuSample, NormalizeCtx, SensorHal, SyntheticCsiAdapter,
-    SyntheticImuAdapter, MAX_CSI_TAPS,
+    synthetic_provenance, AppleLidarDepthAdapter, AppleLidarDepthSample, CsiSample, ImuSample,
+    NormalizeCtx, SensorHal, SyntheticCsiAdapter, SyntheticImuAdapter, MAX_CSI_TAPS,
+    MAX_LIDAR_DEPTH_SAMPLES,
 };
 pub use descriptor::{SamplingSpec, SensorDescriptor};
 pub use label::{CapabilityTag, LabelError, MAX_LABEL_LEN};
@@ -117,6 +118,55 @@ mod tests {
         SyntheticImuAdapter {
             sensor_id: SensorId::new("imu-1").unwrap(),
         }
+    }
+
+    fn lidar_adapter() -> AppleLidarDepthAdapter {
+        AppleLidarDepthAdapter {
+            sensor_id: SensorId::new("iphone-lidar-1").unwrap(),
+            calibration_version: "sha256:calibration-1".into(),
+        }
+    }
+
+    #[test]
+    fn apple_lidar_is_l2_visible_surface_evidence() {
+        let observation = lidar_adapter().normalize(
+            AppleLidarDepthSample {
+                width: 2,
+                height: 2,
+                millimeters: vec![1000, 1200, 0, 900],
+                confidences: vec![2, 1, 0, 2],
+                intrinsics: [1.0; 9],
+                camera_transform: [1.0; 16],
+                evidence_hash: "sha256:packet".into(),
+            },
+            &ctx(),
+        );
+        assert_eq!(observation.modality, Modality::Lidar);
+        assert_eq!(observation.evidence_level(), EvidenceLevel::L2);
+        assert!(!observation.is_unknown());
+        assert_eq!(
+            observation.provenance().privacy_decision,
+            "p1-derived-visible-geometry"
+        );
+    }
+
+    #[test]
+    fn malformed_apple_lidar_degrades_without_panicking() {
+        let observation = lidar_adapter().normalize(
+            AppleLidarDepthSample {
+                width: 2,
+                height: 2,
+                millimeters: vec![1000],
+                confidences: vec![3],
+                intrinsics: [1.0; 9],
+                camera_transform: [1.0; 16],
+                evidence_hash: String::new(),
+            },
+            &ctx(),
+        );
+        assert!(observation.is_unknown());
+        assert!(observation.uncertainty.degraded);
+        assert_eq!(observation.evidence_level(), EvidenceLevel::L0);
     }
 
     fn good_csi() -> CsiSample {
@@ -321,10 +371,7 @@ mod tests {
     fn synthetic_cannot_alias_to_measured() {
         let obs = csi_adapter().normalize(good_csi(), &ctx());
         assert!(obs.is_synthetic());
-        assert_eq!(
-            obs.provenance().calibration_version,
-            SYNTHETIC_CALIBRATION
-        );
+        assert_eq!(obs.provenance().calibration_version, SYNTHETIC_CALIBRATION);
         assert!(obs.evidence_level() < EvidenceLevel::L2);
         assert_ne!(obs.evidence_level(), EvidenceLevel::L4);
         assert_ne!(obs.evidence_level(), EvidenceLevel::L5);

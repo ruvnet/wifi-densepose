@@ -20,7 +20,9 @@ pub struct MultiRoomTransition {
 }
 
 impl MultiRoomTransition {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn tick(&mut self, snap: &RawSnapshot, cfg: &PrimitiveConfig) -> PrimitiveState {
         if snap.since_start < cfg.warmup {
@@ -39,7 +41,8 @@ impl MultiRoomTransition {
         }
 
         // Match exit with subsequent entry.
-        if let (Some(entered), Some((from_zone, exit_t))) = (added.first(), self.last_exit.as_ref()) {
+        if let (Some(entered), Some((from_zone, exit_t))) = (added.first(), self.last_exit.as_ref())
+        {
             let gap = snap.since_start.saturating_sub(*exit_t);
             if gap <= cfg.multi_room_gap && from_zone.as_str() != entered.as_str() {
                 let reason = Reason::new(&[
@@ -65,7 +68,9 @@ impl MultiRoomTransition {
 mod tests {
     use super::*;
 
-    fn cfg() -> PrimitiveConfig { PrimitiveConfig::default() }
+    fn cfg() -> PrimitiveConfig {
+        PrimitiveConfig::default()
+    }
 
     fn zones_snap(t_secs: u64, zones: &[&str]) -> RawSnapshot {
         RawSnapshot {

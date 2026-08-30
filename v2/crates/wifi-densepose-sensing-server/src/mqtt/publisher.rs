@@ -31,8 +31,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rumqttc::{
-    AsyncClient, ClientError, EventLoop, MqttOptions, PublishOptions, QoS, Transport,
-    TlsConfiguration,
+    AsyncClient, ClientError, EventLoop, MqttOptions, PublishOptions, QoS, TlsConfiguration,
+    Transport,
 };
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
@@ -129,7 +129,11 @@ fn build_transport(tls: &TlsConfig) -> Transport {
                 });
             }
         }
-        TlsConfig::MutualTls { ca_file, client_cert, client_key } => {
+        TlsConfig::MutualTls {
+            ca_file,
+            client_cert,
+            client_key,
+        } => {
             if let (Some(ca), Some(cert), Some(key)) = (
                 read_pem("CA", ca_file),
                 read_pem("client cert", client_cert),
@@ -154,10 +158,7 @@ struct NodeAvailability {
 
 impl NodeAvailability {
     fn for_builder(b: &DiscoveryBuilder<'_>, entities: &[EntityKind]) -> Self {
-        let online_topics = entities
-            .iter()
-            .map(|e| b.availability_topic(*e))
-            .collect();
+        let online_topics = entities.iter().map(|e| b.availability_topic(*e)).collect();
         Self { online_topics }
     }
 }
@@ -434,13 +435,34 @@ async fn publish_snapshot(
     // (ADR-297, issue #1541) so nodes never starve one another.
     let node = snap.node_id.as_str();
     for (entity, allowed) in [
-        (EntityKind::PersonCount, rl.allow(node, EntityKind::PersonCount, elapsed, &cfg.rates)),
-        (EntityKind::HeartRate, !cfg.privacy_mode && rl.allow(node, EntityKind::HeartRate, elapsed, &cfg.rates)),
-        (EntityKind::BreathingRate, !cfg.privacy_mode && rl.allow(node, EntityKind::BreathingRate, elapsed, &cfg.rates)),
-        (EntityKind::MotionLevel, rl.allow(node, EntityKind::MotionLevel, elapsed, &cfg.rates)),
-        (EntityKind::MotionEnergy, rl.allow(node, EntityKind::MotionEnergy, elapsed, &cfg.rates)),
-        (EntityKind::PresenceScore, rl.allow(node, EntityKind::PresenceScore, elapsed, &cfg.rates)),
-        (EntityKind::Rssi, rl.allow(node, EntityKind::Rssi, elapsed, &cfg.rates)),
+        (
+            EntityKind::PersonCount,
+            rl.allow(node, EntityKind::PersonCount, elapsed, &cfg.rates),
+        ),
+        (
+            EntityKind::HeartRate,
+            !cfg.privacy_mode && rl.allow(node, EntityKind::HeartRate, elapsed, &cfg.rates),
+        ),
+        (
+            EntityKind::BreathingRate,
+            !cfg.privacy_mode && rl.allow(node, EntityKind::BreathingRate, elapsed, &cfg.rates),
+        ),
+        (
+            EntityKind::MotionLevel,
+            rl.allow(node, EntityKind::MotionLevel, elapsed, &cfg.rates),
+        ),
+        (
+            EntityKind::MotionEnergy,
+            rl.allow(node, EntityKind::MotionEnergy, elapsed, &cfg.rates),
+        ),
+        (
+            EntityKind::PresenceScore,
+            rl.allow(node, EntityKind::PresenceScore, elapsed, &cfg.rates),
+        ),
+        (
+            EntityKind::Rssi,
+            rl.allow(node, EntityKind::Rssi, elapsed, &cfg.rates),
+        ),
     ] {
         if !allowed {
             continue;
@@ -484,7 +506,10 @@ mod per_node_device_tests {
     }
 
     fn device_identifiers(b: &OwnedDiscoveryBuilder) -> Vec<String> {
-        b.as_borrowed().build(EntityKind::Presence).device.identifiers
+        b.as_borrowed()
+            .build(EntityKind::Presence)
+            .device
+            .identifiers
     }
 
     #[test]

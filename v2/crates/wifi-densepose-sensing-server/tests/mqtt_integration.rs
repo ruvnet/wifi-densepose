@@ -165,11 +165,12 @@ async fn collect_published(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn discovery_topics_appear_on_broker() {
-    let Some(port) = should_run() else { return; };
+    let Some(port) = should_run() else {
+        return;
+    };
 
     // Subscriber wired first so we don't miss the initial discovery burst.
-    let (sub, mut sub_loop) =
-        subscribe_client(port, &["homeassistant/#"]).await;
+    let (sub, mut sub_loop) = subscribe_client(port, &["homeassistant/#"]).await;
 
     // Spawn the publisher.
     let cfg = make_cfg(port, false, "discovery");
@@ -211,7 +212,11 @@ async fn discovery_topics_appear_on_broker() {
         .iter()
         .any(|t| t.ends_with("/wifi_densepose_inttest1/fall/config"));
 
-    assert!(presence_cfg, "missing presence discovery topic in {:?}", topics);
+    assert!(
+        presence_cfg,
+        "missing presence discovery topic in {:?}",
+        topics
+    );
     assert!(hr_cfg, "missing heart_rate discovery topic in {:?}", topics);
     assert!(fall_cfg, "missing fall discovery topic in {:?}", topics);
 
@@ -233,10 +238,11 @@ async fn discovery_topics_appear_on_broker() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn privacy_mode_suppresses_biometric_discovery() {
-    let Some(port) = should_run() else { return; };
+    let Some(port) = should_run() else {
+        return;
+    };
 
-    let (sub, mut sub_loop) =
-        subscribe_client(port, &["homeassistant/#"]).await;
+    let (sub, mut sub_loop) = subscribe_client(port, &["homeassistant/#"]).await;
 
     let cfg = make_cfg(port, /* privacy_mode = */ true, "privacy");
     let builder = make_builder("inttest2");
@@ -262,15 +268,17 @@ async fn privacy_mode_suppresses_biometric_discovery() {
     let topics: Vec<&str> = msgs.iter().map(|(t, _, _)| t.as_str()).collect();
 
     // Biometric discovery must NOT appear.
-    let leaked_hr = topics
-        .iter()
-        .any(|t| t.contains("/inttest2/heart_rate/"));
+    let leaked_hr = topics.iter().any(|t| t.contains("/inttest2/heart_rate/"));
     let leaked_br = topics
         .iter()
         .any(|t| t.contains("/inttest2/breathing_rate/"));
     let leaked_pose = topics.iter().any(|t| t.contains("/inttest2/pose/"));
 
-    assert!(!leaked_hr, "heart_rate leaked under privacy mode: {:?}", topics);
+    assert!(
+        !leaked_hr,
+        "heart_rate leaked under privacy mode: {:?}",
+        topics
+    );
     assert!(!leaked_br, "breathing_rate leaked under privacy mode");
     assert!(!leaked_pose, "pose leaked under privacy mode");
 
@@ -278,9 +286,9 @@ async fn privacy_mode_suppresses_biometric_discovery() {
     let presence_cfg = topics
         .iter()
         .any(|t| t.ends_with("/wifi_densepose_inttest2/presence/config"));
-    let sleeping_cfg = topics.iter().any(|t| {
-        t.ends_with("/wifi_densepose_inttest2/someone_sleeping/config")
-    });
+    let sleeping_cfg = topics
+        .iter()
+        .any(|t| t.ends_with("/wifi_densepose_inttest2/someone_sleeping/config"));
 
     assert!(presence_cfg, "presence missing in privacy mode");
     assert!(
@@ -291,7 +299,9 @@ async fn privacy_mode_suppresses_biometric_discovery() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn state_messages_published_on_snapshot_broadcast() {
-    let Some(port) = should_run() else { return; };
+    let Some(port) = should_run() else {
+        return;
+    };
 
     // Subscribe to the entire homeassistant tree so the diagnostic
     // capture shows EVERYTHING the publisher is doing, not just
@@ -351,7 +361,10 @@ async fn state_messages_published_on_snapshot_broadcast() {
             "[diag]   retain={} topic={} payload={}",
             retain,
             t,
-            String::from_utf8_lossy(p).chars().take(80).collect::<String>(),
+            String::from_utf8_lossy(p)
+                .chars()
+                .take(80)
+                .collect::<String>(),
         );
     }
 

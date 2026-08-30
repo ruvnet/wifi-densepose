@@ -29,8 +29,14 @@ pub struct MqttConfig {
 pub enum TlsConfig {
     Off,
     SystemTrust,
-    PinnedCa { ca_file: PathBuf },
-    MutualTls { ca_file: PathBuf, client_cert: PathBuf, client_key: PathBuf },
+    PinnedCa {
+        ca_file: PathBuf,
+    },
+    MutualTls {
+        ca_file: PathBuf,
+        client_cert: PathBuf,
+        client_key: PathBuf,
+    },
 }
 
 /// Per-entity publish rates (Hz). Zero means "publish on change only".
@@ -65,15 +71,14 @@ impl MqttConfig {
     /// supply the default lazily.
     pub fn from_args(args: &crate::cli::MqttArgs) -> Self {
         let password = std::env::var(&args.mqtt_password_env).ok();
-        let port = args.mqtt_port.unwrap_or(if args.mqtt_tls { 8883 } else { 1883 });
+        let port = args
+            .mqtt_port
+            .unwrap_or(if args.mqtt_tls { 8883 } else { 1883 });
         let tls = build_tls(args);
-        let client_id = args
-            .mqtt_client_id
-            .clone()
-            .unwrap_or_else(|| {
-                // Avoid a `gethostname` dep in P1 — fallback only.
-                format!("wifi-densepose-{}", std::process::id())
-            });
+        let client_id = args.mqtt_client_id.clone().unwrap_or_else(|| {
+            // Avoid a `gethostname` dep in P1 — fallback only.
+            format!("wifi-densepose-{}", std::process::id())
+        });
 
         Self {
             host: args.mqtt_host.clone(),
@@ -149,7 +154,9 @@ fn build_tls(args: &crate::cli::MqttArgs) -> TlsConfig {
             client_cert: cert.clone(),
             client_key: key.clone(),
         },
-        (Some(ca), None, None) => TlsConfig::PinnedCa { ca_file: ca.clone() },
+        (Some(ca), None, None) => TlsConfig::PinnedCa {
+            ca_file: ca.clone(),
+        },
         _ => TlsConfig::SystemTrust,
     }
 }
@@ -226,9 +233,12 @@ mod tests {
     fn mtls_when_full_triplet_supplied() {
         let cfg = MqttConfig::from_args(&parse(&[
             "--mqtt-tls",
-            "--mqtt-ca-file", "/etc/ca.pem",
-            "--mqtt-client-cert", "/etc/client.pem",
-            "--mqtt-client-key", "/etc/client.key",
+            "--mqtt-ca-file",
+            "/etc/ca.pem",
+            "--mqtt-client-cert",
+            "/etc/client.pem",
+            "--mqtt-client-key",
+            "/etc/client.key",
         ]));
         assert!(matches!(cfg.tls, TlsConfig::MutualTls { .. }));
     }
@@ -246,7 +256,10 @@ mod tests {
     fn validate_rejects_zero_port() {
         let mut cfg = MqttConfig::from_args(&parse(&[]));
         cfg.port = 0;
-        assert!(matches!(cfg.validate(), Err(MqttConfigError::InvalidPort(0))));
+        assert!(matches!(
+            cfg.validate(),
+            Err(MqttConfigError::InvalidPort(0))
+        ));
     }
 
     #[test]
@@ -261,15 +274,16 @@ mod tests {
         let cfg = MqttConfig::from_args(&parse(&["--mqtt-host", "broker.example.com"]));
         let err = cfg.validate().unwrap_err();
         assert!(matches!(err, MqttConfigError::PlaintextOnPublicHost { .. }));
-        assert!(!err.is_fatal(), "v0.7.0 should warn, not block (ADR-115 §3.9)");
+        assert!(
+            !err.is_fatal(),
+            "v0.7.0 should warn, not block (ADR-115 §3.9)"
+        );
     }
 
     #[test]
     fn validate_public_tls_ok() {
-        let cfg = MqttConfig::from_args(&parse(&[
-            "--mqtt-host", "broker.example.com",
-            "--mqtt-tls",
-        ]));
+        let cfg =
+            MqttConfig::from_args(&parse(&["--mqtt-host", "broker.example.com", "--mqtt-tls"]));
         assert!(cfg.validate().is_ok());
     }
 
@@ -277,22 +291,26 @@ mod tests {
     fn validate_rejects_negative_rate() {
         let mut cfg = MqttConfig::from_args(&parse(&[]));
         cfg.rates.vitals_hz = -1.0;
-        assert!(matches!(cfg.validate(), Err(MqttConfigError::InvalidRate(_))));
+        assert!(matches!(
+            cfg.validate(),
+            Err(MqttConfigError::InvalidRate(_))
+        ));
     }
 
     #[test]
     fn validate_rejects_nan_rate() {
         let mut cfg = MqttConfig::from_args(&parse(&[]));
         cfg.rates.motion_hz = f64::NAN;
-        assert!(matches!(cfg.validate(), Err(MqttConfigError::InvalidRate(_))));
+        assert!(matches!(
+            cfg.validate(),
+            Err(MqttConfigError::InvalidRate(_))
+        ));
     }
 
     #[test]
     fn password_env_resolution() {
         std::env::set_var("RUVIEW_TEST_MQTT_PW", "s3cret");
-        let cfg = MqttConfig::from_args(&parse(&[
-            "--mqtt-password-env", "RUVIEW_TEST_MQTT_PW",
-        ]));
+        let cfg = MqttConfig::from_args(&parse(&["--mqtt-password-env", "RUVIEW_TEST_MQTT_PW"]));
         assert_eq!(cfg.password.as_deref(), Some("s3cret"));
         std::env::remove_var("RUVIEW_TEST_MQTT_PW");
     }

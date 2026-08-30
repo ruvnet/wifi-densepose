@@ -27,7 +27,9 @@ struct Ewma {
 }
 
 impl Ewma {
-    fn new(alpha: f64) -> Self { Self { value: None, alpha } }
+    fn new(alpha: f64) -> Self {
+        Self { value: None, alpha }
+    }
     fn update(&mut self, x: f64) {
         self.value = Some(match self.value {
             Some(v) => self.alpha * x + (1.0 - self.alpha) * v,
@@ -56,14 +58,18 @@ impl Default for PossibleDistress {
 }
 
 impl PossibleDistress {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn tick(&mut self, snap: &RawSnapshot, cfg: &PrimitiveConfig) -> PrimitiveState {
         if snap.since_start < cfg.warmup {
             // Still seed the baseline even in warmup so we don't fire
             // immediately after the warmup ends with a cold baseline.
             if let Some(hr) = snap.heart_rate_bpm {
-                if snap.vital_confidence >= 0.5 { self.baseline.update(hr); }
+                if snap.vital_confidence >= 0.5 {
+                    self.baseline.update(hr);
+                }
             }
             return PrimitiveState::Idle;
         }
@@ -141,7 +147,9 @@ impl PossibleDistress {
 mod tests {
     use super::*;
 
-    fn cfg() -> PrimitiveConfig { PrimitiveConfig::default() }
+    fn cfg() -> PrimitiveConfig {
+        PrimitiveConfig::default()
+    }
 
     fn snap(t_secs: u64, hr: Option<f64>, motion: f64) -> RawSnapshot {
         RawSnapshot {
@@ -181,12 +189,18 @@ mod tests {
         let mut fired = false;
         for t in 60..200 {
             let s = snap(t, Some(120.0), 0.35);
-            if matches!(p.tick(&s, &cfg()), PrimitiveState::Boolean { active: true, .. }) {
+            if matches!(
+                p.tick(&s, &cfg()),
+                PrimitiveState::Boolean { active: true, .. }
+            ) {
                 fired = true;
                 break;
             }
         }
-        assert!(fired, "primitive must fire on sustained elevated HR + motion");
+        assert!(
+            fired,
+            "primitive must fire on sustained elevated HR + motion"
+        );
         assert!(p.active);
     }
 
@@ -216,7 +230,9 @@ mod tests {
         let s_calm = snap(220, Some(75.0), 0.05);
         let state = p.tick(&s_calm, &cfg());
         match state {
-            PrimitiveState::Boolean { active, changed, .. } => {
+            PrimitiveState::Boolean {
+                active, changed, ..
+            } => {
                 assert!(!active && changed);
             }
             other => panic!("expected off/change, got {:?}", other),
@@ -254,7 +270,10 @@ mod tests {
         let mut fired = false;
         for t in 600..800 {
             let s = snap(t, Some(120.0), 0.35);
-            if matches!(p.tick(&s, &cfg()), PrimitiveState::Boolean { active: true, .. }) {
+            if matches!(
+                p.tick(&s, &cfg()),
+                PrimitiveState::Boolean { active: true, .. }
+            ) {
                 fired = true;
                 break;
             }
@@ -278,7 +297,11 @@ mod tests {
         let after = p.baseline.value.unwrap();
         // Baseline may move a little during pre-trigger window, but it
         // must not chase the 130-bpm samples during the active state.
-        assert!(after < 100.0, "baseline {} drifted toward distress HR", after);
+        assert!(
+            after < 100.0,
+            "baseline {} drifted toward distress HR",
+            after
+        );
         assert!(initial < 100.0);
     }
 }

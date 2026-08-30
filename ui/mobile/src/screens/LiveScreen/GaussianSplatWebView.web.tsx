@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef } from 'react';
 import { StyleSheet, View } from 'react-native';
 import * as THREE from 'three';
 import type { SensingFrame } from '@/types/sensing';
+import type { SensorFusionDisplayFrame } from '@/types/fusion';
 
 type Props = {
   onReady: () => void;
   onFps: (fps: number) => void;
   onError: (msg: string) => void;
   frame: SensingFrame | null;
+  fusion: SensorFusionDisplayFrame;
 };
 
 const MAX_PERSONS = 3;
@@ -274,11 +276,13 @@ function lerp3(out: THREE.Vector3, target: THREE.Vector3, alpha: number) {
   out.z += (target.z - out.z) * alpha;
 }
 
-export const GaussianSplatWebViewWeb = ({ onReady, onFps, onError, frame }: Props) => {
+export const GaussianSplatWebViewWeb = ({ onReady, onFps, onError, frame, fusion }: Props) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<SensingFrame | null>(null);
+  const fusionRef = useRef<SensorFusionDisplayFrame>(fusion);
   const sceneRef = useRef<any>(null);
   frameRef.current = frame;
+  fusionRef.current = fusion;
 
   const cleanup = useCallback(() => {
     const s = sceneRef.current;
@@ -303,10 +307,10 @@ export const GaussianSplatWebViewWeb = ({ onReady, onFps, onError, frame }: Prop
       const H = () => container.clientHeight || window.innerHeight;
 
       // --- Renderer ---
-      const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
       renderer.setSize(W(), H());
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      renderer.setClearColor(0x080c16);
+      renderer.setClearColor(0x080c16, 1);
       renderer.shadowMap.enabled = true;
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -408,6 +412,20 @@ export const GaussianSplatWebViewWeb = ({ onReady, onFps, onError, frame }: Prop
       pGeo.setAttribute('position', new THREE.BufferAttribute(pA, 3));
       scene.add(new THREE.Points(pGeo, new THREE.PointsMaterial({ color: 0x3399bb, size: 0.018, transparent: true, opacity: 0.25 })));
 
+      // Visible-scene iPhone LiDAR and separately labeled NLOS hypotheses.
+      const lidarGeo = new THREE.BufferGeometry();
+      const lidarPositions = new Float32Array(4096 * 3);
+      lidarGeo.setAttribute('position', new THREE.BufferAttribute(lidarPositions, 3));
+      lidarGeo.setDrawRange(0, 0);
+      const lidarCloud = new THREE.Points(lidarGeo, new THREE.PointsMaterial({ color: 0x2bd977, size: 0.025, transparent: true, opacity: 0.72 }));
+      scene.add(lidarCloud);
+      const nlosMarkers = Array.from({ length: 16 }, () => {
+        const marker = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), new THREE.MeshBasicMaterial({ color: 0xffb65c, wireframe: true }));
+        marker.visible = false;
+        scene.add(marker);
+        return marker;
+      });
+
       // --- HUD ---
       const hudC = document.createElement('canvas'); hudC.width = 640; hudC.height = 128;
       const hudT = new THREE.CanvasTexture(hudC);
@@ -422,7 +440,7 @@ export const GaussianSplatWebViewWeb = ({ onReady, onFps, onError, frame }: Prop
       const state: any = {
         renderer, scene, camera, animId: 0,
         camAngle: 0, camR: 3.5, camY: 1.4,
-        drag: false, fCount: 0, fpsT: performance.now(),
+        drag: false, fCount: 0, fpsT: performance.now(), lidarSequence: -1,
       };
       sceneRef.current = state;
 
@@ -448,6 +466,27 @@ export const GaussianSplatWebViewWeb = ({ onReady, onFps, onError, frame }: Prop
         state.animId = requestAnimationFrame(animate);
         const t = performance.now() * 0.001;
         const fr = frameRef.current;
+        const fusionFrame = fusionRef.current;
+        const videoOverlay = Boolean(fusionFrame.wallOverlay.enabled && fusionFrame.cameraPreview);
+        scene.background = videoOverlay ? null : new THREE.Color(0x080c16);
+        renderer.setClearAlpha(videoOverlay ? 0 : 1);
+
+        if (fusionFrame.lidarFrame && fusionFrame.lidarFrame.sequence !== state.lidarSequence) {
+          const source = fusionFrame.lidarFrame.points;
+          const count = Math.min(fusionFrame.lidarFrame.pointCount, 4096);
+          for (let i = 0; i < count * 3; i += 1) lidarPositions[i] = source[i];
+          lidarGeo.setDrawRange(0, count);
+          (lidarGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+          state.lidarSequence = fusionFrame.lidarFrame.sequence;
+        } else if (!fusionFrame.lidarFrame && state.lidarSequence !== -1) {
+          lidarGeo.setDrawRange(0, 0);
+          state.lidarSequence = -1;
+        }
+        fusionFrame.nlosTracks.slice(0, nlosMarkers.length).forEach((track, index) => {
+          nlosMarkers[index].position.set(track.positionM.x, track.positionM.y, track.positionM.z);
+          nlosMarkers[index].visible = true;
+        });
+        for (let index = fusionFrame.nlosTracks.length; index < nlosMarkers.length; index += 1) nlosMarkers[index].visible = false;
 
         // Camera
         if (!state.drag) state.camAngle += 0.001;
@@ -460,6 +499,7 @@ export const GaussianSplatWebViewWeb = ({ onReady, onFps, onError, frame }: Prop
         const mPow = fr?.features?.motion_band_power ?? 0;
         const bPow = fr?.features?.breathing_band_power ?? 0;
         const rssi = fr?.features?.mean_rssi ?? -80;
+        const poseNames = ['nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear', 'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow', 'left_wrist', 'right_wrist', 'left_hip', 'right_hip', 'left_knee', 'right_knee', 'left_ankle', 'right_ankle'];
 
         // How many persons to show (from server estimate, or 1 if presence)
         const nPersons = pres && conf > 0.2
@@ -496,8 +536,13 @@ export const GaussianSplatWebViewWeb = ({ onReady, onFps, onError, frame }: Prop
           for (let i = 0; i < 17; i++) {
             const [bx, by, bz] = BASE_POSE[i];
             let ax = bx + xOff, ay = by, az = bz;
+            const measuredJoint = fr?.persons?.[pi]?.keypoints?.find((joint: any) => joint.name === poseNames[i] && joint.confidence >= 0.5);
 
-            if (active) {
+            if (active && measuredJoint && [measuredJoint.x, measuredJoint.y, measuredJoint.z].every(Number.isFinite)) {
+              ax = measuredJoint.x;
+              ay = measuredJoint.y;
+              az = measuredJoint.z;
+            } else if (active) {
               const bFreq = 0.25 + bPow * 0.5;
               const bAmp = 0.004 + bPow * 0.008;
               const bPhase = Math.sin(t * bFreq * Math.PI * 2 + phOff);

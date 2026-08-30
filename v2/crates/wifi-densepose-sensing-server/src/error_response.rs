@@ -67,7 +67,10 @@ pub fn correlation_id() -> String {
 /// `context` is a short, *static* description of where the error happened
 /// (e.g. `"model delete"`); it is safe to log but is **not** sent to the
 /// client.
-pub fn internal_error(context: &str, detail: impl Display) -> (StatusCode, Json<serde_json::Value>) {
+pub fn internal_error(
+    context: &str,
+    detail: impl Display,
+) -> (StatusCode, Json<serde_json::Value>) {
     let cid = correlation_id();
     // Server-side only — this is where the real detail lives.
     tracing::error!(

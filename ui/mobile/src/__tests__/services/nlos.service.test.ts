@@ -197,6 +197,22 @@ describe('NlosService', () => {
     expect(service.getStatus()).toBe('error');
   });
 
+  it('accepts an authenticated cleartext ticket only on the private installation LAN', async () => {
+    const { service, fetchMock, dependencies } = createHarness();
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        schema: NLOS_TICKET_SCHEMA,
+        webSocketUrl: `ws://192.168.1.166:3000/api/v1/nlos/ws?ticket=${'a'.repeat(64)}`,
+        expiresAtUnixMs: NOW + 10_000,
+      }),
+    });
+    await expect(service.connectLive({ serverUrl: 'http://192.168.1.166:3000', bearerToken: BEARER_TOKEN })).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith('http://192.168.1.166:3000/api/v1/nlos/ws-ticket', expect.anything());
+    expect(dependencies.createWebSocket).toHaveBeenCalledWith(expect.stringMatching(/^ws:\/\/192\.168\.1\.166:3000\//));
+  });
+
   it('rejects a ticket that redirects the socket to another authority', async () => {
     const { service, fetchMock, dependencies } = createHarness();
     fetchMock.mockResolvedValueOnce({

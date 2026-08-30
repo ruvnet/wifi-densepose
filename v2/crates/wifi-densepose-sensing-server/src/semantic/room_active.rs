@@ -52,8 +52,12 @@ impl RoomActive {
             if !snap.presence || idle_long {
                 self.active = false;
                 let mut tags = Vec::new();
-                if !snap.presence { tags.push("presence=false"); }
-                if idle_long { tags.push("idle>=10min"); }
+                if !snap.presence {
+                    tags.push("presence=false");
+                }
+                if idle_long {
+                    tags.push("idle>=10min");
+                }
                 return PrimitiveState::Boolean {
                     active: false,
                     changed: true,
@@ -95,7 +99,9 @@ mod tests {
         let s = snap(120, 0.4, true);
         let state = p.tick(&s, &cfg());
         match state {
-            PrimitiveState::Boolean { active, changed, .. } => {
+            PrimitiveState::Boolean {
+                active, changed, ..
+            } => {
                 assert!(active);
                 assert!(changed);
             }
@@ -123,7 +129,9 @@ mod tests {
         let _ = p.tick(&snap(120, 0.4, true), &cfg());
         let state = p.tick(&snap(125, 0.4, false), &cfg());
         match state {
-            PrimitiveState::Boolean { active, changed, .. } => {
+            PrimitiveState::Boolean {
+                active, changed, ..
+            } => {
                 assert!(!active);
                 assert!(changed);
             }

@@ -37,8 +37,14 @@ a default token. Configure allowed browser origins with
   `HOMECORE_AUTOMATIONS`.
 - `Ctrl-C` initiates graceful HTTP shutdown and emits `HomeCoreStop`.
 - The `ruvector` feature enables the recorder's semantic index.
-- Plugin and HAP crates are libraries in this workspace, but this binary does
-  not claim to load plugins or advertise a HomeKit server yet.
+- Packaged plugins are loaded only from explicitly configured directories.
+- The HAP network server remains disabled unless the binary is built with
+  `--features hap-server` and its bind, identity, advertisement, and pairing
+  configuration is supplied.
+- RuView semantic ingest is disabled by default. When explicitly enabled it
+  polls only the per-node privacy-bounded vitals and semantic-event projection
+  endpoints, fails stale/offline evidence closed, and emits anonymous HomeCore
+  binary sensors. See [ADR-343](../../docs/adr/ADR-343-homecore-ruview-semantic-ingest-boundary.md).
 
 ## API
 
@@ -79,6 +85,27 @@ unregistered and return an error rather than a false acknowledgement.
 | `--insecure-dev-auth` | `HOMECORE_INSECURE_DEV_AUTH` | `false` |
 | `--seed-demo-entities` | — | `false` |
 | `--no-recorder` | — | `false` |
+| `--ruview-ingest` | `HOMECORE_RUVIEW_INGEST` | `false` |
+| `--ruview-url` | `HOMECORE_RUVIEW_URL` | `http://127.0.0.1:3000` |
+| `--ruview-node-id` | `HOMECORE_RUVIEW_NODE_ID` | required when enabled |
+| `--ruview-token` | `HOMECORE_RUVIEW_TOKEN` | required when enabled; secret |
+| `--ruview-poll-ms` | `HOMECORE_RUVIEW_POLL_MS` | `1000` |
+| `--ruview-timeout-ms` | `HOMECORE_RUVIEW_TIMEOUT_MS` | `2000` |
+| `--ruview-max-staleness-ms` | `HOMECORE_RUVIEW_MAX_STALENESS_MS` | `10000` |
+
+Use a RuView token limited to sensing reads. Prefer the environment variable so
+the credential is not exposed in shell history or process arguments:
+
+```bash
+export HOMECORE_RUVIEW_INGEST=true
+export HOMECORE_RUVIEW_URL=http://127.0.0.1:3000
+export HOMECORE_RUVIEW_NODE_ID=7
+export HOMECORE_RUVIEW_TOKEN=replace-with-a-sensing-read-token
+cargo run -p homecore-server --features hap-server
+```
+
+Ingest and HAP are independent opt-ins. The example does not configure HAP and
+therefore does not advertise an Apple Home accessory by itself.
 
 ## Validation
 

@@ -13397,12 +13397,16 @@ version = "0.1.0"
 name = "wifi-densepose-rufield"
 version = "0.3.0"
 dependencies = [
+ "base64 0.21.7",
  "rufield-core",
  "rufield-fusion",
  "rufield-privacy",
  "rufield-provenance",
+ "ruview-hal",
+ "ruview-ontology",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -13481,6 +13485,7 @@ dependencies = [
  "wifi-densepose-engine",
  "wifi-densepose-geo",
  "wifi-densepose-hardware",
+ "wifi-densepose-mat",
  "wifi-densepose-physics",
  "wifi-densepose-rufield",
  "wifi-densepose-signal",

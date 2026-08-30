@@ -22,9 +22,22 @@ export const normalizeFrameTimestamp = (frame: SensingFrame): SensingFrame => {
   return frame;
 };
 
+export const isPresentationSensingFrame = (value: unknown): value is SensingFrame => {
+  if (!value || typeof value !== 'object') return false;
+  const frame = value as Partial<SensingFrame>;
+  if (frame.type != null && frame.type !== 'sensing_update') return false;
+  return typeof frame.timestamp === 'number'
+    && Number.isFinite(frame.timestamp)
+    && Array.isArray(frame.nodes)
+    && Boolean(frame.features && typeof frame.features === 'object')
+    && Boolean(frame.classification && typeof frame.classification === 'object')
+    && Boolean(frame.signal_field && typeof frame.signal_field === 'object');
+};
+
 class WsService {
   private ws: WebSocket | null = null;
   private listeners = new Set<FrameListener>();
+  private rawListeners = new Set<FrameListener>();
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private simulationTimer: ReturnType<typeof setInterval> | null = null;
@@ -80,7 +93,14 @@ class WsService {
       socket.onmessage = (evt) => {
         try {
           const raw = typeof evt.data === 'string' ? evt.data : JSON.stringify(evt.data);
-          const frame = normalizeFrameTimestamp(JSON.parse(raw) as SensingFrame);
+          const decoded: unknown = JSON.parse(raw);
+          // `/ws/sensing` also carries typed edge events. They are useful to
+          // dedicated consumers but are not complete screen frames; admitting
+          // one here temporarily erased timestamp/features and made the native
+          // UI flash to "NO FRESH EVIDENCE" once per second.
+          if (!isPresentationSensingFrame(decoded)) return;
+          const frame = normalizeFrameTimestamp(decoded);
+          this.rawListeners.forEach((listener) => listener(frame));
           const now = Date.now();
           if (now - this.lastFrameDeliveryAt < PRESENTATION_FRAME_INTERVAL_MS) {
             return;
@@ -127,6 +147,13 @@ class WsService {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  /** Full-rate frames for short, explicit calibration recordings. UI stores
+   * stay presentation-throttled and raw CSI is never persisted here. */
+  subscribeRaw(listener: FrameListener): () => void {
+    this.rawListeners.add(listener);
+    return () => this.rawListeners.delete(listener);
   }
 
   getStatus(): ConnectionStatus {
@@ -177,6 +204,7 @@ class WsService {
     this.simulationTimer = setInterval(() => {
       this.handleStatusChange('simulated');
       const frame = generateSimulatedData();
+      this.rawListeners.forEach((listener) => listener(frame));
       this.listeners.forEach((listener) => {
         listener(frame);
       });

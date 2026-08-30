@@ -15,7 +15,7 @@ pub struct RawSnapshot {
     pub timestamp_ms: i64,
     pub presence: bool,
     pub fall_detected: bool,
-    pub motion: f64,                 // 0.0..=1.0
+    pub motion: f64, // 0.0..=1.0
     pub motion_energy: f64,
     pub breathing_rate_bpm: Option<f64>,
     pub heart_rate_bpm: Option<f64>,
@@ -37,11 +37,18 @@ pub struct RawSnapshot {
 pub enum PrimitiveState {
     /// Boolean state with hysteresis. Includes change flag so the bus
     /// can decide whether to publish.
-    Boolean { active: bool, changed: bool, reason: Reason },
+    Boolean {
+        active: bool,
+        changed: bool,
+        reason: Reason,
+    },
     /// Continuous score (e.g. fall risk 0..100). Always publish.
     Scalar { value: f64, reason: Reason },
     /// One-shot event (fall, bed exit, multi-room transition).
-    Event { event_type: &'static str, reason: Reason },
+    Event {
+        event_type: &'static str,
+        reason: Reason,
+    },
     /// No output this tick.
     Idle,
 }
@@ -56,7 +63,9 @@ pub struct Reason {
 
 impl Reason {
     pub fn new(tags: &[&str]) -> Self {
-        Self { tags: tags.iter().map(|s| s.to_string()).collect() }
+        Self {
+            tags: tags.iter().map(|s| s.to_string()).collect(),
+        }
     }
 
     pub fn empty() -> Self {
@@ -145,10 +154,10 @@ mod tests {
     #[test]
     fn in_window_wrap_around_midnight() {
         // 22:00–06:00.
-        assert!(in_window(23 * 3600, 22 * 3600, 6 * 3600));   // late evening
-        assert!(in_window(2 * 3600, 22 * 3600, 6 * 3600));    // early morning
-        assert!(!in_window(12 * 3600, 22 * 3600, 6 * 3600));  // noon — outside
-        assert!(in_window(0, 22 * 3600, 6 * 3600));           // midnight tick
+        assert!(in_window(23 * 3600, 22 * 3600, 6 * 3600)); // late evening
+        assert!(in_window(2 * 3600, 22 * 3600, 6 * 3600)); // early morning
+        assert!(!in_window(12 * 3600, 22 * 3600, 6 * 3600)); // noon — outside
+        assert!(in_window(0, 22 * 3600, 6 * 3600)); // midnight tick
     }
 
     #[test]
@@ -171,6 +180,9 @@ mod tests {
     #[test]
     fn reason_new_collects_string_owned() {
         let r = Reason::new(&["motion<5%", "br=12bpm"]);
-        assert_eq!(r.tags, vec!["motion<5%".to_string(), "br=12bpm".to_string()]);
+        assert_eq!(
+            r.tags,
+            vec!["motion<5%".to_string(), "br=12bpm".to_string()]
+        );
     }
 }

@@ -107,7 +107,12 @@ pub struct AvailabilityPayload {
 }
 
 impl AvailabilityPayload {
-    pub fn for_entity(prefix: &str, component: DiscoveryComponent, node_id: &str, entity: &str) -> Self {
+    pub fn for_entity(
+        prefix: &str,
+        component: DiscoveryComponent,
+        node_id: &str,
+        entity: &str,
+    ) -> Self {
         Self {
             topic: format!(
                 "{prefix}/{}/wifi_densepose_{node_id}/{entity}/availability",
@@ -187,9 +192,9 @@ impl EntityKind {
             | EntityKind::BathroomOccupied
             | EntityKind::NoMovement => DiscoveryComponent::BinarySensor,
             // One-shot triggers → event.
-            EntityKind::FallDetected
-            | EntityKind::BedExit
-            | EntityKind::MultiRoomTransition => DiscoveryComponent::Event,
+            EntityKind::FallDetected | EntityKind::BedExit | EntityKind::MultiRoomTransition => {
+                DiscoveryComponent::Event
+            }
             // Numeric measurements → sensor.
             EntityKind::PersonCount
             | EntityKind::BreathingRate
@@ -348,14 +353,17 @@ impl<'a> DiscoveryBuilder<'a> {
                 cfg.payload_on = Some("ON".into());
                 cfg.payload_off = Some("OFF".into());
                 cfg.device_class = Some("occupancy".into());
-                cfg.icon = Some(match entity {
-                    EntityKind::SomeoneSleeping => "mdi:sleep",
-                    EntityKind::MeetingInProgress => "mdi:account-group",
-                    EntityKind::BathroomOccupied => "mdi:shower",
-                    EntityKind::RoomActive => "mdi:home-account",
-                    EntityKind::ZoneOccupancy => "mdi:map-marker",
-                    _ => "mdi:motion-sensor",
-                }.into());
+                cfg.icon = Some(
+                    match entity {
+                        EntityKind::SomeoneSleeping => "mdi:sleep",
+                        EntityKind::MeetingInProgress => "mdi:account-group",
+                        EntityKind::BathroomOccupied => "mdi:shower",
+                        EntityKind::RoomActive => "mdi:home-account",
+                        EntityKind::ZoneOccupancy => "mdi:map-marker",
+                        _ => "mdi:motion-sensor",
+                    }
+                    .into(),
+                );
             }
             EntityKind::PossibleDistress
             | EntityKind::ElderlyInactivityAnomaly
@@ -440,7 +448,11 @@ impl<'a> DiscoveryBuilder<'a> {
     /// All entity kinds this builder will publish, given a `privacy_mode`
     /// flag and a `publish_pose` flag. Used by the publisher to drive the
     /// discovery-emission loop.
-    pub fn enabled_entities(privacy_mode: bool, publish_pose: bool, semantic_disabled: &[String]) -> Vec<EntityKind> {
+    pub fn enabled_entities(
+        privacy_mode: bool,
+        publish_pose: bool,
+        semantic_disabled: &[String],
+    ) -> Vec<EntityKind> {
         let all = [
             EntityKind::Presence,
             EntityKind::PersonCount,
@@ -548,7 +560,10 @@ mod tests {
         assert_eq!(j["state_class"], "measurement");
         assert_eq!(j["value_template"], "{{ value_json.bpm }}");
         assert_eq!(j["qos"], 0);
-        assert!(j["json_attributes_topic"].as_str().unwrap().ends_with("/state"));
+        assert!(j["json_attributes_topic"]
+            .as_str()
+            .unwrap()
+            .ends_with("/state"));
     }
 
     #[test]
@@ -584,7 +599,11 @@ mod tests {
     fn privacy_mode_strips_biometrics() {
         let entities = DiscoveryBuilder::enabled_entities(true, true, &[]);
         for e in &entities {
-            assert!(!e.is_biometric(), "biometric {:?} leaked with privacy_mode", e);
+            assert!(
+                !e.is_biometric(),
+                "biometric {:?} leaked with privacy_mode",
+                e
+            );
         }
         // Semantic primitives must remain available (ADR-115 §3.12.3).
         assert!(entities.contains(&EntityKind::SomeoneSleeping));
@@ -604,13 +623,25 @@ mod tests {
     #[test]
     fn topic_components_match_entity_kind() {
         // binary_sensor for booleans.
-        assert_eq!(EntityKind::Presence.component(), DiscoveryComponent::BinarySensor);
-        assert_eq!(EntityKind::SomeoneSleeping.component(), DiscoveryComponent::BinarySensor);
+        assert_eq!(
+            EntityKind::Presence.component(),
+            DiscoveryComponent::BinarySensor
+        );
+        assert_eq!(
+            EntityKind::SomeoneSleeping.component(),
+            DiscoveryComponent::BinarySensor
+        );
         // event for one-shots.
-        assert_eq!(EntityKind::FallDetected.component(), DiscoveryComponent::Event);
+        assert_eq!(
+            EntityKind::FallDetected.component(),
+            DiscoveryComponent::Event
+        );
         assert_eq!(EntityKind::BedExit.component(), DiscoveryComponent::Event);
         // sensor for measurements.
-        assert_eq!(EntityKind::HeartRate.component(), DiscoveryComponent::Sensor);
+        assert_eq!(
+            EntityKind::HeartRate.component(),
+            DiscoveryComponent::Sensor
+        );
         assert_eq!(EntityKind::Rssi.component(), DiscoveryComponent::Sensor);
     }
 
@@ -629,9 +660,8 @@ mod tests {
     #[test]
     fn availability_topic_matches_state_topic_path() {
         let b = builder();
-        let state = format!(
-            "homeassistant/binary_sensor/wifi_densepose_aabbccddeeff/presence/state"
-        );
+        let state =
+            format!("homeassistant/binary_sensor/wifi_densepose_aabbccddeeff/presence/state");
         let avail = b.availability_topic(EntityKind::Presence);
         // Must differ only in suffix.
         assert_eq!(

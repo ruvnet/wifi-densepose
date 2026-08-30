@@ -25,10 +25,17 @@ impl BathroomOccupied {
             return PrimitiveState::Idle;
         }
         let occupied = snap.presence
-            && snap.active_zones.iter().any(|z| z == &cfg.bathroom_zone_tag);
+            && snap
+                .active_zones
+                .iter()
+                .any(|z| z == &cfg.bathroom_zone_tag);
         if occupied != self.active {
             self.active = occupied;
-            let tag = if occupied { "presence=true,zone=bathroom" } else { "exit-bathroom" };
+            let tag = if occupied {
+                "presence=true,zone=bathroom"
+            } else {
+                "exit-bathroom"
+            };
             return PrimitiveState::Boolean {
                 active: occupied,
                 changed: true,
@@ -59,7 +66,9 @@ mod tests {
         };
         let state = p.tick(&s, &cfg());
         match state {
-            PrimitiveState::Boolean { active, changed, .. } => {
+            PrimitiveState::Boolean {
+                active, changed, ..
+            } => {
                 assert!(active && changed);
             }
             other => panic!("expected on/change, got {:?}", other),
@@ -121,7 +130,9 @@ mod tests {
         };
         let state = p.tick(&s_out, &cfg());
         match state {
-            PrimitiveState::Boolean { active, changed, .. } => {
+            PrimitiveState::Boolean {
+                active, changed, ..
+            } => {
                 assert!(!active && changed);
             }
             other => panic!("expected off/change, got {:?}", other),

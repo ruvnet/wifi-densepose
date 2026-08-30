@@ -1,9 +1,9 @@
 appId: com.ruvnet.wifidensepose
-name: RuView NLOS instrument UI evidence flow
+name: RuView Calibration instrument UI evidence flow
 ---
 - launchApp:
     clearState: true
-- tapOn: "NLOS"
+- tapOn: "Calibration"
 - assertVisible:
     id: "nlos-evidence-state"
 - scrollUntilVisible:

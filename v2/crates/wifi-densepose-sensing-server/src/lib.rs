@@ -10,7 +10,8 @@
 
 pub mod bearer_auth;
 pub mod browser_session;
-pub mod ws_ticket;
+pub mod calibration_guidance;
+pub mod calibration_session;
 pub mod cli;
 pub mod dataset;
 pub mod discovery;
@@ -29,20 +30,19 @@ pub mod pose_physics;
 /// ADR-295: canonical source-provenance state machine (synthetic can never
 /// present as live).
 pub mod provenance;
-pub mod semantic;
 /// ADR-262 P3: the live RuField surface — turns the governed sensing cycle into
 /// signed RuField `FieldEvent`s on the additive `/api/field` + `/ws/field`
 /// endpoints, via the `wifi-densepose-rufield` anti-corruption bridge.
 pub mod rufield_surface;
 pub mod rvf_container;
 pub mod rvf_pipeline;
+pub mod semantic;
 pub mod semconv;
 pub mod telemetry;
 #[allow(dead_code)]
 pub mod trainer;
 /// ADR-296: UDP data-plane bind scope decision + source IP/CIDR allowlist.
 pub mod udp_bind;
-pub mod vital_signs;
 /// ADR-270 Mist and NETGEAR telemetry providers.
 pub mod vendor_mist_netgear;
 /// ADR-270 Origin AI and Plume/OpenSync providers.
@@ -51,6 +51,8 @@ pub mod vendor_origin_plume;
 pub mod vendor_remaining;
 /// ADR-270 provider registry and canonical event helpers.
 pub mod vendor_rf;
+pub mod vital_signs;
+pub mod ws_ticket;
 
 // ADR-185 §3.2/§13: the AETHER pure-compute stack (contrastive embedding,
 // CSI-to-pose transformer, SONA, quantization) was hoisted into the std-only

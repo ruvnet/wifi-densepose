@@ -34,7 +34,10 @@ const BASELINE_FLOOR: Duration = Duration::from_secs(30 * 60); // 30 min
 
 impl ElderlyInactivityAnomaly {
     pub fn new() -> Self {
-        Self { longest_idle: BASELINE_FLOOR, ..Default::default() }
+        Self {
+            longest_idle: BASELINE_FLOOR,
+            ..Default::default()
+        }
     }
 
     pub fn tick(&mut self, snap: &RawSnapshot, cfg: &PrimitiveConfig) -> PrimitiveState {
@@ -46,7 +49,9 @@ impl ElderlyInactivityAnomaly {
             // Update baseline if we just emerged from a long stretch.
             if let Some(start) = self.idle_since {
                 let dur = snap.since_start.saturating_sub(start);
-                if dur > self.longest_idle { self.longest_idle = dur; }
+                if dur > self.longest_idle {
+                    self.longest_idle = dur;
+                }
             }
             self.idle_since = None;
             if self.active {
@@ -77,11 +82,7 @@ impl ElderlyInactivityAnomaly {
             return PrimitiveState::Boolean {
                 active: true,
                 changed: true,
-                reason: Reason::new(&[
-                    "presence=true",
-                    "motion<2%",
-                    "idle>2x_baseline",
-                ]),
+                reason: Reason::new(&["presence=true", "motion<2%", "idle>2x_baseline"]),
             };
         }
         PrimitiveState::Idle
@@ -92,7 +93,9 @@ impl ElderlyInactivityAnomaly {
 mod tests {
     use super::*;
 
-    fn cfg() -> PrimitiveConfig { PrimitiveConfig::default() }
+    fn cfg() -> PrimitiveConfig {
+        PrimitiveConfig::default()
+    }
 
     fn still_snap(t_secs: u64) -> RawSnapshot {
         RawSnapshot {
@@ -110,7 +113,9 @@ mod tests {
         let _ = p.tick(&still_snap(100), &cfg());
         let state = p.tick(&still_snap(100 + 61 * 60), &cfg());
         match state {
-            PrimitiveState::Boolean { active, changed, .. } => {
+            PrimitiveState::Boolean {
+                active, changed, ..
+            } => {
                 assert!(active && changed);
             }
             other => panic!("expected on, got {:?}", other),

@@ -280,7 +280,9 @@ pub enum SessionError {
     NotConfigured,
     #[error("the sign-in request is missing or has expired")]
     InvalidTransaction,
-    #[error("the sign-in state did not match — this response did not come from the flow that started")]
+    #[error(
+        "the sign-in state did not match — this response did not come from the flow that started"
+    )]
     StateMismatch,
     #[error("Cognitum sign-in could not be completed: {0}")]
     ExchangeFailed(String),
@@ -382,7 +384,12 @@ pub fn is_configured() -> bool {
 }
 
 /// Begin sign-in: where to redirect, and the cookie to set.
-pub fn begin(issuer: &str, client_id: &str, scope: &str, secure: bool) -> Result<(String, String), SessionError> {
+pub fn begin(
+    issuer: &str,
+    client_id: &str,
+    scope: &str,
+    secure: bool,
+) -> Result<(String, String), SessionError> {
     let secret = secret()?;
     let req = ruview_auth::pkce::generate();
     let txn = Transaction {
@@ -594,16 +601,27 @@ mod tests {
     #[test]
     fn a_server_with_a_secret_reports_browser_sign_in_as_available() {
         init_secret_for_tests();
-        assert!(is_configured(), "sign-in must be offered once a secret exists");
+        assert!(
+            is_configured(),
+            "sign-in must be offered once a secret exists"
+        );
     }
 
     #[test]
     fn begin_produces_an_authorize_url_carrying_every_required_parameter() {
         init_secret_for_tests();
-        let (url, set_cookie) =
-            begin("https://auth.cognitum.one/", "ruview", "sensing:read", false).unwrap();
+        let (url, set_cookie) = begin(
+            "https://auth.cognitum.one/",
+            "ruview",
+            "sensing:read",
+            false,
+        )
+        .unwrap();
 
-        assert!(url.starts_with("https://auth.cognitum.one/oauth/authorize?"), "{url}");
+        assert!(
+            url.starts_with("https://auth.cognitum.one/oauth/authorize?"),
+            "{url}"
+        );
         assert!(url.contains("response_type=code"), "{url}");
         assert!(url.contains("client_id=ruview"), "{url}");
         // S256 only — the AS rejects `plain`, so getting this wrong is a
@@ -612,23 +630,37 @@ mod tests {
         assert!(!query_param(&url, "code_challenge").is_empty(), "{url}");
         assert!(!query_param(&url, "state").is_empty(), "{url}");
         // The scope's space must survive encoding or the AS sees one scope.
-        let (u2, _) = begin("https://a.example", "ruview", "sensing:read sensing:admin", false).unwrap();
+        let (u2, _) = begin(
+            "https://a.example",
+            "ruview",
+            "sensing:read sensing:admin",
+            false,
+        )
+        .unwrap();
         assert!(u2.contains("sensing%3Aread%20sensing%3Aadmin"), "{u2}");
 
         // The verifier must never be in the URL — only its S256 hash.
         assert!(set_cookie.starts_with(TXN_COOKIE), "{set_cookie}");
-        assert!(set_cookie.contains("HttpOnly"), "the verifier must not be script-readable");
+        assert!(
+            set_cookie.contains("HttpOnly"),
+            "the verifier must not be script-readable"
+        );
     }
 
     #[test]
     fn the_callback_returns_the_verifier_when_the_state_matches() {
         init_secret_for_tests();
-        let (url, set_cookie) = begin("https://a.example", "ruview", "sensing:read", false).unwrap();
+        let (url, set_cookie) =
+            begin("https://a.example", "ruview", "sensing:read", false).unwrap();
         let state = query_param(&url, "state");
         let header = format!("{TXN_COOKIE}={}", value_of(&set_cookie));
 
         let verifier = verifier_for_callback(&header, &state).expect("matching state");
-        assert!(verifier.len() >= 43, "PKCE verifier looks too short: {}", verifier.len());
+        assert!(
+            verifier.len() >= 43,
+            "PKCE verifier looks too short: {}",
+            verifier.len()
+        );
     }
 
     #[test]
@@ -639,7 +671,8 @@ mod tests {
         // their own authorization, feeds the victim the resulting callback URL,
         // and the victim's browser silently ends up in the ATTACKER's session.
         init_secret_for_tests();
-        let (_url, set_cookie) = begin("https://a.example", "ruview", "sensing:read", false).unwrap();
+        let (_url, set_cookie) =
+            begin("https://a.example", "ruview", "sensing:read", false).unwrap();
         let header = format!("{TXN_COOKIE}={}", value_of(&set_cookie));
 
         assert!(matches!(
@@ -698,7 +731,10 @@ mod tests {
         assert_eq!(session.subject, "sub-1");
         assert_eq!(session.account_id, "acct-1");
         assert!(session.has_scope("sensing:read"));
-        assert!(!session.has_scope("sensing:admin"), "scope must not be widened in transit");
+        assert!(
+            !session.has_scope("sensing:admin"),
+            "scope must not be widened in transit"
+        );
     }
 
     #[test]
@@ -796,8 +832,10 @@ mod tests {
         // txn cookie would let an attacker supply their own verifier and state,
         // which defeats the PKCE binding rather than merely confusing it.
         init_secret_for_tests();
-        let (url_a, cookie_a) = begin("https://a.example", "ruview", "sensing:read", false).unwrap();
-        let (_url_b, cookie_b) = begin("https://a.example", "ruview", "sensing:read", false).unwrap();
+        let (url_a, cookie_a) =
+            begin("https://a.example", "ruview", "sensing:read", false).unwrap();
+        let (_url_b, cookie_b) =
+            begin("https://a.example", "ruview", "sensing:read", false).unwrap();
         let state_a = query_param(&url_a, "state");
 
         let header = format!(
@@ -843,7 +881,9 @@ mod tests {
         // branch that is currently unreachable in production.
         assert_eq!(BROWSER_SIGNIN_SCOPE, ruview_auth::scope::SENSING_READ);
         assert!(
-            !BROWSER_SIGNIN_SCOPE.split_whitespace().any(|s| s == ruview_auth::scope::SENSING_ADMIN),
+            !BROWSER_SIGNIN_SCOPE
+                .split_whitespace()
+                .any(|s| s == ruview_auth::scope::SENSING_ADMIN),
             "browser sign-in must not silently request admin: {BROWSER_SIGNIN_SCOPE}"
         );
     }

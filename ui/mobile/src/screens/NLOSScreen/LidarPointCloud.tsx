@@ -4,6 +4,7 @@ import Svg, { Circle, Line, Rect, Text as SvgText } from 'react-native-svg';
 import { instrumentColors } from '@/components/InstrumentPanel';
 import { ThemedText } from '@/components/ThemedText';
 import type { NlosFreshness, NlosTrack } from '@/types/nlos';
+import type { LidarPointFrame } from '@/types/lidar';
 import {
   buildLidarPointCloud,
   LIDAR_RELAY_POINT_COUNT,
@@ -14,6 +15,7 @@ interface LidarPointCloudProps {
   tracks: NlosTrack[];
   freshness: NlosFreshness;
   width: number;
+  lidarFrame?: LidarPointFrame | null;
 }
 
 interface ProjectedPoint {
@@ -30,10 +32,27 @@ const rgb = (red: number, green: number, blue: number) => (
   `rgb(${Math.round(red * 255)}, ${Math.round(green * 255)}, ${Math.round(blue * 255)})`
 );
 
-export const LidarPointCloud = memo(({ tracks, freshness, width }: LidarPointCloudProps) => {
+export const LidarPointCloud = memo(({ tracks, freshness, width, lidarFrame }: LidarPointCloudProps) => {
   const cloud = useMemo(() => buildLidarPointCloud(tracks), [tracks]);
   const points = useMemo(() => {
     const projected: ProjectedPoint[] = [];
+    if (lidarFrame) {
+      const stride = Math.max(1, Math.ceil(lidarFrame.pointCount / 900));
+      for (let index = 0; index < lidarFrame.pointCount; index += stride) {
+        const offset = index * 3;
+        const x = lidarFrame.points[offset];
+        const y = lidarFrame.points[offset + 1];
+        const z = lidarFrame.points[offset + 2];
+        const confidence = lidarFrame.confidences[index];
+        projected.push({
+          x: 180 + x * 34 - z * 8,
+          y: 220 - y * 46 + z * 7,
+          radius: confidence === 2 ? 1.5 : 1,
+          color: confidence === 2 ? instrumentColors.green : instrumentColors.cyan,
+        });
+      }
+      return projected;
+    }
     for (let index = 0; index < cloud.totalPointCount; index += 1) {
       const isRelay = index < LIDAR_RELAY_POINT_COUNT;
       if ((isRelay && index % 3 !== 0) || (!isRelay && index % 2 !== 0)) continue;
@@ -49,7 +68,7 @@ export const LidarPointCloud = memo(({ tracks, freshness, width }: LidarPointClo
       });
     }
     return projected;
-  }, [cloud]);
+  }, [cloud, lidarFrame]);
   const displayWidth = Math.max(260, Math.min(width, 560));
   const markers = useMemo(() => tracks.slice(0, 16).map((track) => {
     const [x, y, z] = resolveLidarTrackCenter(track);
@@ -66,7 +85,9 @@ export const LidarPointCloud = memo(({ tracks, freshness, width }: LidarPointClo
     <View
       testID="nlos-lidar-point-cloud"
       accessibilityRole="image"
-      accessibilityLabel={`Projected LiDAR reconstruction cloud with ${cloud.targetPointCount} gated target returns from ${tracks.length} hidden target hypotheses. ${freshness} evidence.`}
+      accessibilityLabel={lidarFrame
+        ? `Live iPhone LiDAR cloud with ${lidarFrame.pointCount} visible-scene points. Tracking ${lidarFrame.trackingState}.`
+        : `Projected CSI reconstruction cloud with ${cloud.targetPointCount} gated target returns from ${tracks.length} hidden target hypotheses. ${freshness} evidence.`}
       style={{ alignSelf: 'center', width: displayWidth, aspectRatio: CANVAS_WIDTH / CANVAS_HEIGHT }}
     >
       <Svg width="100%" height="100%" viewBox={`0 0 ${CANVAS_WIDTH} ${CANVAS_HEIGHT}`}>
@@ -93,15 +114,15 @@ export const LidarPointCloud = memo(({ tracks, freshness, width }: LidarPointClo
             <SvgText x={marker.x + 15} y={marker.y + 6} fill={marker.color} fontSize={6}>{marker.confidence}% CONF.</SvgText>
           </Fragment>
         ))}
-        <SvgText x={24} y={34} fill={instrumentColors.cyan} fontSize={9} letterSpacing={1.1}>LIDAR CLOUD / NATIVE PROJECTION</SvgText>
-        <SvgText x={24} y={45} fill={instrumentColors.warning} fontSize={6.5} letterSpacing={0.7}>RECONSTRUCTION / NOT RAW SCAN</SvgText>
-        <SvgText x={276} y={34} fill={instrumentColors.textSecondary} fontSize={7} letterSpacing={0.7}>PROJECTED</SvgText>
+        <SvgText x={24} y={34} fill={instrumentColors.cyan} fontSize={9} letterSpacing={1.1}>{lidarFrame ? 'IPHONE LIDAR / VISIBLE SCENE' : 'CSI RECONSTRUCTION CLOUD'}</SvgText>
+        <SvgText x={24} y={45} fill={instrumentColors.warning} fontSize={6.5} letterSpacing={0.7}>{lidarFrame ? 'ARKIT SCENE DEPTH / NOT THROUGH-WALL' : 'RECONSTRUCTION / NOT RAW SCAN'}</SvgText>
+        <SvgText x={276} y={34} fill={instrumentColors.textSecondary} fontSize={7} letterSpacing={0.7}>{lidarFrame ? 'LIVE' : 'PROJECTED'}</SvgText>
       </Svg>
       <View pointerEvents="none" style={styles.metricRow}>
         <ThemedText testID="nlos-cloud-target-count" preset="labelLg" style={styles.metricValue}>
-          {cloud.targetPointCount}
+          {lidarFrame?.pointCount ?? cloud.targetPointCount}
         </ThemedText>
-        <ThemedText preset="mono" style={styles.metricLabel}>GATED TARGET RETURNS</ThemedText>
+        <ThemedText preset="mono" style={styles.metricLabel}>{lidarFrame ? 'VISIBLE-SCENE POINTS' : 'GATED TARGET RETURNS'}</ThemedText>
       </View>
     </View>
   );

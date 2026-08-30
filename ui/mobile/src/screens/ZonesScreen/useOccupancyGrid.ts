@@ -1,6 +1,5 @@
 import { useMemo } from 'react';
-import type { Classification, SignalField } from '@/types/sensing';
-import { usePoseStore } from '@/stores/poseStore';
+import type { PersonDetection, SignalField } from '@/types/sensing';
 
 const GRID_SIZE = 20;
 const CELL_COUNT = GRID_SIZE * GRID_SIZE;
@@ -22,49 +21,15 @@ const parseNumber = (value: unknown): number | null => {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 };
 
-const parsePoint = (value: unknown): Point | null => {
-  if (!value || typeof value !== 'object') {
-    return null;
-  }
-
-  const record = value as Record<string, unknown>;
-  const x = parseNumber(record.x);
-  const y = parseNumber(record.y);
-
-  if (x === null || y === null) {
-    return null;
-  }
-
-  return {
-    x,
-    y,
-  };
-};
-
-const collectPositions = (value: unknown): Point[] => {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value
-    .map((entry) => parsePoint(entry))
-    .filter((point): point is Point => point !== null)
-    .map((point) => ({
-      x: point.x,
-      y: point.y,
-    }));
-};
-
-const readClassificationPositions = (classification: Classification | undefined): Point[] => {
-  const source = classification as unknown as Record<string, unknown>;
-
-  return (
-    collectPositions(source?.persons) ??
-    collectPositions(source?.personPositions) ??
-    collectPositions(source?.positions) ??
-    []
-  );
-};
+export const mapWorldPositionsToField = (persons: PersonDetection[] | undefined): Point[] => (
+  persons?.flatMap((person) => {
+    if (!person.position) return [];
+    const [worldX, , worldZ] = person.position;
+    if (!Number.isFinite(worldX) || !Number.isFinite(worldZ)) return [];
+    // Inverse of the sensing server's field-cell → room-coordinate transform.
+    return [{ x: worldX / 0.6 + GRID_SIZE / 2, y: worldZ / 0.5 + GRID_SIZE / 2 }];
+  }) ?? []
+);
 
 export const deriveFieldPositions = (values: number[], requestedCount: number): Point[] => {
   const count = Math.max(0, Math.min(16, Math.floor(requestedCount)));
@@ -95,9 +60,8 @@ export const deriveFieldPositions = (values: number[], requestedCount: number): 
 export const useOccupancyGrid = (
   signalField: SignalField | null,
   estimatedPersonCount = 0,
+  persons?: PersonDetection[],
 ): { gridValues: number[]; personPositions: Point[] } => {
-  const classification = usePoseStore((state) => state.classification) as Classification | undefined;
-
   const gridValues = useMemo(() => {
     const sourceValues = signalField?.values;
 
@@ -117,7 +81,7 @@ export const useOccupancyGrid = (
   }, [signalField?.values]);
 
   const personPositions = useMemo(() => {
-    const positions = readClassificationPositions(classification);
+    const positions = mapWorldPositionsToField(persons);
 
     if (positions.length > 0) {
       return positions
@@ -129,7 +93,7 @@ export const useOccupancyGrid = (
     }
 
     return deriveFieldPositions(gridValues, estimatedPersonCount);
-  }, [classification, estimatedPersonCount, gridValues]);
+  }, [estimatedPersonCount, gridValues, persons]);
 
   return {
     gridValues,

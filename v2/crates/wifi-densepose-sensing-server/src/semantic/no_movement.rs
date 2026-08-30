@@ -44,11 +44,7 @@ impl NoMovement {
             return PrimitiveState::Boolean {
                 active: true,
                 changed: true,
-                reason: Reason::new(&[
-                    "presence=true",
-                    "motion<1%",
-                    "dwell>=30min",
-                ]),
+                reason: Reason::new(&["presence=true", "motion<1%", "dwell>=30min"]),
             };
         }
         PrimitiveState::Idle
@@ -80,7 +76,9 @@ mod tests {
         // 30 min later — fire.
         let state = p.tick(&still_snap(60 + 10 + 30 * 60), &cfg());
         match state {
-            PrimitiveState::Boolean { active, changed, .. } => {
+            PrimitiveState::Boolean {
+                active, changed, ..
+            } => {
                 assert!(active && changed);
             }
             other => panic!("expected on/change, got {:?}", other),
@@ -126,7 +124,9 @@ mod tests {
         s.motion = 0.10;
         let state = p.tick(&s, &cfg());
         match state {
-            PrimitiveState::Boolean { active, changed, .. } => {
+            PrimitiveState::Boolean {
+                active, changed, ..
+            } => {
                 assert!(!active && changed);
             }
             other => panic!("expected off/change, got {:?}", other),

@@ -200,14 +200,20 @@ pub fn safetensors_to_rvf(data: &[u8], model_id: &str) -> Result<Vec<u8>, ModelL
     };
 
     if data.len() < 8 {
-        return Err(fail("file shorter than the 8-byte safetensors length header".into()));
+        return Err(fail(
+            "file shorter than the 8-byte safetensors length header".into(),
+        ));
     }
     let header_len = u64::from_le_bytes(data[0..8].try_into().unwrap()) as usize;
     let header_start: usize = 8;
     let header_end = header_start
         .checked_add(header_len)
         .filter(|&e| e <= data.len())
-        .ok_or_else(|| fail(format!("declared header length {header_len} exceeds file size")))?;
+        .ok_or_else(|| {
+            fail(format!(
+                "declared header length {header_len} exceeds file size"
+            ))
+        })?;
 
     // The reference safetensors format pads the header to an 8-byte boundary
     // with NUL bytes after the closing brace; a strict single-shot parse over
@@ -244,10 +250,10 @@ pub fn safetensors_to_rvf(data: &[u8], model_id: &str) -> Result<Vec<u8>, ModelL
         let offsets = tinfo
             .get("data_offsets")
             .and_then(|o| o.as_array())
-            .and_then(|a| {
-                Some((a.first()?.as_u64()? as usize, a.get(1)?.as_u64()? as usize))
-            });
-        let Some((start, end)) = offsets else { continue };
+            .and_then(|a| Some((a.first()?.as_u64()? as usize, a.get(1)?.as_u64()? as usize)));
+        let Some((start, end)) = offsets else {
+            continue;
+        };
         let abs_start = tensor_base.checked_add(start);
         let abs_end = tensor_base.checked_add(end);
         match (abs_start, abs_end) {
@@ -256,9 +262,8 @@ pub fn safetensors_to_rvf(data: &[u8], model_id: &str) -> Result<Vec<u8>, ModelL
                     let bytes = &data[s..e];
                     if bytes.len() % 4 == 0 {
                         for chunk in bytes.chunks_exact(4) {
-                            weights.push(f32::from_le_bytes([
-                                chunk[0], chunk[1], chunk[2], chunk[3],
-                            ]));
+                            weights
+                                .push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
                         }
                         tensor_names.push(tname.clone());
                     }
@@ -318,8 +323,8 @@ pub fn jsonl_to_rvf(data: &[u8], model_id: &str) -> Result<Vec<u8>, ModelLoadErr
         if line.is_empty() {
             continue;
         }
-        let v: serde_json::Value = serde_json::from_str(line)
-            .map_err(|e| fail(format!("line is not valid JSON: {e}")))?;
+        let v: serde_json::Value =
+            serde_json::from_str(line).map_err(|e| fail(format!("line is not valid JSON: {e}")))?;
         if let Some(arr) = v.get("weights").and_then(|w| w.as_array()) {
             for x in arr {
                 if let Some(f) = x.as_f64() {
@@ -417,7 +422,10 @@ mod tests {
     #[test]
     fn detects_safetensors_by_magic_and_name() {
         let st = make_safetensors(&[1.0, 2.0, 3.0]);
-        assert_eq!(detect_format(&st, "model.safetensors"), ModelFormat::Safetensors);
+        assert_eq!(
+            detect_format(&st, "model.safetensors"),
+            ModelFormat::Safetensors
+        );
         assert_eq!(detect_format(&st, ""), ModelFormat::Safetensors); // by content
     }
 
@@ -426,13 +434,19 @@ mod tests {
         // The exact bytes the loader reported: "5WEw" => LE u32 0x77455735.
         let data = [0x35u8, 0x57, 0x45, 0x77, 0xAA, 0xBB];
         assert_eq!(leading_u32(&data), Some(HF_QUANT_MAGIC));
-        assert_eq!(detect_format(&data, "model-q4.bin"), ModelFormat::HfQuantBin);
+        assert_eq!(
+            detect_format(&data, "model-q4.bin"),
+            ModelFormat::HfQuantBin
+        );
         assert_eq!(detect_format(&data, ""), ModelFormat::HfQuantBin); // by magic
     }
 
     #[test]
     fn detects_jsonl_and_rvf() {
-        assert_eq!(detect_format(b"{\"seg\":0}\n", "model.rvf.jsonl"), ModelFormat::JsonlManifest);
+        assert_eq!(
+            detect_format(b"{\"seg\":0}\n", "model.rvf.jsonl"),
+            ModelFormat::JsonlManifest
+        );
         // RVFS magic ("RVFS" LE) -> Rvf.
         let rvfs = RVFS_MAGIC.to_le_bytes();
         assert_eq!(detect_format(&rvfs, "model.rvf"), ModelFormat::Rvf);
@@ -490,7 +504,11 @@ mod tests {
         let la = loader.load_layer_a().expect("Layer A");
         assert_eq!(la.model_name, "wifi-densepose-pretrained");
         let lc = loader.load_layer_c().expect("Layer C");
-        assert_eq!(lc.all_weights, vec![1.0, 2.0, 3.0, 4.0], "weights round-trip");
+        assert_eq!(
+            lc.all_weights,
+            vec![1.0, 2.0, 3.0, 4.0],
+            "weights round-trip"
+        );
     }
 
     /// CORE #894 PROOF: feeding the HF quant magic to the classifier yields the
@@ -503,10 +521,18 @@ mod tests {
             "model-q4.bin",
             "invalid magic at offset 0: expected 0x52564653, got 0x77455735",
         );
-        assert!(matches!(err, ModelLoadError::UnsupportedQuant { magic } if magic == HF_QUANT_MAGIC));
+        assert!(
+            matches!(err, ModelLoadError::UnsupportedQuant { magic } if magic == HF_QUANT_MAGIC)
+        );
         let msg = err.to_string();
-        assert!(msg.contains("safetensors"), "must point at the loadable format: {msg}");
-        assert!(!msg.contains("invalid magic at offset"), "must not leak opaque magic: {msg}");
+        assert!(
+            msg.contains("safetensors"),
+            "must point at the loadable format: {msg}"
+        );
+        assert!(
+            !msg.contains("invalid magic at offset"),
+            "must not leak opaque magic: {msg}"
+        );
     }
 
     /// safetensors load failure is classified as NeedsConversion with a
@@ -517,7 +543,10 @@ mod tests {
         let err = classify_load_failure(&st, "model.safetensors", "invalid magic …");
         assert!(matches!(err, ModelLoadError::NeedsConversion { .. }));
         let msg = err.to_string();
-        assert!(msg.contains("--convert-model"), "must give the convert command: {msg}");
+        assert!(
+            msg.contains("--convert-model"),
+            "must give the convert command: {msg}"
+        );
     }
 
     /// jsonl manifest converts and loads.

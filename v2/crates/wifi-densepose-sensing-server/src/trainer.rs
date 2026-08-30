@@ -1323,13 +1323,19 @@ mod tests {
         // Raw threshold 0.2: 0.15 ≤ 0.2 ⇒ correct ⇒ PCK 1.0, independent of any
         // torso scale (there is none in this kernel).
         let raw = pck_at_threshold(&pred, &target, 0.2);
-        assert!((raw - 1.0).abs() < 1e-6, "raw PCK ignores scale; expected 1.0, got {raw}");
+        assert!(
+            (raw - 1.0).abs() < 1e-6,
+            "raw PCK ignores scale; expected 1.0, got {raw}"
+        );
 
         // Same absolute error, tighter raw threshold 0.1: 0.15 > 0.1 ⇒ wrong ⇒ 0.0.
         // The verdict is set purely by the absolute distance vs thr — the
         // signature of a raw (un-normalized) PCK, NOT canonical torso-relative PCK.
         let raw_tight = pck_at_threshold(&pred, &target, 0.1);
-        assert!(raw_tight < 1e-6, "raw PCK is absolute-distance only; expected 0.0, got {raw_tight}");
+        assert!(
+            raw_tight < 1e-6,
+            "raw PCK is absolute-distance only; expected 0.0, got {raw_tight}"
+        );
     }
     #[test]
     fn oks_perfect_is_1() {

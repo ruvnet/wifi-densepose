@@ -79,12 +79,17 @@ impl Server {
             let (http, ws, udp) = (free_port(), free_port(), free_port());
             let mut cmd = Command::new(env!("CARGO_BIN_EXE_sensing-server"));
             cmd.args([
-                "--http-port", &http.to_string(),
-                "--ws-port", &ws.to_string(),
-                "--udp-port", &udp.to_string(),
-                "--bind-addr", "127.0.0.1",
+                "--http-port",
+                &http.to_string(),
+                "--ws-port",
+                &ws.to_string(),
+                "--udp-port",
+                &udp.to_string(),
+                "--bind-addr",
+                "127.0.0.1",
                 "--no-edge-registry",
-                "--source", "simulate",
+                "--source",
+                "simulate",
             ])
             // Inherit nothing auth-related from the developer's shell, or a local
             // RUVIEW_* export would silently change what this test proves.
@@ -108,9 +113,10 @@ impl Server {
             }
             let _ = child.kill();
             let _ = child.wait();
-            let looks_like_port_collision =
-                err.contains("AddrInUse") || err.contains("Address already in use")
-                    || err.contains("code: 10048") || err.contains("code: 98");
+            let looks_like_port_collision = err.contains("AddrInUse")
+                || err.contains("Address already in use")
+                || err.contains("code: 10048")
+                || err.contains("code: 98");
             if looks_like_port_collision && attempt < MAX_ATTEMPTS {
                 continue;
             }
@@ -152,7 +158,9 @@ fn status(port: u16, method: &str, path: &str, headers: &[(&str, &str)]) -> u16 
     s.write_all(req.as_bytes()).expect("write");
 
     let mut line = String::new();
-    BufReader::new(&mut s).read_line(&mut line).expect("status line");
+    BufReader::new(&mut s)
+        .read_line(&mut line)
+        .expect("status line");
     line.split_whitespace()
         .nth(1)
         .and_then(|c| c.parse().ok())
@@ -194,7 +202,12 @@ fn ws_upgrade(port: u16, path: &str, bearer: Option<&str>) -> u16 {
 }
 
 /// Every WebSocket path, on every listener. This list is the point of the test.
-const WS_PATHS: &[&str] = &["/ws/sensing", "/ws/introspection", "/api/v1/stream/pose", "/ws/field"];
+const WS_PATHS: &[&str] = &[
+    "/ws/sensing",
+    "/ws/introspection",
+    "/api/v1/stream/pose",
+    "/ws/field",
+];
 
 /// Non-WebSocket routes that carry sensing data and must be gated.
 ///
@@ -218,7 +231,12 @@ fn with_auth_on_no_listener_serves_sensing_data_anonymously() {
             );
             // And the credential must actually work, or the assertion above
             // could pass because the route simply does not exist.
-            let ok = status(port, "GET", path, &[("Authorization", &format!("Bearer {TOKEN}"))]);
+            let ok = status(
+                port,
+                "GET",
+                path,
+                &[("Authorization", &format!("Bearer {TOKEN}"))],
+            );
             assert_ne!(ok, 401, "{label} port {path} rejected a VALID bearer");
         }
     }
@@ -252,7 +270,11 @@ fn with_auth_on_no_listener_accepts_an_unauthenticated_websocket() {
     );
 
     for &port_label in &["http", "ws"] {
-        let port = if port_label == "http" { server.http } else { server.ws };
+        let port = if port_label == "http" {
+            server.http
+        } else {
+            server.ws
+        };
         for path in WS_PATHS {
             let code = ws_upgrade(port, path, None);
             assert_ne!(

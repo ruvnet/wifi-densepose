@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react';
 import { View, ViewStyle } from 'react-native';
-import Svg, { Circle, Polygon, Rect } from 'react-native-svg';
+import Svg, { Circle, G, Line, Rect } from 'react-native-svg';
 import Animated, {
   createAnimatedComponent,
   interpolateColor,
@@ -15,8 +15,8 @@ import {
   Gesture,
   GestureDetector,
 } from 'react-native-gesture-handler';
-import { colors } from '@/theme/colors';
 import { spacing } from '@/theme/spacing';
+import { instrumentColors } from '@/components/InstrumentPanel';
 
 const GRID_SIZE = 20;
 const CELL_COUNT = GRID_SIZE * GRID_SIZE;
@@ -67,33 +67,19 @@ const Cell = ({
   const y = Math.floor(index / GRID_SIZE) * cellSize;
 
   const animatedProps = useAnimatedProps(() => {
+    const intensity = values.value[index] ?? 0;
     const fill = interpolateColor(
-      values.value[index] ?? 0,
+      intensity,
       [0, 0.5, 1],
-      ['rgb(0, 0, 255)', 'rgb(0, 255, 0)', 'rgb(255, 0, 0)'],
+      ['rgb(7, 21, 27)', 'rgb(25, 212, 230)', 'rgb(38, 217, 104)'],
     );
     return {
       fill,
-      opacity: 0.95 + (progress.value - 1) * 0.05,
+      opacity: 0.05 + intensity * 0.88 + (progress.value - 1) * 0.03,
     };
   }, [index]);
 
   return <AnimatedRect x={x} y={y} width={cellSize} height={cellSize} rx={1} animatedProps={animatedProps} />;
-};
-
-const RouterMarker = ({ cellSize }: { cellSize: number }) => {
-  const cx = cellSize * 5.5;
-  const cy = cellSize * 17.5;
-  const radius = cellSize * 0.35;
-
-  return (
-    <Polygon
-      points={`${cx},${cy - radius} ${cx + radius},${cy} ${cx},${cy + radius} ${cx - radius},${cy}`}
-      fill="rgba(50, 184, 198, 0.25)"
-      stroke={colors.accent}
-      strokeWidth={2}
-    />
-  );
 };
 
 export const FloorPlanSvg = ({ gridValues, personPositions, size = 320, style }: FloorPlanSvgProps) => {
@@ -160,21 +146,8 @@ export const FloorPlanSvg = ({ gridValues, personPositions, size = 320, style }:
         const cy = (Math.max(0, Math.min(GRID_SIZE - 1, point.y)) + 0.5) * cellSize;
         const radius = Math.max(2.8, cellSize * 0.22);
 
-        return (
-          <Circle
-            key={`person-${idx}`}
-            cx={cx}
-            cy={cy}
-            r={radius}
-            fill={colors.accent}
-            stroke="#FFFFFF"
-            strokeWidth={1.8}
-          />
-        );
-      })
-      .concat(
-        <RouterMarker key="router" cellSize={size / GRID_SIZE} />,
-      );
+        return <G key={`person-${idx}`}><Circle cx={cx} cy={cy} r={radius * 3.4} fill="rgba(38,217,104,.08)" stroke="rgba(38,217,104,.42)" strokeWidth={1} strokeDasharray="3 3" /><Circle cx={cx} cy={cy} r={radius} fill={instrumentColors.green} stroke="#E7EBEF" strokeWidth={1.8} /></G>;
+      });
   }, [personPositions, size]);
 
   return (
@@ -182,6 +155,9 @@ export const FloorPlanSvg = ({ gridValues, personPositions, size = 320, style }:
       <GestureDetector gesture={panGesture}>
         <AnimatedContainer style={panStyle}>
           <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+            <Rect x={0} y={0} width={size} height={size} rx={12} fill="#070B10" />
+            {Array.from({ length: 9 }, (_, index) => { const offset = ((index + 1) * size) / 10; return <Line key={`grid-v-${index}`} x1={offset} y1={0} x2={offset} y2={size} stroke="rgba(25,212,230,.07)" strokeWidth={1} />; })}
+            {Array.from({ length: 9 }, (_, index) => { const offset = ((index + 1) * size) / 10; return <Line key={`grid-h-${index}`} x1={0} y1={offset} x2={size} y2={offset} stroke="rgba(25,212,230,.07)" strokeWidth={1} />; })}
             {Array.from({ length: CELL_COUNT }).map((_, index) => (
               <Cell
                 key={`cell-${index}`}

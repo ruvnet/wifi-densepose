@@ -1,6 +1,7 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import { AppTabBar } from '@/navigation/MainTabs';
+import { useTabScrollStore } from '@/stores/tabScrollStore';
 
 jest.mock('@expo/vector-icons', () => ({
   Ionicons: require('react-native').View,
@@ -31,7 +32,7 @@ jest.mock('@/screens/SettingsScreen', () => ({
   default: require('react-native').View,
 }));
 
-const routes = ['Live', 'NLOS', 'Vitals', 'Zones', 'MAT', 'Settings'].map((name) => ({
+const routes = ['Live', 'Calibration', 'Vitals', 'Zones', 'MAT', 'Settings'].map((name) => ({
   key: `${name}-key`,
   name,
   params: undefined,
@@ -61,12 +62,20 @@ const renderTabBar = (activeIndex = 1, defaultPrevented = false) => {
 };
 
 describe('AppTabBar', () => {
+  beforeEach(() => {
+    useTabScrollStore.setState({
+      tokens: { Welcome: 0, Live: 0, Calibration: 0, Vitals: 0, Zones: 0, MAT: 0, Settings: 0 },
+    });
+  });
+
   it('renders a full touch target for every route', () => {
     renderTabBar();
 
     for (const route of routes) {
       expect(screen.getByTestId(`tab-${route.name.toLowerCase()}`)).toBeTruthy();
     }
+    expect(screen.getByText('Calibration')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Calibration tab' })).toBeTruthy();
     expect(screen.getByText('3')).toBeTruthy();
   });
 
@@ -81,6 +90,7 @@ describe('AppTabBar', () => {
       canPreventDefault: true,
     });
     expect(navigation.navigate).toHaveBeenCalledWith('Live', undefined);
+    expect(useTabScrollStore.getState().tokens.Live).toBe(1);
   });
 
   it('does not navigate when tabPress is prevented', () => {
@@ -89,14 +99,16 @@ describe('AppTabBar', () => {
     fireEvent.press(screen.getByTestId('tab-settings'));
 
     expect(navigation.navigate).not.toHaveBeenCalled();
+    expect(useTabScrollStore.getState().tokens.Settings).toBe(0);
   });
 
   it('does not re-navigate when the active tab is pressed', () => {
     const navigation = renderTabBar(1);
 
-    fireEvent.press(screen.getByTestId('tab-nlos'));
+    fireEvent.press(screen.getByTestId('tab-calibration'));
 
     expect(navigation.emit).toHaveBeenCalled();
     expect(navigation.navigate).not.toHaveBeenCalled();
+    expect(useTabScrollStore.getState().tokens.Calibration).toBe(1);
   });
 });

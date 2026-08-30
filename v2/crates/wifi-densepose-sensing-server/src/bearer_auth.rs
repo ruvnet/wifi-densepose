@@ -142,8 +142,7 @@ pub const PROTECTED_PREFIX: &str = "/api/v1/";
 const ANONYMOUS_PREFIXES: &[&str] = &[
     // Orchestrator and load-balancer probes. Documented exemption (ADR-272),
     // pinned by `health_stays_anonymous_on_both_listeners`.
-    "/health",
-    // Sign-in cannot require being signed in.
+    "/health", // Sign-in cannot require being signed in.
     "/oauth/",
 ];
 
@@ -174,11 +173,7 @@ pub fn is_anonymous(path: &str) -> bool {
 /// This list is the set that exists today, used for the boot warning and tests.
 /// The runtime rule is [`is_ws_path`], which matches by prefix so routes added
 /// later are gated without an edit here.
-pub const WS_PATHS: &[&str] = &[
-    "/ws/sensing",
-    "/ws/introspection",
-    "/api/v1/stream/pose",
-];
+pub const WS_PATHS: &[&str] = &["/ws/sensing", "/ws/introspection", "/api/v1/stream/pose"];
 
 /// Restore the pre-ADR-272 behaviour: WebSocket upgrades accepted with no
 /// credential even when auth is on.
@@ -218,6 +213,16 @@ pub const WS_PREFIX: &str = "/ws/";
 /// free.
 fn is_ws_path(path: &str) -> bool {
     path.starts_with(WS_PREFIX) || WS_PATHS_OUTSIDE_PREFIX.contains(&path)
+}
+
+/// Stream scope by direction. Most WebSockets are read-only streams; LiDAR is
+/// an ingest/write stream and therefore fails closed to admin authority.
+fn required_scope_for_ws(path: &str) -> &'static str {
+    if path == "/ws/lidar" {
+        scope::SENSING_ADMIN
+    } else {
+        scope::SENSING_READ
+    }
 }
 
 /// Cognitum OAuth verification state. Built once at boot and shared.
@@ -345,7 +350,11 @@ impl AuthState {
                 } else {
                     tracing::info!(accepted_clients = ?allowed_client_ids, "OAuth audience restricted");
                 }
-                Some(Arc::new(OAuthState { jwks, issuer, allowed_client_ids }))
+                Some(Arc::new(OAuthState {
+                    jwks,
+                    issuer,
+                    allowed_client_ids,
+                }))
             }
             Ok(_) => return Err(OAuthConfigError::EmptyIssuer),
             Err(_) => None,
@@ -491,6 +500,9 @@ const READ_SAFE_MUTATIONS: &[&str] = &[
     // Capture and calibration: create data, never destroy it.
     "/api/v1/calibration/start",
     "/api/v1/calibration/stop",
+    // Cancels only an unfinished, exactly-bound capture. Completed model
+    // deletion remains on the admin-only `/api/v1/calibration/reset` route.
+    "/api/v1/calibration/cancel",
     "/api/v1/pose/calibrate",
     "/api/v1/recording/start",
     "/api/v1/recording/stop",
@@ -533,13 +545,14 @@ pub async fn require_bearer(
             // Consumed here — one attempt per ticket, valid or not, so a
             // guessed value cannot be retried and a real one cannot be replayed.
             if let Some(grant) = auth.tickets.consume(&ticket) {
-                let holds_read = grant
+                let required = required_scope_for_ws(&path);
+                let holds_required = grant
                     .scopes
                     .as_deref()
                     // `None` = issued by the legacy static token, which predates
                     // scopes and carries full authority.
-                    .map_or(true, |s| s.split_whitespace().any(|x| x == scope::SENSING_READ));
-                if holds_read {
+                    .map_or(true, |s| s.split_whitespace().any(|x| x == required));
+                if holds_required {
                     tracing::debug!(path = %path, subject = ?grant.subject, "WebSocket authorized by ticket");
                     return next.run(request).await;
                 }
@@ -584,8 +597,7 @@ pub async fn require_bearer(
     // 2. Cognitum OAuth (ADR-271).
     if let Some(oauth) = auth.oauth.as_ref() {
         let required = if is_ws_path(&path) {
-            // A stream is a read, regardless of the HTTP verb on the upgrade.
-            scope::SENSING_READ
+            required_scope_for_ws(&path)
         } else {
             required_scope_for(request.method(), &path)
         };
@@ -658,7 +670,7 @@ pub async fn require_bearer(
         {
             if let Some(session) = crate::browser_session::from_cookie_header(cookie_header) {
                 let required = if is_ws_path(&path) {
-                    scope::SENSING_READ
+                    required_scope_for_ws(&path)
                 } else {
                     required_scope_for(request.method(), &path)
                 };
@@ -716,7 +728,7 @@ async fn session_or_unauthorized(auth: &AuthState, request: Request, next: Next)
         {
             if let Some(session) = crate::browser_session::from_cookie_header(h) {
                 let required = if is_ws_path(&path) {
-                    scope::SENSING_READ
+                    required_scope_for_ws(&path)
                 } else {
                     required_scope_for(request.method(), &path)
                 };
@@ -835,7 +847,10 @@ mod tests {
 
         // The deliberate escape hatch must keep working, or the fix above would
         // be a behaviour change wearing a security label.
-        assert!(read("*").is_empty(), "`*` must remain the way to accept any client");
+        assert!(
+            read("*").is_empty(),
+            "`*` must remain the way to accept any client"
+        );
 
         // And a real list must still parse, trailing comma and all.
         assert_eq!(
@@ -924,7 +939,7 @@ mod tests {
         assert_eq!(req_status("bearer s3cr3t").await, StatusCode::OK);
         assert_eq!(req_status("BEARER s3cr3t").await, StatusCode::OK);
         assert_eq!(req_status("Bearer  s3cr3t").await, StatusCode::OK); // extra space
-        // Scheme leniency must NOT weaken the token check.
+                                                                        // Scheme leniency must NOT weaken the token check.
         assert_eq!(req_status("bearer nope").await, StatusCode::UNAUTHORIZED);
         assert_eq!(req_status("Basic s3cr3t").await, StatusCode::UNAUTHORIZED);
     }
@@ -984,26 +999,14 @@ mod tests {
             "?token= in the query string must not authenticate (CWE-598)"
         );
         assert_eq!(
-            status(
-                r.clone(),
-                "GET",
-                "/api/v1/info?access_token=s3cr3t",
-                None
-            )
-            .await,
+            status(r.clone(), "GET", "/api/v1/info?access_token=s3cr3t", None).await,
             StatusCode::UNAUTHORIZED,
             "?access_token= in the query string must not authenticate (CWE-598)"
         );
         // A query token must not "help" a request that also lacks the header,
         // even combined with an unrelated param.
         assert_eq!(
-            status(
-                r.clone(),
-                "GET",
-                "/api/v1/info?foo=bar&token=s3cr3t",
-                None
-            )
-            .await,
+            status(r.clone(), "GET", "/api/v1/info?foo=bar&token=s3cr3t", None).await,
             StatusCode::UNAUTHORIZED
         );
         // The header path is the only accepted channel — same token, header,
@@ -1250,7 +1253,12 @@ mod oauth_tests {
     /// Same as [`call`] but presents a browser session cookie instead of a
     /// bearer. The cookie is minted through `browser_session`'s real signing
     /// path, so this exercises genuine verification.
-    async fn call_with_session(auth: AuthState, method: &str, path: &str, cookie: &str) -> StatusCode {
+    async fn call_with_session(
+        auth: AuthState,
+        method: &str,
+        path: &str,
+        cookie: &str,
+    ) -> StatusCode {
         let req = Request::builder()
             .method(method)
             .uri(path)
@@ -1452,7 +1460,8 @@ mod oauth_tests {
             "scope": "sensing:read sensing:admin",
             "exp": chrono::Utc::now().timestamp() + 3600,
         });
-        let raw = crate::browser_session::test_sign_for_tests(&serde_json::to_vec(&legacy).unwrap());
+        let raw =
+            crate::browser_session::test_sign_for_tests(&serde_json::to_vec(&legacy).unwrap());
         let c = format!("ruview_session={raw}");
 
         assert_eq!(
@@ -1717,12 +1726,9 @@ mod oauth_tests {
                 None => "none".to_string(),
             }
         }
-        let router = Router::new()
-            .route("/api/v1/whoami", get(echo))
-            .layer(axum::middleware::from_fn_with_state(
-                oauth_only(),
-                require_bearer,
-            ));
+        let router = Router::new().route("/api/v1/whoami", get(echo)).layer(
+            axum::middleware::from_fn_with_state(oauth_only(), require_bearer),
+        );
         let t = token_with_scope(scope::SENSING_READ);
         let resp = router
             .oneshot(
@@ -1823,7 +1829,10 @@ mod ws_gate_tests {
         let auth = static_auth();
         let ticket = auth
             .tickets()
-            .issue(TicketGrant { scopes: None, subject: None })
+            .issue(TicketGrant {
+                scopes: None,
+                subject: None,
+            })
             .unwrap();
         let uri = format!("/ws/sensing?ticket={ticket}");
 
@@ -1866,7 +1875,10 @@ mod ws_gate_tests {
         let auth = static_auth();
         let ticket = auth
             .tickets()
-            .issue(TicketGrant { scopes: None, subject: None })
+            .issue(TicketGrant {
+                scopes: None,
+                subject: None,
+            })
             .unwrap();
         assert_eq!(
             get_status(auth, &format!("/api/v1/models?ticket={ticket}"), None).await,
@@ -1931,7 +1943,10 @@ mod ws_path_matching_tests {
             "/ui/index.html",
             "/",
         ] {
-            assert!(!is_ws_path(p), "{p} must not be treated as a WebSocket path");
+            assert!(
+                !is_ws_path(p),
+                "{p} must not be treated as a WebSocket path"
+            );
         }
     }
 
@@ -1940,6 +1955,13 @@ mod ws_path_matching_tests {
         // `/wsx/...` must not match `/ws/`.
         assert!(!is_ws_path("/wsx/sensing"));
         assert!(!is_ws_path("/ws"));
+    }
+
+    #[test]
+    fn lidar_ingest_requires_admin_while_output_streams_require_read() {
+        assert_eq!(required_scope_for_ws("/ws/lidar"), scope::SENSING_ADMIN);
+        assert_eq!(required_scope_for_ws("/ws/field"), scope::SENSING_READ);
+        assert_eq!(required_scope_for_ws("/ws/sensing"), scope::SENSING_READ);
     }
 }
 
@@ -1993,10 +2015,7 @@ mod scope_gate_polarity_tests {
                 scope::SENSING_ADMIN,
                 "unknown mutating route {p} must fail closed to admin"
             );
-            assert_eq!(
-                required_scope_for(&Method::DELETE, p),
-                scope::SENSING_ADMIN
-            );
+            assert_eq!(required_scope_for(&Method::DELETE, p), scope::SENSING_ADMIN);
         }
     }
 
@@ -2037,6 +2056,14 @@ mod scope_gate_polarity_tests {
         assert_eq!(
             required_scope_for(&Method::POST, "/api/v1/ws-ticket"),
             scope::SENSING_READ
+        );
+    }
+
+    #[test]
+    fn cost_bearing_calibration_guidance_requires_admin() {
+        assert_eq!(
+            required_scope_for(&Method::POST, "/api/v1/calibration/guidance"),
+            scope::SENSING_ADMIN
         );
     }
 

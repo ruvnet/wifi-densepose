@@ -89,14 +89,14 @@ export const ProvenancePanel = ({ frame, freshness, streamStatus }: ProvenancePa
   const stateAccent = evidenceStateColor(evidenceState);
 
   return (
-    <InstrumentPanel testID="nlos-provenance-panel" eyebrow="Evidence state" style={styles.card}>
+    <InstrumentPanel testID="nlos-provenance-panel" eyebrow="Calibration evidence state" style={styles.card}>
       <View style={styles.stateRow}>
         <View style={styles.stateIdentity}>
           <View style={[styles.stateDot, { backgroundColor: stateAccent }]} />
           <ThemedText
             testID="nlos-evidence-state"
             preset="labelLg"
-            accessibilityLabel={`NLOS evidence state ${evidenceState}`}
+            accessibilityLabel={`Calibration evidence state ${evidenceState}`}
             style={[styles.evidenceState, { color: stateAccent }]}
           >
             {evidenceState}

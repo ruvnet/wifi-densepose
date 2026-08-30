@@ -65,5 +65,5 @@ pub mod record;
 pub use bus::{SemanticBus, SemanticEvent, SemanticKind};
 pub use common::{PrimitiveConfig, PrimitiveState, RawSnapshot, Reason};
 pub use record::{
-    AgentRoute, MultiSignalRule, PrivacyAction, RecordContext, SemanticStateRecord, route_all,
+    route_all, AgentRoute, MultiSignalRule, PrivacyAction, RecordContext, SemanticStateRecord,
 };

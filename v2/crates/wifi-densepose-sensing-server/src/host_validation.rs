@@ -374,12 +374,7 @@ mod tests {
     #[tokio::test]
     async fn forwarded_headers_never_bypass_host_allowlist() {
         let r = router(HostAllowlist::loopback_only());
-        async fn with_forwarded(
-            router: Router,
-            host: &str,
-            xff: &str,
-            xfh: &str,
-        ) -> StatusCode {
+        async fn with_forwarded(router: Router, host: &str, xff: &str, xfh: &str) -> StatusCode {
             let req = Request::builder()
                 .method("GET")
                 .uri("/api/v1/pose/current")

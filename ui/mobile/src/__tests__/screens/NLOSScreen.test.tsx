@@ -43,6 +43,10 @@ jest.mock('@/hooks/useNlosStream', () => ({
   useNlosStream: () => mockNlosResult,
 }));
 
+jest.mock('@/hooks/usePoseStream', () => ({
+  usePoseStream: () => ({ connectionStatus: 'disconnected', lastFrame: null, isSimulated: false }),
+}));
+
 jest.mock('react-native-svg', () => {
   const { View, Text } = require('react-native');
   return {
@@ -56,6 +60,14 @@ jest.mock('react-native-svg', () => {
     Text,
   };
 });
+
+const openCalibrationStep = (step: 'connect' | 'room' | 'pose' | 'review') => {
+  fireEvent.press(screen.getByTestId(`calibration-step-${step}`));
+};
+
+const openHelp = () => {
+  fireEvent.press(screen.getByRole('button', { name: 'Show setup and safety help' }));
+};
 
 describe('NLOSScreen', () => {
   beforeEach(() => {
@@ -80,18 +92,22 @@ describe('NLOSScreen', () => {
     expect(typography.mono.fontFamily).toBe('JetBrainsMono_500Medium');
   });
 
-  it('renders the RuView NLOS screen and iPhone API boundary', () => {
+  it('renders the RuView Calibration screen and iPhone API boundary', () => {
     const { NLOSScreen } = require('@/screens/NLOSScreen');
     render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
-    expect(screen.getByText('Consumer NLOS / field viewer')).toBeTruthy();
+    expect(screen.getByText('RuView installation / calibration')).toBeTruthy();
+    expect(screen.getByText('Calibrate the room.')).toBeTruthy();
     expect(screen.getByText(/does not access raw iPhone LiDAR timing data/)).toBeTruthy();
-    expect(screen.getByText(/web client cannot capture ARKit LiDAR or raw timing data/)).toBeTruthy();
+    expect(screen.getByTestId('calibration-guided-menu')).toBeTruthy();
+    expect(screen.getByText('Connect a verified source')).toBeTruthy();
   });
 
   it('keeps the instrument content inside supplied iPhone safe area insets', () => {
     Object.assign(mockSafeAreaInsets, { top: 47, right: 3, bottom: 34, left: 3 });
     const { NLOSScreen } = require('@/screens/NLOSScreen');
     render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
+
+    openHelp();
 
     const contentStyle = StyleSheet.flatten(
       screen.getByTestId('nlos-scroll-view').props.contentContainerStyle,
@@ -119,11 +135,13 @@ describe('NLOSScreen', () => {
     const { NLOSScreen } = require('@/screens/NLOSScreen');
     render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
 
+    openHelp();
+
     expect(NLOS_EXPLAINER_URL).toBe('https://ruview-nlos.ruv.chatgpt.site');
     expect(NLOS_FEEDBACK_URL).toBe('https://github.com/ruvnet/RuView/issues/1690');
     expect(screen.getByRole('link', { name: 'OPEN EXPLAINER' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'TEST STEPS AND FEEDBACK' })).toBeTruthy();
-    expect(screen.getByText(/Depth only input is never physical NLOS evidence/)).toBeTruthy();
+    expect(screen.getByText(/Depth-only input is never physical through-wall evidence/)).toBeTruthy();
     expect(screen.getByText(/No credentials are saved by setup/)).toBeTruthy();
   });
 
@@ -131,6 +149,8 @@ describe('NLOSScreen', () => {
     const openUrl = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
     const { NLOSScreen } = require('@/screens/NLOSScreen');
     render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
+
+    openHelp();
 
     fireEvent.press(screen.getByRole('link', { name: 'OPEN EXPLAINER' }));
     fireEvent.press(screen.getByRole('link', { name: 'TEST STEPS AND FEEDBACK' }));
@@ -140,9 +160,23 @@ describe('NLOSScreen', () => {
     openUrl.mockRestore();
   });
 
+  it('presents one guided calibration task at a time with working next and back controls', () => {
+    const { NLOSScreen } = require('@/screens/NLOSScreen');
+    render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
+
+    expect(screen.getByText('Connect a verified source')).toBeTruthy();
+    expect(screen.queryByText('Measure and align the room')).toBeNull();
+    fireEvent.press(screen.getByRole('button', { name: 'CONTINUE TO ROOM' }));
+    expect(screen.getByText('Measure and align the room')).toBeTruthy();
+    expect(screen.queryByText('Connect a verified source')).toBeNull();
+    fireEvent.press(screen.getByRole('button', { name: 'BACK' }));
+    expect(screen.getByText('Connect a verified source')).toBeTruthy();
+  });
+
   it('always watermarks synthetic replay', () => {
     const { NLOSScreen } = require('@/screens/NLOSScreen');
     render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
+    openCalibrationStep('review');
     expect(screen.getByTestId('nlos-synthetic-watermark')).toBeTruthy();
     expect(screen.getByTestId('nlos-provenance-badge').props.children).toBe('SYNTHETIC');
     expect(screen.getByTestId('nlos-evidence-state').props.children).toBe('SYNTHETIC');
@@ -160,7 +194,7 @@ describe('NLOSScreen', () => {
   it('does not enable live without an ephemeral credential', () => {
     const { NLOSScreen } = require('@/screens/NLOSScreen');
     render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
-    const button = screen.getByRole('button', { name: 'CONNECT AUTHENTICATED LIVE' });
+    const button = screen.getByRole('button', { name: 'CONNECT LIVE CALIBRATION' });
     expect(button.props.accessibilityState?.disabled ?? button.props.disabled).toBeTruthy();
     expect(screen.getByText(/never stored by this client/)).toBeTruthy();
   });
@@ -186,6 +220,7 @@ describe('NLOSScreen', () => {
     Object.assign(mockNlosResult, { frame: null, freshness: 'unknown', streamStatus: 'idle' });
     const { NLOSScreen } = require('@/screens/NLOSScreen');
     render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
+    openCalibrationStep('review');
     expect(screen.getByTestId('nlos-provenance-badge').props.children).toBe('UNKNOWN');
     expect(screen.getByTestId('nlos-evidence-state').props.children).toBe('DISCONNECTED');
     expect(screen.getByTestId('nlos-track-count').props.children).toBe(0);
@@ -204,6 +239,7 @@ describe('NLOSScreen', () => {
     });
     const { NLOSScreen } = require('@/screens/NLOSScreen');
     render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
+    openCalibrationStep('review');
     expect(screen.getByTestId('nlos-stale-overlay')).toBeTruthy();
     expect(screen.getByTestId('nlos-evidence-state').props.children).toBe('STALE');
     expect(screen.getByTestId('nlos-freshness-badge').props.children).toBe('STALE');
@@ -225,6 +261,7 @@ describe('NLOSScreen', () => {
     });
     const { NLOSScreen } = require('@/screens/NLOSScreen');
     render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
+    openCalibrationStep('review');
     expect(screen.getByTestId('nlos-track-count').props.children).toBe(0);
     expect(screen.getByTestId('nlos-mean-confidence').props.children).toBe('N/A');
     expect(screen.queryByText(live.tracks[0].trackId)).toBeNull();
@@ -250,6 +287,7 @@ describe('NLOSScreen', () => {
     });
     const { NLOSScreen } = require('@/screens/NLOSScreen');
     const view = render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
+    openCalibrationStep('review');
 
     expect(screen.getByTestId('nlos-evidence-state').props.children).toBe('LIVE UNVERIFIED');
     expect(screen.getByTestId('nlos-track-count').props.children).toBe(0);
@@ -278,6 +316,7 @@ describe('NLOSScreen', () => {
     });
     const { NLOSScreen } = require('@/screens/NLOSScreen');
     render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
+    openCalibrationStep('review');
 
     expect(screen.getByTestId('nlos-evidence-state').props.children).toBe('LIVE UNVERIFIED');
     expect(screen.getByTestId('nlos-track-count').props.children).toBe(0);
@@ -293,6 +332,7 @@ describe('NLOSScreen', () => {
     });
     const { NLOSScreen } = require('@/screens/NLOSScreen');
     render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
+    openCalibrationStep('review');
 
     expect(screen.getByTestId('nlos-evidence-state').props.children).toBe('LIVE VERIFIED');
     expect(screen.getByTestId('nlos-track-count').props.children).toBe(1);
@@ -325,6 +365,8 @@ describe('NLOSScreen', () => {
     const { NLOSScreen } = require('@/screens/NLOSScreen');
     render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
 
+    openHelp();
+
     expect(screen.getByTestId('nlos-privacy-legend')).toBeTruthy();
     expect(screen.getByTestId('nlos-beta-setup')).toBeTruthy();
     expect(screen.getByTestId('nlos-explainer-link')).toBeTruthy();
@@ -335,6 +377,8 @@ describe('NLOSScreen', () => {
   it('switches between plan and perspective instrument views', () => {
     const { NLOSScreen } = require('@/screens/NLOSScreen');
     render(<ThemeProvider><NLOSScreen /></ThemeProvider>);
+
+    openCalibrationStep('review');
 
     expect(screen.getByTestId('nlos-view-plan').props.accessibilityState.selected).toBe(true);
     fireEvent.press(screen.getByTestId('nlos-view-perspective'));

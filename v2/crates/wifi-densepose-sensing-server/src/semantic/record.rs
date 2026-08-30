@@ -81,12 +81,16 @@ impl SemanticStateRecord {
     #[must_use]
     pub fn from_event(event: &SemanticEvent, room: Option<String>, ctx: &RecordContext) -> Self {
         let (confidence, active, mut evidence_refs) = match &event.state {
-            PrimitiveState::Boolean { active, reason, .. } => {
-                (if *active { 0.9 } else { 0.1 }, *active, reason.tags.clone())
-            }
-            PrimitiveState::Scalar { value, reason } => {
-                ((*value as f32 / 100.0).clamp(0.0, 1.0), *value > 0.0, reason.tags.clone())
-            }
+            PrimitiveState::Boolean { active, reason, .. } => (
+                if *active { 0.9 } else { 0.1 },
+                *active,
+                reason.tags.clone(),
+            ),
+            PrimitiveState::Scalar { value, reason } => (
+                (*value as f32 / 100.0).clamp(0.0, 1.0),
+                *value > 0.0,
+                reason.tags.clone(),
+            ),
             PrimitiveState::Event { event_type, reason } => {
                 let mut t = reason.tags.clone();
                 t.push(format!("event={event_type}"));
@@ -159,7 +163,10 @@ impl MultiSignalRule {
     pub fn evaluate(&self, records: &[SemanticStateRecord], now_ms: i64) -> Option<AgentRoute> {
         let all_present = self.required_kinds.iter().all(|k| {
             records.iter().any(|r| {
-                r.kind == *k && r.active && r.is_fresh(now_ms) && r.confidence >= self.min_confidence
+                r.kind == *k
+                    && r.active
+                    && r.is_fresh(now_ms)
+                    && r.confidence >= self.min_confidence
             })
         });
         all_present.then(|| self.route.clone())
@@ -174,8 +181,10 @@ pub fn route_all(
     records: &[SemanticStateRecord],
     now_ms: i64,
 ) -> Vec<AgentRoute> {
-    let mut routes: Vec<AgentRoute> =
-        rules.iter().filter_map(|r| r.evaluate(records, now_ms)).collect();
+    let mut routes: Vec<AgentRoute> = rules
+        .iter()
+        .filter_map(|r| r.evaluate(records, now_ms))
+        .collect();
     routes.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.route_id.cmp(b.route_id)));
     routes.dedup();
     routes
@@ -187,7 +196,12 @@ mod tests {
     use crate::semantic::common::Reason;
 
     fn event(kind: SemanticKind, state: PrimitiveState, ts: i64) -> SemanticEvent {
-        SemanticEvent { kind, state, node_id: "node-1".into(), timestamp_ms: ts }
+        SemanticEvent {
+            kind,
+            state,
+            node_id: "node-1".into(),
+            timestamp_ms: ts,
+        }
     }
 
     #[test]
@@ -200,7 +214,10 @@ mod tests {
         };
         let ev = event(
             SemanticKind::FallRisk,
-            PrimitiveState::Scalar { value: 80.0, reason: Reason::new(&["accel_spike", "hr=110bpm"]) },
+            PrimitiveState::Scalar {
+                value: 80.0,
+                reason: Reason::new(&["accel_spike", "hr=110bpm"]),
+            },
             1_000,
         );
         let r = SemanticStateRecord::from_event(&ev, Some("living_room".into()), &ctx);
@@ -215,10 +232,16 @@ mod tests {
 
     #[test]
     fn strip_biometrics_removes_hr_br_tags() {
-        let ctx = RecordContext { privacy_action: PrivacyAction::StripBiometrics, ..Default::default() };
+        let ctx = RecordContext {
+            privacy_action: PrivacyAction::StripBiometrics,
+            ..Default::default()
+        };
         let ev = event(
             SemanticKind::PossibleDistress,
-            PrimitiveState::Scalar { value: 50.0, reason: Reason::new(&["motion<5%", "hr=130bpm", "br=22"]) },
+            PrimitiveState::Scalar {
+                value: 50.0,
+                reason: Reason::new(&["motion<5%", "hr=130bpm", "br=22"]),
+            },
             0,
         );
         let r = SemanticStateRecord::from_event(&ev, None, &ctx);
@@ -230,17 +253,37 @@ mod tests {
         let now = 1_000;
         let ctx = RecordContext::default();
         let fall = SemanticStateRecord::from_event(
-            &event(SemanticKind::FallRisk, PrimitiveState::Scalar { value: 90.0, reason: Reason::empty() }, now),
-            Some("bedroom".into()), &ctx,
+            &event(
+                SemanticKind::FallRisk,
+                PrimitiveState::Scalar {
+                    value: 90.0,
+                    reason: Reason::empty(),
+                },
+                now,
+            ),
+            Some("bedroom".into()),
+            &ctx,
         );
         let elderly = SemanticStateRecord::from_event(
-            &event(SemanticKind::ElderlyAnomaly, PrimitiveState::Boolean { active: true, changed: true, reason: Reason::empty() }, now),
-            Some("bedroom".into()), &ctx,
+            &event(
+                SemanticKind::ElderlyAnomaly,
+                PrimitiveState::Boolean {
+                    active: true,
+                    changed: true,
+                    reason: Reason::empty(),
+                },
+                now,
+            ),
+            Some("bedroom".into()),
+            &ctx,
         );
         let rule = MultiSignalRule {
             required_kinds: vec![SemanticKind::FallRisk, SemanticKind::ElderlyAnomaly],
             min_confidence: 0.5,
-            route: AgentRoute { route_id: "caregiver_escalation", severity: 3 },
+            route: AgentRoute {
+                route_id: "caregiver_escalation",
+                severity: 3,
+            },
         };
 
         // Only fall present → no route (no agreement).
@@ -248,10 +291,16 @@ mod tests {
         // Both present + active + fresh → route fires.
         assert_eq!(
             rule.evaluate(&[fall.clone(), elderly.clone()], now),
-            Some(AgentRoute { route_id: "caregiver_escalation", severity: 3 })
+            Some(AgentRoute {
+                route_id: "caregiver_escalation",
+                severity: 3
+            })
         );
         // Stale records do not fire.
-        assert_eq!(rule.evaluate(&[fall.clone(), elderly.clone()], now + 60_000), None);
+        assert_eq!(
+            rule.evaluate(&[fall.clone(), elderly.clone()], now + 60_000),
+            None
+        );
     }
 
     /// ADR-140 acceptance (the credibility path):
@@ -301,16 +350,24 @@ mod tests {
         let single = MultiSignalRule {
             required_kinds: vec![SemanticKind::FallRisk],
             min_confidence: 0.1,
-            route: AgentRoute { route_id: "fall_notice", severity: 2 },
+            route: AgentRoute {
+                route_id: "fall_notice",
+                severity: 2,
+            },
         };
         assert!(single.evaluate(std::slice::from_ref(&rec), now).is_some());
         let agreement = MultiSignalRule {
             required_kinds: vec![SemanticKind::FallRisk, SemanticKind::ElderlyAnomaly],
             min_confidence: 0.1,
-            route: AgentRoute { route_id: "caregiver_escalation", severity: 3 },
+            route: AgentRoute {
+                route_id: "caregiver_escalation",
+                severity: 3,
+            },
         };
         assert!(
-            agreement.evaluate(std::slice::from_ref(&rec), now).is_none(),
+            agreement
+                .evaluate(std::slice::from_ref(&rec), now)
+                .is_none(),
             "no caregiver escalation without multi-signal agreement"
         );
 
@@ -318,7 +375,9 @@ mod tests {
         let after_expiry = rec.expiry_at_ms + 1;
         assert!(!rec.is_fresh(after_expiry));
         assert!(
-            single.evaluate(std::slice::from_ref(&rec), after_expiry).is_none(),
+            single
+                .evaluate(std::slice::from_ref(&rec), after_expiry)
+                .is_none(),
             "an expired record fires no route"
         );
     }
@@ -327,14 +386,42 @@ mod tests {
     fn route_all_sorts_by_severity_and_dedups() {
         let now = 0;
         let ctx = RecordContext::default();
-        let active = |k| SemanticStateRecord::from_event(
-            &event(k, PrimitiveState::Boolean { active: true, changed: true, reason: Reason::empty() }, now),
-            None, &ctx,
-        );
-        let records = vec![active(SemanticKind::FallRisk), active(SemanticKind::NoMovement)];
+        let active = |k| {
+            SemanticStateRecord::from_event(
+                &event(
+                    k,
+                    PrimitiveState::Boolean {
+                        active: true,
+                        changed: true,
+                        reason: Reason::empty(),
+                    },
+                    now,
+                ),
+                None,
+                &ctx,
+            )
+        };
+        let records = vec![
+            active(SemanticKind::FallRisk),
+            active(SemanticKind::NoMovement),
+        ];
         let rules = vec![
-            MultiSignalRule { required_kinds: vec![SemanticKind::FallRisk], min_confidence: 0.5, route: AgentRoute { route_id: "fall_notice", severity: 2 } },
-            MultiSignalRule { required_kinds: vec![SemanticKind::NoMovement, SemanticKind::FallRisk], min_confidence: 0.5, route: AgentRoute { route_id: "safety_critical", severity: 3 } },
+            MultiSignalRule {
+                required_kinds: vec![SemanticKind::FallRisk],
+                min_confidence: 0.5,
+                route: AgentRoute {
+                    route_id: "fall_notice",
+                    severity: 2,
+                },
+            },
+            MultiSignalRule {
+                required_kinds: vec![SemanticKind::NoMovement, SemanticKind::FallRisk],
+                min_confidence: 0.5,
+                route: AgentRoute {
+                    route_id: "safety_critical",
+                    severity: 3,
+                },
+            },
         ];
         let routes = route_all(&rules, &records, now);
         assert_eq!(routes.len(), 2);

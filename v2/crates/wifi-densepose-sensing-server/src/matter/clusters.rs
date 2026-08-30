@@ -110,16 +110,15 @@ pub fn matter_mapping(entity: EntityKind) -> Option<MatterClusterMapping> {
         // Semantic primitives that surface as occupancy-style booleans
         // (separate endpoints — one per primitive — so controllers can
         // bind individual scenes to each).
-        SomeoneSleeping
-        | RoomActive
-        | MeetingInProgress
-        | BathroomOccupied => MatterClusterMapping {
-            cluster: CLUSTER_OCCUPANCY_SENSING,
-            device_type: DEVICE_TYPE_OCCUPANCY_SENSOR,
-            event_id: None,
-            vendor_attr_id: None,
-            shares_occupancy_endpoint: false,
-        },
+        SomeoneSleeping | RoomActive | MeetingInProgress | BathroomOccupied => {
+            MatterClusterMapping {
+                cluster: CLUSTER_OCCUPANCY_SENSING,
+                device_type: DEVICE_TYPE_OCCUPANCY_SENSOR,
+                event_id: None,
+                vendor_attr_id: None,
+                shares_occupancy_endpoint: false,
+            }
+        }
         // Problem-state booleans use BooleanState — semantically they
         // are NOT occupancy, and controllers shouldn't wire them into
         // motion-light scenes.
@@ -140,7 +139,8 @@ pub fn matter_mapping(entity: EntityKind) -> Option<MatterClusterMapping> {
             shares_occupancy_endpoint: false,
         },
         // Explicitly MQTT-only — no Matter cluster representation.
-        BreathingRate | HeartRate | MotionLevel | MotionEnergy | PresenceScore | Rssi | PoseKeypoints => return None,
+        BreathingRate | HeartRate | MotionLevel | MotionEnergy | PresenceScore | Rssi
+        | PoseKeypoints => return None,
     })
 }
 
@@ -167,8 +167,8 @@ mod tests {
     #[test]
     fn presence_maps_to_occupancy_sensor() {
         let m = matter_mapping(EntityKind::Presence).unwrap();
-        assert_eq!(m.cluster, 0x0406);          // OccupancySensing
-        assert_eq!(m.device_type, 0x0107);      // OccupancySensor
+        assert_eq!(m.cluster, 0x0406); // OccupancySensing
+        assert_eq!(m.device_type, 0x0107); // OccupancySensor
         assert!(m.event_id.is_none());
         assert!(m.vendor_attr_id.is_none());
     }

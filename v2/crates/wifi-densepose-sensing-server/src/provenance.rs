@@ -104,7 +104,10 @@ impl SourceState {
     /// Compatibility accessor for callers migrating off a boolean source flag.
     /// True only for the two states that represent real, arriving frames.
     pub fn is_live(self) -> bool {
-        matches!(self, SourceState::LiveVerified | SourceState::LiveUnverified)
+        matches!(
+            self,
+            SourceState::LiveVerified | SourceState::LiveUnverified
+        )
     }
 
     /// True when this state must be watermarked as synthetic in every view and
@@ -156,7 +159,12 @@ impl SourceState {
         // This path carries no attestation, so the best a live feed earns is
         // `Unverified` — the honest label. `resolve` still short-circuits a
         // synthetic kind to `Synthetic` regardless of frame age.
-        SourceState::resolve(last_frame_age, AuthStatus::Unverified, kind, freshness_window)
+        SourceState::resolve(
+            last_frame_age,
+            AuthStatus::Unverified,
+            kind,
+            freshness_window,
+        )
     }
 }
 
@@ -211,8 +219,13 @@ mod tests {
             SourceState::resolve(fresh(), AuthStatus::Verified, SourceKind::Synthetic, WINDOW),
             SourceState::Synthetic
         );
-        assert!(!SourceState::resolve(fresh(), AuthStatus::Verified, SourceKind::Synthetic, WINDOW)
-            .is_live());
+        assert!(!SourceState::resolve(
+            fresh(),
+            AuthStatus::Verified,
+            SourceKind::Synthetic,
+            WINDOW
+        )
+        .is_live());
     }
 
     #[test]
@@ -258,7 +271,10 @@ mod tests {
         let s = SourceState::from_source_label("simulated", fresh(), WINDOW);
         assert_eq!(s, SourceState::Synthetic);
         assert!(!s.is_live());
-        assert_eq!(SourceState::from_source_label("simulate", None, WINDOW), SourceState::Synthetic);
+        assert_eq!(
+            SourceState::from_source_label("simulate", None, WINDOW),
+            SourceState::Synthetic
+        );
     }
 
     #[test]

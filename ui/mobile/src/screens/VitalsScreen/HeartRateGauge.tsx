@@ -1,44 +1,26 @@
 import { useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { usePoseStore } from '@/stores/poseStore';
 import { GaugeArc } from '@/components/GaugeArc';
 import { colors } from '@/theme/colors';
 import { ThemedText } from '@/components/ThemedText';
 
 const HEART_MIN_BPM = 40;
 const HEART_MAX_BPM = 120;
-const MOTION_BAND_MAX = 0.5;
-const BREATH_BAND_MAX = 0.3;
-
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
 const deriveHeartRate = (
-  heartbeat?: number,
-  motionBand?: number,
-  breathingBand?: number,
-): number => {
+  heartbeat?: number | null,
+): number | null => {
   if (typeof heartbeat === 'number' && Number.isFinite(heartbeat)) {
     return clamp(heartbeat, HEART_MIN_BPM, HEART_MAX_BPM);
   }
-
-  const motionValue = typeof motionBand === 'number' && Number.isFinite(motionBand) ? clamp(motionBand / MOTION_BAND_MAX, 0, 1) : 0;
-  const breathValue = typeof breathingBand === 'number' && Number.isFinite(breathingBand) ? clamp(breathingBand / BREATH_BAND_MAX, 0, 1) : 0;
-
-  const normalized = 0.7 * motionValue + 0.3 * breathValue;
-  return HEART_MIN_BPM + normalized * (HEART_MAX_BPM - HEART_MIN_BPM);
+  return null;
 };
 
-export const HeartRateGauge = () => {
-  const heartProxyBpm = usePoseStore((state) => {
-    const vitals = state.lastFrame?.vital_signs;
-    return vitals?.hr_proxy_bpm ?? vitals?.heart_rate_bpm;
-  });
-  const motionBand = usePoseStore((state) => state.features?.motion_band_power);
-  const breathingBand = usePoseStore((state) => state.features?.breathing_band_power);
-
+export const HeartRateGauge = ({ available, heartProxyBpm }: { available: boolean; heartProxyBpm?: number | null }) => {
   const value = useMemo(
-    () => deriveHeartRate(heartProxyBpm, motionBand, breathingBand),
-    [heartProxyBpm, motionBand, breathingBand],
+    () => available ? deriveHeartRate(heartProxyBpm) : null,
+    [available, heartProxyBpm],
   );
 
   return (
@@ -47,16 +29,16 @@ export const HeartRateGauge = () => {
         HR PROXY
       </ThemedText>
       <GaugeArc
-        value={value}
+        value={value ?? Number.NaN}
         min={HEART_MIN_BPM}
         max={HEART_MAX_BPM}
-        label=""
+        label={value == null ? 'WAITING' : 'RF PROXY'}
         unit="BPM"
         color={colors.danger}
         colorTo={colors.success}
       />
       <ThemedText preset="bodySm" color="textSecondary" style={styles.note}>
-        (estimated)
+        {value == null ? 'No measured proxy' : 'Measured stream'}
       </ThemedText>
     </View>
   );

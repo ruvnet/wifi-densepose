@@ -201,9 +201,7 @@ impl UdpSourceAllowlist {
                     continue;
                 }
                 if entries.len() >= MAX_ENTRIES {
-                    return Err(format!(
-                        "too many allowlist entries (limit {MAX_ENTRIES})"
-                    ));
+                    return Err(format!("too many allowlist entries (limit {MAX_ENTRIES})"));
                 }
                 entries.push(parse_entry(part)?);
             }

@@ -40,6 +40,31 @@ const ENERGY_THRESH_3: f64 = 25.0;
 /// reliable — genuine higher counts come from the multistatic fusion path.
 const MAX_SINGLE_LINK_OCCUPANCY: usize = 3;
 
+/// Provenance for a count produced by the calibrated field model.  This is
+/// intentionally narrower than [`occupancy_or_fallback`]: callers that attach
+/// calibration evidence to a wire frame must never silently substitute the
+/// score heuristic when the calibrated path cannot evaluate the observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CalibratedOccupancyMethod {
+    Eigenvalue,
+    PerturbationEnergy,
+}
+
+impl CalibratedOccupancyMethod {
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::Eigenvalue => "field_model_eigenvalue_v1",
+            Self::PerturbationEnergy => "field_model_perturbation_energy_v1",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CalibratedOccupancy {
+    pub person_count: usize,
+    pub method: CalibratedOccupancyMethod,
+}
+
 /// Create a FieldModelConfig for single-link mode (one ESP32 node = one link).
 /// This avoids the DimensionMismatch error when feeding single-frame observations.
 pub fn single_link_config() -> FieldModelConfig {
@@ -107,6 +132,55 @@ pub fn occupancy_or_fallback(
     }
 }
 
+/// Produce a fail-closed occupancy result from a *fresh* calibrated model.
+///
+/// Unlike the legacy display helper above, this function returns `None` when
+/// the model is unavailable/stale, the observation is empty, or both
+/// calibrated estimators fail.  Raw hardware histories are normalized onto
+/// the same canonical 56-tone grid used during calibration before inference.
+pub fn calibrated_occupancy(
+    field: &FieldModel,
+    frame_history: &VecDeque<Vec<f64>>,
+    observed_at_us: u64,
+) -> Option<CalibratedOccupancy> {
+    if field.check_freshness(observed_at_us) != CalibrationStatus::Fresh {
+        return None;
+    }
+
+    let frames: Vec<Vec<f64>> = frame_history
+        .iter()
+        .rev()
+        .take(OCCUPANCY_WINDOW)
+        .map(|frame| CALIB_NORMALIZER.resample_to_canonical(frame))
+        .collect();
+    if frames.is_empty() {
+        return None;
+    }
+
+    if let Ok(person_count) = field.estimate_occupancy(&frames) {
+        return Some(CalibratedOccupancy {
+            person_count: person_count.min(MAX_SINGLE_LINK_OCCUPANCY),
+            method: CalibratedOccupancyMethod::Eigenvalue,
+        });
+    }
+
+    let observation = vec![frames[0].clone()];
+    let perturbation = field.extract_perturbation(&observation).ok()?;
+    let person_count = if perturbation.total_energy > ENERGY_THRESH_3 {
+        3
+    } else if perturbation.total_energy > ENERGY_THRESH_2 {
+        2
+    } else if perturbation.total_energy > 1.0 {
+        1
+    } else {
+        0
+    };
+    Some(CalibratedOccupancy {
+        person_count,
+        method: CalibratedOccupancyMethod::PerturbationEnergy,
+    })
+}
+
 /// Feed the latest frame to the FieldModel during calibration collection.
 ///
 /// Acts while the model is `Uncalibrated` or `Collecting`. The first fed frame
@@ -135,6 +209,7 @@ pub fn maybe_feed_calibration(field: &mut FieldModel, frame_history: &VecDeque<V
         }
     }
 }
+
 
 /// Parse node positions from a semicolon-delimited string.
 ///
@@ -173,6 +248,32 @@ pub fn parse_node_positions(input: &str) -> Vec<[f32; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fresh_test_model() -> FieldModel {
+        let config = FieldModelConfig {
+            n_links: 1,
+            n_subcarriers: 56,
+            n_modes: 3,
+            min_calibration_frames: 10,
+            baseline_expiry_s: 2.0,
+        };
+        let mut field = FieldModel::new(config).expect("field model");
+        for index in 0..20 {
+            let phase = index as f64 * 0.1;
+            let observation = vec![(0..56)
+                .map(|subcarrier| {
+                    1.0 + subcarrier as f64 * 0.01 + (phase + subcarrier as f64 * 0.03).sin() * 0.01
+                })
+                .collect()];
+            field
+                .feed_calibration(&observation)
+                .expect("calibration frame");
+        }
+        field
+            .finalize_calibration(1_000_000, 7)
+            .expect("finalize calibration");
+        field
+    }
 
     #[test]
     fn test_parse_node_positions() {
@@ -261,6 +362,29 @@ mod tests {
             field.calibration_frame_count(),
             1,
             "wide frame must accumulate, not be silently dropped"
+        );
+    }
+
+    #[test]
+    fn calibrated_occupancy_is_fresh_model_only_and_normalizes_runtime_frames() {
+        let field = fresh_test_model();
+        let mut history = VecDeque::new();
+        // Deliberately use a real-world wide frame. The evidence path must use
+        // the same canonicalizer as calibration instead of falling back.
+        history.push_back(vec![1.02; 128]);
+
+        let result =
+            calibrated_occupancy(&field, &history, 1_500_000).expect("fresh calibrated inference");
+        assert!(result.person_count <= MAX_SINGLE_LINK_OCCUPANCY);
+        assert!(matches!(
+            result.method,
+            CalibratedOccupancyMethod::Eigenvalue | CalibratedOccupancyMethod::PerturbationEnergy
+        ));
+
+        assert_eq!(calibrated_occupancy(&field, &history, 4_000_000), None);
+        assert_eq!(
+            calibrated_occupancy(&field, &VecDeque::new(), 1_500_000),
+            None
         );
     }
 }

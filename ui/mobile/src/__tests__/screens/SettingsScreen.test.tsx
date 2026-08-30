@@ -5,6 +5,11 @@ import { apiService } from '@/services/api.service';
 import { wsService } from '@/services/ws.service';
 import { useSettingsStore } from '@/stores/settingsStore';
 
+jest.mock('@expo/vector-icons', () => {
+  const { View } = require('react-native');
+  return { Ionicons: View };
+});
+
 jest.mock('@/services/ws.service', () => ({
   wsService: {
     connect: jest.fn(),
@@ -68,7 +73,7 @@ describe('SettingsScreen', () => {
     expect(screen.getByText('SERVER')).toBeTruthy();
   });
 
-  it('renders the SENSING section', () => {
+  it('shows real service status without exposing controls backed only by stub behavior', () => {
     const { SettingsScreen } = require('@/screens/SettingsScreen');
     render(
       <ThemeProvider>
@@ -76,6 +81,8 @@ describe('SettingsScreen', () => {
       </ThemeProvider>,
     );
     expect(screen.getByText('SENSING')).toBeTruthy();
+    expect(screen.queryByLabelText('RSSI scanning')).toBeNull();
+    expect(screen.queryByLabelText('MAT alert sounds')).toBeNull();
   });
 
   it('renders the ABOUT section with version', () => {
@@ -116,9 +123,19 @@ describe('SettingsScreen', () => {
     );
 
     fireEvent.changeText(screen.getByTestId('nlos-server-url-input'), 'https://nlos.example.com');
-    fireEvent.press(screen.getByText('Save NLOS server'));
+    fireEvent.press(screen.getByText('SAVE CALIBRATION SERVER'));
 
     expect(useSettingsStore.getState().nlosServerUrl).toBe('https://nlos.example.com');
+  });
+
+  it('accepts the private-LAN calibration server without an HTTPS error', () => {
+    const { SettingsScreen } = require('@/screens/SettingsScreen');
+    render(<ThemeProvider><SettingsScreen /></ThemeProvider>);
+    fireEvent.changeText(screen.getByTestId('nlos-server-url-input'), 'http://192.168.1.166:3000');
+    expect(screen.queryByText(/requires HTTPS/)).toBeNull();
+    expect(screen.getByText('LOCAL HTTP')).toBeTruthy();
+    fireEvent.press(screen.getByText('SAVE CALIBRATION SERVER'));
+    expect(useSettingsStore.getState().nlosServerUrl).toBe('http://192.168.1.166:3000');
   });
 
   it('tests the draft sensing endpoint without saving it', async () => {
@@ -139,7 +156,7 @@ describe('SettingsScreen', () => {
     expect(useSettingsStore.getState().serverUrl).toBe('http://localhost:3000');
   });
 
-  it('updates sensing and appearance controls', () => {
+  it('updates the functional appearance control', () => {
     const { SettingsScreen } = require('@/screens/SettingsScreen');
     render(
       <ThemeProvider>
@@ -147,15 +164,8 @@ describe('SettingsScreen', () => {
       </ThemeProvider>,
     );
 
-    fireEvent(screen.getByLabelText('RSSI scanning'), 'valueChange', true);
-    fireEvent.press(screen.getByText('5s'));
     fireEvent.press(screen.getByText('DARK'));
-    fireEvent(screen.getByLabelText('MAT alert sounds'), 'valueChange', false);
 
-    expect(useSettingsStore.getState().rssiScanEnabled).toBe(true);
-    expect(useSettingsStore.getState().rssiScanIntervalSeconds).toBe(5);
     expect(useSettingsStore.getState().theme).toBe('dark');
-    expect(useSettingsStore.getState().alertSoundEnabled).toBe(false);
-    expect(screen.getByText('Active interval: 5s')).toBeTruthy();
   });
 });

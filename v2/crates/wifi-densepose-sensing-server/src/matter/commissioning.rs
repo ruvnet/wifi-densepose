@@ -65,7 +65,12 @@ impl SetupCodeInput {
     /// Build with the production-default dev VID + sensible product ID.
     /// `passcode` and `discriminator` come from a CSPRNG at first start.
     pub fn dev(passcode: u32, discriminator: u16) -> Self {
-        Self { passcode, discriminator, vendor_id: 0xFFF1, product_id: 0x8001 }
+        Self {
+            passcode,
+            discriminator,
+            vendor_id: 0xFFF1,
+            product_id: 0x8001,
+        }
     }
 
     /// Validate against §5.1.6.1 disallowed values + bit-width ranges.
@@ -264,8 +269,8 @@ mod tests {
     #[test]
     fn validate_rejects_disallowed_passcodes() {
         for &bad in &[
-            0u32, 11111111, 22222222, 33333333, 44444444, 55555555,
-            66666666, 77777777, 88888888, 99999999, 12345678, 87654321,
+            0u32, 11111111, 22222222, 33333333, 44444444, 55555555, 66666666, 77777777, 88888888,
+            99999999, 12345678, 87654321,
         ] {
             let s = SetupCodeInput::dev(bad, 100);
             assert!(s.validate().is_err(), "passcode {} must be rejected", bad);
@@ -322,19 +327,15 @@ mod tests {
 
     #[test]
     fn manual_code_differs_when_passcode_changes() {
-        let a = ManualPairingCode::from_input(&SetupCodeInput::dev(20202021, 3840))
-            .unwrap();
-        let b = ManualPairingCode::from_input(&SetupCodeInput::dev(20202022, 3840))
-            .unwrap();
+        let a = ManualPairingCode::from_input(&SetupCodeInput::dev(20202021, 3840)).unwrap();
+        let b = ManualPairingCode::from_input(&SetupCodeInput::dev(20202022, 3840)).unwrap();
         assert_ne!(a, b);
     }
 
     #[test]
     fn manual_code_differs_when_discriminator_changes() {
-        let a = ManualPairingCode::from_input(&SetupCodeInput::dev(20202021, 3840))
-            .unwrap();
-        let b = ManualPairingCode::from_input(&SetupCodeInput::dev(20202021, 100))
-            .unwrap();
+        let a = ManualPairingCode::from_input(&SetupCodeInput::dev(20202021, 3840)).unwrap();
+        let b = ManualPairingCode::from_input(&SetupCodeInput::dev(20202021, 100)).unwrap();
         assert_ne!(a, b);
     }
 
@@ -365,7 +366,10 @@ mod tests {
             ManualPairingCode::from_input(&SetupCodeInput::dev(passcode, discriminator)).unwrap();
         let decoded = code.decode().unwrap();
         assert!(!decoded.vid_pid_present);
-        assert_eq!(decoded.passcode, passcode, "passcode must round-trip exactly");
+        assert_eq!(
+            decoded.passcode, passcode,
+            "passcode must round-trip exactly"
+        );
         assert_eq!(
             decoded.short_discriminator,
             (discriminator >> 8) as u8,
@@ -380,7 +384,10 @@ mod tests {
         let last = code.0[10..11].parse::<u8>().unwrap();
         let tampered = format!("{}{}", &code.0[0..10], (last + 1) % 10);
         let bad = ManualPairingCode(tampered);
-        assert!(bad.decode().is_err(), "tampered check digit must be rejected");
+        assert!(
+            bad.decode().is_err(),
+            "tampered check digit must be rejected"
+        );
     }
 
     #[test]
@@ -412,8 +419,8 @@ mod tests {
     /// The §5.1.6.1 disallowed-passcodes set, hoisted to a const for
     /// reuse in property tests.
     const DISALLOWED_PASSCODES: &[u32] = &[
-        0u32, 11111111, 22222222, 33333333, 44444444, 55555555,
-        66666666, 77777777, 88888888, 99999999, 12345678, 87654321,
+        0u32, 11111111, 22222222, 33333333, 44444444, 55555555, 66666666, 77777777, 88888888,
+        99999999, 12345678, 87654321,
     ];
 
     proptest! {

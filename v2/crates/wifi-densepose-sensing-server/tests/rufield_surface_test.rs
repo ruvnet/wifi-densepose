@@ -44,7 +44,11 @@ fn features() -> SensingFeatures {
 
 fn class(presence: bool) -> SensingClass {
     SensingClass {
-        motion_level: if presence { "low".into() } else { "none".into() },
+        motion_level: if presence {
+            "low".into()
+        } else {
+            "none".into()
+        },
         presence,
         confidence: if presence { 0.82 } else { 0.05 },
     }
@@ -68,7 +72,12 @@ fn surface_router() -> (FieldState, axum::Router) {
 
 /// Drive one cycle into the surface (the in-process equivalent of the live
 /// sensing loop calling `emit()` per cycle).
-async fn inject(state: &FieldState, trust: RuViewPrivacyClass, presence: bool, identity_bound: bool) {
+async fn inject(
+    state: &FieldState,
+    trust: RuViewPrivacyClass,
+    presence: bool,
+    identity_bound: bool,
+) {
     let snap = rufield_surface::build_snapshot(
         1_791_986_400_000_000_000,
         "esp32_node_7".into(),
@@ -95,7 +104,9 @@ async fn get_field_events(app: &axum::Router) -> Vec<FieldEvent> {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "/api/field must return 200");
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(v["spec"], "rufield");
     serde_json::from_value(v["events"].clone()).expect("events array deserializes to FieldEvents")
@@ -107,7 +118,11 @@ async fn gate_anonymous_cycle_surfaces_wellformed_signed_event() {
     inject(&state, RuViewPrivacyClass::Anonymous, true, false).await;
 
     let events = get_field_events(&app).await;
-    assert_eq!(events.len(), 1, "one occupancy cycle ⇒ exactly one surfaced event");
+    assert_eq!(
+        events.len(),
+        1,
+        "one occupancy cycle ⇒ exactly one surfaced event"
+    );
     let ev = &events[0];
 
     // Well-formed: WiFi-CSI modality, real timestamp.
@@ -125,7 +140,10 @@ async fn gate_anonymous_cycle_surfaces_wellformed_signed_event() {
     assert!(is_fusable(ev), "verified receipt ⇒ fusable");
 
     // Real position derived from the signal-field peak (not fabricated).
-    assert!(ev.observation.range_m.is_some(), "field peak ⇒ a real range readout");
+    assert!(
+        ev.observation.range_m.is_some(),
+        "field peak ⇒ a real range readout"
+    );
 }
 
 #[tokio::test]

@@ -23,7 +23,7 @@ export const AlertList = ({ alerts }: AlertListProps) => {
           backgroundColor: '#111827',
         }}
       >
-        <ThemedText preset="bodyMd">No alerts — system nominal</ThemedText>
+        <ThemedText preset="bodyMd">No active alerts returned by the MAT API</ThemedText>
       </View>
     );
   }

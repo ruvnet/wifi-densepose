@@ -2023,7 +2023,10 @@ mod tests {
     fn claim_training_slot_rejects_when_already_active() {
         let status = Arc::new(Mutex::new(TrainingStatus::default()));
         let config = TrainingConfig::default();
-        assert!(claim_training_slot(&status, &config).is_ok(), "first claim wins");
+        assert!(
+            claim_training_slot(&status, &config).is_ok(),
+            "first claim wins"
+        );
         let err = claim_training_slot(&status, &config)
             .expect_err("second claim must be refused while active");
         assert!(err.active, "the rejection carries the active status");
@@ -2362,8 +2365,14 @@ mod tests {
             }
         }
         assert!(n_frames > 0, "expected streamed progress frames, got none");
-        assert!(saw_epoch, "expected at least one epoch-tagged progress frame");
-        assert!(saw_completed, "expected a terminal 'completed' progress frame");
+        assert!(
+            saw_epoch,
+            "expected at least one epoch-tagged progress frame"
+        );
+        assert!(
+            saw_completed,
+            "expected a terminal 'completed' progress frame"
+        );
 
         // Final shared status reflects genuine completion, not just a flag flip:
         // real epochs ran (the loop wrote per-epoch status) and a finite loss was
@@ -2416,7 +2425,10 @@ mod tests {
     fn training_enablement_gate() {
         assert!(training_enabled_from_env(None), "default is enabled");
         assert!(training_enabled_from_env(Some("0")), "0 keeps it enabled");
-        assert!(training_enabled_from_env(Some("")), "empty keeps it enabled");
+        assert!(
+            training_enabled_from_env(Some("")),
+            "empty keeps it enabled"
+        );
         assert!(!training_enabled_from_env(Some("1")), "1 disables");
         assert!(!training_enabled_from_env(Some("true")), "true disables");
         assert!(!training_enabled_from_env(Some("YES")), "case-insensitive");

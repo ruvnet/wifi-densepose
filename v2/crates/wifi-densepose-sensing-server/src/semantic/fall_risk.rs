@@ -36,16 +36,16 @@ pub struct FallRiskElevated {
 }
 
 impl FallRiskElevated {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     fn variance(samples: &VecDeque<(Duration, f64)>) -> f64 {
-        if samples.is_empty() { return 0.0; }
+        if samples.is_empty() {
+            return 0.0;
+        }
         let mean = samples.iter().map(|(_, m)| m).sum::<f64>() / samples.len() as f64;
-        let v = samples
-            .iter()
-            .map(|(_, m)| (m - mean).powi(2))
-            .sum::<f64>()
-            / samples.len() as f64;
+        let v = samples.iter().map(|(_, m)| (m - mean).powi(2)).sum::<f64>() / samples.len() as f64;
         v
     }
 
@@ -55,7 +55,8 @@ impl FallRiskElevated {
         }
 
         // Maintain rolling motion history.
-        self.motion_history.push_back((snap.since_start, snap.motion));
+        self.motion_history
+            .push_back((snap.since_start, snap.motion));
         while let Some(&(t, _)) = self.motion_history.front() {
             if snap.since_start.saturating_sub(t) > RECENT_MOTION_WINDOW {
                 self.motion_history.pop_front();
@@ -101,7 +102,9 @@ impl FallRiskElevated {
 mod tests {
     use super::*;
 
-    fn cfg() -> PrimitiveConfig { PrimitiveConfig::default() }
+    fn cfg() -> PrimitiveConfig {
+        PrimitiveConfig::default()
+    }
 
     #[test]
     fn warmup_blocks_score() {
@@ -130,11 +133,14 @@ mod tests {
     fn score_grows_with_falls() {
         let mut p = FallRiskElevated::new();
         // Establish baseline with no falls.
-        let _ = p.tick(&RawSnapshot {
-            since_start: Duration::from_secs(120),
-            motion: 0.05,
-            ..Default::default()
-        }, &cfg());
+        let _ = p.tick(
+            &RawSnapshot {
+                since_start: Duration::from_secs(120),
+                motion: 0.05,
+                ..Default::default()
+            },
+            &cfg(),
+        );
         let base_score = p.last_score;
         // Add some falls.
         for t in 121..125 {
@@ -170,11 +176,14 @@ mod tests {
         // The crossing-event return is on the first tick that crosses.
         // Verify the type via a fresh sequence.
         let mut p2 = FallRiskElevated::new();
-        let _ = p2.tick(&RawSnapshot {
-            since_start: Duration::from_secs(120),
-            motion: 0.05,
-            ..Default::default()
-        }, &cfg());
+        let _ = p2.tick(
+            &RawSnapshot {
+                since_start: Duration::from_secs(120),
+                motion: 0.05,
+                ..Default::default()
+            },
+            &cfg(),
+        );
         let mut saw_event = false;
         for t in 121..130 {
             let s = RawSnapshot {
@@ -197,18 +206,24 @@ mod tests {
     fn fall_history_evicts_after_24h() {
         let mut p = FallRiskElevated::new();
         // Inject fall.
-        let _ = p.tick(&RawSnapshot {
-            since_start: Duration::from_secs(120),
-            motion: 0.05,
-            fall_detected: true,
-            ..Default::default()
-        }, &cfg());
+        let _ = p.tick(
+            &RawSnapshot {
+                since_start: Duration::from_secs(120),
+                motion: 0.05,
+                fall_detected: true,
+                ..Default::default()
+            },
+            &cfg(),
+        );
         // 25 hours later — the fall should evict from the window.
-        let _ = p.tick(&RawSnapshot {
-            since_start: Duration::from_secs(120 + 25 * 3600),
-            motion: 0.05,
-            ..Default::default()
-        }, &cfg());
+        let _ = p.tick(
+            &RawSnapshot {
+                since_start: Duration::from_secs(120 + 25 * 3600),
+                motion: 0.05,
+                ..Default::default()
+            },
+            &cfg(),
+        );
         assert!(p.fall_history.is_empty(), "fall must evict after 24h");
     }
 }

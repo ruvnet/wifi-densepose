@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Pressable,
   ScrollView,
@@ -16,9 +16,13 @@ import {
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useNlosStream } from '@/hooks/useNlosStream';
+import { useLidarStore } from '@/stores/lidarStore';
+import { useTabScrollToTop } from '@/stores/tabScrollStore';
 import { spacing } from '@/theme/spacing';
 import { BetaSetupCard } from './BetaSetupCard';
 import { HiddenTargetVisualization, type NlosViewMode } from './HiddenTargetVisualization';
+import { LidarCommissioningCard } from './LidarCommissioningCard';
+import { PoseTeachingCard } from './PoseTeachingCard';
 import { ProvenancePanel, resolveNlosEvidenceState } from './ProvenancePanel';
 
 const ViewModePicker = ({
@@ -77,7 +81,80 @@ const ScopeChip = ({ label, accent = false }: { label: string; accent?: boolean 
   </View>
 );
 
+type CalibrationStep = 'connect' | 'room' | 'pose' | 'review';
+type StepState = 'complete' | 'current' | 'pending' | 'optional';
+
+const calibrationSteps: ReadonlyArray<{ id: CalibrationStep; number: string; label: string }> = [
+  { id: 'connect', number: '01', label: 'CONNECT' },
+  { id: 'room', number: '02', label: 'ROOM' },
+  { id: 'pose', number: '03', label: 'POSE' },
+  { id: 'review', number: '04', label: 'REVIEW' },
+];
+
+const GuidedMenu = ({
+  active,
+  states,
+  onChange,
+}: {
+  active: CalibrationStep;
+  states: Record<CalibrationStep, StepState>;
+  onChange: (step: CalibrationStep) => void;
+}) => (
+  <View testID="calibration-guided-menu" style={styles.guideMenuWrap}>
+    <View style={styles.guideHeading}>
+      <View>
+        <ThemedText preset="mono" style={styles.guideEyebrow}>GUIDED CALIBRATION</ThemedText>
+        <ThemedText preset="bodySm" style={styles.guideHint}>Complete the active task, then continue.</ThemedText>
+      </View>
+      <ThemedText preset="mono" style={styles.guideProgress}>{calibrationSteps.findIndex((step) => step.id === active) + 1} / 4</ThemedText>
+    </View>
+    <View accessibilityRole="tablist" style={styles.guideMenu}>
+      {calibrationSteps.map((step) => {
+        const selected = active === step.id;
+        const state = states[step.id];
+        return (
+          <Pressable
+            key={step.id}
+            testID={`calibration-step-${step.id}`}
+            accessibilityRole="button"
+            accessibilityLabel={`${step.label} calibration step`}
+            accessibilityState={{ selected }}
+            onPress={() => onChange(step.id)}
+            style={[styles.guideStep, selected && styles.guideStepActive]}
+          >
+            <View style={[styles.guideNumber, state === 'complete' && styles.guideNumberComplete, selected && styles.guideNumberActive]}>
+              <ThemedText preset="mono" style={[styles.guideNumberText, (selected || state === 'complete') && styles.guideNumberTextActive]}>{state === 'complete' ? '✓' : step.number}</ThemedText>
+            </View>
+            <ThemedText preset="mono" style={[styles.guideStepLabel, selected && styles.guideStepLabelActive]}>{step.label}</ThemedText>
+            <ThemedText preset="mono" style={[styles.guideState, state === 'complete' && styles.guideStateComplete]}>{state.toUpperCase()}</ThemedText>
+          </Pressable>
+        );
+      })}
+    </View>
+  </View>
+);
+
+const StepIntro = ({ number, title, copy, requirement }: { number: string; title: string; copy: string; requirement: string }) => (
+  <View testID="calibration-step-content" style={styles.stepIntro}>
+    <ThemedText preset="mono" style={styles.stepIntroNumber}>STEP {number} / 04</ThemedText>
+    <ThemedText preset="displayMd" style={styles.stepIntroTitle}>{title}</ThemedText>
+    <ThemedText preset="bodyMd" style={styles.stepIntroCopy}>{copy}</ThemedText>
+    <View style={styles.requirementRow}><View style={styles.requirementDot} /><ThemedText preset="mono" style={styles.requirementText}>{requirement}</ThemedText></View>
+  </View>
+);
+
+const GuideAction = ({ label, onPress, secondary = false }: { label: string; onPress: () => void; secondary?: boolean }) => (
+  <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={[styles.guideAction, secondary && styles.guideActionSecondary]}>
+    <ThemedText preset="labelMd" style={[styles.guideActionText, secondary && styles.guideActionTextSecondary]}>{label}</ThemedText>
+  </Pressable>
+);
+
 export const NLOSScreen = () => {
+  const scrollRef = useTabScrollToTop('Calibration');
+  const lidarFrame = useLidarStore((state) => state.frame);
+  const calibration = useLidarStore((state) => state.calibration);
+  const poseCalibration = useLidarStore((state) => state.poseCalibration);
+  const markCalibrationStale = useLidarStore((state) => state.markCalibrationStale);
   const {
     frame,
     freshness,
@@ -93,6 +170,11 @@ export const NLOSScreen = () => {
   const [viewMode, setViewMode] = useState<NlosViewMode>('plan');
   const [credentialDraft, setCredentialDraft] = useState('');
   const [credentialError, setCredentialError] = useState(false);
+  const [activeStep, setActiveStep] = useState<CalibrationStep>(() => {
+    if (calibration?.quality !== 'VALID' || calibration.staleness.state !== 'CURRENT') return 'connect';
+    return poseCalibration?.quality === 'VALID' ? 'review' : 'pose';
+  });
+  const [helpOpen, setHelpOpen] = useState(false);
   const { width } = useWindowDimensions();
   const safeAreaInsets = useSafeAreaInsets();
   const visualizationWidth = useMemo(
@@ -115,6 +197,24 @@ export const NLOSScreen = () => {
     ? `${Math.round(visibleTracks.reduce((sum, track) => sum + track.confidence, 0) / visibleTracks.length * 100)}%`
     : 'N/A';
   const credentialLengthValid = credentialDraft.length >= 32 && credentialDraft.length <= 512;
+  const spatialReady = calibration?.quality === 'VALID' && calibration.staleness.state === 'CURRENT';
+  const poseReady = poseCalibration?.quality === 'VALID';
+  const sourceReady = streamStatus === 'live';
+  const reviewReady = evidenceState === 'LIVE VERIFIED';
+  const stepStates: Record<CalibrationStep, StepState> = {
+    connect: sourceReady ? 'complete' : activeStep === 'connect' ? 'current' : 'pending',
+    room: spatialReady ? 'complete' : activeStep === 'room' ? 'current' : 'pending',
+    pose: poseReady ? 'complete' : activeStep === 'pose' ? 'current' : 'optional',
+    review: reviewReady ? 'complete' : activeStep === 'review' ? 'current' : 'pending',
+  };
+
+  useEffect(() => {
+    if (!calibration || calibration.staleness.state === 'STALE' || frame?.source !== 'live') return;
+    if ((frame.evidenceLevel === 'l2_calibrated' || frame.evidenceLevel === 'l3_corroborated')
+      && frame.calibrationHash !== calibration.digestSha256) {
+      markCalibrationStale('The live RuView stream reports a different calibration hash. Re-synchronize or run a short rescan.');
+    }
+  }, [calibration, frame, markCalibrationStale]);
 
   const handleConfigureCredential = () => {
     const configured = configureCredential(credentialDraft);
@@ -126,9 +226,11 @@ export const NLOSScreen = () => {
     <ThemedView style={styles.container}>
       <InstrumentGrid />
       <ScrollView
+        ref={scrollRef}
         testID="nlos-scroll-view"
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
+        stickyHeaderIndices={[2]}
         contentContainerStyle={[
           styles.content,
           {
@@ -139,14 +241,14 @@ export const NLOSScreen = () => {
           },
         ]}
       >
-        <InstrumentPanel eyebrow="Consumer NLOS / field viewer" style={styles.hero}>
-          <ThemedText preset="displayLg" style={styles.heroTitle}>Track hidden space</ThemedText>
-          <ThemedText preset="displayLg" style={styles.heroAccent}>hypotheses.</ThemedText>
+        <InstrumentPanel eyebrow="RuView installation / calibration" style={styles.hero}>
+          <ThemedText preset="displayLg" style={styles.heroTitle}>Calibrate the room.</ThemedText>
+          <ThemedText preset="displayLg" style={styles.heroAccent}>Then validate sensing.</ThemedText>
           <ThemedText preset="bodyLg" style={styles.heroCopy}>
-            Inspect validated reconstruction frames with explicit source, freshness, and confidence. No camera equivalence is implied.
+            Scan visible geometry, align RuView nodes, fit room and pose corrections, and verify improvement on held-out paths before promoting calibration for Live use.
           </ThemedText>
           <View style={styles.scopeRow}>
-            <ScopeChip label="VIEWER ONLY" />
+            <ScopeChip label="INSTALLATION TOOL" />
             <ScopeChip label="FAIL CLOSED" accent />
           </View>
         </InstrumentPanel>
@@ -158,161 +260,82 @@ export const NLOSScreen = () => {
           <View style={styles.noticeCopy}>
             <ThemedText preset="mono" style={styles.noticeLabel}>SENSOR BOUNDARY</ThemedText>
             <ThemedText preset="bodySm" style={styles.noticeText}>
-              This client does not access raw iPhone LiDAR timing data. Safari and Expo display authenticated RuView track frames or visibly watermarked synthetic replay only.
+              This client does not access raw iPhone LiDAR timing data. ARKit supplies visible-room depth and geometry for calibration, but cannot see through walls. Hidden-space tracks require authenticated RuView CSI evidence.
             </ThemedText>
           </View>
         </View>
 
-        <ProvenancePanel frame={frame} freshness={freshness} streamStatus={streamStatus} />
+        <GuidedMenu active={activeStep} states={stepStates} onChange={setActiveStep} />
 
-        <InstrumentPanel
-          eyebrow="Spatial return"
-          accessory={<ThemedText preset="mono" style={styles.panelIndex}>FRAME / 01</ThemedText>}
-          style={styles.visualizationCard}
-        >
-          <ViewModePicker value={viewMode} onChange={setViewMode} />
-          <View style={styles.visualizationStage}>
-            <HiddenTargetVisualization
-              tracks={visibleTracks}
-              freshness={freshness}
-              mode={viewMode}
-              width={visualizationWidth}
-            />
-            {isSynthetic && (
-              <View testID="nlos-synthetic-watermark" pointerEvents="none" style={styles.watermark}>
-                <ThemedText preset="displayMd" style={styles.watermarkText}>SYNTHETIC</ThemedText>
-              </View>
+        {activeStep === 'connect' && (
+          <>
+            <StepIntro number="01" title="Connect a verified source" copy="Use authenticated live RuView evidence for real calibration. Replay is available only to learn the interface and remains visibly synthetic." requirement="LIVE SOURCE REQUIRED BEFORE REFERENCE WALKS" />
+            <View style={styles.actions}>
+              <Pressable testID="nlos-start-synthetic" accessibilityRole="button" accessibilityLabel="USE CALIBRATION REPLAY" onPress={startReplay} style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}>
+                <View style={styles.buttonLabelRow}><View style={styles.syntheticButtonDot} /><ThemedText preset="labelMd" style={styles.secondaryButtonText}>USE CALIBRATION REPLAY</ThemedText></View>
+                <ThemedText preset="bodySm" style={styles.buttonCaption}>Practice only · deterministic and watermarked</ThemedText>
+              </Pressable>
+              <Pressable testID="nlos-connect-live" accessibilityRole="button" accessibilityLabel="CONNECT LIVE CALIBRATION" disabled={!liveCredentialAvailable} onPress={connectLive} style={({ pressed }) => [styles.liveButton, !liveCredentialAvailable && styles.disabledButton, pressed && liveCredentialAvailable && styles.buttonPressed]}>
+                <ThemedText preset="labelMd" style={styles.liveButtonText}>CONNECT LIVE CALIBRATION</ThemedText>
+                <ThemedText preset="bodySm" style={styles.liveButtonCaption}>{liveCredentialAvailable ? 'Credential ready for this session' : 'Ephemeral credential required'}</ThemedText>
+              </Pressable>
+            </View>
+            {!liveCredentialAvailable ? (
+              <InstrumentPanel eyebrow="Secure calibration pairing" style={styles.credentialCard}>
+                <ThemedText preset="bodyMd" style={styles.credentialIntro}>Enter a coordinator supplied credential to unlock the authenticated stream for this session.</ThemedText>
+                <TextInput testID="nlos-credential-input" accessibilityLabel="Ephemeral calibration bearer credential" value={credentialDraft} onChangeText={(value) => { setCredentialDraft(value); setCredentialError(false); }} secureTextEntry autoCapitalize="none" autoCorrect={false} autoComplete="off" textContentType="oneTimeCode" maxLength={512} placeholder="32 to 512 character pairing credential" placeholderTextColor={instrumentColors.textSecondary} style={[styles.credentialInput, credentialError && styles.credentialInputError]} />
+                <Pressable testID="nlos-unlock-live" accessibilityRole="button" accessibilityLabel="UNLOCK AUTHENTICATED LIVE" disabled={!credentialLengthValid} onPress={handleConfigureCredential} style={({ pressed }) => [styles.credentialButton, !credentialLengthValid && styles.disabledButton, pressed && credentialLengthValid && styles.buttonPressed]}>
+                  <ThemedText preset="labelMd" style={styles.credentialButtonText}>UNLOCK AUTHENTICATED LIVE</ThemedText>
+                </Pressable>
+                <ThemedText preset="bodySm" style={styles.credentialNote}>Held in memory only, sent solely in the ticket request Authorization header, and never stored by this client.</ThemedText>
+              </InstrumentPanel>
+            ) : (
+              <View style={styles.credentialReadyRow}><View style={styles.readyIdentity}><View style={styles.readyDot} /><ThemedText preset="bodySm" style={styles.readyText}>EPHEMERAL CREDENTIAL READY</ThemedText></View><Pressable accessibilityRole="button" accessibilityLabel="Forget ephemeral credential" onPress={forgetCredential} style={styles.forgetButton}><ThemedText preset="labelMd" style={styles.forgetText}>FORGET</ThemedText></Pressable></View>
             )}
-            {freshness === 'stale' && (
-              <View testID="nlos-stale-overlay" pointerEvents="none" style={styles.staleOverlay}>
-                <ThemedText preset="labelLg" style={styles.staleText}>STALE FRAME</ThemedText>
-                <ThemedText preset="bodySm" style={styles.staleCaption}>Targets hidden until fresh evidence arrives</ThemedText>
-              </View>
-            )}
-          </View>
-
-          <View style={styles.summaryRow}>
-            <View style={styles.metric}>
-              <ThemedText testID="nlos-track-count" preset="displayMd" style={styles.metricValue}>
-                {visibleTracks.length}
-              </ThemedText>
-              <ThemedText preset="mono" style={styles.metricLabel}>GATED TRACKS</ThemedText>
-            </View>
-            <View style={styles.metricDivider} />
-            <View style={styles.metric}>
-              <ThemedText testID="nlos-mean-confidence" preset="displayMd" style={styles.metricValue}>
-                {meanConfidence}
-              </ThemedText>
-              <ThemedText preset="mono" style={styles.metricLabel}>MEAN CONF.</ThemedText>
-            </View>
-          </View>
-        </InstrumentPanel>
-
-        <View style={styles.actions}>
-          <Pressable
-            testID="nlos-start-synthetic"
-            accessibilityRole="button"
-            accessibilityLabel="USE SYNTHETIC REPLAY"
-            onPress={startReplay}
-            style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
-          >
-            <View style={styles.buttonLabelRow}>
-              <View style={styles.syntheticButtonDot} />
-              <ThemedText preset="labelMd" style={styles.secondaryButtonText}>USE SYNTHETIC REPLAY</ThemedText>
-            </View>
-            <ThemedText preset="bodySm" style={styles.buttonCaption}>Deterministic and watermarked</ThemedText>
-          </Pressable>
-          <Pressable
-            testID="nlos-connect-live"
-            accessibilityRole="button"
-            accessibilityLabel="CONNECT AUTHENTICATED LIVE"
-            disabled={!liveCredentialAvailable}
-            onPress={connectLive}
-            style={({ pressed }) => [
-              styles.liveButton,
-              !liveCredentialAvailable && styles.disabledButton,
-              pressed && liveCredentialAvailable && styles.buttonPressed,
-            ]}
-          >
-            <ThemedText preset="labelMd" style={styles.liveButtonText}>CONNECT AUTHENTICATED LIVE</ThemedText>
-            <ThemedText preset="bodySm" style={styles.liveButtonCaption}>Ephemeral credential required</ThemedText>
-          </Pressable>
-        </View>
-
-        {!liveCredentialAvailable ? (
-          <InstrumentPanel eyebrow="Secure live pairing" style={styles.credentialCard}>
-            <ThemedText preset="bodyMd" style={styles.credentialIntro}>
-              Enter a coordinator supplied credential to unlock the authenticated stream for this session.
-            </ThemedText>
-            <TextInput
-              testID="nlos-credential-input"
-              accessibilityLabel="Ephemeral NLOS Bearer credential"
-              value={credentialDraft}
-              onChangeText={(value) => {
-                setCredentialDraft(value);
-                setCredentialError(false);
-              }}
-              secureTextEntry
-              autoCapitalize="none"
-              autoCorrect={false}
-              autoComplete="off"
-              textContentType="oneTimeCode"
-              maxLength={512}
-              placeholder="32 to 512 character pairing credential"
-              placeholderTextColor={instrumentColors.textSecondary}
-              style={[styles.credentialInput, credentialError && styles.credentialInputError]}
-            />
-            <Pressable
-              testID="nlos-unlock-live"
-              accessibilityRole="button"
-              accessibilityLabel="UNLOCK AUTHENTICATED LIVE"
-              disabled={!credentialLengthValid}
-              onPress={handleConfigureCredential}
-              style={({ pressed }) => [
-                styles.credentialButton,
-                !credentialLengthValid && styles.disabledButton,
-                pressed && credentialLengthValid && styles.buttonPressed,
-              ]}
-            >
-              <ThemedText preset="labelMd" style={styles.credentialButtonText}>UNLOCK AUTHENTICATED LIVE</ThemedText>
-            </Pressable>
-            <ThemedText preset="bodySm" style={styles.credentialNote}>
-              A native host or signed in web session may supply this credential automatically. It is held in memory only, sent solely in the ticket request Authorization header, and never stored by this client.
-            </ThemedText>
-          </InstrumentPanel>
-        ) : (
-          <View style={styles.credentialReadyRow}>
-            <View style={styles.readyIdentity}>
-              <View style={styles.readyDot} />
-              <ThemedText preset="bodySm" style={styles.readyText}>EPHEMERAL CREDENTIAL READY</ThemedText>
-            </View>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Forget ephemeral credential"
-              onPress={forgetCredential}
-              style={styles.forgetButton}
-            >
-              <ThemedText preset="labelMd" style={styles.forgetText}>FORGET</ThemedText>
-            </Pressable>
-          </View>
+            {lastRejectedReason && <View style={styles.rejectionCard}><ThemedText testID="nlos-rejection" preset="bodySm" style={styles.rejectionText}>Rejected {rejectedFrameCount} frame{rejectedFrameCount === 1 ? '' : 's'}; latest reason: {lastRejectedReason}</ThemedText></View>}
+          </>
         )}
 
-        {lastRejectedReason && (
-          <View style={styles.rejectionCard}>
-            <ThemedText testID="nlos-rejection" preset="bodySm" style={styles.rejectionText}>
-              Rejected {rejectedFrameCount} frame{rejectedFrameCount === 1 ? '' : 's'}; latest reason: {lastRejectedReason}
-            </ThemedText>
-          </View>
+        {activeStep === 'room' && (
+          <>
+            <StepIntro number="02" title="Measure and align the room" copy="Scan visible geometry, mark at least three RuView nodes, then record separate baseline and held-out walks in one coordinate frame." requirement={sourceReady ? 'LIVE RF READY · KEEP ROOM SCAN ACTIVE' : 'RETURN TO STEP 01 AND CONNECT LIVE RF'} />
+            <LidarCommissioningCard />
+          </>
         )}
 
-        <BetaSetupCard />
+        {activeStep === 'pose' && (
+          <>
+            <StepIntro number="03" title="Teach coarse pose — optional" copy="Temporarily pair visible iPhone joints with synchronized CSI to fit a room-specific student. Skip this step when spatial localization is the only goal." requirement={spatialReady ? 'VALID ROOM CALIBRATION FOUND' : 'VALID ROOM CALIBRATION REQUIRED TO RECORD'} />
+            <PoseTeachingCard />
+          </>
+        )}
 
-        <View testID="nlos-privacy-legend" style={styles.privacyLegend}>
-          <ThemedText preset="mono" style={styles.privacyLabel}>PRIVACY DEFAULTS</ThemedText>
-          <ThemedText preset="bodySm" style={styles.privacyCopy}>
-            Viewer retention: raw RF off, audio off, pairing credential memory only. Connected servers require their own consent and retention controls.
-          </ThemedText>
+        {activeStep === 'review' && (
+          <>
+            <StepIntro number="04" title="Review evidence before promotion" copy="Confirm provenance, freshness, calibration identity, visible tracks, and confidence. Missing or stale evidence stays hidden." requirement="PROMOTE ONLY VERIFIED, FRESH, HELD-OUT RESULTS" />
+            <ProvenancePanel frame={frame} freshness={freshness} streamStatus={streamStatus} />
+            <InstrumentPanel eyebrow="Calibration validation / spatial return" accessory={<ThemedText preset="mono" style={styles.panelIndex}>FRAME / 01</ThemedText>} style={styles.visualizationCard}>
+              <ViewModePicker value={viewMode} onChange={setViewMode} />
+              <View style={styles.visualizationStage}>
+                <HiddenTargetVisualization tracks={visibleTracks} freshness={freshness} mode={viewMode} width={visualizationWidth} lidarFrame={lidarFrame} />
+                {isSynthetic && <View testID="nlos-synthetic-watermark" pointerEvents="none" style={styles.watermark}><ThemedText preset="displayMd" style={styles.watermarkText}>SYNTHETIC</ThemedText></View>}
+                {freshness === 'stale' && <View testID="nlos-stale-overlay" pointerEvents="none" style={styles.staleOverlay}><ThemedText preset="labelLg" style={styles.staleText}>STALE FRAME</ThemedText><ThemedText preset="bodySm" style={styles.staleCaption}>Targets hidden until fresh evidence arrives</ThemedText></View>}
+              </View>
+              <View style={styles.summaryRow}><View style={styles.metric}><ThemedText testID="nlos-track-count" preset="displayMd" style={styles.metricValue}>{visibleTracks.length}</ThemedText><ThemedText preset="mono" style={styles.metricLabel}>VALIDATION TRACKS</ThemedText></View><View style={styles.metricDivider} /><View style={styles.metric}><ThemedText testID="nlos-mean-confidence" preset="displayMd" style={styles.metricValue}>{meanConfidence}</ThemedText><ThemedText preset="mono" style={styles.metricLabel}>MEAN CONF.</ThemedText></View></View>
+            </InstrumentPanel>
+          </>
+        )}
+
+        <View style={styles.guideActions}>
+          {activeStep !== 'connect' && <GuideAction label="BACK" secondary onPress={() => setActiveStep(activeStep === 'room' ? 'connect' : activeStep === 'pose' ? 'room' : 'pose')} />}
+          {activeStep !== 'review' && <GuideAction label={activeStep === 'connect' ? 'CONTINUE TO ROOM' : activeStep === 'room' ? 'CONTINUE TO OPTIONAL POSE' : 'REVIEW RESULTS'} onPress={() => setActiveStep(activeStep === 'connect' ? 'room' : activeStep === 'room' ? 'pose' : 'review')} />}
         </View>
+
+        <Pressable accessibilityRole="button" accessibilityLabel={helpOpen ? 'Hide setup and safety help' : 'Show setup and safety help'} onPress={() => setHelpOpen((value) => !value)} style={styles.helpToggle}>
+          <View><ThemedText preset="labelMd" style={styles.helpTitle}>SETUP, SAFETY & TEST HELP</ThemedText><ThemedText preset="bodySm" style={styles.helpCopy}>Device requirements, beta links, evidence labels, and privacy defaults</ThemedText></View>
+          <ThemedText preset="mono" style={styles.helpIcon}>{helpOpen ? '−' : '+'}</ThemedText>
+        </Pressable>
+        {helpOpen && <><BetaSetupCard /><View testID="nlos-privacy-legend" style={styles.privacyLegend}><ThemedText preset="mono" style={styles.privacyLabel}>PRIVACY DEFAULTS</ThemedText><ThemedText preset="bodySm" style={styles.privacyCopy}>Viewer retention: raw RF off, audio off, pairing credential memory only. Connected servers require their own consent and retention controls.</ThemedText></View></>}
       </ScrollView>
     </ThemedView>
   );
@@ -427,6 +450,49 @@ const styles = StyleSheet.create({
   noticeCopy: { flex: 1, gap: spacing.xs },
   noticeLabel: { color: instrumentColors.warning, fontSize: 9, letterSpacing: 1.25 },
   noticeText: { color: instrumentColors.textSecondary, lineHeight: 18 },
+  guideMenuWrap: {
+    backgroundColor: instrumentColors.background,
+    borderColor: instrumentColors.border,
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: spacing.sm,
+    shadowColor: '#000',
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  guideHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xs, paddingBottom: spacing.sm },
+  guideEyebrow: { color: instrumentColors.cyan, fontSize: 9, letterSpacing: 1.2 },
+  guideHint: { color: instrumentColors.textSecondary, marginTop: 2 },
+  guideProgress: { color: instrumentColors.green, fontSize: 10 },
+  guideMenu: { flexDirection: 'row', gap: 4 },
+  guideStep: { flex: 1, minHeight: 66, alignItems: 'center', justifyContent: 'center', borderRadius: 9, gap: 3, paddingHorizontal: 2 },
+  guideStepActive: { backgroundColor: 'rgba(36, 211, 229, 0.09)', borderColor: instrumentColors.cyanDim, borderWidth: 1 },
+  guideNumber: { width: 24, height: 24, borderRadius: 12, borderWidth: 1, borderColor: instrumentColors.borderStrong, alignItems: 'center', justifyContent: 'center' },
+  guideNumberActive: { borderColor: instrumentColors.cyan, backgroundColor: 'rgba(36, 211, 229, 0.12)' },
+  guideNumberComplete: { borderColor: instrumentColors.greenDim, backgroundColor: 'rgba(43, 217, 119, 0.12)' },
+  guideNumberText: { color: instrumentColors.textSecondary, fontSize: 7 },
+  guideNumberTextActive: { color: instrumentColors.green },
+  guideStepLabel: { color: instrumentColors.textSecondary, fontSize: 7, letterSpacing: 0.4 },
+  guideStepLabelActive: { color: instrumentColors.cyan },
+  guideState: { color: instrumentColors.textSecondary, fontSize: 5.5 },
+  guideStateComplete: { color: instrumentColors.green },
+  stepIntro: { borderLeftWidth: 2, borderLeftColor: instrumentColors.cyan, paddingVertical: spacing.sm, paddingLeft: spacing.md, paddingRight: spacing.xs, gap: spacing.xs },
+  stepIntroNumber: { color: instrumentColors.green, fontSize: 8, letterSpacing: 1.1 },
+  stepIntroTitle: { color: instrumentColors.text, fontSize: 24, lineHeight: 29 },
+  stepIntroCopy: { color: instrumentColors.textSecondary, lineHeight: 19 },
+  requirementRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.xs },
+  requirementDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: instrumentColors.warning },
+  requirementText: { flex: 1, color: instrumentColors.warning, fontSize: 7.5 },
+  guideActions: { flexDirection: 'row', gap: spacing.sm },
+  guideAction: { flex: 1, minHeight: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: instrumentColors.cyan, paddingHorizontal: spacing.sm },
+  guideActionSecondary: { backgroundColor: 'transparent', borderColor: instrumentColors.borderStrong, borderWidth: 1 },
+  guideActionText: { color: instrumentColors.background, textAlign: 'center', fontSize: 9 },
+  guideActionTextSecondary: { color: instrumentColors.textSecondary },
+  helpToggle: { minHeight: 66, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md, borderColor: instrumentColors.border, borderWidth: 1, borderRadius: 12, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
+  helpTitle: { color: instrumentColors.text, fontSize: 10 },
+  helpCopy: { color: instrumentColors.textSecondary, marginTop: 3, maxWidth: 330 },
+  helpIcon: { color: instrumentColors.cyan, fontSize: 18 },
   panelIndex: { color: instrumentColors.textSecondary, fontSize: 9, letterSpacing: 1 },
   visualizationCard: { paddingHorizontal: 0, paddingBottom: 0 },
   picker: {

@@ -20,7 +20,9 @@ pub struct MeetingInProgress {
 }
 
 impl MeetingInProgress {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn tick(&mut self, snap: &RawSnapshot, cfg: &PrimitiveConfig) -> PrimitiveState {
         if snap.since_start < cfg.warmup {
@@ -39,11 +41,7 @@ impl MeetingInProgress {
                     return PrimitiveState::Boolean {
                         active: true,
                         changed: true,
-                        reason: Reason::new(&[
-                            "n_persons>=2",
-                            "motion=1-20%",
-                            "dwell>=10min",
-                        ]),
+                        reason: Reason::new(&["n_persons>=2", "motion=1-20%", "dwell>=10min"]),
                     };
                 }
             } else {
@@ -76,7 +74,9 @@ impl MeetingInProgress {
 mod tests {
     use super::*;
 
-    fn cfg() -> PrimitiveConfig { PrimitiveConfig::default() }
+    fn cfg() -> PrimitiveConfig {
+        PrimitiveConfig::default()
+    }
 
     fn meeting_snap(t_secs: u64, n: u32) -> RawSnapshot {
         RawSnapshot {
@@ -103,7 +103,10 @@ mod tests {
     fn does_not_fire_with_1_person() {
         let mut p = MeetingInProgress::new();
         for t in 100..(100 + 1200) {
-            assert!(matches!(p.tick(&meeting_snap(t, 1), &cfg()), PrimitiveState::Idle));
+            assert!(matches!(
+                p.tick(&meeting_snap(t, 1), &cfg()),
+                PrimitiveState::Idle
+            ));
         }
         assert!(!p.active);
     }

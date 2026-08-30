@@ -10,13 +10,19 @@ iPhone LiDAR
   -> depth + confidence + camera intrinsics + device pose
   -> compact u16 millimeter wire frame
   -> WebSocket relay
-  -> browser point cloud
-  -> future RuView HAL / fusion ingest
+  -> RuView HAL normalization + signed RuField P1 summary
+  -> browser/native sensor-fusion display
 ```
 
 The native path is the sensor. The web path is a receiver and visualization surface. Mobile Safari does not expose ARKit scene depth directly to ordinary web pages, so the browser cannot replace the native capture layer on iPhone today.
 
 ## Native iPhone path
+
+The production mobile client under `ui/mobile` now embeds this capture path as the local Expo module `modules/ruview-lidar`. Its NLOS commissioning panel adds capability checks, live visible-scene point rendering, RoomPlan room geometry, ESP32 pose marking in the same coordinate frame, a SHA-256 calibration artifact, and direct transmission of this integration's `ruview.lidar.depth.v1` packets to the authenticated relay. The relay endpoint and token are held in memory only. The sensing server bounds the packet, normalizes it through `ruview-hal`, emits a signed RuField P1 geometry summary, and drops raw depth bytes.
+
+An optional pose-teaching stage reuses the completed RoomPlan AR session, runs Vision body-pose detection at a bounded rate, and lifts coarse visible joints with the scene-depth buffer from the same `ARFrame`. A hands-up gesture estimates the phone/CSI clock offset; samples are rejected when measured timing residual or association skew exceeds 20 ms. Ten sequences are fixed as seven training and three held-out tests. Only a room-specific student that improves PCK@20cm by at least 25% without increasing lost poses is marked `VALID` and used by the Live overlay. Raw camera, depth, CSI training frames, fingers, and biometric identity are not stored in the resulting model artifact.
+
+The standalone SwiftUI target below remains a focused protocol/reference client and browser-relay test fixture.
 
 Create an iOS SwiftUI app target in Xcode, deployment target iOS 17 or newer, then add the files under `native/RuViewLiDAR/` to the target.
 
@@ -29,7 +35,7 @@ Add this Info.plist value:
 
 Run on a physical LiDAR capable iPhone or iPad. The simulator does not provide LiDAR scene depth.
 
-The app requests `ARWorldTrackingConfiguration` with `.sceneDepth`, checks `supportsFrameSemantics`, extracts `ARDepthData.depthMap` and `confidenceMap`, and never transmits RGB camera frames.
+The app requests `ARWorldTrackingConfiguration` with `.sceneDepth`, checks `supportsFrameSemantics`, extracts `ARDepthData.depthMap` and `confidenceMap`, and never transmits RGB camera frames. The explicit Live video-overlay option creates a bounded, transient local JPEG preview; it is not included in the relay packet or persisted.
 
 ## Browser path
 
@@ -61,7 +67,7 @@ Depth is downsampled by 2 in each dimension by default and streamed at a maximum
 
 The initial implementation labels provenance as `source=live` and `privacyClass=geometry-only`. It sends depth geometry, confidence, camera intrinsics, pose, sequence, and wall clock timestamp. It does not send RGB imagery.
 
-The development relay requires an ephemeral token and bounds each WebSocket message, but it is not a production trust boundary. Production integration should terminate the WebSocket inside RuView, authenticate the device using the existing sensor identity path, convert each frame into `ruview-hal::Observation`, and attach witness receipts before fusion or persistence.
+The standalone development relay requires an ephemeral token and bounds each WebSocket message, but it is not a production trust boundary. The integrated RuView endpoint requires an admin-scoped bearer or single-use ticket, converts each valid frame into `ruview-hal::Observation`, and signs the derived RuField summary before fusion.
 
 ## Validation status
 

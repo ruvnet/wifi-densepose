@@ -68,13 +68,18 @@ impl SomeoneSleeping {
             if exiting {
                 let start = *self.exit_since.get_or_insert(snap.since_start);
                 // Presence-drop is immediate; motion-spike requires 30s dwell.
-                if !presence_ok || snap.since_start.saturating_sub(start) >= Duration::from_secs(30) {
+                if !presence_ok || snap.since_start.saturating_sub(start) >= Duration::from_secs(30)
+                {
                     self.active = false;
                     self.enter_since = None;
                     self.exit_since = None;
                     let mut tags = Vec::new();
-                    if !presence_ok { tags.push("presence=false"); }
-                    if snap.motion > 0.15 { tags.push("motion>15%"); }
+                    if !presence_ok {
+                        tags.push("presence=false");
+                    }
+                    if snap.motion > 0.15 {
+                        tags.push("motion>15%");
+                    }
                     return PrimitiveState::Boolean {
                         active: false,
                         changed: true,
@@ -120,11 +125,16 @@ mod tests {
     fn fires_after_dwell_post_warmup() {
         let mut p = SomeoneSleeping::new();
         // Tick after warmup but before dwell — idle.
-        assert!(matches!(p.tick(&sleeping_snap(60 + 100), &cfg()), PrimitiveState::Idle));
+        assert!(matches!(
+            p.tick(&sleeping_snap(60 + 100), &cfg()),
+            PrimitiveState::Idle
+        ));
         // Tick after warmup + dwell — should activate (start was at t=160).
         let state = p.tick(&sleeping_snap(60 + 100 + 300), &cfg());
         match state {
-            PrimitiveState::Boolean { active, changed, .. } => {
+            PrimitiveState::Boolean {
+                active, changed, ..
+            } => {
                 assert!(active);
                 assert!(changed);
             }
@@ -172,7 +182,9 @@ mod tests {
         s.presence = false;
         let state = p.tick(&s, &cfg());
         match state {
-            PrimitiveState::Boolean { active, changed, .. } => {
+            PrimitiveState::Boolean {
+                active, changed, ..
+            } => {
                 assert!(!active);
                 assert!(changed);
             }
@@ -198,7 +210,9 @@ mod tests {
         s2.motion = 0.20;
         let state2 = p.tick(&s2, &cfg());
         match state2 {
-            PrimitiveState::Boolean { active, changed, .. } => {
+            PrimitiveState::Boolean {
+                active, changed, ..
+            } => {
                 assert!(!active);
                 assert!(changed);
             }

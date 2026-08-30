@@ -1,476 +1,100 @@
-# WiFi-DensePose Mobile
+# RuView Mobile
 
-**See through walls from your phone.** Real-time WiFi sensing, vital signs, and disaster response — in a cross-platform mobile app.
+RuView Mobile is the iPhone, Android, and web instrument for installing, calibrating, and observing a RuView sensing deployment. It combines local RuView evidence with calibrated WorldGraph topology, optional Cognitum Spaces context, and explicitly authorized Cognitum Meta-LLM interpretation.
 
-WiFi-DensePose Mobile is a React Native / Expo companion app for the [WiFi-DensePose](../../README.md) sensing platform. It connects to a WiFi sensing server over WebSocket, renders live 3D Gaussian splat visualizations of detected humans, displays breathing and heart rate in real time, and provides a full WiFi-MAT disaster triage dashboard — all from a single codebase that runs on iOS, Android, and Web.
+The application is source-honest: disconnected sensors remain disconnected, empty cloud responses remain empty, synthetic replay is visibly labeled, and no UI state is promoted to measured evidence without a validated source.
 
-> | Screen | What It Shows |
-> |--------|---------------|
-> | **Live** | 3D Gaussian splat body rendering with FPS counter, signal strength, confidence HUD |
-> | **NLOS** | Authenticated hidden-target hypotheses with 2D plan / 3D perspective views, evidence provenance, freshness, and bounded synthetic replay |
-> | **Vitals** | Breathing rate (6-30 BPM) and heart rate (40-120 BPM) arc gauges with sparkline history |
-> | **Zones** | SVG floor plan with occupancy grid, zone legend, presence heatmap |
-> | **MAT** | Mass casualty assessment: survivor counter, triage alerts, zone management |
-> | **Settings** | Server URL, theme picker, RSSI-only toggle, alert sound control |
+## Capabilities
 
-```bash
-# Quick start — web preview in 30 seconds
-cd ui/mobile
-npm install
-npx expo start --web
-```
+- **Welcome** — workflow-oriented entry point and system status.
+- **Live** — local camera/LiDAR and RuView sensor-fusion display with evidence-level controls.
+- **Calibration** — guided room scan, RuView node registration, coordinate alignment, visible-path capture, and calibration validation.
+- **Vitals** — measured breathing and heart evidence with a fail-closed Apple Home availability boundary.
+- **Zones** — anonymous RF occupancy, calibrated WorldGraph topology, Cognitum Spaces, and consent-gated spatial interpretation.
+- **MAT** — governed RuView/WorldGraph incident evidence with explicit source health and no fabricated detections.
+- **Settings** — sensing and calibration server configuration, transport diagnostics, privacy controls, and app preferences.
 
-<!-- Screenshot placeholder: replace with actual app screenshots -->
-<!-- ![WiFi-DensePose Mobile](assets/screenshots/app-overview.png) -->
+## Cognitum One integration
 
----
+The mobile client uses two deliberately separate OAuth grants:
 
-## Features
+| Capability | OAuth client | Scope | Data boundary |
+| --- | --- | --- | --- |
+| Cognitum Spaces | `ruview` | `sensing:read spaces:read` | Tenant/workspace semantic P2/P3 resources only |
+| Meta-LLM | `meta-proxy` | `inference` | User-approved, bounded anonymous spatial summary |
 
-| | Feature | Details |
-|---|---------|---------|
-| **3D Live View** | Gaussian splat rendering | Three.js via WebView (native) or iframe (web), real-time pose overlay |
-| **RuView NLOS Labs** | Hidden-target tracks | Authenticated `ruview.nlos.track.v1` frames, strict bounds, replay rejection, staleness, and visible provenance |
-| **Vital Signs** | Breathing + heart rate | Arc gauge components with sparkline 60-sample history, confidence indicators |
-| **Disaster Response** | WiFi-MAT dashboard | Survivor detection, START triage classification, priority alerts, zone scan tracking |
-| **Floor Plan** | SVG occupancy grid | Zone-level presence visualization, color-coded density, interactive legend |
-| **Cross-Platform** | iOS, Android, Web | Expo SDK 55, React Native 0.83, single codebase with platform-specific modules |
-| **Offline Capable** | Automatic simulation fallback | When the sensing server is unreachable, generates synthetic data so the UI stays functional |
-| **RSSI Mode** | No CSI hardware needed | Toggle RSSI-only scanning for coarse presence detection on consumer WiFi devices |
-| **Dark Theme** | Cyan accent (#32B8C6) | Dark-first design system with consistent color tokens, spacing scale, and monospace typography |
-| **Persistent State** | Zustand + AsyncStorage | Settings, connection preferences, and theme survive app restarts |
-| **Platform WiFi** | Native RSSI scanning | Android: `react-native-wifi-reborn`, iOS: stub (requires entitlement), Web: synthetic values |
+Both flows use Authorization Code with PKCE and Cognitum's supported one-time-code exchange. Native refresh tokens are stored in the OS keychain through Expo SecureStore; access tokens are short-lived. Web sessions use session storage and end with the browser session.
 
-### RuView NLOS on iOS and the web
+Spaces responses are schema-validated and must preserve the HomeCore Edge boundary. The client rejects a response if it does not explicitly exclude raw CSI, CIR, RF tensors, recordings, pose frames, vital waveforms, and identity observations.
 
-The NLOS tab is a cross-platform **track client**, not an iPhone LiDAR capture implementation. Apple Safari, Expo, and ordinary App Store APIs do not expose the raw photon timing histograms required by the research reconstruction pipeline. The client therefore accepts only:
+Meta-LLM is off until the operator enables cloud interpretation. It receives only the semantic payload displayed in Zones and returns an OpenAI-compatible completion plus the governed `x_cognitum` routing receipt. Local sensing remains usable when Cognitum is unavailable or unauthorized.
 
-1. Live track frames from an authenticated RuView NLOS server session, after a transport-layer Bearer token is exchanged for a single-use WebSocket ticket.
-2. Deterministic `SYNTHETIC` replay, always labeled `l0_synthetic` and always covered by a visible watermark.
+Upstream contracts:
 
-Unknown, expired, out-of-order, malformed, oversized, depth-only, or unauthenticated data is never presented as live NLOS. A native host can provide an ephemeral credential with `configureNlosBearerToken`, or an operator can paste a 32-to-512-character pairing credential into the masked NLOS screen input. The credential remains in memory, is sent only in the ticket request `Authorization` header, and is never persisted by this client.
+- [Cognitum API](https://github.com/cognitum-one/api)
+- [Cognitum Meta-LLM](https://github.com/cognitum-one/meta-llm)
+- [RuView](https://github.com/ruvnet/RuView)
 
-### Beta tester setup
+## Requirements
 
-The NLOS screen now starts with a platform-aware setup card. It links directly to the [interactive explainer](https://ruview-nlos.ruv.chatgpt.site) and the [step-by-step test and feedback issue](https://github.com/ruvnet/RuView/issues/1690).
+- Node.js 20 or newer
+- npm
+- Xcode 16 or newer for iOS builds
+- Android Studio for Android builds
+- A RuView sensing server for measured sensing data
+- A LiDAR-equipped iPhone or iPad for native room scanning
+- Cognitum One account/workspace access for private Spaces or Meta-LLM calls
 
-#### Native iOS through TestFlight
-
-1. On the test iPhone or iPad, install [Apple TestFlight](https://apps.apple.com/app/testflight/id899247664).
-2. Open the private RuView invitation supplied by the beta coordinator. Installing TestFlight alone does not grant access to the beta build.
-3. Install RuView NLOS Beta, open the **NLOS** tab, and allow only the permissions required by the assigned test.
-4. Run **USE SYNTHETIC REPLAY** first to verify rendering and provenance labels.
-5. Use **CONNECT AUTHENTICATED LIVE** only when the coordinator supplies an ephemeral pairing credential. The credential remains in memory and is never stored.
-
-#### iPhone web app through Safari
-
-1. Open the hosted web build in Safari on the iPhone.
-2. Tap **Share**, choose **Add to Home Screen**, then open the installed RuView icon.
-3. Run synthetic replay or connect to an authenticated RuView reconstruction server.
-4. Submit the device model, app version, evidence label, and observed result to [issue 1690](https://github.com/ruvnet/RuView/issues/1690). Do not post credentials or private captures.
-
-The web client cannot capture ARKit LiDAR, Apple depth maps, or raw photon timing data. It is an installable viewer for synthetic replay and validated server-produced tracks. Any LiDAR-equipped iPhone Pro or iPad Pro requirement applies only to separately assigned hardware capability checks. Evidence must remain labeled `L0 SYNTHETIC`, `L1 MEASURED`, `L2 CALIBRATED`, or `L3 CORROBORATED`, with freshness shown as `FRESH`, `STALE`, or `UNKNOWN`. Depth-only input is never evidence of physical around-the-corner reconstruction.
-
----
-
-## Prerequisites
-
-| Requirement | Version | Notes |
-|-------------|---------|-------|
-| Node.js | 18+ | LTS recommended |
-| npm | 9+ | Ships with Node.js 18+ |
-| Expo CLI | Latest | Installed automatically via `npx` |
-| iOS Simulator | Xcode 15+ | macOS only; optional for iOS development |
-| Android Emulator | API 33+ | Android Studio; optional for Android development |
-| WiFi-DensePose Server | Any | Optional — app falls back to simulated data without a server |
-
----
-
-## Quick Start
-
-### Web (fastest)
+## Setup
 
 ```bash
-cd ui/mobile
-npm install
-npx expo start --web
+git clone https://github.com/cognitum-one/ruview-mobile.git
+cd ruview-mobile
+npm ci
+cp .env.example .env.local
+npm run ios
 ```
 
-Open `http://localhost:8081` in your browser. The app starts in simulation mode with synthetic pose and vital sign data.
-
-### Android
+For a web development build:
 
 ```bash
-cd ui/mobile
-npm install
-npx expo start --android
+npm run web
 ```
 
-Requires Android Studio with an emulator running, or a physical device with Expo Go installed.
+`EXPO_PUBLIC_DEFAULT_SERVER_URL` is only the default local RuView server address. Cognitum API, authorization, and inference origins are fixed in the governed service implementation and are not accepted from user input.
 
-### iOS
+## Native iOS module
+
+`modules/ruview-lidar` contains the Expo native module for ARKit/LiDAR capture and local Apple Home capability bridging. Native projects are generated artifacts and are intentionally ignored:
 
 ```bash
-cd ui/mobile
-npm install
-npx expo start --ios
+npx expo prebuild --platform ios
+npx expo run:ios
 ```
 
-Requires Xcode with a simulator, or a physical device with Expo Go. RSSI scanning on iOS requires the `com.apple.developer.networking.wifi-info` entitlement.
+The app requests camera access for visible room geometry and calibration. It does not claim that consumer LiDAR can reconstruct hidden people, and it does not retain raw camera imagery through this module.
 
----
-
-## Connecting to a Sensing Server
-
-The app connects to the WiFi-DensePose sensing server over WebSocket for live data. Configure the server URL in the **Settings** tab.
-
-| Server Location | URL | Notes |
-|----------------|-----|-------|
-| Local dev server | `http://localhost:3000` | Default; sensing WS auto-connects on port 3001 |
-| Docker container | `http://host.docker.internal:3000` | From emulator connecting to host Docker |
-| ESP32 mesh | `http://<esp32-ip>:3000` | Direct connection to ESP32 aggregator |
-| Remote server | `https://your-server.example.com` | TLS supported; WebSocket upgrades to `wss://` |
-
-When the server is unreachable, the app automatically falls back to **simulation mode** after exhausting reconnect attempts (exponential backoff). A yellow `SIM` badge appears in the connection banner. Reconnection resumes automatically when the server becomes available.
-
----
-
-<details>
-<summary><strong>Architecture</strong></summary>
-
-### Directory Structure
-
-```
-ui/mobile/
-  App.tsx                          Root component (providers, navigation, services)
-  app.config.ts                    Expo configuration
-  index.ts                         Entry point
-  src/
-    components/
-      ConnectionBanner.tsx         Server status banner (connected/simulated/disconnected)
-      ErrorBoundary.tsx            Crash boundary with fallback UI
-      GaugeArc.tsx                 SVG arc gauge for vital sign display
-      HudOverlay.tsx               Heads-up display overlay
-      LoadingSpinner.tsx           Themed loading indicator
-      ModeBadge.tsx                LIVE / SIM / RSSI mode indicator
-      OccupancyGrid.tsx            Grid-based occupancy visualization
-      SignalBar.tsx                RSSI signal strength bars
-      SparklineChart.tsx           Mini sparkline for metric history
-      StatusDot.tsx                Connection status indicator dot
-      ThemedText.tsx               Text component with theme presets
-      ThemedView.tsx               View component with theme background
-    constants/
-      api.ts                       REST API path constants
-      simulation.ts                Simulation tick interval, defaults
-      websocket.ts                 WS path, reconnect delays, max attempts
-    hooks/
-      usePoseStream.ts             Subscribe to live or simulated sensing frames
-      useNlosStream.ts             Authenticated NLOS / deterministic replay lifecycle
-      useRssiScanner.ts            Platform RSSI scanning hook
-      useServerReachability.ts     HTTP health check polling
-      useTheme.ts                  Dark/light/system theme resolution
-      useWebViewBridge.ts          WebView message bridge for Gaussian viewer
-    navigation/
-      MainTabs.tsx                 Bottom tab navigator (5 tabs with lazy loading)
-      RootNavigator.tsx            Root stack navigator
-      types.ts                     Navigation param list types
-    screens/
-      LiveScreen/
-        index.tsx                  3D Gaussian splat view with HUD overlay
-        GaussianSplatWebView.tsx   Native WebView renderer (Three.js)
-        GaussianSplatWebView.web.tsx  Web iframe renderer
-        LiveHUD.tsx                FPS, RSSI, confidence, person count overlay
-        useGaussianBridge.ts       WebView message protocol
-      NLOSScreen/
-        index.tsx                  NLOS evidence, controls, metrics, and safe fallback UI
-        HiddenTargetVisualization.tsx  Memoized plan / perspective SVG renderer
-        ProvenancePanel.tsx        Source, evidence, histogram, and freshness disclosure
-      VitalsScreen/
-        index.tsx                  Breathing + heart rate dashboard
-        BreathingGauge.tsx         Arc gauge for breathing BPM
-        HeartRateGauge.tsx         Arc gauge for heart rate BPM
-        MetricCard.tsx             Vital sign metric card with sparkline
-      ZonesScreen/
-        index.tsx                  Floor plan occupancy view
-        FloorPlanSvg.tsx           SVG floor plan renderer
-        useOccupancyGrid.ts        Grid computation from sensing frames
-        ZoneLegend.tsx             Color-coded zone legend
-      MATScreen/
-        index.tsx                  Mass casualty assessment dashboard
-        AlertCard.tsx              Single triage alert card
-        AlertList.tsx              Scrollable alert list with priority sorting
-        MatWebView.tsx             MAT visualization WebView
-        SurvivorCounter.tsx        Survivor count by triage status
-        useMatBridge.ts            MAT WebView message protocol
-      SettingsScreen/
-        index.tsx                  App settings panel
-        ServerUrlInput.tsx         Server URL text input with validation
-        RssiToggle.tsx             RSSI-only mode switch
-        ThemePicker.tsx            Dark / light / system theme selector
-    services/
-      ws.service.ts               WebSocket client with auto-reconnect + simulation fallback
-      nlos.service.ts             Bearer ticket exchange, bounded WebSocket, replay rejection
-      nlos.validation.ts          Strict versioned NLOS track frame validation
-      api.service.ts              REST client (Axios) with retry logic
-      rssi.service.ts             Platform-agnostic RSSI scanner interface
-      rssi.service.android.ts     Android: react-native-wifi-reborn integration
-      rssi.service.ios.ts         iOS: stub (requires entitlement)
-      rssi.service.web.ts         Web: synthetic RSSI values
-      simulation.service.ts       Generates synthetic SensingFrame data
-    stores/
-      poseStore.ts                Pose frames, connection status, frame history (Zustand)
-      nlosStore.ts                NLOS frame ordering, provenance, rejection, and staleness
-      matStore.ts                 MAT survivors, zones, alerts, disaster events (Zustand)
-      settingsStore.ts            Server URL, theme, RSSI toggle (Zustand + persist)
-    theme/
-      colors.ts                   Color tokens (bg, surface, accent, danger, etc.)
-      spacing.ts                  4px-based spacing scale
-      typography.ts               Font families and size presets
-      ThemeContext.tsx             React context provider for theme
-      index.ts                    Theme barrel export
-    types/
-      sensing.ts                  SensingFrame, SensingNode, VitalsData, Classification
-      nlos.ts                     Canonical `ruview.nlos.track.v1` wire contract
-      mat.ts                      Survivor, Alert, ScanZone, TriageStatus, DisasterType
-      api.ts                      PoseStatus, ZoneConfig, HistoricalFrames, ApiError
-      navigation.ts               Navigation param lists
-    utils/
-      colorMap.ts                 Value-to-color mapping for heatmaps
-      formatters.ts               Number and date formatting utilities
-      ringBuffer.ts               Fixed-size circular buffer for frame history
-      urlValidator.ts             Server URL validation
-  e2e/                            Maestro end-to-end test specs
-  assets/                         App icons and images
-```
-
-### Data Flow
-
-```
-WiFi Sensing Server (Rust/Axum)
-       |
-       | WebSocket (ws://host:3001/ws/sensing)
-       v
-  ws.service.ts -----> [auto-reconnect with exponential backoff]
-       |                       |
-       | SensingFrame          | (server unreachable)
-       v                       v
-  poseStore.ts          simulation.service.ts
-       |                       |
-       | Zustand state         | synthetic SensingFrame
-       v                       v
-  usePoseStream.ts  <----------+
-       |
-       +---> LiveScreen (3D Gaussian splat + HUD)
-       +---> VitalsScreen (breathing + heart rate gauges)
-       +---> ZonesScreen (floor plan occupancy grid)
-
-  api.service.ts -----> REST API (GET /api/pose/status, /zones, /frames)
-       |
-       v
-  matStore.ts -----> MATScreen (survivor counter, alerts, zones)
-
-  rssi.service.ts -----> Platform WiFi scan (Android / iOS / Web)
-       |
-       v
-  useRssiScanner.ts -----> LiveScreen HUD (signal bars)
-```
-
-</details>
-
----
-
-<details>
-<summary><strong>Screens</strong></summary>
-
-### Live
-
-The primary visualization screen. Renders a 3D Gaussian splat representation of detected humans using Three.js. On native platforms, the renderer runs inside a WebView; on web, it uses an iframe. A heads-up display overlays connection status, FPS, RSSI signal strength, detection confidence, and person count. Supports three modes: **LIVE** (connected to server), **SIM** (simulation fallback), and **RSSI** (RSSI-only scanning).
-
-### Vitals
-
-Displays real-time breathing rate and heart rate extracted from CSI signal processing. Each vital sign is shown as an animated arc gauge (`GaugeArc` component) with the current BPM value, a 60-sample sparkline history (`SparklineChart`), and a confidence percentage. Normal ranges: breathing 6-30 BPM, heart rate 40-120 BPM.
-
-### NLOS
-
-Displays hidden-target hypotheses produced upstream by RuView NLOS. The 2D plan and lightweight 3D perspective views render at most 16 tracks and covariance ellipses. The provenance card reports evidence level, transient kind, histogram preservation, sensor model, sequence, and freshness. Stale tracks remain visible only as muted historical context beneath a `STALE FRAME` overlay.
-
-The NLOS server URL is configured separately from the CSI socket. Live authentication uses `POST /api/v1/nlos/ws-ticket` with a Bearer credential; the response supplies a short-lived single-use `wss` URL. If no ephemeral credential is available, the tab starts in deterministic synthetic replay rather than silently relabeling simulated data as live.
-
-### Zones
-
-A floor plan view that maps WiFi sensing coverage to physical space. Uses SVG rendering (`react-native-svg`) to draw zones with color-coded occupancy density. The `useOccupancyGrid` hook computes grid cell values from incoming sensing frames. A legend shows the color scale from empty to high-density zones.
-
-### MAT
-
-Mass Casualty Assessment Tool for disaster response. Displays a survivor counter grouped by START triage classification (Immediate / Delayed / Minor / Deceased), a scrollable alert list sorted by priority, and zone scan progress. Each alert card shows the survivor location, recommended action, and triage color. The MAT tab badge shows the active alert count.
-
-### Settings
-
-Configuration panel with separate sensing and NLOS controls:
-- **Server URL** — text input with URL validation; changes trigger WebSocket reconnect
-- **RuView NLOS server URL** — separate base URL used only for the authenticated ticket exchange
-- **Theme** — dark / light / system picker
-- **RSSI Scanning** — toggle for platform-native WiFi RSSI scanning
-- **Alert Sound** — toggle for MAT alert audio notifications
-
-All settings persist across app restarts via Zustand with AsyncStorage.
-
-</details>
-
----
-
-<details>
-<summary><strong>API Integration</strong></summary>
-
-### WebSocket Protocol
-
-The app connects to the sensing server's WebSocket endpoint for real-time data streaming.
-
-**Endpoint:** `ws://<host>:3001/ws/sensing`
-
-**Frame format** (`SensingFrame`):
-
-```typescript
-interface SensingFrame {
-  type?: string;
-  timestamp?: number;
-  source?: string;           // "live" | "simulated"
-  tick?: number;
-  nodes: SensingNode[];      // Per-node RSSI, position, amplitude
-  features: FeatureSet;      // mean_rssi, variance, motion_band_power, etc.
-  classification: Classification; // motion_level, presence, confidence
-  signal_field: SignalField;  // 3D voxel grid values
-  vital_signs?: VitalsData;  // breathing_bpm, hr_proxy_bpm, confidence
-}
-```
-
-The WebSocket service (`ws.service.ts`) handles:
-- Automatic reconnection with exponential backoff (1s, 2s, 4s, 8s, 16s)
-- Fallback to simulation after max reconnect attempts
-- Protocol upgrade (`http:` to `ws:`, `https:` to `wss:`)
-- Port mapping (HTTP 3000 maps to WS 3001)
-
-### REST API
-
-The REST client (`api.service.ts`) provides:
-
-| Method | Path | Returns |
-|--------|------|---------|
-| `GET` | `/api/pose/status` | `PoseStatus` — server health and capabilities |
-| `GET` | `/api/pose/zones` | `ZoneConfig[]` — configured sensing zones |
-| `GET` | `/api/pose/frames?limit=N` | `HistoricalFrames` — recent frame history |
-
-All requests use Axios with a 5-second timeout and automatic retry (2 attempts).
-
-### RuView NLOS protocol
-
-The NLOS client exchanges its in-memory Bearer credential at `POST /api/v1/nlos/ws-ticket`. The ticket response is capped at 8 KiB and must be exactly:
-
-```json
-{
-  "schema": "ruview.nlos.ws-ticket.v1",
-  "webSocketUrl": "wss://ruview.example/api/v1/nlos/ws?ticket=single-use",
-  "expiresAtUnixMs": 1770000000000
-}
-```
-
-The first WebSocket message must be `ruview.nlos.authenticated.v1`. Only then can the socket deliver `ruview.nlos.track.v1` frames for the same session. Track JSON is capped at 256 KiB and 16 tracks. Positions are bounded to ±100 m, velocity to ±20 m/s, covariance to 10 m², and expiration to five seconds. Sequence values must increase monotonically.
-
-Live frames require at least `l1_measured` evidence, preserved raw or compact normalized histograms, and `ruview_server` transport provenance. `depth_only` data cannot be labeled live NLOS. Synthetic frames require `l0_synthetic`, replay transport, the zero calibration hash, and the on-screen `SYNTHETIC` watermark.
-
-</details>
-
----
-
-## Testing
-
-### Unit Tests
+## Validation
 
 ```bash
-cd ui/mobile
-npm test
+npm run typecheck
+npm run lint
+npm test -- --runInBand
+npm run e2e:web
+npx expo-doctor
 ```
 
-Runs the Jest test suite via `jest-expo`. Tests cover:
+The browser suite exercises welcome navigation, fixed header/footer behavior, calibration, LiDAR gating, live rendering, Vitals, Zones, MAT, settings, and scroll-to-top behavior. Native release validation should additionally build through Xcode and run the physical-device calibration workflow against enrolled RuView hardware.
 
-| Category | Files | What Is Tested |
-|----------|-------|----------------|
-| Components | 7 | `ConnectionBanner`, `GaugeArc`, `HudOverlay`, `OccupancyGrid`, `SignalBar`, `SparklineChart`, `StatusDot` |
-| Screens | 6 | Existing screens plus `NLOSScreen` |
-| Services | 6 | Existing services plus NLOS transport and protocol validation |
-| Stores | 4 | Existing stores plus NLOS ordering, provenance, and staleness state |
-| Hooks | 4 | Existing hooks plus the NLOS authenticated/replay lifecycle |
-| Utils | 3 | `colorMap`, `ringBuffer`, `urlValidator` |
+## Security and privacy invariants
 
-### End-to-End Tests (Maestro)
-
-```bash
-# Install Maestro CLI
-curl -Ls https://get.maestro.mobile.dev | bash
-
-# Run all e2e specs
-maestro test e2e/
-```
-
-Maestro YAML specs cover each screen:
-
-| Spec | What It Verifies |
-|------|-----------------|
-| `live_screen.yaml` | 3D viewer loads, HUD elements visible, mode badge displays |
-| `vitals_screen.yaml` | Breathing and heart rate gauges render with values |
-| `zones_screen.yaml` | Floor plan SVG renders, zone legend visible |
-| `mat_screen.yaml` | Survivor counter displays, alert list populates |
-| `settings_screen.yaml` | URL input editable, theme picker works, toggles respond |
-| `offline_fallback.yaml` | App transitions to SIM mode when server unreachable |
-
----
-
-## Tech Stack
-
-| Layer | Technology | Version |
-|-------|-----------|---------|
-| Framework | Expo | 55 |
-| UI | React Native | 0.83 |
-| Language | TypeScript | 5.9 |
-| Navigation | React Navigation | 7.x |
-| State | Zustand | 5.x |
-| HTTP | Axios | 1.x |
-| SVG | react-native-svg | 15.x |
-| WebView | react-native-webview | 13.x |
-| WiFi | react-native-wifi-reborn | 4.x |
-| Charts | Victory Native | 41.x |
-| Animations | react-native-reanimated | 4.x |
-| Testing | Jest + jest-expo | 30.x |
-| E2E | Maestro | Latest |
-
----
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch from `main`
-3. Make changes in the `ui/mobile/` directory
-4. Run `npm test` and verify all tests pass
-5. Run `npx expo start --web` to verify the app renders correctly
-6. Submit a pull request
-
-Follow the project's existing patterns:
-- Components go in `src/components/`
-- Screen-specific components go in `src/screens/<ScreenName>/`
-- Platform-specific files use the `.android.ts` / `.ios.ts` / `.web.ts` suffix convention
-- All state management uses Zustand stores in `src/stores/`
-- All types go in `src/types/`
-
----
-
-## Credits
-
-Mobile app by [@MaTriXy](https://github.com/MaTriXy) — original scaffold, screen architecture, and cross-platform service layer.
-
-Built on the [WiFi-DensePose](../../README.md) sensing platform.
-
----
+- No bearer token is placed in a URL or persisted in ordinary app settings.
+- Cloud interpretation requires a local consent receipt and a separate `inference` authorization.
+- Cognitum authorization never grants actuator or write authority to this application.
+- Raw sensing and identity-class data do not enter the Spaces or Meta-LLM payloads.
+- Malformed, oversized, stale, unauthenticated, or boundary-violating responses fail closed.
+- Synthetic evidence is visibly watermarked and never represented as a live measurement.
 
 ## License
 
-[MIT](../../LICENSE)
+See the upstream RuView project for applicable licensing and notices. A repository-specific license should be added before public redistribution.

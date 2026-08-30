@@ -113,18 +113,17 @@ fn bench_state_encode(c: &mut Criterion) {
     let s = snap();
     let enc = StateEncoder { builder: &b };
     c.bench_function("state::numeric_heart_rate", |bench| {
-        bench.iter(|| {
-            black_box(enc.numeric(EntityKind::HeartRate, &s).unwrap())
-        });
+        bench.iter(|| black_box(enc.numeric(EntityKind::HeartRate, &s).unwrap()));
     });
     c.bench_function("state::boolean_presence", |bench| {
-        bench.iter(|| {
-            black_box(enc.boolean(EntityKind::Presence, true).unwrap())
-        });
+        bench.iter(|| black_box(enc.boolean(EntityKind::Presence, true).unwrap()));
     });
     c.bench_function("state::event_fall", |bench| {
         bench.iter(|| {
-            black_box(enc.event(EntityKind::FallDetected, "fall_detected", 0, Some(0.87)).unwrap())
+            black_box(
+                enc.event(EntityKind::FallDetected, "fall_detected", 0, Some(0.87))
+                    .unwrap(),
+            )
         });
     });
 }
@@ -149,7 +148,12 @@ fn bench_rate_limit(c: &mut Criterion) {
         bench.iter_batched(
             || {
                 let mut rl = RateLimiter::new();
-                rl.allow("bench-node", EntityKind::HeartRate, Duration::from_secs(0), &r);
+                rl.allow(
+                    "bench-node",
+                    EntityKind::HeartRate,
+                    Duration::from_secs(0),
+                    &r,
+                );
                 rl
             },
             |mut rl| {

@@ -60,9 +60,18 @@ mod tests {
     #[test]
     fn privacy_on_suppresses_biometrics_only() {
         // HR / BR / pose keypoints → suppressed.
-        assert_eq!(decide(EntityKind::HeartRate, true), PublishDecision::Suppress);
-        assert_eq!(decide(EntityKind::BreathingRate, true), PublishDecision::Suppress);
-        assert_eq!(decide(EntityKind::PoseKeypoints, true), PublishDecision::Suppress);
+        assert_eq!(
+            decide(EntityKind::HeartRate, true),
+            PublishDecision::Suppress
+        );
+        assert_eq!(
+            decide(EntityKind::BreathingRate, true),
+            PublishDecision::Suppress
+        );
+        assert_eq!(
+            decide(EntityKind::PoseKeypoints, true),
+            PublishDecision::Suppress
+        );
     }
 
     #[test]
@@ -76,7 +85,12 @@ mod tests {
             EntityKind::FallDetected,
             EntityKind::PresenceScore,
         ] {
-            assert_eq!(decide(e, true), PublishDecision::Publish, "{:?} should not be suppressed", e);
+            assert_eq!(
+                decide(e, true),
+                PublishDecision::Publish,
+                "{:?} should not be suppressed",
+                e
+            );
         }
     }
 
@@ -97,7 +111,12 @@ mod tests {
             EntityKind::NoMovement,
             EntityKind::MultiRoomTransition,
         ] {
-            assert_eq!(decide(e, true), PublishDecision::Publish, "{:?} should not be suppressed", e);
+            assert_eq!(
+                decide(e, true),
+                PublishDecision::Publish,
+                "{:?} should not be suppressed",
+                e
+            );
         }
     }
 }

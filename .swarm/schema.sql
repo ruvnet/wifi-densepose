@@ -1,5 +1,5 @@
 
--- Claude Flow V3 Memory Database
+-- RuFlo V3 Memory Database
 -- Version: 3.0.0
 -- Features: Pattern learning, vector embeddings, temporal decay, migration tracking
 
@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS memory_entries (
   tags TEXT, -- JSON array
   metadata TEXT, -- JSON object
   owner_id TEXT,
+
+  -- ADR-323: who/what produced this entry — lets shared-namespace retrieval
+  -- filter by trust level instead of conflating a user's stated claim with
+  -- an agent's own output or a raw tool/system observation.
+  provenance_type TEXT DEFAULT 'unknown' CHECK(provenance_type IN (
+    'user_claim', 'agent_output', 'system_observation', 'tool_result', 'unknown'
+  )),
 
   -- Timestamps
   created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
@@ -279,6 +286,36 @@ CREATE TABLE IF NOT EXISTS vector_indexes (
 );
 
 -- ============================================
+-- GRAPH EDGES (ADR-130 Phase 1)
+-- Unified knowledge graph backend — sql.js canonical store
+-- ============================================
+
+-- Unified graph edges table (ADR-130)
+-- Node IDs use domain-prefixed format: {domain}:{uuid}
+-- where domain in (mem, agent, task, entity, span, pattern)
+CREATE TABLE IF NOT EXISTS graph_edges (
+  id              TEXT PRIMARY KEY,          -- edge-{uuid}
+  source_id       TEXT NOT NULL,             -- domain-prefixed node ID
+  target_id       TEXT NOT NULL,             -- domain-prefixed node ID
+  relation        TEXT NOT NULL,             -- e.g. "caused", "depends-on", "imports"
+  weight          REAL DEFAULT 1.0,
+  -- Temporal / reliability semantics (ADR-130 §"graph that forgets" property)
+  confidence      REAL DEFAULT 1.0,          -- [0,1]; updated by JUDGE step
+  decay_rate      REAL DEFAULT 0.0,          -- per-day exponential decay applied at read time
+  last_reinforced TEXT,                      -- ISO-8601; set when CONSOLIDATE re-touches edge
+  witness_id      TEXT,                      -- FK to verification/witness-fixes.json (ADR-103)
+  -- Embedding storage: "inline:{base64}" | "vector_indexes:{id}" | NULL
+  embedding_ref   TEXT,
+  metadata        TEXT,                      -- JSON blob for plugin-specific fields
+  created_at      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_graph_edges_source    ON graph_edges (source_id);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_target    ON graph_edges (target_id);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_relation  ON graph_edges (relation);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_reinforced ON graph_edges (last_reinforced);
+
+-- ============================================
 -- SYSTEM METADATA
 -- ============================================
 
@@ -292,14 +329,17 @@ CREATE TABLE IF NOT EXISTS metadata (
 INSERT OR REPLACE INTO metadata (key, value) VALUES
   ('schema_version', '3.0.0'),
   ('backend', 'hybrid'),
-  ('created_at', '2026-02-28T16:04:25.842Z'),
+  ('created_at', '2026-08-27T01:44:33.221Z'),
   ('sql_js', 'true'),
   ('vector_embeddings', 'enabled'),
   ('pattern_learning', 'enabled'),
   ('temporal_decay', 'enabled'),
   ('hnsw_indexing', 'enabled');
 
--- Create default vector index configuration
+-- Create default vector index configuration. Dimension matches the default
+-- ONNX embedding model (Xenova/all-MiniLM-L6-v2, 384-dim); HNSW rejects
+-- inserts whose dim does not match this row, so a 768 here breaks every
+-- memory_store --vector and memory_search on a fresh install (#1947).
 INSERT OR IGNORE INTO vector_indexes (id, name, dimensions) VALUES
-  ('default', 'default', 768),
-  ('patterns', 'patterns', 768);
+  ('default', 'default', 384),
+  ('patterns', 'patterns', 384);

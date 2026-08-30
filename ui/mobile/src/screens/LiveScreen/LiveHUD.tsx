@@ -8,7 +8,7 @@ import { formatConfidence, formatRssi } from '@/utils/formatters';
 import { colors, spacing } from '@/theme';
 import type { ConnectionStatus } from '@/types/sensing';
 
-type LiveMode = 'LIVE' | 'SIM' | 'RSSI';
+type LiveMode = 'LIVE' | 'SIM' | 'IDLE';
 
 type LiveHUDProps = {
   rssi?: number;

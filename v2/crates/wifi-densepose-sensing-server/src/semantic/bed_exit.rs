@@ -24,11 +24,12 @@ pub struct BedExit {
 }
 
 impl BedExit {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     fn in_bed_zone(snap: &RawSnapshot) -> bool {
-        !snap.bed_zones.is_empty()
-            && snap.active_zones.iter().any(|z| snap.bed_zones.contains(z))
+        !snap.bed_zones.is_empty() && snap.active_zones.iter().any(|z| snap.bed_zones.contains(z))
     }
 
     pub fn tick(&mut self, snap: &RawSnapshot, cfg: &PrimitiveConfig) -> PrimitiveState {
@@ -45,10 +46,7 @@ impl BedExit {
             if in_window(snap.local_seconds_since_midnight, start, end) {
                 return PrimitiveState::Event {
                     event_type: "bed_exit",
-                    reason: Reason::new(&[
-                        "left_bed_zone",
-                        "overnight_window",
-                    ]),
+                    reason: Reason::new(&["left_bed_zone", "overnight_window"]),
                 };
             }
         }
@@ -61,7 +59,9 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    fn cfg() -> PrimitiveConfig { PrimitiveConfig::default() }
+    fn cfg() -> PrimitiveConfig {
+        PrimitiveConfig::default()
+    }
 
     fn in_bed_overnight(t: u64) -> RawSnapshot {
         RawSnapshot {
@@ -90,7 +90,13 @@ mod tests {
         let mut p = BedExit::new();
         let _ = p.tick(&in_bed_overnight(10), &cfg());
         let state = p.tick(&out_of_bed_overnight(20), &cfg());
-        assert!(matches!(state, PrimitiveState::Event { event_type: "bed_exit", .. }));
+        assert!(matches!(
+            state,
+            PrimitiveState::Event {
+                event_type: "bed_exit",
+                ..
+            }
+        ));
     }
 
     #[test]

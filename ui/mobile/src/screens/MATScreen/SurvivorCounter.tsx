@@ -2,7 +2,7 @@ import { View } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
 import { colors } from '@/theme/colors';
 import { spacing } from '@/theme/spacing';
-import { TriageStatus, type Survivor } from '@/types/mat';
+import type { Survivor } from '@/types/mat';
 
 type SurvivorCounterProps = {
   survivors: Survivor[];
@@ -26,19 +26,19 @@ const getBreakdown = (survivors: Survivor[]): Breakdown => {
   };
 
   survivors.forEach((survivor) => {
-    if (survivor.triage_status === TriageStatus.Immediate) {
+    if (survivor.triage_status === 'Immediate') {
       output.immediate += 1;
       return;
     }
-    if (survivor.triage_status === TriageStatus.Delayed) {
+    if (survivor.triage_status === 'Delayed') {
       output.delayed += 1;
       return;
     }
-    if (survivor.triage_status === TriageStatus.Minor) {
+    if (survivor.triage_status === 'Minor') {
       output.minor += 1;
       return;
     }
-    if (survivor.triage_status === TriageStatus.Deceased) {
+    if (survivor.triage_status === 'Deceased') {
       output.deceased += 1;
       return;
     }

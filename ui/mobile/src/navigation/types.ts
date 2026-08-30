@@ -3,8 +3,9 @@ export type RootStackParamList = {
 };
 
 export type MainTabsParamList = {
+  Welcome: undefined;
   Live: undefined;
-  NLOS: undefined;
+  Calibration: undefined;
   Vitals: undefined;
   Zones: undefined;
   MAT: undefined;

@@ -39,6 +39,8 @@ export interface VitalsData {
   breathing_confidence?: number;
   heart_rate_bpm?: number;
   heart_confidence?: number;
+  heartbeat_confidence?: number;
+  signal_quality?: number;
   confidence?: number;
 }
 

@@ -1,83 +1,128 @@
-import { useMemo } from 'react';
-import { ScrollView, useWindowDimensions, View } from 'react-native';
-import { ConnectionBanner } from '@/components/ConnectionBanner';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Switch, TextInput, useWindowDimensions, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { InstrumentGrid, InstrumentPanel, instrumentColors } from '@/components/InstrumentPanel';
 import { ThemedText } from '@/components/ThemedText';
-import { ThemedView } from '@/components/ThemedView';
-import { colors } from '@/theme/colors';
-import { spacing } from '@/theme/spacing';
 import { usePoseStore } from '@/stores/poseStore';
-import { type ConnectionStatus } from '@/types/sensing';
-import { useOccupancyGrid } from './useOccupancyGrid';
+import { useSettingsStore } from '@/stores/settingsStore';
+import { useCognitumStore } from '@/stores/cognitumStore';
+import { useTabScrollToTop } from '@/stores/tabScrollStore';
+import { worldGraphService } from '@/services/worldGraph.service';
+import type { WorldGraphSnapshot } from '@/types/worldGraph';
+import type { SpatialIntelligenceInput } from '@/types/cognitum';
 import { FloorPlanSvg } from './FloorPlanSvg';
 import { ZoneLegend } from './ZoneLegend';
+import { useOccupancyGrid } from './useOccupancyGrid';
+import { WorldGraphMap } from '@/screens/MATScreen/WorldGraphMap';
 
-const getLastUpdateSeconds = (timestamp?: number): string => {
-  if (!timestamp) {
-    return 'N/A';
-  }
+type Layer = 'field' | 'topology' | 'spaces';
+type SourceStatus = 'live' | 'idle' | 'error' | 'gated';
 
-  const ageMs = Date.now() - timestamp;
-  const secs = Math.max(0, ageMs / 1000);
-  return `${secs.toFixed(1)}s`;
+const timeAgo = (timestamp?: number): string => {
+  if (!timestamp) return 'NO FRAME';
+  const value = timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp;
+  const seconds = Math.max(0, (Date.now() - value) / 1000);
+  return seconds < 60 ? `${seconds.toFixed(1)}S AGO` : `${Math.floor(seconds / 60)}M AGO`;
 };
+const sourceColor = (status: SourceStatus) => status === 'live' ? instrumentColors.green : status === 'error' ? instrumentColors.danger : status === 'gated' ? instrumentColors.warning : instrumentColors.textSecondary;
 
-const resolveBannerState = (status: ConnectionStatus): 'connected' | 'simulated' | 'disconnected' => {
-  if (status === 'connecting') {
-    return 'disconnected';
-  }
-
-  return status;
+const SourceTile = ({ icon, label, value, status }: { icon: keyof typeof Ionicons.glyphMap; label: string; value: string; status: SourceStatus }) => {
+  const color = sourceColor(status);
+  return <View style={[styles.sourceTile, status === 'live' && styles.sourceTileLive]}><Ionicons name={icon} size={18} color={color} /><View style={styles.sourceCopy}><ThemedText preset="mono" style={styles.sourceLabel}>{label}</ThemedText><ThemedText preset="labelMd" style={[styles.sourceValue, { color }]} numberOfLines={1}>{value}</ThemedText></View><View style={[styles.sourceDot, { backgroundColor: color }]} /></View>;
 };
+const LayerButton = ({ active, icon, label, onPress }: { active: boolean; icon: keyof typeof Ionicons.glyphMap; label: string; onPress: () => void }) => <Pressable accessibilityRole="button" accessibilityLabel={`${label} layer`} accessibilityState={{ selected: active }} onPress={onPress} style={({ pressed }) => [styles.layerButton, active && styles.layerButtonActive, pressed && styles.pressed]}><Ionicons name={icon} size={16} color={active ? instrumentColors.cyan : instrumentColors.textSecondary} /><ThemedText preset="mono" style={[styles.layerLabel, active && styles.layerLabelActive]}>{label}</ThemedText></Pressable>;
+const StatusBadge = ({ label, status }: { label: string; status: SourceStatus }) => { const color = sourceColor(status); return <View style={[styles.badge, { borderColor: `${color}66` }]}><View style={[styles.badgeDot, { backgroundColor: color }]} /><ThemedText preset="mono" style={[styles.badgeText, { color }]}>{label}</ThemedText></View>; };
+const PayloadMetric = ({ label, value }: { label: string; value: string }) => <View style={styles.payloadMetric}><ThemedText preset="labelMd" style={styles.payloadValue}>{value}</ThemedText><ThemedText preset="mono" style={styles.payloadLabel}>{label}</ThemedText></View>;
 
 export const ZonesScreen = () => {
+  const scrollRef = useTabScrollToTop('Zones');
+  const { width } = useWindowDimensions();
+  const serverUrl = useSettingsStore((state) => state.serverUrl);
   const connectionStatus = usePoseStore((state) => state.connectionStatus);
   const lastFrame = usePoseStore((state) => state.lastFrame);
   const signalField = usePoseStore((state) => state.signalField);
+  const cognitum = useCognitumStore();
+  const { bootstrap } = cognitum;
+  const [layer, setLayer] = useState<Layer>('field');
+  const [topology, setTopology] = useState<WorldGraphSnapshot | null>(null);
+  const [topologyStatus, setTopologyStatus] = useState<SourceStatus>('idle');
+  const [topologyError, setTopologyError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [authorizationCode, setAuthorizationCode] = useState('');
 
   const estimatedPersonCount = lastFrame?.estimated_persons ?? (lastFrame?.classification?.presence ? 1 : 0);
-  const { gridValues, personPositions } = useOccupancyGrid(signalField, estimatedPersonCount);
+  const { gridValues, personPositions } = useOccupancyGrid(signalField, estimatedPersonCount, lastFrame?.persons);
+  const mapSize = useMemo(() => Math.max(250, Math.min(width - 64, 500)), [width]);
+  const roomCount = topology?.nodes.filter((node) => node.kind === 'room' || node.kind === 'zone').length ?? 0;
+  const sensorCount = topology?.nodes.filter((node) => node.kind === 'sensor').length ?? 0;
+  const localConfidence = lastFrame?.classification?.confidence;
 
-  const { width } = useWindowDimensions();
-  const mapSize = useMemo(() => Math.max(240, Math.min(width - spacing.md * 2, 520)), [width]);
+  const refreshTopology = useCallback(async () => {
+    setTopologyStatus('idle'); setTopologyError(null);
+    try { const result = await worldGraphService.fetchSnapshot(serverUrl); setTopology(result.graph); setTopologyStatus('live'); }
+    catch (error) { setTopology(null); setTopologyStatus('error'); setTopologyError(error instanceof Error ? error.message : 'WorldGraph topology unavailable'); }
+  }, [serverUrl]);
 
-  return (
-    <ThemedView style={{ flex: 1, backgroundColor: colors.bg }}>
-      <ScrollView contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xxl }}>
-        <ConnectionBanner status={resolveBannerState(connectionStatus)} />
-        <View
-          style={{
-            marginTop: 28,
-            marginBottom: spacing.md,
-          }}
-        >
-          <ThemedText preset="labelLg" style={{ color: colors.textSecondary, marginBottom: 8 }}>
-            Floor Plan — Occupancy Heatmap
-          </ThemedText>
-        </View>
+  useEffect(() => { void bootstrap(); void refreshTopology(); }, [bootstrap, refreshTopology]);
+  const refresh = async () => { setRefreshing(true); await Promise.all([refreshTopology(), cognitum.session.signedIn ? cognitum.refreshSpatial() : Promise.resolve()]); setRefreshing(false); };
 
-        <FloorPlanSvg
-          gridValues={gridValues}
-          personPositions={personPositions}
-          size={mapSize}
-          style={{ alignSelf: 'center' }}
-        />
+  const spatialInput: SpatialIntelligenceInput = useMemo(() => ({
+    generatedAt: new Date().toISOString(),
+    local: { connection: connectionStatus, anonymousOccupancy: personPositions.length, presence: Boolean(lastFrame?.classification?.presence), motionLevel: lastFrame?.classification?.motion_level ?? 'unknown', confidence: typeof localConfidence === 'number' ? localConfidence : null, signalQuality: typeof lastFrame?.signal_quality_score === 'number' ? lastFrame.signal_quality_score : null },
+    spaces: cognitum.spaces.map((space) => ({ id: space.id, name: space.name ?? null, status: space.status ?? null, confidence: space.confidence ?? null, observedAt: space.observedAt })),
+    zones: cognitum.zones.map((zone) => ({ id: zone.id, name: zone.name ?? null, status: zone.status ?? null, confidence: zone.confidence ?? null, observedAt: zone.observedAt })),
+  }), [connectionStatus, personPositions.length, lastFrame, localConfidence, cognitum.spaces, cognitum.zones]);
 
-        <ZoneLegend />
+  const rfStatus: SourceStatus = connectionStatus === 'connected' || connectionStatus === 'simulated' ? 'live' : 'idle';
+  const spacesStatus: SourceStatus = cognitum.dataStatus === 'live' ? 'live' : cognitum.dataStatus === 'error' ? 'error' : cognitum.session.signedIn ? 'idle' : 'gated';
+  const metaStatus: SourceStatus = cognitum.insight ? 'live' : cognitum.cloudConsentAt && cognitum.inferenceAuthorized ? 'idle' : 'gated';
+  const liveSources = [rfStatus, topologyStatus, spacesStatus, metaStatus].filter((status) => status === 'live').length;
 
-        <View
-          style={{
-            marginTop: spacing.md,
-            flexDirection: 'row',
-            justifyContent: 'space-between',
-            gap: spacing.md,
-          }}
-        >
-          <ThemedText preset="bodyMd">Occupancy: {personPositions.length} persons detected</ThemedText>
-          <ThemedText preset="bodyMd">Last update: {getLastUpdateSeconds(lastFrame?.timestamp)}</ThemedText>
-        </View>
-      </ScrollView>
-    </ThemedView>
-  );
+  return <View style={styles.root}><InstrumentGrid /><ScrollView ref={scrollRef} testID="zones-scroll-view" refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} tintColor={instrumentColors.cyan} />} contentContainerStyle={styles.content}>
+    <InstrumentPanel testID="zones-hero" eyebrow="SPATIAL INTELLIGENCE / SOURCE-HONEST" accessory={<ThemedText preset="mono" style={styles.heroAccessory}>{liveSources} / 4 LIVE</ThemedText>}>
+      <ThemedText preset="displayLg" style={styles.heroTitle}>A room is more than <ThemedText preset="displayLg" style={styles.heroAccent}>a grid.</ThemedText></ThemedText>
+      <ThemedText preset="bodyLg" style={styles.heroBody}>Layer local RF evidence, calibrated topology, tenant-scoped Spaces, and optional governed interpretation without confusing one source for another.</ThemedText>
+      <View style={styles.sourceGrid}><SourceTile icon="radio-outline" label="RUVIEW FIELD" value={rfStatus === 'live' ? connectionStatus.toUpperCase() : 'NO LIVE FRAME'} status={rfStatus} /><SourceTile icon="git-network-outline" label="WORLDGRAPH" value={topologyStatus === 'live' ? `${roomCount} AREAS` : topologyStatus.toUpperCase()} status={topologyStatus} /><SourceTile icon="layers-outline" label="SPACES" value={cognitum.dataStatus === 'live' ? `${cognitum.spaces.length} SPACES` : cognitum.session.signedIn ? cognitum.dataStatus.toUpperCase() : 'OAUTH REQUIRED'} status={spacesStatus} /><SourceTile icon="sparkles-outline" label="META-LLM" value={cognitum.insight ? 'BRIEF READY' : cognitum.inferenceAuthorized ? 'INFERENCE READY' : cognitum.cloudConsentAt ? 'OAUTH REQUIRED' : 'CLOUD OFF'} status={metaStatus} /></View>
+    </InstrumentPanel>
+
+    <InstrumentPanel eyebrow="ROOM LAYERS" accessory={<StatusBadge label={timeAgo(lastFrame?.timestamp)} status={rfStatus} />}>
+      <View style={styles.layerBar}><LayerButton active={layer === 'field'} icon="scan-outline" label="RF FIELD" onPress={() => setLayer('field')} /><LayerButton active={layer === 'topology'} icon="map-outline" label="TOPOLOGY" onPress={() => setLayer('topology')} /><LayerButton active={layer === 'spaces'} icon="shapes-outline" label="SPACES" onPress={() => setLayer('spaces')} /></View>
+      {layer === 'field' && <View testID="zones-field-layer"><View style={styles.mapHeader}><View><ThemedText preset="labelLg" style={styles.mapTitle}>ANONYMOUS OCCUPANCY FIELD</ThemedText><ThemedText preset="mono" style={styles.mapCaption}>LOCAL CSI · NO CAMERA · NO IDENTITY</ThemedText></View><View style={styles.countOrb}><ThemedText preset="displayMd" style={styles.countValue}>{personPositions.length}</ThemedText><ThemedText preset="mono" style={styles.countLabel}>TRACKS</ThemedText></View></View><FloorPlanSvg gridValues={gridValues} personPositions={personPositions} size={mapSize} style={styles.floorPlan} /><ZoneLegend />{!lastFrame && <View style={styles.emptyStrip}><Ionicons name="pulse-outline" size={17} color={instrumentColors.textSecondary} /><ThemedText preset="bodySm" style={styles.emptyText}>Waiting for a verified sensing frame. The field remains empty rather than synthesizing occupancy.</ThemedText></View>}</View>}
+      {layer === 'topology' && <View testID="zones-topology-layer" style={styles.layerContent}><View style={styles.mapHeader}><View><ThemedText preset="labelLg" style={styles.mapTitle}>CALIBRATED WORLDGRAPH</ThemedText><ThemedText preset="mono" style={styles.mapCaption}>{roomCount} AREAS · {sensorCount} SENSORS</ThemedText></View><StatusBadge label={topologyStatus.toUpperCase()} status={topologyStatus} /></View><WorldGraphMap graph={topology} zones={[]} survivors={[]} />{topologyError && <ThemedText preset="bodySm" style={styles.errorText}>{topologyError}</ThemedText>}</View>}
+      {layer === 'spaces' && <View testID="zones-spaces-layer" style={styles.layerContent}><View style={styles.mapHeader}><View><ThemedText preset="labelLg" style={styles.mapTitle}>COGNITUM SEMANTIC HIERARCHY</ThemedText><ThemedText preset="mono" style={styles.mapCaption}>TENANT / WORKSPACE SCOPED · P2/P3 ONLY</ThemedText></View><StatusBadge label={cognitum.dataStatus.toUpperCase()} status={spacesStatus} /></View>{!cognitum.session.signedIn ? <View style={styles.gatedState}><Ionicons name="lock-closed-outline" size={28} color={instrumentColors.warning} /><ThemedText preset="labelLg" style={styles.gatedTitle}>SPACES IS PRIVATE BY DEFAULT</ThemedText><ThemedText preset="bodyMd" style={styles.gatedCopy}>Sign in with Cognitum to read the workspace’s semantic rooms and zones. This grants read access only.</ThemedText></View> : cognitum.spaces.length === 0 ? <View style={styles.gatedState}><Ionicons name="file-tray-outline" size={28} color={instrumentColors.textSecondary} /><ThemedText preset="labelLg" style={styles.gatedTitle}>NO AUTHORIZED SPACES</ThemedText><ThemedText preset="bodyMd" style={styles.gatedCopy}>An empty response does not prove the physical site is empty.</ThemedText></View> : <View style={styles.spaceList}>{cognitum.spaces.map((space) => <View key={space.id} style={styles.spaceCard}><View style={styles.spaceIcon}><Ionicons name="cube-outline" size={18} color={instrumentColors.cyan} /></View><View style={styles.spaceCopy}><ThemedText preset="labelMd" style={styles.spaceName}>{space.name || space.id}</ThemedText><ThemedText preset="mono" style={styles.spaceMeta}>{space.privacy} · {space.status || 'STATE UNKNOWN'}</ThemedText></View><ThemedText preset="mono" style={styles.confidence}>{space.confidence == null ? '—' : `${Math.round(space.confidence * 100)}%`}</ThemedText></View>)}</View>}</View>}
+    </InstrumentPanel>
+
+    <InstrumentPanel eyebrow="COGNITUM ONE" accessory={<ThemedText preset="mono" style={styles.panelAccessory}>OAUTH + PKCE</ThemedText>}>
+      <View style={styles.accountRow}><View style={[styles.accountIcon, cognitum.session.signedIn && styles.accountIconLive]}><Ionicons name={cognitum.session.signedIn ? 'person-outline' : 'key-outline'} size={20} color={cognitum.session.signedIn ? instrumentColors.green : instrumentColors.warning} /></View><View style={styles.accountCopy}><ThemedText preset="labelLg" style={styles.accountTitle}>{cognitum.authStatus === 'awaiting_code' ? 'FINISH SECURE SIGN-IN' : cognitum.session.signedIn ? 'COGNITUM CONNECTED' : 'CONNECT YOUR WORKSPACE'}</ThemedText><ThemedText preset="bodySm" style={styles.accountDescription}>{cognitum.authStatus === 'awaiting_code' ? 'Copy the one-time code from Cognitum and return here. The PKCE verifier never leaves this device.' : cognitum.session.signedIn ? `${cognitum.session.scopes.join(' · ') || 'scope unavailable'}${cognitum.inferenceAuthorized ? ' · inference' : ''}` : 'Cognitum opens in a secure browser and returns a one-time PKCE code. Tokens are held in memory and the OS keychain, never app settings.'}</ThemedText></View></View>
+      {cognitum.authStatus === 'awaiting_code' && <View style={styles.codePanel}>
+        <ThemedText preset="mono" style={styles.codeLabel}>ONE-TIME AUTHORIZATION CODE</ThemedText>
+        <TextInput accessibilityLabel="Cognitum one-time code" testID="cognitum-code-input" value={authorizationCode} onChangeText={setAuthorizationCode} autoCapitalize="none" autoCorrect={false} spellCheck={false} placeholder="Paste code from Cognitum" placeholderTextColor={instrumentColors.textSecondary} selectionColor={instrumentColors.cyan} style={styles.codeInput} />
+        <Pressable accessibilityRole="button" accessibilityLabel="Complete Cognitum sign-in" onPress={async () => { await cognitum.completeAuthorization(authorizationCode); setAuthorizationCode(''); }} disabled={!authorizationCode.trim()} style={({ pressed }) => [styles.primaryButton, !authorizationCode.trim() && styles.disabled, pressed && styles.pressed]}><Ionicons name="shield-checkmark-outline" size={17} color="#071015" /><ThemedText preset="labelMd" style={styles.primaryButtonText}>COMPLETE COGNITUM SIGN-IN</ThemedText></Pressable>
+      </View>}
+      <View style={styles.buttonRow}>{!cognitum.session.signedIn ? <Pressable accessibilityRole="button" onPress={() => void cognitum.connectSpaces()} disabled={cognitum.authStatus === 'authorizing'} style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}>{cognitum.authStatus === 'authorizing' ? <ActivityIndicator color="#071015" /> : <Ionicons name="log-in-outline" size={17} color="#071015" />}<ThemedText preset="labelMd" style={styles.primaryButtonText}>SIGN IN FOR SPACES</ThemedText></Pressable> : <><Pressable accessibilityRole="button" onPress={() => void cognitum.refreshSpatial()} style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}><Ionicons name="refresh-outline" size={16} color={instrumentColors.cyan} /><ThemedText preset="labelMd" style={styles.secondaryButtonText}>SYNC SPACES</ThemedText></Pressable><Pressable accessibilityRole="button" onPress={() => void cognitum.disconnect()} style={({ pressed }) => [styles.quietButton, pressed && styles.pressed]}><ThemedText preset="mono" style={styles.quietButtonText}>SIGN OUT</ThemedText></Pressable></>}</View>
+      {cognitum.boundary && <View style={styles.boundary}><Ionicons name="shield-checkmark-outline" size={16} color={instrumentColors.green} /><ThemedText preset="mono" style={styles.boundaryText}>AUTHORITY: {cognitum.boundary.toUpperCase()}</ThemedText></View>}{cognitum.error && <View style={styles.errorBox}><Ionicons name="alert-circle-outline" size={17} color={instrumentColors.danger} /><ThemedText preset="bodySm" style={styles.errorText}>{cognitum.error}</ThemedText></View>}
+    </InstrumentPanel>
+
+    <InstrumentPanel eyebrow="GOVERNED INTERPRETATION" accessory={<ThemedText preset="mono" style={styles.panelAccessory}>META-LLM / COGNITUM-AUTO</ThemedText>}>
+      <View style={styles.consentRow}><View style={styles.consentCopy}><ThemedText preset="labelLg" style={styles.accountTitle}>CLOUD SPATIAL BRIEF</ThemedText><ThemedText preset="bodySm" style={styles.accountDescription}>When enabled, only the anonymous semantic summary shown here is sent to api.cognitum.one. Raw CSI, pose frames, vital waveforms, recordings, and identity observations remain excluded.</ThemedText></View><Switch accessibilityLabel="Cloud spatial interpretation" value={Boolean(cognitum.cloudConsentAt)} onValueChange={cognitum.setCloudConsent} trackColor={{ false: instrumentColors.border, true: instrumentColors.cyanDim }} thumbColor={cognitum.cloudConsentAt ? instrumentColors.cyan : instrumentColors.textSecondary} /></View>
+      <View style={styles.payloadStrip}><PayloadMetric label="LOCAL TRACKS" value={String(personPositions.length)} /><PayloadMetric label="SPACES" value={String(cognitum.spaces.length)} /><PayloadMetric label="ZONES" value={String(cognitum.zones.length)} /><PayloadMetric label="IDENTITY" value="NONE" /></View>
+      <Pressable accessibilityRole="button" onPress={() => void cognitum.analyze(spatialInput)} disabled={!cognitum.cloudConsentAt || cognitum.dataStatus === 'loading'} style={({ pressed }) => [styles.insightButton, (!cognitum.cloudConsentAt || cognitum.dataStatus === 'loading') && styles.disabled, pressed && styles.pressed]}><Ionicons name="sparkles-outline" size={17} color={instrumentColors.cyan} /><ThemedText preset="labelMd" style={styles.insightButtonText}>{!cognitum.inferenceAuthorized ? 'AUTHORIZE COGNITUM INFERENCE' : cognitum.insight ? 'REFRESH SPATIAL BRIEF' : 'GENERATE SPATIAL BRIEF'}</ThemedText></Pressable>
+      {cognitum.insight ? <View testID="spatial-insight" style={styles.insight}><View style={styles.insightHead}><ThemedText preset="mono" style={styles.insightModel}>{cognitum.insight.model.toUpperCase()}{cognitum.insight.resolvedTier ? ` / ${cognitum.insight.resolvedTier.toUpperCase()}` : ''}</ThemedText><ThemedText preset="mono" style={styles.insightModel}>{new Date(cognitum.insight.generatedAt).toLocaleTimeString()}</ThemedText></View><ThemedText preset="bodyMd" style={styles.insightText}>{cognitum.insight.text}</ThemedText><ThemedText preset="mono" style={styles.receipt}>{cognitum.insight.promptTokens ?? '—'} IN / {cognitum.insight.completionTokens ?? '—'} OUT · {cognitum.insight.requestId ? `RECEIPT ${cognitum.insight.requestId}` : 'CLOUD RECEIPT'}</ThemedText></View> : <View style={styles.emptyStrip}><Ionicons name="sparkles-outline" size={17} color={instrumentColors.textSecondary} /><ThemedText preset="bodySm" style={styles.emptyText}>No AI narrative is generated automatically. RuView evidence remains usable without Cognitum meta-LLM.</ThemedText></View>}
+    </InstrumentPanel>
+  </ScrollView></View>;
 };
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: instrumentColors.background }, content: { padding: 16, paddingBottom: 132, gap: 16 }, heroAccessory: { color: instrumentColors.green, fontSize: 10, letterSpacing: 1.2 }, heroTitle: { color: instrumentColors.text, fontSize: 34, lineHeight: 39, letterSpacing: -.8 }, heroAccent: { color: instrumentColors.cyan, fontSize: 34, lineHeight: 39 }, heroBody: { color: instrumentColors.textSecondary, lineHeight: 23 },
+  sourceGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, sourceTile: { width: '48.5%', minHeight: 70, padding: 11, borderRadius: 13, borderWidth: 1, borderColor: instrumentColors.border, backgroundColor: '#0A0D12', flexDirection: 'row', alignItems: 'center', gap: 9 }, sourceTileLive: { borderColor: 'rgba(38,217,104,.36)', backgroundColor: 'rgba(38,217,104,.035)' }, sourceCopy: { flex: 1, gap: 2 }, sourceLabel: { color: instrumentColors.textSecondary, fontSize: 8, letterSpacing: .8 }, sourceValue: { fontSize: 12, letterSpacing: .5 }, sourceDot: { width: 7, height: 7, borderRadius: 4 }, panelAccessory: { color: instrumentColors.textSecondary, fontSize: 9, letterSpacing: 1 },
+  badge: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderRadius: 99, paddingHorizontal: 8, paddingVertical: 5 }, badgeDot: { width: 6, height: 6, borderRadius: 3 }, badgeText: { fontSize: 8, letterSpacing: .8 }, layerBar: { flexDirection: 'row', padding: 4, borderRadius: 12, backgroundColor: '#090C11', borderWidth: 1, borderColor: instrumentColors.border, gap: 4 }, layerButton: { flex: 1, minHeight: 42, borderRadius: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }, layerButtonActive: { backgroundColor: 'rgba(25,212,230,.09)', borderWidth: 1, borderColor: instrumentColors.cyanDim }, layerLabel: { color: instrumentColors.textSecondary, fontSize: 8, letterSpacing: .6 }, layerLabelActive: { color: instrumentColors.cyan },
+  layerContent: { gap: 12 }, mapHeader: { marginTop: 4, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }, mapTitle: { color: instrumentColors.text, fontSize: 13, letterSpacing: .7 }, mapCaption: { color: instrumentColors.textSecondary, fontSize: 8, letterSpacing: .8, marginTop: 3 }, countOrb: { width: 58, height: 58, borderRadius: 29, borderWidth: 1, borderColor: instrumentColors.cyanDim, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(25,212,230,.055)' }, countValue: { color: instrumentColors.cyan, fontSize: 22, lineHeight: 23 }, countLabel: { color: instrumentColors.textSecondary, fontSize: 7 }, floorPlan: { alignSelf: 'center', marginTop: 12, borderRadius: 14, borderWidth: 1, borderColor: instrumentColors.borderStrong, backgroundColor: '#070B10' },
+  emptyStrip: { flexDirection: 'row', alignItems: 'center', gap: 9, padding: 11, borderRadius: 10, backgroundColor: '#0B0E13', borderWidth: 1, borderColor: instrumentColors.border, marginTop: 10 }, emptyText: { color: instrumentColors.textSecondary, flex: 1, lineHeight: 17 }, errorText: { color: instrumentColors.danger, flex: 1, lineHeight: 17 }, gatedState: { minHeight: 185, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24, borderRadius: 13, borderWidth: 1, borderStyle: 'dashed', borderColor: 'rgba(255,182,92,.34)', backgroundColor: 'rgba(255,182,92,.025)' }, gatedTitle: { color: instrumentColors.warning, fontSize: 13, letterSpacing: .8 }, gatedCopy: { color: instrumentColors.textSecondary, textAlign: 'center', lineHeight: 20 },
+  spaceList: { gap: 8 }, spaceCard: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 11, borderRadius: 11, backgroundColor: '#0A0D12', borderWidth: 1, borderColor: instrumentColors.border }, spaceIcon: { width: 36, height: 36, borderRadius: 9, backgroundColor: 'rgba(25,212,230,.07)', alignItems: 'center', justifyContent: 'center' }, spaceCopy: { flex: 1 }, spaceName: { color: instrumentColors.text, fontSize: 13 }, spaceMeta: { color: instrumentColors.textSecondary, fontSize: 8, marginTop: 3 }, confidence: { color: instrumentColors.green, fontSize: 11 }, accountRow: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' }, accountIcon: { width: 46, height: 46, borderRadius: 14, borderWidth: 1, borderColor: 'rgba(255,182,92,.35)', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,182,92,.05)' }, accountIconLive: { borderColor: 'rgba(38,217,104,.35)', backgroundColor: 'rgba(38,217,104,.05)' },
+  codePanel: { gap: 9, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,182,92,.35)', backgroundColor: 'rgba(255,182,92,.035)' }, codeLabel: { color: instrumentColors.warning, fontSize: 8, letterSpacing: .9 }, codeInput: { minHeight: 48, borderRadius: 10, borderWidth: 1, borderColor: instrumentColors.cyanDim, backgroundColor: '#080B10', color: instrumentColors.text, fontFamily: 'monospace', fontSize: 14, paddingHorizontal: 13 },
+  accountCopy: { flex: 1, gap: 4 }, accountTitle: { color: instrumentColors.text, fontSize: 13, letterSpacing: .7 }, accountDescription: { color: instrumentColors.textSecondary, lineHeight: 18 }, buttonRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' }, primaryButton: { flex: 1, minHeight: 46, paddingHorizontal: 14, borderRadius: 11, backgroundColor: instrumentColors.green, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }, primaryButtonText: { color: '#071015', fontSize: 11, letterSpacing: .8 }, secondaryButton: { flex: 1, minHeight: 44, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, borderColor: instrumentColors.cyanDim, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 }, secondaryButtonText: { color: instrumentColors.cyan, fontSize: 10 }, quietButton: { minHeight: 44, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, borderColor: instrumentColors.border, alignItems: 'center', justifyContent: 'center' }, quietButtonText: { color: instrumentColors.textSecondary, fontSize: 9 },
+  boundary: { flexDirection: 'row', gap: 7, alignItems: 'center', padding: 9, borderRadius: 9, backgroundColor: 'rgba(38,217,104,.04)' }, boundaryText: { color: instrumentColors.green, fontSize: 8, flex: 1 }, errorBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 10, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,100,120,.35)', backgroundColor: 'rgba(255,100,120,.04)' }, consentRow: { flexDirection: 'row', gap: 12, alignItems: 'center' }, consentCopy: { flex: 1, gap: 4 }, payloadStrip: { flexDirection: 'row', borderWidth: 1, borderColor: instrumentColors.border, borderRadius: 11, overflow: 'hidden' }, payloadMetric: { flex: 1, minHeight: 58, alignItems: 'center', justifyContent: 'center', borderRightWidth: 1, borderRightColor: instrumentColors.border }, payloadValue: { color: instrumentColors.text, fontSize: 14 }, payloadLabel: { color: instrumentColors.textSecondary, fontSize: 6.5, marginTop: 3, letterSpacing: .45 },
+  insightButton: { minHeight: 46, borderRadius: 11, borderWidth: 1, borderColor: instrumentColors.cyanDim, backgroundColor: 'rgba(25,212,230,.055)', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }, insightButtonText: { color: instrumentColors.cyan, fontSize: 11, letterSpacing: .7 }, insight: { padding: 13, gap: 9, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(185,140,255,.35)', backgroundColor: 'rgba(185,140,255,.045)' }, insightHead: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 }, insightModel: { color: '#C9A8FF', fontSize: 8, letterSpacing: .7 }, insightText: { color: instrumentColors.text, lineHeight: 21 }, receipt: { color: instrumentColors.textSecondary, fontSize: 8 }, pressed: { opacity: .72 }, disabled: { opacity: .38 },
+});
 
 export default ZonesScreen;

@@ -13,7 +13,8 @@ repository.workspace = true
 # RuView does NOT depend on published rufield crates (there are none) and does
 # NOT make rufield a v2 workspace member. The four crates below are pure-Rust
 # (serde / serde_json / toml / sha2 / ed25519-dalek only — no tch / openblas /
-# ndarray / candle), so they build under `--no-default-features`.
+# ndarray / candle). Hardware packets additionally normalize through
+# `ruview-hal`/ontology before any RuField event is created.
 [dependencies]
 rufield-core = { version = "0.1.0", path = "../../../vendor/rufield/crates/rufield-core" }
 rufield-provenance = { version = "0.1.0", path = "../../../vendor/rufield/crates/rufield-provenance" }
@@ -21,6 +22,10 @@ rufield-privacy = { version = "0.1.0", path = "../../../vendor/rufield/crates/ru
 rufield-fusion = { version = "0.1.0", path = "../../../vendor/rufield/crates/rufield-fusion" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+base64 = "0.21"
+thiserror = { workspace = true }
+ruview-hal = { path = "../ruview-hal" }
+ruview-ontology = { path = "../ruview-ontology" }
 
 [dev-dependencies]
 serde_json = { workspace = true }

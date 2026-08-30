@@ -21,7 +21,7 @@ export const getBetaPlatformGuidance = (platform: BetaPlatform): BetaPlatformGui
       label: 'NATIVE IOS BETA',
       steps: [
         'Install TestFlight, then open the private RuView invitation supplied by the beta coordinator.',
-        'Launch RuView, open NLOS, and allow only the permissions requested for the assigned test.',
+        'Launch RuView, open Calibration, and allow only the permissions requested for the assigned test.',
         'Run synthetic replay first. Connect live only with a coordinator supplied ephemeral credential.',
       ],
       showTestFlightButton: true,
@@ -98,14 +98,14 @@ export const BetaSetupCard = () => {
       testID="nlos-beta-setup"
       eyebrow="Governed beta protocol"
       style={styles.card}
-      accessibilityLabel="RuView NLOS beta setup"
+      accessibilityLabel="RuView calibration beta setup"
     >
       <View style={styles.headingRow}>
         <ThemedText preset="labelLg" style={styles.sectionLabel}>BETA SETUP</ThemedText>
         <ThemedText preset="labelMd" style={styles.platformBadge}>{guidance.label}</ThemedText>
       </View>
 
-      <ThemedText preset="displayMd" style={styles.title}>Start a governed test in about five minutes</ThemedText>
+      <ThemedText preset="displayMd" style={styles.title}>Start a governed calibration test</ThemedText>
 
       <View style={styles.steps}>
         {guidance.steps.map((step, index) => (
@@ -133,7 +133,7 @@ export const BetaSetupCard = () => {
         <View style={styles.compatibilityCell}>
           <ThemedText preset="mono" style={styles.cellLabel}>EVIDENCE</ThemedText>
           <ThemedText preset="bodySm" style={styles.cellCopy}>
-            Evidence labels: L0 synthetic, L1 measured, L2 calibrated, or L3 corroborated, plus fresh, stale, or unknown. Depth only input is never physical NLOS evidence.
+            Evidence labels: L0 synthetic, L1 measured, L2 calibrated, or L3 corroborated, plus fresh, stale, or unknown. Depth-only input is never physical through-wall evidence.
           </ThemedText>
         </View>
       </View>

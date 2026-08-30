@@ -8,20 +8,14 @@
 //! holds a list of trait objects so the call site doesn't grow when we
 //! add primitives in P4.5b.
 
-use super::common::{PrimitiveConfig, PrimitiveState, RawSnapshot};
 #[cfg(test)]
 use super::common::Reason;
+use super::common::{PrimitiveConfig, PrimitiveState, RawSnapshot};
 use super::{
-    bathroom::BathroomOccupied,
-    bed_exit::BedExit,
-    distress::PossibleDistress,
-    elderly_anomaly::ElderlyInactivityAnomaly,
-    fall_risk::FallRiskElevated,
-    meeting::MeetingInProgress,
-    multi_room::MultiRoomTransition,
-    no_movement::NoMovement,
-    room_active::RoomActive,
-    sleeping::SomeoneSleeping,
+    bathroom::BathroomOccupied, bed_exit::BedExit, distress::PossibleDistress,
+    elderly_anomaly::ElderlyInactivityAnomaly, fall_risk::FallRiskElevated,
+    meeting::MeetingInProgress, multi_room::MultiRoomTransition, no_movement::NoMovement,
+    room_active::RoomActive, sleeping::SomeoneSleeping,
 };
 
 /// Identifier for which primitive produced an event. Used by the
@@ -85,16 +79,43 @@ impl SemanticBus {
     /// emit (Idle states are filtered).
     pub fn tick(&mut self, snap: &RawSnapshot) -> Vec<SemanticEvent> {
         let pairs: [(SemanticKind, PrimitiveState); 10] = [
-            (SemanticKind::SomeoneSleeping,   self.sleeping.tick(snap, &self.config)),
-            (SemanticKind::PossibleDistress,  self.distress.tick(snap, &self.config)),
-            (SemanticKind::RoomActive,        self.room_active.tick(snap, &self.config)),
-            (SemanticKind::ElderlyAnomaly,    self.elderly_anomaly.tick(snap, &self.config)),
-            (SemanticKind::Meeting,           self.meeting.tick(snap, &self.config)),
-            (SemanticKind::BathroomOccupied,  self.bathroom.tick(snap, &self.config)),
-            (SemanticKind::FallRisk,          self.fall_risk.tick(snap, &self.config)),
-            (SemanticKind::BedExit,           self.bed_exit.tick(snap, &self.config)),
-            (SemanticKind::NoMovement,        self.no_movement.tick(snap, &self.config)),
-            (SemanticKind::MultiRoom,         self.multi_room.tick(snap, &self.config)),
+            (
+                SemanticKind::SomeoneSleeping,
+                self.sleeping.tick(snap, &self.config),
+            ),
+            (
+                SemanticKind::PossibleDistress,
+                self.distress.tick(snap, &self.config),
+            ),
+            (
+                SemanticKind::RoomActive,
+                self.room_active.tick(snap, &self.config),
+            ),
+            (
+                SemanticKind::ElderlyAnomaly,
+                self.elderly_anomaly.tick(snap, &self.config),
+            ),
+            (SemanticKind::Meeting, self.meeting.tick(snap, &self.config)),
+            (
+                SemanticKind::BathroomOccupied,
+                self.bathroom.tick(snap, &self.config),
+            ),
+            (
+                SemanticKind::FallRisk,
+                self.fall_risk.tick(snap, &self.config),
+            ),
+            (
+                SemanticKind::BedExit,
+                self.bed_exit.tick(snap, &self.config),
+            ),
+            (
+                SemanticKind::NoMovement,
+                self.no_movement.tick(snap, &self.config),
+            ),
+            (
+                SemanticKind::MultiRoom,
+                self.multi_room.tick(snap, &self.config),
+            ),
         ];
         pairs
             .into_iter()
@@ -159,7 +180,9 @@ mod tests {
             ..Default::default()
         };
         let events = bus.tick(&snap);
-        assert!(events.iter().any(|e| e.kind == SemanticKind::BathroomOccupied));
+        assert!(events
+            .iter()
+            .any(|e| e.kind == SemanticKind::BathroomOccupied));
     }
 
     #[test]
@@ -193,7 +216,10 @@ mod tests {
             ..Default::default()
         };
         let events = bus.tick(&snap);
-        let bath = events.into_iter().find(|e| e.kind == SemanticKind::BathroomOccupied).unwrap();
+        let bath = events
+            .into_iter()
+            .find(|e| e.kind == SemanticKind::BathroomOccupied)
+            .unwrap();
         assert_eq!(bath.node_id, "aabb");
         assert_eq!(bath.timestamp_ms, 1779_512_400_000);
     }
@@ -212,9 +238,15 @@ mod tests {
             ..Default::default()
         };
         let events = bus.tick(&snap);
-        let ra = events.into_iter().find(|e| e.kind == SemanticKind::RoomActive).unwrap();
+        let ra = events
+            .into_iter()
+            .find(|e| e.kind == SemanticKind::RoomActive)
+            .unwrap();
         if let PrimitiveState::Boolean { reason, .. } = ra.state {
-            assert!(!reason.tags.is_empty(), "reason tags must explain why primitive fired");
+            assert!(
+                !reason.tags.is_empty(),
+                "reason tags must explain why primitive fired"
+            );
         } else {
             panic!("expected Boolean state");
         }
@@ -241,25 +273,24 @@ mod tests {
         // proptest only impls Strategy for tuples up to length 12, so
         // we split into two nested tuples and merge in the prop_map.
         let core = (
-            0u64..86400,                             // since_start secs
-            0i64..(1u64 << 40) as i64,               // timestamp_ms
-            any::<bool>(),                           // presence
-            any::<bool>(),                           // fall_detected
-            -0.5f64..2.0,                            // motion (incl. out-of-range)
-            -1000.0f64..10000.0,                     // motion_energy
-            proptest::option::of(0.0f64..200.0),     // breathing_rate_bpm
+            0u64..86400,                         // since_start secs
+            0i64..(1u64 << 40) as i64,           // timestamp_ms
+            any::<bool>(),                       // presence
+            any::<bool>(),                       // fall_detected
+            -0.5f64..2.0,                        // motion (incl. out-of-range)
+            -1000.0f64..10000.0,                 // motion_energy
+            proptest::option::of(0.0f64..200.0), // breathing_rate_bpm
         );
         let extra = (
-            proptest::option::of(0.0f64..250.0),     // heart_rate_bpm
-            0u32..10,                                // n_persons
-            proptest::option::of(-120.0f64..0.0),    // rssi_dbm
-            0.0f64..1.0,                             // vital_confidence
-            0u32..86400,                             // local_seconds_since_midnight
+            proptest::option::of(0.0f64..250.0),       // heart_rate_bpm
+            0u32..10,                                  // n_persons
+            proptest::option::of(-120.0f64..0.0),      // rssi_dbm
+            0.0f64..1.0,                               // vital_confidence
+            0u32..86400,                               // local_seconds_since_midnight
             prop::collection::vec("[a-z]{3,8}", 0..4), // active_zones
         );
         (core, extra).prop_map(
-            |((secs, ts, presence, fall, motion, energy, br),
-              (hr, n, rssi, conf, tod, zones))| {
+            |((secs, ts, presence, fall, motion, energy, br), (hr, n, rssi, conf, tod, zones))| {
                 RawSnapshot {
                     node_id: "fuzz".into(),
                     since_start: std::time::Duration::from_secs(secs),

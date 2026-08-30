@@ -13,6 +13,7 @@ use crate::rvf_pipeline::ProgressiveLoader;
 use crate::vital_signs::{VitalSignDetector, VitalSigns};
 
 use wifi_densepose_hardware::PpduType;
+use wifi_densepose_sensing_server::calibration_session::CalibratedPresenceEvidence;
 use wifi_densepose_signal::ruvsense::field_model::FieldModel;
 use wifi_densepose_signal::ruvsense::longitudinal::{EmbeddingEntry, EmbeddingHistory};
 use wifi_densepose_signal::ruvsense::multistatic::MultistaticFuser;
@@ -125,6 +126,8 @@ pub struct SensingUpdate {
     pub nodes: Vec<NodeInfo>,
     pub features: FeatureInfo,
     pub classification: ClassificationInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calibrated_presence_evidence: Option<CalibratedPresenceEvidence>,
     pub signal_field: SignalField,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vital_signs: Option<VitalSigns>,

@@ -1,39 +1,26 @@
 import { useMemo } from 'react';
 import { View, StyleSheet } from 'react-native';
-import { usePoseStore } from '@/stores/poseStore';
 import { GaugeArc } from '@/components/GaugeArc';
 import { colors } from '@/theme/colors';
 import { ThemedText } from '@/components/ThemedText';
 
 const BREATHING_MIN_BPM = 0;
 const BREATHING_MAX_BPM = 30;
-const BREATHING_BAND_MAX = 0.3;
-
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
 const deriveBreathingValue = (
-  breathingBand?: number,
-  breathingBpm?: number,
-): number => {
+  breathingBpm?: number | null,
+): number | null => {
   if (typeof breathingBpm === 'number' && Number.isFinite(breathingBpm)) {
     return clamp(breathingBpm, BREATHING_MIN_BPM, BREATHING_MAX_BPM);
   }
-
-  const bandValue = typeof breathingBand === 'number' && Number.isFinite(breathingBand) ? breathingBand : 0;
-  const normalized = clamp(bandValue / BREATHING_BAND_MAX, 0, 1);
-  return normalized * BREATHING_MAX_BPM;
+  return null;
 };
 
-export const BreathingGauge = () => {
-  const breathingBand = usePoseStore((state) => state.features?.breathing_band_power);
-  const breathingBpm = usePoseStore((state) => {
-    const vitals = state.lastFrame?.vital_signs;
-    return vitals?.breathing_bpm ?? vitals?.breathing_rate_bpm;
-  });
-
+export const BreathingGauge = ({ available, breathingBpm }: { available: boolean; breathingBpm?: number | null }) => {
   const value = useMemo(
-    () => deriveBreathingValue(breathingBand, breathingBpm),
-    [breathingBand, breathingBpm],
+    () => available ? deriveBreathingValue(breathingBpm) : null,
+    [available, breathingBpm],
   );
 
   return (
@@ -41,9 +28,9 @@ export const BreathingGauge = () => {
       <ThemedText preset="labelMd" style={styles.label}>
         BREATHING
       </ThemedText>
-      <GaugeArc value={value} min={BREATHING_MIN_BPM} max={BREATHING_MAX_BPM} label="" unit="BPM" color={colors.accent} />
+      <GaugeArc value={value ?? Number.NaN} min={BREATHING_MIN_BPM} max={BREATHING_MAX_BPM} label={value == null ? 'WAITING' : 'RF ESTIMATE'} unit="BPM" color={colors.accent} />
       <ThemedText preset="labelMd" color="textSecondary" style={styles.unit}>
-        BPM
+        {value == null ? 'No measured rate' : 'Measured stream'}
       </ThemedText>
     </View>
   );

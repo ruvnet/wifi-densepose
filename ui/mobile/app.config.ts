@@ -1,9 +1,10 @@
 export default {
-  name: 'RuView NLOS Beta',
+  name: 'RuView',
   slug: 'wifi-densepose',
   version: '1.0.0',
-  description: 'Governed RuView NLOS beta viewer for synthetic replay and authenticated track evidence.',
+  description: 'RuView commissioning, visible-scene LiDAR calibration, and governed spatial evidence viewer.',
   orientation: 'portrait',
+  scheme: 'ruview',
   userInterfaceStyle: 'dark',
   icon: './assets/icon.png',
   backgroundColor: '#0A0E1A',
@@ -13,9 +14,19 @@ export default {
     resizeMode: 'contain',
     backgroundColor: '#0B0E13',
   },
+  plugins: [
+    'expo-web-browser',
+    'expo-secure-store',
+    ['expo-build-properties', { ios: { deploymentTarget: '16.0' } }],
+  ],
   ios: {
     bundleIdentifier: 'com.ruvnet.wifidensepose',
     supportsTablet: true,
+    infoPlist: {
+      NSCameraUsageDescription: 'RuView uses the camera and LiDAR scanner to map visible room geometry and calibrate local Wi-Fi sensing nodes. Raw camera images are not retained.',
+      NSLocalNetworkUsageDescription: 'RuView discovers your local Apple Home HAP bridge so you can verify and pair room occupancy sensors.',
+      NSBonjourServices: ['_hap._tcp'],
+    },
   },
   android: {
     package: 'com.ruvnet.wifidensepose',
@@ -29,8 +40,8 @@ export default {
   },
   web: {
     favicon: './assets/favicon.png',
-    name: 'RuView NLOS Beta',
-    shortName: 'RuView NLOS',
+    name: 'RuView',
+    shortName: 'RuView',
     lang: 'en',
     themeColor: '#0A0E1A',
     backgroundColor: '#0A0E1A',

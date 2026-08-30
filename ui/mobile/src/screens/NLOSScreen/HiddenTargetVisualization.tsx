@@ -3,6 +3,7 @@ import { View } from 'react-native';
 import Svg, { Circle, Ellipse, Line, Polygon, Rect, Text as SvgText } from 'react-native-svg';
 import { instrumentColors } from '@/components/InstrumentPanel';
 import type { NlosFreshness, NlosTrack } from '@/types/nlos';
+import type { LidarPointFrame } from '@/types/lidar';
 import { LidarPointCloud } from './LidarPointCloud';
 
 export type NlosViewMode = 'plan' | 'perspective' | 'cloud';
@@ -12,6 +13,7 @@ interface HiddenTargetVisualizationProps {
   freshness: NlosFreshness;
   mode: NlosViewMode;
   width: number;
+  lidarFrame?: LidarPointFrame | null;
 }
 
 interface ProjectedTrack {
@@ -113,6 +115,7 @@ export const HiddenTargetVisualization = memo(({
   freshness,
   mode,
   width,
+  lidarFrame,
 }: HiddenTargetVisualizationProps) => {
   const projectedTracks = useMemo(
     () => tracks.map(mode === 'plan' ? projectPlan : projectPerspective),
@@ -121,7 +124,7 @@ export const HiddenTargetVisualization = memo(({
   const displayWidth = Math.max(260, Math.min(width, 560));
 
   if (mode === 'cloud') {
-    return <LidarPointCloud tracks={tracks} freshness={freshness} width={displayWidth} />;
+    return <LidarPointCloud tracks={tracks} freshness={freshness} width={displayWidth} lidarFrame={lidarFrame} />;
   }
 
   return (
