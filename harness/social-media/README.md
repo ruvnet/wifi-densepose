@@ -158,3 +158,9 @@ selected suites that do not require the local HTTP test server; endpoint tests
 remain separate.
 Fresh Ruflo threat and MCP scans plus final diff review are still required, and
 no unrelated worktree change may be included.
+
+The path scoped workflow in `.github/workflows/social-metaharness.yml` repeats
+the deterministic gates on Node 20 and Node 22 and runs the operating system
+network denial profile on macOS. ADR 353 governs this CI evidence. The workflow
+does not publish, deploy, connect an account, or make its checks mandatory in
+repository branch protection.

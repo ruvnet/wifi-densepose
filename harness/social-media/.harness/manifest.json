@@ -13,7 +13,7 @@
     "AGENTS.md": "d336a8deb7add5267dee0250098e62feecf7104cb9d58a8c0606ca0020dd4fa4",
     "Containerfile": "64c2600270e6bbe1c013051a4faea117721fa319c6741be670d53d2b7c615141",
     "LICENSE": "07ac707c14b61b235b6b2c7cf999beade74cf4e4ab8fc9847ae82ed398f8323f",
-    "README.md": "0b9e19eb2555292e73d7d10b5b5c5e64e4f841ad207de3a7ce84f7d9e98469f0",
+    "README.md": "eee61cf2a4aaf6d006dfaa0b2647534eb0b97c97a9322e50e559fde89489b49e",
     "bin/cli.js": "58861654b750a14bd3842978436d648b4dcd82451689bd3725f660b2fbb2bb78",
     "config/direction.json": "71fb630ca9b812d2b3c83f29fe2ba9d592c032bee18c981c7daedfebe4268dc4",
     "config/identities.json": "23555479ca6d63c58c80a1343d2cbcfd88a0dd7767fea4216824a3173d23b09e",
@@ -48,7 +48,7 @@
     "src/validation.js": "d6703b2212fba5ad6352d43761925347df96cb0aa132ab5c6775777f8d93f694",
     "src/voice.js": "7c4e7dff717dd0a2570ed37fb8c58614eef3bda819a24c1fb972a14ce0773cd0"
   },
-  "filesDigest": "3203b66ebd52019d94e03792884f08f35a28b820cfce240d5717c4e147f50003",
+  "filesDigest": "540f053142b68c40c051cce6aab30bafe21ac72c0fe8361023ab94f6b05a8b24",
   "meta": {
     "surface": "cli+mcp+http-policy",
     "decisions": "ADR-345..ADR-352"

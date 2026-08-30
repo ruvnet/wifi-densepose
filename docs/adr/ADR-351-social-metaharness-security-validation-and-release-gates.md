@@ -39,9 +39,9 @@ credential, outbound client, account connection, or action execution tool.
 ## Outputs
 
 The implemented outputs are console test results, a deterministic
-`.harness/manifest.json`, its SHA-256 envelope, a package dry run file list, and
-Ruflo tool results returned to the reviewer. No release report file, signature,
-CI attestation, SBOM, vulnerability scan, cloud trace, or live platform receipt
+`.harness/manifest.json`, its SHA-256 envelope, a package dry run file list,
+GitHub check results under ADR 353, and Ruflo tool results returned to the
+reviewer. No signed release report, SBOM, cloud trace, or live platform receipt
 is produced in Phase 1. Those remain future release requirements.
 
 ## Assumptions
@@ -232,6 +232,7 @@ code change that affects it.
 
 ```bash
 cd harness/social-media
+npm ci --ignore-scripts
 npm test
 npm run test:security
 npm run test:schemas
@@ -252,6 +253,7 @@ npm run security:container-static
 npm run security:iam-static
 npm run platform-policy:verify
 npm run manifest:verify
+npm audit --omit=optional
 npm pack --dry-run
 ```
 

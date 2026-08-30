@@ -292,6 +292,7 @@ harness/**/*.tgz
 harness/**/package-lock.json
 !harness/ruview/package-lock.json
 !harness/homecore/package-lock.json
+!harness/social-media/package-lock.json
 harness/**/.claude-flow/
 harness/**/.metaharness/
 harness/**/ruvector.db
