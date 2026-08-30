@@ -320,3 +320,8 @@ scripts/fal-visual-teacher/output/
 # Board identity index — MACs of physical hardware, not secret, but not useful
 # to anyone else and it churns per fleet. Keep it local.
 firmware/esp32-csi-node/board_index.json
+
+# Provisioning profile: holds an SSID and the PATH to a credential file, never
+# a credential. Created by provision_node.py on first run; site-specific, so it
+# should not be committed.
+firmware/esp32-csi-node/provision_conf.json
