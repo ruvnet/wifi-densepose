@@ -248,9 +248,10 @@ static void medium_loop_cb(TimerHandle_t t)
     portEXIT_CRITICAL(&s_obs_lock);
 
     if (s_obs_valid) {
-        ESP_LOGI(TAG, "medium tick: state=%u yield=%upps motion=%.2f presence=%.2f rssi=%d",
+        ESP_LOGI(TAG, "medium tick: state=%u yield=%upps dsp=%.1fHz motion=%.2f presence=%.2f rssi=%d",
                  (unsigned)s_state,
                  (unsigned)obs.pkt_yield_per_sec,
+                 (double)edge_get_sample_rate_hz(),
                  (double)obs.motion_score,
                  (double)obs.presence_score,
                  (int)obs.rssi_median_dbm);

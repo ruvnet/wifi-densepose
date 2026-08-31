@@ -58,6 +58,10 @@ CONFIG_ULP_COPROC_RESERVE_MEM=8192
 # CONFIG_DISPLAY_ENABLE is not set
 # CONFIG_WASM_ENABLE is not set
 
+# Physical Tier 2 qualification on ESP32-C6 rev 0.2 converges at 8 Hz while
+# leaving the raw network CSI stream independent at roughly 30-40 pps.
+CONFIG_EDGE_DSP_SAMPLE_HZ=8
+
 # ── Compiler ──
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 
