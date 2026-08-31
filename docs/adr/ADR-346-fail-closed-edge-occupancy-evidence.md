@@ -47,4 +47,6 @@ Software acceptance requires:
 
 Physical acceptance requires the updated firmware on a confirmed board, a captured boot log, five minutes of live packets, zero logical count contradictions, and no increase in transport errors. Accuracy remains unmeasured until labelled held out sequences are recorded.
 
-Physical qualification completed for ESP32 C6 node 4 on 2026 08 31. The five minute run observed 242 edge packets, including 61 absent packets, with zero logical count contradictions and zero parse errors. See `docs/validation/2026-08-31-esp32-c6-occupancy-integrity.md`. Other nodes remain unqualified until separately identified and upgraded.
+Physical occupancy qualification completed for ESP32 C6 node 4 on 2026 08 31. The five minute run observed 242 edge packets, including 61 absent packets, with zero logical count contradictions and zero parse errors. See `docs/validation/2026-08-31-esp32-c6-occupancy-integrity.md`.
+
+ESP32 C6 node 7 was subsequently identified, upgraded to firmware 0.8.8, and transport qualified for five minutes with zero fused presence count contradictions and zero steady state transport errors. Its controlled empty room sequence remains required before occupancy qualification. See `docs/validation/2026-08-31-esp32-c6-node7-rate-aware-sensing.md`. Other nodes remain unqualified until separately identified and upgraded.

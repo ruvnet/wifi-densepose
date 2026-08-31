@@ -51,6 +51,10 @@ The updated OTA status endpoint reports the selected 1,900,544 byte partition ra
 
 Nodes 3 and 7 still demonstrate the old contradictory behavior and must be upgraded only after their network identity, OTA credential, and rollback path are verified. The current run had no labelled ground truth, so multi person fidelity and adjacent room rejection remain unmeasured.
 
+## Subsequent node 7 status
+
+Later on 2026 08 31, node 7 was separately identified, backed up, upgraded to firmware 0.8.8, and transport qualified for five minutes. That later occupied room run had zero fused presence count contradictions but did not produce the 30 absent edge packets required to supersede the historical control result above. See `docs/validation/2026-08-31-esp32-c6-node7-rate-aware-sensing.md`.
+
 ## Acceptance test
 
 Repeat a five minute capture after every firmware change. Pass only when every updated node has at least 30 absent packets, zero packets where `presence=false` and `n_persons>0`, zero parser errors, and a ready sensing server with zero engine errors.
