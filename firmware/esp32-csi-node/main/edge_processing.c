@@ -38,6 +38,16 @@ extern nvs_config_t g_nvs_config;
 
 static const char *TAG = "edge_proc";
 
+#ifndef CONFIG_EDGE_DSP_SAMPLE_HZ
+#if CONFIG_IDF_TARGET_ESP32C6
+#define CONFIG_EDGE_DSP_SAMPLE_HZ 8
+#else
+#define CONFIG_EDGE_DSP_SAMPLE_HZ 20
+#endif
+#endif
+
+#define EDGE_CONFIGURED_SAMPLE_RATE_HZ ((float)CONFIG_EDGE_DSP_SAMPLE_HZ)
+
 /* ======================================================================
  * SPSC Ring Buffer (lock-free, single-producer single-consumer)
  * ====================================================================== */
@@ -355,11 +365,12 @@ static float s_heartrate_filtered[EDGE_PHASE_HISTORY_LEN];
 
 /** Measured CSI sample rate (Hz), smoothed from frame timestamps.
  * #985's self-ping raised the callback rate above the old ~10 Hz beacon
- * assumption and made it variable (~13-19 Hz); a fixed rate scaled BPM wrong
- * and made HR swing with CSI yield. See update in process_csi_frame(). */
-static float    s_sample_rate_hz   = 15.0f;
-static float    s_filter_design_fs = 20.0f; /* fs the biquads were last designed at */
-static uint32_t s_last_frame_ts_us = 0;
+ * assumption and made it variable. A fixed rate scales BPM and Doppler bins
+ * incorrectly. Start from the filter design rate, then follow measured time. */
+static float    s_sample_rate_hz   = EDGE_CONFIGURED_SAMPLE_RATE_HZ;
+static float    s_filter_design_fs = EDGE_CONFIGURED_SAMPLE_RATE_HZ; /* fs the biquads were last designed at */
+static uint32_t s_rate_window_start_us = 0;
+static uint32_t s_rate_window_intervals = 0;
 
 /** Latest vitals state. */
 static float    s_breathing_bpm;
@@ -408,6 +419,21 @@ static edge_biquad_t s_person_bq_br[EDGE_MAX_PERSONS];
 static edge_biquad_t s_person_bq_hr[EDGE_MAX_PERSONS];
 static float s_person_br_filt[EDGE_MAX_PERSONS][EDGE_PHASE_HISTORY_LEN];
 static float s_person_hr_filt[EDGE_MAX_PERSONS][EDGE_PHASE_HISTORY_LEN];
+
+/** Clear person slots whenever the room-level presence gate is closed. */
+static void reset_person_count_state(void)
+{
+    s_person_count_candidate = 0;
+    s_person_count_streak = 0;
+    s_person_count_stable = 0;
+    for (uint8_t p = 0; p < EDGE_MAX_PERSONS; p++) {
+        s_persons[p].active = false;
+        s_persons[p].history_len = 0;
+        s_persons[p].history_idx = 0;
+        s_persons[p].breathing_bpm = 0.0f;
+        s_persons[p].heartrate_bpm = 0.0f;
+    }
+}
 
 /** Latest vitals packet (thread-safe via volatile copy). */
 static volatile edge_vitals_pkt_t s_latest_pkt;
@@ -898,7 +924,10 @@ static void send_vitals_packet(void)
     for (uint8_t p = 0; p < EDGE_MAX_PERSONS; p++) {
         if (s_persons[p].active) n_active++;
     }
-    pkt.n_persons = n_active;
+    /* Fail closed: the slot heuristic cannot assert occupants while the
+     * debounced presence gate is false. The host repeats this invariant for
+     * backward compatibility with older firmware. */
+    pkt.n_persons = edge_evidence_person_count(s_presence_detected, n_active);
 
     pkt.motion_energy = s_motion_energy;
     pkt.presence_score = s_presence_score;
@@ -1038,20 +1067,27 @@ static void process_frame(const edge_ring_slot_t *slot)
     s_frame_count++;
     s_latest_rssi = slot->rssi;
 
-    /* Measure the REAL CSI sample rate from inter-frame timestamps. #985's
-     * self-ping made the callback rate variable (~13-19 Hz); the old fixed
-     * 10 Hz both scaled BPM wrong (true ~87 BPM read as ~45) and made HR swing
-     * as CSI yield fluctuated. EMA-smooth and clamp to a plausible band. */
-    if (s_last_frame_ts_us != 0 && slot->timestamp_us > s_last_frame_ts_us) {
-        float dt = (float)(slot->timestamp_us - s_last_frame_ts_us) * 1e-6f;
-        if (dt > 0.02f && dt < 0.5f) {            /* 2-50 Hz plausible; reject gaps/hops */
-            float inst = 1.0f / dt;
-            s_sample_rate_hz += 0.05f * (inst - s_sample_rate_hz);
-            if (s_sample_rate_hz < 8.0f)  s_sample_rate_hz = 8.0f;
-            if (s_sample_rate_hz > 30.0f) s_sample_rate_hz = 30.0f;
+    /* Measure the real CSI sample rate over one-second timestamp windows. WiFi
+     * replies arrive in bursts, so filtering individual short intervals made
+     * a 35 pps stream look like 12-16 Hz. Counting all processed intervals in
+     * the window preserves the clock actually seen by the temporal filters. */
+    if (s_rate_window_start_us == 0) {
+        s_rate_window_start_us = slot->timestamp_us;
+        s_rate_window_intervals = 0;
+    } else if (slot->timestamp_us > s_rate_window_start_us) {
+        s_rate_window_intervals++;
+        uint32_t elapsed_us = slot->timestamp_us - s_rate_window_start_us;
+        if (elapsed_us >= EDGE_SAMPLE_RATE_WINDOW_MIN_US) {
+            s_sample_rate_hz = edge_sample_rate_window_update(
+                s_sample_rate_hz, s_rate_window_intervals, elapsed_us);
+            s_rate_window_start_us = slot->timestamp_us;
+            s_rate_window_intervals = 0;
         }
+    } else {
+        /* Timer wrap or reset. Start a fresh evidence window. */
+        s_rate_window_start_us = slot->timestamp_us;
+        s_rate_window_intervals = 0;
     }
-    s_last_frame_ts_us = slot->timestamp_us;
 
     /* Re-tune the biquads if the measured rate has drifted from their design fs,
      * so the breathing (0.1-0.5 Hz) and HR (0.8-2.0 Hz) passbands stay in real
@@ -1202,8 +1238,15 @@ static void process_frame(const edge_ring_slot_t *slot)
         }
     }
 
-    /* --- Step 11: Multi-person vitals --- */
-    update_multi_person_vitals(slot->iq_data, n_subcarriers, sample_rate);
+    /* --- Step 11: Multi-person vitals ---
+     * Person slots are subordinate to the room presence gate. Processing or
+     * retaining slots while absent produced contradictory packets such as
+     * presence=false with n_persons=4. */
+    if (s_presence_detected) {
+        update_multi_person_vitals(slot->iq_data, n_subcarriers, sample_rate);
+    } else {
+        reset_person_count_state();
+    }
     /* Yield after multi-person DSP so IDLE1 can feed Core 1 watchdog (#683). */
     if (s_cfg.tier >= 2) vTaskDelay(1);
 
@@ -1314,6 +1357,11 @@ bool edge_get_vitals(edge_vitals_pkt_t *pkt)
     return true;
 }
 
+float edge_get_sample_rate_hz(void)
+{
+    return s_sample_rate_hz;
+}
+
 void edge_get_multi_person(edge_person_vitals_t *persons, uint8_t *n_active)
 {
     uint8_t active = 0;
@@ -1373,6 +1421,10 @@ esp_err_t edge_processing_init(const edge_config_t *cfg)
     s_fall_detected = false;
     s_latest_rssi = 0;
     s_frame_count = 0;
+    s_sample_rate_hz = EDGE_CONFIGURED_SAMPLE_RATE_HZ;
+    s_filter_design_fs = EDGE_CONFIGURED_SAMPLE_RATE_HZ;
+    s_rate_window_start_us = 0;
+    s_rate_window_intervals = 0;
     s_prev_phase_velocity = 0.0f;
     s_fall_consec_count = 0;
     s_fall_last_alert_us = 0;
@@ -1397,9 +1449,9 @@ esp_err_t edge_processing_init(const edge_config_t *cfg)
     s_person_count_streak = 0;
     s_person_count_stable = 0;
 
-    /* Design biquad bandpass filters.
-     * Sampling rate ~20 Hz (typical ESP32 CSI callback rate). */
-    const float fs = 20.0f;
+    /* Design biquad bandpass filters against the configured DSP clock. The
+     * measured timestamp estimator then follows sustained hardware drift. */
+    const float fs = EDGE_CONFIGURED_SAMPLE_RATE_HZ;
     biquad_bandpass_design(&s_bq_breathing, fs, 0.1f, 0.5f);
     biquad_bandpass_design(&s_bq_heartrate, fs, 0.8f, 2.0f);
 
