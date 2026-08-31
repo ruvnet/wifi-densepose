@@ -64,6 +64,8 @@ jobs:
             size_limit_kb: 1152
             artifact_app: esp32-csi-node-4mb.bin
             artifact_pt: partition-table-4mb.bin
+            artifact_bootloader: bootloader-4mb.bin
+            artifact_otadata: ota_data_initial-4mb.bin
           # ADR-110: ESP32-C6 research target (Wi-Fi 6 / 802.15.4 / TWT / LP-core)
           - variant: c6-4mb
             target: esp32c6
@@ -73,6 +75,8 @@ jobs:
             size_limit_kb: 1152
             artifact_app: esp32-csi-node-c6.bin
             artifact_pt: partition-table-c6.bin
+            artifact_bootloader: bootloader-c6.bin
+            artifact_otadata: ota_data_initial-c6.bin
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -162,10 +166,18 @@ jobs:
           mkdir -p release-staging
           cp build/esp32-csi-node.bin                      release-staging/${{ matrix.artifact_app }}
           cp build/partition_table/partition-table.bin     release-staging/${{ matrix.artifact_pt }}
+          # Every variant needs a bootloader and initial OTA data to flash a
+          # blank board; staging them only for 8mb left the C6 artifacts
+          # unflashable (RuView#1757). The 8mb names are unchanged so existing
+          # docs and scripts keep working.
           if [ "${{ matrix.variant }}" = "8mb" ]; then
             cp build/bootloader/bootloader.bin             release-staging/bootloader.bin
             cp build/ota_data_initial.bin                  release-staging/ota_data_initial.bin
+          else
+            cp build/bootloader/bootloader.bin             release-staging/${{ matrix.artifact_bootloader }}
+            cp build/ota_data_initial.bin                  release-staging/${{ matrix.artifact_otadata }}
           fi
+          ( cd release-staging && sha256sum -- * > SHA256SUMS-${{ matrix.variant }}.txt )
           ls -la release-staging/
 
       - name: Check QEMU ESP32-S3 support status
@@ -180,3 +192,32 @@ jobs:
           name: esp32-csi-node-firmware-${{ matrix.variant }}
           path: firmware/esp32-csi-node/release-staging/
           retention-days: 90
+
+  # RuView#1757: the build matrix produced C6 artifacts on every tag but nothing
+  # ever attached them to the release, so the newest published C6 firmware was
+  # v0.8.0 while S3 shipped v0.8.4. Release assets were being uploaded by hand,
+  # which is why one variant could be forgotten. Attach every variant the matrix
+  # built, from the artifacts it already uploads.
+  release:
+    name: Attach firmware artifacts to the release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-esp32')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download every variant's staged binaries
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          pattern: esp32-csi-node-firmware-*
+          path: artifacts
+
+      - name: List what will be attached
+        run: find artifacts -type f | sort
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: artifacts/**/*
+          fail_on_unmatched_files: true
