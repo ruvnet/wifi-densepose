@@ -60,7 +60,52 @@ nvs_config_t g_nvs_config;
 
 static EventGroupHandle_t s_wifi_event_group;
 static int s_retry_num = 0;
-#define MAX_RETRY 10
+
+/* WiFi reconnection.
+ *
+ * This used to be `#define MAX_RETRY 10` with the disconnect handler giving up
+ * permanently once s_retry_num reached it: it set WIFI_FAIL_BIT and never
+ * called esp_wifi_connect() again. s_retry_num is only cleared on a successful
+ * IP_EVENT_STA_GOT_IP, so it accumulated over the node's entire uptime -- ten
+ * disconnects spread across days left the node permanently off the network
+ * with nothing but a power cycle to clear it.
+ *
+ * MEASURED 2026-08-30: a single AP-side event at 03:37:03 EDT disconnected all
+ * three wall-mounted nodes within three minutes of each other. Every one of
+ * them latched off and stayed off for 5.5-7.5 hours, until it was physically
+ * unplugged. CSI capture kept running throughout (it is driver-level and needs
+ * no IP), so the boards looked alive on the bench and dead to the server.
+ *
+ * Retry is now unbounded with exponential backoff. Two things that were
+ * conflated are now separate: WIFI_BOOT_WAIT_ATTEMPTS only releases app_main
+ * from its startup wait so the rest of the node can boot; it does not stop the
+ * node trying to reconnect. Nothing stops the node trying to reconnect. */
+#define WIFI_BOOT_WAIT_ATTEMPTS 10
+#define WIFI_RETRY_BASE_MS       500
+#define WIFI_RETRY_MAX_MS      30000
+
+static esp_timer_handle_t s_reconnect_timer;
+
+/* 500 ms doubling to a 30 s ceiling. Backoff matters because the failure this
+ * guards against is an AP that is down or rebooting: hammering
+ * esp_wifi_connect() at full rate for the minutes an AP takes to come back
+ * wastes power and floods the log without reconnecting any sooner. */
+static uint32_t wifi_retry_delay_ms(int attempt)
+{
+    int shift = attempt - 1;
+    if (shift < 0)  shift = 0;
+    if (shift > 6)  shift = 6;
+    uint32_t d = (uint32_t)WIFI_RETRY_BASE_MS << shift;
+    return d > WIFI_RETRY_MAX_MS ? WIFI_RETRY_MAX_MS : d;
+}
+
+/* Runs on the esp_timer task, not the event loop task -- esp_wifi_connect()
+ * must not be reached through a delay inside the event handler itself. */
+static void wifi_reconnect_cb(void *arg)
+{
+    (void)arg;
+    esp_wifi_connect();
+}
 
 static void event_handler(void *arg, esp_event_base_t event_base,
                           int32_t event_id, void *event_data)
@@ -70,13 +115,22 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *)event_data;
         ESP_LOGW(TAG, "WiFi disconnected, reason=%d rssi=%d", disc->reason, disc->rssi);
-        if (s_retry_num < MAX_RETRY) {
-            esp_wifi_connect();
-            s_retry_num++;
-            ESP_LOGI(TAG, "Retrying WiFi connection (%d/%d)", s_retry_num, MAX_RETRY);
-        } else {
+        s_retry_num++;
+        /* Release the boot wait once, so a node that comes up while the AP is
+         * down still starts CSI capture and the mesh instead of blocking in
+         * app_main. Retrying continues regardless. */
+        if (s_retry_num == WIFI_BOOT_WAIT_ATTEMPTS) {
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
         }
+        uint32_t delay_ms = wifi_retry_delay_ms(s_retry_num);
+        if (s_reconnect_timer != NULL) {
+            esp_timer_stop(s_reconnect_timer);   /* may not be running; harmless */
+            esp_timer_start_once(s_reconnect_timer, (uint64_t)delay_ms * 1000);
+        } else {
+            esp_wifi_connect();                  /* timer unavailable: retry now */
+        }
+        ESP_LOGI(TAG, "Reconnecting in %lu ms (attempt %d)",
+                 (unsigned long)delay_ms, s_retry_num);
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
@@ -84,6 +138,41 @@ static void event_handler(void *arg, esp_event_base_t event_base,
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
+
+#ifdef CONFIG_UPLINK_WATCHDOG
+/* Uplink supervision.
+ *
+ * The reconnect fix above addresses the one wedge whose mechanism we have
+ * proven. This catches the ones we have not: any state in which the node is
+ * powered, capturing, and unable to put a packet on the wire. It bounds such a
+ * state to CONFIG_UPLINK_WATCHDOG_TIMEOUT_S instead of the 7.5 hours measured
+ * on 2026-08-30.
+ *
+ * The signal is a successful sendto(), which on UDP means the stack accepted
+ * the datagram -- NOT that the server received it. That distinction is what
+ * makes this safe: stopping the aggregator does not reboot the fleet, because
+ * sendto keeps succeeding into a socket whose peer is gone. It fires only when
+ * the node's own network path is broken.
+ *
+ * It arms on the first successful send rather than at boot, so a node that has
+ * never reached the network does not reboot-loop while the AP is down; the
+ * unbounded reconnect above owns that case. */
+static void uplink_watchdog_tick(void)
+{
+    int64_t last = stream_sender_last_success_us();
+    if (last == 0) {
+        return;                      /* never delivered -- not armed yet */
+    }
+    int64_t idle_s = (esp_timer_get_time() - last) / 1000000;
+    if (idle_s < CONFIG_UPLINK_WATCHDOG_TIMEOUT_S) {
+        return;
+    }
+    ESP_LOGE(TAG, "uplink watchdog: no successful send for %lld s "
+                  "(limit %d s) -- restarting",
+             (long long)idle_s, CONFIG_UPLINK_WATCHDOG_TIMEOUT_S);
+    esp_restart();
+}
+#endif /* CONFIG_UPLINK_WATCHDOG */
 
 static void wifi_init_sta(void)
 {
@@ -136,6 +225,17 @@ static void wifi_init_sta(void)
     }
 #endif
 
+    const esp_timer_create_args_t reconnect_args = {
+        .callback = &wifi_reconnect_cb,
+        .name     = "wifi_reconnect",
+    };
+    esp_err_t rc_ret = esp_timer_create(&reconnect_args, &s_reconnect_timer);
+    if (rc_ret != ESP_OK) {
+        ESP_LOGW(TAG, "reconnect timer create failed: %s (falling back to "
+                      "immediate retry)", esp_err_to_name(rc_ret));
+        s_reconnect_timer = NULL;
+    }
+
     ESP_ERROR_CHECK(esp_wifi_start());
 
     ESP_LOGI(TAG, "WiFi STA initialized, connecting to SSID: %s", g_nvs_config.wifi_ssid);
@@ -148,7 +248,9 @@ static void wifi_init_sta(void)
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "Connected to WiFi");
     } else if (bits & WIFI_FAIL_BIT) {
-        ESP_LOGE(TAG, "Failed to connect to WiFi after %d retries", MAX_RETRY);
+        ESP_LOGW(TAG, "Not connected after %d attempts -- continuing boot; "
+                      "reconnection keeps retrying in the background",
+                 WIFI_BOOT_WAIT_ATTEMPTS);
     }
 }
 
@@ -541,8 +643,11 @@ void app_main(void)
              (swarm_ret == ESP_OK) ? g_nvs_config.seed_url : "off",
              (adapt_ret == ESP_OK) ? "on" : "off");
 
-    /* Main loop — keep alive */
+    /* Main loop — keep alive, and supervise the uplink. */
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
+#ifdef CONFIG_UPLINK_WATCHDOG
+        uplink_watchdog_tick();
+#endif
     }
 }
