@@ -125,8 +125,6 @@ class TestStatePathSanitization(unittest.TestCase):
         self.assertTrue(path.endswith("COM7.json"))
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestStateFilePermissions(unittest.TestCase):
@@ -197,3 +195,64 @@ class TestOtaPskNamespace(unittest.TestCase):
         rows = [r.split(",") for r in provision.build_nvs_csv(args).strip().splitlines()]
         namespaces = [r[0] for r in rows if len(r) > 1 and r[1] == "namespace"]
         self.assertEqual(namespaces, ["csi_cfg", "security"])
+
+
+class TestReworkedAfterReview(unittest.TestCase):
+    """Regressions for defects found reviewing the first cut of this change."""
+
+    def setUp(self):
+        self.dir = os.path.join(tempfile.mkdtemp(prefix="provision-rework-"), "state")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(os.path.dirname(self.dir), ignore_errors=True)
+
+    def test_ota_psk_alone_counts_as_a_config_value(self):
+        # The headline flag must be able to provision on its own; previously
+        # has_config_value() rejected it before NVS generation.
+        args = _mk_args(ota_psk="a" * 64)
+        self.assertTrue(provision.has_config_value(args))
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX symlink semantics")
+    def test_symlink_at_the_temp_path_cannot_capture_the_secret(self):
+        # The temp path is predictable. Without O_EXCL/O_NOFOLLOW, os.open with
+        # O_CREAT|O_TRUNC follows a planted symlink and writes the cleartext
+        # password through it. Asserting the *final* file mode does not catch
+        # this — the trailing chmod fixes that either way — so assert the victim
+        # never receives the secret.
+        os.makedirs(self.dir, mode=0o700, exist_ok=True)
+        victim = os.path.join(os.path.dirname(self.dir), "victim.txt")
+        with open(victim, "w", encoding="utf-8") as f:
+            f.write("original")
+        tmp = provision._state_path_for("COM7", self.dir) + ".tmp"
+        os.symlink(victim, tmp)
+
+        try:
+            provision.save_state("COM7", self.dir, {"password": "s3cret"})
+        except OSError:
+            pass  # refusing outright is an acceptable outcome
+
+        with open(victim, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "original",
+                             "secret was written through a planted symlink")
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX permission model only")
+    def test_read_path_repairs_permissions_left_by_an_earlier_version(self):
+        os.makedirs(self.dir, exist_ok=True)
+        provision.save_state("COM7", self.dir, {"password": "secret"})
+        # Simulate state written before this change.
+        os.chmod(self.dir, 0o755)
+        os.chmod(provision._state_path_for("COM7", self.dir), 0o644)
+        provision._harden_existing_state("COM7", self.dir)
+        self.assertEqual(os.stat(self.dir).st_mode & 0o777, 0o700)
+        self.assertEqual(
+            os.stat(provision._state_path_for("COM7", self.dir)).st_mode & 0o777, 0o600)
+
+    def test_harden_survives_a_chmod_failure(self):
+        # A read-only or exotic filesystem must warn, not abort provisioning.
+        missing = os.path.join(self.dir, "definitely-not-there.json")
+        provision._harden(missing, 0o600)  # must not raise
+
+
+if __name__ == "__main__":
+    unittest.main()

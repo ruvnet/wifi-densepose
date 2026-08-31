@@ -58,6 +58,7 @@ NVS_PARTITION_SIZE = 0x6000  # 24 KiB
 
 
 CONFIG_VALUE_CHECKS = [
+    ("ota_psk", bool),
     ("ssid", bool),
     ("password", lambda value: value is not None),
     ("target_ip", bool),
@@ -201,6 +202,15 @@ def _harden(path: str, mode: int) -> None:
         print(f"WARNING: could not set {oct(mode)} on {path}: {e}", file=sys.stderr)
 
 
+def _harden_existing_state(port: str, state_dir: str) -> None:
+    """Tighten permissions on already-written state without rewriting it."""
+    if os.path.isdir(state_dir):
+        _harden(state_dir, STATE_DIR_MODE)
+    path = _state_path_for(port, state_dir)
+    if os.path.isfile(path):
+        _harden(path, STATE_FILE_MODE)
+
+
 def save_state(port: str, state_dir: str, state: dict) -> str:
     """Write `state` to the per-port file, creating dirs as needed. Returns path.
 
@@ -214,8 +224,17 @@ def save_state(port: str, state_dir: str, state: dict) -> str:
     # Sort keys for deterministic on-disk content (easier to diff).
     tmp = path + ".tmp"
     # Create restrictively rather than chmod-ing after: the secret must never
-    # exist world-readable, not even briefly.
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, STATE_FILE_MODE)
+    # exist world-readable, not even briefly. O_EXCL (plus removing any stale
+    # temp first) means the mode is actually applied — O_CREAT is ignored for an
+    # existing path, so a leftover 0644 file or a planted symlink would
+    # otherwise receive the secret. O_NOFOLLOW where available refuses a symlink
+    # outright.
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(tmp, flags, STATE_FILE_MODE)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2, sort_keys=True)
         f.write("\n")
@@ -455,8 +474,15 @@ def main():
         psk = args.ota_psk.strip()
         if not psk:
             parser.error("--ota-psk must not be empty")
-        if len(psk) > 64:
-            parser.error(f"--ota-psk must be at most 64 characters (got {len(psk)})")
+        # ota_update.c documents the PSK as a hex-encoded SHA-256 and caps it at
+        # OTA_PSK_MAX_LEN (65 incl. NUL). Accepting a short value would reduce a
+        # firmware-upload bearer credential to something guessable, so require
+        # the full 64 hex characters rather than merely "fits".
+        if len(psk) != 64:
+            parser.error(
+                f"--ota-psk must be exactly 64 hex characters "
+                f"(a hex-encoded SHA-256); got {len(psk)}. "
+                f"Generate one with: openssl rand -hex 32")
         if any(c not in "0123456789abcdefABCDEF" for c in psk):
             parser.error("--ota-psk must be hex (0-9, a-f)")
         args.ota_psk = psk.lower()
@@ -470,24 +496,28 @@ def main():
         prior = {}
     else:
         prior = load_state(args.port, args.state_dir)
+        _harden_existing_state(args.port, args.state_dir)
 
     # Issue #1755: state is keyed by serial port path, and port names are reused
     # when boards are swapped. Prior state from a *different* board must not be
     # merged onto this one — inheriting another board's node_id silently
-    # corrupts a multistatic cohort. `--state` stays read-only and skips the
-    # chip round-trip.
+    # corrupts a multistatic cohort.
+    #
+    # The identity is read on every run that will talk to the device, not only
+    # when prior state exists: a *first* provisioning must record the MAC, or
+    # the very next swap has nothing to compare against. --state and --dry-run
+    # never touch the serial port.
     chip_mac = None
-    if prior and not args.state:
+    if not args.state and not args.dry_run:
         chip_mac = read_chip_mac(args.port, args.baud, args.chip)
-        if not identity_matches(prior, chip_mac):
+        if prior and not identity_matches(prior, chip_mac):
             print(
                 f"ERROR: {args.port} last held board "
                 f"{prior.get(STATE_IDENTITY_KEY)}, but the connected board is "
                 f"{chip_mac}.\n"
                 "       Refusing to merge another board's settings (node_id, "
                 "target_port, channel ...).\n"
-                "       Pass --reset to provision this board from scratch, or "
-                "pass every value explicitly.",
+                "       Pass --reset to provision this board from scratch.",
                 file=sys.stderr,
             )
             sys.exit(2)
@@ -497,7 +527,17 @@ def main():
         merged[STATE_IDENTITY_KEY] = chip_mac
 
     if args.state:
-        print(json.dumps(merged, indent=2, sort_keys=True))
+        # Repair permissions on state written by an earlier version even on this
+        # read-only path — otherwise an existing 0644 file stays exposed until
+        # the next write.
+        _harden_existing_state(args.port, args.state_dir)
+        shown = dict(merged)
+        if shown.get("ota_psk"):
+            # The OTA bearer credential is stored (provisioning rewrites the whole
+            # NVS partition, so dropping it would wipe the device's PSK) but it is
+            # not printed.
+            shown["ota_psk"] = "<redacted; present>"
+        print(json.dumps(shown, indent=2, sort_keys=True))
         return
 
     if not has_config_value(args):
