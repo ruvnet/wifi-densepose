@@ -108,6 +108,7 @@ MERGEABLE_ATTRS = [
     "channel", "filter_mac",
     "hop_channels", "hop_dwell",
     "seed_url", "seed_token", "zone", "swarm_hb", "swarm_ingest",
+    "ota_psk",
 ]
 
 
@@ -129,6 +130,47 @@ def _state_path_for(port: str, state_dir: str) -> str:
     return os.path.join(state_dir, f"{safe}.json")
 
 
+# Key under which the board's own identity is recorded inside the per-port
+# state file. Underscore-prefixed so it can never collide with an NVS key and is
+# trivially filtered out of the merge.
+STATE_IDENTITY_KEY = "_chip_mac"
+
+
+def read_chip_mac(port: str, baud: int, chip: str):
+    """Return the connected board's MAC, or None if it cannot be read.
+
+    Best-effort and never fatal: identity binding is a safety net, so a board
+    that will not answer must still be provisionable exactly as before.
+    """
+    try:
+        out = subprocess.run(
+            [sys.executable, "-m", "esptool", "--chip", chip, "--port", port,
+             "--baud", str(baud), "read-mac"],
+            capture_output=True, text=True, timeout=60,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in out.splitlines():
+        # esptool prints e.g. "MAC: 80:b5:4e:c1:b5:68"
+        if line.strip().upper().startswith("MAC:"):
+            mac = line.split(":", 1)[1].strip().lower()
+            if len(mac.split(":")) == 6:
+                return mac
+    return None
+
+
+def identity_matches(prior: dict, chip_mac) -> bool:
+    """True when prior state may be merged onto the connected board.
+
+    Unknown on either side means "cannot prove a mismatch", which stays
+    permissive so existing state files keep working after upgrade.
+    """
+    recorded = prior.get(STATE_IDENTITY_KEY)
+    if not recorded or not chip_mac:
+        return True
+    return recorded == chip_mac
+
+
 def load_state(port: str, state_dir: str) -> dict:
     """Return the merged-state dict for `port`, or `{}` if absent / unreadable."""
     path = _state_path_for(port, state_dir)
@@ -144,16 +186,41 @@ def load_state(port: str, state_dir: str) -> dict:
     return {}
 
 
+# State files hold the WiFi password in cleartext, so they are owner-only.
+STATE_DIR_MODE = 0o700
+STATE_FILE_MODE = 0o600
+
+
+def _harden(path: str, mode: int) -> None:
+    """Best-effort chmod. Never fatal: a read-only or exotic FS must not block
+    provisioning, but we also must not silently leave a secret world-readable
+    without saying so."""
+    try:
+        os.chmod(path, mode)
+    except OSError as e:
+        print(f"WARNING: could not set {oct(mode)} on {path}: {e}", file=sys.stderr)
+
+
 def save_state(port: str, state_dir: str, state: dict) -> str:
-    """Write `state` to the per-port file, creating dirs as needed. Returns path."""
-    os.makedirs(state_dir, exist_ok=True)
+    """Write `state` to the per-port file, creating dirs as needed. Returns path.
+
+    The file contains the WiFi password in cleartext, so it is created 0600 and
+    the directory 0700. `makedirs` cannot tighten a directory that already
+    exists, so an explicit chmod covers state dirs left by earlier versions.
+    """
+    os.makedirs(state_dir, mode=STATE_DIR_MODE, exist_ok=True)
+    _harden(state_dir, STATE_DIR_MODE)
     path = _state_path_for(port, state_dir)
     # Sort keys for deterministic on-disk content (easier to diff).
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
+    # Create restrictively rather than chmod-ing after: the secret must never
+    # exist world-readable, not even briefly.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, STATE_FILE_MODE)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2, sort_keys=True)
         f.write("\n")
     os.replace(tmp, path)
+    _harden(path, STATE_FILE_MODE)
     return path
 
 
@@ -234,6 +301,12 @@ def build_nvs_csv(args):
         writer.writerow(["swarm_hb", "data", "u16", str(args.swarm_hb)])
     if args.swarm_ingest is not None:
         writer.writerow(["swarm_ingest", "data", "u16", str(args.swarm_ingest)])
+    # ADR-050 / issue #1753: the OTA pre-shared key lives in its own `security`
+    # namespace, which is what main/ota_update.c reads (OTA_NVS_NAMESPACE /
+    # OTA_NVS_KEY). Emitted last so the csi_cfg namespace above is unaffected.
+    if getattr(args, "ota_psk", None):
+        writer.writerow(["security", "namespace", "", ""])
+        writer.writerow(["ota_psk", "data", "string", args.ota_psk])
     return buf.getvalue()
 
 
@@ -352,6 +425,10 @@ def main():
     parser.add_argument("--seed-url", type=str, help="Cognitum Seed base URL (e.g. http://10.1.10.236)")
     parser.add_argument("--seed-token", type=str, help="Seed Bearer token (from pairing)")
     parser.add_argument("--zone", type=str, help="Zone name for this node (e.g. lobby, hallway)")
+    parser.add_argument("--ota-psk", type=str,
+                        help="OTA pre-shared key (hex, <=64 chars) written to the `security` "
+                             "NVS namespace. Without it the node's OTA endpoint rejects every "
+                             "upload (fail-closed, issue #1753).")
     parser.add_argument("--swarm-hb", type=int, help="Swarm heartbeat interval in seconds (default 30)")
     parser.add_argument("--swarm-ingest", type=int, help="Swarm vector ingest interval in seconds (default 5)")
     parser.add_argument("--dry-run", action="store_true", help="Generate NVS binary but don't flash")
@@ -371,6 +448,19 @@ def main():
 
     args = parser.parse_args()
 
+    # Firmware caps the PSK at OTA_PSK_MAX_LEN (65) including the NUL, and
+    # documents it as a hex-encoded SHA-256, so reject anything that cannot be
+    # stored or that the device would treat as malformed.
+    if args.ota_psk is not None:
+        psk = args.ota_psk.strip()
+        if not psk:
+            parser.error("--ota-psk must not be empty")
+        if len(psk) > 64:
+            parser.error(f"--ota-psk must be at most 64 characters (got {len(psk)})")
+        if any(c not in "0123456789abcdefABCDEF" for c in psk):
+            parser.error("--ota-psk must be hex (0-9, a-f)")
+        args.ota_psk = psk.lower()
+
     # --- Per-port state load + merge (additive-by-default, #391 / #574) ---
     if args.reset:
         path = _state_path_for(args.port, args.state_dir)
@@ -380,7 +470,31 @@ def main():
         prior = {}
     else:
         prior = load_state(args.port, args.state_dir)
+
+    # Issue #1755: state is keyed by serial port path, and port names are reused
+    # when boards are swapped. Prior state from a *different* board must not be
+    # merged onto this one — inheriting another board's node_id silently
+    # corrupts a multistatic cohort. `--state` stays read-only and skips the
+    # chip round-trip.
+    chip_mac = None
+    if prior and not args.state:
+        chip_mac = read_chip_mac(args.port, args.baud, args.chip)
+        if not identity_matches(prior, chip_mac):
+            print(
+                f"ERROR: {args.port} last held board "
+                f"{prior.get(STATE_IDENTITY_KEY)}, but the connected board is "
+                f"{chip_mac}.\n"
+                "       Refusing to merge another board's settings (node_id, "
+                "target_port, channel ...).\n"
+                "       Pass --reset to provision this board from scratch, or "
+                "pass every value explicitly.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
     merged = merge_state_into_args(args, prior)
+    if chip_mac:
+        merged[STATE_IDENTITY_KEY] = chip_mac
 
     if args.state:
         print(json.dumps(merged, indent=2, sort_keys=True))

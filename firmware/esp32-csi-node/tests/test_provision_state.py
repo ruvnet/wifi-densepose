@@ -127,3 +127,73 @@ class TestStatePathSanitization(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStateFilePermissions(unittest.TestCase):
+    """Issue #1754: the state file holds the WiFi password in cleartext."""
+
+    def setUp(self):
+        self.dir = os.path.join(tempfile.mkdtemp(prefix="provision-perm-"), "state")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(os.path.dirname(self.dir), ignore_errors=True)
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX permission model only")
+    def test_state_file_is_owner_only(self):
+        path = provision.save_state("COM7", self.dir, {"ssid": "x", "password": "secret"})
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX permission model only")
+    def test_state_dir_is_owner_only(self):
+        provision.save_state("COM7", self.dir, {"password": "secret"})
+        self.assertEqual(os.stat(self.dir).st_mode & 0o777, 0o700)
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX permission model only")
+    def test_tightens_a_directory_left_by_an_earlier_version(self):
+        # makedirs cannot tighten an existing directory; an explicit chmod must.
+        os.makedirs(self.dir, exist_ok=True)
+        os.chmod(self.dir, 0o755)
+        provision.save_state("COM7", self.dir, {"password": "secret"})
+        self.assertEqual(os.stat(self.dir).st_mode & 0o777, 0o700)
+
+
+class TestChipIdentityBinding(unittest.TestCase):
+    """Issue #1755: port paths are reused when boards are swapped."""
+
+    def test_matches_when_identity_absent_on_either_side(self):
+        # Permissive: pre-existing state files carry no identity, and a board
+        # that will not answer must still be provisionable.
+        self.assertTrue(provision.identity_matches({}, "80:b5:4e:c1:b5:68"))
+        self.assertTrue(provision.identity_matches(
+            {provision.STATE_IDENTITY_KEY: "80:b5:4e:c1:b5:68"}, None))
+
+    def test_matches_same_board(self):
+        self.assertTrue(provision.identity_matches(
+            {provision.STATE_IDENTITY_KEY: "80:b5:4e:c1:b5:68"}, "80:b5:4e:c1:b5:68"))
+
+    def test_rejects_a_different_board_on_the_same_port(self):
+        self.assertFalse(provision.identity_matches(
+            {provision.STATE_IDENTITY_KEY: "80:b5:4e:c1:b5:68"}, "80:b5:4e:c1:c4:f0"))
+
+
+class TestOtaPskNamespace(unittest.TestCase):
+    """Issue #1753: the OTA PSK lives in its own `security` NVS namespace."""
+
+    def test_security_namespace_emitted_with_psk(self):
+        args = _mk_args(ssid="net", ota_psk="a" * 64)
+        csv_text = provision.build_nvs_csv(args)
+        self.assertIn("security,namespace", csv_text.replace(", ", ","))
+        self.assertIn("ota_psk", csv_text)
+
+    def test_no_security_namespace_without_psk(self):
+        args = _mk_args(ssid="net")
+        csv_text = provision.build_nvs_csv(args)
+        self.assertNotIn("security", csv_text)
+        self.assertNotIn("ota_psk", csv_text)
+
+    def test_csi_cfg_namespace_still_first(self):
+        args = _mk_args(ssid="net", ota_psk="b" * 64)
+        rows = [r.split(",") for r in provision.build_nvs_csv(args).strip().splitlines()]
+        namespaces = [r[0] for r in rows if len(r) > 1 and r[1] == "namespace"]
+        self.assertEqual(namespaces, ["csi_cfg", "security"])
