@@ -409,6 +409,21 @@ static edge_biquad_t s_person_bq_hr[EDGE_MAX_PERSONS];
 static float s_person_br_filt[EDGE_MAX_PERSONS][EDGE_PHASE_HISTORY_LEN];
 static float s_person_hr_filt[EDGE_MAX_PERSONS][EDGE_PHASE_HISTORY_LEN];
 
+/** Clear person slots whenever the room-level presence gate is closed. */
+static void reset_person_count_state(void)
+{
+    s_person_count_candidate = 0;
+    s_person_count_streak = 0;
+    s_person_count_stable = 0;
+    for (uint8_t p = 0; p < EDGE_MAX_PERSONS; p++) {
+        s_persons[p].active = false;
+        s_persons[p].history_len = 0;
+        s_persons[p].history_idx = 0;
+        s_persons[p].breathing_bpm = 0.0f;
+        s_persons[p].heartrate_bpm = 0.0f;
+    }
+}
+
 /** Latest vitals packet (thread-safe via volatile copy). */
 static volatile edge_vitals_pkt_t s_latest_pkt;
 static volatile bool s_pkt_valid;
@@ -898,7 +913,10 @@ static void send_vitals_packet(void)
     for (uint8_t p = 0; p < EDGE_MAX_PERSONS; p++) {
         if (s_persons[p].active) n_active++;
     }
-    pkt.n_persons = n_active;
+    /* Fail closed: the slot heuristic cannot assert occupants while the
+     * debounced presence gate is false. The host repeats this invariant for
+     * backward compatibility with older firmware. */
+    pkt.n_persons = edge_evidence_person_count(s_presence_detected, n_active);
 
     pkt.motion_energy = s_motion_energy;
     pkt.presence_score = s_presence_score;
@@ -1202,8 +1220,15 @@ static void process_frame(const edge_ring_slot_t *slot)
         }
     }
 
-    /* --- Step 11: Multi-person vitals --- */
-    update_multi_person_vitals(slot->iq_data, n_subcarriers, sample_rate);
+    /* --- Step 11: Multi-person vitals ---
+     * Person slots are subordinate to the room presence gate. Processing or
+     * retaining slots while absent produced contradictory packets such as
+     * presence=false with n_persons=4. */
+    if (s_presence_detected) {
+        update_multi_person_vitals(slot->iq_data, n_subcarriers, sample_rate);
+    } else {
+        reset_person_count_state();
+    }
     /* Yield after multi-person DSP so IDLE1 can feed Core 1 watchdog (#683). */
     if (s_cfg.tier >= 2) vTaskDelay(1);
 

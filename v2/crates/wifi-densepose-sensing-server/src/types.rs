@@ -258,6 +258,9 @@ pub struct Esp32VitalsPacket {
     pub heartrate_bpm: f64,
     pub rssi: i8,
     pub n_persons: u8,
+    /// True only when the firmware count is protocol-bounded and consistent
+    /// with the packet presence flag.
+    pub person_count_valid: bool,
     pub motion_energy: f32,
     pub presence_score: f32,
     pub timestamp_ms: u32,

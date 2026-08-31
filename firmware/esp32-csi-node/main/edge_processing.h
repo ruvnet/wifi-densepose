@@ -38,6 +38,20 @@
 /* ---- Multi-person ---- */
 #define EDGE_MAX_PERSONS      4     /**< Max simultaneous persons. */
 
+/**
+ * Enforce the wire-level occupancy invariant.
+ *
+ * A subcarrier slot estimate is supporting evidence only. It cannot assert an
+ * occupant when the independently debounced presence gate is false. Keeping
+ * this helper in the public firmware header lets host tests exercise the exact
+ * function used by the device build.
+ */
+static inline uint8_t edge_evidence_person_count(bool presence, uint8_t active_count)
+{
+    if (!presence) return 0;
+    return active_count > EDGE_MAX_PERSONS ? EDGE_MAX_PERSONS : active_count;
+}
+
 /* ---- Multi-person counting gates (issue #998) ----
  *
  * Over-counting root cause: the multi-person path used to split the top-K

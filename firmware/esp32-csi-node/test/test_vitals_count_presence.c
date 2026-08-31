@@ -266,6 +266,19 @@ static void test_debounce_flapping_stays_stable(void)
     CHECK_EQ_U8("flapping count stays at 1", out, 1);
 }
 
+/* The packet count is evidence subordinated to presence, never an independent
+ * occupancy assertion. This guards the field failure where a node emitted
+ * presence=false with n_persons=3 or 4. */
+static void test_person_count_fails_closed_without_presence(void)
+{
+    CHECK_EQ_U8("absent with four active slots -> zero",
+                edge_evidence_person_count(false, 4), 0);
+    CHECK_EQ_U8("present preserves a bounded count",
+                edge_evidence_person_count(true, 3), 3);
+    CHECK_EQ_U8("present count clamps to protocol maximum",
+                edge_evidence_person_count(true, 255), EDGE_MAX_PERSONS);
+}
+
 /* ──────────────────────────────────────────────────────────────────────
  *  #996 — presence_flag_update: dithering score must NOT flicker the flag
  * ────────────────────────────────────────────────────────────────────── */
@@ -375,6 +388,7 @@ int main(void)
     test_debounce_rejects_transient_spike();
     test_debounce_accepts_sustained_change();
     test_debounce_flapping_stays_stable();
+    test_person_count_fails_closed_without_presence();
 
     /* #996 presence hysteresis */
     test_presence_no_flicker_on_dither();

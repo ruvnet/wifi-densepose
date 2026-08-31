@@ -9,6 +9,17 @@ use crate::adaptive_classifier;
 use crate::types::*;
 use crate::vital_signs::VitalSigns;
 
+const EDGE_MAX_PERSONS: u8 = 4;
+
+/// Person count is supporting evidence, never an independent occupancy claim.
+/// Return zero and mark invalid for contradictory or out-of-range firmware.
+fn sanitize_edge_person_count(presence: bool, raw: u8) -> (u8, bool) {
+    if raw > EDGE_MAX_PERSONS || (!presence && raw != 0) {
+        return (0, false);
+    }
+    (raw, true)
+}
+
 // ── ESP32 UDP frame parsers ─────────────────────────────────────────────────
 
 /// Parse a 32-byte edge vitals packet (magic 0xC511_0002).
@@ -26,24 +37,61 @@ pub fn parse_esp32_vitals(buf: &[u8]) -> Option<Esp32VitalsPacket> {
     let breathing_raw = u16::from_le_bytes([buf[6], buf[7]]);
     let heartrate_raw = u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]);
     let rssi = buf[12] as i8;
-    let n_persons = buf[13];
+    let presence = (flags & 0x01) != 0;
+    let (n_persons, person_count_valid) = sanitize_edge_person_count(presence, buf[13]);
     let motion_energy = f32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]);
     let presence_score = f32::from_le_bytes([buf[20], buf[21], buf[22], buf[23]]);
     let timestamp_ms = u32::from_le_bytes([buf[24], buf[25], buf[26], buf[27]]);
 
     Some(Esp32VitalsPacket {
         node_id,
-        presence: (flags & 0x01) != 0,
+        presence,
         fall_detected: (flags & 0x02) != 0,
         motion: (flags & 0x04) != 0,
         breathing_rate_bpm: breathing_raw as f64 / 100.0,
         heartrate_bpm: heartrate_raw as f64 / 10000.0,
         rssi,
         n_persons,
+        person_count_valid,
         motion_energy,
         presence_score,
         timestamp_ms,
     })
+}
+
+#[cfg(test)]
+mod edge_vitals_integrity_tests {
+    use super::*;
+
+    fn packet(presence: bool, n_persons: u8) -> Vec<u8> {
+        let mut buf = vec![0u8; 32];
+        buf[0..4].copy_from_slice(&0xC511_0002u32.to_le_bytes());
+        buf[4] = 4;
+        buf[5] = u8::from(presence);
+        buf[13] = n_persons;
+        buf
+    }
+
+    #[test]
+    fn contradictory_count_fails_closed() {
+        let parsed = parse_esp32_vitals(&packet(false, 4)).expect("valid packet");
+        assert_eq!(parsed.n_persons, 0);
+        assert!(!parsed.person_count_valid);
+    }
+
+    #[test]
+    fn bounded_present_count_is_preserved() {
+        let parsed = parse_esp32_vitals(&packet(true, 3)).expect("valid packet");
+        assert_eq!(parsed.n_persons, 3);
+        assert!(parsed.person_count_valid);
+    }
+
+    #[test]
+    fn out_of_range_count_fails_closed() {
+        let parsed = parse_esp32_vitals(&packet(true, 5)).expect("valid packet");
+        assert_eq!(parsed.n_persons, 0);
+        assert!(!parsed.person_count_valid);
+    }
 }
 
 /// Parse a WASM output packet (magic 0xC511_0007 — reassigned per issue #928;
