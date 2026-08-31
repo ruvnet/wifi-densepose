@@ -4,6 +4,16 @@
 # Target: ESP32-S3
 CONFIG_IDF_TARGET="esp32s3"
 
+# Display disabled: the ESP32-S3-DevKitC-1 has no AMOLED panel. With the display
+# compiled in (default y), the boot-time panel probe false-positives on boards
+# with no TCA9554 ("assuming display power is always-on (direct wiring)"), so
+# display_is_active() returns true, has_display stays true in main.c, and the
+# csi_collector_enable_data_capture() upgrade (MGMT->MGMT+DATA promiscuous) is
+# never applied — the CSI callback then starves to yield=0pps (#521/#893).
+# Disabling the display fixes CSI yield on display-less boards AND drops LVGL
+# from the build. Re-enable only on the Waveshare AMOLED hardware.
+CONFIG_DISPLAY_ENABLE=n
+
 # Use custom partition table (8MB flash with OTA — ADR-045)
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_display.csv"

@@ -411,7 +411,13 @@ static void csi_start_self_ping(void)
     esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
     cfg.target_addr     = target;
     cfg.count           = ESP_PING_COUNT_INFINITE;
-    cfg.interval_ms     = 20;     /* 50 Hz -> ~50 received OFDM replies/sec */
+    cfg.interval_ms     = 100;    /* 10 Hz -> ~10 OFDM replies/sec. Lowered from
+                                   * 50 Hz: the 50 Hz flood hammered the channel
+                                   * and raised the empty-room CSI noise floor to
+                                   * the same magnitude as a moving person, killing
+                                   * presence SNR. 10 Hz still exceeds the Nyquist
+                                   * rate for human motion/breathing while cutting
+                                   * the self-induced RF churn ~5x. */
     cfg.data_size       = 1;
     cfg.task_stack_size = 4096;
 

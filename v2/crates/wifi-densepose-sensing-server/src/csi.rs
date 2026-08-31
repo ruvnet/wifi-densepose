@@ -398,18 +398,36 @@ pub fn extract_features_from_frame(
     } else {
         sub_variances.iter().sum::<f64>() / sub_variances.len() as f64
     };
-    let variance = intra_variance.max(temporal_variance);
+    // Publish the *temporal* variance (how each subcarrier moves over time) as
+    // the `variance` feature. The previous `intra_variance.max(temporal_variance)`
+    // returned the spatial spread across subcarriers (~175, effectively constant
+    // whether the room is empty or occupied), which masked the motion signal:
+    // raw-CSI analysis showed temporal variance rises ~+50% on movement while the
+    // spatial spread does not move at all. Detection needs the part that reacts.
+    let variance = temporal_variance;
 
     let spectral_power: f64 = frame.amplitudes.iter().map(|a| a * a).sum::<f64>() / n;
     let half = frame.amplitudes.len() / 2;
-    let motion_band_power = if half > 0 {
-        frame.amplitudes[half..]
-            .iter()
-            .map(|a| (a - mean_amp).powi(2))
-            .sum::<f64>()
-            / (frame.amplitudes.len() - half) as f64
-    } else {
-        0.0
+    // Frame-to-frame amplitude change — a direct temporal motion metric. The old
+    // definition (spatial spread of the upper-half subcarriers vs the frame mean)
+    // was constant regardless of occupancy and never reflected motion. The mean
+    // absolute delta against the previous frame rises when a body perturbs the
+    // multipath and sits at the noise floor when the scene is static.
+    let motion_band_power = match frame_history.back() {
+        Some(prev) if !prev.is_empty() => {
+            let m = frame.amplitudes.len().min(prev.len());
+            if m > 0 {
+                frame.amplitudes[..m]
+                    .iter()
+                    .zip(prev[..m].iter())
+                    .map(|(a, p)| (a - p).abs())
+                    .sum::<f64>()
+                    / m as f64
+            } else {
+                0.0
+            }
+        }
+        _ => 0.0,
     };
     let breathing_band_power = if half > 0 {
         frame.amplitudes[..half]
