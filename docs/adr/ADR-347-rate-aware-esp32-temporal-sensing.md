@@ -3,7 +3,9 @@
 ## Status
 
 Accepted. Implemented in firmware 0.8.8. The timing and transport path is
-physically qualified on ESP32 C6; held out inference accuracy remains required.
+physically qualified on ESP32 C6. The independent raw transport path is also
+physically qualified on an ESP32 S3 running Tier 0. Held out inference accuracy
+remains required.
 
 ## Context
 

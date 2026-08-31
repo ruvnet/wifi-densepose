@@ -45,8 +45,10 @@ update. The sensing server health endpoint remained ready with ESP32 input.
 | Repository diff whitespace check | PASS |
 | Local libFuzzer aggregate | NOT RUN, local Xcode toolchain lacks `libclang_rt.fuzzer_osx.a` |
 
-The S3 result is source and toolchain validation only. No S3 was attached and
-no S3 runtime claim is made.
+For this C6 record, the S3 result was source and toolchain validation only and
+no S3 runtime claim is made here. The later physical S3 Tier 0 transport run is
+recorded separately in
+`docs/validation/2026-08-31-esp32-s3-rate-aware-transport.md`.
 
 ## Measured rate correction
 
