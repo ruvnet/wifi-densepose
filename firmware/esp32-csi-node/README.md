@@ -7,17 +7,40 @@ This firmware captures WiFi Channel State Information (CSI) from an ESP32-S3 (pr
 [![ESP-IDF v5.4](https://img.shields.io/badge/ESP--IDF-v5.4-blue.svg)](https://docs.espressif.com/projects/esp-idf/en/v5.4/)
 [![Target: ESP32-S3 / ESP32-C6](https://img.shields.io/badge/target-ESP32--S3%20%7C%20ESP32--C6-purple.svg)](https://www.espressif.com/en/products/socs/esp32-s3)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green.svg)](../../LICENSE)
-[![Binary: ~943 KB](https://img.shields.io/badge/binary-~943%20KB-orange.svg)](#memory-budget)
+[![Binary: up to 1.1 MB](https://img.shields.io/badge/binary-up%20to%201.1%20MB-orange.svg)](#memory-budget)
 [![CI: Docker Build](https://img.shields.io/badge/CI-Docker%20Build-brightgreen.svg)](../../.github/workflows/firmware-ci.yml)
 
-> | Capability | Method | Performance |
-> |------------|--------|-------------|
-> | **CSI streaming** | Per-subcarrier I/Q capture over UDP | ~20 Hz, ADR-018 binary format |
-> | **Breathing detection** | Bandpass 0.1-0.5 Hz, zero-crossing BPM | 6-30 BPM |
-> | **Heart rate** | Bandpass 0.8-2.0 Hz, zero-crossing BPM | 40-120 BPM |
-> | **Presence indicator** (heuristic) | Phase variance + adaptive threshold (60 s ambient learning) | < 1 ms latency, false-positives under strong RF interference — see [Tier 2 caveats](#what-this-firmware-does-not-do-tier-2-caveats) |
+> | Capability | Method | Current contract |
+> |------------|--------|------------------|
+> | **CSI streaming** | Per-subcarrier I/Q capture over UDP | Radio-dependent cadence with a 20 packets-per-second hardware acceptance floor, ADR-018 binary format |
+> | **Breathing estimate** | Bandpass 0.1-0.5 Hz, zero-crossing BPM | Experimental 6-30 BPM output; calibrate against a reference before use |
+> | **Heart-rate estimate** | Bandpass 0.8-2.0 Hz, zero-crossing BPM | Experimental 40-120 BPM output; not a medical measurement |
+> | **Presence indicator** (heuristic) | Phase variance + adaptive threshold (60 s ambient learning) | Fast local indicator; strong RF interference can cause false positives — see [Tier 2 caveats](#what-this-firmware-does-not-do-tier-2-caveats) |
 > | **Fall detection** | Phase acceleration threshold | Configurable sensitivity |
 > | **Programmable sensing** | WASM modules loaded over HTTP | Hot-swap, no reflash |
+
+## Firmware 0.8.8 in plain language
+
+Release 0.8.8 makes the sensing stream more internally consistent and easier
+to diagnose:
+
+1. An empty-room decision can no longer carry a nonzero person count. Older
+   firmware could expose those two contradictory values at the same time.
+2. ESP32-C6 signal processing now uses a stable 8 Hz clock while raw CSI keeps
+   streaming at the faster radio-dependent rate. This prevents temporal
+   filters from silently using the wrong time scale.
+3. The one-second diagnostic reports both raw callback yield and the DSP rate,
+   making slow or overloaded nodes visible.
+4. OTA reports the application slot selected by the board instead of assuming
+   a fixed 900 KB limit.
+
+Two ESP32-C6 boards and one ESP32-S3 completed five-minute physical transport
+runs. The updated nodes had zero steady-state send failures, parser failures,
+watchdogs, panics, or reboots. These results prove timing and transport
+stability, not better heartbeat, pose, identity, or person-count accuracy.
+See the [0.8.8 release notes](../../docs/releases/v0.8.8-esp32.md) and
+[ADR 347](../../docs/adr/ADR-347-rate-aware-esp32-temporal-sensing.md) for the
+measured evidence and limitations.
 
 ---
 
@@ -25,22 +48,40 @@ This firmware captures WiFi Channel State Information (CSI) from an ESP32-S3 (pr
 
 For users who want to get running fast. Detailed explanations follow in later sections.
 
-### 0. Pre-built binaries (v0.6.5 — skip the build step)
+### 0. Download the 0.8.8 release
 
-Pre-built binaries are in `firmware/esp32-csi-node/release_bins/` (version: see `release_bins/version.txt`).
-Flash them directly:
+Use the versioned source tag and binaries on the
+[v0.8.8 ESP32 release page](https://github.com/ruvnet/RuView/releases/tag/v0.8.8-esp32).
+Choose the package that names both your chip and flash size:
+
+| Package | Use it for |
+|---------|------------|
+| `esp32-csi-node-v0.8.8-s3-8mb-flash-bundle.zip` | Fresh ESP32-S3 installation with 8 MB flash |
+| `esp32-csi-node-v0.8.8-s3-4mb-flash-bundle.zip` | Fresh ESP32-S3 installation with 4 MB flash |
+| `esp32-csi-node-v0.8.8-c6-4mb-flash-bundle.zip` | Fresh ESP32-C6 installation using the supported 4 MB layout |
+
+Each bundle contains the matching bootloader, partition table, OTA metadata,
+application, checksums, and a short flashing guide. Never flash an S3 bundle
+onto a C6, or a C6 bundle onto an S3.
+
+Example for an 8 MB ESP32-S3 after extracting its bundle:
 
 ```bash
 python -m esptool --chip esp32s3 --port COM7 --baud 460800 \
   write_flash --flash_mode dio --flash_size 8MB \
-  0x0     firmware/esp32-csi-node/release_bins/bootloader.bin \
-  0x8000  firmware/esp32-csi-node/release_bins/partition-table.bin \
-  0xf000  firmware/esp32-csi-node/release_bins/ota_data_initial.bin \
-  0x20000 firmware/esp32-csi-node/release_bins/esp32-csi-node.bin
+  0x0     bootloader.bin \
+  0x8000  partition-table.bin \
+  0xf000  ota_data_initial.bin \
+  0x20000 esp32-csi-node.bin
 ```
 
-For 4 MB boards use `release_bins/esp32-csi-node-4mb.bin` and `release_bins/partition-table-4mb.bin`
-with `--flash_size 4MB`.
+For an existing provisioned node, back up its current application and inspect
+`http://DEVICE_IP:8032/ota/status` before choosing an application-only update.
+Writing only offset `0x20000` is safe only when the status endpoint reports
+`running_partition` as `ota_0` and the downloaded image matches the board.
+The full bundles do not include NVS, so the documented four-offset install
+preserves WiFi and node configuration while replacing the boot and application
+images.
 
 ### 1. Build (Docker -- the only reliable method)
 
@@ -111,7 +152,7 @@ curl http://<ESP32_IP>:8032/wasm/list
 | **Recommended boards** | ESP32-S3-DevKitC-1, XIAO ESP32-S3 | Any ESP32-S3 with 8 MB flash works |
 | **Deployment** | 3-6 nodes per room | Multistatic mesh for 360-degree coverage |
 
-> **Tip:** A single node provides presence and vital signs along its line of sight. Multiple nodes (3-6) create a multistatic mesh that resolves 3D pose with <30 mm jitter and zero identity swaps.
+> **Tip:** A single node is mainly useful for presence and motion along one RF link. Three or more spatially separated links improve geometry and track separation. Location, pose, and multi-person accuracy still require room-specific calibration and held-out ground-truth evaluation.
 
 > **⚠️ Thermal warning — compact boards (ESP32-S3-Zero, SuperMini, other coin-sized clones):** This firmware runs the WiFi radio with modem sleep disabled (`WIFI_PS_NONE`, required for continuous CSI capture) plus a full edge-processing DSP pipeline on Core 1 (`edge_tier=2`) plus, on ADR-183 builds, a continuous 40 Hz onboard LED driver. That's sustained high current draw with no duty-cycling. Full-size dev boards (DevKitC-1, XIAO) have more copper pour and thermal mass around the regulator and tolerate this fine. Coin-sized clones with minimal PCB area and budget regulators may run hot to the touch during normal operation, and in at least one field report, boards that ran hot during a session failed to power on afterward (regulator damage suspected — see issue tracker). Give these boards airflow, don't stack or enclose them, and check them by touch during the first several minutes of a new deployment. If a board is uncomfortably hot (not just warm), power it down and let it cool before continuing.
 

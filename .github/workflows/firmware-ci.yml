@@ -162,10 +162,14 @@ jobs:
           mkdir -p release-staging
           cp build/esp32-csi-node.bin                      release-staging/${{ matrix.artifact_app }}
           cp build/partition_table/partition-table.bin     release-staging/${{ matrix.artifact_pt }}
-          if [ "${{ matrix.variant }}" = "8mb" ]; then
-            cp build/bootloader/bootloader.bin             release-staging/bootloader.bin
-            cp build/ota_data_initial.bin                  release-staging/ota_data_initial.bin
-          fi
+          cp build/bootloader/bootloader.bin               release-staging/bootloader.bin
+          cp build/ota_data_initial.bin                    release-staging/ota_data_initial.bin
+          cp version.txt                                   release-staging/version.txt
+          (cd release-staging && sha256sum \
+            "${{ matrix.artifact_app }}" \
+            "${{ matrix.artifact_pt }}" \
+            bootloader.bin ota_data_initial.bin version.txt \
+            > SHA256SUMS.txt)
           ls -la release-staging/
 
       - name: Check QEMU ESP32-S3 support status
