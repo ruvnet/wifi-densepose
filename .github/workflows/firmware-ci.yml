@@ -200,7 +200,10 @@ jobs:
   # built, from the artifacts it already uploads.
   release:
     name: Attach firmware artifacts to the release
-    needs: build
+    # Must need version-guard as well as build: they run in parallel, so
+    # depending on build alone would let a tag that FAILED the
+    # version.txt-matches-tag check still publish a release.
+    needs: [version-guard, build]
     if: startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-esp32')
     runs-on: ubuntu-latest
     permissions:
