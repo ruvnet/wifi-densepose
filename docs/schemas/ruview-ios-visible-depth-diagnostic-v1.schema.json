@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ruview.ai/schemas/ruview-ios-visible-depth-diagnostic-v1.schema.json",
+  "title": "RuView iOS visible depth diagnostic v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "sessionId", "createdAt", "deviceModelFamily", "osVersion",
+    "appVersion", "capabilities", "phases", "consent", "evidenceLabel",
+    "physicalNLOSStatus", "cameraPermission", "completionStatus"
+  ],
+  "properties": {
+    "schema": { "const": "ruview.ios.visible-depth-diagnostic.v1" },
+    "sessionId": { "type": "string", "format": "uuid", "maxLength": 36 },
+    "createdAt": { "type": "string", "format": "date-time", "maxLength": 40 },
+    "deviceModelFamily": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "osVersion": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "appVersion": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "capabilities": { "$ref": "#/$defs/capabilities" },
+    "phases": {
+      "type": "array",
+      "maxItems": 2,
+      "items": { "$ref": "#/$defs/phase" }
+    },
+    "consent": { "$ref": "#/$defs/consent" },
+    "evidenceLabel": { "const": "direct_depth" },
+    "physicalNLOSStatus": { "const": "blocked_raw_transients_unavailable" },
+    "cameraPermission": { "enum": ["not_requested", "granted", "denied", "restricted"] },
+    "completionStatus": { "enum": ["completed", "cancelled", "failed"] },
+    "failureReason": { "type": "string", "maxLength": 240 }
+  },
+  "$defs": {
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "worldTracking", "sceneDepth", "smoothedSceneDepth", "sceneMesh",
+        "rawPhotonHistograms"
+      ],
+      "properties": {
+        "worldTracking": { "type": "boolean" },
+        "sceneDepth": { "type": "boolean" },
+        "smoothedSceneDepth": { "type": "boolean" },
+        "sceneMesh": { "type": "boolean" },
+        "rawPhotonHistograms": { "const": false }
+      }
+    },
+    "phase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "phase", "plannedDurationSeconds", "observedDurationSeconds", "frameCount",
+        "averageFPS", "averageDepthCoverage", "averageMovementMetersPerSecond",
+        "finalTrackingState", "peakThermalState"
+      ],
+      "properties": {
+        "phase": { "enum": ["calibration", "wall_scan"] },
+        "plannedDurationSeconds": { "enum": [15, 30] },
+        "observedDurationSeconds": { "type": "number", "minimum": 0, "maximum": 60 },
+        "frameCount": { "type": "integer", "minimum": 0, "maximum": 14400 },
+        "averageFPS": { "type": "number", "minimum": 0, "maximum": 240 },
+        "averageDepthCoverage": { "type": "number", "minimum": 0, "maximum": 1 },
+        "averageMovementMetersPerSecond": { "type": "number", "minimum": 0, "maximum": 20 },
+        "finalTrackingState": { "type": "string", "maxLength": 48 },
+        "peakThermalState": { "enum": ["unknown", "nominal", "fair", "serious", "critical"] }
+      }
+    },
+    "consent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["localValidation", "diagnosticExport", "rawSensorExport"],
+      "properties": {
+        "localValidation": { "type": "boolean" },
+        "diagnosticExport": { "type": "boolean" },
+        "rawSensorExport": { "const": false }
+      }
+    }
+  }
+}

@@ -7,7 +7,7 @@ jest.mock('react-native-wifi-reborn', () => ({
 }));
 
 jest.mock('react-native-reanimated', () =>
-  require('react-native-reanimated/mock')
+  require('./src/__tests__/__mocks__/reanimated')
 );
 
 jest.mock('react-native-webview', () => {

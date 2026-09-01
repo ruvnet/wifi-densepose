@@ -4,6 +4,7 @@ export type RootStackParamList = {
 
 export type MainTabsParamList = {
   Live: undefined;
+  NLOS: undefined;
   Vitals: undefined;
   Zones: undefined;
   MAT: undefined;
@@ -11,6 +12,7 @@ export type MainTabsParamList = {
 };
 
 export type LiveScreenParams = undefined;
+export type NLOSScreenParams = undefined;
 export type VitalsScreenParams = undefined;
 export type ZonesScreenParams = undefined;
 export type MATScreenParams = undefined;

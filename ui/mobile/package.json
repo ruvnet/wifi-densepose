@@ -8,6 +8,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "test": "jest",
+    "typecheck": "tsc --noEmit",
     "lint": "eslint ."
   },
   "dependencies": {
@@ -18,10 +19,10 @@
     "@types/three": "^0.183.1",
     "axios": "^1.15.2",
     "expo": "~55.0.4",
-    "expo-status-bar": "~55.0.4",
+    "expo-status-bar": "~55.0.6",
     "react": "19.2.0",
-    "react-dom": "19.2.6",
-    "react-native": "0.85.2",
+    "react-dom": "19.2.0",
+    "react-native": "0.83.10",
     "react-native-gesture-handler": "~2.30.0",
     "react-native-reanimated": "4.2.1",
     "react-native-safe-area-context": "~5.6.2",
@@ -35,18 +36,21 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
+    "@eslint/js": "10.0.1",
     "@testing-library/jest-native": "^5.4.3",
     "@testing-library/react-native": "^13.3.3",
-    "@types/jest": "^30.0.0",
+    "@types/jest": "29.5.14",
     "@types/react": "~19.2.2",
     "@typescript-eslint/eslint-plugin": "^8.59.3",
     "@typescript-eslint/parser": "^8.56.1",
     "babel-preset-expo": "^55.0.10",
     "eslint": "^10.2.1",
-    "jest": "^30.2.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.11.0",
+    "jest": "~29.7.0",
     "jest-expo": "^55.0.9",
     "prettier": "^3.8.3",
-    "react-native-worklets": "^0.7.4",
+    "react-native-worklets": "0.7.4",
     "typescript": "~5.9.2"
   },
   "overrides": {

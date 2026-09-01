@@ -21,6 +21,7 @@ import { authorizeTool, mcpAnnotations, validateArguments } from './policy.js';
 import { searchBrain } from './brain.js';
 import { getGuidance, GUIDANCE_TOPICS } from './guidance.js';
 import { listCognitumSpaces } from './spaces.js';
+import { makeNlosPlan, verifyNlos } from './nlos.js';
 
 /** Walk up from `start` to find the RuView monorepo root (or null). */
 export function findRepoRoot(start = process.cwd()) {
@@ -77,7 +78,11 @@ export function run(cmd, args, opts = {}) {
     let stderr = '';
     let child;
     try {
-      child = spawn(cmd, args, { cwd: opts.cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawn(cmd, args, {
+        cwd: opts.cwd,
+        env: opts.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
     } catch (e) {
       resolvePromise({ status: null, ok: false, stdout: '', stderr: '', error: e.message });
       return;
@@ -288,6 +293,34 @@ export const TOOLS = {
     },
     handler(args = {}) {
       return getGuidance(args, { repoRoot: findRepoRoot() });
+    },
+  },
+
+  ruview_nlos_plan: {
+    title: 'Plan consumer NLOS work',
+    description: 'Return the staged, source-bounded RuView consumer-NLOS plan. Advisory only: it never captures hardware, mutates the repository, or claims a research result.',
+    inputSchema: { type: 'object', properties: {} },
+    handler() {
+      return makeNlosPlan({ repoRoot: findRepoRoot() });
+    },
+  },
+
+  ruview_nlos_verify: {
+    title: 'Verify consumer NLOS surfaces and evidence',
+    description: 'Inspect optional Rust/native/web NLOS surfaces and evaluate a preregistered live-hardware evidence record. The local CLI can also run available build gates; MCP rejects repository selection and build execution. Missing optional surfaces are reported, not fabricated; malformed present surfaces fail.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', minLength: 1, maxLength: 4096, description: 'CLI only: RuView repository root. Default: auto-detect from cwd.' },
+        evidence_file: { type: 'string', minLength: 1, maxLength: 4096, description: 'Repository-contained ruview.nlos.acceptance.v1 JSON evidence record.' },
+        run_builds: { type: 'boolean', description: 'CLI only: run available Rust, Swift/Xcode, and web gates. Unavailable toolchains are explicit skips.' },
+        require_research_pass: { type: 'boolean', description: 'Fail unless live-hardware reproduction and fusion acceptance both pass.' },
+      },
+    },
+    async handler(args = {}, context = {}) {
+      return verifyNlos(args, {
+        repoRoot: findRepoRoot(), source: context.source, runCommand: run, whichCommand: which,
+      });
     },
   },
 

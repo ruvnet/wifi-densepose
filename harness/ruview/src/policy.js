@@ -9,6 +9,8 @@ export const TOOL_POLICY = Object.freeze({
   ruview_calibrate: { class: 'workspace-write', writesWorkspace: true, confirmField: 'confirm' },
   ruview_node_flash: { class: 'hardware-write', writesWorkspace: true, hardware: true, confirmField: 'confirm' },
   ruview_guidance: { class: 'read', readOnly: true },
+  ruview_nlos_plan: { class: 'read', readOnly: true },
+  ruview_nlos_verify: { class: 'execute', readOnly: true },
   ruview_spaces_list: { class: 'external-read', readOnly: true, requiredGrant: 'credential-use', openWorld: true, usesCredentials: true, mayRefreshCredentials: true },
   ruview_memory_search: { class: 'read', readOnly: true },
 });

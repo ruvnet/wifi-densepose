@@ -11,6 +11,7 @@
     "./guardrails": "./src/guardrails.js",
     "./brain": "./src/brain.js",
     "./guidance": "./src/guidance.js",
+    "./nlos": "./src/nlos.js",
     "./hosts": "./src/hosts/index.js"
   },
   "files": [
@@ -47,6 +48,8 @@
     "ruview",
     "csi",
     "channel-state-information",
+    "consumer-lidar",
+    "non-line-of-sight",
     "pose-estimation",
     "presence-detection",
     "esp32",

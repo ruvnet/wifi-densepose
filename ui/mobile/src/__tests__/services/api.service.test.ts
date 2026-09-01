@@ -129,7 +129,7 @@ describe('ApiService', () => {
         isAxiosError: true,
       };
       mockRequest.mockRejectedValue(axiosError);
-      (mockAxios.isAxiosError as jest.Mock).mockReturnValue(true);
+      (mockAxios.isAxiosError as unknown as jest.Mock).mockReturnValue(true);
 
       await expect(apiService.get('/test')).rejects.toEqual(
         expect.objectContaining({
@@ -142,7 +142,7 @@ describe('ApiService', () => {
 
     it('normalizes generic Error', async () => {
       mockRequest.mockRejectedValue(new Error('network timeout'));
-      (mockAxios.isAxiosError as jest.Mock).mockReturnValue(false);
+      (mockAxios.isAxiosError as unknown as jest.Mock).mockReturnValue(false);
 
       await expect(apiService.get('/test')).rejects.toEqual(
         expect.objectContaining({ message: 'network timeout' }),
@@ -151,7 +151,7 @@ describe('ApiService', () => {
 
     it('normalizes unknown error', async () => {
       mockRequest.mockRejectedValue('string error');
-      (mockAxios.isAxiosError as jest.Mock).mockReturnValue(false);
+      (mockAxios.isAxiosError as unknown as jest.Mock).mockReturnValue(false);
 
       await expect(apiService.get('/test')).rejects.toEqual(
         expect.objectContaining({ message: 'Unknown error' }),
@@ -163,7 +163,7 @@ describe('ApiService', () => {
     it('retries up to 2 times on failure then throws', async () => {
       const error = new Error('fail');
       mockRequest.mockRejectedValue(error);
-      (mockAxios.isAxiosError as jest.Mock).mockReturnValue(false);
+      (mockAxios.isAxiosError as unknown as jest.Mock).mockReturnValue(false);
 
       await expect(apiService.get('/flaky')).rejects.toEqual(
         expect.objectContaining({ message: 'fail' }),

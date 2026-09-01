@@ -12,6 +12,7 @@ import { Alert, Pressable, Platform } from 'react-native';
 import { ThemePicker } from './ThemePicker';
 import { RssiToggle } from './RssiToggle';
 import { ServerUrlInput } from './ServerUrlInput';
+import { NlosServerUrlInput } from './NlosServerUrlInput';
 
 type GlowCardProps = {
   title: string;
@@ -82,18 +83,25 @@ const ScanIntervalPicker = ({
 
 export const SettingsScreen = () => {
   const serverUrl = useSettingsStore((state) => state.serverUrl);
+  const nlosServerUrl = useSettingsStore((state) => state.nlosServerUrl);
   const rssiScanEnabled = useSettingsStore((state) => state.rssiScanEnabled);
   const theme = useSettingsStore((state) => state.theme);
   const setServerUrl = useSettingsStore((state) => state.setServerUrl);
+  const setNlosServerUrl = useSettingsStore((state) => state.setNlosServerUrl);
   const setRssiScanEnabled = useSettingsStore((state) => state.setRssiScanEnabled);
   const setTheme = useSettingsStore((state) => state.setTheme);
 
   const [draftUrl, setDraftUrl] = useState(serverUrl);
+  const [draftNlosUrl, setDraftNlosUrl] = useState(nlosServerUrl);
   const [scanInterval, setScanInterval] = useState(2);
 
   useEffect(() => {
     setDraftUrl(serverUrl);
   }, [serverUrl]);
+
+  useEffect(() => {
+    setDraftNlosUrl(nlosServerUrl);
+  }, [nlosServerUrl]);
 
   const intervalSummary = useMemo(() => `${scanInterval}s`, [scanInterval]);
 
@@ -103,6 +111,10 @@ export const SettingsScreen = () => {
     wsService.disconnect();
     wsService.connect(newUrl);
     apiService.setBaseUrl(newUrl);
+  };
+
+  const handleSaveNlosUrl = () => {
+    setNlosServerUrl(draftNlosUrl.trim());
   };
 
   const handleOpenGitHub = async () => {
@@ -124,6 +136,14 @@ export const SettingsScreen = () => {
       >
         <GlowCard title="SERVER">
           <ServerUrlInput value={draftUrl} onChange={setDraftUrl} onSave={handleSaveUrl} />
+        </GlowCard>
+
+        <GlowCard title="RUVIEW NLOS SERVER">
+          <NlosServerUrlInput
+            value={draftNlosUrl}
+            onChange={setDraftNlosUrl}
+            onSave={handleSaveNlosUrl}
+          />
         </GlowCard>
 
         <GlowCard title="SENSING">

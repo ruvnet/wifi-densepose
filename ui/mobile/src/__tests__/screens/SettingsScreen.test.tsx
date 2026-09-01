@@ -25,6 +25,7 @@ describe('SettingsScreen', () => {
   beforeEach(() => {
     useSettingsStore.setState({
       serverUrl: 'http://localhost:3000',
+      nlosServerUrl: 'http://localhost:3000',
       rssiScanEnabled: false,
       theme: 'system',
       alertSoundEnabled: true,

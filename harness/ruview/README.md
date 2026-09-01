@@ -17,6 +17,8 @@ npx @ruvnet/ruview claim-check --file REPORT.md   # the honesty guardrail (non-z
 npx @ruvnet/ruview verify                # run the deterministic proof (VERDICT: PASS)
 npx @ruvnet/ruview doctor                # self-check (tools, adapters, local CLIs)
 npx @ruvnet/ruview guidance --topic homecore --query "Wasmtime plugins"
+npx @ruvnet/ruview nlos plan
+npx @ruvnet/ruview nlos verify --repo .
 npx @ruvnet/ruview spaces --resource spaces
 npx @ruvnet/ruview spaces --resource events --limit 25
 npx @ruvnet/ruview --help
@@ -40,11 +42,52 @@ Exposed both as CLI verbs and as an MCP server (`npx @ruvnet/ruview mcp start`):
 | `ruview_calibrate` | ADR-151 room pipeline (baseline→enroll→train-room→room-watch) |
 | `ruview_node_flash` | Build+flash firmware (Windows/ESP-IDF; mutating, guarded) |
 | `ruview_guidance` | Source-cited code map, capability maturity, validation commands, and limitations |
+| `ruview_nlos_plan` | Advisory, phase-gated consumer transient-LiDAR and CSI fusion plan |
+| `ruview_nlos_verify` | Static/build inspection plus fail-closed live-hardware evidence arithmetic |
 | `ruview_spaces_list` | OAuth-only paging for sites/buildings/floors/spaces/zones/entities/events/alerts (guarded over MCP) |
 | `ruview_memory_search` | Search the reviewed, source-cited contributor brain |
 
 Every tool is **fail-closed**: missing repo / python / binary / port → an honest
 negative, never a fabricated success.
+
+### Consumer NLOS research gate
+
+`nlos plan` and `nlos verify` are optional contributor aids for ADR-328 through
+ADR-331. They do not capture sensors and are not required by the RuView runtime.
+The verifier discovers `v2/crates/ruview-nlos`, `ui/ios-nlos`, and the NLOS
+surface in `ui/mobile`. An absent optional surface is reported as `ABSENT`; a
+partial, escaping, oversized, or marker-incompatible surface fails shallow
+discovery. Contract tests remain authoritative. Add `--run-builds` to
+run the build/test commands supported by the current host. Xcode and hardware
+remain explicit skips when unavailable.
+
+Repository selection and build execution are local-CLI capabilities. The MCP
+tool auto-detects its checkout, performs read-only inspection/evidence checks,
+and rejects `repo` or `run_builds` arguments. Run CLI builds only in a trusted
+checkout: the environment is allowlisted and tails redacted, but Cargo/Swift/
+Jest/Expo execution is not a sandbox.
+
+The research gate accepts only a preregistered `LIVE_HARDWARE` record with an
+external ground-truth capture manifest. It requires the pinned VL53L8CH
+baseline to run at least 27 Hz and CSI fusion to reduce mean position error or
+lost-track rate by at least 25 percent over 100 or more paired sequences, with
+adjusted confidence,
+paired aggregate arithmetic, independent CSI ablation, frozen guardrails, and
+witness/privacy/security report digests. `SYNTHETIC` and replay
+frames can validate software, but can never pass that gate:
+
+```bash
+npx @ruvnet/ruview nlos verify --repo . --run-builds
+npx @ruvnet/ruview nlos verify --repo . \
+  --evidence-file evidence/nlos/acceptance.json \
+  --require-research-pass
+```
+
+The boundary is deliberate: the MIT method needs per-zone photon-arrival
+histograms. Apple currently documents processed ARKit scene depth and mesh, so
+the native adapter uses those for pose/context only; the web adapter consumes
+authenticated tracks or visibly labelled deterministic replay. Neither surface
+claims direct iPhone NLOS reconstruction.
 
 ### Cognitum Spaces OAuth
 
@@ -100,7 +143,7 @@ as evidence.
 ## Skills
 
 Host-neutral playbooks in `skills/` (`onboard`, `provision-node`, `calibrate-room`,
-`train-pose`, `verify`, `cognitum-spaces`). `npx @ruvnet/ruview skill <name>`
+`train-pose`, `verify`, `cognitum-spaces`, `consumer-nlos`). `npx @ruvnet/ruview skill <name>`
 prints one.
 
 ## Use as a Claude Code MCP server

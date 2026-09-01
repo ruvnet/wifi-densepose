@@ -72,6 +72,9 @@ Operator tools:
   flash --port COM8 --variant s3-8mb [--confirm]        build+flash firmware (Windows/ESP-IDF)
   guidance [--topic homecore] [--query "Wasmtime"]      source-cited code/capability map
   spaces [--resource sites|...|alerts] [--limit 50]     page OAuth-bound Cognitum spatial resources
+  nlos plan                                              print the staged consumer-NLOS research plan
+  nlos verify [--repo <dir>] [--run-builds]             inspect optional NLOS surfaces and run available gates
+       [--evidence-file <json>] [--require-research-pass]
 
 Harness:
   doctor                 verify tools, adapters, and local CLI discovery
@@ -154,6 +157,23 @@ export async function run(args) {
         return new Promise(() => {}); // run until stdin closes
       }
       console.error('Usage: ruview mcp start'); return 2;
+    }
+    case 'nlos': {
+      const action = rest[0] || 'plan';
+      if (action === 'plan') {
+        const result = await runTool('ruview_nlos_plan', {}, { source: 'cli' });
+        pjson(result); return result.ok ? 0 : 1;
+      }
+      if (action === 'verify') {
+        const toolArgs = {};
+        if (flags.repo !== undefined) toolArgs.repo = String(flags.repo);
+        if (flags['evidence-file'] !== undefined) toolArgs.evidence_file = String(flags['evidence-file']);
+        if (flags['run-builds'] === true) toolArgs.run_builds = true;
+        if (flags['require-research-pass'] === true) toolArgs.require_research_pass = true;
+        const result = await runTool('ruview_nlos_verify', toolArgs, { source: 'cli' });
+        pjson(result); return result.ok ? 0 : 1;
+      }
+      console.error('Usage: ruview nlos plan|verify'); return 2;
     }
     case 'agent': {
       if (rest[0] !== 'run') { console.error('Usage: ruview agent run --host claude-code|codex --prompt "..." [--repo <dir>]'); return 2; }
