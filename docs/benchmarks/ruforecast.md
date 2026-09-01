@@ -137,6 +137,60 @@ weighted quantile loss at least 10% better than seasonal naive and 80% interval
 coverage between 75% and 85%. Those targets remain unmeasured until a frozen,
 leakage-free report is attached.
 
+### Informal HPO exploration note (unaccepted, not a release claim)
+
+**2026-09-01.** An exploratory session ran the accuracy protocol above end to
+end against a governed 24-window **synthetic** dataset (`tiny_ci` profile,
+context 64 / horizon 12, temporal train/test split, not entity-holdout —
+only one synthetic generator was used, so entity holdout does not apply) and
+a small `OptimizerSpec` hyperparameter search (learning rate, weight decay,
+gradient clip norm, batch size, epochs) using a new Darwin Mode numeric-genome
+evolution engine (upstream: `ruvnet/metaharness` PR #260, not yet merged).
+This is **exploratory evidence only** — not a frozen, leakage-free,
+maintainer-reviewed report, and not eligible for the ledger below until one
+is produced.
+
+Prior to this exploration, a **single real household window** (76 real
+1&nbsp;Hz vital-signs samples, one physical ESP32 sensor, temporal not entity
+holdout) scored **worse than both baselines** (WQL 0.537 vs. last-value
+0.106 and seasonal-naive 0.123) — consistent with a single training window
+overfitting rather than generalizing.
+
+With a larger (still synthetic, still `tiny_ci`) 24-window training set and
+three rounds of hyperparameter search, weighted quantile loss on the held-out
+synthetic split improved and stayed ahead of both baselines throughout:
+
+| Round | learning_rate | weight_decay | grad_clip | batch | epochs | WQL (model) | WQL (last-value) | WQL (seasonal-naive) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Default config | 0.0010000 | 1.00e-4 | 1.000 | 8 | 60 | 0.257 | 0.277 | 0.514 |
+| Search round 1 | 0.0002356 | 3.05e-6 | 0.100 | 27 | 195 | 0.161 | 0.277 | 0.514 |
+| Search round 2 | 0.0000298 | 4.09e-11 | 4.746 | 26 | 356 | **0.153** | 0.277 | 0.514 |
+
+Round-2 gain over round 1 (−0.008) was much smaller than round-1's gain over
+the default (−0.096) — a diminishing-returns signal consistent with a local
+optimum for this model size and dataset, not a converged global result.
+`gradient_clip_norm` landed at opposite bound extremes across rounds
+(0.1 then 4.7), so no directional recommendation on that parameter should be
+drawn from this exploration alone.
+
+**Explicit scope limits — do not generalize beyond these:**
+- `tiny_ci` only. Nothing here has been run against `large_linux`; its far
+  larger parameter count and different compute profile mean these
+  hyperparameters are not a starting point for it without their own search.
+- Synthetic dataset only (24 windows, one generator/seed family). Not
+  validated against any real corpus at this scale.
+- Self-signed, evaluation-only model activation (a throwaway local Ed25519
+  key, not a release signature) was used to run inference for scoring.
+- No security/provenance/maintainer-approval gate has passed — the Darwin
+  Mode promotion rule correctly refused to promote any candidate here.
+
+Reproducer: `harness/ruview/flywheel/ruforecast/` (genome, gate, evaluator,
+dry-run/`--confirm` driver) in the `ruvnet/RuView` repo, paired with
+`ruvnet/metaharness` PR #260 (`evolve-numeric`) linked locally via
+`npm link`. Neither the genome defaults here nor any repo default config
+were changed by this note — it is a record of exploratory evidence, not a
+committed recommendation.
+
 ## Append-only evidence ledger
 
 Never replace a prior measurement. Append a row and retain the failed or stale
