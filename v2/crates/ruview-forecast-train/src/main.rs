@@ -73,6 +73,42 @@ enum Command {
         #[arg(long)]
         directory: PathBuf,
     },
+    /// Create a larger, configurable synthetic training shard plus a
+    /// matching `train-local.toml` and a separate held-out `test.jsonl` (for
+    /// `evaluate`). Same synthetic-only, local-pipeline-validation-only
+    /// posture as `prepare-local-example`, just bigger and
+    /// hyperparameter-configurable -- for local experimentation and
+    /// hyperparameter search, never a release claim.
+    PrepareSyntheticDataset {
+        /// New directory that will receive `train.jsonl`, `train-local.toml`,
+        /// and `test.jsonl`.
+        #[arg(long)]
+        directory: PathBuf,
+        /// Synthetic training windows.
+        #[arg(long, default_value_t = 24)]
+        train_windows: u64,
+        /// Synthetic held-out windows written to `test.jsonl`.
+        #[arg(long, default_value_t = 8)]
+        test_windows: u64,
+        /// Coupled variates per window.
+        #[arg(long, default_value_t = 3)]
+        variates: u16,
+        /// AdamW learning rate.
+        #[arg(long, default_value_t = 1e-3)]
+        learning_rate: f64,
+        /// AdamW decoupled weight decay.
+        #[arg(long, default_value_t = 1e-4)]
+        weight_decay: f64,
+        /// Gradient clip norm.
+        #[arg(long, default_value_t = 1.0)]
+        gradient_clip_norm: f64,
+        /// Windows per optimizer step.
+        #[arg(long, default_value_t = 8)]
+        batch_size: u16,
+        /// Full passes over the generated training windows.
+        #[arg(long, default_value_t = 60)]
+        epochs: u16,
+    },
     /// Run fal Direct Server routes on the configured bind address.
     Serve {
         /// Bind address.
@@ -92,6 +128,25 @@ enum Command {
         /// Candidate envelope path.
         #[arg(long)]
         candidate: PathBuf,
+    },
+    /// Score an unsigned candidate against held-out windows and the
+    /// last-value/seasonal-naive baselines. Activates the candidate with a
+    /// fixed, publicly-known evaluation-only key — never a production or
+    /// release signature. See `docs/benchmarks/ruforecast.md`'s "Accuracy
+    /// and calibration protocol" for what this covers and what it does not
+    /// (site/device slices, interference regime, and the RuVector-retrieval
+    /// ablation need infrastructure this command does not have).
+    Evaluate {
+        /// Unsigned candidate produced by `train-local` or `smoke` (model.mpk).
+        #[arg(long)]
+        candidate: PathBuf,
+        /// Held-out windows, one JSON `JsonlWindow` per line, that were never
+        /// part of the candidate's training shard.
+        #[arg(long)]
+        test_jsonl: PathBuf,
+        /// Seasonal-naive baseline row period.
+        #[arg(long, default_value_t = 12)]
+        seasonal_period: usize,
     },
 }
 
@@ -253,9 +308,35 @@ async fn main() -> Result<()> {
             output,
         } => train_local(request, dataset_root, output),
         Command::PrepareLocalExample { directory } => prepare_local_example(directory),
+        Command::PrepareSyntheticDataset {
+            directory,
+            train_windows,
+            test_windows,
+            variates,
+            learning_rate,
+            weight_decay,
+            gradient_clip_norm,
+            batch_size,
+            epochs,
+        } => prepare_synthetic_dataset(
+            directory,
+            train_windows,
+            test_windows,
+            variates,
+            learning_rate,
+            weight_decay,
+            gradient_clip_norm,
+            batch_size,
+            epochs,
+        ),
         Command::Serve { bind, output } => serve(bind, output).await,
         Command::Fal { command } => fal(command).await,
         Command::VerifyCandidate { candidate } => verify_candidate(candidate),
+        Command::Evaluate {
+            candidate,
+            test_jsonl,
+            seasonal_period,
+        } => evaluate(candidate, test_jsonl, seasonal_period),
     }
 }
 
@@ -363,6 +444,191 @@ fn prepare_local_example(directory: PathBuf) -> Result<()> {
     write_private_new(&directory.join("train-local.toml"), &request_bytes)?;
     println!(
         "created synthetic local-only example at {}; replace its data, split, schema digest, and policy with governed values before real training",
+        directory.display()
+    );
+    Ok(())
+}
+
+fn synthetic_dataset_value(window: u64, row: usize, variate: usize, salt: u64) -> f32 {
+    let phase = (window as f32) * 0.37 + (salt as f32) * 1.7;
+    let base = (row as f32 * 0.05 + phase + variate as f32 * 0.9).sin();
+    let harmonic = (row as f32 * 0.13 + phase * 0.5).cos() * 0.3;
+    (base + harmonic) * (1.0 + 0.15 * variate as f32)
+}
+
+fn synthetic_dataset_window(
+    key: SeriesKey,
+    index: u64,
+    salt: u64,
+    context_len: usize,
+    horizon: usize,
+    variates: u16,
+) -> JsonlWindow {
+    let variates_usize = usize::from(variates);
+    let mut values = Vec::with_capacity(context_len * variates_usize);
+    for row in 0..context_len {
+        for variate in 0..variates_usize {
+            values.push(synthetic_dataset_value(index, row, variate, salt));
+        }
+    }
+    let mut targets = Vec::with_capacity(variates_usize * horizon);
+    for variate in 0..variates_usize {
+        for step in 0..horizon {
+            targets.push(synthetic_dataset_value(index, context_len + step, variate, salt));
+        }
+    }
+    JsonlWindow {
+        version: 1,
+        series_key: key,
+        context_start_ms: 1_000,
+        variates,
+        values,
+        observed_mask: vec![1; context_len * variates_usize],
+        targets,
+        target_mask: vec![1; variates_usize * horizon],
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_synthetic_dataset(
+    directory: PathBuf,
+    train_windows: u64,
+    test_windows: u64,
+    variates: u16,
+    learning_rate: f64,
+    weight_decay: f64,
+    gradient_clip_norm: f64,
+    batch_size: u16,
+    epochs: u16,
+) -> Result<()> {
+    let mut directory_builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        directory_builder.mode(0o700);
+    }
+    directory_builder.create(&directory)?;
+
+    let model = ModelProfile::TinyCi.config();
+    if variates == 0 || usize::from(variates) > model.max_variates {
+        bail!("variates must be nonzero and within the tiny_ci config's max_variates");
+    }
+    if train_windows == 0 {
+        bail!("train-windows must be nonzero");
+    }
+
+    let mut train_members = Vec::with_capacity(train_windows as usize);
+    let mut lines = Vec::with_capacity(train_windows as usize);
+    for index in 0..train_windows {
+        let key = SeriesKey::new("synthetic-train", "generator-train", format!("s{index}"))?;
+        train_members.push(SplitMember::new(key.clone(), TimeRange::new(1, 100_000)?));
+        let window =
+            synthetic_dataset_window(key, index, 11, model.context_len, model.horizon, variates);
+        lines.push(serde_json::to_string(&window)?);
+    }
+    let mut shard = lines.join("\n").into_bytes();
+    shard.push(b'\n');
+    write_private_new(&directory.join("train.jsonl"), &shard)?;
+    let sha256 = Sha256Digest::of_bytes(&shard);
+
+    let test_key = SeriesKey::new("synthetic-test", "generator-test", "nominal")?;
+    let split_plan = TemporalSplitPlan::new(
+        SplitStrategy::EntityHoldout(HoldoutKey::Strict),
+        train_members,
+        vec![],
+        vec![SplitMember::new(test_key, TimeRange::new(1, 100_000)?)],
+        model.horizon,
+        1_000,
+        0,
+    )?;
+
+    let feature_names: Vec<String> =
+        (0..usize::from(variates)).map(|index| format!("synthetic-{index}")).collect();
+    let feature_schema_digest = CanonicalDigest::of_bytes(
+        b"ruview-synthetic-dataset-feature-schema-v1",
+        feature_names.join(",").as_bytes(),
+    );
+    let policy = DataPolicy::new(
+        PrivacyClass::P3,
+        "synthetic-dataset",
+        "synthetic-dataset",
+        "synthetic-dataset",
+        "local-pipeline-validation-only",
+        CanonicalDigest::of_bytes(b"ruview-synthetic-dataset-policy-v1", b"not-real-approval"),
+        None,
+        None,
+        None,
+        unix_ms().saturating_add(7 * 24 * 60 * 60 * 1_000),
+        true,
+    )?;
+
+    let steps_per_epoch = train_windows.div_ceil(u64::from(batch_size.max(1)));
+    let max_optimizer_steps = steps_per_epoch.saturating_mul(u64::from(epochs)).max(1);
+
+    let request = LocalTrainingRequestWire {
+        job_id: JobId::new("synthetic-dataset")?,
+        train: LocalTrainSpecWire {
+            context_length: model.context_len,
+            horizon: model.horizon,
+            step_ms: 1_000,
+            quantiles: QuantileSet::new(model.quantiles.to_vec())?,
+            split_plan,
+            normalization: NormalizationPolicy::None,
+            dataset_digest: CanonicalDigest::of_bytes(
+                b"ruview-jsonl-window-shard-v1",
+                sha256.as_bytes(),
+            ),
+            policy,
+        },
+        dataset: DatasetSource::Manifest(DatasetInput {
+            path: RelativeDataPath::new("train.jsonl")?,
+            size_bytes: u64::try_from(shard.len())?,
+            sha256,
+            window_count: u32::try_from(train_windows)?,
+            variates,
+            feature_schema_digest,
+        }),
+        model: ModelProfile::TinyCi,
+        device: TrainingDevice::Cpu,
+        optimizer: OptimizerSpec {
+            epochs,
+            batch_size,
+            learning_rate,
+            weight_decay,
+            gradient_clip_norm,
+            checkpoint_every_epochs: epochs,
+            seed: 11,
+        },
+        budget: TrainingBudget {
+            max_optimizer_steps,
+            max_wall_time_seconds: 600,
+            max_memory_bytes: 4 * 1024 * 1024 * 1024,
+            max_artifact_bytes: 512 * 1024 * 1024,
+            max_checkpoints: 1,
+        },
+    };
+    let request_bytes = toml::to_string_pretty(&request)?.into_bytes();
+    write_private_new(&directory.join("train-local.toml"), &request_bytes)?;
+
+    let mut test_lines = Vec::with_capacity(test_windows as usize);
+    for index in 0..test_windows {
+        let key = SeriesKey::new("synthetic-test", "generator-test", format!("t{index}"))?;
+        let window = synthetic_dataset_window(
+            key,
+            10_000 + index,
+            29,
+            model.context_len,
+            model.horizon,
+            variates,
+        );
+        test_lines.push(serde_json::to_string(&window)?);
+    }
+    let mut test_shard = test_lines.join("\n").into_bytes();
+    test_shard.push(b'\n');
+    write_private_new(&directory.join("test.jsonl"), &test_shard)?;
+
+    println!(
+        "created synthetic dataset at {} ({train_windows} train windows, {test_windows} held-out windows in test.jsonl); replace with governed real data before any release claim",
         directory.display()
     );
     Ok(())
@@ -812,6 +1078,397 @@ fn verify_candidate(path: PathBuf) -> Result<()> {
             .collect::<String>()
     );
     Ok(())
+}
+
+/// Reads held-out windows for `evaluate`: one JSON [`JsonlWindow`] per line,
+/// bounded the same way a training shard line is bounded. This is a
+/// deliberately simpler reader than the training path's
+/// [`ruview_forecast_train::corpus::JsonlWindowReader`], which additionally
+/// verifies a declared dataset manifest (sha256/digest) before trusting a
+/// shard -- not needed here, since the operator running this CLI supplies
+/// both the candidate and the held-out file directly, with no untrusted
+/// intermediary.
+#[cfg(feature = "cpu")]
+fn read_test_windows(path: &std::path::Path) -> Result<Vec<JsonlWindow>> {
+    use anyhow::Context as _;
+    use std::io::BufRead;
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("opening test windows {}", path.display()))?;
+    let reader = std::io::BufReader::new(file);
+    let mut windows = Vec::new();
+    for (line_index, line) in reader.lines().enumerate() {
+        let line = line.with_context(|| format!("reading line {} of {}", line_index + 1, path.display()))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if line.len() > ruview_forecast_train::config::MAX_JSONL_LINE_BYTES {
+            bail!(
+                "line {} of {} exceeds {} bytes",
+                line_index + 1,
+                path.display(),
+                ruview_forecast_train::config::MAX_JSONL_LINE_BYTES
+            );
+        }
+        let window: JsonlWindow = serde_json::from_str(&line)
+            .with_context(|| format!("parsing line {} of {}", line_index + 1, path.display()))?;
+        windows.push(window);
+    }
+    Ok(windows)
+}
+
+/// Index of the declared quantile closest to `target`, within a small
+/// tolerance. Used to locate the bounds of an interval (e.g. the 0.10/0.90
+/// quantiles for an 80% interval) without assuming a fixed position in the
+/// declared quantile set.
+#[cfg(feature = "cpu")]
+fn nearest_quantile_index(quantiles: &[f32], target: f32) -> Result<usize> {
+    quantiles
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| (**a - target).abs().total_cmp(&(**b - target).abs()))
+        .filter(|(_, value)| (**value - target).abs() < 0.02)
+        .map(|(index, _)| index)
+        .ok_or_else(|| anyhow::anyhow!("no declared quantile near {target}"))
+}
+
+#[cfg_attr(not(feature = "cpu"), allow(unused_variables))]
+fn evaluate(candidate: PathBuf, test_jsonl: PathBuf, seasonal_period: usize) -> Result<()> {
+    #[cfg(not(feature = "cpu"))]
+    {
+        bail!("rebuild with --features cpu,cli");
+    }
+    #[cfg(feature = "cpu")]
+    {
+        use anyhow::Context as _;
+        use ruview_forecast_core::{
+            interval_coverage, weighted_quantile_loss, weighted_quantile_loss_by_horizon,
+            DataPolicy, FeatureSchema, FeatureSpec, Forecast, ForecastOutcome, ForecastRequest,
+            Forecaster, LastValueForecaster, PrivacyClass, SeasonalNaiveForecaster, SourceState,
+            TimeSeries,
+        };
+        use ruview_forecast_model::{activate_for_evaluation, build_eval_input, CpuDevice};
+
+        let candidate_bytes = std::fs::read(&candidate)
+            .with_context(|| format!("reading candidate {}", candidate.display()))?;
+        // No independent held-out-dataset manifest exists at this CLI layer
+        // to check the candidate against, so the expected digest here is the
+        // candidate's own declared value: this proves internal consistency
+        // of the candidate file, not that it matches a specific dataset.
+        // Contrast the real training/activation path, which checks against
+        // an independently supplied policy.
+        let declared_digest = ruview_forecast_model::ModelArtifact::decode(&candidate_bytes)
+            .context("decoding candidate before evaluation-only activation")?
+            .manifest()
+            .feature_schema_digest;
+        let runtime = activate_for_evaluation(&candidate_bytes, unix_ms(), declared_digest)
+            .context("activating candidate for local evaluation (self-signed, not a release signature)")?;
+        let config = runtime.config().clone();
+        let device = CpuDevice::default();
+        let context_len = config.context_len;
+        let horizon = config.horizon;
+        let nq = config.quantiles.len();
+        let lower_index = nearest_quantile_index(&config.quantiles, 0.10)?;
+        let upper_index = nearest_quantile_index(&config.quantiles, 0.90)?;
+
+        let windows = read_test_windows(&test_jsonl)?;
+        if windows.is_empty() {
+            bail!("--test-jsonl contains no windows");
+        }
+        let variates = usize::from(windows[0].variates);
+        if variates == 0 || variates > config.max_variates {
+            bail!("test window variates disagree with the candidate's config");
+        }
+        let context_cells = context_len * variates;
+        let target_cells = variates * horizon;
+        for window in &windows {
+            if usize::from(window.variates) != variates
+                || window.values.len() != context_cells
+                || window.observed_mask.len() != context_cells
+                || window.targets.len() != target_cells
+                || window.target_mask.len() != target_cells
+            {
+                bail!("a test window's shape disagrees with the candidate's config");
+            }
+        }
+
+        let feature_names: Vec<String> = (0..variates).map(|index| format!("eval-{index}")).collect();
+        let schema = FeatureSchema::new(
+            feature_names
+                .iter()
+                .map(|name| FeatureSpec::new(name.as_str(), "ratio"))
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+        )?;
+        let eval_policy = DataPolicy::new(
+            PrivacyClass::P3,
+            "cli-evaluate",
+            "cli-evaluate",
+            "cli-evaluate",
+            "ruforecast-evaluate-cli-local-only",
+            CanonicalDigest::of_bytes(b"ruforecast-evaluate-cli-policy-v1", b"local-cli-run"),
+            None,
+            None,
+            None,
+            unix_ms().saturating_add(24 * 60 * 60 * 1_000),
+            true,
+        )?;
+        let quantiles = QuantileSet::new(config.quantiles.to_vec())?;
+        let seasonal = SeasonalNaiveForecaster::new(seasonal_period)?;
+
+        struct Accumulator {
+            wql: Vec<f64>,
+            wql_by_horizon: Vec<Vec<f64>>,
+            lower: Vec<f32>,
+            upper: Vec<f32>,
+            actual: Vec<f32>,
+            observed: Vec<bool>,
+        }
+        impl Accumulator {
+            fn new(horizon: usize) -> Self {
+                Self {
+                    wql: Vec::new(),
+                    wql_by_horizon: vec![Vec::new(); horizon],
+                    lower: Vec::new(),
+                    upper: Vec::new(),
+                    actual: Vec::new(),
+                    observed: Vec::new(),
+                }
+            }
+            fn push_bounds_from_forecast(
+                &mut self,
+                forecast: &Forecast,
+                actual_step_major: &[f32],
+                observed_step_major: &[bool],
+                variates: usize,
+                lower_index: usize,
+                upper_index: usize,
+            ) {
+                for index in 0..actual_step_major.len() {
+                    if !observed_step_major[index] {
+                        continue;
+                    }
+                    let step = index / variates;
+                    let variate = index % variates;
+                    self.actual.push(actual_step_major[index]);
+                    self.observed.push(true);
+                    self.lower.push(
+                        forecast
+                            .value(step, variate, lower_index)
+                            .expect("validated forecast shape"),
+                    );
+                    self.upper.push(
+                        forecast
+                            .value(step, variate, upper_index)
+                            .expect("validated forecast shape"),
+                    );
+                }
+            }
+        }
+
+        let mut model_acc = Accumulator::new(horizon);
+        let mut last_value_acc = Accumulator::new(horizon);
+        let mut seasonal_acc = Accumulator::new(horizon);
+
+        let mut missing_context = 0_u64;
+        let mut total_context = 0_u64;
+        let mut missing_target = 0_u64;
+        let mut total_target = 0_u64;
+
+        for window in &windows {
+            total_context += window.observed_mask.len() as u64;
+            missing_context += window.observed_mask.iter().filter(|mask| **mask == 0).count() as u64;
+            total_target += window.target_mask.len() as u64;
+            missing_target += window.target_mask.iter().filter(|mask| **mask == 0).count() as u64;
+
+            // Model inference. window.targets/target_mask are variate-major
+            // (index = variate * horizon + step); the model's quantile
+            // tensor is [variates, horizon, quantiles] row-major (batch=1).
+            let input = build_eval_input(
+                &config,
+                &device,
+                window.context_start_ms,
+                1_000,
+                variates,
+                &window.values,
+                &window.observed_mask,
+            )
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+            let output = runtime.predict(input).map_err(|error| anyhow::anyhow!("{error}"))?;
+            let quantile_values: Vec<f32> = output
+                .normalized_quantiles
+                .into_data()
+                .to_vec::<f32>()
+                .map_err(|error| anyhow::anyhow!("reading model output tensor: {error:?}"))?;
+
+            let mut window_loss = 0.0_f64;
+            let mut window_scale = 0.0_f64;
+            let mut by_horizon_loss = vec![0.0_f64; horizon];
+            let mut by_horizon_scale = vec![0.0_f64; horizon];
+            for variate in 0..variates {
+                for step in 0..horizon {
+                    let target_index = variate * horizon + step;
+                    if window.target_mask[target_index] == 0 {
+                        continue;
+                    }
+                    let actual = window.targets[target_index];
+                    let scale = f64::from(actual.abs());
+                    window_scale += scale;
+                    by_horizon_scale[step] += scale;
+                    let base = (variate * horizon + step) * nq;
+                    for (quantile_index, quantile) in config.quantiles.iter().enumerate() {
+                        let predicted = quantile_values[base + quantile_index];
+                        let residual = f64::from(actual) - f64::from(predicted);
+                        let q = f64::from(*quantile);
+                        let pinball = if residual >= 0.0 { q * residual } else { (q - 1.0) * residual };
+                        window_loss += pinball;
+                        by_horizon_loss[step] += pinball;
+                    }
+                    model_acc.actual.push(actual);
+                    model_acc.observed.push(true);
+                    model_acc.lower.push(quantile_values[base + lower_index]);
+                    model_acc.upper.push(quantile_values[base + upper_index]);
+                }
+            }
+            if window_scale > 0.0 {
+                model_acc.wql.push(2.0 * window_loss / (nq as f64 * window_scale));
+            }
+            for step in 0..horizon {
+                if by_horizon_scale[step] > 0.0 {
+                    model_acc.wql_by_horizon[step]
+                        .push(2.0 * by_horizon_loss[step] / (nq as f64 * by_horizon_scale[step]));
+                }
+            }
+
+            // Baselines, via the shared Forecaster trait and core metrics.
+            let series_timestamps: Vec<u64> = (0..context_len)
+                .map(|row| window.context_start_ms + (row as u64) * 1_000)
+                .collect();
+            let series_mask: Vec<bool> = window.observed_mask.iter().map(|mask| *mask == 1).collect();
+            let series = TimeSeries::new(
+                schema.clone(),
+                series_timestamps,
+                window.values.clone(),
+                series_mask,
+                SourceState::synthetic("ruforecast-evaluate-cli")?,
+                eval_policy.clone(),
+            )?;
+            let request = ForecastRequest::new(&series, horizon, 1_000, &quantiles)?;
+
+            let mut actual_step_major = vec![0.0_f32; variates * horizon];
+            let mut observed_step_major = vec![false; variates * horizon];
+            for variate in 0..variates {
+                for step in 0..horizon {
+                    let src = variate * horizon + step;
+                    let dst = step * variates + variate;
+                    actual_step_major[dst] = window.targets[src];
+                    observed_step_major[dst] = window.target_mask[src] == 1;
+                }
+            }
+
+            if let ForecastOutcome::Forecast(forecast) =
+                LastValueForecaster::new().forecast(&request)?
+            {
+                last_value_acc
+                    .wql
+                    .push(weighted_quantile_loss(&actual_step_major, &observed_step_major, &forecast)?);
+                for (step, value) in
+                    weighted_quantile_loss_by_horizon(&actual_step_major, &observed_step_major, &forecast)?
+                        .into_iter()
+                        .enumerate()
+                {
+                    last_value_acc.wql_by_horizon[step].push(value);
+                }
+                last_value_acc.push_bounds_from_forecast(
+                    &forecast,
+                    &actual_step_major,
+                    &observed_step_major,
+                    variates,
+                    lower_index,
+                    upper_index,
+                );
+            }
+            if let ForecastOutcome::Forecast(forecast) = seasonal.forecast(&request)? {
+                seasonal_acc
+                    .wql
+                    .push(weighted_quantile_loss(&actual_step_major, &observed_step_major, &forecast)?);
+                for (step, value) in
+                    weighted_quantile_loss_by_horizon(&actual_step_major, &observed_step_major, &forecast)?
+                        .into_iter()
+                        .enumerate()
+                {
+                    seasonal_acc.wql_by_horizon[step].push(value);
+                }
+                seasonal_acc.push_bounds_from_forecast(
+                    &forecast,
+                    &actual_step_major,
+                    &observed_step_major,
+                    variates,
+                    lower_index,
+                    upper_index,
+                );
+            }
+        }
+
+        let mean = |values: &[f64]| -> Option<f64> {
+            if values.is_empty() {
+                None
+            } else {
+                Some(values.iter().sum::<f64>() / values.len() as f64)
+            }
+        };
+        let mean_by_horizon = |per_window: &[Vec<f64>]| -> Vec<Option<f64>> {
+            per_window.iter().map(|values| mean(values)).collect()
+        };
+        let coverage = |accumulator: &Accumulator| -> Option<f64> {
+            if accumulator.actual.is_empty() {
+                None
+            } else {
+                interval_coverage(
+                    &accumulator.actual,
+                    &accumulator.lower,
+                    &accumulator.upper,
+                    &accumulator.observed,
+                )
+                .ok()
+            }
+        };
+
+        let report = serde_json::json!({
+            "n_test_windows": windows.len(),
+            "variates": variates,
+            "horizon": horizon,
+            "context_length": context_len,
+            "seasonal_period": seasonal_period,
+            "interval": {"lower_quantile": config.quantiles[lower_index], "upper_quantile": config.quantiles[upper_index]},
+            "missingness": {
+                "context_fraction": missing_context as f64 / total_context.max(1) as f64,
+                "target_fraction": missing_target as f64 / total_target.max(1) as f64,
+            },
+            "model": {
+                "weighted_quantile_loss": mean(&model_acc.wql),
+                "weighted_quantile_loss_by_horizon": mean_by_horizon(&model_acc.wql_by_horizon),
+                "interval_coverage": coverage(&model_acc),
+            },
+            "last_value_baseline": {
+                "weighted_quantile_loss": mean(&last_value_acc.wql),
+                "weighted_quantile_loss_by_horizon": mean_by_horizon(&last_value_acc.wql_by_horizon),
+                "interval_coverage": coverage(&last_value_acc),
+            },
+            "seasonal_naive_baseline": {
+                "weighted_quantile_loss": mean(&seasonal_acc.wql),
+                "weighted_quantile_loss_by_horizon": mean_by_horizon(&seasonal_acc.wql_by_horizon),
+                "interval_coverage": coverage(&seasonal_acc),
+            },
+            "not_implemented": [
+                "abstention_coverage",
+                "selective_risk",
+                "site_and_device_slices",
+                "interference_regime",
+                "ruvector_retrieval_ablation",
+            ],
+        });
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        Ok(())
+    }
 }
 
 fn unix_ms() -> u64 {
