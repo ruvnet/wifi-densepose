@@ -102,6 +102,68 @@ pub fn weighted_quantile_loss(
     Ok(2.0 * loss / (forecast.quantiles().len() as f64 * scale))
 }
 
+/// [`weighted_quantile_loss`] broken out per horizon step (index `0..horizon`)
+/// instead of collapsed into one aggregate number. Uses the identical
+/// per-cell pinball formula and the same domain checks; only the reduction
+/// changes, so summing this function's outputs' contributions reproduces
+/// [`weighted_quantile_loss`]'s aggregate exactly. Useful for spotting
+/// whether error grows with lead time, which a single aggregate number
+/// hides.
+pub fn weighted_quantile_loss_by_horizon(
+    actual: &[f32],
+    observed: &[bool],
+    forecast: &Forecast,
+) -> Result<Vec<f64>, ForecastError> {
+    let horizon = forecast.horizon();
+    let variates = forecast.variates();
+    let expected = horizon
+        .checked_mul(variates)
+        .ok_or(ForecastError::SizeOverflow {
+            field: "metric_targets",
+        })?;
+    check_shape("metric_actual", expected, actual.len())?;
+    check_shape("metric_observed", expected, observed.len())?;
+    check_finite("metric_actual", actual)?;
+    let mut loss = vec![0.0_f64; horizon];
+    let mut scale = vec![0.0_f64; horizon];
+    let mut observed_count = vec![0_u64; horizon];
+    for index in 0..expected {
+        if !observed[index] {
+            continue;
+        }
+        let step = index / variates;
+        let variate = index % variates;
+        observed_count[step] += 1;
+        scale[step] += f64::from(actual[index]).abs();
+        for (quantile_index, quantile) in forecast.quantiles().values().iter().enumerate() {
+            let prediction = forecast
+                .value(step, variate, quantile_index)
+                .expect("validated forecast shape");
+            let residual = f64::from(actual[index]) - f64::from(prediction);
+            let q = f64::from(*quantile);
+            loss[step] += if residual >= 0.0 {
+                q * residual
+            } else {
+                (q - 1.0) * residual
+            };
+        }
+    }
+    let quantile_count = forecast.quantiles().len() as f64;
+    let mut result = Vec::with_capacity(horizon);
+    for step in 0..horizon {
+        if observed_count[step] == 0 {
+            return Err(ForecastError::NoObservedTargets);
+        }
+        if scale[step] == 0.0 {
+            return Err(ForecastError::MetricUndefined {
+                reason: "weighted quantile loss requires nonzero absolute targets",
+            });
+        }
+        result.push(2.0 * loss[step] / (quantile_count * scale[step]));
+    }
+    Ok(result)
+}
+
 /// Fraction of observed targets inside inclusive lower/upper intervals.
 pub fn interval_coverage(
     actual: &[f32],
@@ -171,5 +233,97 @@ mod tests {
             interval_coverage(&[1.0], &[0.0], &[2.0], &[false]),
             Err(ForecastError::NoObservedTargets)
         ));
+    }
+
+    #[test]
+    fn per_horizon_wql_sums_to_the_aggregate() {
+        use crate::{
+            ArtifactReceipt, CanonicalDigest, DataPolicy, FeatureSchema, FeatureSpec,
+            ForecastRequest, PrivacyClass, QuantileSet, SourceState, TimeSeries,
+        };
+
+        let schema = FeatureSchema::new(vec![
+            FeatureSpec::new("a", "ratio").unwrap(),
+            FeatureSpec::new("b", "ratio").unwrap(),
+        ])
+        .unwrap();
+        let policy = DataPolicy::new(
+            PrivacyClass::P1,
+            "tenant",
+            "account",
+            "workspace",
+            "unit test",
+            CanonicalDigest::of_bytes(b"metrics-test", b"policy"),
+            None,
+            None,
+            None,
+            10_000,
+            true,
+        )
+        .unwrap();
+        let series = TimeSeries::new(
+            schema.clone(),
+            vec![1, 2, 3, 4],
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            vec![true; 8],
+            SourceState::synthetic("fixture").unwrap(),
+            policy.clone(),
+        )
+        .unwrap();
+        let quantiles = QuantileSet::new(vec![0.1, 0.5, 0.9]).unwrap();
+        let horizon = 3;
+        let variates = 2;
+        let request = ForecastRequest::new(&series, horizon, 1, &quantiles).unwrap();
+
+        // Deterministic, hand-built forecast: a constant prediction offset
+        // from a synthetic actual series so every cell has a nonzero,
+        // distinguishable pinball contribution.
+        let artifact = ArtifactReceipt::new(
+            "fixture-model",
+            "1",
+            CanonicalDigest::of_bytes(b"metrics-test", b"model"),
+            CanonicalDigest::of_bytes(b"metrics-test", b"config"),
+            policy.canonical_digest(),
+            SourceState::claimed("fixture").unwrap(),
+        )
+        .unwrap();
+        let source = SourceState::derived_forecast("fixture", series.source(), artifact.source())
+            .unwrap();
+        let mut values = Vec::with_capacity(horizon * variates * quantiles.len());
+        for step in 0..horizon {
+            for variate in 0..variates {
+                let base = (step * variates + variate) as f32;
+                for quantile_index in 0..quantiles.len() {
+                    values.push(base + quantile_index as f32 * 0.1);
+                }
+            }
+        }
+        let forecast = Forecast::issue(&request, values, artifact, source).unwrap();
+
+        let actual: Vec<f32> = (0..horizon * variates).map(|i| i as f32 + 0.5).collect();
+        let observed = vec![true; horizon * variates];
+
+        let aggregate = weighted_quantile_loss(&actual, &observed, &forecast).unwrap();
+        let by_horizon = weighted_quantile_loss_by_horizon(&actual, &observed, &forecast).unwrap();
+        assert_eq!(by_horizon.len(), horizon);
+
+        // Reconstruct the aggregate from the per-step numerators/denominators
+        // (not just averaging the per-step ratios, which would be a
+        // different, incorrect reduction) to prove the two functions agree.
+        let quantile_count = quantiles.len() as f64;
+        let mut total_loss = 0.0_f64;
+        let mut total_scale = 0.0_f64;
+        for step in 0..horizon {
+            let step_scale: f64 = (0..variates)
+                .map(|variate| f64::from(actual[step * variates + variate]).abs())
+                .sum();
+            total_scale += step_scale;
+            total_loss += by_horizon[step] * quantile_count * step_scale / 2.0;
+        }
+        let reconstructed = 2.0 * total_loss / (quantile_count * total_scale);
+        assert!(
+            (reconstructed - aggregate).abs() < 1e-9,
+            "reconstructed {reconstructed} vs aggregate {aggregate}"
+        );
     }
 }

@@ -30,7 +30,7 @@ pub use forecast::{
     Abstention, AbstentionReason, Forecast, ForecastOutcome, ForecastRequest, Forecaster,
     QuantileSet, MAX_FORECAST_SPAN_MS, MAX_QUANTILES, MAX_STEP_MS,
 };
-pub use metrics::{interval_coverage, mae, pinball_loss, weighted_quantile_loss};
+pub use metrics::{interval_coverage, mae, pinball_loss, weighted_quantile_loss, weighted_quantile_loss_by_horizon};
 pub use privacy::{
     DataPolicy, FalGovernanceClaims, FalGovernanceVerifier, PrivacyClass,
     SignedFalGovernanceReceipt, VerifiedFalDataset,
