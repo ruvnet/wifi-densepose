@@ -191,6 +191,90 @@ dry-run/`--confirm` driver) in the `ruvnet/RuView` repo, paired with
 were changed by this note — it is a record of exploratory evidence, not a
 committed recommendation.
 
+### Amendment (2026-09-01, later same day): the round-2 result above did not generalize -- retracted
+
+**The "Search round 2" row above (WQL 0.153, learning_rate=0.0000298 etc.) is
+RETRACTED as a claim of improvement.** It is kept in the table (append-only,
+never silently edit a prior measurement) but must be read together with this
+amendment: independent verification, run the same day using a new
+regression-candidate promotion path (`ruvnet/autogenous` PR-in-progress,
+branch `feat/regression-candidate-kind`, not yet merged/pushed --
+`v2/crates/ruforecast-autogenous-bridge` in this worktree) against TWO FRESH
+synthetic corpora that were never part of that search (seeds 1000/1097, vs.
+the search's single fixed seed 0), showed that "winner" genome performing
+**WORSE than the baseline on both**:
+
+| Judge corpus | Candidate WQL | Baseline WQL | Candidate beats baseline by |
+|---|---:|---:|---:|
+| seed 1000 | 0.155 | **0.099** | -0.056 (worse) |
+| seed 1097 | 0.219 | **0.109** | -0.110 (worse) |
+
+**Root cause**: every evaluation in the three search rounds above (default,
+round 1, round 2) trained and scored every candidate against the exact same
+fixed synthetic corpus (`prepare-synthetic-dataset`'s implicit `--seed 0`
+default). The search had learned to exploit that one corpus's specific
+random windows -- textbook overfitting -- not found a genuinely better
+hyperparameter configuration. This is a real, measured failure mode, not a
+hypothetical caveat.
+
+**Fix applied**: `harness/ruview/flywheel/ruforecast/gate.mjs`'s
+`evaluateGenome` now trains and scores every candidate against THREE
+independent synthetic corpora (`DEFAULT_SEARCH_SEEDS = [11, 23, 47]`, none
+of which overlap the retracted search's seed 0 or the verification seeds
+1000/1097) and takes the WORST CASE `primary` across them, not an average --
+a candidate only counts as a win if it beats both baselines on every corpus.
+See `harness/ruview/flywheel/ruforecast/README.md`'s "Multi-seed fitness"
+section for the full account.
+
+**Re-running the search with the fix, still no verified improvement.** A
+fresh search under the corrected multi-seed fitness (2 generations x 2
+children, cleared `.metaharness-numeric` archive so no stale pre-fix state
+leaked in) found a genuine winner ON ITS OWN THREE SEARCH SEEDS --
+`learning_rate=0.008012, weight_decay=0.000159, gradient_clip_norm=0.267,
+batch_size=24, epochs=20`, beating the baseline on all three (primary
+0.099 / 0.556 / 0.576, worst-case 0.099). Independent verification against
+the same fresh seeds 1000/1097 (never part of this candidate's own search)
+again showed it losing to the baseline on both:
+
+| Judge corpus | Candidate WQL | Baseline WQL | Candidate beats baseline by |
+|---|---:|---:|---:|
+| seed 1000 | 0.178 | **0.099** | -0.079 (worse) |
+| seed 1097 | 0.314 | **0.109** | -0.205 (worse) |
+
+**Honest conclusion**: two independent search rounds (pre- and post- the
+multi-seed fitness fix) both produced a genome that looked like a real
+improvement on its own search data and both failed independent out-of-sample
+verification. This converges on a different, deeper explanation than "the
+search methodology was broken" (that part IS fixed): at this dataset scale
+(24 synthetic training windows), held-out WQL varies enormously by which
+corpus is drawn REGARDLESS of hyperparameters -- the baseline genome itself,
+evaluated with the corrected multi-seed fitness function, swings from
+primary 0.83 (a strong win) to a full regression (primary 0, WQL worse than
+last-value) purely from which of the three fixed search seeds was used, with
+identical hyperparameters throughout. The corpus-noise floor at n=24
+windows appears to dominate any real hyperparameter effect. No RuForecast
+hyperparameter configuration has been shown, by this exploration, to
+reliably beat the trivial baselines out-of-sample at this scale. A larger
+training corpus (more windows, ideally real governed data under the
+`large_linux` profile) is the more promising next lever than further
+hyperparameter search on this fixture.
+
+A related implementation-only fix: the promotion verifier
+(`envelope::regression::verify_regression_promotion` in the Autogenous
+branch above) initially required all judges' receipts to share one
+`corpus_id`, inherited unreviewed from a same-evidence review model that
+does not fit this kind's intentionally cross-corpus judge design. This was
+corrected (`ReceiptCorpusMismatch` is no longer produced by that function);
+it did not change either REJECT verdict above, both of which were already
+correctly driven by the real `NotBetterThanParent` signal.
+
+Reproducer for both verification runs above: same as below, plus
+`v2/crates/ruforecast-autogenous-bridge` (`cargo +1.92.0 run --manifest-path
+crates/ruforecast-autogenous-bridge/Cargo.toml -- --ruforecast-bin
+./target/debug/ruforecast --candidate-genome <genome>.json --parent-genome
+<baseline>.json --judges 2 --work-dir <scratch>`) against the unpushed
+`ruvnet/autogenous` branch `feat/regression-candidate-kind`.
+
 ## Append-only evidence ledger
 
 Never replace a prior measurement. Append a row and retain the failed or stale
