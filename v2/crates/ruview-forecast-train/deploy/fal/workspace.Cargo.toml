@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ruview-forecast-core",
+    "crates/ruview-forecast-model",
+    "crates/ruview-forecast-train",
+]
+
+[workspace.package]
+version = "0.3.1"
+edition = "2021"
+authors = ["rUv <ruv@ruv.net>", "WiFi-DensePose Contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ruvnet/wifi-densepose"
+
+# This manifest is deliberately minimal. deploy.py installs it into the
+# tracked-only temporary context instead of exporting the full RuView
+# workspace manifest and unrelated crate names.
+[workspace.dependencies]
+anyhow = "1.0"
+axum = { version = "0.7", features = ["ws", "macros"] }
+burn-core = { version = "0.21", default-features = false, features = ["std"] }
+burn-cuda = { version = "0.21", default-features = false, features = ["std"] }
+burn-ndarray = { version = "0.21", default-features = false, features = ["std"] }
+burn-nn = { version = "0.21", default-features = false }
+burn-wgpu = { version = "0.21", default-features = false, features = ["std"] }
+clap = { version = "4.4", features = ["derive", "env"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+ed25519-dalek = "2.1"
+proptest = "1.4"
+ruvector-core = "2.3.0"
+ruview-forecast-core = { path = "crates/ruview-forecast-core" }
+ruview-forecast-model = { path = "crates/ruview-forecast-model" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+thiserror = "2.0"
+tokio = { version = "1.35", features = ["full"] }
+tower = { version = "0.4", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+wiremock = "0.5"

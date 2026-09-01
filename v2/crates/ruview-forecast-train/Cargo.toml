@@ -1,0 +1,62 @@
+[package]
+name = "ruview-forecast-train"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Typed local and fal.ai training orchestration for RuView Forecast"
+
+[[bin]]
+name = "ruforecast"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = []
+cli = ["dep:anyhow", "dep:clap", "dep:tokio", "dep:tracing-subscriber"]
+server = ["fal-client", "dep:axum", "dep:http-body-util", "dep:tokio"]
+fal-client = ["dep:reqwest", "dep:tokio", "dep:url"]
+cpu = ["ruview-forecast-model/cpu", "training", "dep:burn-ndarray"]
+cuda = ["ruview-forecast-model/cuda", "training", "dep:burn-cuda"]
+training = ["dep:burn-autodiff", "dep:burn-core", "dep:burn-optim"]
+
+[dependencies]
+anyhow = { workspace = true, optional = true }
+axum = { workspace = true, features = ["json", "macros"], optional = true }
+blake3 = "1.5"
+burn-autodiff = { version = "0.21", default-features = false, optional = true }
+burn-core = { workspace = true, optional = true }
+burn-ndarray = { workspace = true, optional = true }
+burn-optim = { version = "0.21", default-features = false, features = ["std"], optional = true }
+burn-cuda = { workspace = true, optional = true }
+clap = { workspace = true, optional = true }
+hex = "0.4"
+http-body-util = { version = "0.1", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"], optional = true }
+rustix = { version = "1", features = ["fs"] }
+ruview-forecast-core.workspace = true
+ruview-forecast-model.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, optional = true }
+toml = "0.8"
+tracing.workspace = true
+tracing-subscriber = { workspace = true, optional = true }
+url = { version = "2", optional = true }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+criterion = "0.5"
+tempfile = "3.10"
+tower = { workspace = true, features = ["util"] }
+
+[build-dependencies]
+sha2.workspace = true
+
+[[bench]]
+name = "data_pipeline"
+harness = false
+required-features = ["cpu"]

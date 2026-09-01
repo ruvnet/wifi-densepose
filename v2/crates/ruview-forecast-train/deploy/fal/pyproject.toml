@@ -1,0 +1,9 @@
+[project]
+name = "ruview-forecast-fal-launcher"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["fal==1.80.0"]
+
+[tool.fal.apps.ruforecast]
+ref = "fal_app.py::run_server"
+auth = "private"

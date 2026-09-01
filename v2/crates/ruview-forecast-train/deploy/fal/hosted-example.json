@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "note": "Documentation only: generate the signed/digest-bound wire body with `ruforecast fal submit`; do not hand-edit or put FAL_KEY here.",
+  "training_mode": "synthetic_only",
+  "customer_dataset_export": false,
+  "queue_result_metadata_retained": true,
+  "provider_enforces_client_cost_cap": false
+}

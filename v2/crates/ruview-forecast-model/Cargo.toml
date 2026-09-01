@@ -1,0 +1,53 @@
+[package]
+name = "ruview-forecast-model"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Independent Rust multivariate forecasting model for RuView"
+
+[features]
+default = []
+model = ["dep:burn-core", "dep:burn-nn"]
+cpu = ["model", "dep:burn-ndarray"]
+cuda = ["model", "dep:burn-cuda"]
+wgpu = ["model", "dep:burn-wgpu"]
+ruvector = ["dep:ruvector-core", "dep:tempfile"]
+
+[dependencies]
+ruview-forecast-core = { path = "../ruview-forecast-core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+blake3 = "1.5"
+ed25519-dalek = "2.1"
+burn-core = { workspace = true, optional = true }
+burn-nn = { workspace = true, optional = true }
+burn-ndarray = { workspace = true, optional = true }
+burn-cuda = { workspace = true, optional = true }
+burn-wgpu = { workspace = true, optional = true }
+ruvector-core = { version = "=2.3.0", optional = true, default-features = false, features = ["hnsw", "memory-only"] }
+tempfile = { version = "3.10", optional = true }
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "forecast_inference"
+harness = false
+required-features = ["cpu"]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+missing_errors_doc = "allow"
+module_name_repetitions = "allow"
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"

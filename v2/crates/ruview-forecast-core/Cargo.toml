@@ -1,0 +1,17 @@
+[package]
+name = "ruview-forecast-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Validated, backend-neutral multivariate forecasting contracts for RuView"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+sha2.workspace = true
+ed25519-dalek.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
