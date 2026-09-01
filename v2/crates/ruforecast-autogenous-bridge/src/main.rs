@@ -37,7 +37,7 @@ use witness::{content_hash, SigningAuthority};
     about = "LOCAL-DEV-ONLY: sign/verify a RuForecast hyperparameter candidate through Autogenous's regression-candidate promotion path"
 )]
 struct Cli {
-    /// Path to the built `ruforecast` binary (ruview-forecast-train's CLI).
+    /// Path to the built `ruforecast` binary (ruforecast-train's CLI).
     #[arg(long)]
     ruforecast_bin: PathBuf,
     /// Candidate hyperparameter genome, JSON: {learning_rate, weight_decay, gradient_clip_norm, batch_size, epochs}.

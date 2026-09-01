@@ -123,12 +123,8 @@ members = [
     # ADR-324 — clean-room Kooima off-axis (head-coupled perspective) projection.
     # Dependency-free native core; wasm-bindgen surface only on wasm32.
     "crates/ruview-offaxis",
-    # ADR-348 — clean-room, backend-neutral multivariate forecasting stack.
-    # Core stays Burn-free so the workspace's Rust 1.89/no-default-features
-    # gate can validate contracts and metrics without a GPU toolchain.
-    "crates/ruview-forecast-core",
-    "crates/ruview-forecast-model",
-    "crates/ruview-forecast-train",
+    # ADR-348 — RuForecast extracted to the ruvnet/RuForecast submodule
+    # (see crates/ruforecast in the exclude list below); path-deps only.
 ]
 # ADR-040: WASM edge crate targets wasm32-unknown-unknown (no_std),
 # excluded from workspace to avoid breaking `cargo test --workspace`.
@@ -141,6 +137,7 @@ exclude = [
     "crates/wifi-densepose-wasm-edge",
     "crates/homecore-plugin-example",
     "crates/worldgraph",   # ruvnet/worldgraph submodule — its own workspace (geo/worldgraph/worldmodel)
+    "crates/ruforecast",   # ruvnet/RuForecast submodule — its own workspace (ruforecast-core/model/train)
     # LOCAL-DEV-ONLY: path-depends on an absolute, unpublished ruvnet/autogenous
     # checkout that does not exist in CI. Build directly with
     # `cargo build --manifest-path crates/ruforecast-autogenous-bridge/Cargo.toml`
@@ -290,9 +287,9 @@ wifi-densepose-wasm = { version = "0.3.0", path = "crates/wifi-densepose-wasm" }
 wifi-densepose-mat = { version = "0.3.0", path = "crates/wifi-densepose-mat" }
 wifi-densepose-ruvector = { version = "0.3.0", path = "crates/wifi-densepose-ruvector" }
 wifi-densepose-worldmodel = { version = "0.3.0", path = "crates/worldgraph/wifi-densepose-worldmodel" }
-ruview-forecast-core = { version = "0.3.1", path = "crates/ruview-forecast-core" }
-ruview-forecast-model = { version = "0.3.1", path = "crates/ruview-forecast-model" }
-ruview-forecast-train = { version = "0.3.1", path = "crates/ruview-forecast-train" }
+ruforecast-core = { version = "0.1.0", path = "crates/ruforecast/crates/ruforecast-core" }
+ruforecast-model = { version = "0.1.0", path = "crates/ruforecast/crates/ruforecast-model" }
+ruforecast-train = { version = "0.1.0", path = "crates/ruforecast/crates/ruforecast-train" }
 
 [profile.release]
 lto = true

@@ -8710,14 +8710,12 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "tokio-rustls",
- "tokio-util",
  "tower 0.5.3",
  "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "wasm-streams 0.4.2",
  "web-sys",
  "webpki-roots 1.0.7",
 ]
@@ -8752,7 +8750,7 @@ dependencies = [
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "wasm-streams 0.5.0",
+ "wasm-streams",
  "web-sys",
 ]
 
@@ -9432,72 +9430,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "ruview-forecast-core"
-version = "0.3.1"
-dependencies = [
- "ed25519-dalek",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "ruview-forecast-model"
-version = "0.3.1"
-dependencies = [
- "blake3",
- "burn-core",
- "burn-cuda",
- "burn-ndarray",
- "burn-nn",
- "burn-wgpu",
- "criterion",
- "ed25519-dalek",
- "proptest",
- "ruvector-core",
- "ruview-forecast-core",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "ruview-forecast-train"
-version = "0.3.1"
-dependencies = [
- "anyhow",
- "axum",
- "blake3",
- "burn-autodiff",
- "burn-core",
- "burn-cuda",
- "burn-ndarray",
- "burn-optim",
- "clap",
- "criterion",
- "hex",
- "http-body-util",
- "reqwest 0.12.28",
- "rustix",
- "ruview-forecast-core",
- "ruview-forecast-model",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "toml 0.8.23",
- "tower 0.4.13",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
 ]
 
 [[package]]
@@ -12486,19 +12418,6 @@ dependencies = [
  "indexmap 2.13.0",
  "wasm-encoder 0.244.0",
  "wasmparser 0.244.0",
-]
-
-[[package]]
-name = "wasm-streams"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15053d8d85c7eccdbefef60f06769760a563c7f0a9d6902a13d35c7800b0ad65"
-dependencies = [
- "futures-util",
- "js-sys",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]
