@@ -141,6 +141,11 @@ exclude = [
     "crates/wifi-densepose-wasm-edge",
     "crates/homecore-plugin-example",
     "crates/worldgraph",   # ruvnet/worldgraph submodule — its own workspace (geo/worldgraph/worldmodel)
+    # LOCAL-DEV-ONLY: path-depends on an absolute, unpublished ruvnet/autogenous
+    # checkout that does not exist in CI. Build directly with
+    # `cargo build --manifest-path crates/ruforecast-autogenous-bridge/Cargo.toml`
+    # on a host with that checkout present. See its Cargo.toml/README.
+    "crates/ruforecast-autogenous-bridge",
 ]
 
 [workspace.package]

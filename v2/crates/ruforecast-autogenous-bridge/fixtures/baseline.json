@@ -1,0 +1,1 @@
+{"learning_rate": 0.001, "weight_decay": 0.0001, "gradient_clip_norm": 1.0, "batch_size": 8, "epochs": 60}

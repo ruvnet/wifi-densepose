@@ -1,0 +1,25 @@
+[package]
+name = "ruforecast-autogenous-bridge"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "LOCAL-DEV-ONLY bridge: signs/verifies a Darwin-found RuForecast hyperparameter candidate through Autogenous's regression-candidate promotion path (ruvnet/autogenous, not yet published/vendored). Path-dependency on a sibling local checkout; not part of any release build."
+
+[[bin]]
+name = "ruforecast-autogenous-bridge"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+# LOCAL-DEV-ONLY path deps into a sibling, unpublished autogenous checkout.
+# Not vendored/submoduled yet; this only builds on a host with this exact
+# absolute checkout location (currently: ruvultra). See README.md.
+envelope = { path = "/home/ruvultra/projects/autogenous/crates/envelope" }
+agl-types = { path = "/home/ruvultra/projects/autogenous/crates/agl-types" }
+constitution = { path = "/home/ruvultra/projects/autogenous/crates/constitution" }
+witness = { path = "/home/ruvultra/projects/autogenous/crates/witness" }

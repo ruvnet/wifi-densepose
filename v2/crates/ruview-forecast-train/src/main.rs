@@ -108,6 +108,13 @@ enum Command {
         /// Full passes over the generated training windows.
         #[arg(long, default_value_t = 60)]
         epochs: u16,
+        /// Deterministic generator seed offset. Same seed -> byte-identical
+        /// train.jsonl/test.jsonl across runs (needed so two different
+        /// hyperparameter genomes can be trained on the SAME corpus for a
+        /// fair comparison); different seeds -> genuinely independent
+        /// corpora (needed for honest multi-judge evaluation upstream).
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
     },
     /// Run fal Direct Server routes on the configured bind address.
     Serve {
@@ -318,6 +325,7 @@ async fn main() -> Result<()> {
             gradient_clip_norm,
             batch_size,
             epochs,
+            seed,
         } => prepare_synthetic_dataset(
             directory,
             train_windows,
@@ -328,6 +336,7 @@ async fn main() -> Result<()> {
             gradient_clip_norm,
             batch_size,
             epochs,
+            seed,
         ),
         Command::Serve { bind, output } => serve(bind, output).await,
         Command::Fal { command } => fal(command).await,
@@ -500,6 +509,7 @@ fn prepare_synthetic_dataset(
     gradient_clip_norm: f64,
     batch_size: u16,
     epochs: u16,
+    seed: u64,
 ) -> Result<()> {
     let mut directory_builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
@@ -522,8 +532,14 @@ fn prepare_synthetic_dataset(
     for index in 0..train_windows {
         let key = SeriesKey::new("synthetic-train", "generator-train", format!("s{index}"))?;
         train_members.push(SplitMember::new(key.clone(), TimeRange::new(1, 100_000)?));
-        let window =
-            synthetic_dataset_window(key, index, 11, model.context_len, model.horizon, variates);
+        let window = synthetic_dataset_window(
+            key,
+            index,
+            11u64.wrapping_add(seed),
+            model.context_len,
+            model.horizon,
+            variates,
+        );
         lines.push(serde_json::to_string(&window)?);
     }
     let mut shard = lines.join("\n").into_bytes();
@@ -616,7 +632,7 @@ fn prepare_synthetic_dataset(
         let window = synthetic_dataset_window(
             key,
             10_000 + index,
-            29,
+            29u64.wrapping_add(seed),
             model.context_len,
             model.horizon,
             variates,
