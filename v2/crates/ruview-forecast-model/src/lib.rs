@@ -15,6 +15,8 @@
 mod artifact;
 mod config;
 
+#[cfg(feature = "cpu")]
+mod eval;
 #[cfg(feature = "model")]
 mod network;
 #[cfg(feature = "cpu")]
@@ -33,6 +35,10 @@ pub use config::{
     TIME_WIDTH, TINY_PARAMETER_COUNT,
 };
 
+/// Local, evaluation-only activation and inference-input construction. Never
+/// a production trust path — see the module's own documentation.
+#[cfg(feature = "cpu")]
+pub use eval::{activate_for_evaluation, build_eval_input};
 #[cfg(feature = "model")]
 pub use network::{
     masked_pinball_loss, record_to_bytes, ForecastModelOutput, ModelInput, RuForecastMixer,
