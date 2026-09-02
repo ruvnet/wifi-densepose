@@ -275,6 +275,55 @@ crates/ruforecast-autogenous-bridge/Cargo.toml -- --ruforecast-bin
 <baseline>.json --judges 2 --work-dir <scratch>`) against the unpushed
 `ruvnet/autogenous` branch `feat/regression-candidate-kind`.
 
+### Real-household-data result (2026-09-01, MEASURED, unaccepted, not a release claim)
+
+Following the informal HPO exploration above, this session also collected
+**6,390 real 1&nbsp;Hz vital-signs samples** (heart rate, breathing rate,
+signal quality) from a real, live, ESP32-sourced household sensing
+deployment over a continuous 2-hour window (88.75% real sample coverage;
+gaps handled honestly via `observed_mask=0`, never fabricated
+interpolation) — the "more real training data" lever flagged as the
+credible next step in the note above. This directly answers that open
+question.
+
+Two genuinely independent temporal splits of the same real corpus (not
+synthetic seeds — real data has no seed to vary, so independence here
+means two different train/test boundary choices on the same timeline,
+each with its own 90s embargo gap) were trained (default, untuned
+`OptimizerSpec`: `lr=0.001, weight_decay=0.0001, gradient_clip_norm=1.0,
+batch_size=8, epochs=60`) and scored via the real `evaluate` CLI, then
+independently, cryptographically verified through
+`ruforecast-autogenous-bridge`'s real signed regression-candidate
+promotion path (`ruvnet/autogenous`, `envelope::regression`):
+
+| Judge | Split | Real test windows | Model WQL | Best trivial baseline WQL | Model beats baseline by |
+|---|---|---:|---:|---:|---:|
+| 1 | 70% train / 90s embargo / 30% test | 27 | 0.0514 | 0.0563 (last-value) | +0.0049 |
+| 2 | 50% train / 90s embargo / 50% test | 46 | 0.0670 | 0.0543 (seasonal-naive) | −0.0128 |
+
+**Signed verdict: REJECT.** Judge 1's nominal win (+0.0049) is below the
+0.01 non-inferiority margin, so it doesn't clear the promotion bar even
+on its own; Judge 2 lost outright. Both rejections are recorded as
+`NotBetterThanParent` in the signed promotion envelope.
+
+**Honest conclusion:** even with a real household corpus (n=6,390 real
+samples, not synthetic), the result is exactly the same shape as every
+synthetic search this session — a result that looks like a win on one
+split does not hold up on an independently verified second split. This
+is not evidence that real data can't help; it is evidence that this
+scale of real data (6,390 samples, one household, one physical sensor)
+is not yet enough to distinguish a genuine effect from split-dependent
+noise. The credible next lever remains more real data — more households,
+longer collection windows, or the `large_linux` profile — not further
+hyperparameter search on any fixture this small, synthetic or real.
+
+Reproducer: `v2/crates/ruforecast-autogenous-bridge/examples/real_data_verify.rs`
+and `v2/crates/ruforecast/crates/ruforecast-train/examples/real_data_windows.rs`
+in this worktree (`train/ruforecast-rust` branch, commits `130f547` in the
+`ruforecast` submodule and `788401c5` in this repo — both local, not yet
+pushed). Raw real vitals data never left the collecting/training hosts and
+was never written to any git-tracked or pushed path.
+
 ## Append-only evidence ledger
 
 Never replace a prior measurement. Append a row and retain the failed or stale
