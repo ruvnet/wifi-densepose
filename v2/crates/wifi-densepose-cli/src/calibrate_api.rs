@@ -616,13 +616,16 @@ async fn finalize(
         status.write().await.session = Some(snap);
     }
 
+    // `CalibrationRecorder::finalize` consumes the recorder, so retain a
+    // terminal snapshot before attempting the fallible operation.
+    let mut aborted_snapshot = session_snapshot(&sess, "aborted", None);
     let baseline: BaselineCalibration = match sess.recorder.finalize() {
         Ok(baseline) => baseline,
         Err(e) => {
             let message = format!("finalize failed: {e}");
             let note = format!("aborted: {message}");
-            let snap = session_snapshot(&sess, "aborted", Some(note.clone()));
-            status.write().await.session = Some(snap);
+            aborted_snapshot.note = Some(note.clone());
+            status.write().await.session = Some(aborted_snapshot);
             eprintln!("[calibrate-serve] {note}");
             return Err(message);
         }
