@@ -811,6 +811,15 @@ struct BoundingBox {
 /// Each ESP32 node gets its own frame history, smoothing buffers, and vital
 /// sign detector so that data from different nodes is never mixed.
 struct NodeState {
+    /// Source address of the most recent datagram from this node.
+    ///
+    /// Nothing else knows where a node lives. Nodes are configured with the
+    /// server's address and push to it, so the reverse mapping exists only in
+    /// the packets they send; without recording it, managing a node means
+    /// scanning the subnet for its HTTP port and asking each responder who it
+    /// is. Observed rather than configured, so it follows a node across DHCP
+    /// leases with no intervention.
+    pub(crate) last_src_ip: Option<std::net::IpAddr>,
     pub(crate) frame_history: VecDeque<Vec<f64>>,
     smoothed_person_score: f64,
     pub(crate) prev_person_count: usize,
@@ -1136,6 +1145,7 @@ impl NodeState {
 
     pub(crate) fn new() -> Self {
         Self {
+            last_src_ip: None,
             frame_history: VecDeque::new(),
             smoothed_person_score: 0.0,
             prev_person_count: 0,
@@ -6462,6 +6472,7 @@ async fn nodes_endpoint(State(state): State<SharedState>) -> Json<serde_json::Va
             serde_json::json!({
                 "node_id": id,
                 "status": status,
+                "ip": ns.last_src_ip.map(|ip| ip.to_string()),
                 "last_seen_ms": elapsed_ms,
                 "rssi_dbm": rssi,
                 "motion_level": &ns.current_motion_level,
@@ -6739,6 +6750,7 @@ async fn udp_receiver_task(
                     // ── Per-node state for edge vitals (issue #249) ──────
                     let node_id = vitals.node_id;
                     let ns = s.node_states.entry(node_id).or_insert_with(NodeState::new);
+                    ns.last_src_ip = Some(src.ip());
                     let first_sensing_frame = ns.last_frame_time.is_none();
                     ns.last_frame_time = Some(std::time::Instant::now());
                     if first_sensing_frame && telemetry::curated_events_enabled() {
@@ -6992,8 +7004,10 @@ async fn udp_receiver_task(
                                        sync.local_minus_epoch_us());
                                 let mut s = state.write().await;
                                 let node_id = sync.node_id;
+                                let src_ip = src.ip();
                                 let ns = s.node_states.entry(node_id)
                                     .or_insert_with(NodeState::new);
+                                ns.last_src_ip = Some(src_ip);
                                 ns.apply_sync_packet(sync, std::time::Instant::now());
                                 continue;
                             }
@@ -7147,6 +7161,7 @@ async fn udp_receiver_task(
                     let adaptive_model_clone = s.adaptive_model.clone();
 
                     let ns = s.node_states.entry(node_id).or_insert_with(NodeState::new);
+                    ns.last_src_ip = Some(src.ip());
                     // ADR-110 iter 19 — feed the per-node fps EMA from real
                     // CSI arrivals. The helper sets `last_frame_time` as a
                     // side effect, so the previous bare assignment is gone.
