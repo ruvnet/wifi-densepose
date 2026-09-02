@@ -333,3 +333,48 @@ row when code, model, configuration, corpus, hardware, or methodology changes.
 |---|---|---|---|---|---|---:|---:|---:|---:|---:|---|---|
 
 No rows have been accepted.
+
+### Real public dataset: BIDMC PPG/Respiration (2026-09-02, cross-entity holdout)
+
+Every real-data test up to this point used a single household/entity with only
+a **temporal** holdout (same physical sensor, different time windows). This
+test is the first with a genuine **cross-entity** holdout: 53 real ICU
+patients from the BIDMC PPG and Respiration Dataset (PhysioNet, Open Data
+Commons Attribution License v1.0, public and openly licensed — no
+credentialing, https://physionet.org/content/bidmc/1.0.0/), splitting by
+*patient*, not by time, so the held-out test set contains real people the
+model never saw during training.
+
+25,546 real 1 Hz rows across 53 recordings (~8 minutes each), heart rate +
+respiratory rate + SpO2. 3 of 53 patients' windows were excluded honestly
+(genuine sensor-dropout `NaN` values in the source recordings, not
+fabricated/interpolated). Two independent, disjoint patient-partition splits:
+
+| Judge | Train patients | Test patients | Test windows | Model WQL | Best baseline WQL | Result |
+|---|---:|---:|---:|---:|---:|---|
+| A (contiguous split) | 34 | 16 | 16 | 0.01964 | 0.01159 (last-value) | worse, +69% |
+| B (interleaved split) | 24 | 26 | 26 | 0.07022 | 0.01002 (last-value) | worse, +601% |
+
+**Same conclusion as every prior test this session**, now on real, public,
+multi-subject clinical data with genuine cross-entity generalization: the
+model does not beat trivial forecasting baselines. The margin is decisive on
+both independent splits, not a near-miss — the earlier hypothesis that a
+larger, genuinely diverse real dataset (many different people, not one
+household) might change the picture does not hold at this scale/model
+configuration either.
+
+**Honest scope note on verification**: prior real-data tests in this document
+were independently checked through Autogenous's signed regression-candidate
+promotion path. That additional cryptographic-signing step was **not** run
+for this test — the result is reported directly from the `evaluate` CLI's
+real output on two genuinely disjoint, real patient-holdout splits, which is
+itself real, independent, out-of-sample evidence, but it does not carry a
+signed promotion-gate verdict the way the earlier entries do. Flagging this
+explicitly rather than presenting it with the same evidentiary weight.
+
+Reproducer: `v2/crates/ruforecast/crates/ruforecast-train/examples/bidmc_prepare.rs`
+(untracked scratch example, worktree `train/ruforecast-rust`) — downloads
+`bidmc_NN_Numerics.csv` for patients 01-53 directly from PhysioNet, builds
+one 76-row (context 64 + horizon 12) window per eligible patient, and writes
+governed `train.jsonl`/`test.jsonl`/`train-local.toml` per judge split. Raw
+data cached at `/tmp/bidmc-raw/` on the training host only.
