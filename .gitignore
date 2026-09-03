@@ -321,7 +321,7 @@ scripts/fal-visual-teacher/output/
 # to anyone else and it churns per fleet. Keep it local.
 firmware/esp32-csi-node/board_index.json
 
-# Provisioning profile: holds an SSID and the PATH to a credential file, never
-# a credential. Created by provision_node.py on first run; site-specific, so it
-# should not be committed.
-firmware/esp32-csi-node/provision_conf.json
+# Provisioning profiles: hold an SSID and the PATH to a credential file, never
+# a credential. Globbed because --net <name> reads provision_conf_<name>.json,
+# so a new profile must not become committable simply by being created.
+firmware/esp32-csi-node/provision_conf*.json

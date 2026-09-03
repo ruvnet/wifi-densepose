@@ -82,9 +82,15 @@ def mac_via_esptool(port, chip="esp32c6"):
         except Exception:
             continue
         if r.returncode == 0:
-            # Prefer the "MAC: xx:.." line; fall back to any MAC in the output.
+            # BASE MAC is the authoritative one; take nothing else if it is
+            # present, because the other lines are derived forms.
             for line in r.stdout.splitlines():
-                if "MAC" in line.upper():
+                if "BASE MAC" in line.upper():
+                    m = MAC_RE.search(line)
+                    if m:
+                        return m.group(1).lower()
+            for line in r.stdout.splitlines():
+                if "MAC" in line.upper() and "EXT" not in line.upper():
                     m = MAC_RE.search(line)
                     if m:
                         return m.group(1).lower()
