@@ -440,6 +440,7 @@ fn decode_node_health_datagram(buf: &[u8]) -> Option<NodeHealthObservation> {
 fn reset_reason_name(reason: u8) -> &'static str {
     match reason {
         1 => "power_on",
+        2 => "external_pin",
         3 => "software",
         4 => "panic",
         5 => "interrupt_watchdog",
@@ -448,6 +449,11 @@ fn reset_reason_name(reason: u8) -> &'static str {
         8 => "deep_sleep",
         9 => "brownout",
         10 => "sdio",
+        11 => "usb",
+        12 => "jtag",
+        13 => "efuse_error",
+        14 => "power_glitch",
+        15 => "cpu_lockup",
         _ => "unknown",
     }
 }
@@ -937,6 +943,17 @@ mod node_health_ingestion_tests {
         assert_eq!(value["udp_send_failures"], 5);
         assert_eq!(value["packet_yield_per_sec"], 37);
         assert_eq!(value["free_heap_bytes"], 181_224);
+    }
+
+    #[test]
+    fn reset_reason_names_cover_current_esp_idf_reasons() {
+        assert_eq!(reset_reason_name(2), "external_pin");
+        assert_eq!(reset_reason_name(11), "usb");
+        assert_eq!(reset_reason_name(12), "jtag");
+        assert_eq!(reset_reason_name(13), "efuse_error");
+        assert_eq!(reset_reason_name(14), "power_glitch");
+        assert_eq!(reset_reason_name(15), "cpu_lockup");
+        assert_eq!(reset_reason_name(255), "unknown");
     }
 }
 
