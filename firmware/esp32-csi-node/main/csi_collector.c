@@ -12,6 +12,9 @@
  */
 
 #include "csi_collector.h"
+#include "thermal.h"
+#include "esp_system.h"
+#include "esp_heap_caps.h"
 #include "nvs_config.h"
 #include "stream_sender.h"
 #include "edge_processing.h"
@@ -114,6 +117,9 @@ static int64_t s_last_send_us = 0;
  */
 #define CSI_MIN_PROCESS_INTERVAL_US  (20 * 1000)  /* 50 Hz */
 static int64_t s_last_process_us = 0;
+/* Mesh-epoch window index of the last accepted frame. UINT64_MAX means "none
+ * yet", which no real bucket can collide with. */
+static uint64_t s_last_gate_bucket = UINT64_MAX;
 static uint32_t s_early_drop = 0;
 
 /* ---- ADR-029: Channel-hop state ---- */
@@ -137,7 +143,7 @@ static esp_timer_handle_t s_hop_timer = NULL;
  * Serialize CSI data into ADR-018 binary frame format.
  *
  * Layout:
- *   [0..3]   Magic: 0xC5110001 (LE)
+ *   [0..3]   Magic: 0xC5110008 = CSI_MAGIC_V2 (LE); v1 was 0xC5110001
  *   [4]      Node ID
  *   [5]      Number of antennas (rx_ctrl.rx_ant + 1 if available, else 1)
  *   [6..7]   Number of subcarriers (LE u16) = len / (2 * n_antennas)
@@ -145,8 +151,13 @@ static esp_timer_handle_t s_hop_timer = NULL;
  *   [12..15] Sequence number (LE u32)
  *   [16]     RSSI (i8)
  *   [17]     Noise floor (i8)
- *   [18..19] Reserved
- *   [20..]   I/Q data (raw bytes from ESP-IDF callback)
+ *   [18]     PPDU type (ADR-110; 0 when HE tagging is compiled out)
+ *   [19]     Flags (ADR-018; bit4 = cross-node sync valid)
+ *   [20..25] Transmitter MAC (addr2) — wire v2 only
+ *   [26..]   I/Q data (raw bytes from ESP-IDF callback)
+ *
+ * Emits wire v2 (CSI_MAGIC_V2). v1 differs only in lacking bytes 20..25, so
+ * its I/Q begins at 20 instead of 26.
  */
 size_t csi_serialize_frame(const wifi_csi_info_t *info, uint8_t *buf, size_t buf_len)
 {
@@ -158,7 +169,7 @@ size_t csi_serialize_frame(const wifi_csi_info_t *info, uint8_t *buf, size_t buf
     uint16_t iq_len = (uint16_t)info->len;
     uint16_t n_subcarriers = iq_len / (2 * n_antennas);
 
-    size_t frame_size = CSI_HEADER_SIZE + iq_len;
+    size_t frame_size = CSI_HEADER_SIZE_V3 + iq_len;
     if (frame_size > buf_len) {
         ESP_LOGW(TAG, "Buffer too small: need %u, have %u", (unsigned)frame_size, (unsigned)buf_len);
         return 0;
@@ -177,8 +188,12 @@ size_t csi_serialize_frame(const wifi_csi_info_t *info, uint8_t *buf, size_t buf
         freq_mhz = 0;
     }
 
-    /* Magic (LE) */
-    uint32_t magic = CSI_MAGIC;
+    /* Magic (LE). Wire v3: identical to v2 through byte 25, then rx_seq at
+     * 26..27 and I/Q from 28. A reader that does not know v3 rejects the magic
+     * outright rather than misparsing the payload at the wrong offset -- which
+     * is the whole reason each layout change takes a new magic instead of
+     * appending silently. */
+    uint32_t magic = CSI_MAGIC_V3;
     memcpy(&buf[0], &magic, 4);
 
     /* Node ID (captured at init into s_node_id to survive memory corruption
@@ -263,8 +278,31 @@ size_t csi_serialize_frame(const wifi_csi_info_t *info, uint8_t *buf, size_t buf
     buf[19] = 0;
 #endif
 
+    /* Wire v2 bytes 20..25: transmitter (addr2) of the frame this CSI came
+     * from. ESP-IDF already hands it to us in info->mac; before v2 it was
+     * used only for the optional filter_mac comparison and then discarded,
+     * which left the sink unable to tell one link from another. */
+    memcpy(&buf[20], info->mac, 6);
+
+    /* Wire v3 bytes 26..27: the 802.11 sequence control field of the overheard
+     * frame, little-endian.
+     *
+     * This is the join key for cross-node fusion. The `sequence` at bytes
+     * 12..15 is this node's own counter and means nothing to any other node;
+     * rx_seq is assigned by the TRANSMITTER, so every receiver of the same
+     * packet reports the same value. (mac, rx_seq) therefore names one
+     * transmission across the whole fleet without any coordination between
+     * receivers -- no shared clock, no negotiation.
+     *
+     * Sent raw rather than masked to 12 bits: the low 4 bits are the fragment
+     * number, and discarding them here would merge fragments of one MSDU into
+     * a single key. The sink can mask if it wants sequence-only semantics; it
+     * cannot recover what the node threw away. */
+    uint16_t rx_seq = (uint16_t)info->rx_seq;
+    memcpy(&buf[26], &rx_seq, 2);
+
     /* I/Q data */
-    memcpy(&buf[CSI_HEADER_SIZE], info->buf, iq_len);
+    memcpy(&buf[CSI_HEADER_SIZE_V3], info->buf, iq_len);
 
     return frame_size;
 }
@@ -272,27 +310,81 @@ size_t csi_serialize_frame(const wifi_csi_info_t *info, uint8_t *buf, size_t buf
 /**
  * WiFi CSI callback — invoked by ESP-IDF when CSI data is available.
  */
+/* ---- DIAGNOSTIC: census of every transmitter the CSI engine produces for ----
+ *
+ * OFF BY DEFAULT. Build with -DRUVIEW_DIAG_CENSUS to enable. It logs heavily
+ * over serial and is only meaningful on a board you are watching, so it must
+ * never reach the fleet through an OTA.
+ */
+static struct { uint32_t seen; } s_cen_rx;   /* seen stays readable when off */
+
 static void wifi_csi_callback(void *ctx, wifi_csi_info_t *info)
 {
     (void)ctx;
 
-    /* Early rate gate: drop excess callbacks to ~50 Hz to prevent
-     * SPI flash cache crash in WiFi ISR (wDev_ProcessFiq). */
-    int64_t now_us = esp_timer_get_time();
-    if ((now_us - s_last_process_us) < CSI_MIN_PROCESS_INTERVAL_US) {
-        s_early_drop++;
-        return;
+    if ((s_cen_rx.seen % 1000u) == 0u) {
     }
-    s_last_process_us = now_us;
 
     /* ADR-060: MAC address filtering — drop frames from non-matching sources.
      * Uses defensively-copied s_filter_mac instead of g_nvs_config (which can
-     * be corrupted by wifi_init_sta — same root cause as the node_id clobber). */
+     * be corrupted by wifi_init_sta — same root cause as the node_id clobber).
+     *
+     * This MUST run before the rate gate below. Previously the gate ran first
+     * and stamped s_last_process_us before this check, so a frame from any
+     * other transmitter consumed the 20 ms slot and was then discarded here —
+     * starving the frames we actually asked for. Measured on an ESP32-C6 in a
+     * normal home environment (2026-08-28): enabling filter_mac dropped yield
+     * from ~42 pps to 6-13 pps, because ~75% of promiscuous MGMT+DATA traffic
+     * on the channel was not the filtered peer. Filtering first restores the
+     * full rate for the selected transmitter.
+     *
+     * Safe with respect to the crash the gate guards against: a 6-byte memcmp
+     * is negligible ISR work next to the CSI processing that follows, so
+     * running it on every callback does not reintroduce the wDev_ProcessFiq
+     * SPI-flash-cache pressure the gate exists to bound. */
     if (s_filter_mac_set) {
         if (memcmp(info->mac, s_filter_mac, 6) != 0) {
             return;  /* Source MAC doesn't match filter — skip frame. */
         }
     }
+
+    /* ADR-345 phase 2 probe: is rx_seq live, and do nodes share frames?
+     *
+     * `wifi_csi_info_t.rx_seq` is the 802.11 sequence number of the overheard
+     * packet, so two nodes that hear the SAME transmission see the SAME value.
+     * That would make (mac, rx_seq) a coordination-free identifier for "the
+     * same moment in the channel" — fusing on it needs no clocks, no guard
+     * interval, and no sync at all, because the frames are literally the same
+     * transmission arriving nanoseconds apart.
+     *
+     * Two things have to hold, and neither is safe to assume:
+     *
+     *   1. rx_seq is actually populated. It is declared and documented, but
+     *      IDF has fields that exist and are never filled.
+     *   2. Nodes accept overlapping frames. The rate gate below is a *time*
+     *      limiter with independent phase per node, so node A may accept at
+     *      t=0,20,40 ms while node B accepts at 7,27,47 — potentially disjoint
+     *      sets, which would leave nothing to pair.
+     *
+     * Logged BEFORE the gate ('h' = heard) and again after ('a' = accepted),
+     * so one capture answers both: whether rx_seq increments sensibly, and
+     * what fraction of heard frames survive to be pairable.
+     *
+     * Off by default. Enabling it costs a log line per callback at up to
+     * 50 Hz, which is fine for a bench capture and not for a soak. */
+
+    /* Early rate gate: drop excess callbacks to ~50 Hz to prevent
+     * SPI flash cache crash in WiFi ISR (wDev_ProcessFiq). */
+    int64_t now_us = esp_timer_get_time();
+    bool take;
+    take = (now_us - s_last_process_us) >= CSI_MIN_PROCESS_INTERVAL_US;
+    if (!take) {
+        s_early_drop++;
+        return;
+    }
+    s_last_process_us = now_us;
+
+
 
     s_cb_count++;
 
@@ -368,7 +460,7 @@ static void wifi_csi_callback(void *ctx, wifi_csi_info_t *info)
 #define CONFIG_C6_SYNC_EVERY_N_FRAMES 20
 #endif
         if ((s_cb_count % CONFIG_C6_SYNC_EVERY_N_FRAMES) == 0) {
-            uint8_t sync[32];
+            uint8_t sync[38];
             uint32_t sync_magic = 0xC511A110u;    /* CSI-ADR-110 sync packet */
             uint64_t local_us = (uint64_t)esp_timer_get_time();
             uint64_t epoch_us = c6_sync_espnow_get_epoch_us();
@@ -380,14 +472,60 @@ static void wifi_csi_callback(void *ctx, wifi_csi_info_t *info)
 
             memcpy(&sync[0],  &sync_magic, 4);
             sync[4] = s_node_id;
-            sync[5] = 0x01;                       /* protocol version */
+            sync[5] = 0x02;                       /* proto v2: + node_mac */
             sync[6] = flags;
             sync[7] = 0;                          /* reserved */
             memcpy(&sync[8],  &local_us, 8);
             memcpy(&sync[16], &epoch_us, 8);
             memcpy(&sync[24], &s_sequence, 4);    /* high-water seq for pairing */
-            uint32_t zero32 = 0;
-            memcpy(&sync[28], &zero32, 4);        /* reserved (room for leader_id low32) */
+
+            /* Bytes 32..37: this node's own WiFi STA MAC.
+             *
+             * The sink cannot otherwise tell that a captured transmitter
+             * address belongs to one of its own nodes. It had to guess, using
+             * the only signature available: a MAC heard by every receiver
+             * except one is probably that one's. That holds while every node
+             * hears every other -- true of boards on a bench, false the moment
+             * they are spread through a building. MEASURED 2026-08-31 with
+             * nine nodes in real positions: 0 of 32 links attributed, every
+             * peer link misreported as infrastructure.
+             *
+             * The node knows this for free. Six bytes at ~0.5 Hz replaces an
+             * inference that fails exactly where the product is meant to run. */
+            uint8_t self_mac[6] = {0};
+            if (esp_wifi_get_mac(WIFI_IF_STA, self_mac) != ESP_OK) {
+                /* Leave zeros; the sink treats all-zero as "not reported"
+                 * rather than as an address. */
+                memset(self_mac, 0, sizeof(self_mac));
+            }
+            memcpy(&sync[32], self_mac, 6);
+            /* Node health, in bytes that were reserved-zero.
+             *
+             * These nodes live on walls with no console, so a serial log line
+             * reaches nobody. The sync packet is the right carrier: it already
+             * leaves every node on a priority path at ~2 Hz and the server
+             * already stores it per node, so health rides along for free.
+             *
+             * Backward compatible in both directions -- an older server reads
+             * these as the zeros it always ignored, and a node that has
+             * thermal monitoring compiled out still sends zeros.
+             *
+             *   [7]  minimum free heap / 2048 (0 = unknown; ~510 KB range)
+             *   [28] reset reason (esp_reset_reason_t)
+             *   [29] thermal state (0 ok, 1 warn, 2 throttled, 3 critical)
+             *   [30] die temperature, signed whole degrees C
+             *   [31] current WiFi transmit ceiling, whole dBm
+             *
+             * Byte 31 matters as much as byte 30: a thermally throttled node's
+             * RSSI drops at both ends, which is indistinguishable from an
+             * obstruction unless the reader can see the transmit power fell. */
+            size_t minheap = esp_get_minimum_free_heap_size() / 2048;
+            sync[7]  = (uint8_t)(minheap > 255 ? 255 : minheap);
+            sync[28] = (uint8_t)esp_reset_reason();
+            sync[29] = (uint8_t)thermal_state();
+            float dc = thermal_celsius();
+            sync[30] = (dc < -100.0f) ? 0 : (uint8_t)(int8_t)dc;
+            sync[31] = (uint8_t)thermal_tx_dbm();
             /* Sync packets are 32 B at ~0.5 Hz — priority path so the CSI
              * ENOMEM backoff can't starve cross-node time alignment (#1183). */
             int sr = stream_sender_send_priority(sync, sizeof(sync));
