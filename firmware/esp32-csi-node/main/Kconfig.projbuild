@@ -39,6 +39,17 @@ menu "CSI Node Configuration"
         help
             WiFi channel to listen on for CSI data.
 
+    config CSI_SELF_PING_HZ
+        int "Connected-STA CSI probe rate (Hz)"
+        default 50
+        range 10 50
+        help
+            Rate of the one-byte ICMP probes used to create a stable OFDM
+            CSI source on quiet networks. Fifty hertz is the measured safety
+            ceiling for the current ESP-IDF WiFi callback path. Higher rates
+            are intentionally rejected because sustained callback load above
+            50 Hz has caused WiFi ISR and packet-buffer failures on S3 and C6.
+
 endmenu
 
 menu "Edge Intelligence (ADR-039)"
@@ -65,6 +76,18 @@ menu "Edge Intelligence (ADR-039)"
         range 1 32
         help
             Number of highest-variance subcarriers to use for DSP.
+
+    config EDGE_DSP_SAMPLE_HZ
+        int "On-device edge DSP sample rate (Hz)"
+        default 8 if IDF_TARGET_ESP32C6
+        default 20
+        range 8 50
+        help
+            Uniform rate at which CSI callbacks enter the Tier 1 and Tier 2
+            edge DSP. Raw CSI transmission keeps its independent full-rate
+            path. Eight hertz is the hardware-measured sustainable C6 Tier 2
+            setting and preserves a 4 Hz Nyquist limit for the 0.1-2.0 Hz
+            vital bands.
 
     config EDGE_FALL_THRESH
         int "Fall detection threshold (x1000)"

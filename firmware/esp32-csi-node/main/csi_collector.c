@@ -63,6 +63,32 @@ static uint32_t s_send_ok = 0;
 static uint32_t s_send_fail = 0;
 static uint32_t s_rate_skip = 0;
 
+#ifndef CONFIG_CSI_SELF_PING_HZ
+#define CONFIG_CSI_SELF_PING_HZ 50
+#endif
+
+#if CONFIG_CSI_SELF_PING_HZ < 10 || CONFIG_CSI_SELF_PING_HZ > 50
+#error "CONFIG_CSI_SELF_PING_HZ must stay within the hardware-qualified 10-50 Hz range"
+#endif
+
+#define CSI_SELF_PING_INTERVAL_MS (1000U / CONFIG_CSI_SELF_PING_HZ)
+
+#ifndef CONFIG_EDGE_DSP_SAMPLE_HZ
+#if CONFIG_IDF_TARGET_ESP32C6
+#define CONFIG_EDGE_DSP_SAMPLE_HZ 8
+#else
+#define CONFIG_EDGE_DSP_SAMPLE_HZ 20
+#endif
+#endif
+
+#if CONFIG_EDGE_DSP_SAMPLE_HZ < 8 || CONFIG_EDGE_DSP_SAMPLE_HZ > 50
+#error "CONFIG_EDGE_DSP_SAMPLE_HZ must stay within the supported 8-50 Hz range"
+#endif
+
+#define EDGE_DSP_MIN_INTERVAL_US (1000000U / CONFIG_EDGE_DSP_SAMPLE_HZ)
+static int64_t s_next_edge_enqueue_us = 0;
+static uint32_t s_edge_rate_skip = 0;
+
 /**
  * Minimum interval between UDP sends in microseconds.
  * CSI callbacks can fire hundreds of times per second in promiscuous mode.
@@ -300,10 +326,31 @@ static void wifi_csi_callback(void *ctx, wifi_csi_info_t *info)
         }
     }
 
-    /* ADR-039: Enqueue raw I/Q into edge processing ring buffer. */
+    /* ADR-039 / ADR-347: Raw CSI stays at the independent network cadence,
+     * while the on-device Tier 1/2 pipeline receives a uniform, sustainable
+     * stream. Enqueuing every burst frame overloaded the unicore C6 DSP and
+     * turned 30-40 callback pps into an irregular approximately 8 Hz subset. */
     if (info->buf && info->len > 0) {
-        edge_enqueue_csi((const uint8_t *)info->buf, (uint16_t)info->len,
-                         (int8_t)info->rx_ctrl.rssi, info->rx_ctrl.channel);
+        if (s_next_edge_enqueue_us == 0) {
+            s_next_edge_enqueue_us = now_us;
+        }
+
+        if (now_us >= s_next_edge_enqueue_us) {
+            (void)edge_enqueue_csi((const uint8_t *)info->buf, (uint16_t)info->len,
+                                   (int8_t)info->rx_ctrl.rssi, info->rx_ctrl.channel);
+
+            /* Preserve the configured sample clock instead of resetting it to
+             * each irregular callback. With roughly 35 raw callbacks per
+             * second, a last-seen 100 ms gate selected every fourth callback
+             * and drifted to roughly 8 Hz. Advancing the deadline by complete
+             * periods alternates the available callbacks around the configured
+             * phase and prevents both drift and catch-up bursts. */
+            int64_t periods = ((now_us - s_next_edge_enqueue_us) /
+                               EDGE_DSP_MIN_INTERVAL_US) + 1;
+            s_next_edge_enqueue_us += periods * EDGE_DSP_MIN_INTERVAL_US;
+        } else {
+            s_edge_rate_skip++;
+        }
     }
 
     /* ADR-110 §A0.11/§A0.12 — Emit a sync-packet every N CSI frames so the
@@ -411,7 +458,7 @@ static void csi_start_self_ping(void)
     esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
     cfg.target_addr     = target;
     cfg.count           = ESP_PING_COUNT_INFINITE;
-    cfg.interval_ms     = 20;     /* 50 Hz -> ~50 received OFDM replies/sec */
+    cfg.interval_ms     = CSI_SELF_PING_INTERVAL_MS;
     cfg.data_size       = 1;
     cfg.task_stack_size = 4096;
 
@@ -424,7 +471,8 @@ static void csi_start_self_ping(void)
 
     if (esp_ping_new_session(&cfg, &cbs, &s_self_ping) == ESP_OK && s_self_ping != NULL) {
         esp_ping_start(s_self_ping);
-        ESP_LOGI(TAG, "self-ping started -> %s @50Hz (CSI OFDM source, fix #521/#954)", gw_str);
+        ESP_LOGI(TAG, "self-ping started -> %s @%dHz (CSI OFDM source, fix #521/#954)",
+                 gw_str, CONFIG_CSI_SELF_PING_HZ);
     } else {
         ESP_LOGW(TAG, "self-ping: esp_ping_new_session failed");
         s_self_ping = NULL;
@@ -592,6 +640,8 @@ void csi_collector_init(void)
 
     ESP_LOGI(TAG, "CSI collection initialized (node_id=%u, channel=%u)",
              (unsigned)s_node_id, (unsigned)csi_channel);
+    ESP_LOGI(TAG, "edge DSP cadence=%dHz; raw CSI network cadence remains independent",
+             CONFIG_EDGE_DSP_SAMPLE_HZ);
 
     /* RuView#521/#954: start the connected-STA traffic source so the CSI engine
      * receives a guaranteed OFDM unicast floor even when promiscuous capture is

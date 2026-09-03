@@ -1,0 +1,627 @@
+name: RuForecast Rust CI
+
+on:
+  push:
+    branches: [main, develop, 'feat/*', 'feature/*']
+    paths:
+      - 'v2/crates/ruforecast'
+      - 'v2/Cargo.toml'
+      - 'v2/Cargo.lock'
+      - 'v2/rust-toolchain.toml'
+      - 'scripts/csi-data-policy-check.sh'
+      - 'scripts/run-ruforecast-benchmarks.sh'
+      - 'docs/adr/ADR-348-*.md'
+      - 'docs/adr/ADR-349-*.md'
+      - 'docs/adr/ADR-350-*.md'
+      - 'docs/adr/README.md'
+      - 'docs/benchmarks/ruforecast.md'
+      - 'docs/huggingface/RUVIEW_FORECAST_MODEL_CARD_TEMPLATE.md'
+      - 'docs/security/ruview-forecast-*'
+      - 'docs/validation/ruforecast-requirements-evidence.md'
+      - '.github/workflows/ruforecast-ci.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'v2/crates/ruforecast'
+      - 'v2/Cargo.toml'
+      - 'v2/Cargo.lock'
+      - 'v2/rust-toolchain.toml'
+      - 'scripts/csi-data-policy-check.sh'
+      - 'scripts/run-ruforecast-benchmarks.sh'
+      - 'docs/adr/ADR-348-*.md'
+      - 'docs/adr/ADR-349-*.md'
+      - 'docs/adr/ADR-350-*.md'
+      - 'docs/adr/README.md'
+      - 'docs/benchmarks/ruforecast.md'
+      - 'docs/huggingface/RUVIEW_FORECAST_MODEL_CARD_TEMPLATE.md'
+      - 'docs/security/ruview-forecast-*'
+      - 'docs/validation/ruforecast-requirements-evidence.md'
+      - '.github/workflows/ruforecast-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ruforecast-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  CARGO_PROFILE_BENCH_DEBUG: '0'
+  CARGO_PROFILE_RELEASE_DEBUG: '0'
+
+jobs:
+  contract-rust-189:
+    name: Forecast contract and feature-off boundary (Rust 1.89)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout recursively
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Rust 1.89 with lint components
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.89.0
+          components: rustfmt,clippy
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: v2/crates/ruforecast
+          key: ruforecast-rust-189
+
+      - name: Validate benchmark runner and evidence contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/run-ruforecast-benchmarks.sh
+          test -x scripts/run-ruforecast-benchmarks.sh
+          test -f docs/benchmarks/ruforecast.md
+          test -f docs/huggingface/RUVIEW_FORECAST_MODEL_CARD_TEMPLATE.md
+          test -f docs/security/ruview-forecast-clean-room.md
+          test -f docs/security/ruview-forecast-threat-model.md
+          test -f docs/validation/ruforecast-requirements-evidence.md
+
+          for adr_number in 348 349 350; do
+            mapfile -t adr_files < <(
+              find docs/adr -maxdepth 1 -type f -name "ADR-${adr_number}-*.md" -print
+            )
+            if [[ "${#adr_files[@]}" -ne 1 ]]; then
+              echo "Expected exactly one ADR-${adr_number} file, found ${#adr_files[@]}" >&2
+              exit 1
+            fi
+            grep -q "^# ADR-${adr_number}:" "${adr_files[0]}"
+            grep -Eq '^[-*] \*\*Status\*\*: (Proposed|Accepted|Superseded|Deprecated)( |$|—)|^## Status' "${adr_files[0]}"
+          done
+
+          grep -q '^## Requirements' docs/adr/ADR-348-*.md
+          grep -q '^## Acceptance gates' docs/adr/ADR-348-*.md
+          grep -q '^## Requirements and acceptance' docs/adr/ADR-349-*.md
+          grep -q '^## Requirements and acceptance' docs/adr/ADR-350-*.md
+          for adr_number in 348 349 350; do
+            grep -q "| \[ADR-${adr_number}\](ADR-${adr_number}-" docs/adr/README.md \
+              || { echo "ADR-${adr_number} is missing from the ADR index" >&2; exit 1; }
+          done
+
+          for number in $(seq 1 12); do
+            requirement="$(printf 'RF-%03d' "$number")"
+            grep -q "| ${requirement} |" docs/validation/ruforecast-requirements-evidence.md \
+              || { echo "Missing evidence row for ${requirement}" >&2; exit 1; }
+          done
+          for number in $(seq 1 8); do
+            requirement="$(printf 'FT-%03d' "$number")"
+            grep -q "| ${requirement} |" docs/validation/ruforecast-requirements-evidence.md \
+              || { echo "Missing evidence row for ${requirement}" >&2; exit 1; }
+          done
+          for number in $(seq 1 9); do
+            requirement="$(printf 'PM-%03d' "$number")"
+            grep -q "| ${requirement} |" docs/validation/ruforecast-requirements-evidence.md \
+              || { echo "Missing evidence row for ${requirement}" >&2; exit 1; }
+          done
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import tomllib
+
+          root = Path("v2/crates/ruforecast/crates")
+          core = tomllib.loads((root / "ruforecast-core/Cargo.toml").read_text())
+          model = tomllib.loads((root / "ruforecast-model/Cargo.toml").read_text())
+          train = tomllib.loads((root / "ruforecast-train/Cargo.toml").read_text())
+
+          assert core.get("features", {}).get("default", []) == []
+          assert model["features"]["default"] == [], "model defaults must stay backend-free"
+          assert train["features"]["default"] == [], "train defaults must stay backend-free"
+          assert {"model", "cpu", "cuda", "wgpu", "ruvector"} <= model["features"].keys()
+          assert {"cpu", "cuda", "training", "cli", "server", "fal-client"} <= train["features"].keys()
+          assert {"model", "dep:burn-ndarray"} <= set(model["features"]["cpu"])
+          assert {"model", "dep:burn-cuda"} <= set(model["features"]["cuda"])
+          assert {"model", "dep:burn-wgpu"} <= set(model["features"]["wgpu"])
+          assert "dep:ruvector-core" in model["features"]["ruvector"]
+          assert {"ruforecast-model/cpu", "training"} <= set(train["features"]["cpu"])
+          assert {"ruforecast-model/cuda", "training"} <= set(train["features"]["cuda"])
+
+          bins = {entry["name"]: entry for entry in train.get("bin", [])}
+          assert bins["ruforecast"]["required-features"] == ["cli"]
+
+          model_benches = {entry["name"]: entry for entry in model.get("bench", [])}
+          train_benches = {entry["name"]: entry for entry in train.get("bench", [])}
+          assert model_benches["forecast_inference"]["harness"] is False
+          assert model_benches["forecast_inference"]["required-features"] == ["cpu"]
+          assert train_benches["data_pipeline"]["harness"] is False
+          assert train_benches["data_pipeline"]["required-features"] == ["cpu"]
+          PY
+
+      - name: Check formatting for forecast packages only
+        working-directory: v2/crates/ruforecast
+        run: >-
+          cargo +1.89.0 fmt
+          -p ruforecast-core
+          -p ruforecast-model
+          -p ruforecast-train
+          -- --check
+
+      - name: Prove feature-off graph excludes Burn and CubeCL
+        working-directory: v2/crates/ruforecast
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > forecast-feature-off-tree.txt
+          for package in ruforecast-core ruforecast-model ruforecast-train; do
+            cargo +1.89.0 tree --locked -e normal,build -p "$package" --no-default-features \
+              >> forecast-feature-off-tree.txt
+          done
+          if grep -Eiq '(^|[[:space:]])(burn|cubecl)(-|[[:space:]])' forecast-feature-off-tree.txt; then
+            echo 'Burn/CubeCL entered the Rust 1.89 feature-off dependency graph.' >&2
+            cat forecast-feature-off-tree.txt >&2
+            exit 1
+          fi
+
+      - name: Check feature-off packages
+        working-directory: v2/crates/ruforecast
+        run: >-
+          cargo +1.89.0 check --locked
+          -p ruforecast-core
+          -p ruforecast-model
+          -p ruforecast-train
+          --no-default-features --all-targets
+
+      - name: Test model-neutral core
+        working-directory: v2/crates/ruforecast
+        run: >-
+          cargo +1.89.0 test --locked
+          -p ruforecast-core
+          --no-default-features --lib --tests
+
+      - name: Test model contracts without a model backend
+        working-directory: v2/crates/ruforecast
+        run: >-
+          cargo +1.89.0 test --locked
+          -p ruforecast-model
+          --no-default-features --lib --tests
+
+      - name: Test RuVector retrieval boundary without a model backend
+        working-directory: v2/crates/ruforecast
+        run: >-
+          cargo +1.89.0 test --locked
+          -p ruforecast-model
+          --no-default-features --features ruvector --lib --tests
+
+      - name: Clippy RuVector retrieval boundary
+        working-directory: v2/crates/ruforecast
+        run: >-
+          cargo +1.89.0 clippy --locked
+          -p ruforecast-model
+          --no-default-features --features ruvector --all-targets -- -D warnings
+
+      - name: Clippy forecast packages without backend features
+        working-directory: v2/crates/ruforecast
+        run: >-
+          cargo +1.89.0 clippy --locked
+          -p ruforecast-core
+          -p ruforecast-model
+          -p ruforecast-train
+          --no-default-features --all-targets -- -D warnings
+
+      - name: Upload feature-off dependency tree
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ruforecast-feature-off-tree
+          path: v2/crates/ruforecast/forecast-feature-off-tree.txt
+          if-no-files-found: error
+
+  hosted-boundaries-rust-189:
+    name: Forecast hosted boundaries and privacy contract (Rust 1.89)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout recursively
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Rust 1.89 with Clippy
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.89.0
+          components: clippy
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: v2/crates/ruforecast
+          key: ruforecast-hosted-rust-189
+
+      - name: Enforce clean-room source, secret, and hosted-wire boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          roots = [
+              Path("v2/crates/ruforecast/crates/ruforecast-core"),
+              Path("v2/crates/ruforecast/crates/ruforecast-model"),
+              Path("v2/crates/ruforecast/crates/ruforecast-train"),
+          ]
+          text_suffixes = {".json", ".py", ".rs", ".sh", ".toml", ".yaml", ".yml"}
+          forbidden_source = re.compile(r"(?i)\b(?:times[ _-]?fm|google[ _/-]?research)\b")
+          secret_patterns = {
+              "private key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+              "AWS access key": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+              "JWT": re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
+              "presigned URL": re.compile(r"(?i)[?&](?:X-Amz-Signature|X-Goog-Signature)="),
+              "literal FAL_KEY": re.compile(r"(?i)\bFAL_KEY\b\s*[:=]\s*['\"][^'$<{\"\n]{8,}['\"]"),
+          }
+          forbidden_blobs = {".ckpt", ".mpk", ".npy", ".npz", ".onnx", ".pt", ".pth", ".safetensors"}
+
+          errors = []
+          for root in roots:
+              for path in root.rglob("*"):
+                  if not path.is_file() or "target" in path.parts:
+                      continue
+                  if path.suffix.lower() in forbidden_blobs:
+                      errors.append(f"forbidden checked-in model/data blob: {path}")
+                      continue
+                  if path.suffix.lower() not in text_suffixes:
+                      continue
+                  text = path.read_text(encoding="utf-8")
+                  if forbidden_source.search(text):
+                      errors.append(f"forbidden clean-room source/import reference: {path}")
+                  for label, pattern in secret_patterns.items():
+                      if pattern.search(text):
+                          errors.append(f"possible {label} in {path}")
+
+          fal_source = Path("v2/crates/ruforecast/crates/ruforecast-train/src/fal.rs").read_text()
+          for struct_name in ("HostedOptimizer", "HostedBudget", "HostedSyntheticPayload"):
+              match = re.search(
+                  rf"pub struct {struct_name}\s*\{{(?P<body>.*?)^\}}",
+                  fal_source,
+                  flags=re.MULTILINE | re.DOTALL,
+              )
+              if match is None:
+                  errors.append(f"missing hosted wire struct: {struct_name}")
+                  continue
+              body = match.group("body")
+              fields = re.findall(r"^\s*pub\s+([A-Za-z0-9_]+)\s*:", body, re.MULTILINE)
+              forbidden_fields = (
+                  "account", "data_policy", "dataset", "device", "identity", "path",
+                  "person", "room", "session", "site", "split", "subject", "tenant",
+                  "workspace",
+              )
+              for field in fields:
+                  lowered = field.lower()
+                  if any(fragment in lowered for fragment in forbidden_fields):
+                      errors.append(f"forbidden hosted field {struct_name}.{field}")
+                  if "bytes" in lowered and field not in {
+                      "max_artifact_bytes",
+                      "max_memory_bytes",
+                  }:
+                      errors.append(f"unapproved hosted byte field {struct_name}.{field}")
+              if "DataPolicy" in body:
+                  errors.append(f"DataPolicy entered hosted wire struct {struct_name}")
+
+          if errors:
+              print("\n".join(errors), file=sys.stderr)
+              raise SystemExit(1)
+          PY
+
+      - name: Enforce tracked-data policy
+        run: |
+          set -euo pipefail
+          bash scripts/csi-data-policy-check.sh --self-test
+          bash scripts/csi-data-policy-check.sh --tracked
+
+      - name: Validate minimal fal deployment archive policy
+        run: >-
+          python3
+          v2/crates/ruforecast/crates/ruforecast-train/deploy/fal/deploy.py
+          self-test
+
+      - name: Prove hosted feature graph excludes Burn and CubeCL
+        working-directory: v2/crates/ruforecast
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.89.0 tree --locked -e normal,build \
+            -p ruforecast-train \
+            --no-default-features --features cli,server,fal-client \
+            > forecast-hosted-feature-tree.txt
+          if grep -Eiq '(^|[[:space:]])(burn|cubecl)(-|[[:space:]])' \
+            forecast-hosted-feature-tree.txt; then
+            echo 'Burn/CubeCL entered the Rust 1.89 hosted dependency graph.' >&2
+            cat forecast-hosted-feature-tree.txt >&2
+            exit 1
+          fi
+
+      - name: Require named hosted boundary regressions
+        working-directory: v2/crates/ruforecast
+        shell: bash
+        env:
+          FAL_KEY: ''
+        run: |
+          set -euo pipefail
+          cargo +1.89.0 test --locked \
+            -p ruforecast-train \
+            --no-default-features --features cli,server,fal-client \
+            --lib --bins --tests -- --list \
+            | tee hosted-boundary-tests.txt
+          for regression in \
+            fal_app_rejects_path_and_host_confusion \
+            fal_urls_require_exact_origin_path_and_no_query \
+            fal_submit_headers_disable_retry_and_omit_store_io \
+            hosted_payload_dto_has_no_customer_fields \
+            queue_status_discards_provider_error_body \
+            result_url_accepts_exact_response_suffix \
+            artifact_file_url_uses_expected_api_path \
+            fal_key_debug_is_redacted \
+            hosted_payload_rejects_app_field \
+            hosted_reservation_cannot_exceed_source_retention \
+            artifact_handoff_expiry_boundary_is_fail_closed \
+            fal_result_enforces_cumulative_artifact_budget_boundary \
+            fal_download_rejects_over_budget_without_writing \
+            direct_server_train_requires_request_id_header \
+            request_id_rejects_path_injection \
+            unknown_cancel_is_not_success \
+            privacy_external_dataset_payload_is_denied; do
+            grep -q "$regression" hosted-boundary-tests.txt \
+              || { echo "Missing hosted boundary regression: $regression" >&2; exit 1; }
+          done
+
+      - name: Exercise hosted external-data rejection
+        working-directory: v2/crates/ruforecast
+        env:
+          FAL_KEY: ''
+        run: >-
+          cargo +1.89.0 test --locked
+          -p ruforecast-train
+          --no-default-features --features cli,server,fal-client
+          privacy_external_dataset_payload_is_denied
+
+      - name: Test server and fal client with mock integrations
+        working-directory: v2/crates/ruforecast
+        env:
+          FAL_KEY: ''
+        run: >-
+          cargo +1.89.0 test --locked
+          -p ruforecast-train
+          --no-default-features --features cli,server,fal-client
+          --lib --bins --tests
+
+      - name: Clippy server and fal client boundaries
+        working-directory: v2/crates/ruforecast
+        env:
+          FAL_KEY: ''
+        run: >-
+          cargo +1.89.0 clippy --locked
+          -p ruforecast-train
+          --no-default-features --features cli,server,fal-client
+          --all-targets -- -D warnings
+
+      - name: Clippy standalone CLI feature boundary
+        working-directory: v2/crates/ruforecast
+        env:
+          FAL_KEY: ''
+        run: >-
+          cargo +1.89.0 clippy --locked
+          -p ruforecast-train
+          --no-default-features --features cli
+          --bin ruforecast -- -D warnings
+
+      - name: Upload hosted dependency tree
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ruforecast-hosted-feature-tree
+          path: v2/crates/ruforecast/forecast-hosted-feature-tree.txt
+          if-no-files-found: error
+
+  burn-cpu-rust-192:
+    name: Forecast Burn CPU tests and bench compile (Rust 1.92)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout recursively
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Rust 1.92 with Clippy
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.92.0
+          components: clippy
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: v2/crates/ruforecast
+          key: ruforecast-rust-192-cpu
+
+      - name: Test model with Burn CPU backend
+        working-directory: v2/crates/ruforecast
+        run: >-
+          cargo +1.92.0 test --locked
+          -p ruforecast-model
+          --no-default-features --features cpu --lib --tests
+
+      - name: Test trainer and CLI with Burn CPU backend
+        working-directory: v2/crates/ruforecast
+        run: >-
+          cargo +1.92.0 test --locked
+          -p ruforecast-train
+          --no-default-features --features cpu,cli --lib --bins
+
+      - name: Run one-step local JSONL training smoke
+        working-directory: v2/crates/ruforecast
+        run: >-
+          cargo +1.92.0 test --locked
+          -p ruforecast-train
+          --no-default-features --features cpu
+          --test local_jsonl_smoke --
+          --exact local_hash_addressed_jsonl_executes_one_real_optimizer_step
+
+      - name: Run idempotent synthetic CLI training smoke
+        working-directory: v2/crates/ruforecast
+        run: >-
+          cargo +1.92.0 test --locked
+          -p ruforecast-train
+          --no-default-features --features cpu,cli
+          --test cli_smoke --
+          --exact cli_smoke_trains_and_writes_the_complete_candidate_set
+
+      - name: Test combined CPU and hosted feature surface
+        working-directory: v2/crates/ruforecast
+        env:
+          FAL_KEY: ''
+        run: >-
+          cargo +1.92.0 test --locked
+          -p ruforecast-train
+          --no-default-features --features cpu,cli,server,fal-client
+          --lib --bins
+
+      - name: Clippy model with Burn CPU backend
+        working-directory: v2/crates/ruforecast
+        run: >-
+          cargo +1.92.0 clippy --locked
+          -p ruforecast-model
+          --no-default-features --features cpu --all-targets -- -D warnings
+
+      - name: Clippy trainer and CLI with Burn CPU backend
+        working-directory: v2/crates/ruforecast
+        env:
+          FAL_KEY: ''
+        run: >-
+          cargo +1.92.0 clippy --locked
+          -p ruforecast-train
+          --no-default-features --features cpu,cli,server,fal-client
+          --all-targets -- -D warnings
+
+      - name: Compile forecast inference benchmark
+        working-directory: v2/crates/ruforecast
+        run: >-
+          cargo +1.92.0 bench --locked
+          -p ruforecast-model
+          --no-default-features --features cpu
+          --bench forecast_inference --no-run
+
+      - name: Compile forecast data-pipeline benchmark
+        working-directory: v2/crates/ruforecast
+        run: >-
+          cargo +1.92.0 bench --locked
+          -p ruforecast-train
+          --no-default-features --features cpu
+          --bench data_pipeline --no-run
+
+      - name: Run quick inference benchmark for trend visibility
+        continue-on-error: true
+        timeout-minutes: 15
+        working-directory: v2/crates/ruforecast
+        run: |
+          set -o pipefail
+          mkdir -p ../../bench-out/ruforecast
+          cargo +1.92.0 bench --locked \
+            -p ruforecast-model \
+            --no-default-features --features cpu \
+            --bench forecast_inference -- \
+            --warm-up-time 1 --measurement-time 2 --sample-size 10 \
+            | tee ../../bench-out/ruforecast/forecast-inference.txt
+
+      - name: Run quick data-pipeline benchmark for trend visibility
+        continue-on-error: true
+        timeout-minutes: 15
+        working-directory: v2/crates/ruforecast
+        run: |
+          set -o pipefail
+          mkdir -p ../../bench-out/ruforecast
+          cargo +1.92.0 bench --locked \
+            -p ruforecast-train \
+            --no-default-features --features cpu \
+            --bench data_pipeline -- \
+            --warm-up-time 1 --measurement-time 2 --sample-size 10 \
+            | tee ../../bench-out/ruforecast/data-pipeline.txt
+
+      - name: Upload informational benchmark logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ruforecast-informational-cpu-benchmarks
+          path: bench-out/ruforecast/
+          if-no-files-found: warn
+
+  burn-cuda-compile-rust-192:
+    name: Forecast Burn CUDA/WGPU compile checks only (Rust 1.92)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout recursively
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Rust 1.92
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.92.0
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: v2/crates/ruforecast
+          key: ruforecast-rust-192-cuda-check
+
+      - name: Check model CUDA feature
+        working-directory: v2/crates/ruforecast
+        run: >-
+          cargo +1.92.0 check --locked
+          -p ruforecast-model
+          --no-default-features --features cuda --lib
+
+      - name: Check model WGPU feature
+        working-directory: v2/crates/ruforecast
+        run: >-
+          cargo +1.92.0 check --locked
+          -p ruforecast-model
+          --no-default-features --features wgpu --lib
+
+      - name: Check trainer CUDA and hosted-server feature combination
+        working-directory: v2/crates/ruforecast
+        env:
+          FAL_KEY: ''
+        run: >-
+          cargo +1.92.0 check --locked
+          -p ruforecast-train
+          --no-default-features --features cuda,cli,server
+          --lib --bins

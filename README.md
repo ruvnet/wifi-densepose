@@ -2,19 +2,10 @@
 
 <p align="center">
   <a href="https://cognitum.one/seed">
-    <img src="assets/ruview-seed.png" alt="RuView - WiFi DensePose" width="100%">
+    <img src="assets/ruview-hero-h3-v3.gif" alt="RuView - WiFi DensePose — animated visualization of real-time pose estimation, breathing, and heart-rate sensing through WiFi" width="100%">
   </a>
 </p>
-<p align="center">
-  <a href="https://cognitum.one/marketplace">
-    <img src="assets/musica-promo.png" alt="Cognitum Musica" width="100%">
-  </a>
-</p>
-<p align="center">
-  <a href="https://github.com/ruvnet/RuCelium">
-    <img src="assets/rucelium-hero.png" alt="RuCelium — environmental intelligence" width="100%">
-  </a>
-</p>
+
 
 ## **See through walls with WiFi** ##
 

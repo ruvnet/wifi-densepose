@@ -139,6 +139,32 @@ Implement the §3.3 mapping: `effective_class → PrivacyClass`, `cog-ha-matter`
 Add an opt-in `/ws/field` endpoint (or a `field_events` array on `SensingUpdate` behind a flag) carrying the signed `FieldEvent` + a privacy badge. Add an ingest route to `rufield-viewer` (it has none today — `server.rs:63-72`) so it can replay RuView's live feed instead of only `SyntheticSim`. **Gate:** a WS integration test asserting a connected client receives a privacy-badged, signature-verifiable `FieldEvent`; a viewer test asserting the new ingest route renders a live event. The `cognitum` appliance can speak RuField by consuming this endpoint (it already runs `ruview-vitals-worker`); deferred to its own ADR.
 
 **P4 — fusion composition + multi-modality (ARCHITECTURE, optional).**
+
+> **Update — second modality landed as a library.** Open question 5 below asked
+> whether the second modality should be `rvcsi`. It is **ultrasonic**, because
+> the cost collapsed: `rufield-adapters` now ships `UltrasonicReplayAdapter`,
+> the first adapter for `Modality::Ultrasonic` (registry code 7, empty since
+> v0.1), which parses, validates and signs [BatVu](https://github.com/ruvnet/batvu)
+> range profiles upstream. RuView only has to decide what it will put on a wire.
+>
+> `wifi-densepose-rufield::ultrasonic` is that decision, and it is expressed
+> structurally: the adapter is configured for its 32-bin coarse output (`P1`,
+> egress-safe) rather than its full per-bin frame (`P0`, edge-local), because a
+> consumer cannot un-coarsen a coarse profile whereas a runtime check can be
+> reordered. The `network_egress_allowed` gate still runs and is asserted to
+> drop nothing.
+>
+> Gates: `tests/ultrasonic_gates.rs`, 12 tests — round-trip, signature-verify,
+> fusion ingest, P1 on **both** tensor and observation, structural unreachability
+> of P4/P5, trust-tier refusal in both directions, determinism, whole-file
+> rejection of a malformed recording. Plus one asserting the honest negative
+> result: **an ultrasonic scan produces no fused inferences at all**, because the
+> adapter declines to populate `presence` (one transducer pair cannot tell a
+> person from a coat on a chair) and the engine's feature vocabulary is entirely
+> statements about a body. RuField v0.1 has no predicate for static geometry.
+>
+> Not wired into the running server. P1 shipped as a library before P3 wired it
+> in; this follows the same staging.
 Wire a second modality (cheapest: an `rvcsi`-sourced event, or recorded mmWave) into `RuFieldFusion` alongside the WiFi event, proving cross-modality fusion above ruvsense. **Gate:** a fusion test with two modalities producing ≥1 cross-modal inference, with provenance coverage 100%.
 
 ---

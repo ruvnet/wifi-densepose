@@ -23,9 +23,6 @@ static const char *TAG = "ota_update";
 /** OTA HTTP server port. */
 #define OTA_PORT 8032
 
-/** Maximum firmware size (900 KB — matches CI binary size gate). */
-#define OTA_MAX_SIZE (900 * 1024)
-
 /** NVS namespace and key for the OTA pre-shared key. */
 #define OTA_NVS_NAMESPACE "security"
 #define OTA_NVS_KEY       "ota_psk"
@@ -95,11 +92,11 @@ static esp_err_t ota_status_handler(httpd_req_t *req)
     int len = snprintf(response, sizeof(response),
         "{\"version\":\"%s\",\"date\":\"%s\",\"time\":\"%s\","
         "\"running_partition\":\"%s\",\"next_partition\":\"%s\","
-        "\"max_size\":%d}",
+        "\"max_size\":%lu}",
         app->version, app->date, app->time,
         running ? running->label : "unknown",
         update ? update->label : "none",
-        OTA_MAX_SIZE);
+        (unsigned long)(update ? update->size : 0));
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, response, len);
@@ -121,16 +118,19 @@ static esp_err_t ota_upload_handler(httpd_req_t *req)
 
     ESP_LOGI(TAG, "OTA update started, content_length=%d", req->content_len);
 
-    if (req->content_len <= 0 || req->content_len > OTA_MAX_SIZE) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                            "Invalid firmware size (must be 1B - 900KB)");
-        return ESP_FAIL;
-    }
-
     const esp_partition_t *update_partition = esp_ota_get_next_update_partition(NULL);
     if (update_partition == NULL) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                             "No OTA partition available");
+        return ESP_FAIL;
+    }
+
+    if (req->content_len <= 0 || (size_t)req->content_len > update_partition->size) {
+        ESP_LOGW(TAG, "OTA rejected: content_length=%d exceeds partition '%s' size=%lu",
+                 req->content_len, update_partition->label,
+                 (unsigned long)update_partition->size);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                            "Invalid firmware size for OTA partition");
         return ESP_FAIL;
     }
 

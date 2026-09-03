@@ -69,6 +69,7 @@ pub mod bridge;
 pub mod lidar;
 pub mod privacy;
 pub mod snapshot;
+pub mod ultrasonic;
 
 pub use bridge::{snapshot_egress_class, snapshot_to_field_event};
 pub use lidar::{lidar_packet_to_field_event, LidarBridgeError, LidarDepthPacket};
@@ -76,6 +77,7 @@ pub use privacy::{apply_demotion_floor, egress_class, map_privacy};
 pub use snapshot::{
     RuViewPrivacyClass, SensingClass, SensingFeatures, SensingSnapshot, SignalField,
 };
+pub use ultrasonic::{ScanError, ScanSource, UltrasonicScan, ULTRASONIC_EGRESS_CLASS};
 
 // Re-export the rufield surface a bridge consumer needs, so callers depend on
 // one crate.

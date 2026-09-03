@@ -275,8 +275,12 @@ pub fn lidar_packet_to_field_event(
         motion_vector: None,
         confidence,
         features,
+        track_id: None,
+        attributes: Default::default(),
         labels: vec!["direct_visible_depth".into(), "not_nlos".into()],
         privacy_class: PrivacyClass::P1,
+        identity_evidence: None,
+        channel_sounding_provenance: None,
     };
     let provenance = ProvenanceRef {
         raw_hash,
@@ -292,6 +296,9 @@ pub fn lidar_packet_to_field_event(
         vendor: "apple_arkit".into(),
         device_id: sensor_id.to_string(),
         placement: packet.provenance.coordinate_frame_id.clone(),
+        coordinate_frame: Some(packet.provenance.coordinate_frame_id.clone()),
+        position_m: None,
+        orientation_xyzw: None,
         clock_domain: "iphone_unix".into(),
     };
     let mut event = FieldEvent::new(

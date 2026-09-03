@@ -145,6 +145,21 @@ pub fn snapshot_to_field_event(snap: &SensingSnapshot, signer: &Signer) -> Field
         features: build_features(snap, range_m),
         labels: build_labels(snap),
         privacy_class: class,
+        // ── fields added upstream since the previous submodule pin ─────────
+        //
+        // Each empty for its own reason rather than because a default was
+        // convenient. `track_id`: this bridge emits per-cycle snapshots, not
+        // tracks, and a stable per-person identifier is exactly what §3.3
+        // warns about. `attributes`: nothing `features` and `labels` do not
+        // already carry, and an empty map is omitted from the wire.
+        // `identity_evidence` / `channel_sounding_provenance`: both are
+        // structurally BLE-only — `validate_evidence_at` rejects either on any
+        // other modality — so for `wifi_csi` they are not unset, they are
+        // unrepresentable.
+        track_id: None,
+        attributes: Default::default(),
+        identity_evidence: None,
+        channel_sounding_provenance: None,
     };
 
     // ── 3. Provenance (real sha256 over the tensor bytes) ───────────────────
@@ -166,6 +181,15 @@ pub fn snapshot_to_field_event(snap: &SensingSnapshot, signer: &Signer) -> Field
         vendor: "esp32".to_string(),
         device_id: snap.node_id.clone(),
         placement: "unknown".to_string(),
+        // Optional sensor pose, added upstream. Left unset on purpose: a CSI
+        // link has no boresight and no surveyed position here, and §6 is
+        // explicit that this surface makes no validated room-coordinate claim
+        // (`field_localize`). A placeholder pose would be inventing exactly
+        // that claim. The ultrasonic path DOES set these, because a handheld
+        // scanner genuinely knows where it was pointing.
+        coordinate_frame: None,
+        position_m: None,
+        orientation_xyzw: None,
         clock_domain: "local".to_string(),
     };
 

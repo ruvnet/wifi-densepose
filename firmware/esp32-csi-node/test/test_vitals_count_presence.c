@@ -266,6 +266,19 @@ static void test_debounce_flapping_stays_stable(void)
     CHECK_EQ_U8("flapping count stays at 1", out, 1);
 }
 
+/* The packet count is evidence subordinated to presence, never an independent
+ * occupancy assertion. This guards the field failure where a node emitted
+ * presence=false with n_persons=3 or 4. */
+static void test_person_count_fails_closed_without_presence(void)
+{
+    CHECK_EQ_U8("absent with four active slots -> zero",
+                edge_evidence_person_count(false, 4), 0);
+    CHECK_EQ_U8("present preserves a bounded count",
+                edge_evidence_person_count(true, 3), 3);
+    CHECK_EQ_U8("present count clamps to protocol maximum",
+                edge_evidence_person_count(true, 255), EDGE_MAX_PERSONS);
+}
+
 /* ──────────────────────────────────────────────────────────────────────
  *  #996 — presence_flag_update: dithering score must NOT flicker the flag
  * ────────────────────────────────────────────────────────────────────── */
@@ -357,6 +370,36 @@ static void test_presence_dead_band_holds_state(void)
     CHECK_TRUE("dead band does not clear from true", flag);
 }
 
+/* The physical C6 delivered 28-37 CSI frames/s while the former estimator was
+ * capped at 30 Hz. A 34 Hz stream must converge above that old ceiling. */
+static void test_sample_rate_tracks_above_thirty_hz(void)
+{
+    float rate = 20.0f;
+    for (int i = 0; i < 12; i++) {
+        rate = edge_sample_rate_window_update(rate, 34U, 1000000U);
+    }
+    CHECK_TRUE("sample rate follows measured 34 Hz cadence", rate > 33.0f && rate < 35.0f);
+}
+
+static void test_sample_rate_requires_complete_window(void)
+{
+    float rate = 34.0f;
+    CHECK_TRUE("short window rejected",
+               edge_sample_rate_window_update(rate, 10U, 200000U) == rate);
+    CHECK_TRUE("stalled window rejected",
+               edge_sample_rate_window_update(rate, 10U, 4000000U) == rate);
+}
+
+static void test_sample_rate_is_bounded(void)
+{
+    float rate = EDGE_SAMPLE_RATE_MAX_HZ;
+    CHECK_TRUE("sample rate upper bound holds",
+               edge_sample_rate_window_update(rate, 1000U, 1000000U) <= EDGE_SAMPLE_RATE_MAX_HZ);
+    rate = EDGE_SAMPLE_RATE_MIN_HZ;
+    CHECK_TRUE("sample rate lower bound holds",
+               edge_sample_rate_window_update(rate, 1U, 1000000U) >= EDGE_SAMPLE_RATE_MIN_HZ);
+}
+
 /* ──────────────────────────────────────────────────────────────────────
  *  main
  * ────────────────────────────────────────────────────────────────────── */
@@ -375,12 +418,18 @@ int main(void)
     test_debounce_rejects_transient_spike();
     test_debounce_accepts_sustained_change();
     test_debounce_flapping_stays_stable();
+    test_person_count_fails_closed_without_presence();
 
     /* #996 presence hysteresis */
     test_presence_no_flicker_on_dither();
     test_presence_clear_debounce_holds();
     test_presence_genuine_departure_clears();
     test_presence_dead_band_holds_state();
+
+    /* Timestamp-derived temporal calibration */
+    test_sample_rate_tracks_above_thirty_hz();
+    test_sample_rate_requires_complete_window();
+    test_sample_rate_is_bounded();
 
     printf("\n%d passed, %d failed\n", g_passed, g_failed);
     return g_failed == 0 ? 0 : 1;
