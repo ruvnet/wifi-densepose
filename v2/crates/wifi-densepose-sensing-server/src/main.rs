@@ -7774,6 +7774,67 @@ fn coalesce_ui_path(initial: std::path::PathBuf) -> std::path::PathBuf {
     initial
 }
 
+#[cfg(feature = "mqtt")]
+fn start_mqtt_if_allowed<T>(
+    validation: Result<(), wifi_densepose_sensing_server::mqtt::config::MqttConfigError>,
+    start: impl FnOnce() -> T,
+) -> Option<T> {
+    match validation {
+        Ok(()) => Some(start()),
+        Err(advisory) if !advisory.is_fatal() => {
+            tracing::warn!("MQTT config advisory: {advisory}");
+            Some(start())
+        }
+        Err(error) => {
+            tracing::error!("MQTT config invalid: {error}; publisher not started");
+            None
+        }
+    }
+}
+
+#[cfg(all(test, feature = "mqtt"))]
+mod mqtt_startup_tests {
+    use super::start_mqtt_if_allowed;
+    use std::cell::Cell;
+    use wifi_densepose_sensing_server::mqtt::config::MqttConfigError;
+
+    #[test]
+    fn valid_config_starts_publisher() {
+        let calls = Cell::new(0);
+        let result = start_mqtt_if_allowed(Ok(()), || {
+            calls.set(calls.get() + 1);
+            "started"
+        });
+        assert_eq!(result, Some("started"));
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn nonfatal_advisory_starts_publisher() {
+        let calls = Cell::new(0);
+        let advisory = MqttConfigError::PlaintextOnPublicHost {
+            host: "broker.example.com".to_string(),
+        };
+        let result = start_mqtt_if_allowed(Err(advisory), || {
+            calls.set(calls.get() + 1);
+            "started"
+        });
+        assert_eq!(result, Some("started"));
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn fatal_error_rejects_publisher_startup() {
+        let calls = Cell::new(0);
+        let result = start_mqtt_if_allowed(Err(MqttConfigError::EmptyHost), || {
+            calls.set(calls.get() + 1);
+            "started"
+        });
+        assert_eq!(result, None);
+        assert_eq!(calls.get(), 0);
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // Initialize tracing; with the `otel` feature and
@@ -8527,40 +8588,37 @@ async fn main() {
         {
             use wifi_densepose_sensing_server::mqtt;
             let mcfg = std::sync::Arc::new(mqtt::config::MqttConfig::from_args(&args.mqtt_opts));
-            match mcfg.validate() {
-                Ok(()) => {
-                    let node_id = mcfg.client_id.clone();
-                    let builder = mqtt::publisher::OwnedDiscoveryBuilder {
-                        discovery_prefix: mcfg.discovery_prefix.clone(),
-                        node_id: node_id.clone(),
-                        node_friendly_name: Some("RuView".to_string()),
-                        sw_version: env!("CARGO_PKG_VERSION").to_string(),
-                        model: "RuView WiFi Sensing".to_string(),
-                        via_device: None,
-                    };
-                    let (vtx, vrx) = broadcast::channel::<mqtt::state::VitalsSnapshot>(64);
-                    let (host, port) = (mcfg.host.clone(), mcfg.port);
-                    mqtt::publisher::spawn(mcfg, builder, vrx);
-                    let mut jrx = tx.subscribe();
-                    tokio::spawn(async move {
-                        while let Ok(json) = jrx.recv().await {
-                            let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) else {
-                                continue;
-                            };
-                            // #898/#872: emit one snapshot per physical node so
-                            // each surfaces as its own Home-Assistant device with
-                            // its *own* presence/motion/RSSI (see
-                            // vitals_snapshots_from_sensing_json). Falls back to a
-                            // single aggregate snapshot for per-node-less sources.
-                            for snap in vitals_snapshots_from_sensing_json(&v, &node_id) {
-                                let _ = vtx.send(snap);
-                            }
+            let _ = start_mqtt_if_allowed(mcfg.validate(), || {
+                let node_id = mcfg.client_id.clone();
+                let builder = mqtt::publisher::OwnedDiscoveryBuilder {
+                    discovery_prefix: mcfg.discovery_prefix.clone(),
+                    node_id: node_id.clone(),
+                    node_friendly_name: Some("RuView".to_string()),
+                    sw_version: env!("CARGO_PKG_VERSION").to_string(),
+                    model: "RuView WiFi Sensing".to_string(),
+                    via_device: None,
+                };
+                let (vtx, vrx) = broadcast::channel::<mqtt::state::VitalsSnapshot>(64);
+                let (host, port) = (mcfg.host.clone(), mcfg.port);
+                mqtt::publisher::spawn(mcfg, builder, vrx);
+                let mut jrx = tx.subscribe();
+                tokio::spawn(async move {
+                    while let Ok(json) = jrx.recv().await {
+                        let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) else {
+                            continue;
+                        };
+                        // #898/#872: emit one snapshot per physical node so
+                        // each surfaces as its own Home-Assistant device with
+                        // its *own* presence/motion/RSSI (see
+                        // vitals_snapshots_from_sensing_json). Falls back to a
+                        // single aggregate snapshot for per-node-less sources.
+                        for snap in vitals_snapshots_from_sensing_json(&v, &node_id) {
+                            let _ = vtx.send(snap);
                         }
-                    });
-                    tracing::info!("MQTT publisher started -> {host}:{port}");
-                }
-                Err(e) => tracing::error!("MQTT config invalid: {e}; publisher not started"),
-            }
+                    }
+                });
+                tracing::info!("MQTT publisher started -> {host}:{port}");
+            });
         }
         #[cfg(not(feature = "mqtt"))]
         tracing::warn!(
