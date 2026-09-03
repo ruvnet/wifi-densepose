@@ -6469,6 +6469,31 @@ async fn mesh_endpoint(State(state): State<SharedState>) -> Json<serde_json::Val
     }))
 }
 
+/// `GET /api/v1/diag/mark/:label` -- stamp a labelled instant into the phase
+/// diagnostics stream.
+///
+/// Ground truth recalled after the fact is soft. The only high-provenance
+/// label of an overnight run is the one reported AS IT HAPPENS; matching a
+/// detection to a remembered time is post-hoc fitting, because during an
+/// active stretch the detector bumps every ~1.5 min and any estimate "matches"
+/// something.
+///
+/// Returns the recording-relative timestamp so a client can show what it
+/// captured, and reports plainly when diagnostics are not enabled rather than
+/// silently accepting a mark that goes nowhere.
+async fn diag_mark(axum::extract::Path(label): axum::extract::Path<String>) -> Json<serde_json::Value> {
+    match phase_diagnostics() {
+        Some(d) => {
+            let t_s = d.mark(&label);
+            Json(serde_json::json!({ "ok": true, "t_s": t_s, "label": label }))
+        }
+        None => Json(serde_json::json!({
+            "ok": false,
+            "error": "phase diagnostics not enabled; start with --phase-diagnostics <DIR>"
+        })),
+    }
+}
+
 async fn nodes_endpoint(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
     let now = std::time::Instant::now();
@@ -9269,6 +9294,7 @@ async fn main() {
         .route("/api/v1/rf/vendors/:vendor/events", post(ingest_vendor_events))
         // Per-node health endpoint
         .route("/api/v1/nodes", get(nodes_endpoint))
+        .route("/api/v1/diag/mark/:label", get(diag_mark))
         // ADR-110 iter 29 — per-node mesh sync state for HTTP clients.
         .route("/api/v1/nodes/:id/sync", get(node_sync_endpoint))
         .route("/api/v1/mesh", get(mesh_endpoint))
