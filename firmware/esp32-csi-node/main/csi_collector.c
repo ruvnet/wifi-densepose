@@ -460,7 +460,7 @@ static void wifi_csi_callback(void *ctx, wifi_csi_info_t *info)
 #define CONFIG_C6_SYNC_EVERY_N_FRAMES 20
 #endif
         if ((s_cb_count % CONFIG_C6_SYNC_EVERY_N_FRAMES) == 0) {
-            uint8_t sync[38];
+            uint8_t sync[50];
             uint32_t sync_magic = 0xC511A110u;    /* CSI-ADR-110 sync packet */
             uint64_t local_us = (uint64_t)esp_timer_get_time();
             uint64_t epoch_us = c6_sync_espnow_get_epoch_us();
@@ -472,7 +472,7 @@ static void wifi_csi_callback(void *ctx, wifi_csi_info_t *info)
 
             memcpy(&sync[0],  &sync_magic, 4);
             sync[4] = s_node_id;
-            sync[5] = 0x02;                       /* proto v2: + node_mac */
+            sync[5] = 0x03;                       /* proto v3: + TX path counters */
             sync[6] = flags;
             sync[7] = 0;                          /* reserved */
             memcpy(&sync[8],  &local_us, 8);
@@ -526,7 +526,38 @@ static void wifi_csi_callback(void *ctx, wifi_csi_info_t *info)
             float dc = thermal_celsius();
             sync[30] = (dc < -100.0f) ? 0 : (uint8_t)(int8_t)dc;
             sync[31] = (uint8_t)thermal_tx_dbm();
-            /* Sync packets are 32 B at ~0.5 Hz — priority path so the CSI
+
+            /* Bytes 38..49: the three TX-path counters, u32 LE each.
+             *
+             *   [38..41] send_fail  — stream_sender_send() returned <= 0. This
+             *                         is the ENOMEM signature: lwIP could not
+             *                         allocate a pbuf for the datagram.
+             *   [42..45] rate_skip  — frames suppressed by the 20 ms send cap
+             *                         (CSI_MIN_SEND_INTERVAL_US, 50 Hz ceiling).
+             *   [46..49] early_drop — callbacks discarded by the early rate gate
+             *                         before any processing.
+             *
+             * Why these have to leave the node at all: send_fail was previously
+             * only reachable as an ESP_LOGW line, and only for the FIRST FIVE
+             * failures. A board on a wall has no console, so in practice the
+             * one counter that says "the TX path is failing" was unobservable —
+             * which makes any claim about TX buffer sizing untestable rather
+             * than merely unproven.
+             *
+             * The two skip counters are here because send_fail alone cannot
+             * distinguish "the radio is fine" from "the rate limiters are doing
+             * so much work that nothing ever reaches the failing path". A zero
+             * send_fail beside a large rate_skip means the cap is holding the
+             * line, not that there is headroom.
+             *
+             * Monotonic since boot. The sink differences successive packets, so
+             * a wrap or a reboot shows as one discarded interval rather than a
+             * spike. */
+            memcpy(&sync[38], &s_send_fail,  4);
+            memcpy(&sync[42], &s_rate_skip,  4);
+            memcpy(&sync[46], &s_early_drop, 4);
+
+            /* Sync packets are 50 B at ~0.5 Hz — priority path so the CSI
              * ENOMEM backoff can't starve cross-node time alignment (#1183). */
             int sr = stream_sender_send_priority(sync, sizeof(sync));
             static uint32_t s_sync_count = 0;

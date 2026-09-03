@@ -40,10 +40,14 @@ pub const SYNC_PACKET_MAGIC: u32 = 0xC511_A110;
 pub const SYNC_PACKET_SIZE: usize = 32;
 /// Wire size once the node's own MAC is appended (proto v2).
 pub const SYNC_PACKET_SIZE_V2: usize = 38;
+/// Wire size once the TX-path counters are appended (proto v3).
+pub const SYNC_PACKET_SIZE_V3: usize = 50;
 /// Wire protocol version currently emitted by firmware.
 pub const SYNC_PACKET_PROTO_VER: u8 = 0x02;
 /// Protocol version that first carried `node_mac`.
 pub const SYNC_PACKET_PROTO_VER_MAC: u8 = 0x02;
+/// Protocol version that first carried the TX-path counters.
+pub const SYNC_PACKET_PROTO_VER_TX_STATS: u8 = 0x03;
 
 /// Decoded ADR-110 §A0.12 sync packet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +108,32 @@ pub struct NodeHealth {
     /// Minimum free heap since boot, KiB. A slow leak and an overheat look
     /// identical after ten days unless this has been walking downward.
     pub min_heap_kib: Option<u32>,
+    /// TX-path counters, monotonic since the node booted. `None` before
+    /// proto v3.
+    ///
+    /// Reported because the failure they describe was otherwise unobservable:
+    /// the node logs a send failure to a serial console it does not have, and
+    /// only for the first five. Any question about transmit buffering was
+    /// therefore untestable in a deployed fleet rather than merely unanswered.
+    pub tx: Option<TxCounters>,
+}
+
+/// Counters describing the node's outbound CSI path.
+///
+/// Read them together. `send_fail` alone cannot distinguish a healthy radio
+/// from one whose rate limiters are working so hard that nothing ever reaches
+/// the failing path -- a zero `send_fail` beside a large `rate_skip` means the
+/// cap is holding the line, not that there is headroom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct TxCounters {
+    /// Datagram sends that failed, i.e. lwIP could not allocate a pbuf. This
+    /// is the ENOMEM signature.
+    pub send_fail: u32,
+    /// Frames suppressed by the node's own send-rate cap (a 20 ms minimum
+    /// interval, so a 50 Hz ceiling).
+    pub rate_skip: u32,
+    /// CSI callbacks discarded by the early rate gate, before any processing.
+    pub early_drop: u32,
 }
 
 impl NodeHealth {
@@ -205,6 +235,21 @@ impl SyncPacket {
             die_c: if buf[30] == 0 { None } else { Some(buf[30] as i8) },
             tx_dbm: if buf[31] == 0 { None } else { Some(buf[31]) },
             min_heap_kib: if min_heap == 0 { None } else { Some(u32::from(min_heap) * 2) },
+            // Same length-AND-version guard as the MAC above: a padded v2
+            // datagram would otherwise yield twelve bytes of whatever the
+            // sender's stack left there, and plausible-looking counters are
+            // worse than absent ones.
+            tx: if proto_ver >= SYNC_PACKET_PROTO_VER_TX_STATS
+                && buf.len() >= SYNC_PACKET_SIZE_V3
+            {
+                Some(TxCounters {
+                    send_fail: u32::from_le_bytes(buf[38..42].try_into().unwrap()),
+                    rate_skip: u32::from_le_bytes(buf[42..46].try_into().unwrap()),
+                    early_drop: u32::from_le_bytes(buf[46..50].try_into().unwrap()),
+                })
+            } else {
+                None
+            },
         };
         Ok(Self {
             node_id,
@@ -627,5 +672,85 @@ mod tests {
         let re_encoded = decoded.to_bytes();
         assert_eq!(re_encoded, canonical,
                    "Rust to_bytes drifted from the canonical pin — Python decoder will break");
+    }
+}
+
+#[cfg(test)]
+mod tx_counter_tests {
+    //! The TX counters must appear only when BOTH the version and the length
+    //! agree.
+    //!
+    //! A padded v2 datagram is the hazard: it can be long enough to reach byte
+    //! 49 while containing nothing meaningful there. Reporting whatever the
+    //! sender's stack left in those bytes as a send-failure count is worse than
+    //! reporting nothing, because a fabricated non-zero would be read as
+    //! evidence of exactly the fault being investigated.
+    use super::*;
+
+    fn frame(proto: u8, len: usize, fail: u32, skip: u32, drop: u32) -> Vec<u8> {
+        let mut b = vec![0u8; len];
+        b[0..4].copy_from_slice(&SYNC_PACKET_MAGIC.to_le_bytes());
+        b[4] = 7;          // node_id
+        b[5] = proto;
+        b[6] = 0x02;       // valid
+        b[7] = 60;         // min heap / 2
+        b[24..28].copy_from_slice(&99u32.to_le_bytes());
+        b[28] = 1;         // power-on
+        b[31] = 20;        // tx dbm
+        if len >= SYNC_PACKET_SIZE_V2 {
+            b[32..38].copy_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
+        }
+        if len >= SYNC_PACKET_SIZE_V3 {
+            b[38..42].copy_from_slice(&fail.to_le_bytes());
+            b[42..46].copy_from_slice(&skip.to_le_bytes());
+            b[46..50].copy_from_slice(&drop.to_le_bytes());
+        }
+        b
+    }
+
+    #[test]
+    fn v3_reports_the_tx_counters() {
+        let p = SyncPacket::from_bytes(&frame(3, SYNC_PACKET_SIZE_V3, 4, 5000, 120)).unwrap();
+        let tx = p.health.tx.expect("v3 carries counters");
+        assert_eq!(tx.send_fail, 4);
+        assert_eq!(tx.rate_skip, 5000);
+        assert_eq!(tx.early_drop, 120);
+    }
+
+    #[test]
+    fn v2_reports_no_counters() {
+        let p = SyncPacket::from_bytes(&frame(2, SYNC_PACKET_SIZE_V2, 0, 0, 0)).unwrap();
+        assert!(p.health.tx.is_none(), "a v2 node has no counters to report");
+        assert!(p.node_mac.is_some(), "but it still reports its MAC");
+    }
+
+    /// A PADDED v2 datagram: long enough, wrong version. The version guard has
+    /// to refuse it, or trailing bytes become fabricated evidence.
+    #[test]
+    fn a_padded_v2_datagram_does_not_yield_counters() {
+        let p = SyncPacket::from_bytes(&frame(2, SYNC_PACKET_SIZE_V3, 77, 77, 77)).unwrap();
+        assert!(
+            p.health.tx.is_none(),
+            "length alone must not admit counters -- proto v2 cannot have them"
+        );
+    }
+
+    /// A TRUNCATED v3 datagram: right version, too short. The length guard has
+    /// to refuse it rather than read past the end.
+    #[test]
+    fn a_truncated_v3_datagram_does_not_yield_counters() {
+        let p = SyncPacket::from_bytes(&frame(3, SYNC_PACKET_SIZE_V2, 0, 0, 0)).unwrap();
+        assert!(
+            p.health.tx.is_none(),
+            "version alone must not admit counters -- the bytes are not there"
+        );
+    }
+
+    #[test]
+    fn a_v1_datagram_still_parses() {
+        let p = SyncPacket::from_bytes(&frame(1, SYNC_PACKET_SIZE, 0, 0, 0)).unwrap();
+        assert!(p.health.tx.is_none());
+        assert!(p.node_mac.is_none());
+        assert_eq!(p.node_id, 7);
     }
 }
