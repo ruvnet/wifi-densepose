@@ -11,7 +11,7 @@ use thiserror::Error;
 
 pub const MAX_CALIBRATION_SOURCE_NODES: usize = 16;
 pub const CALIBRATED_PRESENCE_EVIDENCE_SCHEMA: &str =
-    "ruview.calibration.calibrated-presence-evidence.v1";
+    "ruview.calibration.calibrated-presence-evidence.v2";
 const SHA256_HEX_LEN: usize = 64;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -68,7 +68,7 @@ pub struct CalibrationModelReceipt {
 /// A per-frame result that can be joined back to one exact immutable field
 /// model receipt. It is emitted only when the binary has produced a strict
 /// calibrated occupancy result; heuristic fallbacks never receive this shape.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CalibratedPresenceEvidence {
     pub schema: String,
     pub boot_epoch: String,
@@ -83,6 +83,31 @@ pub struct CalibratedPresenceEvidence {
     pub inference_method: String,
     pub presence: bool,
     pub person_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub residual_energy: Option<CalibratedResidualEnergyEvidence>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CalibratedNodeResidualEnergy {
+    pub node_id: u8,
+    pub energy: f64,
+    pub null_median: f64,
+    pub null_p95: f64,
+    pub null_p99: f64,
+    pub normalized_energy: f64,
+    pub decision_threshold: f64,
+    pub above_threshold: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CalibratedResidualEnergyEvidence {
+    pub nodes: Vec<CalibratedNodeResidualEnergy>,
+    pub aggregate_mean_energy: f64,
+    pub aggregate_mean_normalized_energy: f64,
+    pub nodes_above_threshold: usize,
+    pub node_quorum: usize,
+    pub hysteresis_present: bool,
+    pub hysteresis_candidate_frames: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -237,6 +262,25 @@ impl CalibrationSessionContract {
         person_count: usize,
         inference_method: &'static str,
     ) -> Option<CalibratedPresenceEvidence> {
+        self.calibrated_presence_evidence_with_residual(
+            inference_node_id,
+            source_tick,
+            observed_at_unix_ms,
+            person_count,
+            inference_method,
+            None,
+        )
+    }
+
+    pub fn calibrated_presence_evidence_with_residual(
+        &self,
+        inference_node_id: u8,
+        source_tick: u64,
+        observed_at_unix_ms: u64,
+        person_count: usize,
+        inference_method: &'static str,
+        residual_energy: Option<CalibratedResidualEnergyEvidence>,
+    ) -> Option<CalibratedPresenceEvidence> {
         let receipt = self.model_receipt.as_ref()?;
         if receipt
             .source_node_ids
@@ -246,7 +290,9 @@ impl CalibrationSessionContract {
             || person_count > 3
             || !matches!(
                 inference_method,
-                "field_model_eigenvalue_v1" | "field_model_perturbation_energy_v1"
+                "field_model_eigenvalue_v1"
+                    | "field_model_perturbation_energy_v1"
+                    | "field_model_null_normalized_v2"
             )
         {
             return None;
@@ -265,6 +311,7 @@ impl CalibrationSessionContract {
             inference_method: inference_method.to_string(),
             presence: person_count > 0,
             person_count,
+            residual_energy,
         })
     }
 
@@ -604,6 +651,37 @@ mod tests {
         assert_eq!(evidence.observed_at_unix_ms, 123_999);
         assert!(evidence.presence);
         assert_eq!(evidence.person_count, 1);
+        assert!(evidence.residual_energy.is_none());
+
+        let residual = CalibratedResidualEnergyEvidence {
+            nodes: vec![CalibratedNodeResidualEnergy {
+                node_id: 7,
+                energy: 2.0,
+                null_median: 0.5,
+                null_p95: 0.8,
+                null_p99: 1.0,
+                normalized_energy: 2.0,
+                decision_threshold: 1.0,
+                above_threshold: true,
+            }],
+            aggregate_mean_energy: 2.0,
+            aggregate_mean_normalized_energy: 2.0,
+            nodes_above_threshold: 1,
+            node_quorum: 1,
+            hysteresis_present: true,
+            hysteresis_candidate_frames: 0,
+        };
+        let diagnostic = contract
+            .calibrated_presence_evidence_with_residual(
+                7,
+                89,
+                124_000,
+                1,
+                "field_model_null_normalized_v2",
+                Some(residual.clone()),
+            )
+            .expect("null-normalized diagnostic evidence");
+        assert_eq!(diagnostic.residual_energy, Some(residual));
 
         assert!(contract
             .calibrated_presence_evidence(2, 89, 124_000, 0, "field_model_perturbation_energy_v1",)

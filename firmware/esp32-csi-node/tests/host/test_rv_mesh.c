@@ -38,6 +38,15 @@ static void test_encode_health_roundtrip(void) {
     st.noise_floor_dbm  = -93;
     st.pkt_yield        = 42;
     st.sync_error_us    = 12;
+    st.send_fail_count  = 3;
+    st.wifi_retry_count = 4;
+    st.association_epoch = 12;
+    st.free_heap_bytes  = 182640;
+    st.last_disconnect_reason = 200;
+    st.reset_reason     = 3;
+    st.last_disconnect_rssi_dbm = -81;
+    const uint8_t bssid[6] = {0xD4, 0xA0, 0xFB, 0x40, 0x01, 0x58};
+    memcpy(st.bssid, bssid, sizeof(bssid));
 
     uint8_t buf[RV_MESH_MAX_FRAME_BYTES];
     size_t n = rv_mesh_encode_health(RV_ROLE_OBSERVER, /*epoch*/ 100,

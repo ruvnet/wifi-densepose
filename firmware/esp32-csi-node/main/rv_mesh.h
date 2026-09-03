@@ -100,10 +100,19 @@ typedef struct __attribute__((packed)) {
     uint16_t sync_error_us;   /**< Absolute drift vs. anchor. */
     uint16_t health_flags;
     uint16_t reserved;
+    uint16_t send_fail_count;
+    uint16_t wifi_retry_count;
+    uint32_t association_epoch;
+    uint32_t free_heap_bytes;
+    uint16_t last_disconnect_reason;
+    uint8_t  reset_reason;
+    int8_t   last_disconnect_rssi_dbm;
+    uint8_t  bssid[6];
+    uint16_t extended_reserved;
 } rv_node_status_t;
 
-_Static_assert(sizeof(rv_node_status_t) == 28,
-               "rv_node_status_t must be 28 bytes");
+_Static_assert(sizeof(rv_node_status_t) == 52,
+               "rv_node_status_t must be 52 bytes");
 
 /* ---- TIME_SYNC payload ---- */
 

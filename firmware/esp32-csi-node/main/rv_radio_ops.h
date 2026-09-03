@@ -63,8 +63,18 @@ typedef struct {
     uint8_t  current_channel;     /**< Channel currently configured. */
     uint8_t  current_bw_mhz;      /**< Bandwidth currently configured. */
     uint8_t  current_profile;     /**< Active rv_capture_profile_t. */
-    uint8_t  reserved;
+    uint8_t  reset_reason;        /**< esp_reset_reason_t captured at boot. */
+    uint16_t wifi_retry_count;    /**< Current consecutive STA retry count. */
+    uint16_t last_disconnect_reason; /**< Latest wifi_err_reason_t, zero if none. */
+    int8_t   last_disconnect_rssi_dbm;
+    uint8_t  bssid[6];            /**< Current or last associated AP BSSID. */
+    uint32_t association_epoch;   /**< Increments after each acquired STA IP. */
+    uint32_t free_heap_bytes;     /**< Current free internal heap. */
 } rv_radio_health_t;
+
+/** Record station lifecycle telemetry from the application Wi-Fi handler. */
+void rv_radio_health_note_disconnect(uint16_t reason, int8_t rssi, uint16_t retry_count);
+void rv_radio_health_note_connected(void);
 
 /* ---- The vtable ---- */
 

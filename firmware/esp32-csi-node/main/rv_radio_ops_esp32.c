@@ -18,7 +18,9 @@
 #include <string.h>
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_wifi.h"
+#include "freertos/FreeRTOS.h"
 
 static const char *TAG = "rv_radio_esp32";
 
@@ -43,6 +45,36 @@ static uint8_t  s_current_bw      = 20;
 static uint8_t  s_current_profile = RV_PROFILE_PASSIVE_LOW_RATE;
 static uint8_t  s_current_mode    = RV_RADIO_MODE_PASSIVE_RX;
 static bool     s_csi_enabled     = true;
+static uint16_t s_wifi_retry_count = 0;
+static uint16_t s_last_disconnect_reason = 0;
+static int8_t   s_last_disconnect_rssi_dbm = 0;
+static uint8_t  s_last_bssid[6] = {0};
+static uint32_t s_association_epoch = 0;
+static portMUX_TYPE s_health_lock = portMUX_INITIALIZER_UNLOCKED;
+
+void rv_radio_health_note_disconnect(uint16_t reason, int8_t rssi, uint16_t retry_count)
+{
+    portENTER_CRITICAL(&s_health_lock);
+    s_last_disconnect_reason = reason;
+    s_last_disconnect_rssi_dbm = rssi;
+    s_wifi_retry_count = retry_count;
+    portEXIT_CRITICAL(&s_health_lock);
+}
+
+void rv_radio_health_note_connected(void)
+{
+    wifi_ap_record_t ap = {0};
+    portENTER_CRITICAL(&s_health_lock);
+    s_wifi_retry_count = 0;
+    s_association_epoch++;
+    portEXIT_CRITICAL(&s_health_lock);
+    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+        portENTER_CRITICAL(&s_health_lock);
+        memcpy(s_last_bssid, ap.bssid, sizeof(s_last_bssid));
+        s_current_channel = ap.primary;
+        portEXIT_CRITICAL(&s_health_lock);
+    }
+}
 
 /* ---- Vtable implementations ---- */
 
@@ -147,10 +179,22 @@ static int esp32_get_health(rv_radio_health_t *out)
     out->current_channel   = s_current_channel;
     out->current_bw_mhz    = s_current_bw;
     out->current_profile   = s_current_profile;
+    out->reset_reason      = (uint8_t)esp_reset_reason();
+    out->free_heap_bytes   = esp_get_free_heap_size();
+
+    portENTER_CRITICAL(&s_health_lock);
+    out->wifi_retry_count = s_wifi_retry_count;
+    out->last_disconnect_reason = s_last_disconnect_reason;
+    out->last_disconnect_rssi_dbm = s_last_disconnect_rssi_dbm;
+    out->association_epoch = s_association_epoch;
+    memcpy(out->bssid, s_last_bssid, sizeof(out->bssid));
+    portEXIT_CRITICAL(&s_health_lock);
 
     wifi_ap_record_t ap = {0};
     if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
         out->rssi_median_dbm = ap.rssi;
+        out->current_channel = ap.primary;
+        memcpy(out->bssid, ap.bssid, sizeof(out->bssid));
     }
     return ESP_OK;
 }

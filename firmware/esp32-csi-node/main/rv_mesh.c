@@ -218,6 +218,14 @@ esp_err_t rv_mesh_send_health(uint8_t role, uint32_t epoch,
             st.current_bw      = h.current_bw_mhz;
             st.noise_floor_dbm = h.noise_floor_dbm;
             st.pkt_yield       = h.pkt_yield_per_sec;
+            st.send_fail_count = h.send_fail_count;
+            st.wifi_retry_count = h.wifi_retry_count;
+            st.association_epoch = h.association_epoch;
+            st.free_heap_bytes = h.free_heap_bytes;
+            st.last_disconnect_reason = h.last_disconnect_reason;
+            st.reset_reason = h.reset_reason;
+            st.last_disconnect_rssi_dbm = h.last_disconnect_rssi_dbm;
+            memcpy(st.bssid, h.bssid, sizeof(st.bssid));
         }
     }
 
