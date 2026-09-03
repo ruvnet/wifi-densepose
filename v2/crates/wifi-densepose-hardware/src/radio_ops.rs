@@ -138,6 +138,8 @@ impl RadioOps for MockRadio {
 
 /// `RV_MESH_MAGIC` from rv_mesh.h.
 pub const MESH_MAGIC: u32 = 0xC511_8100;
+/// Stable JSON schema exposed by the sensing server for decoded node health.
+pub const NODE_HEALTH_SCHEMA: &str = "ruview.node-health.v1";
 /// `RV_MESH_VERSION` from rv_mesh.h.
 pub const MESH_VERSION: u8 = 1;
 /// `RV_MESH_MAX_PAYLOAD` from rv_mesh.h.
@@ -218,7 +220,10 @@ pub struct MeshHeader {
     pub payload_len: u16,
 }
 
-/// `rv_node_status_t`, 28 bytes.
+/// `rv_node_status_t`, 52 bytes in the extended firmware contract.
+///
+/// The decoder also accepts the legacy 28-byte payload and marks
+/// `extended=false`, allowing hosts to ingest mixed-version fleets.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NodeStatus {
     pub node_id: [u8; 8],
@@ -230,6 +235,16 @@ pub struct NodeStatus {
     pub pkt_yield: u16,
     pub sync_error_us: u16,
     pub health_flags: u16,
+    pub send_fail_count: u16,
+    pub wifi_retry_count: u16,
+    pub association_epoch: u32,
+    pub free_heap_bytes: u32,
+    pub last_disconnect_reason: u16,
+    pub reset_reason: u8,
+    pub last_disconnect_rssi_dbm: i8,
+    pub bssid: [u8; 6],
+    /// True when the extended telemetry fields were present on the wire.
+    pub extended: bool,
 }
 
 /// `rv_anomaly_alert_t`, 28 bytes.
@@ -351,18 +366,23 @@ pub fn decode_mesh(buf: &[u8]) -> Result<(MeshHeader, &[u8]), MeshError> {
     ))
 }
 
-/// Decode a `HEALTH` payload (28 bytes).
+/// Decode a legacy (28-byte) or extended (52-byte) `HEALTH` payload.
 pub fn decode_node_status(p: &[u8]) -> Result<NodeStatus, MeshError> {
-    if p.len() != 28 {
+    if p.len() != 28 && p.len() != 52 {
         return Err(MeshError::PayloadSizeMismatch {
             which: "HEALTH",
             got: p.len(),
-            want: 28,
+            want: 52,
         });
     }
     let mut node_id = [0u8; 8];
     node_id.copy_from_slice(&p[0..8]);
     let local_time_us = u64::from_le_bytes([p[8], p[9], p[10], p[11], p[12], p[13], p[14], p[15]]);
+    let extended = p.len() == 52;
+    let mut bssid = [0u8; 6];
+    if extended {
+        bssid.copy_from_slice(&p[44..50]);
+    }
     Ok(NodeStatus {
         node_id,
         local_time_us,
@@ -373,6 +393,25 @@ pub fn decode_node_status(p: &[u8]) -> Result<NodeStatus, MeshError> {
         pkt_yield: u16::from_le_bytes([p[20], p[21]]),
         sync_error_us: u16::from_le_bytes([p[22], p[23]]),
         health_flags: u16::from_le_bytes([p[24], p[25]]),
+        send_fail_count: extended
+            .then(|| u16::from_le_bytes([p[28], p[29]]))
+            .unwrap_or(0),
+        wifi_retry_count: extended
+            .then(|| u16::from_le_bytes([p[30], p[31]]))
+            .unwrap_or(0),
+        association_epoch: extended
+            .then(|| u32::from_le_bytes([p[32], p[33], p[34], p[35]]))
+            .unwrap_or(0),
+        free_heap_bytes: extended
+            .then(|| u32::from_le_bytes([p[36], p[37], p[38], p[39]]))
+            .unwrap_or(0),
+        last_disconnect_reason: extended
+            .then(|| u16::from_le_bytes([p[40], p[41]]))
+            .unwrap_or(0),
+        reset_reason: if extended { p[42] } else { 0 },
+        last_disconnect_rssi_dbm: if extended { p[43] as i8 } else { 0 },
+        bssid,
+        extended,
     })
 }
 
@@ -400,10 +439,10 @@ pub fn decode_anomaly_alert(p: &[u8]) -> Result<AnomalyAlert, MeshError> {
     })
 }
 
-/// Encode a `HEALTH` payload. Produces the 16-byte header, 28-byte
+/// Encode an extended `HEALTH` payload. Produces the 16-byte header, 52-byte
 /// payload, and 4-byte CRC — bit-identical to what the firmware emits.
 pub fn encode_health(sender_role: MeshRole, epoch: u32, status: &NodeStatus) -> Vec<u8> {
-    let payload_len: u16 = 28;
+    let payload_len: u16 = 52;
     let mut buf = Vec::with_capacity(MESH_HEADER_SIZE + payload_len as usize + 4);
 
     // header
@@ -427,6 +466,15 @@ pub fn encode_health(sender_role: MeshRole, epoch: u32, status: &NodeStatus) -> 
     buf.extend_from_slice(&status.sync_error_us.to_le_bytes());
     buf.extend_from_slice(&status.health_flags.to_le_bytes());
     buf.extend_from_slice(&0u16.to_le_bytes()); // reserved
+    buf.extend_from_slice(&status.send_fail_count.to_le_bytes());
+    buf.extend_from_slice(&status.wifi_retry_count.to_le_bytes());
+    buf.extend_from_slice(&status.association_epoch.to_le_bytes());
+    buf.extend_from_slice(&status.free_heap_bytes.to_le_bytes());
+    buf.extend_from_slice(&status.last_disconnect_reason.to_le_bytes());
+    buf.push(status.reset_reason);
+    buf.push(status.last_disconnect_rssi_dbm as u8);
+    buf.extend_from_slice(&status.bssid);
+    buf.extend_from_slice(&0u16.to_le_bytes()); // extended reserved
 
     let crc = crc32_ieee(&buf);
     buf.extend_from_slice(&crc.to_le_bytes());
@@ -480,20 +528,49 @@ mod tests {
             pkt_yield: 20,
             sync_error_us: 7,
             health_flags: 0x0001,
+            send_fail_count: 3,
+            wifi_retry_count: 4,
+            association_epoch: 12,
+            free_heap_bytes: 182_640,
+            last_disconnect_reason: 200,
+            reset_reason: 3,
+            last_disconnect_rssi_dbm: -81,
+            bssid: [0xD4, 0xA0, 0xFB, 0x40, 0x01, 0x58],
+            extended: true,
         };
 
         let wire = encode_health(MeshRole::Observer, 5, &st);
-        assert_eq!(wire.len(), MESH_HEADER_SIZE + 28 + 4);
-        assert_eq!(wire.len(), 48);
+        assert_eq!(wire.len(), MESH_HEADER_SIZE + 52 + 4);
+        assert_eq!(wire.len(), 72);
 
         let (hdr, payload) = decode_mesh(&wire).expect("decode");
         assert_eq!(hdr.msg_type, MeshMsgType::Health);
         assert_eq!(hdr.sender_role, MeshRole::Observer);
         assert_eq!(hdr.epoch, 5);
-        assert_eq!(hdr.payload_len, 28);
+        assert_eq!(hdr.payload_len, 52);
 
         let back = decode_node_status(payload).expect("payload decode");
         assert_eq!(back, st);
+    }
+
+    #[test]
+    fn legacy_health_payload_decodes_with_unavailable_extended_fields() {
+        let mut payload = vec![0u8; 28];
+        payload[0] = 11;
+        payload[8..16].copy_from_slice(&42_000_000u64.to_le_bytes());
+        payload[16] = MeshRole::Observer as u8;
+        payload[17] = 1;
+        payload[18] = 20;
+        payload[19] = (-94i8) as u8;
+        payload[20..22].copy_from_slice(&37u16.to_le_bytes());
+
+        let status = decode_node_status(&payload).expect("legacy health decode");
+        assert_eq!(status.node_id[0], 11);
+        assert_eq!(status.local_time_us, 42_000_000);
+        assert_eq!(status.pkt_yield, 37);
+        assert_eq!(status.send_fail_count, 0);
+        assert_eq!(status.bssid, [0; 6]);
+        assert!(!status.extended);
     }
 
     #[test]
@@ -508,6 +585,15 @@ mod tests {
             pkt_yield: 0,
             sync_error_us: 0,
             health_flags: 0,
+            send_fail_count: 0,
+            wifi_retry_count: 0,
+            association_epoch: 0,
+            free_heap_bytes: 0,
+            last_disconnect_reason: 0,
+            reset_reason: 0,
+            last_disconnect_rssi_dbm: 0,
+            bssid: [0; 6],
+            extended: true,
         };
         let mut wire = encode_health(MeshRole::Observer, 0, &st);
         let p0 = MESH_HEADER_SIZE; // first payload byte
@@ -548,6 +634,7 @@ mod tests {
     fn mesh_constants_match_firmware() {
         // These must match rv_mesh.h byte-for-byte.
         assert_eq!(MESH_MAGIC, 0xC511_8100);
+        assert_eq!(NODE_HEALTH_SCHEMA, "ruview.node-health.v1");
         assert_eq!(MESH_VERSION, 1);
         assert_eq!(MESH_HEADER_SIZE, 16);
         assert_eq!(MESH_MAX_PAYLOAD, 256);

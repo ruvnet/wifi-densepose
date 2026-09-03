@@ -352,6 +352,9 @@ pub fn compute_subcarrier_variances(frame_history: &VecDeque<Vec<f64>>, n_sub: u
 
 pub fn extract_features_from_frame(
     frame: &Esp32Frame,
+    // Callers append `frame` before extraction so variance and breathing
+    // windows include the newest sample. Temporal motion must therefore use
+    // the entry immediately before the history tail, never the tail itself.
     frame_history: &VecDeque<Vec<f64>>,
     sample_rate_hz: f64,
 ) -> (FeatureInfo, ClassificationInfo, f64, Vec<f64>, f64) {
@@ -437,7 +440,7 @@ pub fn extract_features_from_frame(
         .filter(|w| (w[0] < threshold) != (w[1] < threshold))
         .count();
 
-    let temporal_motion_score = if let Some(prev_frame) = frame_history.back() {
+    let temporal_motion_score = if let Some(prev_frame) = frame_history.iter().rev().nth(1) {
         let n_cmp = n_sub.min(prev_frame.len());
         if n_cmp > 0 {
             let diff_energy: f64 = (0..n_cmp)

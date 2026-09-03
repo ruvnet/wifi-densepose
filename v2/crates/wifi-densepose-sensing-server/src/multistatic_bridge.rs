@@ -119,10 +119,36 @@ pub fn node_frames_from_states_with_guard(
     node_states: &HashMap<u8, NodeState>,
     guard_interval_us: u64,
 ) -> Vec<MultiBandCsiFrame> {
+    node_frames_from_states_with_guard_for_nodes(node_states, guard_interval_us, None)
+}
+
+/// As [`node_frames_from_states_with_guard`], restricted to an immutable
+/// source-node set. Unrelated active radios cannot displace or invalidate a
+/// calibration cohort.
+pub fn bound_node_frames_from_states_with_guard(
+    node_states: &HashMap<u8, NodeState>,
+    guard_interval_us: u64,
+    source_node_ids: &[u8],
+) -> Vec<MultiBandCsiFrame> {
+    node_frames_from_states_with_guard_for_nodes(
+        node_states,
+        guard_interval_us,
+        Some(source_node_ids),
+    )
+}
+
+fn node_frames_from_states_with_guard_for_nodes(
+    node_states: &HashMap<u8, NodeState>,
+    guard_interval_us: u64,
+    source_node_ids: Option<&[u8]>,
+) -> Vec<MultiBandCsiFrame> {
     let now = Instant::now();
     let mut active: Vec<(u8, &NodeState)> = node_states
         .iter()
         .filter_map(|(&node_id, ns)| {
+            if source_node_ids.is_some_and(|ids| ids.binary_search(&node_id).is_err()) {
+                return None;
+            }
             let last_time = ns.last_frame_time.as_ref()?;
             (now.duration_since(*last_time) <= STALE_THRESHOLD).then_some((node_id, ns))
         })
