@@ -95,6 +95,7 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-348](ADR-348-independent-rust-multivariate-forecasting.md) | Independent Rust multivariate forecasting for RuView | Proposed |
 | [ADR-349](ADR-349-governed-local-and-fal-forecast-training.md) | Governed local and fal.ai forecast training | Proposed |
 | [ADR-350](ADR-350-ruvector-predictive-memory-and-ruvllm-boundary.md) | RuVector predictive memory and RuVLLM authority boundary | Proposed |
+| [ADR-354](ADR-354-forecast-governance-enforcement-in-ruforecast-submodule.md) | fal.ai forecast governance and spend enforcement now real, in the vendored RuForecast submodule | Accepted |
 
 ### Platform and UI
 
