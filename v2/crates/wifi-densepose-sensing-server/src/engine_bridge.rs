@@ -268,6 +268,10 @@ mod tests {
     use wifi_densepose_bfld::PrivacyClass;
 
     fn node_state_with_history(amp: f64, n_sub: usize) -> NodeState {
+        // Pin the bridge's lazy process-global epoch first so the stamp below
+        // is never pre-epoch (issue #1194) — a pre-epoch instant clamps to a
+        // zero offset and the frame gets dropped.
+        crate::multistatic_bridge::pin_epoch();
         let mut ns = NodeState::new();
         let frame: Vec<f64> = (0..n_sub).map(|i| amp + 0.1 * i as f64).collect();
         ns.frame_history = VecDeque::from(vec![frame]);
@@ -329,6 +333,7 @@ mod tests {
     // Deterministic node states (no wall-clock in amplitude/history).
     fn two_node_states_fixed() -> HashMap<u8, NodeState> {
         let mut m = HashMap::new();
+        crate::multistatic_bridge::pin_epoch();
         for (id, amp) in [(0u8, 1.0_f64), (1u8, 1.05)] {
             let mut ns = NodeState::new();
             ns.frame_history = VecDeque::from(vec![(0..56)
@@ -436,6 +441,7 @@ mod tests {
         // so the fuser rejects the cycle with TimestampMismatch. Future
         // offsets keep both instants safely after the bridge's lazy EPOCH.
         fn mismatched_states() -> HashMap<u8, NodeState> {
+            crate::multistatic_bridge::pin_epoch();
             let now = Instant::now();
             let mut a = node_state_with_history(1.0, 56);
             a.last_frame_time = Some(now + std::time::Duration::from_millis(600));

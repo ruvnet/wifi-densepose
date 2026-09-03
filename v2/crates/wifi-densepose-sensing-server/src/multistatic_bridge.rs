@@ -26,6 +26,16 @@ const DEFAULT_FREQ_MHZ: u32 = 2437; // Channel 6
 /// are relative to this instant, avoiding wall-clock/monotonic mixing issues.
 static EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
 
+/// Test hook (issue #1194): force the process-global epoch to be fixed NOW
+/// so fixtures stamping `Instant::now()` land at/after it. Test code that
+/// creates `NodeState`s must call this before capturing their instants —
+/// a pre-epoch stamp clamps to zero and `node_frame_from_state` drops the
+/// frame, which silently starves cycles that ran before the first fusion.
+#[cfg(test)]
+pub(crate) fn pin_epoch() {
+    let _ = &*EPOCH;
+}
+
 /// Shared length-only canonicalizer (issue #1170). The default 56-tone grid
 /// matches what `MultistaticFuser` (ADR-154) expects. Stateless and immutable,
 /// so a single process-wide instance is safe to share across nodes.
@@ -216,6 +226,7 @@ mod tests {
 
     #[test]
     fn test_node_frame_conversion() {
+        pin_epoch();
         let mut history = VecDeque::new();
         history.push_back(vec![10.0, 20.0, 30.5]);
         let ns = make_node_state(history, Some(Instant::now()), 0);
@@ -242,6 +253,7 @@ mod tests {
         // Issue #1170 regression: a mixed mesh with HT20 (64-bin) and HT40
         // (192-bin) nodes must canonicalize to a uniform 56 tones and fuse,
         // instead of tripping DimensionMismatch on every cycle.
+        pin_epoch();
         let mut states: HashMap<u8, NodeState> = HashMap::new();
 
         let mut h64 = VecDeque::new();
@@ -279,6 +291,7 @@ mod tests {
 
     #[test]
     fn test_stale_node_excluded() {
+        pin_epoch();
         let mut states: HashMap<u8, NodeState> = HashMap::new();
 
         // Active node: frame just received
