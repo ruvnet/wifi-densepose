@@ -59,7 +59,7 @@ nvs_config_t g_nvs_config;
 
 static EventGroupHandle_t s_wifi_event_group;
 static int s_retry_num = 0;
-#define MAX_RETRY 10
+#define MAX_RETRY 90
 
 static void event_handler(void *arg, esp_event_base_t event_base,
                           int32_t event_id, void *event_data)
@@ -72,14 +72,17 @@ static void event_handler(void *arg, esp_event_base_t event_base,
         if (s_retry_num < MAX_RETRY) {
             esp_wifi_connect();
             s_retry_num++;
+            rv_radio_health_note_disconnect(disc->reason, disc->rssi, (uint16_t)s_retry_num);
             ESP_LOGI(TAG, "Retrying WiFi connection (%d/%d)", s_retry_num, MAX_RETRY);
         } else {
+            rv_radio_health_note_disconnect(disc->reason, disc->rssi, MAX_RETRY);
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
         s_retry_num = 0;
+        rv_radio_health_note_connected();
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }

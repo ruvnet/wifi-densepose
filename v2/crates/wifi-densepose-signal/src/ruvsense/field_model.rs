@@ -291,6 +291,21 @@ pub struct FieldNormalMode {
     /// per-window sample size. Defaults to 0.0 in the diagonal-fallback path.
     /// Issue #942.
     pub baseline_noise_var: f64,
+    /// Empirical empty-room residual-energy distribution for each link.
+    /// Runtime detectors use these learned quantiles instead of comparing
+    /// installation-dependent CSI amplitudes with an absolute threshold.
+    pub null_residual_energy: Vec<NullResidualEnergy>,
+}
+
+/// Robust, bounded summary of one link's residual energy while the room was
+/// explicitly empty. Quantiles are learned after removing the fitted normal
+/// modes, so they describe the detector's actual runtime feature.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NullResidualEnergy {
+    pub median: f64,
+    pub p95: f64,
+    pub p99: f64,
+    pub sample_count: usize,
 }
 
 /// Body perturbation extracted from a CSI observation.
@@ -345,6 +360,19 @@ pub struct FieldModel {
     covariance_sum: Option<Array2<f64>>,
     /// Number of frames accumulated into covariance_sum.
     covariance_count: u64,
+    /// Recent empty-room cohorts retained solely to learn post-projection
+    /// residual quantiles at finalize time. Bounded to avoid retaining an
+    /// unbounded CSI history.
+    null_residual_reservoir: Vec<Vec<Vec<f64>>>,
+}
+
+const NULL_RESIDUAL_RESERVOIR_CAPACITY: usize = 2_048;
+
+fn splitmix64(mut value: u64) -> u64 {
+    value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
 }
 
 /// Diagonal variance fallback for when full covariance SVD is unavailable.
@@ -400,6 +428,52 @@ fn diagonal_fallback(
     (mode_energies, environmental_modes, baseline_count)
 }
 
+fn residual_energy_after_projection(
+    observation: &[f64],
+    baseline: &[f64],
+    environmental_modes: &[Vec<f64>],
+) -> f64 {
+    let mut residual: Vec<f64> = observation
+        .iter()
+        .zip(baseline.iter())
+        .map(|(value, mean)| value - mean)
+        .collect();
+    for mode in environmental_modes {
+        let projection = residual
+            .iter()
+            .zip(mode.iter())
+            .map(|(value, coefficient)| value * coefficient)
+            .sum::<f64>();
+        for (value, coefficient) in residual.iter_mut().zip(mode.iter()) {
+            *value -= projection * coefficient;
+        }
+    }
+    residual
+        .iter()
+        .map(|value| value * value)
+        .sum::<f64>()
+        .sqrt()
+}
+
+fn summarize_null_residual_energy(mut samples: Vec<f64>) -> NullResidualEnergy {
+    samples.retain(|value| value.is_finite() && *value >= 0.0);
+    samples.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
+    let sample_count = samples.len();
+    let quantile = |fraction: f64| {
+        if samples.is_empty() {
+            return 0.0;
+        }
+        let index = ((samples.len() - 1) as f64 * fraction).ceil() as usize;
+        samples[index.min(samples.len() - 1)]
+    };
+    NullResidualEnergy {
+        median: quantile(0.50),
+        p95: quantile(0.95),
+        p99: quantile(0.99),
+        sample_count,
+    }
+}
+
 impl FieldModel {
     /// Create a new field model for the given configuration.
     pub fn new(config: FieldModelConfig) -> Result<Self, FieldModelError> {
@@ -429,6 +503,7 @@ impl FieldModel {
             last_calibration_us: 0,
             covariance_sum: None,
             covariance_count: 0,
+            null_residual_reservoir: Vec::with_capacity(NULL_RESIDUAL_RESERVOIR_CAPACITY),
         })
     }
 
@@ -495,6 +570,20 @@ impl FieldModel {
         }
         // Count once per frame (not per link) for correct MP ratio
         self.covariance_count += 1;
+
+        if self.null_residual_reservoir.len() < NULL_RESIDUAL_RESERVOIR_CAPACITY {
+            self.null_residual_reservoir.push(observations.to_vec());
+        } else {
+            // Deterministic Algorithm-R reservoir sampling spreads the bounded
+            // sample across the entire empty-room interval instead of keeping
+            // only its final minute. The mixing function is not used for
+            // security; it merely avoids a periodic sampling bias.
+            let seen = self.covariance_count as usize;
+            let index = splitmix64(self.covariance_count) as usize % seen;
+            if index < NULL_RESIDUAL_RESERVOIR_CAPACITY {
+                self.null_residual_reservoir[index] = observations.to_vec();
+            }
+        }
 
         Ok(())
     }
@@ -616,8 +705,7 @@ impl FieldModel {
                         }
                         Err(_) => {
                             // Fallback to diagonal approximation on SVD failure
-                            let (e, m, b) =
-                                diagonal_fallback(&self.link_stats, n_sc, n_modes);
+                            let (e, m, b) = diagonal_fallback(&self.link_stats, n_sc, n_modes);
                             (e, m, b, 0.0_f64)
                         }
                     }
@@ -669,6 +757,21 @@ impl FieldModel {
             0.0
         };
 
+        let mut residual_samples = vec![Vec::new(); self.config.n_links];
+        for cohort in &self.null_residual_reservoir {
+            for (link_idx, observation) in cohort.iter().enumerate() {
+                residual_samples[link_idx].push(residual_energy_after_projection(
+                    observation,
+                    &baseline[link_idx],
+                    &environmental_modes,
+                ));
+            }
+        }
+        let null_residual_energy = residual_samples
+            .into_iter()
+            .map(summarize_null_residual_energy)
+            .collect();
+
         let field_mode = FieldNormalMode {
             baseline,
             environmental_modes,
@@ -678,6 +781,7 @@ impl FieldModel {
             geometry_hash,
             baseline_eigenvalue_count: baseline_eig_count,
             baseline_noise_var,
+            null_residual_energy,
         };
 
         self.modes = Some(field_mode);
@@ -935,6 +1039,33 @@ mod tests {
         assert!((w.mean - 5.0).abs() < 1e-10);
         assert!((w.variance() - 4.0).abs() < 1e-10);
         assert_eq!(w.count, 8);
+    }
+
+    #[test]
+    fn finalize_learns_per_link_null_residual_energy_distribution() {
+        let mut model = FieldModel::new(make_config(3, 8, 32)).unwrap();
+        for frame in 0..96 {
+            let observations = (0..3)
+                .map(|link| {
+                    (0..8)
+                        .map(|tone| {
+                            let phase = (frame * (link + 1) + tone * 7) as f64 * 0.071;
+                            2.0 + link as f64 * 0.4 + tone as f64 * 0.02 + phase.sin() * 0.08
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            model.feed_calibration(&observations).unwrap();
+        }
+
+        let modes = model.finalize_calibration(1_000_000, 7).unwrap();
+        assert_eq!(modes.null_residual_energy.len(), 3);
+        for learned in &modes.null_residual_energy {
+            assert_eq!(learned.sample_count, 96);
+            assert!(learned.median.is_finite() && learned.median >= 0.0);
+            assert!(learned.p95 >= learned.median);
+            assert!(learned.p99 >= learned.p95);
+        }
     }
 
     #[test]
