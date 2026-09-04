@@ -136,37 +136,126 @@ pub fn maybe_feed_calibration(field: &mut FieldModel, frame_history: &VecDeque<V
     }
 }
 
-/// Parse node positions from a semicolon-delimited string.
+/// One parsed `--node-positions` entry: a position, and the node id if the
+/// operator named one explicitly.
 ///
-/// Format: `"x,y,z;x,y,z;..."` where each coordinate is an `f32`.
-/// Malformed entries are skipped with a warning log.
-pub fn parse_node_positions(input: &str) -> Vec<[f32; 3]> {
+/// `node_id: None` means the entry was given positionally, so its identity is
+/// its index in the list — which is only the same thing as a node id on a fleet
+/// numbered `0, 1, 2, ...`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NodePositionEntry {
+    pub node_id: Option<u8>,
+    pub position: [f32; 3],
+}
+
+/// Parse node positions, keeping any explicit node ids.
+///
+/// Two accepted forms, per entry:
+///
+/// * `x,y,z`           — positional; identity is the entry's index.
+/// * `node_id:x,y,z`   — explicit; identity is the stated node id.
+///
+/// The explicit form exists because the positional one is only unambiguous on a
+/// fleet whose ids happen to run `0, 1, 2, ...`. Anywhere else, "the third
+/// entry" and "node 3" are different nodes, and nothing in the string says
+/// which was meant. Naming the id removes the guess rather than relocating it.
+///
+/// Both forms may be mixed; a positional entry keeps its index as its identity.
+/// Malformed entries are skipped with a warning rather than failing the boot —
+/// a typo in one triplet should not take the server down.
+pub fn parse_node_position_entries(input: &str) -> Vec<NodePositionEntry> {
     if input.is_empty() {
         return Vec::new();
     }
     input
         .split(';')
         .enumerate()
-        .filter_map(|(idx, triplet)| {
+        .filter_map(|(idx, raw)| {
+            let entry = raw.trim();
+            if entry.is_empty() {
+                return None;
+            }
+            // An explicit id is everything before the first ':'. Coordinates
+            // never contain one, so this cannot be ambiguous.
+            let (node_id, triplet) = match entry.split_once(':') {
+                Some((id_str, rest)) => match id_str.trim().parse::<u8>() {
+                    Ok(id) => (Some(id), rest),
+                    Err(_) => {
+                        tracing::warn!(
+                            "Skipping node position entry {idx}: '{entry}' has \
+                             an unparseable node id before ':' (expected \
+                             node_id:x,y,z with node_id in 0..=255)"
+                        );
+                        return None;
+                    }
+                },
+                None => (None, entry),
+            };
+
             let parts: Vec<&str> = triplet.split(',').collect();
             if parts.len() != 3 {
                 tracing::warn!(
-                    "Skipping malformed node position entry {idx}: '{triplet}' (expected x,y,z)"
+                    "Skipping malformed node position entry {idx}: '{entry}' (expected x,y,z)"
                 );
                 return None;
             }
             match (
-                parts[0].parse::<f32>(),
-                parts[1].parse::<f32>(),
-                parts[2].parse::<f32>(),
+                parts[0].trim().parse::<f32>(),
+                parts[1].trim().parse::<f32>(),
+                parts[2].trim().parse::<f32>(),
             ) {
-                (Ok(x), Ok(y), Ok(z)) => Some([x, y, z]),
+                (Ok(x), Ok(y), Ok(z)) => Some(NodePositionEntry {
+                    node_id,
+                    position: [x, y, z],
+                }),
                 _ => {
-                    tracing::warn!("Skipping unparseable node position entry {idx}: '{triplet}'");
+                    tracing::warn!("Skipping unparseable node position entry {idx}: '{entry}'");
                     None
                 }
             }
         })
+        .collect()
+}
+
+/// Build the `node_id -> position` map the live `NodeInfo` output reads.
+///
+/// Identity is the explicit `node_id:` prefix when the operator gave one, and
+/// the entry's list index otherwise.
+///
+/// This exists as a function rather than a loop inside `main()` because the bug
+/// it fixes was invisible without a test: positions were inserted keyed by list
+/// index and read back by `node_id`, so on any fleet not numbered `0, 1, 2, ...`
+/// every lookup missed and silently fell through to the hardcoded
+/// `[2.0, 0.0, 1.5]` that `--node-positions` exists to replace. The config
+/// looked applied and did nothing.
+pub fn node_positions_by_id(
+    entries: &[NodePositionEntry],
+) -> std::collections::HashMap<u8, [f32; 3]> {
+    let mut map = std::collections::HashMap::new();
+    for (idx, e) in entries.iter().enumerate() {
+        let key = e.node_id.unwrap_or(idx as u8);
+        if let Some(prev) = map.insert(key, e.position) {
+            tracing::warn!(
+                "node position for node {key} given twice ({prev:?} then {:?}); the later entry wins",
+                e.position
+            );
+        }
+    }
+    map
+}
+
+/// Parse node positions from a semicolon-delimited string.
+///
+/// Format: `"x,y,z;x,y,z;..."` where each coordinate is an `f32`.
+/// Malformed entries are skipped with a warning log.
+///
+/// Positional view, for consumers that index the list rather than key it by
+/// node id — `MultistaticFuser::set_node_positions()` is the one that matters.
+/// Use [`parse_node_position_entries`] where identity is needed.
+pub fn parse_node_positions(input: &str) -> Vec<[f32; 3]> {
+    parse_node_position_entries(input)
+        .into_iter()
+        .map(|e| e.position)
         .collect()
 }
 
@@ -201,6 +290,158 @@ mod tests {
         let positions = parse_node_positions("1,2;3,4,5");
         assert_eq!(positions.len(), 1);
         assert_eq!(positions[0], [3.0, 4.0, 5.0]);
+    }
+
+    // ---- Explicit node ids (the indexing-mismatch regression) ----
+
+    /// Positional entries carry no id, so identity falls back to the index.
+    /// This is the ONLY case the old behaviour handled correctly.
+    #[test]
+    fn positional_entries_report_no_explicit_id() {
+        let e = parse_node_position_entries("0,0,1.5;3,0,1.5");
+        assert_eq!(e.len(), 2);
+        assert!(e.iter().all(|x| x.node_id.is_none()));
+        assert_eq!(e[1].position, [3.0, 0.0, 1.5]);
+    }
+
+    /// THE REGRESSION. Positions were stored keyed by list index and read back
+    /// by node_id, so on any fleet not numbered 0,1,2,... every lookup missed
+    /// and fell through to the hardcoded default the option exists to replace.
+    /// Non-sequential ids are what catch that.
+    #[test]
+    fn non_sequential_node_ids_are_preserved() {
+        let e = parse_node_position_entries("11:1,2,3;12:4,5,6;13:7,8,9");
+        assert_eq!(e.len(), 3);
+        assert_eq!(e[0].node_id, Some(11));
+        assert_eq!(e[1].node_id, Some(12));
+        assert_eq!(e[2].node_id, Some(13));
+        assert_eq!(e[2].position, [7.0, 8.0, 9.0]);
+        // The index would have been 0,1,2 -- none of which is a real node here.
+        for (idx, entry) in e.iter().enumerate() {
+            assert_ne!(
+                entry.node_id,
+                Some(idx as u8),
+                "index and node id must not be conflated"
+            );
+        }
+    }
+
+    /// Two-digit ids, and a fleet re-homed to even numbers -- the shape of the
+    /// planned hardware check (nine boards moved from 0..8 to 0,2,4,...,16).
+    #[test]
+    fn two_digit_and_even_numbered_fleet_ids_parse() {
+        let spec = "0:0,0,1;2:1,0,1;4:2,0,1;6:3,0,1;8:4,0,1;10:5,0,1;12:6,0,1;14:7,0,1;16:8,0,1";
+        let e = parse_node_position_entries(spec);
+        assert_eq!(e.len(), 9);
+        let ids: Vec<u8> = e.iter().map(|x| x.node_id.unwrap()).collect();
+        assert_eq!(ids, vec![0, 2, 4, 6, 8, 10, 12, 14, 16]);
+        assert_eq!(e[8].position, [8.0, 0.0, 1.0]);
+    }
+
+    /// A non-zero starting index must work too -- nothing requires node 0.
+    #[test]
+    fn a_fleet_that_does_not_start_at_zero_parses() {
+        let e = parse_node_position_entries("18:1.5,2.5,3.5");
+        assert_eq!(e[0].node_id, Some(18));
+        assert_eq!(e[0].position, [1.5, 2.5, 3.5]);
+    }
+
+    /// Mixing is allowed: an unkeyed entry keeps its index.
+    #[test]
+    fn mixed_forms_keep_their_own_identity() {
+        let e = parse_node_position_entries("0,0,1;7:9,9,9");
+        assert_eq!(e[0].node_id, None);
+        assert_eq!(e[1].node_id, Some(7));
+    }
+
+    /// An unparseable id is skipped rather than silently treated as positional
+    /// -- guessing there would reintroduce the exact ambiguity being removed.
+    #[test]
+    fn an_unparseable_node_id_is_skipped_not_guessed() {
+        let e = parse_node_position_entries("abc:1,2,3;5:4,5,6");
+        assert_eq!(e.len(), 1, "only the well-formed entry survives");
+        assert_eq!(e[0].node_id, Some(5));
+    }
+
+    /// 256 is out of range for a u8 node id and must not wrap to 0.
+    #[test]
+    fn an_out_of_range_node_id_is_rejected() {
+        let e = parse_node_position_entries("256:1,2,3");
+        assert!(e.is_empty(), "256 must not wrap to node 0");
+    }
+
+    /// The positional view stays byte-compatible for the fuser, which indexes
+    /// the list rather than keying it.
+    #[test]
+    fn the_positional_view_is_unchanged_by_explicit_ids() {
+        let p = parse_node_positions("11:1,2,3;12:4,5,6");
+        assert_eq!(p, vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]);
+    }
+
+    /// The regression itself, at the map that `NodeInfo` actually reads.
+    ///
+    /// The old code inserted keyed by list index and looked up by node_id. On a
+    /// fleet numbered 11,12,13 that map holds keys 0,1,2, so every lookup misses
+    /// and the node reports the hardcoded default. This asserts both halves:
+    /// the real ids resolve, and the indices are absent.
+    #[test]
+    fn the_map_is_keyed_by_node_id_not_list_index() {
+        let entries = parse_node_position_entries("11:1,2,3;12:4,5,6;13:7,8,9");
+        let map = node_positions_by_id(&entries);
+
+        assert_eq!(map.get(&11), Some(&[1.0, 2.0, 3.0]));
+        assert_eq!(map.get(&12), Some(&[4.0, 5.0, 6.0]));
+        assert_eq!(map.get(&13), Some(&[7.0, 8.0, 9.0]));
+
+        for idx in 0u8..3 {
+            assert!(
+                map.get(&idx).is_none(),
+                "list index {idx} must not be a key -- that is the bug: a lookup                  by node_id would miss and fall back to the hardcoded position"
+            );
+        }
+    }
+
+    /// Positional input keeps the old behaviour exactly: index becomes the key.
+    /// This is what made the bug invisible on a 0..8 fleet.
+    #[test]
+    fn positional_input_still_keys_by_index() {
+        let entries = parse_node_position_entries("0,0,1;3,0,1;6,0,1");
+        let map = node_positions_by_id(&entries);
+        assert_eq!(map.get(&0), Some(&[0.0, 0.0, 1.0]));
+        assert_eq!(map.get(&1), Some(&[3.0, 0.0, 1.0]));
+        assert_eq!(map.get(&2), Some(&[6.0, 0.0, 1.0]));
+    }
+
+    /// A re-homed fleet at 0,2,4,...,16 resolves on the real ids, and the odd
+    /// indices in between are absent.
+    #[test]
+    fn an_even_numbered_fleet_resolves_by_id() {
+        let spec = "0:0,0,1;2:1,0,1;4:2,0,1;6:3,0,1;8:4,0,1;10:5,0,1;12:6,0,1;14:7,0,1;16:8,0,1";
+        let map = node_positions_by_id(&parse_node_position_entries(spec));
+        assert_eq!(map.len(), 9);
+        assert_eq!(map.get(&16), Some(&[8.0, 0.0, 1.0]));
+        assert_eq!(map.get(&10), Some(&[5.0, 0.0, 1.0]));
+        // Index-keyed would have produced 0..8; 1,3,5,7 are not real nodes here.
+        for odd in [1u8, 3, 5, 7] {
+            assert!(map.get(&odd).is_none(), "node {odd} does not exist in this fleet");
+        }
+    }
+
+    /// A duplicate id keeps the later entry rather than silently holding two.
+    #[test]
+    fn a_duplicate_node_id_keeps_the_later_entry() {
+        let map = node_positions_by_id(&parse_node_position_entries("4:1,1,1;4:2,2,2"));
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get(&4), Some(&[2.0, 2.0, 2.0]));
+    }
+
+    /// Whitespace around entries and coordinates is tolerated.
+    #[test]
+    fn whitespace_is_tolerated() {
+        let e = parse_node_position_entries(" 3 : 1.0 , 2.0 , 3.0 ");
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].node_id, Some(3));
+        assert_eq!(e[0].position, [1.0, 2.0, 3.0]);
     }
 
     /// Regression: a freshly-started (`Uncalibrated`) field model must begin

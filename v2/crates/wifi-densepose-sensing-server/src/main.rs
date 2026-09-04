@@ -8678,15 +8678,25 @@ async fn main() {
                 ..cfg.clone()
             });
             if let Some(ref pos_str) = args.node_positions {
-                let positions = field_bridge::parse_node_positions(pos_str);
-                if !positions.is_empty() {
+                let entries = field_bridge::parse_node_position_entries(pos_str);
+                if !entries.is_empty() {
                     info!(
                         "Configured {} node positions for multistatic fusion",
-                        positions.len()
+                        entries.len()
                     );
-                    for (idx, p) in positions.iter().enumerate() {
-                        node_positions_config.insert(idx as u8, *p);
-                    }
+                    // Identity comes from the explicit `node_id:` prefix when
+                    // given, and from the list index otherwise. Built by a
+                    // tested function rather than inline here, because keying
+                    // this map by index while reading it back by node_id is
+                    // precisely the bug being fixed, and a loop inside main()
+                    // is unreachable from any test.
+                    node_positions_config = field_bridge::node_positions_by_id(&entries);
+                    // The fuser indexes this list positionally, matched to
+                    // per-frame iteration order rather than to node id. Left
+                    // as-is deliberately: this change is about the NodeInfo
+                    // output, and quietly altering fusion semantics inside it
+                    // would be the wrong scope. Order given is order passed.
+                    let positions: Vec<[f32; 3]> = entries.iter().map(|e| e.position).collect();
                     fuser.set_node_positions(positions);
                 }
             }

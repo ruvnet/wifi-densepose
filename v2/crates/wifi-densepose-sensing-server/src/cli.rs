@@ -178,7 +178,12 @@ pub struct Args {
     #[arg(long, value_name = "TYPE")]
     pub build_index: Option<String>,
 
-    /// Node positions for multistatic fusion (format: "x,y,z;x,y,z;...")
+    /// Node positions for multistatic fusion.
+    ///
+    /// Two forms, mixable: "x,y,z;..." positional, where each entry's identity
+    /// is its index, and "node_id:x,y,z;..." explicit. Prefer the explicit form
+    /// unless the fleet is numbered 0,1,2,... — otherwise "the third entry" and
+    /// "node 3" are different nodes and nothing in the string says which is meant.
     #[arg(long, env = "SENSING_NODE_POSITIONS")]
     pub node_positions: Option<String>,
 
