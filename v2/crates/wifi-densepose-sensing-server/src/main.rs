@@ -10103,7 +10103,14 @@ async fn config_get_room(State(state): State<SharedState>) -> Json<serde_json::V
     let nodes: Vec<RoomNode> = s
         .node_positions_config
         .iter()
-        .map(|(&id, p)| {
+        .enumerate()
+        .map(|(idx, p)| {
+            // #1791 made node_positions_config a POSITIONAL Vec rather than a
+            // map keyed by node_id, so identity here is the list index. Kept
+            // consistent with that convention deliberately: the Room Builder
+            // must describe the same binding the fusion path actually uses,
+            // or the UI would show positions the server is not applying.
+            let id = idx as u8;
             let label = saved
                 .nodes
                 .iter()
@@ -10162,13 +10169,15 @@ async fn config_set_room(
     }
 
     let mut s = state.write().await;
-    s.node_positions_config.clear();
+    // Indexed by node id so a sparse or non-contiguous set of ids still lands
+    // each node at the right slot; gaps stay at the origin rather than
+    // shifting every later node, which is what a plain push would do.
     let max_id = config.nodes.iter().map(|n| n.id).max().unwrap_or(0);
     let mut positions = vec![[0.0f32, 0.0, 0.0]; max_id as usize + 1];
     for n in &config.nodes {
-        s.node_positions_config.insert(n.id, [n.x, n.y, n.z]);
         positions[n.id as usize] = [n.x, n.y, n.z];
     }
+    s.node_positions_config = positions.clone();
     s.multistatic_fuser.set_node_positions(positions);
     let data_dir = s.data_dir.clone();
     drop(s);
