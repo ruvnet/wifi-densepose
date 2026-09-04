@@ -55,6 +55,10 @@ static thermal_state_t s_state = THERMAL_OK;
 
 static int8_t s_txp = TXP_FULL;
 
+#ifdef CONFIG_THERMAL_THROTTLE
+/* Only referenced from the throttling block in thermal_tick(). Guarded so a
+ * monitor-only build (the default, and what is on the wall) does not warn
+ * about an unused function. */
 static void apply_tx_power(int8_t q)
 {
     if (q == s_txp) {
@@ -70,15 +74,37 @@ static void apply_tx_power(int8_t q)
                  q, esp_err_to_name(r));
     }
 }
+#endif /* CONFIG_THERMAL_THROTTLE */
 
 esp_err_t thermal_init(void)
 {
-    temperature_sensor_config_t cfg =
-        TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 110);
-    esp_err_t r = temperature_sensor_install(&cfg, &s_sensor);
+    /* The requested span must fit ENTIRELY inside one of the sensor's
+     * predefined measurement ranges -- the driver walks a table and takes the
+     * first that contains it, so a span crossing two boundaries is rejected
+     * with ESP_ERR_INVALID_ARG rather than clamped. (-10,110) looks reasonable
+     * and is invalid for exactly that reason; it failed on real hardware.
+     *
+     * (20,100) is the right first choice here: the warn/throttle/critical
+     * thresholds all sit comfortably inside it, and indoor ambient is
+     * essentially never below 20 C. The wider fallbacks exist so an unheated
+     * room, or a different chip revision with a different table, degrades to a
+     * usable range instead of leaving the node unmonitored. */
+    static const struct { int lo, hi; } spans[] = {
+        {20, 100}, {-10, 80}, {-30, 50}, {50, 125},
+    };
+    esp_err_t r = ESP_ERR_INVALID_ARG;
+    for (size_t i = 0; i < sizeof(spans) / sizeof(spans[0]); i++) {
+        temperature_sensor_config_t cfg =
+            TEMPERATURE_SENSOR_CONFIG_DEFAULT(spans[i].lo, spans[i].hi);
+        r = temperature_sensor_install(&cfg, &s_sensor);
+        if (r == ESP_OK) {
+            ESP_LOGI(TAG, "sensor range %d..%d C", spans[i].lo, spans[i].hi);
+            break;
+        }
+    }
     if (r != ESP_OK) {
-        ESP_LOGW(TAG, "sensor install failed: %s (continuing unmonitored)",
-                 esp_err_to_name(r));
+        ESP_LOGW(TAG, "sensor install failed on every range: %s "
+                      "(continuing unmonitored)", esp_err_to_name(r));
         return r;
     }
     r = temperature_sensor_enable(s_sensor);
