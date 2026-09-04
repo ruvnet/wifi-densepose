@@ -33,7 +33,31 @@
 #define EDGE_MAX_IQ_BYTES     1024  /**< Max I/Q payload per slot. */
 #define EDGE_PHASE_HISTORY_LEN 256  /**< Phase history buffer depth. */
 #define EDGE_TOP_K            8     /**< Top-K subcarriers to track. */
-#define EDGE_MAX_SUBCARRIERS  128   /**< Max subcarriers per frame. */
+/**
+ * Max subcarriers per frame the edge pipeline will process.
+ *
+ * Target-conditional since 2026-08-28. The original 128 was an ESP32-S3
+ * assumption: pre-HE chips report at most 128 CSI bins. ADR-110 onboarded the
+ * ESP32-C6 to the *capture* path but not to this one, and a C6 associated to an
+ * HE-capable AP delivers HE20 frames with 256 bins (iq_len = 512 bytes).
+ *
+ * `process_frame()` guards with `n_subcarriers > EDGE_MAX_SUBCARRIERS -> return`,
+ * so on C6 every frame was rejected and the whole edge pipeline â€” vitals,
+ * presence, fall detection, per-slot counting â€” silently did nothing. The Edge
+ * DSP task started, logged its banner, and never processed a frame. Confirmed
+ * on hardware: no edge_proc log past init and no vitals packet ever reaching
+ * the sink.
+ *
+ * HE-capable parts get 256; pre-HE parts keep 128 so they don't pay ~3.5 KB of
+ * .bss they can never use. CONFIG_SOC_WIFI_HE_SUPPORT is the same switch
+ * csi_collector.c uses to pick its rx_ctrl layout.
+ */
+#if CONFIG_SOC_WIFI_HE_SUPPORT
+#define EDGE_MAX_SUBCARRIERS  256   /**< HE20 carries 256 CSI bins (C6/C5). */
+#else
+#define EDGE_MAX_SUBCARRIERS  128   /**< Pre-HE parts (S3 etc). */
+#endif
+
 
 /* ---- Measured sample-rate tracking ----
  *
