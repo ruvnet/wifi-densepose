@@ -13,6 +13,7 @@
  */
 
 #include "adaptive_controller.h"
+#include "thermal.h"
 #include "rv_radio_ops.h"
 #include "rv_feature_state.h"
 #include "rv_mesh.h"
@@ -331,6 +332,10 @@ static void emit_feature_state(void)
 static void slow_loop_cb(TimerHandle_t t)
 {
     (void)t;
+    /* Sample the die and apply the thermal policy. The slow loop (30 s) is the
+     * right cadence: the die does not change quickly, and reading it more
+     * often buys nothing but noise. No-op unless CONFIG_THERMAL_MONITOR. */
+    thermal_tick();
     /* ADR-081 L3: publish a HEALTH mesh message every slow tick
      * (default 30 s). The coordinator uses these to track liveness and
      * detect sync-error drift. */
