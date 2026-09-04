@@ -23,6 +23,7 @@ use ndarray::Array2;
 use ndarray_linalg::Eigh;
 #[cfg(feature = "eigenvalue")]
 use ndarray_linalg::UPLO;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Calibration window constants
@@ -41,6 +42,11 @@ pub const CALIBRATION_DURATION_S: f64 = 600.0;
 /// Assumed per-node CSI rate (Hz) used to relate the frame target to
 /// [`CALIBRATION_DURATION_S`] ("10 min at 20 Hz").
 pub const ASSUMED_CALIBRATION_RATE_HZ: f64 = 20.0;
+
+/// A recent window whose mean remains within this residual energy of the
+/// empty room manifold is treated as background before eigenvalue counting.
+#[cfg(feature = "eigenvalue")]
+const EMPTY_ROOM_RESIDUAL_ENERGY_MAX: f64 = 1.0;
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -261,7 +267,8 @@ impl LinkBaselineStats {
 // ---------------------------------------------------------------------------
 
 /// Configuration for field model calibration and runtime.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct FieldModelConfig {
     /// Number of links in the mesh.
     pub n_links: usize,
@@ -304,7 +311,8 @@ impl Default for FieldModelConfig {
 /// Learned from SVD on the covariance of CSI amplitudes during
 /// empty-room calibration. The top-K modes capture environmental
 /// variation (temperature, humidity, time-of-day effects).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct FieldNormalMode {
     /// Per-link baseline mean: `[n_links][n_subcarriers]`.
     pub baseline: Vec<Vec<f64>>,
@@ -360,6 +368,18 @@ pub enum CalibrationStatus {
     Stale,
     /// Calibration has expired.
     Expired,
+}
+
+/// Privacy reduced restart image for a completed field model.
+///
+/// This contains only aggregate baseline statistics and environmental modes.
+/// It excludes raw CSI frames, device addresses, room names, credentials, and
+/// calibration authority. A restored image is only a bootstrap prior.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FieldModelSnapshotV1 {
+    pub config: FieldModelConfig,
+    pub modes: FieldNormalMode,
 }
 
 /// The persistent field model for a single room.
@@ -481,6 +501,96 @@ impl FieldModel {
     /// Access the computed field normal modes, if available.
     pub fn modes(&self) -> Option<&FieldNormalMode> {
         self.modes.as_ref()
+    }
+
+    /// Export aggregate model state suitable for local restart persistence.
+    /// Raw calibration observations and Welford accumulators are not exported.
+    pub fn export_snapshot(&self) -> Result<FieldModelSnapshotV1, FieldModelError> {
+        let modes = self.modes.clone().ok_or(FieldModelError::NotCalibrated)?;
+        Ok(FieldModelSnapshotV1 {
+            config: self.config.clone(),
+            modes,
+        })
+    }
+
+    /// Restore a bounded, validated aggregate snapshot.
+    pub fn from_snapshot(
+        snapshot: FieldModelSnapshotV1,
+        current_us: u64,
+    ) -> Result<Self, FieldModelError> {
+        let config = &snapshot.config;
+        if config.n_links > 16 || config.n_subcarriers > 2_048 {
+            return Err(FieldModelError::InvalidConfig(
+                "snapshot dimensions exceed bounded limits".into(),
+            ));
+        }
+        if !config.min_calibration_duration_s.is_finite()
+            || config.min_calibration_duration_s < 0.0
+            || !config.baseline_expiry_s.is_finite()
+            || config.baseline_expiry_s <= 0.0
+            || config.baseline_expiry_s > 604_800.0
+        {
+            return Err(FieldModelError::InvalidConfig(
+                "snapshot timing values are invalid".into(),
+            ));
+        }
+
+        let modes = &snapshot.modes;
+        let baseline_shape_valid = modes.baseline.len() == config.n_links
+            && modes
+                .baseline
+                .iter()
+                .all(|link| link.len() == config.n_subcarriers);
+        let mode_shape_valid = modes.environmental_modes.len() == modes.mode_energies.len()
+            && modes.environmental_modes.len() <= config.n_modes
+            && modes
+                .environmental_modes
+                .iter()
+                .all(|mode| mode.len() == config.n_subcarriers);
+        let values_valid = modes
+            .baseline
+            .iter()
+            .flatten()
+            .chain(modes.environmental_modes.iter().flatten())
+            .all(|value| value.is_finite())
+            && modes
+                .mode_energies
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0)
+            && modes.variance_explained.is_finite()
+            && (0.0..=10.0).contains(&modes.variance_explained)
+            && modes.baseline_noise_var.is_finite()
+            && modes.baseline_noise_var >= 0.0
+            && modes.baseline_eigenvalue_count <= config.n_subcarriers;
+        if !baseline_shape_valid || !mode_shape_valid || !values_valid {
+            return Err(FieldModelError::InvalidConfig(
+                "snapshot modes are malformed or non finite".into(),
+            ));
+        }
+        if modes.calibrated_at_us == 0
+            || modes.calibrated_at_us > current_us.saturating_add(300_000_000)
+        {
+            return Err(FieldModelError::InvalidConfig(
+                "snapshot calibration time is invalid".into(),
+            ));
+        }
+        let elapsed_s = current_us.saturating_sub(modes.calibrated_at_us) as f64 / 1_000_000.0;
+        if elapsed_s > config.baseline_expiry_s {
+            return Err(FieldModelError::BaselineExpired {
+                elapsed_s,
+                max_s: config.baseline_expiry_s,
+            });
+        }
+
+        let mut model = Self::new(snapshot.config)?;
+        model.status = if elapsed_s > model.config.baseline_expiry_s * 0.5 {
+            CalibrationStatus::Stale
+        } else {
+            CalibrationStatus::Fresh
+        };
+        model.last_calibration_us = modes.calibrated_at_us;
+        model.modes = Some(snapshot.modes);
+        Ok(model)
     }
 
     /// Number of calibration frames collected so far.
@@ -881,6 +991,17 @@ impl FieldModel {
         }
         for m in &mut mean {
             *m /= count as f64;
+        }
+
+        // Rank alone is not person evidence. A continuation window can expose
+        // more significant eigenvalues while its mean remains on the learned
+        // empty room manifold. Fail toward empty only inside the same
+        // conservative residual energy boundary used by the server fallback.
+        if self
+            .extract_perturbation(&[mean.clone()])
+            .is_ok_and(|perturbation| perturbation.total_energy <= EMPTY_ROOM_RESIDUAL_ENERGY_MAX)
+        {
+            return Ok(0);
         }
 
         let mut cov = Array2::<f64>::zeros((n, n));
@@ -1536,6 +1657,48 @@ mod tests {
             modes.baseline_eigenvalue_count <= 8,
             "baseline_eigenvalue_count should be <= n_subcarriers"
         );
+    }
+
+    #[test]
+    fn snapshot_round_trip_preserves_aggregate_modes_without_raw_frames() {
+        let config = make_config(1, 4, 10);
+        let mut model = FieldModel::new(config).unwrap();
+        for i in 0..10 {
+            model
+                .feed_calibration(&[vec![1.0 + i as f64 * 0.01, 2.0, 3.0, 4.0]])
+                .unwrap();
+        }
+        model.finalize_calibration(1_000_000, 0xCA1).unwrap();
+
+        let snapshot = model.export_snapshot().unwrap();
+        let restored = FieldModel::from_snapshot(snapshot.clone(), 2_000_000).unwrap();
+
+        assert_eq!(restored.status(), CalibrationStatus::Fresh);
+        assert_eq!(restored.calibration_frame_count(), 0);
+        assert_eq!(restored.export_snapshot().unwrap(), snapshot);
+    }
+
+    #[test]
+    fn snapshot_restore_rejects_expired_and_malformed_images() {
+        let config = make_config(1, 4, 10);
+        let mut model = FieldModel::new(config).unwrap();
+        for _ in 0..10 {
+            model.feed_calibration(&[vec![1.0, 2.0, 3.0, 4.0]]).unwrap();
+        }
+        model.finalize_calibration(1_000_000, 0).unwrap();
+        let snapshot = model.export_snapshot().unwrap();
+
+        assert!(matches!(
+            FieldModel::from_snapshot(snapshot.clone(), 90_000_000_000),
+            Err(FieldModelError::BaselineExpired { .. })
+        ));
+
+        let mut malformed = snapshot;
+        malformed.modes.baseline[0].pop();
+        assert!(matches!(
+            FieldModel::from_snapshot(malformed, 2_000_000),
+            Err(FieldModelError::InvalidConfig(_))
+        ));
     }
 
     #[test]
