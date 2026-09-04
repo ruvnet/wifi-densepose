@@ -491,6 +491,57 @@ fn classification_from_room(room: &RoomInference) -> ClassificationInfo {
     }
 }
 
+/// Minimum time a candidate room-level classification must be observed
+/// *consistently* before the debounced room state actually flips to it.
+///
+/// `fuse_room` recomputes its plurality vote fresh every cycle with no
+/// memory of its own — unlike each node's own classification, which is
+/// individually debounced (`smooth_and_classify_node`). Confirmed live
+/// (2026-08-28) as a real source of "flapping": with per-node confidences
+/// sitting near the classification boundary (44%/83%/53% observed), whichever
+/// 2 of 3 nodes happen to agree can flip cycle-to-cycle even while each
+/// node's own reading is individually stable. This adds the missing
+/// room-level hysteresis, same idea as the per-node debounce, one layer up.
+const ROOM_DEBOUNCE_DURATION_SECS: f64 = 1.5;
+
+/// Debounced counterpart to [`classification_from_room`] — apply this at
+/// live call sites instead, so the room's `presence`/`motion_level` only
+/// flips after `raw`'s new candidate class has been observed continuously
+/// for [`ROOM_DEBOUNCE_DURATION_SECS`], not on the very first cycle it wins
+/// `fuse_room`'s plurality vote. `confidence` is passed through un-debounced
+/// (it's a continuous value, not a discrete state, so there's nothing to
+/// flap) — only `motion_level`/`presence` are held back.
+fn debounce_room_classification(state: &mut AppStateInner, raw: &RoomInference) -> ClassificationInfo {
+    let candidate = if raw.classification == "unavailable" {
+        "absent"
+    } else {
+        raw.classification.as_str()
+    };
+    let now = std::time::Instant::now();
+
+    if candidate == state.room_debounced_level {
+        // Already stable in this state — reset any in-flight candidate.
+        state.room_debounce_candidate = candidate.to_string();
+        state.room_debounce_since = None;
+    } else if candidate == state.room_debounce_candidate {
+        let since = *state.room_debounce_since.get_or_insert(now);
+        if now.duration_since(since).as_secs_f64() >= ROOM_DEBOUNCE_DURATION_SECS {
+            state.room_debounced_level = candidate.to_string();
+            state.room_debounce_since = None;
+        }
+    } else {
+        // New candidate — restart the hold timer.
+        state.room_debounce_candidate = candidate.to_string();
+        state.room_debounce_since = Some(now);
+    }
+
+    ClassificationInfo {
+        motion_level: state.room_debounced_level.clone(),
+        presence: state.room_debounced_level != "absent",
+        confidence: raw.confidence,
+    }
+}
+
 /// ADR-297 — the window a node may be silent before it stops contributing to
 /// the fused room aggregate (its entities go stale/unavailable rather than
 /// holding a frozen online value). Mirrors the 10 s active-node filter used to
@@ -609,6 +660,98 @@ mod issue_1554_room_classification_tests {
         };
         let b = a.clone();
         assert_eq!(classification_from_room(&a), classification_from_room(&b));
+    }
+}
+
+#[cfg(test)]
+mod debounce_room_classification_tests {
+    //! `fuse_room`'s plurality vote has no memory of its own — confirmed live
+    //! (2026-08-28) as a real "flapping" source when per-node confidences sit
+    //! near the classification boundary: whichever 2 of 3 nodes happen to
+    //! agree on a given cycle can flip the room result even while each
+    //! node's own reading is individually stable. `debounce_room_classification`
+    //! adds the missing room-level hysteresis (same idea as each node's own
+    //! debounce, one layer up).
+    use super::{debounce_room_classification, AppStateInner, RoomInference};
+    use std::time::{Duration, Instant};
+
+    fn room(classification: &str, confidence: f64) -> RoomInference {
+        RoomInference {
+            classification: classification.to_string(),
+            confidence,
+            contributing_nodes: 3,
+        }
+    }
+
+    #[test]
+    fn single_cycle_candidate_does_not_flip_immediately() {
+        let mut state = AppStateInner::minimal();
+        let c = debounce_room_classification(&mut state, &room("present_still", 0.6));
+        assert_eq!(c.motion_level, "absent", "one cycle must not be enough to flip");
+        assert!(!c.presence);
+    }
+
+    #[test]
+    fn repeated_but_recent_candidate_still_does_not_flip() {
+        let mut state = AppStateInner::minimal();
+        debounce_room_classification(&mut state, &room("present_still", 0.6));
+        // Second cycle, essentially no time elapsed — still under the hold duration.
+        let c = debounce_room_classification(&mut state, &room("present_still", 0.6));
+        assert_eq!(c.motion_level, "absent");
+    }
+
+    #[test]
+    fn candidate_sustained_past_hold_duration_flips() {
+        let mut state = AppStateInner::minimal();
+        // Simulate "present_still" having already been the candidate for 2s
+        // (> ROOM_DEBOUNCE_DURATION_SECS = 1.5s) without needing to sleep in
+        // the test.
+        state.room_debounce_candidate = "present_still".to_string();
+        state.room_debounce_since = Some(Instant::now() - Duration::from_secs(2));
+
+        let c = debounce_room_classification(&mut state, &room("present_still", 0.7));
+        assert_eq!(c.motion_level, "present_still");
+        assert!(c.presence);
+    }
+
+    #[test]
+    fn flapping_candidate_resets_the_hold_timer() {
+        let mut state = AppStateInner::minimal();
+        // "present_still" has been pending 1s (not yet enough to flip).
+        state.room_debounce_candidate = "present_still".to_string();
+        state.room_debounce_since = Some(Instant::now() - Duration::from_secs(1));
+
+        // A different candidate arrives — this is exactly the flapping
+        // pattern (2-of-3 node agreement flipping cycle to cycle). The hold
+        // timer must restart for the new candidate, not carry over.
+        let c = debounce_room_classification(&mut state, &room("active", 0.5));
+        assert_eq!(c.motion_level, "absent", "still debounced to the old stable state");
+        assert_eq!(state.room_debounce_candidate, "active");
+        assert!(
+            state.room_debounce_since.unwrap().elapsed() < Duration::from_millis(100),
+            "hold timer must have restarted for the new candidate"
+        );
+    }
+
+    #[test]
+    fn already_stable_state_reports_immediately_without_waiting() {
+        let mut state = AppStateInner::minimal();
+        state.room_debounced_level = "present_moving".to_string();
+        let c = debounce_room_classification(&mut state, &room("present_moving", 0.9));
+        assert_eq!(c.motion_level, "present_moving", "no need to re-debounce an already-stable state");
+        assert!(c.presence);
+    }
+
+    #[test]
+    fn unavailable_room_debounces_toward_absent_like_any_other_candidate() {
+        let mut state = AppStateInner::minimal();
+        state.room_debounced_level = "present_still".to_string();
+        state.room_debounce_candidate = "absent".to_string();
+        state.room_debounce_since = Some(Instant::now() - Duration::from_secs(2));
+
+        let c = debounce_room_classification(&mut state, &RoomInference::unavailable());
+        assert_eq!(c.motion_level, "absent");
+        assert!(!c.presence);
     }
 }
 
@@ -1410,6 +1553,15 @@ struct AppStateInner {
     /// Per-node sensing state for multi-node deployments.
     /// Keyed by `node_id` from the ESP32 frame header.
     node_states: HashMap<u8, NodeState>,
+    /// Debounced room-level classification state — see
+    /// `debounce_room_classification`. `fuse_room` is a fresh, memoryless
+    /// plurality vote every cycle with no debounce of its own (unlike each
+    /// node's own classification, which is debounced individually), so with
+    /// per-node confidences sitting near a boundary the room-level result
+    /// can flip cycle-to-cycle even though each node's own reading is stable.
+    room_debounced_level: String,
+    room_debounce_candidate: String,
+    room_debounce_since: Option<std::time::Instant>,
     // ── Accuracy sprint: Kalman tracker, multistatic fusion, eigenvalue counting ──
     /// Global Kalman-based pose tracker for stable person IDs and smoothed keypoints.
     pose_tracker: PoseTracker,
@@ -1682,6 +1834,9 @@ impl AppStateInner {
             training_progress_tx: broadcast::channel::<String>(256).0,
             adaptive_model: None,
             node_states: HashMap::new(),
+            room_debounced_level: "absent".to_string(),
+            room_debounce_candidate: "absent".to_string(),
+            room_debounce_since: None,
             pose_tracker: PoseTracker::new(),
             last_tracker_instant: None,
             multistatic_fuser: MultistaticFuser::new(),
@@ -2647,13 +2802,43 @@ fn raw_classify(score: f64) -> String {
 }
 
 /// Debounce frames required before state transition (at ~10 FPS = ~0.4s).
+/// Used only by [`smooth_and_classify`] (simulated / WiFi-scan sources,
+/// which run on a fixed tick cadence close to this design point).
 const DEBOUNCE_FRAMES: u32 = 4;
 /// EMA alpha for motion smoothing (~1s time constant at 10 FPS).
+/// Used only by [`smooth_and_classify`]; see above.
 const MOTION_EMA_ALPHA: f64 = 0.15;
 /// EMA alpha for slow-adapting baseline (~30s time constant at 10 FPS).
+/// Used only by [`smooth_and_classify`]; see above.
 const BASELINE_EMA_ALPHA: f64 = 0.003;
 /// Number of warm-up frames before baseline subtraction kicks in.
+/// Used only by [`smooth_and_classify`]; see above.
 const BASELINE_WARMUP: u64 = 50;
+
+/// Debounce duration required before [`smooth_and_classify_node`] accepts a
+/// state transition. Equivalent to the original `DEBOUNCE_FRAMES = 4` at the
+/// assumed 10 FPS design point.
+const NODE_DEBOUNCE_DURATION_SECS: f64 = 0.4;
+/// Time constant for [`smooth_and_classify_node`]'s motion-score EMA,
+/// derived from `MOTION_EMA_ALPHA` at the assumed 10 FPS design point
+/// (τ = -T / ln(1-α)) so behavior is unchanged for a node running at
+/// exactly 10 FPS.
+///
+/// Frame-count/fixed-alpha smoothing silently scales with actual CSI
+/// arrival rate. ESP32-C6 boards observed in the field run CSI at
+/// ~48-50 FPS, not the assumed 10 FPS — ~5x faster — which made the
+/// debounce trigger in ~0.08s instead of ~0.4s and compressed the "1s"
+/// motion EMA to ~0.2s of real smoothing, letting raw per-frame noise
+/// flip the reported label almost directly (the reported UI "seizure").
+/// Deriving a per-frame alpha from the node's actual measured
+/// `csi_fps_ema` makes the smoothing strength invariant to arrival rate.
+const NODE_MOTION_TIME_CONSTANT_SECS: f64 = 0.6154;
+/// Time constant for [`smooth_and_classify_node`]'s baseline EMA, same
+/// derivation as `NODE_MOTION_TIME_CONSTANT_SECS` from `BASELINE_EMA_ALPHA`.
+const NODE_BASELINE_TIME_CONSTANT_SECS: f64 = 33.28;
+/// Baseline warm-up duration before baseline subtraction kicks in for
+/// [`smooth_and_classify_node`] (originally 50 frames at 10 FPS = 5s).
+const NODE_BASELINE_WARMUP_SECS: f64 = 5.0;
 
 /// Apply EMA smoothing, adaptive baseline subtraction, and hysteresis debounce
 /// to the raw classification.  Mutates the smoothing state in `AppStateInner`.
@@ -2708,18 +2893,27 @@ fn smooth_and_classify(state: &mut AppStateInner, raw: &mut ClassificationInfo, 
 /// Per-node variant of `smooth_and_classify` that operates on a `NodeState`
 /// instead of `AppStateInner` (issue #249).
 fn smooth_and_classify_node(ns: &mut NodeState, raw: &mut ClassificationInfo, raw_motion: f64) {
+    // Derive this frame's effective time step from the node's actual
+    // measured CSI rate (already EMA-tracked, burst-filtered elsewhere —
+    // see `observe_csi_frame_arrival`) rather than assuming 10 FPS.
+    let fps = ns.csi_fps_ema.max(1.0);
+    let dt = 1.0 / fps;
+    let motion_alpha = 1.0 - (-dt / NODE_MOTION_TIME_CONSTANT_SECS).exp();
+    let baseline_alpha = 1.0 - (-dt / NODE_BASELINE_TIME_CONSTANT_SECS).exp();
+    let debounce_frames_needed = ((NODE_DEBOUNCE_DURATION_SECS * fps).round() as u32).max(1);
+    let warmup_frames_needed = ((NODE_BASELINE_WARMUP_SECS * fps).round() as u64).max(1);
+
     ns.baseline_frames += 1;
-    if ns.baseline_frames < BASELINE_WARMUP {
+    if ns.baseline_frames < warmup_frames_needed {
         ns.baseline_motion = ns.baseline_motion * 0.9 + raw_motion * 0.1;
     } else if raw_motion < ns.smoothed_motion + 0.05 {
         ns.baseline_motion =
-            ns.baseline_motion * (1.0 - BASELINE_EMA_ALPHA) + raw_motion * BASELINE_EMA_ALPHA;
+            ns.baseline_motion * (1.0 - baseline_alpha) + raw_motion * baseline_alpha;
     }
 
     let adjusted = (raw_motion - ns.baseline_motion * 0.7).max(0.0);
 
-    ns.smoothed_motion =
-        ns.smoothed_motion * (1.0 - MOTION_EMA_ALPHA) + adjusted * MOTION_EMA_ALPHA;
+    ns.smoothed_motion = ns.smoothed_motion * (1.0 - motion_alpha) + adjusted * motion_alpha;
     let sm = ns.smoothed_motion;
 
     let candidate = raw_classify(sm);
@@ -2729,7 +2923,7 @@ fn smooth_and_classify_node(ns: &mut NodeState, raw: &mut ClassificationInfo, ra
         ns.debounce_candidate = candidate;
     } else if candidate == ns.debounce_candidate {
         ns.debounce_counter += 1;
-        if ns.debounce_counter >= DEBOUNCE_FRAMES {
+        if ns.debounce_counter >= debounce_frames_needed {
             ns.current_motion_level = candidate;
             ns.debounce_counter = 0;
         }
@@ -6700,7 +6894,7 @@ async fn udp_receiver_task(
                     // node's own reading no longer overwrites the room's. The
                     // old ad-hoc "boost confidence by node count" is replaced by
                     // `room_inference`'s freshness-weighted multi-node confidence.
-                    let classification = classification_from_room(&room_inference);
+                    let classification = debounce_room_classification(&mut s, &room_inference);
 
                     let signal_field = generate_signal_field(
                         fused_features.mean_rssi,
@@ -7174,6 +7368,7 @@ async fn udp_receiver_task(
                         active_nodes.iter().filter_map(|ni| ni.node_inference.as_ref()),
                         NODE_STALE_AFTER_MS,
                     );
+                    let room_classification = debounce_room_classification(&mut s, &room_inference);
 
                     let mut update = SensingUpdate {
                         msg_type: "sensing_update".to_string(),
@@ -7187,7 +7382,7 @@ async fn udp_receiver_task(
                         // `classification` (this node's own smoothed reading)
                         // still drives `motion_score`/`total_persons` above,
                         // which are legitimately this-packet-local.
-                        classification: classification_from_room(&room_inference),
+                        classification: room_classification,
                         signal_field: generate_signal_field(
                             fused_features.mean_rssi,
                             motion_score,
@@ -8784,6 +8979,9 @@ async fn main() {
                     );
                 }),
         node_states: HashMap::new(),
+        room_debounced_level: "absent".to_string(),
+        room_debounce_candidate: "absent".to_string(),
+        room_debounce_since: None,
         // Accuracy sprint
         pose_tracker: PoseTracker::new(),
         last_tracker_instant: None,
