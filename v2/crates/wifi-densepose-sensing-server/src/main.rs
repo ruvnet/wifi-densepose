@@ -1417,9 +1417,13 @@ struct AppStateInner {
     last_tracker_instant: Option<std::time::Instant>,
     /// Attention-weighted multi-node CSI fusion engine.
     multistatic_fuser: MultistaticFuser,
-    /// Node positions parsed from --node-positions, keyed by 0-based index
-    /// into the parsed list (which corresponds to node_id).
-    node_positions_config: HashMap<u8, [f32; 3]>,
+    /// Node positions parsed from --node-positions, in the same order given
+    /// to `multistatic_fuser.set_node_positions`. Real fleets use
+    /// non-sequential logical node IDs, so this is NOT keyed by node_id —
+    /// entry `i` applies to the i-th smallest currently-active node_id, the
+    /// same convention `MultistaticFuser::fuse` uses. See
+    /// `node_positions_by_active_id`.
+    node_positions_config: Vec<[f32; 3]>,
     /// Governed trust-path bridge (ADR-135..146): runs the same live frames
     /// through the privacy/provenance/witness control plane. Does not alter
     /// person-count behavior; its trust state (witness, effective class,
@@ -1681,7 +1685,7 @@ impl AppStateInner {
             pose_tracker: PoseTracker::new(),
             last_tracker_instant: None,
             multistatic_fuser: MultistaticFuser::new(),
-            node_positions_config: HashMap::new(),
+            node_positions_config: Vec::new(),
             engine_bridge: engine_bridge::EngineBridge::new(
                 wifi_densepose_bfld::PrivacyMode::PrivateHome,
                 1,
@@ -6271,6 +6275,99 @@ async fn info_page() -> Html<String> {
     )
 }
 
+/// Resolve `--node-positions` entries to the currently active node IDs.
+///
+/// `MultistaticFuser::fuse` assigns `node_positions[i]` to the i-th node in
+/// its `node_frames` argument, which callers build sorted ascending by
+/// node_id (see `node_frames_from_states_with_guard`). Real fleets use
+/// non-sequential logical node IDs (e.g. 11, 12, 13), so a naive
+/// `node_id -> node_positions_config[node_id]` lookup silently misses for
+/// every real deployment. This mirrors the same ascending-rank convention so
+/// the live `NodeInfo.position` field agrees with what fusion actually used.
+fn node_positions_by_active_id(
+    node_positions_config: &[[f32; 3]],
+    node_states: &HashMap<u8, NodeState>,
+    now: std::time::Instant,
+) -> HashMap<u8, [f64; 3]> {
+    let mut active_ids: Vec<u8> = node_states
+        .iter()
+        .filter(|(_, n)| {
+            n.last_frame_time
+                .is_some_and(|t| now.duration_since(t).as_secs() < 10)
+        })
+        .map(|(&id, _)| id)
+        .collect();
+    active_ids.sort_unstable();
+    active_ids
+        .into_iter()
+        .enumerate()
+        .filter_map(|(rank, id)| {
+            node_positions_config
+                .get(rank)
+                .map(|p| (id, [p[0] as f64, p[1] as f64, p[2] as f64]))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod node_positions_by_active_id_tests {
+    use super::*;
+
+    fn active_node(now: std::time::Instant) -> NodeState {
+        let mut ns = NodeState::new();
+        ns.last_frame_time = Some(now);
+        ns
+    }
+
+    #[test]
+    fn non_sequential_node_ids_get_positions_by_ascending_rank() {
+        // Real fleets use logical IDs like 11, 12, 13 — not 0, 1, 2. The
+        // configured position list must map by ascending node_id rank, not
+        // by treating node_id as a direct index into the list.
+        let now = std::time::Instant::now();
+        let mut node_states = HashMap::new();
+        node_states.insert(13, active_node(now));
+        node_states.insert(11, active_node(now));
+        node_states.insert(12, active_node(now));
+
+        let configured = [[1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, 0.0]];
+        let resolved = node_positions_by_active_id(&configured, &node_states, now);
+
+        assert_eq!(resolved.get(&11), Some(&[1.0, 0.0, 0.0]));
+        assert_eq!(resolved.get(&12), Some(&[2.0, 0.0, 0.0]));
+        assert_eq!(resolved.get(&13), Some(&[3.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn stale_nodes_are_excluded_from_rank_assignment() {
+        let now = std::time::Instant::now();
+        let mut node_states = HashMap::new();
+        node_states.insert(11, active_node(now));
+        let mut stale = NodeState::new();
+        stale.last_frame_time =
+            Some(now - std::time::Duration::from_secs(30));
+        node_states.insert(12, stale);
+        node_states.insert(13, active_node(now));
+
+        let configured = [[1.0, 0.0, 0.0], [3.0, 0.0, 0.0]];
+        let resolved = node_positions_by_active_id(&configured, &node_states, now);
+
+        assert_eq!(resolved.get(&11), Some(&[1.0, 0.0, 0.0]));
+        assert_eq!(resolved.get(&12), None, "stale node must not consume a rank");
+        assert_eq!(resolved.get(&13), Some(&[3.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn missing_config_entries_fall_through_to_the_caller_default() {
+        let now = std::time::Instant::now();
+        let mut node_states = HashMap::new();
+        node_states.insert(11, active_node(now));
+
+        let resolved = node_positions_by_active_id(&[], &node_states, now);
+        assert_eq!(resolved.get(&11), None);
+    }
+}
+
 // ── UDP receiver task ────────────────────────────────────────────────────────
 
 async fn udp_receiver_task(
@@ -6520,6 +6617,8 @@ async fn udp_receiver_task(
                     }
 
                     // Build nodes array with all active nodes.
+                    let resolved_positions =
+                        node_positions_by_active_id(&s.node_positions_config, &s.node_states, now);
                     let active_nodes: Vec<NodeInfo> = s
                         .node_states
                         .iter()
@@ -6530,10 +6629,9 @@ async fn udp_receiver_task(
                         .map(|(&id, n)| NodeInfo {
                             node_id: id,
                             rssi_dbm: n.rssi_history.back().copied().unwrap_or(0.0),
-                            position: s
-                                .node_positions_config
+                            position: resolved_positions
                                 .get(&id)
-                                .map(|p| [p[0] as f64, p[1] as f64, p[2] as f64])
+                                .copied()
                                 .unwrap_or([2.0, 0.0, 1.5]),
                             amplitude: vec![],
                             subcarrier_count: 0,
@@ -7008,6 +7106,8 @@ async fn udp_receiver_task(
                     // privacy gate applies at Restricted (drop amplitude/phase
                     // proxies).
                     let suppress_raw = s.engine_bridge.suppress_raw_outputs();
+                    let resolved_positions =
+                        node_positions_by_active_id(&s.node_positions_config, &s.node_states, now);
                     let active_nodes: Vec<NodeInfo> = s
                         .node_states
                         .iter()
@@ -7018,10 +7118,9 @@ async fn udp_receiver_task(
                         .map(|(&id, n)| NodeInfo {
                             node_id: id,
                             rssi_dbm: n.rssi_history.back().copied().unwrap_or(0.0),
-                            position: s
-                                .node_positions_config
+                            position: resolved_positions
                                 .get(&id)
-                                .map(|p| [p[0] as f64, p[1] as f64, p[2] as f64])
+                                .copied()
                                 .unwrap_or([2.0, 0.0, 1.5]),
                             amplitude: if suppress_raw {
                                 vec![]
@@ -8593,7 +8692,7 @@ async fn main() {
     // threaded into `engine_bridge` so both fusion paths honor the same
     // WDP_TDM_SLOTS/WDP_GUARD_INTERVAL_US-derived guard (#1049/#1057).
     let mut engine_bridge_multistatic_cfg: Option<MultistaticConfig> = None;
-    let mut node_positions_config: HashMap<u8, [f32; 3]> = HashMap::new();
+    let mut node_positions_config: Vec<[f32; 3]> = Vec::new();
     let state: SharedState = Arc::new(RwLock::new(AppStateInner {
         latest_update: None,
         rssi_history: VecDeque::new(),
@@ -8684,9 +8783,7 @@ async fn main() {
                         "Configured {} node positions for multistatic fusion",
                         positions.len()
                     );
-                    for (idx, p) in positions.iter().enumerate() {
-                        node_positions_config.insert(idx as u8, *p);
-                    }
+                    node_positions_config = positions.clone();
                     fuser.set_node_positions(positions);
                 }
             }
