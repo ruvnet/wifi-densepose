@@ -223,6 +223,11 @@ def main():
         print("  " + " ".join(shown[1:]))
         if a.dry_run:
             continue
+        # nosemgrep: dangerous-subprocess-use-audit
+        # List form, no shell=True: argv goes straight to execve, so there is no
+        # shell to inject into. The elements are a fixed flag sequence plus values
+        # from a local operator-owned config file; a hostile value can only become
+        # one bad argument to provision.py, not a second command.
         r = subprocess.run(cmd, capture_output=True, text=True)
         # provision.py cannot build the NVS image without ESP-IDF on PATH, so
         # on a bare Windows host it writes nvs_config.csv and stops. Finish the
@@ -252,6 +257,8 @@ def main():
             if a.no_auto_reset:
                 esp += ["--before", "no-reset"]
             esp += ["write_flash", NVS_OFFSET, binp]
+            # nosemgrep: dangerous-subprocess-use-audit
+            # Same reasoning as above: list form, no shell.
             f = subprocess.run(esp, capture_output=True, text=True)
             if "verified" in f.stdout or f.returncode == 0:
                 print("  ok -- NVS written at %s. Confirm the boot log says "
