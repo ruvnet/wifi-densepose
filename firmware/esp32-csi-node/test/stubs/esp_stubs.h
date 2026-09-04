@@ -89,7 +89,11 @@ typedef struct {
 /** Minimal wifi_csi_info_t needed by csi_serialize_frame. */
 typedef struct {
     wifi_pkt_rx_ctrl_t rx_ctrl;
-    uint8_t            mac[6];
+    uint8_t            mac[6];  /**< 802.11 addr2 -- the TRANSMITTER. */
+    /** 802.11 sequence number of the overheard frame. Mirrors IDF's
+     * esp_wifi_types_native.h so this harness compiles the REAL serializer
+     * rather than a divergent copy. */
+    uint16_t           rx_seq;
     int16_t            len;     /**< Length of the I/Q buffer in bytes. */
     int8_t            *buf;     /**< Pointer to I/Q data. */
 } wifi_csi_info_t;

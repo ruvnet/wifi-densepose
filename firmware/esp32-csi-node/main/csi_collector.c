@@ -12,9 +12,6 @@
  */
 
 #include "csi_collector.h"
-#include "thermal.h"
-#include "esp_system.h"
-#include "esp_heap_caps.h"
 #include "nvs_config.h"
 #include "stream_sender.h"
 #include "edge_processing.h"
@@ -519,13 +516,6 @@ static void wifi_csi_callback(void *ctx, wifi_csi_info_t *info)
              * Byte 31 matters as much as byte 30: a thermally throttled node's
              * RSSI drops at both ends, which is indistinguishable from an
              * obstruction unless the reader can see the transmit power fell. */
-            size_t minheap = esp_get_minimum_free_heap_size() / 2048;
-            sync[7]  = (uint8_t)(minheap > 255 ? 255 : minheap);
-            sync[28] = (uint8_t)esp_reset_reason();
-            sync[29] = (uint8_t)thermal_state();
-            float dc = thermal_celsius();
-            sync[30] = (dc < -100.0f) ? 0 : (uint8_t)(int8_t)dc;
-            sync[31] = (uint8_t)thermal_tx_dbm();
 
             /* Bytes 38..49: the three TX-path counters, u32 LE each.
              *
