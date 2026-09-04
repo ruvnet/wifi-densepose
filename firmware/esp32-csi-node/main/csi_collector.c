@@ -457,7 +457,7 @@ static void wifi_csi_callback(void *ctx, wifi_csi_info_t *info)
 #define CONFIG_C6_SYNC_EVERY_N_FRAMES 20
 #endif
         if ((s_cb_count % CONFIG_C6_SYNC_EVERY_N_FRAMES) == 0) {
-            uint8_t sync[50];
+            uint8_t sync[58];
             uint32_t sync_magic = 0xC511A110u;    /* CSI-ADR-110 sync packet */
             uint64_t local_us = (uint64_t)esp_timer_get_time();
             uint64_t epoch_us = c6_sync_espnow_get_epoch_us();
@@ -469,7 +469,7 @@ static void wifi_csi_callback(void *ctx, wifi_csi_info_t *info)
 
             memcpy(&sync[0],  &sync_magic, 4);
             sync[4] = s_node_id;
-            sync[5] = 0x03;                       /* proto v3: + TX path counters */
+            sync[5] = 0x04;                       /* proto v4: + edge pipeline counters */
             sync[6] = flags;
             sync[7] = 0;                          /* reserved */
             memcpy(&sync[8],  &local_us, 8);
@@ -546,6 +546,33 @@ static void wifi_csi_callback(void *ctx, wifi_csi_info_t *info)
             memcpy(&sync[38], &s_send_fail,  4);
             memcpy(&sync[42], &s_rate_skip,  4);
             memcpy(&sync[46], &s_early_drop, 4);
+
+            /* Bytes 50..57: the edge pipeline's own two counters, u32 LE each.
+             *
+             *   [50..53] edge_frames_processed — frames that passed the
+             *                                    subcarrier-grid guard and were
+             *                                    actually processed.
+             *   [54..57] edge_frames_rejected  — frames discarded by that guard
+             *                                    for being wider than
+             *                                    EDGE_MAX_SUBCARRIERS.
+             *
+             * The TX counters above describe what leaves the node. Neither says
+             * anything about whether the on-device pipeline is doing any work,
+             * and that gap hid a real bug: EDGE_MAX_SUBCARRIERS was sized for
+             * pre-HE parts while a C6 delivers 256-bin HE20 frames, so every
+             * frame was rejected and vitals, presence and fall detection all
+             * produced nothing — on a node reporting full frame rate, good RSSI
+             * and a healthy DSP banner. Read together the two counters separate
+             * the cases that otherwise look identical from the server:
+             *
+             *   processed == 0 && rejected == 0  nothing reaches the DSP task
+             *   processed == 0 && rejected  > 0  the grid does not match the radio
+             *
+             * Monotonic since boot, differenced by the sink like the others. */
+            uint32_t edge_ok  = edge_processing_get_frames_processed();
+            uint32_t edge_rej = edge_processing_get_frames_rejected();
+            memcpy(&sync[50], &edge_ok,  4);
+            memcpy(&sync[54], &edge_rej, 4);
 
             /* Sync packets are 50 B at ~0.5 Hz — priority path so the CSI
              * ENOMEM backoff can't starve cross-node time alignment (#1183). */

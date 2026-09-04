@@ -42,12 +42,16 @@ pub const SYNC_PACKET_SIZE: usize = 32;
 pub const SYNC_PACKET_SIZE_V2: usize = 38;
 /// Wire size once the TX-path counters are appended (proto v3).
 pub const SYNC_PACKET_SIZE_V3: usize = 50;
+/// Wire size once the edge-pipeline counters are appended (proto v4).
+pub const SYNC_PACKET_SIZE_V4: usize = 58;
 /// Wire protocol version currently emitted by firmware.
 pub const SYNC_PACKET_PROTO_VER: u8 = 0x02;
 /// Protocol version that first carried `node_mac`.
 pub const SYNC_PACKET_PROTO_VER_MAC: u8 = 0x02;
 /// Protocol version that first carried the TX-path counters.
 pub const SYNC_PACKET_PROTO_VER_TX_STATS: u8 = 0x03;
+/// Protocol version that first carried the edge-pipeline counters.
+pub const SYNC_PACKET_PROTO_VER_EDGE_STATS: u8 = 0x04;
 
 /// Decoded ADR-110 §A0.12 sync packet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +120,15 @@ pub struct NodeHealth {
     /// only for the first five. Any question about transmit buffering was
     /// therefore untestable in a deployed fleet rather than merely unanswered.
     pub tx: Option<TxCounters>,
+    /// Edge-pipeline counters, present from proto v4.
+    ///
+    /// The `tx` counters above describe what leaves the node and say nothing
+    /// about whether the on-device pipeline did any work. That gap hid a real
+    /// bug: the subcarrier grid was sized for pre-HE parts while a C6 delivers
+    /// 256-bin HE20 frames, so every frame was rejected and vitals, presence
+    /// and fall detection produced nothing -- on a node reporting full frame
+    /// rate, good RSSI and a healthy DSP banner.
+    pub edge: Option<EdgeCounters>,
 }
 
 /// Counters describing the node's outbound CSI path.
@@ -134,6 +147,29 @@ pub struct TxCounters {
     pub rate_skip: u32,
     /// CSI callbacks discarded by the early rate gate, before any processing.
     pub early_drop: u32,
+}
+
+/// Counters describing the node's on-device edge pipeline.
+///
+/// Read them together, like the TX pair. Separately each is ambiguous; together
+/// they distinguish the two ways a silent pipeline looks identical from here:
+///
+/// | processed | rejected | meaning                                        |
+/// |-----------|----------|------------------------------------------------|
+/// | 0         | 0        | nothing is reaching the DSP task at all        |
+/// | 0         | > 0      | frames arrive and every one is discarded — the |
+/// |           |          | subcarrier grid does not match the radio       |
+/// | > 0       | 0        | healthy                                        |
+///
+/// The second row is the case that went unnoticed for weeks: `EDGE_MAX_SUBCARRIERS`
+/// was 128 while an HE-capable C6 delivers 256 bins, so `process_frame()`
+/// rejected every frame and nothing recorded that it was happening.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct EdgeCounters {
+    /// Frames that passed the subcarrier-grid guard and were processed.
+    pub frames_processed: u32,
+    /// Frames discarded by that guard for being empty or wider than the grid.
+    pub frames_rejected: u32,
 }
 
 impl NodeHealth {
@@ -246,6 +282,17 @@ impl SyncPacket {
                     send_fail: u32::from_le_bytes(buf[38..42].try_into().unwrap()),
                     rate_skip: u32::from_le_bytes(buf[42..46].try_into().unwrap()),
                     early_drop: u32::from_le_bytes(buf[46..50].try_into().unwrap()),
+                })
+            } else {
+                None
+            },
+            // Same length-AND-version guard again, for the same reason.
+            edge: if proto_ver >= SYNC_PACKET_PROTO_VER_EDGE_STATS
+                && buf.len() >= SYNC_PACKET_SIZE_V4
+            {
+                Some(EdgeCounters {
+                    frames_processed: u32::from_le_bytes(buf[50..54].try_into().unwrap()),
+                    frames_rejected: u32::from_le_bytes(buf[54..58].try_into().unwrap()),
                 })
             } else {
                 None
@@ -706,6 +753,70 @@ mod tx_counter_tests {
             b[46..50].copy_from_slice(&drop.to_le_bytes());
         }
         b
+    }
+
+    /// v4 adds the edge counters after the TX ones; everything else is v3.
+    fn frame_v4(proto: u8, len: usize, ok: u32, rej: u32) -> Vec<u8> {
+        let mut b = frame(proto, len, 1, 2, 3);
+        if len >= SYNC_PACKET_SIZE_V4 {
+            b[50..54].copy_from_slice(&ok.to_le_bytes());
+            b[54..58].copy_from_slice(&rej.to_le_bytes());
+        }
+        b
+    }
+
+    #[test]
+    fn v4_reports_the_edge_counters() {
+        let p = SyncPacket::from_bytes(&frame_v4(4, SYNC_PACKET_SIZE_V4, 8123, 0)).unwrap();
+        let e = p.health.edge.expect("v4 carries edge counters");
+        assert_eq!(e.frames_processed, 8123);
+        assert_eq!(e.frames_rejected, 0);
+        // v4 is a superset: the v3 counters must still decode.
+        let tx = p.health.tx.expect("v4 still carries the TX counters");
+        assert_eq!(tx.send_fail, 1);
+        assert_eq!(tx.early_drop, 3);
+    }
+
+    /// The signature of the HE20 truncation bug, as the server would see it:
+    /// frames arriving and every one discarded by the subcarrier guard.
+    #[test]
+    fn edge_counters_expose_a_pipeline_rejecting_every_frame() {
+        let p = SyncPacket::from_bytes(&frame_v4(4, SYNC_PACKET_SIZE_V4, 0, 41_207)).unwrap();
+        let e = p.health.edge.expect("v4 carries edge counters");
+        assert_eq!(e.frames_processed, 0, "nothing was processed");
+        assert!(
+            e.frames_rejected > 0,
+            "and the reason is visible: the frames arrived and were rejected,              which is what distinguishes a mis-sized subcarrier grid from a              pipeline that is simply receiving nothing"
+        );
+    }
+
+    #[test]
+    fn v3_reports_no_edge_counters() {
+        let p = SyncPacket::from_bytes(&frame(3, SYNC_PACKET_SIZE_V3, 0, 0, 0)).unwrap();
+        assert!(p.health.edge.is_none(), "a v3 node has no edge counters");
+        assert!(p.health.tx.is_some(), "but it still reports the TX ones");
+    }
+
+    /// Padded v3: long enough, wrong version. Same trap as the v2 case above --
+    /// admitting these would report a confidently wrong zero for a node whose
+    /// pipeline was never measured.
+    #[test]
+    fn a_padded_v3_datagram_does_not_yield_edge_counters() {
+        let p = SyncPacket::from_bytes(&frame_v4(3, SYNC_PACKET_SIZE_V4, 55, 55)).unwrap();
+        assert!(
+            p.health.edge.is_none(),
+            "length alone must not admit edge counters -- proto v3 cannot have them"
+        );
+    }
+
+    /// Truncated v4: right version, too short.
+    #[test]
+    fn a_truncated_v4_datagram_does_not_yield_edge_counters() {
+        let p = SyncPacket::from_bytes(&frame_v4(4, SYNC_PACKET_SIZE_V3, 0, 0)).unwrap();
+        assert!(
+            p.health.edge.is_none(),
+            "version alone must not admit edge counters -- the bytes are not there"
+        );
     }
 
     #[test]

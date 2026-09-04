@@ -101,7 +101,8 @@ pub use rtl8720f::{
 };
 pub use sync_packet::{
     NodeHealth,
-    SyncPacket, SyncPacketFlags, SYNC_PACKET_MAGIC, SYNC_PACKET_PROTO_VER, SYNC_PACKET_SIZE,
+    EdgeCounters, SyncPacket, SyncPacketFlags, SYNC_PACKET_MAGIC, SYNC_PACKET_PROTO_VER,
+    SYNC_PACKET_SIZE,
 };
 pub use vendor_rf::{
     ProviderAvailability, ProviderDescriptor, RfCapability, VendorEventError, VendorId,
