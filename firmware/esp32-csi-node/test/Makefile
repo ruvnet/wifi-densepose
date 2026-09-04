@@ -44,9 +44,11 @@ FUZZ_DURATION ?= 30
 FUZZ_JOBS     ?= 1
 
 .PHONY: all clean run_serialize run_edge run_nvs run_all test_adr110 run_adr110 \
-        test_vitals run_vitals test_mmwave_detect run_mmwave_detect host_tests
+        test_vitals run_vitals test_mmwave_detect run_mmwave_detect host_tests \
+        test_thermal run_thermal
 
-all: fuzz_serialize fuzz_edge fuzz_nvs test_adr110 test_vitals test_mmwave_detect
+all: fuzz_serialize fuzz_edge fuzz_nvs test_adr110 test_vitals test_mmwave_detect \
+     test_thermal
 
 # --- ADR-110 encoding unit tests ---
 # Host-side, no libFuzzer needed — plain C99 deterministic table tests
@@ -80,8 +82,19 @@ test_mmwave_detect: test_mmwave_detect.c $(MAIN_DIR)/mmwave_detect.h
 run_mmwave_detect: test_mmwave_detect
 	./test_mmwave_detect
 
-host_tests: run_adr110 run_vitals run_mmwave_detect
-	@echo "Host tests passed (ADR-110 + vitals #998/#996 + mmwave detect #1135)"
+# --- Thermal state hysteresis ---
+# Host-side. Exercises thermal_next_state() from ../main/thermal.h directly --
+# the same function the device build runs -- so the test and the firmware cannot
+# drift. Pins every edge in both directions, including the CRITICAL -> THROTTLED
+# flap that had no hysteresis at all.
+test_thermal: test_thermal_hysteresis.c $(MAIN_DIR)/thermal.h
+	cc -std=c99 -Wall -Wextra -Istubs -I$(MAIN_DIR) -o $@ $<
+
+run_thermal: test_thermal
+	./test_thermal
+
+host_tests: run_adr110 run_vitals run_mmwave_detect run_thermal
+	@echo "Host tests passed (ADR-110 + vitals #998/#996 + mmwave detect #1135 + thermal)"
 
 # --- Serialize fuzzer ---
 # Tests csi_serialize_frame() with random wifi_csi_info_t inputs.

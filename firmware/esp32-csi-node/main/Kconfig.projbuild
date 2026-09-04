@@ -574,12 +574,18 @@ config THERMAL_CRITICAL_C
     default 80
 
 config THERMAL_HYSTERESIS_C
-    int "Degrees below the throttle point before recovering"
+    int "Degrees of cooling required before stepping down a thermal state"
     depends on THERMAL_MONITOR
     range 1 20
     default 8
     help
       Recovering at the same threshold that tripped would oscillate, and every
       oscillation is a visible RSSI step on every link the node has.
+
+      Applies to EVERY downward transition, each relative to the threshold that
+      was crossed on the way up: leaving CRITICAL needs CRITICAL_C minus this,
+      leaving THROTTLED needs THROTTLE_C minus this, leaving WARN needs WARN_C
+      minus this. Rising transitions are immediate at the plain thresholds --
+      heat is a reason to act now.
 
 endmenu

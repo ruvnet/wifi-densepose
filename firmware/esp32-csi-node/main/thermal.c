@@ -110,22 +110,13 @@ void thermal_tick(void)
 
     /* Hysteresis on the way down: recovering at the same threshold that
      * tripped would oscillate, and each oscillation is a visible RSSI step on
-     * every link this node has. */
-    const float recover = (float)CONFIG_THERMAL_THROTTLE_C
-                        - (float)CONFIG_THERMAL_HYSTERESIS_C;
-
-    thermal_state_t next = s_state;
-    if (c >= (float)CONFIG_THERMAL_CRITICAL_C) {
-        next = THERMAL_CRITICAL;
-    } else if (c >= (float)CONFIG_THERMAL_THROTTLE_C) {
-        next = THERMAL_THROTTLED;
-    } else if (c >= (float)CONFIG_THERMAL_WARN_C) {
-        if (s_state != THERMAL_THROTTLED && s_state != THERMAL_CRITICAL) {
-            next = THERMAL_WARN;
-        }
-    } else if (c < recover) {
-        next = THERMAL_OK;
-    }
+     * every link this node has. The decision itself lives in thermal.h as a
+     * pure function so a host test can exercise the same code this runs. */
+    const thermal_state_t next = thermal_next_state(s_state, c,
+                                                    CONFIG_THERMAL_WARN_C,
+                                                    CONFIG_THERMAL_THROTTLE_C,
+                                                    CONFIG_THERMAL_CRITICAL_C,
+                                                    CONFIG_THERMAL_HYSTERESIS_C);
 
     if (next != s_state) {
         ESP_LOGW(TAG, "%.1f C: %s -> %s",
