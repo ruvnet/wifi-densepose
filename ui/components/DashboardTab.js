@@ -95,7 +95,8 @@ export class DashboardTab {
       'live':              { text: 'ESP32',     status: 'healthy', msg: 'Real hardware connected' },
       'server-simulated':  { text: 'SIMULATED', status: 'warning', msg: 'Server running without hardware' },
       'reconnecting':      { text: 'RECONNECTING', status: 'degraded', msg: 'Attempting to connect...' },
-      'simulated':         { text: 'OFFLINE',   status: 'unhealthy', msg: 'Server unreachable, local fallback' },
+      'unreachable':       { text: 'NO DATA',   status: 'unhealthy', msg: 'Server unreachable — readings below are stale' },
+      'simulated':         { text: 'INVENTED',  status: 'unhealthy', msg: 'Browser-generated data, not measured' },
     };
     const cfg = config[ds] || config['reconnecting'];
     el.className = `component-status status-${cfg.status}`;
