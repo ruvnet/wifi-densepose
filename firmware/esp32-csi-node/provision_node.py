@@ -37,6 +37,7 @@ It also fills in the two things that are easy to get wrong by hand:
 
 import argparse
 import json
+import ipaddress
 import os
 import secrets
 import stat
@@ -205,17 +206,49 @@ def main():
         sys.exit("--tdm-total %d is smaller than the %d boards being "
                  "provisioned" % (a.tdm_total, len(targets)))
 
+    # Validate everything that reaches an argv list before it gets there.
+    #
+    # These values come from a JSON config and CLI flags, which a scanner
+    # rightly treats as untrusted. subprocess is called in list form with no
+    # shell, so this is not a command-injection path -- but "no shell" is a
+    # property of THIS call site, and the values also end up in esptool
+    # arguments and a flash offset. Constraining them here means the safety
+    # does not depend on remembering that, and a typo fails loudly at the top
+    # instead of surfacing as a confusing esptool error nine boards in.
+    CHIPS = {"esp32", "esp32s2", "esp32s3", "esp32c3", "esp32c5", "esp32c6", "esp32h2"}
+    chip = str(conf.get("chip", "esp32c6"))
+    if chip not in CHIPS:
+        sys.exit("unsupported chip %r in config (expected one of %s)"
+                 % (chip, ", ".join(sorted(CHIPS))))
+
+    ssid = str(conf["ssid"])
+    if not ssid or len(ssid) > 32:
+        sys.exit("ssid must be 1-32 characters (802.11 limit)")
+
+    target_ip = str(conf["target_ip"])
+    try:
+        ipaddress.ip_address(target_ip)
+    except ValueError:
+        sys.exit("target_ip %r is not a valid IP address" % target_ip)
+
+    try:
+        edge_tier = int(conf.get("edge_tier", 2))
+    except (TypeError, ValueError):
+        sys.exit("edge_tier must be an integer")
+    if edge_tier not in (0, 1, 2):
+        sys.exit("edge_tier must be 0, 1 or 2 (got %d)" % edge_tier)
+
     for port, nid, mac in targets:
         cmd = [sys.executable, os.path.join(HERE, "provision.py"),
                "--port", port,
-               "--chip", conf.get("chip", "esp32c6"),
-               "--ssid", conf["ssid"],
+               "--chip", chip,
+               "--ssid", ssid,
                "--password", pw,
-               "--target-ip", conf["target_ip"],
+               "--target-ip", target_ip,
                "--node-id", str(nid),
                "--tdm-slot", str(nid),
                "--tdm-total", str(a.tdm_total),
-               "--edge-tier", str(conf.get("edge_tier", 2)),
+               "--edge-tier", str(edge_tier),
                "--ota-psk", psk]
         redact = {pw: "<password>", psk: "<ota-psk>"}
         shown = [redact.get(c, c) for c in cmd]
@@ -223,11 +256,6 @@ def main():
         print("  " + " ".join(shown[1:]))
         if a.dry_run:
             continue
-        # nosemgrep: dangerous-subprocess-use-audit
-        # List form, no shell=True: argv goes straight to execve, so there is no
-        # shell to inject into. The elements are a fixed flag sequence plus values
-        # from a local operator-owned config file; a hostile value can only become
-        # one bad argument to provision.py, not a second command.
         r = subprocess.run(cmd, capture_output=True, text=True)
         # provision.py cannot build the NVS image without ESP-IDF on PATH, so
         # on a bare Windows host it writes nvs_config.csv and stops. Finish the
@@ -252,13 +280,11 @@ def main():
                 print("  " + (g.stderr or g.stdout).strip()[-300:])
                 continue
             esp = [sys.executable, "-m", "esptool", "--chip",
-                   conf.get("chip", "esp32c6"), "--port", port,
+                   chip, "--port", port,
                    "--baud", "460800"]
             if a.no_auto_reset:
                 esp += ["--before", "no-reset"]
             esp += ["write_flash", NVS_OFFSET, binp]
-            # nosemgrep: dangerous-subprocess-use-audit
-            # Same reasoning as above: list form, no shell.
             f = subprocess.run(esp, capture_output=True, text=True)
             if "verified" in f.stdout or f.returncode == 0:
                 print("  ok -- NVS written at %s. Confirm the boot log says "
