@@ -5822,13 +5822,31 @@ async fn calibration_stop(State(state): State<SharedState>) -> Json<serde_json::
         // caller knows to keep the room empty and poll /calibration/status.
         let have = fm.calibration_frame_count();
         let need = fm.min_calibration_frames() as u64;
-        if have < need {
-            return Json(serde_json::json!({
+        let elapsed_s = fm.calibration_elapsed_s();
+        let need_s = fm.min_calibration_duration_s();
+        if have < need || (need_s > 0.0 && elapsed_s < need_s) {
+            let mut resp = serde_json::json!({
                 "success": false,
-                "error": "Not enough calibration frames yet — keep the room empty and poll /calibration/status until frame_count reaches the target.",
+                "error": "Calibration not complete yet — keep the room empty and poll /calibration/status until both frame_count and elapsed_s reach their targets.",
                 "frame_count": have,
                 "frames_needed": need,
-            }));
+                "elapsed_s": elapsed_s,
+                "duration_needed_s": need_s,
+                "frames_per_second": fm.calibration_frames_per_second(),
+            });
+            // #1756: a fast fleet satisfies the frame gate in ~1/N of the
+            // intended wall-clock window. Make that explicit instead of
+            // silently collecting, so the operator sees why the session
+            // keeps running.
+            if have >= need && elapsed_s < need_s {
+                tracing::warn!(
+                    "Calibration frame target reached in {elapsed_s:.1}s — substantially less than the intended {need_s:.0}s window; continuing to collect for slow environmental variation (#1756)"
+                );
+                resp["warning"] = serde_json::json!(format!(
+                    "frame target reached in {elapsed_s:.1}s — substantially less than the intended {need_s:.0}s window; continuing to collect for slow environmental variation"
+                ));
+            }
+            return Json(resp);
         }
         let ts = chrono::Utc::now().timestamp_micros() as u64;
         match fm.finalize_calibration(ts, 0) {
@@ -5841,6 +5859,7 @@ async fn calibration_stop(State(state): State<SharedState>) -> Json<serde_json::
                     "baseline_eigenvalue_count": baseline,
                     "variance_explained": variance_explained,
                     "frame_count": fm.calibration_frame_count(),
+                    "elapsed_s": elapsed_s,
                 }))
             }
             // ADR-080 #2: finalize error chain stays server-side only.
@@ -5857,10 +5876,17 @@ async fn calibration_stop(State(state): State<SharedState>) -> Json<serde_json::
 async fn calibration_status(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
     match s.field_model.as_ref() {
+        // #1756: expose elapsed wall-clock time and the effective aggregate
+        // sample rate alongside the frame count, so a client can see the
+        // shape of the capture instead of frames alone.
         Some(fm) => Json(serde_json::json!({
             "active": true,
             "status": format!("{:?}", fm.status()),
             "frame_count": fm.calibration_frame_count(),
+            "min_frames": fm.min_calibration_frames(),
+            "elapsed_s": fm.calibration_elapsed_s(),
+            "frames_per_second": fm.calibration_frames_per_second(),
+            "min_duration_s": fm.min_calibration_duration_s(),
         })),
         None => Json(serde_json::json!({
             "active": false,
