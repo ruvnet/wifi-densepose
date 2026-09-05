@@ -187,6 +187,16 @@ static inline esp_err_t esp_wifi_set_csi(bool en) { (void)en; return ESP_OK; }
 static inline esp_err_t esp_wifi_set_channel(uint8_t ch, wifi_second_chan_t sc) { (void)ch; (void)sc; return ESP_OK; }
 static inline esp_err_t esp_wifi_80211_tx(wifi_interface_t ifx, const void *b, int len, bool en) { (void)ifx; (void)b; (void)len; (void)en; return ESP_OK; }
 static inline esp_err_t esp_wifi_sta_get_ap_info(wifi_ap_record_t *ap) { (void)ap; return ESP_FAIL; }
+/* Returns a fixed, non-zero station MAC so the serializer takes the same
+ * branch it takes on a device. The all-zero "not reported" path is the
+ * failure branch and is not what the fuzzer is here to exercise. */
+static inline esp_err_t esp_wifi_get_mac(wifi_interface_t ifx, uint8_t mac[6])
+{
+    (void)ifx;
+    static const uint8_t stub_mac[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x01 };
+    memcpy(mac, stub_mac, sizeof(stub_mac));
+    return ESP_OK;
+}
 static inline const char *esp_err_to_name(esp_err_t code) { (void)code; return "STUB"; }
 
 /* ---- NVS stubs ---- */
