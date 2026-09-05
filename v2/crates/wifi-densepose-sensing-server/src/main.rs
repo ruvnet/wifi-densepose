@@ -915,10 +915,10 @@ const NOVELTY_SKETCH_VERSION: u16 = 1;
 /// bursts whose intra-burst arrival deltas are tens of microseconds apart —
 /// a 36 µs delta yields `1/dt ≈ 27 kHz`, which the old `< 1 s` guard let
 /// straight into the EMA and inflated `csi_fps_ema` by 1–3 orders of
-/// magnitude (issue #1180). We reject any delta implying more than 200 fps
-/// (4× the physical ceiling, leaving slack for benign arrival jitter); such
-/// deltas are burst artifacts, not distinct production intervals.
+/// magnitude (issue #1180). We reject sub-5 ms deltas as burst artifacts and
+/// cap accepted estimates to the firmware's 50 fps physical ceiling.
 pub(crate) const MIN_PLAUSIBLE_CSI_DT_SEC: f64 = 0.005;
+pub(crate) const MAX_PHYSICAL_CSI_FPS: f64 = 50.0;
 
 /// ADR-110 iter 18 — EMA update for per-node CSI fps tracking.
 ///
@@ -934,7 +934,7 @@ pub(crate) fn update_csi_fps_ema(prev_fps: f64, dt_sec: f64) -> Option<f64> {
     if !(dt_sec >= MIN_PLAUSIBLE_CSI_DT_SEC && dt_sec < 1.0) {
         return None;
     }
-    let instantaneous = 1.0 / dt_sec;
+    let instantaneous = (1.0 / dt_sec).min(MAX_PHYSICAL_CSI_FPS);
     // y[n] = y[n-1] + (x - y[n-1]) / 8
     Some(prev_fps + (instantaneous - prev_fps) / 8.0)
 }
@@ -984,6 +984,15 @@ mod fps_ema_tests {
     }
 
     #[test]
+    fn accepted_burst_edge_is_capped_to_firmware_ceiling() {
+        let mut fps = 50.0;
+        for _ in 0..32 {
+            fps = update_csi_fps_ema(fps, 0.005).unwrap();
+        }
+        assert!(fps <= 50.0, "reported {fps} Hz above firmware ceiling");
+    }
+
+    #[test]
     fn burst_interleaved_with_nominal_stays_in_band() {
         // A true ~40 fps node whose frames arrive in sub-ms bursts: feeding
         // only the plausible (nominal-cadence) deltas keeps the EMA near the
@@ -1004,6 +1013,18 @@ mod fps_ema_tests {
 }
 
 impl NodeState {
+    /// Measured sample rate only after enough inter-frame deltas have warmed
+    /// the EMA. The physical ceiling is enforced again at the consumption
+    /// boundary so restored or malformed state cannot overclock DSP math.
+    fn measured_sample_rate_hz(&self) -> Option<f64> {
+        (self.csi_fps_samples >= 5 && self.csi_fps_ema.is_finite())
+            .then(|| self.csi_fps_ema.clamp(1.0, MAX_PHYSICAL_CSI_FPS))
+    }
+
+    fn effective_sample_rate_hz(&self) -> f64 {
+        self.measured_sample_rate_hz().unwrap_or(20.0)
+    }
+
     /// ADR-110 §A0.12 timestamp recovery: given a CSI frame's node-local
     /// `esp_timer_get_time()` snapshot, return the mesh-aligned epoch
     /// computed from this node's most recent sync packet — or `None`
@@ -1051,7 +1072,7 @@ impl NodeState {
         // samples; until then fall back to the 20 Hz firmware ceiling. The
         // §A0.12 capture showed real bench fps ≈ 10, so the measured value
         // is significantly more accurate than the constant fallback.
-        let fps = if self.csi_fps_samples >= 5 { self.csi_fps_ema } else { 20.0 };
+        let fps = self.effective_sample_rate_hz();
         Some(sync.mesh_aligned_us_for_sequence(frame_sequence, fps))
     }
 
@@ -1099,7 +1120,7 @@ impl NodeState {
             is_valid: sync.flags.is_valid,
             smoothed: sync.flags.smoothed_used,
             sequence: sync.sequence,
-            csi_fps_ema: self.csi_fps_ema,
+            csi_fps_ema: self.effective_sample_rate_hz(),
             csi_fps_samples: self.csi_fps_samples,
             staleness_ms: self.latest_sync_at.map(|t| t.elapsed().as_millis() as u64),
         })
@@ -1163,7 +1184,7 @@ impl NodeState {
             hr_buffer: VecDeque::with_capacity(8),
             br_buffer: VecDeque::with_capacity(8),
             rssi_history: VecDeque::new(),
-            vital_detector: VitalSignDetector::new(10.0),
+            vital_detector: VitalSignDetector::new(20.0),
             latest_vitals: VitalSigns::default(),
             last_frame_time: None,
             edge_vitals: None,
@@ -1349,7 +1370,7 @@ fn build_node_features(
                 },
                 rssi_dbm: ns.rssi_history.back().copied().unwrap_or(0.0),
                 last_seen_ms,
-                frame_rate_hz: 0.0, // Computed elsewhere; not yet plumbed here.
+                frame_rate_hz: ns.measured_sample_rate_hz().unwrap_or(0.0),
                 stale,
                 novelty_score: ns.last_novelty_score,
             }
@@ -2768,15 +2789,9 @@ fn extract_features_from_frame(
         0.0
     };
 
-    // ── Dominant frequency via peak subcarrier index ──
-    let peak_idx = frame
-        .amplitudes
-        .iter()
-        .enumerate()
-        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(i, _)| i)
-        .unwrap_or(0);
-    let dominant_freq_hz = peak_idx as f64 * 0.05;
+    // A subcarrier index is a spatial-frequency bin, not temporal hertz.
+    let dominant_freq_hz =
+        csi::estimate_temporal_dominant_frequency_hz(frame_history, sample_rate_hz);
 
     // ── Change point detection (threshold-crossing count in current frame) ──
     let threshold = mean_amp * 1.2;
@@ -2789,7 +2804,9 @@ fn extract_features_from_frame(
     // ── Motion score: sliding-window temporal difference ──
     // Compare current frame against the most recent historical frame.
     // The difference is normalised by the mean amplitude to be scale-invariant.
-    let temporal_motion_score = if let Some(prev_frame) = frame_history.back() {
+    // Callers append the current frame first, making the true predecessor the
+    // second item from the back.
+    let temporal_motion_score = if let Some(prev_frame) = frame_history.iter().rev().nth(1) {
         let n_cmp = n_sub.min(prev_frame.len());
         if n_cmp > 0 {
             let diff_energy: f64 = (0..n_cmp)
@@ -3022,13 +3039,18 @@ fn adaptive_override(
             .back()
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
+        let dominant_frequency = adaptive_classifier::compatible_dominant_frequency(
+            model.version,
+            features.dominant_freq_hz,
+            amps,
+        );
         let feat_arr = adaptive_classifier::features_from_runtime(
             &serde_json::json!({
                 "variance": features.variance,
                 "motion_band_power": features.motion_band_power,
                 "breathing_band_power": features.breathing_band_power,
                 "spectral_power": features.spectral_power,
-                "dominant_freq_hz": features.dominant_freq_hz,
+                "dominant_freq_hz": dominant_frequency,
                 "change_points": features.change_points,
                 "mean_rssi": features.mean_rssi,
             }),
@@ -6452,6 +6474,9 @@ async fn calibration_status(State(state): State<SharedState>) -> Json<serde_json
                 "state": if result.matches_empty { "matched" } else { "changed" },
                 "matches_empty": result.matches_empty,
                 "score": result.score,
+                "normalized_residual_z": result.normalized_residual_z,
+                "maturity": result.maturity,
+                "reliable": result.reliable,
                 "residual_energy": result.residual_energy,
                 "residual_energy_threshold": result.residual_energy_threshold,
                 "window_size": result.window_size,
@@ -8044,7 +8069,7 @@ async fn udp_receiver_task(
                         ns.frame_history.pop_front();
                     }
 
-                    let sample_rate_hz = 1000.0 / 500.0_f64;
+                    let sample_rate_hz = ns.effective_sample_rate_hz();
                     let (
                         features,
                         mut classification,
@@ -8057,13 +8082,19 @@ async fn udp_receiver_task(
                     // Adaptive override using cloned model (safe, no raw pointers).
                     if let Some(ref model) = adaptive_model_clone {
                         let amps = ns.frame_history.back().map(|v| v.as_slice()).unwrap_or(&[]);
+                        let dominant_frequency =
+                            adaptive_classifier::compatible_dominant_frequency(
+                                model.version,
+                                features.dominant_freq_hz,
+                                amps,
+                            );
                         let feat_arr = adaptive_classifier::features_from_runtime(
                             &serde_json::json!({
                                 "variance": features.variance,
                                 "motion_band_power": features.motion_band_power,
                                 "breathing_band_power": features.breathing_band_power,
                                 "spectral_power": features.spectral_power,
-                                "dominant_freq_hz": features.dominant_freq_hz,
+                                "dominant_freq_hz": dominant_frequency,
                                 "change_points": features.change_points,
                                 "mean_rssi": features.mean_rssi,
                             }),
@@ -8079,6 +8110,18 @@ async fn udp_receiver_task(
                     ns.rssi_history.push_back(features.mean_rssi);
                     if ns.rssi_history.len() > 60 {
                         ns.rssi_history.pop_front();
+                    }
+
+                    if ns.csi_fps_samples >= 5
+                        && ns.vital_detector.reconfigure_sample_rate(sample_rate_hz)
+                    {
+                        // Never smooth estimates computed against two clocks.
+                        ns.smoothed_hr = 0.0;
+                        ns.smoothed_br = 0.0;
+                        ns.smoothed_hr_conf = 0.0;
+                        ns.smoothed_br_conf = 0.0;
+                        ns.hr_buffer.clear();
+                        ns.br_buffer.clear();
                     }
 
                     let raw_vitals = ns
@@ -10618,6 +10661,20 @@ mod sync_snapshot_helper_tests {
         assert_eq!(snap.sequence, 20);
         assert!((snap.csi_fps_ema - 10.5).abs() < 1e-9);
         assert_eq!(snap.csi_fps_samples, 42);
+    }
+
+    #[test]
+    fn exported_node_rate_is_mature_and_physically_bounded() {
+        let mut ns = NodeState::new();
+        assert_eq!(ns.measured_sample_rate_hz(), None);
+
+        ns.csi_fps_ema = 74.0;
+        ns.csi_fps_samples = 5;
+        assert_eq!(ns.measured_sample_rate_hz(), Some(50.0));
+
+        ns.latest_sync = Some(populated_sync(9));
+        ns.latest_sync_at = Some(std::time::Instant::now());
+        assert_eq!(ns.sync_snapshot().unwrap().csi_fps_ema, 50.0);
     }
 
     #[test]

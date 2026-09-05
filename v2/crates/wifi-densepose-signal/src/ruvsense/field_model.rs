@@ -380,6 +380,12 @@ pub struct FieldNormalMode {
 pub struct EmptyRoomMatch {
     pub matches_empty: bool,
     pub score: Option<f64>,
+    /// Robust residual distance from the quiet reference median.
+    pub normalized_residual_z: Option<f64>,
+    /// Reference coverage relative to the normal calibration target.
+    pub maturity: f64,
+    /// Whether the reference set is large and valid enough to suppress change.
+    pub reliable: bool,
     pub residual_energy: f64,
     pub residual_energy_threshold: f64,
     pub window_size: usize,
@@ -642,6 +648,27 @@ fn percentile_95(mut values: Vec<f64>) -> Option<f64> {
         .div_ceil(100)
         .saturating_sub(1);
     values.get(index).copied()
+}
+
+fn robust_residual_z(reference: &[f64], residual: f64) -> Option<f64> {
+    if !residual.is_finite() || reference.is_empty() {
+        return None;
+    }
+    let mut sorted: Vec<f64> = reference
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .collect();
+    if sorted.len() != reference.len() {
+        return None;
+    }
+    sorted.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
+    let median = sorted[sorted.len() / 2];
+    let mut deviations: Vec<f64> = sorted.iter().map(|value| (value - median).abs()).collect();
+    deviations.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
+    let mad = deviations[deviations.len() / 2];
+    let robust_scale = (1.4826 * mad).max((median.abs() * 0.01).max(f64::EPSILON));
+    Some((residual - median) / robust_scale)
 }
 
 #[cfg(feature = "eigenvalue")]
@@ -1315,12 +1342,20 @@ impl FieldModel {
         let residual_energy_threshold = modes
             .empty_room_residual_energy_threshold?
             .max(EMPTY_ROOM_RESIDUAL_ENERGY_MAX);
-        let matches_empty = residual_energy <= residual_energy_threshold;
         let reference_window_count = modes.empty_room_residual_energy_reference.len();
-        let score = if !matches_empty {
-            Some(0.0)
-        } else if reference_window_count == 0 {
+        let maturity = (reference_window_count as f64
+            / MIN_BACKGROUND_REFERENCE_WINDOWS as f64)
+            .clamp(0.0, 1.0);
+        let reliable = reference_window_count >= 10
+            && modes
+                .empty_room_residual_energy_reference
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0);
+        let matches_empty = reliable && residual_energy <= residual_energy_threshold;
+        let score = if !reliable {
             None
+        } else if !matches_empty {
+            Some(0.0)
         } else {
             let at_or_below = modes
                 .empty_room_residual_energy_reference
@@ -1331,6 +1366,12 @@ impl FieldModel {
         Some(EmptyRoomMatch {
             matches_empty,
             score,
+            normalized_residual_z: robust_residual_z(
+                &modes.empty_room_residual_energy_reference,
+                residual_energy,
+            ),
+            maturity,
+            reliable,
             residual_energy,
             residual_energy_threshold,
             window_size,
@@ -2149,6 +2190,9 @@ mod tests {
             .expect("background match");
         assert!(background.matches_empty);
         assert_eq!(background.reference_window_count, 12);
+        assert!(background.reliable);
+        assert_eq!(background.maturity, 0.6);
+        assert!(background.normalized_residual_z.is_some());
         assert!(background
             .score
             .is_some_and(|score| (0.5..=1.0).contains(&score)));
@@ -2237,6 +2281,51 @@ mod tests {
         let background = model.empty_room_match(&shifted).expect("shifted match");
         assert!(!background.matches_empty);
         assert_eq!(background.score, Some(0.0));
+        assert!(background.reliable);
+        assert!(background.normalized_residual_z.is_some());
+    }
+
+    #[cfg(feature = "eigenvalue")]
+    #[test]
+    fn sparse_background_reference_cannot_suppress_runtime_change() {
+        let config = FieldModelConfig {
+            n_links: 1,
+            n_subcarriers: 56,
+            n_modes: 3,
+            min_calibration_frames: 500,
+            min_calibration_duration_s: 0.0,
+            baseline_expiry_s: 86_400.0,
+        };
+        let mut model = FieldModel::new(config).unwrap();
+        let mut calibration = Vec::new();
+        for frame_index in 0..600 {
+            let time = frame_index as f64 * 0.071;
+            let frame: Vec<f64> = (0..56)
+                .map(|subcarrier| {
+                    let carrier = subcarrier as f64;
+                    18.0 + carrier * 0.08
+                        + (time + carrier * 0.13).sin() * 0.8
+                        + (time * 0.37 + carrier * 0.031).cos() * 0.35
+                })
+                .collect();
+            model.feed_calibration(&[frame.clone()]).unwrap();
+            calibration.push(frame);
+        }
+        model.finalize_calibration(1_000_000, 0).unwrap();
+        model
+            .modes
+            .as_mut()
+            .unwrap()
+            .empty_room_residual_energy_reference
+            .truncate(9);
+
+        let result = model
+            .empty_room_match(&calibration[550..600])
+            .expect("background comparison");
+        assert!(!result.reliable);
+        assert!(!result.matches_empty);
+        assert_eq!(result.score, None);
+        assert_eq!(result.maturity, 0.45);
     }
 
     #[test]
