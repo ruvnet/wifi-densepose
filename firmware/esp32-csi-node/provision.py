@@ -140,8 +140,18 @@ def _state_path_for(port: str, state_dir: str) -> str:
     return os.path.join(state_dir, f"{safe}.json")
 
 
+SECRET_ATTRS = ("password", "seed_token", "ota_psk")
+
+
 def load_state(port: str, state_dir: str) -> dict:
-    """Return the merged-state dict for `port`, or `{}` if absent / unreadable."""
+    """Return the merged-state dict for `port`, or `{}` if absent / unreadable.
+
+    A state file written before secrets were excluded still holds the WiFi
+    passphrase in cleartext. Reading one is the only moment we are certain
+    such a file exists, so scrub it here and rewrite it immediately rather
+    than waiting for the next successful run to overwrite it -- a run that
+    may never happen on a board that has been retired or moved.
+    """
     path = _state_path_for(port, state_dir)
     if not os.path.isfile(path):
         return {}
@@ -149,13 +159,28 @@ def load_state(port: str, state_dir: str) -> dict:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict):
+            stale = [k for k in SECRET_ATTRS if k in data]
+            if stale:
+                data = {k: v for k, v in data.items() if k not in SECRET_ATTRS}
+                print(
+                    f"NOTE: removed {', '.join(stale)} from the state file "
+                    f"{path}. Credentials are no longer cached there; supply "
+                    f"them on this run (provision_node.py reads them from "
+                    f"files).",
+                    file=sys.stderr,
+                )
+                try:
+                    save_state(port, state_dir, data)
+                except OSError as exc:
+                    print(
+                        f"WARNING: could not rewrite {path} without the "
+                        f"credential: {exc}",
+                        file=sys.stderr,
+                    )
             return data
     except (OSError, json.JSONDecodeError) as exc:
         print(f"WARNING: could not read state file {path}: {exc}", file=sys.stderr)
     return {}
-
-
-SECRET_ATTRS = ("password", "seed_token", "ota_psk")
 
 
 def save_state(port: str, state_dir: str, state: dict) -> str:
@@ -439,13 +464,25 @@ def main():
         ] if val is None or val == ""
     ]
     if wifi_trio_missing and not args.force_partial:
+        state_path = _state_path_for(args.port, args.state_dir)
+        # Distinguish the two ways to land here. "No state file" was the only
+        # cause until secrets stopped being cached; saying it when the file is
+        # sitting right there sends the operator looking for the wrong problem.
+        if os.path.isfile(state_path):
+            why = (f"  The state file {state_path} exists but does not carry\n"
+                   f"  credentials -- they are no longer cached there -- and the\n"
+                   f"  CLI didn't include them.\n")
+        else:
+            why = (f"  No per-port state file at {state_path}\n"
+                   f"  and the CLI didn't include them.\n")
         parser.error(
             f"Missing required WiFi credentials after merging prior state: "
             f"{', '.join(wifi_trio_missing)}.\n"
             f"\n"
-            f"  No per-port state file at {_state_path_for(args.port, args.state_dir)}\n"
-            f"  and the CLI didn't include them. Either pass --ssid + --password + --target-ip\n"
-            f"  on this run, or add --force-partial to flash without WiFi.\n"
+            f"{why}"
+            f"  Either pass --ssid + --password + --target-ip on this run\n"
+            f"  (provision_node.py reads them from files), or add\n"
+            f"  --force-partial to flash without WiFi.\n"
         )
     if args.force_partial and wifi_trio_missing:
         print(
