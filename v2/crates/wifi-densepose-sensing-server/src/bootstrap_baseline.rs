@@ -6,6 +6,7 @@
 
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -19,6 +20,8 @@ pub const BOOTSTRAP_BASELINE_SCHEMA: &str = "ruview.bootstrap-empty-field-model.
 pub const BOOTSTRAP_BASELINE_AUTHORITY: &str = "bootstrap_only";
 pub const BOOTSTRAP_VALIDATION_SAMPLES: usize = 12;
 pub const BOOTSTRAP_VALIDATION_MIN_EMPTY: usize = 10;
+pub const BOOTSTRAP_VALIDATION_MIN_SPACING_MS: u64 = 1_000;
+pub const BOOTSTRAP_VALIDATION_SAMPLE_TIMEOUT_MS: u64 = 4_000;
 const BOOTSTRAP_MAX_FILE_BYTES: u64 = 1_048_576;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -38,6 +41,13 @@ struct BootstrapPayloadV1 {
 #[serde(deny_unknown_fields)]
 struct BootstrapImageV1 {
     payload: BootstrapPayloadV1,
+    content_sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BootstrapImageRawV1 {
+    payload: Box<RawValue>,
     content_sha256: String,
 }
 
@@ -181,11 +191,19 @@ pub fn load(
     if bytes.len() as u64 > BOOTSTRAP_MAX_FILE_BYTES {
         return Err(BootstrapBaselineError::FileTooLarge);
     }
-    let image: BootstrapImageV1 = serde_json::from_slice(&bytes)?;
-    validate_payload(&image.payload, installation_id, current_unix_ms)?;
-    if payload_digest(&image.payload)? != image.content_sha256 {
+    // Verify the exact payload bytes written by storage before decoding the
+    // floating point model. Equivalent JSON number spellings may serialize
+    // differently, so decode and reserialize is not an integrity contract.
+    let raw_image: BootstrapImageRawV1 = serde_json::from_slice(&bytes)?;
+    if hex_sha256(raw_image.payload.get().as_bytes()) != raw_image.content_sha256 {
         return Err(BootstrapBaselineError::DigestMismatch);
     }
+    let payload: BootstrapPayloadV1 = serde_json::from_str(raw_image.payload.get())?;
+    validate_payload(&payload, installation_id, current_unix_ms)?;
+    let image = BootstrapImageV1 {
+        payload,
+        content_sha256: raw_image.content_sha256,
+    };
     let model = FieldModel::from_snapshot(
         image.payload.field_model.clone(),
         current_unix_ms.saturating_mul(1_000),
@@ -368,6 +386,11 @@ mod tests {
 
     #[test]
     fn promotion_gate_requires_twelve_fresh_samples_and_zero_vitals() {
+        assert_eq!(BOOTSTRAP_VALIDATION_MIN_SPACING_MS, 1_000);
+        assert_eq!(BOOTSTRAP_VALIDATION_SAMPLE_TIMEOUT_MS, 4_000);
+        assert!(
+            BOOTSTRAP_VALIDATION_SAMPLE_TIMEOUT_MS >= BOOTSTRAP_VALIDATION_MIN_SPACING_MS
+        );
         let passing = vec![
             BootstrapValidationSample {
                 fresh_tick: true,
@@ -384,5 +407,30 @@ mod tests {
         let mut vital = passing;
         vital[0].vital_signs_absent = false;
         assert!(!evaluate_validation(&vital).passed);
+    }
+
+    #[test]
+    fn restart_verifies_the_exact_stored_payload_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = path_in(dir.path());
+        let now_ms = 1_000_000;
+        let model = completed_model(now_ms * 1_000);
+        store(&path, "home-a", &[5], "model", now_ms, &model).unwrap();
+
+        let original = fs::read_to_string(&path).unwrap();
+        let image: BootstrapImageRawV1 = serde_json::from_str(&original).unwrap();
+        let rewritten_payload = image.payload.get().replacen(
+            "\"min_calibration_duration_s\":0.0",
+            "\"min_calibration_duration_s\":0.00",
+            1,
+        );
+        assert_ne!(rewritten_payload, image.payload.get());
+        let digest = hex_sha256(rewritten_payload.as_bytes());
+        let rewritten =
+            format!("{{\"payload\":{rewritten_payload},\"content_sha256\":\"{digest}\"}}");
+        fs::write(&path, rewritten).unwrap();
+
+        let (_, loaded) = load(&path, "home-a", now_ms + 1).unwrap();
+        assert_eq!(loaded.content_sha256, digest);
     }
 }

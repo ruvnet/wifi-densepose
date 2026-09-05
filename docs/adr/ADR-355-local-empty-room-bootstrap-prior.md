@@ -23,17 +23,26 @@ directory, which is unreliable for embedded application hosts.
 RuView may persist a completed empty room field model as a local bootstrap
 prior only after two server controlled stages:
 
-1. Normal calibration reaches both 12,000 accepted frames and 600 seconds.
-2. Promotion observes 12 new one second samples. At least 10 must resolve
-   empty, all ticks must be fresh, and none may publish numeric vital signs.
+1. Normal calibration reaches both 1,000 accepted frames and 600 seconds.
+   The frame target represents twenty complete fifty frame runtime windows.
+   Collection binds to the first accepted ESP32 source and rejects frames from
+   other radios for that single link model.
+2. Promotion observes 12 new samples spaced by at least one second. Each
+   sample has a four second bounded acquisition timeout. At least 10 must
+   resolve empty, all ticks must be fresh, and none may publish numeric vital
+   signs.
 
 The stored image contains aggregate means, environmental modes, mode energies,
-noise statistics, configuration, contributing node IDs, and a server generated
-model ID. It excludes raw CSI, waveforms, device addresses, room names, pose,
-identity, credentials, and positive human labels.
+noise statistics, sorted scalar residual references, configuration, one source
+node ID, and a server generated model ID. It excludes raw CSI, waveforms,
+device addresses, room names, pose, identity, credentials, and positive human
+labels. Runtime matching compares a fifty frame mean with the learned residual
+distribution. Its score is empirical background conformance, not an absence
+probability.
 
 The image is bound to a SHA 256 digest of the stable installation ID, carries
-an integrity digest, is capped at 1 MiB, and inherits the field model expiry.
+an integrity digest over the exact stored payload bytes, is capped at 1 MiB,
+and inherits the field model expiry.
 Files with an invalid schema, dimensions, values, node set, installation
 binding, digest, size, or lifetime fail closed.
 
@@ -42,6 +51,11 @@ reduce an uncalibrated false person count, but it cannot authorize calibrated
 evidence or numeric heart and breathing rates. Explicit calibration replaces
 it with fresh statistics. Cancelling an unfinished capture restores a valid
 prior. Administrator scoped reset removes it.
+
+The status endpoint reports the learned runtime window, residual threshold,
+reference count, current background conformance, and the negative only
+authority boundary. A restored model never resumes collection and never
+persists raw calibration frames.
 
 The server accepts `--data-dir` or `RUVIEW_DATA_DIR`, allowing an application
 host to provide a protected state directory.
@@ -71,12 +85,29 @@ occupied sequences. Empty data is never relabeled as human training.
    denies calibrated evidence and numeric vital authority.
 5. Numeric vitals fail closed unless an explicit fresh calibration resolves
    exactly one occupant at sufficient signal quality and confidence.
+6. The legacy `edge_vitals` WebSocket message applies the same publication
+   gate as `sensing_update`. When the bootstrap background matches, it emits
+   absent state, zero people, null numeric rates, and an explicit abstention
+   reason instead of forwarding raw edge candidates.
+
+## Measured installation evidence
+
+One physical empty home run on source Node 5 collected 1,762 accepted frames
+over 655 seconds and produced 35 privacy reduced reference windows. Promotion
+observed 12 of 12 fresh empty samples, zero stale samples, and zero numeric
+vital samples. After process restart, 12 of 12 fresh samples matched the empty
+background and contained no numeric vital signs. Background conformance scores
+ranged from 50.0 to 64.3 percent with a median of 54.3 percent.
+
+This is measured negative evidence for one installation. No occupied positive
+holdout was recorded, so it does not prove person recall, person counting, or
+cross home accuracy improvement.
 
 ## Acceptance test
 
 With a physically empty room, complete calibration on stable nodes, promote
-the model, and restart the server with the same installation ID and data
-directory. Status must report `binding_mode=bootstrap_only`, zero collection
-frames, and false authority for calibrated evidence and numeric vitals. Twelve
-fresh empty samples must contain no numeric vital signs. Starting a new room
-calibration must replace the prior and begin at frame zero.
+the single source model, and restart the server with the same installation ID
+and data directory. Status must report `binding_mode=bootstrap_only`, zero
+collection frames, and false authority for calibrated evidence and numeric
+vitals. Twelve fresh empty samples must contain no numeric vital signs.
+Starting a new room calibration must replace the prior and begin at frame zero.
