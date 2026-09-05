@@ -6159,6 +6159,14 @@ mod bootstrap_vital_publication_tests {
         assert!(!calibration_source_accepts(&sources, 3));
     }
 
+    #[test]
+    fn explicit_single_link_source_rejects_other_live_nodes() {
+        let sources = std::collections::BTreeSet::from([5]);
+        assert!(calibration_source_accepts(&sources, 5));
+        assert!(!calibration_source_accepts(&sources, 3));
+        assert!(!calibration_source_accepts(&sources, 7));
+    }
+
     fn strong_candidates() -> VitalSigns {
         VitalSigns {
             breathing_rate_bpm: Some(15.0),
@@ -6249,8 +6257,33 @@ mod bootstrap_vital_publication_tests {
 
 // ── Field model calibration endpoints (eigenvalue person counting) ──────────
 
-async fn calibration_start(State(state): State<SharedState>) -> Json<serde_json::Value> {
+#[derive(Debug, Default, Deserialize)]
+struct CalibrationStartQuery {
+    /// Optional explicit single-link source. When omitted, the first accepted
+    /// ESP32 packet preserves the legacy binding behavior.
+    source_node_id: Option<u8>,
+}
+
+async fn calibration_start(
+    State(state): State<SharedState>,
+    Query(query): Query<CalibrationStartQuery>,
+) -> Json<serde_json::Value> {
     let mut s = state.write().await;
+    if let Some(source_node_id) = query.source_node_id {
+        let now = std::time::Instant::now();
+        let source_is_live = s.node_states.get(&source_node_id).is_some_and(|node| {
+            node.last_frame_time
+                .is_some_and(|seen| now.saturating_duration_since(seen) < ESP32_OFFLINE_TIMEOUT)
+        });
+        if !source_is_live {
+            return Json(serde_json::json!({
+                "success": false,
+                "error_code": "calibration_source_unavailable",
+                "error": "The requested calibration source is missing or stale.",
+                "source_node_id": source_node_id,
+            }));
+        }
+    }
     if s.bootstrap_baseline_active {
         s.field_model = None;
         s.bootstrap_baseline_active = false;
@@ -6279,10 +6312,14 @@ async fn calibration_start(State(state): State<SharedState>) -> Json<serde_json:
             s.field_model = Some(fm);
             s.calibration_model_id = Some(opaque_calibration_model_id());
             s.calibration_source_node_ids.clear();
+            if let Some(source_node_id) = query.source_node_id {
+                s.calibration_source_node_ids.insert(source_node_id);
+            }
             Json(serde_json::json!({
                 "success": true,
                 "message": "Calibration started — keep room empty while frames accumulate.",
                 "model_id": s.calibration_model_id,
+                "source_node_ids": s.calibration_source_node_ids,
             }))
         }
         // ADR-080 #2: FieldModel init error chain stays server-side only.

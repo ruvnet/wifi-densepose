@@ -25,8 +25,10 @@ prior only after two server controlled stages:
 
 1. Normal calibration reaches both 1,000 accepted frames and 600 seconds.
    The frame target represents twenty complete fifty frame runtime windows.
-   Collection binds to the first accepted ESP32 source and rejects frames from
-   other radios for that single link model.
+   A caller may select one currently live ESP32 source. The server checks its
+   freshness before replacing an active bootstrap prior, binds collection to
+   that source, and rejects frames from other radios. When no source is
+   selected, the first accepted ESP32 source preserves legacy behavior.
 2. Promotion observes 12 new samples spaced by at least one second. Each
    sample has a four second bounded acquisition timeout. At least 10 must
    resolve empty, all ticks must be fresh, and none may publish numeric vital
@@ -89,6 +91,9 @@ occupied sequences. Empty data is never relabeled as human training.
    gate as `sensing_update`. When the bootstrap background matches, it emits
    absent state, zero people, null numeric rates, and an explicit abstention
    reason instead of forwarding raw edge candidates.
+7. `POST /api/v1/calibration/start?source_node_id=N` selects a live source for
+   deterministic single link capture. A missing or stale selection fails
+   without disabling the active bootstrap prior.
 
 ## Measured installation evidence
 
@@ -111,3 +116,5 @@ and data directory. Status must report `binding_mode=bootstrap_only`, zero
 collection frames, and false authority for calibrated evidence and numeric
 vitals. Twelve fresh empty samples must contain no numeric vital signs.
 Starting a new room calibration must replace the prior and begin at frame zero.
+When several radios are live, selecting Node 5 must leave Nodes 3 and 7 out of
+the source set for the entire capture.
