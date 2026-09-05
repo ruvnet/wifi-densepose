@@ -57,6 +57,10 @@ pub const MIN_CALIBRATION_FRAMES: usize =
     RUNTIME_OCCUPANCY_WINDOW * MIN_BACKGROUND_REFERENCE_WINDOWS;
 const CALIBRATION_BACKGROUND_WINDOWS_MAX: usize = 512;
 const EMPTY_ROOM_RESIDUAL_MARGIN: f64 = 1.5;
+const EMPTY_ROOM_HELD_OUT_MARGIN: f64 = 1.10;
+const EMPTY_ROOM_REFINEMENT_MAX_LIFT: f64 = 1.25;
+const EMPTY_ROOM_REFINEMENT_MIN_SAMPLES: usize = 10;
+const EMPTY_ROOM_REFINEMENT_MAX_SAMPLES: usize = 64;
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -362,6 +366,11 @@ pub struct FieldNormalMode {
     /// an empty room model into positive person evidence.
     #[serde(default)]
     pub empty_room_residual_energy_reference: Vec<f64>,
+    /// Number of operator-confirmed held-out empty refinements. Version one
+    /// permits one bounded refinement so repeated calls cannot ratchet the
+    /// background boundary upward until a weak occupant is suppressed.
+    #[serde(default)]
+    pub empty_room_residual_refinement_count: u8,
 }
 
 /// A bounded comparison between one runtime window and the learned empty room
@@ -374,6 +383,16 @@ pub struct EmptyRoomMatch {
     pub residual_energy: f64,
     pub residual_energy_threshold: f64,
     pub window_size: usize,
+    pub reference_window_count: usize,
+}
+
+/// Receipt for one bounded, operator-confirmed empty-room refinement.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EmptyRoomRefinement {
+    pub threshold_before: f64,
+    pub threshold_after: f64,
+    pub held_out_p95: f64,
+    pub held_out_sample_count: usize,
     pub reference_window_count: usize,
 }
 
@@ -692,6 +711,73 @@ impl FieldModel {
             .and_then(|modes| modes.empty_room_residual_energy_threshold)
     }
 
+    /// Refine a completed single-link empty-room boundary with scalar residuals
+    /// measured during a separate operator-confirmed empty holdout.
+    ///
+    /// This never ingests or persists raw CSI. The lift is capped at 25 percent
+    /// and may happen only once per snapshot, preventing repeated calls from
+    /// silently erasing weak occupied evidence.
+    pub fn refine_empty_room_residual_boundary(
+        &mut self,
+        held_out_residuals: &[f64],
+    ) -> Result<EmptyRoomRefinement, FieldModelError> {
+        if self.config.n_links != 1 || self.status != CalibrationStatus::Fresh {
+            return Err(FieldModelError::NotCalibrated);
+        }
+        if !(EMPTY_ROOM_REFINEMENT_MIN_SAMPLES..=EMPTY_ROOM_REFINEMENT_MAX_SAMPLES)
+            .contains(&held_out_residuals.len())
+            || held_out_residuals
+                .iter()
+                .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return Err(FieldModelError::InvalidConfig(
+                "held-out empty residuals are missing, excessive, or non-finite".into(),
+            ));
+        }
+        let modes = self.modes.as_mut().ok_or(FieldModelError::NotCalibrated)?;
+        if modes.empty_room_residual_refinement_count != 0 {
+            return Err(FieldModelError::InvalidConfig(
+                "the empty-room boundary already has its one permitted held-out refinement"
+                    .into(),
+            ));
+        }
+        if modes.empty_room_residual_energy_reference.len() + held_out_residuals.len()
+            > CALIBRATION_BACKGROUND_WINDOWS_MAX
+        {
+            return Err(FieldModelError::InvalidConfig(
+                "the empty-room residual reference limit would be exceeded".into(),
+            ));
+        }
+        let threshold_before = modes
+            .empty_room_residual_energy_threshold
+            .ok_or(FieldModelError::NotCalibrated)?
+            .max(EMPTY_ROOM_RESIDUAL_ENERGY_MAX);
+        let held_out_p95 = percentile_95(held_out_residuals.to_vec())
+            .ok_or(FieldModelError::NotCalibrated)?;
+        let proposed = held_out_p95 * EMPTY_ROOM_HELD_OUT_MARGIN;
+        let threshold_after = threshold_before
+            .max(proposed.min(threshold_before * EMPTY_ROOM_REFINEMENT_MAX_LIFT));
+
+        modes
+            .empty_room_residual_energy_reference
+            .extend_from_slice(held_out_residuals);
+        modes
+            .empty_room_residual_energy_reference
+            .sort_by(|left, right| {
+                left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
+            });
+        modes.empty_room_residual_energy_threshold = Some(threshold_after);
+        modes.empty_room_residual_refinement_count = 1;
+
+        Ok(EmptyRoomRefinement {
+            threshold_before,
+            threshold_after,
+            held_out_p95,
+            held_out_sample_count: held_out_residuals.len(),
+            reference_window_count: modes.empty_room_residual_energy_reference.len(),
+        })
+    }
+
     /// Export aggregate model state suitable for local restart persistence.
     /// Raw calibration observations and Welford accumulators are not exported.
     pub fn export_snapshot(&self) -> Result<FieldModelSnapshotV1, FieldModelError> {
@@ -762,6 +848,7 @@ impl FieldModel {
                 .is_none_or(|threshold| threshold.is_finite() && threshold >= 0.0)
             && modes.empty_room_residual_energy_reference.len()
                 <= CALIBRATION_BACKGROUND_WINDOWS_MAX
+            && modes.empty_room_residual_refinement_count <= 1
             && modes
                 .empty_room_residual_energy_reference
                 .iter()
@@ -1118,6 +1205,7 @@ impl FieldModel {
             baseline_runtime_window_size: None,
             empty_room_residual_energy_threshold: None,
             empty_room_residual_energy_reference: Vec::new(),
+            empty_room_residual_refinement_count: 0,
         };
 
         // The full calibration covariance and a fifty frame runtime covariance
@@ -2064,6 +2152,44 @@ mod tests {
         assert!(background
             .score
             .is_some_and(|score| (0.5..=1.0).contains(&score)));
+    }
+
+    #[test]
+    fn held_out_empty_refinement_is_bounded_and_single_use() {
+        let config = FieldModelConfig {
+            n_links: 1,
+            n_subcarriers: 8,
+            n_modes: 2,
+            min_calibration_frames: 100,
+            min_calibration_duration_s: 0.0,
+            baseline_expiry_s: 86_400.0,
+        };
+        let mut model = FieldModel::new(config).unwrap();
+        for frame_index in 0..1_000 {
+            let phase = frame_index as f64 * 0.071;
+            let frame = (0..8)
+                .map(|index| 20.0 + index as f64 * 0.1 + (phase + index as f64).sin())
+                .collect();
+            model.feed_calibration(&[frame]).unwrap();
+        }
+        model.finalize_calibration(1_000_000, 0).unwrap();
+
+        let before = model.empty_room_residual_energy_threshold().unwrap();
+        let residuals = vec![before * 1.4; 12];
+        let receipt = model
+            .refine_empty_room_residual_boundary(&residuals)
+            .unwrap();
+        assert_eq!(receipt.threshold_before, before);
+        assert!(receipt.threshold_after > before);
+        assert!(receipt.threshold_after <= before * EMPTY_ROOM_REFINEMENT_MAX_LIFT);
+        assert_eq!(receipt.held_out_sample_count, 12);
+        assert_eq!(
+            model.modes().unwrap().empty_room_residual_refinement_count,
+            1
+        );
+        assert!(model
+            .refine_empty_room_residual_boundary(&residuals)
+            .is_err());
     }
 
     #[cfg(feature = "eigenvalue")]
