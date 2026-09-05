@@ -40,7 +40,9 @@ use wifi_densepose_sensing_server::{
     trainer,
 };
 use wifi_densepose_sensing_server::bootstrap_baseline::{
-    self, BootstrapBaselineMetadata, BootstrapValidationSample, BOOTSTRAP_VALIDATION_SAMPLES,
+    self, BootstrapBaselineMetadata, BootstrapValidationSample,
+    BOOTSTRAP_VALIDATION_MIN_SPACING_MS, BOOTSTRAP_VALIDATION_SAMPLES,
+    BOOTSTRAP_VALIDATION_SAMPLE_TIMEOUT_MS,
 };
 // ADR-295 / ADR-297: canonical provenance state + per-node/room inference.
 use wifi_densepose_sensing_server::inference::{fuse_room, NodeInference, RoomInference};
@@ -1715,12 +1717,27 @@ impl AppStateInner {
     fn person_count(&self) -> usize {
         match self.field_model.as_ref() {
             Some(fm) => {
-                // Prefer global frame_history (populated by wifi/simulate paths).
-                // Fall back to freshest per-node history (populated by ESP32 paths).
-                let history = if !self.frame_history.is_empty() {
+                // A single-link model may score only the source node it was
+                // calibrated against. Applying one node's baseline to a
+                // different radio creates deterministic false occupancy from
+                // hardware-specific amplitude offsets.
+                let bound_source_node_id = (self.calibration_source_node_ids.len() == 1)
+                    .then(|| self.calibration_source_node_ids.iter().next().copied())
+                    .flatten()
+                    .or_else(|| {
+                        self.bootstrap_baseline.as_ref().and_then(|metadata| {
+                            (metadata.source_node_ids.len() == 1)
+                                .then_some(metadata.source_node_ids[0])
+                        })
+                    });
+                let history = if let Some(node_id) = bound_source_node_id {
+                    self.node_states
+                        .get(&node_id)
+                        .map(|state| &state.frame_history)
+                        .unwrap_or(&self.frame_history)
+                } else if !self.frame_history.is_empty() {
                     &self.frame_history
                 } else {
-                    // Find the node with the most recent frame
                     self.node_states
                         .values()
                         .filter(|ns| !ns.frame_history.is_empty())
@@ -1737,6 +1754,36 @@ impl AppStateInner {
             }
             None => score_to_person_count(self.smoothed_person_score, self.prev_person_count),
         }
+    }
+
+    /// A restored startup image has negative-only authority. It may suppress
+    /// an empty-room false positive after one complete runtime window, but it
+    /// cannot establish positive presence or publish vital signs.
+    fn bootstrap_empty_prior_applies(&self, observed_at_unix_ms: u64) -> bool {
+        self.bootstrap_background_match(observed_at_unix_ms)
+            .is_some_and(|result| result.matches_empty)
+    }
+
+    /// Return current background conformance for the exact source node bound
+    /// into the restored image. This remains diagnostic and negative-only.
+    fn bootstrap_background_match(
+        &self,
+        observed_at_unix_ms: u64,
+    ) -> Option<field_bridge::BootstrapBackgroundMatch> {
+        if !self.bootstrap_baseline_active {
+            return None;
+        }
+        let field_model = self.field_model.as_ref()?;
+        let metadata = self.bootstrap_baseline.as_ref()?;
+        let [source_node_id] = metadata.source_node_ids.as_slice() else {
+            return None;
+        };
+        let history = &self.node_states.get(source_node_id)?.frame_history;
+        field_bridge::bootstrap_background_match(
+            field_model,
+            history,
+            observed_at_unix_ms.saturating_mul(1_000),
+        )
     }
 
     fn effective_source(&self) -> String {
@@ -6041,6 +6088,50 @@ fn vitals_for_publication(
     })
 }
 
+fn edge_vitals_message_for_publication(
+    raw: &Esp32VitalsPacket,
+    published_vitals: Option<&VitalSigns>,
+    bootstrap_empty: bool,
+    explicit_calibration_fresh: bool,
+    person_count: usize,
+) -> serde_json::Value {
+    let numeric_vitals_authorized = published_vitals.is_some();
+    let abstention_reason = if numeric_vitals_authorized {
+        None
+    } else if bootstrap_empty {
+        Some("bootstrap_empty_background")
+    } else if !explicit_calibration_fresh {
+        Some("explicit_calibration_required")
+    } else if person_count != 1 {
+        Some("exactly_one_occupant_required")
+    } else {
+        Some("vital_quality_gate_failed")
+    };
+    let effective_presence = raw.presence && !bootstrap_empty;
+    let effective_motion = raw.motion && !bootstrap_empty;
+    let effective_person_count = if bootstrap_empty { 0 } else { person_count };
+
+    serde_json::json!({
+        "type": "edge_vitals",
+        "node_id": raw.node_id,
+        "presence": effective_presence,
+        "fall_detected": raw.fall_detected && !bootstrap_empty,
+        "motion": effective_motion,
+        "breathing_rate_bpm": published_vitals
+            .and_then(|vitals| vitals.breathing_rate_bpm),
+        "heartrate_bpm": published_vitals
+            .and_then(|vitals| vitals.heart_rate_bpm),
+        "n_persons": effective_person_count,
+        "person_count_valid": raw.person_count_valid && !bootstrap_empty,
+        "motion_energy": if bootstrap_empty { 0.0 } else { raw.motion_energy },
+        "presence_score": if bootstrap_empty { 0.0 } else { raw.presence_score },
+        "rssi": raw.rssi,
+        "calibrated_evidence_authorized": explicit_calibration_fresh,
+        "numeric_vitals_authorized": numeric_vitals_authorized,
+        "abstention_reason": abstention_reason,
+    })
+}
+
 fn opaque_calibration_model_id() -> String {
     let mut bytes = [0_u8; 16];
     OsRng.fill_bytes(&mut bytes);
@@ -6048,9 +6139,25 @@ fn opaque_calibration_model_id() -> String {
     format!("cal-model-{suffix}")
 }
 
+fn calibration_source_accepts(
+    source_node_ids: &std::collections::BTreeSet<u8>,
+    node_id: u8,
+) -> bool {
+    source_node_ids.is_empty() || source_node_ids.contains(&node_id)
+}
+
 #[cfg(test)]
 mod bootstrap_vital_publication_tests {
     use super::*;
+
+    #[test]
+    fn single_link_calibration_binds_to_first_source() {
+        let mut sources = std::collections::BTreeSet::new();
+        assert!(calibration_source_accepts(&sources, 5));
+        sources.insert(5);
+        assert!(calibration_source_accepts(&sources, 5));
+        assert!(!calibration_source_accepts(&sources, 3));
+    }
 
     fn strong_candidates() -> VitalSigns {
         VitalSigns {
@@ -6082,6 +6189,61 @@ mod bootstrap_vital_publication_tests {
         let mut candidates = strong_candidates();
         candidates.signal_quality = 0.2;
         assert!(vitals_for_publication(&candidates, true, 1).is_none());
+    }
+
+    fn raw_edge_vitals() -> Esp32VitalsPacket {
+        Esp32VitalsPacket {
+            node_id: 5,
+            presence: true,
+            fall_detected: true,
+            motion: true,
+            breathing_rate_bpm: 15.0,
+            heartrate_bpm: 72.0,
+            rssi: -42,
+            n_persons: 1,
+            person_count_valid: true,
+            motion_energy: 0.8,
+            presence_score: 0.9,
+            timestamp_ms: 42,
+        }
+    }
+
+    #[test]
+    fn bootstrap_empty_background_suppresses_legacy_edge_vitals() {
+        let message = edge_vitals_message_for_publication(
+            &raw_edge_vitals(),
+            None,
+            true,
+            false,
+            0,
+        );
+        assert_eq!(message["presence"], false);
+        assert_eq!(message["motion"], false);
+        assert_eq!(message["fall_detected"], false);
+        assert_eq!(message["n_persons"], 0);
+        assert!(message["breathing_rate_bpm"].is_null());
+        assert!(message["heartrate_bpm"].is_null());
+        assert_eq!(message["numeric_vitals_authorized"], false);
+        assert_eq!(message["abstention_reason"], "bootstrap_empty_background");
+    }
+
+    #[test]
+    fn explicit_single_occupant_may_publish_legacy_edge_vitals() {
+        let published = vitals_for_publication(&strong_candidates(), true, 1).unwrap();
+        let message = edge_vitals_message_for_publication(
+            &raw_edge_vitals(),
+            Some(&published),
+            false,
+            true,
+            1,
+        );
+        assert_eq!(message["presence"], true);
+        assert_eq!(message["fall_detected"], true);
+        assert_eq!(message["n_persons"], 1);
+        assert_eq!(message["breathing_rate_bpm"], 15.0);
+        assert_eq!(message["heartrate_bpm"], 72.0);
+        assert_eq!(message["numeric_vitals_authorized"], true);
+        assert!(message["abstention_reason"].is_null());
     }
 }
 
@@ -6194,6 +6356,17 @@ async fn calibration_stop(State(state): State<SharedState>) -> Json<serde_json::
 
 async fn calibration_status(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
+    let observed_at_unix_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+    let bootstrap_background_match = s.bootstrap_background_match(observed_at_unix_ms);
+    let runtime_reference = s.field_model.as_ref().and_then(|model| {
+        model.modes().map(|modes| serde_json::json!({
+            "window_size": modes.baseline_runtime_window_size,
+            "significant_eigenvalue_p95": modes.baseline_runtime_eigenvalue_count,
+            "residual_energy_threshold": modes.empty_room_residual_energy_threshold,
+            "residual_reference_window_count": modes.empty_room_residual_energy_reference.len(),
+            "raw_calibration_frames_persisted": false,
+        }))
+    });
     let (active, status, frame_count, min_frames, elapsed_s, frames_per_second, min_duration_s) =
         s.field_model.as_ref().map_or(
             (false, "none".to_string(), 0, 0, 0.0, 0.0, 0.0),
@@ -6219,6 +6392,7 @@ async fn calibration_status(State(state): State<SharedState>) -> Json<serde_json
         "min_duration_s": min_duration_s,
         "model_id": s.calibration_model_id,
         "source_node_ids": s.calibration_source_node_ids,
+        "runtime_reference": runtime_reference,
         "binding_mode": if s.bootstrap_baseline_active { "bootstrap_only" } else if active { "runtime" } else { "none" },
         "bootstrap_baseline": s.bootstrap_baseline.as_ref().map(|metadata| serde_json::json!({
             "stored": true,
@@ -6229,6 +6403,15 @@ async fn calibration_status(State(state): State<SharedState>) -> Json<serde_json
             "created_at_unix_ms": metadata.created_at_unix_ms,
             "expires_at_unix_ms": metadata.expires_at_unix_ms,
             "content_sha256": metadata.content_sha256,
+            "background_match": bootstrap_background_match.map(|result| serde_json::json!({
+                "state": if result.matches_empty { "matched" } else { "changed" },
+                "matches_empty": result.matches_empty,
+                "score": result.score,
+                "residual_energy": result.residual_energy,
+                "residual_energy_threshold": result.residual_energy_threshold,
+                "window_size": result.window_size,
+                "reference_window_count": result.reference_window_count,
+            })),
             "calibrated_evidence_authorized": false,
             "numeric_vitals_authorized": false,
         })).unwrap_or_else(|| serde_json::json!({
@@ -6274,8 +6457,11 @@ async fn calibration_promote_bootstrap(
 
     let mut samples = Vec::with_capacity(BOOTSTRAP_VALIDATION_SAMPLES);
     let mut last_tick = None;
+    let mut next_sample_at = tokio::time::Instant::now();
     for _ in 0..BOOTSTRAP_VALIDATION_SAMPLES {
-        let interval_deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        tokio::time::sleep_until(next_sample_at).await;
+        let interval_deadline = tokio::time::Instant::now()
+            + Duration::from_millis(BOOTSTRAP_VALIDATION_SAMPLE_TIMEOUT_MS);
         let mut sample = BootstrapValidationSample {
             fresh_tick: false,
             calibrated_empty: false,
@@ -6310,7 +6496,8 @@ async fn calibration_promote_bootstrap(
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         samples.push(sample);
-        tokio::time::sleep_until(interval_deadline).await;
+        next_sample_at = tokio::time::Instant::now()
+            + Duration::from_millis(BOOTSTRAP_VALIDATION_MIN_SPACING_MS);
     }
 
     let validation = bootstrap_baseline::evaluate_validation(&samples);
@@ -6341,11 +6528,11 @@ async fn calibration_promote_bootstrap(
         }));
     };
     let source_node_ids: Vec<u8> = s.calibration_source_node_ids.iter().copied().collect();
-    if source_node_ids.is_empty() || source_node_ids.len() > 16 {
+    if source_node_ids.len() != 1 {
         return Json(serde_json::json!({
             "success": false,
             "error_code": "calibration_source_nodes_missing",
-            "error": "The active calibration must contain between 1 and 16 contributing ESP32 nodes.",
+            "error": "The single-link startup baseline must contain exactly one contributing ESP32 node.",
         }));
     }
     let Some(field_model) = s.field_model.as_ref() else {
@@ -6825,6 +7012,7 @@ async fn mesh_endpoint(State(state): State<SharedState>) -> Json<serde_json::Val
 async fn nodes_endpoint(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
     let now = std::time::Instant::now();
+    let observed_at_unix_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
     let nodes: Vec<serde_json::Value> = s
         .node_states
         .iter()
@@ -6836,13 +7024,24 @@ async fn nodes_endpoint(State(state): State<SharedState>) -> Json<serde_json::Va
             let stale = elapsed_ms > 5000;
             let status = if stale { "stale" } else { "active" };
             let rssi = ns.rssi_history.back().copied().unwrap_or(-90.0);
+            let bootstrap_empty = s.bootstrap_baseline_active
+                && s.bootstrap_baseline.as_ref().is_some_and(|metadata| {
+                    metadata.source_node_ids.as_slice() == [id]
+                })
+                && s.field_model.as_ref().is_some_and(|field_model| {
+                    field_bridge::bootstrap_empty_prior_applies(
+                        field_model,
+                        &ns.frame_history,
+                        observed_at_unix_ms.saturating_mul(1_000),
+                    )
+                });
             serde_json::json!({
                 "node_id": id,
                 "status": status,
                 "last_seen_ms": elapsed_ms,
                 "rssi_dbm": rssi,
-                "motion_level": &ns.current_motion_level,
-                "person_count": ns.prev_person_count,
+                "motion_level": if bootstrap_empty { "absent" } else { &ns.current_motion_level },
+                "person_count": if bootstrap_empty { 0 } else { ns.prev_person_count },
                 "person_count_valid": ns.edge_vitals
                     .as_ref()
                     .map(|vitals| vitals.person_count_valid),
@@ -7088,24 +7287,6 @@ async fn udp_receiver_task(
                         vitals.presence
                     );
                     let mut s = state.write().await;
-                    // Broadcast vitals via WebSocket.
-                    if let Ok(json) = serde_json::to_string(&serde_json::json!({
-                        "type": "edge_vitals",
-                        "node_id": vitals.node_id,
-                        "presence": vitals.presence,
-                        "fall_detected": vitals.fall_detected,
-                        "motion": vitals.motion,
-                        "breathing_rate_bpm": vitals.breathing_rate_bpm,
-                        "heartrate_bpm": vitals.heartrate_bpm,
-                        "n_persons": vitals.n_persons,
-                        "person_count_valid": vitals.person_count_valid,
-                        "motion_energy": vitals.motion_energy,
-                        "presence_score": vitals.presence_score,
-                        "rssi": vitals.rssi,
-                    })) {
-                        let _ = s.tx.send(json);
-                    }
-
                     // Issue #323: Also emit a sensing_update so the UI renders
                     // detections for ESP32 nodes running the edge DSP pipeline
                     // (Tier 2+).  Without this, vitals arrive but the UI shows
@@ -7153,9 +7334,18 @@ async fn udp_receiver_task(
                         0.05
                     };
 
-                    // Aggregate person count: gate on presence first (matching WiFi path).
+                    let observed_at_unix_ms =
+                        chrono::Utc::now().timestamp_millis().max(0) as u64;
+                    let bootstrap_empty =
+                        s.bootstrap_empty_prior_applies(observed_at_unix_ms);
+
+                    // A startup prior has negative-only authority. Once a full
+                    // runtime window matches the stored background, raw edge
+                    // presence cannot force the count back to one.
                     let now = std::time::Instant::now();
-                    let total_persons = if vitals.presence {
+                    let total_persons = if bootstrap_empty {
+                        0
+                    } else if vitals.presence {
                         let dedup = s.dedup_factor;
                         let (fused, fallback_count) = multistatic_bridge::fuse_or_fallback(
                             &s.multistatic_fuser,
@@ -7208,10 +7398,16 @@ async fn udp_receiver_task(
                         .get(&node_id)
                         .map(|ns| ns.frame_history.clone())
                     {
-                        let accepted = if let Some(ref mut fm) = s.field_model {
-                            let before = fm.calibration_frame_count();
-                            field_bridge::maybe_feed_calibration(fm, &frame_history);
-                            fm.calibration_frame_count() > before
+                        let source_allowed =
+                            calibration_source_accepts(&s.calibration_source_node_ids, node_id);
+                        let accepted = if source_allowed {
+                            if let Some(ref mut fm) = s.field_model {
+                                let before = fm.calibration_frame_count();
+                                field_bridge::maybe_feed_calibration(fm, &frame_history);
+                                fm.calibration_frame_count() > before
+                            } else {
+                                false
+                            }
                         } else {
                             false
                         };
@@ -7278,7 +7474,15 @@ async fn udp_receiver_task(
                     // node's own reading no longer overwrites the room's. The
                     // old ad-hoc "boost confidence by node count" is replaced by
                     // `room_inference`'s freshness-weighted multi-node confidence.
-                    let classification = debounce_room_classification(&mut s, &room_inference);
+                    let classification = if bootstrap_empty {
+                        ClassificationInfo {
+                            motion_level: "absent".to_string(),
+                            presence: false,
+                            confidence: 0.0,
+                        }
+                    } else {
+                        debounce_room_classification(&mut s, &room_inference)
+                    };
 
                     let signal_field = generate_signal_field(
                         fused_features.mean_rssi,
@@ -7305,6 +7509,21 @@ async fn udp_receiver_task(
                         explicit_calibration_fresh,
                         total_persons,
                     );
+
+                    // Keep the legacy edge_vitals stream aligned with the
+                    // governed sensing envelope. Raw numeric candidates are
+                    // never published before the explicit calibration and
+                    // single-occupant gates have passed.
+                    let edge_vitals_message = edge_vitals_message_for_publication(
+                        &vitals,
+                        published_vitals.as_ref(),
+                        bootstrap_empty,
+                        explicit_calibration_fresh,
+                        total_persons,
+                    );
+                    if let Ok(json) = serde_json::to_string(&edge_vitals_message) {
+                        let _ = s.tx.send(json);
+                    }
 
                     let mut update = SensingUpdate {
                         msg_type: "sensing_update".to_string(),
@@ -7645,9 +7864,17 @@ async fn udp_receiver_task(
                         0.05
                     };
 
-                    // Aggregate person count: gate on presence first (matching WiFi path).
+                    let observed_at_unix_ms =
+                        chrono::Utc::now().timestamp_millis().max(0) as u64;
+                    let bootstrap_empty =
+                        s.bootstrap_empty_prior_applies(observed_at_unix_ms);
+
+                    // A restored prior can suppress a background-only raw
+                    // classification. It cannot authorize positive presence.
                     let now = std::time::Instant::now();
-                    let total_persons = if classification.presence {
+                    let total_persons = if bootstrap_empty {
+                        0
+                    } else if classification.presence {
                         let dedup = s.dedup_factor;
                         let (fused, fallback_count) = multistatic_bridge::fuse_or_fallback(
                             &s.multistatic_fuser,
@@ -7700,10 +7927,16 @@ async fn udp_receiver_task(
                         .get(&node_id)
                         .map(|ns| ns.frame_history.clone())
                     {
-                        let accepted = if let Some(ref mut fm) = s.field_model {
-                            let before = fm.calibration_frame_count();
-                            field_bridge::maybe_feed_calibration(fm, &frame_history);
-                            fm.calibration_frame_count() > before
+                        let source_allowed =
+                            calibration_source_accepts(&s.calibration_source_node_ids, node_id);
+                        let accepted = if source_allowed {
+                            if let Some(ref mut fm) = s.field_model {
+                                let before = fm.calibration_frame_count();
+                                field_bridge::maybe_feed_calibration(fm, &frame_history);
+                                fm.calibration_frame_count() > before
+                            } else {
+                                false
+                            }
                         } else {
                             false
                         };
@@ -7763,7 +7996,15 @@ async fn udp_receiver_task(
                         active_nodes.iter().filter_map(|ni| ni.node_inference.as_ref()),
                         NODE_STALE_AFTER_MS,
                     );
-                    let room_classification = debounce_room_classification(&mut s, &room_inference);
+                    let room_classification = if bootstrap_empty {
+                        ClassificationInfo {
+                            motion_level: "absent".to_string(),
+                            presence: false,
+                            confidence: 0.0,
+                        }
+                    } else {
+                        debounce_room_classification(&mut s, &room_inference)
+                    };
                     let explicit_calibration_fresh = !s.bootstrap_baseline_active
                         && s.field_model.as_ref().is_some_and(|model| {
                             matches!(model.status(), CalibrationStatus::Fresh)
