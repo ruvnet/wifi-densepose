@@ -47,6 +47,9 @@ const MAX_SINGLE_LINK_OCCUPANCY: usize = 3;
 pub struct BootstrapBackgroundMatch {
     pub matches_empty: bool,
     pub score: Option<f64>,
+    pub normalized_residual_z: Option<f64>,
+    pub maturity: f64,
+    pub reliable: bool,
     pub residual_energy: f64,
     pub residual_energy_threshold: f64,
     pub window_size: usize,
@@ -227,6 +230,9 @@ pub fn bootstrap_background_match(
     Some(BootstrapBackgroundMatch {
         matches_empty: result.matches_empty,
         score: result.score,
+        normalized_residual_z: result.normalized_residual_z,
+        maturity: result.maturity,
+        reliable: result.reliable,
         residual_energy: result.residual_energy,
         residual_energy_threshold: result.residual_energy_threshold,
         window_size: result.window_size,
@@ -502,6 +508,9 @@ mod tests {
             .expect("background score");
         assert!(background.matches_empty);
         assert_eq!(background.reference_window_count, 12);
+        assert!(background.reliable);
+        assert_eq!(background.maturity, 0.6);
+        assert!(background.normalized_residual_z.is_some());
         assert!(background
             .score
             .is_some_and(|score| (0.5..=1.0).contains(&score)));
@@ -530,5 +539,6 @@ mod tests {
             .expect("shifted background result");
         assert!(!shifted_background.matches_empty);
         assert_eq!(shifted_background.score, Some(0.0));
+        assert!(shifted_background.reliable);
     }
 }
