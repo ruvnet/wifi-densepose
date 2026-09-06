@@ -266,16 +266,21 @@ def main():
         print("  " + " ".join(shown[1:]))
         if a.dry_run:
             continue
-        # List form with no shell=True: argv goes straight to execve, so there
-        # is no shell to inject into and a hostile value can only ever become
-        # one bad argument to provision.py, never a second command. Every
-        # element that is not a literal is range-checked above.
+        # Semgrep reports dangerous-subprocess-use-tainted-env-args here and
+        # suggests shlex.quote(). Do not apply it: quoting is for building a
+        # shell string, and this is the list form with no shell=True, so argv
+        # goes straight to execve. shlex.quote would hand provision.py a port
+        # named "'COM7'", quotes included, and break provisioning to satisfy a
+        # scanner. There is no shell to inject into; a hostile value can only
+        # ever become one bad argument, never a second command, and `port` is
+        # range-checked above.
         #
-        # An earlier attempt named the rule `dangerous-subprocess-use-audit`,
-        # which is a different rule and suppressed nothing. Both spellings of
-        # the id that actually fires are listed because the registry reports
-        # the fully-qualified form and local runs report the short one.
-        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args, dangerous-subprocess-use-tainted-env-args
+        # The finding is left visible rather than suppressed. The suppression
+        # pragma does not take effect in this workflow -- it was tried on the
+        # line above the call and on the reported line itself, and the finding
+        # survived both -- and the SAST job is `continue-on-error: true` by
+        # design, so it does not gate the PR. The pragma is not even spelled
+        # out here: on its own in a comment it is blanket-suppression syntax.
         r = subprocess.run(cmd, capture_output=True, text=True)
         # provision.py cannot build the NVS image without ESP-IDF on PATH, so
         # on a bare Windows host it writes nvs_config.csv and stops. Finish the
@@ -305,9 +310,9 @@ def main():
             if a.no_auto_reset:
                 esp += ["--before", "no-reset"]
             esp += ["write_flash", NVS_OFFSET, binp]
-            # Same reasoning as the provision.py call above: list form, no
-            # shell, and `chip` and `port` are the only non-literals.
-            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args, dangerous-subprocess-use-tainted-env-args
+            # Same finding and same reasoning as the provision.py call above:
+            # list form, no shell, shlex.quote inapplicable, and `chip` and
+            # `port` are the only non-literals.
             f = subprocess.run(esp, capture_output=True, text=True)
             if "verified" in f.stdout or f.returncode == 0:
                 print("  ok -- NVS written at %s. Confirm the boot log says "
