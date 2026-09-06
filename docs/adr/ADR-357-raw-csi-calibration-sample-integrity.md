@@ -39,7 +39,9 @@ not be promoted as a production bootstrap prior.
 4. A requested source may start calibration only when it has a grid admitted
    raw CSI packet newer than five seconds. General node liveness is not enough.
    The node endpoint reports both `csi_status` and `csi_last_seen_ms` so clients
-   can explain the gate before the operator begins.
+   can explain the gate before the operator begins. Calibration status reports
+   `last_sequence_by_node` so admission growth and sequence identity can be
+   observed atomically without exposing CSI values.
 5. Start, cancel, reset, and process initialization clear sequence admission
    state. A failed feed does not advance the sequence cursor, so the same
    packet may be retried after a transient model input failure.

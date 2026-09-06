@@ -6520,10 +6520,12 @@ mod bootstrap_vital_publication_tests {
         );
         inner.calibration_model_id = Some("cal-model-test".to_string());
         inner.calibration_source_node_ids.insert(5);
+        inner.calibration_last_sequences.insert(5, 41);
         inner.calibration_sequence_fault_node_ids.insert(5);
         let state = Arc::new(RwLock::new(inner));
 
         let Json(status) = calibration_status(State(state.clone())).await;
+        assert_eq!(status["last_sequence_by_node"]["5"], 41);
         assert_eq!(status["sequence_fault_node_ids"], serde_json::json!([5]));
 
         let Json(stopped) = calibration_stop(State(state)).await;
@@ -6823,6 +6825,7 @@ async fn calibration_status(State(state): State<SharedState>) -> Json<serde_json
         "min_duration_s": min_duration_s,
         "model_id": s.calibration_model_id,
         "source_node_ids": s.calibration_source_node_ids,
+        "last_sequence_by_node": s.calibration_last_sequences,
         "sequence_fault_node_ids": s.calibration_sequence_fault_node_ids,
         "runtime_reference": runtime_reference,
         "binding_mode": if bootstrap_active { "bootstrap_only" } else if active { "runtime" } else { "none" },
