@@ -64,9 +64,9 @@ def load_conf(net=None):
             "no %s.\n\nCreate it with:\n"
             '  {\n'
             '    "ssid": "thisismyssid",\n'
-            '    "password_file": "D:\\\\path\\\\to\\\\thisismyssid.txt",\n'
+            '    "password_file": "~/secrets/thisismyssid.txt",\n'
             '    "target_ip": "192.168.1.10",\n'
-            '    "ota_psk_file": "D:\\\\path\\\\to\\\\ota_psk.txt",\n'
+            '    "ota_psk_file": "~/secrets/ota_psk.txt",\n'
             '    "chip": "esp32c6",\n'
             '    "edge_tier": 2\n'
             '  }\n\n'
@@ -76,7 +76,24 @@ def load_conf(net=None):
         return json.load(fh)
 
 
+def secret_path(path):
+    """Resolve a credential path from a profile.
+
+    Expanded so a profile can say ~/onedrive/ota_psk.txt instead of
+    D:/Users/<name>/onedrive/ota_psk.txt. The profile is tracked -- it holds
+    only paths, never a credential -- so keeping a login name out of it costs
+    nothing and stops the file naming a particular person's machine.
+
+    Prefer `~`: expanduser resolves it on Windows and POSIX alike. %VAR% is
+    also expanded, but only on Windows -- expandvars reads $VAR syntax on
+    POSIX -- so a profile written with %USERPROFILE% breaks under WSL. An
+    absolute path is returned unchanged, so existing profiles keep working.
+    """
+    return os.path.expandvars(os.path.expanduser(path))
+
+
 def read_password(path):
+    path = secret_path(path)
     try:
         with open(path, encoding="utf-8-sig") as fh:
             pw = fh.read().strip()
@@ -106,6 +123,7 @@ def read_or_create_psk(conf):
     if not path:
         # Default alongside the passphrase, which is already outside the repo.
         path = os.path.join(os.path.dirname(conf["password_file"]), "ota_psk.txt")
+    path = secret_path(path)
 
     real = os.path.realpath(path)
     if real.startswith(os.path.realpath(HERE) + os.sep):
