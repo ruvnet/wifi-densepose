@@ -238,6 +238,16 @@ def main():
     if edge_tier not in (0, 1, 2):
         sys.exit("edge_tier must be 0, 1 or 2 (got %d)" % edge_tier)
 
+    # Ports arrive from --port or from board_index.json, so they are the one
+    # remaining non-literal in the esptool argv. Real device nodes are
+    # COM7, /dev/ttyUSB0, /dev/cu.usbserial-1420 -- none of which need a
+    # character outside this set.
+    for port, _nid, _mac in targets:
+        if not port or len(port) > 64 or not all(
+                c.isalnum() or c in "/\\.-_:" for c in port):
+            sys.exit("refusing to use %r as a serial port: expected something "
+                     "like COM7 or /dev/ttyUSB0" % port)
+
     for port, nid, mac in targets:
         cmd = [sys.executable, os.path.join(HERE, "provision.py"),
                "--port", port,
@@ -256,6 +266,16 @@ def main():
         print("  " + " ".join(shown[1:]))
         if a.dry_run:
             continue
+        # List form with no shell=True: argv goes straight to execve, so there
+        # is no shell to inject into and a hostile value can only ever become
+        # one bad argument to provision.py, never a second command. Every
+        # element that is not a literal is range-checked above.
+        #
+        # An earlier attempt named the rule `dangerous-subprocess-use-audit`,
+        # which is a different rule and suppressed nothing. Both spellings of
+        # the id that actually fires are listed because the registry reports
+        # the fully-qualified form and local runs report the short one.
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args, dangerous-subprocess-use-tainted-env-args
         r = subprocess.run(cmd, capture_output=True, text=True)
         # provision.py cannot build the NVS image without ESP-IDF on PATH, so
         # on a bare Windows host it writes nvs_config.csv and stops. Finish the
@@ -285,6 +305,9 @@ def main():
             if a.no_auto_reset:
                 esp += ["--before", "no-reset"]
             esp += ["write_flash", NVS_OFFSET, binp]
+            # Same reasoning as the provision.py call above: list form, no
+            # shell, and `chip` and `port` are the only non-literals.
+            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args, dangerous-subprocess-use-tainted-env-args
             f = subprocess.run(esp, capture_output=True, text=True)
             if "verified" in f.stdout or f.returncode == 0:
                 print("  ok -- NVS written at %s. Confirm the boot log says "
