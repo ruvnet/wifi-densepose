@@ -1635,8 +1635,13 @@ struct AppStateInner {
     /// Last admitted raw CSI sequence per contributing node. Edge-vitals
     /// packets do not carry a new CSI observation and cannot advance this map.
     calibration_last_sequences: HashMap<u8, u32>,
-    /// Nodes whose sequence moved backward during the current session. Without
-    /// a wire boot epoch, the session must stay failed closed after regression.
+    /// Late packets inside the bounded UDP reorder window are ignored rather
+    /// than counted. These receipts make the transport behavior auditable.
+    calibration_reordered_packets: HashMap<u8, u64>,
+    calibration_max_reorder_depth: HashMap<u8, u32>,
+    /// Nodes whose sequence moved backward beyond the bounded UDP reorder
+    /// window during the current session. Without a wire boot epoch, the
+    /// session must stay failed closed after a material discontinuity.
     calibration_sequence_fault_node_ids: std::collections::BTreeSet<u8>,
     // ── ADR-044 §5.2: adaptive rolling-p95 normalization ─────────────────────
     /// Rolling P95 of `FeatureInfo.variance` over the last ~30 s (600 frames @ 20 Hz).
@@ -1745,8 +1750,15 @@ enum CalibrationSequenceOrder {
     First,
     Forward,
     Duplicate,
-    Regression,
+    Reordered(u32),
+    Discontinuity,
 }
+
+/// Live Node 5 evidence observed a same-source receive batch ordered as high
+/// water mark, then minus three, minus two, minus one. Four covers that
+/// measured UDP reorder with one frame of margin. At the firmware's 50 Hz
+/// ceiling it spans at most 80 ms; larger backward jumps stay failed closed.
+const CALIBRATION_SEQUENCE_REORDER_WINDOW: u32 = 4;
 
 fn calibration_sequence_order(previous: Option<u32>, sequence: u32) -> CalibrationSequenceOrder {
     let Some(previous) = previous else {
@@ -1758,7 +1770,12 @@ fn calibration_sequence_order(previous: Option<u32>, sequence: u32) -> Calibrati
     } else if delta < (1_u32 << 31) {
         CalibrationSequenceOrder::Forward
     } else {
-        CalibrationSequenceOrder::Regression
+        let reorder_depth = previous.wrapping_sub(sequence);
+        if reorder_depth <= CALIBRATION_SEQUENCE_REORDER_WINDOW {
+            CalibrationSequenceOrder::Reordered(reorder_depth)
+        } else {
+            CalibrationSequenceOrder::Discontinuity
+        }
     }
 }
 
@@ -1780,13 +1797,31 @@ impl AppStateInner {
         let previous_sequence = self.calibration_last_sequences.get(&node_id).copied();
         match calibration_sequence_order(previous_sequence, sequence) {
             CalibrationSequenceOrder::Duplicate => return false,
-            CalibrationSequenceOrder::Regression => {
+            CalibrationSequenceOrder::Reordered(depth) => {
+                *self
+                    .calibration_reordered_packets
+                    .entry(node_id)
+                    .or_default() += 1;
+                self.calibration_max_reorder_depth
+                    .entry(node_id)
+                    .and_modify(|observed| *observed = (*observed).max(depth))
+                    .or_insert(depth);
+                debug!(
+                    node_id,
+                    previous_sequence,
+                    sequence,
+                    depth,
+                    "Ignored bounded late CSI packet during calibration"
+                );
+                return false;
+            }
+            CalibrationSequenceOrder::Discontinuity => {
                 self.calibration_sequence_fault_node_ids.insert(node_id);
                 warn!(
                     node_id,
                     previous_sequence,
                     sequence,
-                    "Calibration source sequence regressed; restart the empty-room capture"
+                    "Calibration source sequence discontinuity exceeded reorder window; restart the empty-room capture"
                 );
                 return false;
             }
@@ -1805,6 +1840,8 @@ impl AppStateInner {
 
     fn clear_calibration_sequence_state(&mut self) {
         self.calibration_last_sequences.clear();
+        self.calibration_reordered_packets.clear();
+        self.calibration_max_reorder_depth.clear();
         self.calibration_sequence_fault_node_ids.clear();
     }
 
@@ -2051,6 +2088,8 @@ impl AppStateInner {
             calibration_model_id: None,
             calibration_source_node_ids: std::collections::BTreeSet::new(),
             calibration_last_sequences: HashMap::new(),
+            calibration_reordered_packets: HashMap::new(),
+            calibration_max_reorder_depth: HashMap::new(),
             calibration_sequence_fault_node_ids: std::collections::BTreeSet::new(),
             p95_variance: RollingP95::new(600, 60),
             p95_motion_band_power: RollingP95::new(600, 60),
@@ -6432,7 +6471,7 @@ mod bootstrap_vital_publication_tests {
     }
 
     #[test]
-    fn calibration_sequence_regression_latches_session_failure() {
+    fn calibration_bounded_reorder_is_dropped_without_feeding_model() {
         let mut state = AppStateInner::minimal();
         state.field_model = Some(
             FieldModel::new(field_bridge::single_link_config()).expect("field model"),
@@ -6440,11 +6479,14 @@ mod bootstrap_vital_publication_tests {
         state.calibration_source_node_ids.insert(5);
         let frame = vec![0.25; 56];
 
-        assert!(state.maybe_feed_calibration_frame(5, 10, &frame));
-        assert!(state.maybe_feed_calibration_frame(5, 11, &frame));
-        assert!(!state.maybe_feed_calibration_frame(5, 10, &frame));
-        assert!(!state.maybe_feed_calibration_frame(5, 12, &frame));
-        assert!(state.calibration_sequence_fault_node_ids.contains(&5));
+        assert!(state.maybe_feed_calibration_frame(5, 4_119_566, &frame));
+        assert!(!state.maybe_feed_calibration_frame(5, 4_119_563, &frame));
+        assert!(!state.maybe_feed_calibration_frame(5, 4_119_564, &frame));
+        assert!(!state.maybe_feed_calibration_frame(5, 4_119_565, &frame));
+        assert!(state.maybe_feed_calibration_frame(5, 4_119_567, &frame));
+        assert!(state.calibration_sequence_fault_node_ids.is_empty());
+        assert_eq!(state.calibration_reordered_packets.get(&5), Some(&3));
+        assert_eq!(state.calibration_max_reorder_depth.get(&5), Some(&3));
         assert_eq!(
             state
                 .field_model
@@ -6453,10 +6495,35 @@ mod bootstrap_vital_publication_tests {
                 .calibration_frame_count(),
             2
         );
+    }
+
+    #[test]
+    fn calibration_sequence_discontinuity_latches_session_failure() {
+        let mut state = AppStateInner::minimal();
+        state.field_model = Some(
+            FieldModel::new(field_bridge::single_link_config()).expect("field model"),
+        );
+        state.calibration_source_node_ids.insert(5);
+        let frame = vec![0.25; 56];
+
+        assert!(state.maybe_feed_calibration_frame(5, 100, &frame));
+        assert!(!state.maybe_feed_calibration_frame(5, 95, &frame));
+        assert!(!state.maybe_feed_calibration_frame(5, 101, &frame));
+        assert!(state.calibration_sequence_fault_node_ids.contains(&5));
+        assert_eq!(
+            state
+                .field_model
+                .as_ref()
+                .expect("field model")
+                .calibration_frame_count(),
+            1
+        );
 
         state.clear_calibration_sequence_state();
         assert!(state.calibration_sequence_fault_node_ids.is_empty());
         assert!(state.calibration_last_sequences.is_empty());
+        assert!(state.calibration_reordered_packets.is_empty());
+        assert!(state.calibration_max_reorder_depth.is_empty());
     }
 
     #[test]
@@ -6485,7 +6552,7 @@ mod bootstrap_vital_publication_tests {
     }
 
     #[test]
-    fn calibration_sequence_order_rejects_backward_and_half_range() {
+    fn calibration_sequence_order_drops_bounded_late_and_rejects_discontinuity() {
         assert_eq!(
             calibration_sequence_order(None, 7),
             CalibrationSequenceOrder::First
@@ -6500,11 +6567,19 @@ mod bootstrap_vital_publication_tests {
         );
         assert_eq!(
             calibration_sequence_order(Some(8), 7),
-            CalibrationSequenceOrder::Regression
+            CalibrationSequenceOrder::Reordered(1)
+        );
+        assert_eq!(
+            calibration_sequence_order(Some(8), 4),
+            CalibrationSequenceOrder::Reordered(4)
+        );
+        assert_eq!(
+            calibration_sequence_order(Some(8), 3),
+            CalibrationSequenceOrder::Discontinuity
         );
         assert_eq!(
             calibration_sequence_order(Some(0), 1_u32 << 31),
-            CalibrationSequenceOrder::Regression
+            CalibrationSequenceOrder::Discontinuity
         );
         assert_eq!(
             calibration_sequence_order(Some(u32::MAX), 0),
@@ -6521,11 +6596,16 @@ mod bootstrap_vital_publication_tests {
         inner.calibration_model_id = Some("cal-model-test".to_string());
         inner.calibration_source_node_ids.insert(5);
         inner.calibration_last_sequences.insert(5, 41);
+        inner.calibration_reordered_packets.insert(5, 3);
+        inner.calibration_max_reorder_depth.insert(5, 3);
         inner.calibration_sequence_fault_node_ids.insert(5);
         let state = Arc::new(RwLock::new(inner));
 
         let Json(status) = calibration_status(State(state.clone())).await;
         assert_eq!(status["last_sequence_by_node"]["5"], 41);
+        assert_eq!(status["reorder_window_sequences"], 4);
+        assert_eq!(status["reordered_packets_by_node"]["5"], 3);
+        assert_eq!(status["max_reorder_depth_by_node"]["5"], 3);
         assert_eq!(status["sequence_fault_node_ids"], serde_json::json!([5]));
 
         let Json(stopped) = calibration_stop(State(state)).await;
@@ -6536,6 +6616,8 @@ mod bootstrap_vital_publication_tests {
         );
         assert_eq!(stopped["model_id"], "cal-model-test");
         assert_eq!(stopped["source_node_ids"], serde_json::json!([5]));
+        assert_eq!(stopped["reordered_packets_by_node"]["5"], 3);
+        assert_eq!(stopped["max_reorder_depth_by_node"]["5"], 3);
     }
 
     fn strong_candidates() -> VitalSigns {
@@ -6712,13 +6794,17 @@ async fn calibration_stop(State(state): State<SharedState>) -> Json<serde_json::
     let mut s = state.write().await;
     let model_id = s.calibration_model_id.clone();
     let source_node_ids: Vec<u8> = s.calibration_source_node_ids.iter().copied().collect();
+    let reordered_packets_by_node = s.calibration_reordered_packets.clone();
+    let max_reorder_depth_by_node = s.calibration_max_reorder_depth.clone();
     if !s.calibration_sequence_fault_node_ids.is_empty() {
         return Json(serde_json::json!({
             "success": false,
             "error_code": "calibration_sequence_discontinuity",
-            "error": "Raw CSI sequence moved backward during capture. Cancel and restart the empty-room calibration.",
+            "error": "Raw CSI sequence moved backward beyond the bounded UDP reorder window. Cancel and restart the empty-room calibration.",
             "model_id": model_id,
             "source_node_ids": source_node_ids,
+            "reordered_packets_by_node": reordered_packets_by_node,
+            "max_reorder_depth_by_node": max_reorder_depth_by_node,
             "sequence_fault_node_ids": s.calibration_sequence_fault_node_ids,
         }));
     }
@@ -6769,6 +6855,8 @@ async fn calibration_stop(State(state): State<SharedState>) -> Json<serde_json::
                     "elapsed_s": elapsed_s,
                     "model_id": model_id,
                     "source_node_ids": source_node_ids,
+                    "reordered_packets_by_node": reordered_packets_by_node,
+                    "max_reorder_depth_by_node": max_reorder_depth_by_node,
                 }))
             }
             // ADR-080 #2: finalize error chain stays server-side only.
@@ -6826,6 +6914,10 @@ async fn calibration_status(State(state): State<SharedState>) -> Json<serde_json
         "model_id": s.calibration_model_id,
         "source_node_ids": s.calibration_source_node_ids,
         "last_sequence_by_node": s.calibration_last_sequences,
+        "sequence_policy": "forward_only_with_bounded_udp_reorder_drop_v1",
+        "reorder_window_sequences": CALIBRATION_SEQUENCE_REORDER_WINDOW,
+        "reordered_packets_by_node": s.calibration_reordered_packets,
+        "max_reorder_depth_by_node": s.calibration_max_reorder_depth,
         "sequence_fault_node_ids": s.calibration_sequence_fault_node_ids,
         "runtime_reference": runtime_reference,
         "binding_mode": if bootstrap_active { "bootstrap_only" } else if active { "runtime" } else { "none" },
@@ -10375,6 +10467,8 @@ async fn main() {
         calibration_model_id: args.calibrate.then(opaque_calibration_model_id),
         calibration_source_node_ids: std::collections::BTreeSet::new(),
         calibration_last_sequences: HashMap::new(),
+        calibration_reordered_packets: HashMap::new(),
+        calibration_max_reorder_depth: HashMap::new(),
         calibration_sequence_fault_node_ids: std::collections::BTreeSet::new(),
         // ADR-044 §5.2: rolling-P95 over ~30 s at 20 Hz; warm-up after 60 samples.
         p95_variance: RollingP95::new(600, 60),
