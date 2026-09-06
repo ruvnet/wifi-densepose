@@ -17,6 +17,9 @@
 /** ADR-018 header size in bytes. */
 #define CSI_HEADER_SIZE 20
 
+/** ADR-018 byte 19: ESP-IDF reported and firmware sanitized invalid CSI prefix. */
+#define CSI_FLAG_FIRST_WORD_SANITIZED (1U << 5)
+
 /** Maximum frame buffer size (header + 4 antennas * 256 subcarriers * 2 bytes). */
 #define CSI_MAX_FRAME_SIZE (CSI_HEADER_SIZE + 4 * 256 * 2)
 

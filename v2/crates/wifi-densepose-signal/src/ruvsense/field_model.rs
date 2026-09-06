@@ -57,6 +57,10 @@ pub const MIN_CALIBRATION_FRAMES: usize =
     RUNTIME_OCCUPANCY_WINDOW * MIN_BACKGROUND_REFERENCE_WINDOWS;
 const CALIBRATION_BACKGROUND_WINDOWS_MAX: usize = 512;
 const EMPTY_ROOM_RESIDUAL_MARGIN: f64 = 1.5;
+const EMPTY_ROOM_HELD_OUT_MARGIN: f64 = 1.10;
+const EMPTY_ROOM_REFINEMENT_MAX_LIFT: f64 = 1.25;
+const EMPTY_ROOM_REFINEMENT_MIN_SAMPLES: usize = 10;
+const EMPTY_ROOM_REFINEMENT_MAX_SAMPLES: usize = 64;
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -362,6 +366,11 @@ pub struct FieldNormalMode {
     /// an empty room model into positive person evidence.
     #[serde(default)]
     pub empty_room_residual_energy_reference: Vec<f64>,
+    /// Number of operator-confirmed held-out empty refinements. Version one
+    /// permits one bounded refinement so repeated calls cannot ratchet the
+    /// background boundary upward until a weak occupant is suppressed.
+    #[serde(default)]
+    pub empty_room_residual_refinement_count: u8,
 }
 
 /// A bounded comparison between one runtime window and the learned empty room
@@ -371,9 +380,25 @@ pub struct FieldNormalMode {
 pub struct EmptyRoomMatch {
     pub matches_empty: bool,
     pub score: Option<f64>,
+    /// Robust residual distance from the quiet reference median.
+    pub normalized_residual_z: Option<f64>,
+    /// Reference coverage relative to the normal calibration target.
+    pub maturity: f64,
+    /// Whether the reference set is large and valid enough to suppress change.
+    pub reliable: bool,
     pub residual_energy: f64,
     pub residual_energy_threshold: f64,
     pub window_size: usize,
+    pub reference_window_count: usize,
+}
+
+/// Receipt for one bounded, operator-confirmed empty-room refinement.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EmptyRoomRefinement {
+    pub threshold_before: f64,
+    pub threshold_after: f64,
+    pub held_out_p95: f64,
+    pub held_out_sample_count: usize,
     pub reference_window_count: usize,
 }
 
@@ -625,6 +650,27 @@ fn percentile_95(mut values: Vec<f64>) -> Option<f64> {
     values.get(index).copied()
 }
 
+fn robust_residual_z(reference: &[f64], residual: f64) -> Option<f64> {
+    if !residual.is_finite() || reference.is_empty() {
+        return None;
+    }
+    let mut sorted: Vec<f64> = reference
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .collect();
+    if sorted.len() != reference.len() {
+        return None;
+    }
+    sorted.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
+    let median = sorted[sorted.len() / 2];
+    let mut deviations: Vec<f64> = sorted.iter().map(|value| (value - median).abs()).collect();
+    deviations.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
+    let mad = deviations[deviations.len() / 2];
+    let robust_scale = (1.4826 * mad).max((median.abs() * 0.01).max(f64::EPSILON));
+    Some((residual - median) / robust_scale)
+}
+
 #[cfg(feature = "eigenvalue")]
 fn percentile_95_usize(mut values: Vec<usize>) -> Option<usize> {
     values.sort_unstable();
@@ -690,6 +736,73 @@ impl FieldModel {
         self.modes
             .as_ref()
             .and_then(|modes| modes.empty_room_residual_energy_threshold)
+    }
+
+    /// Refine a completed single-link empty-room boundary with scalar residuals
+    /// measured during a separate operator-confirmed empty holdout.
+    ///
+    /// This never ingests or persists raw CSI. The lift is capped at 25 percent
+    /// and may happen only once per snapshot, preventing repeated calls from
+    /// silently erasing weak occupied evidence.
+    pub fn refine_empty_room_residual_boundary(
+        &mut self,
+        held_out_residuals: &[f64],
+    ) -> Result<EmptyRoomRefinement, FieldModelError> {
+        if self.config.n_links != 1 || self.status != CalibrationStatus::Fresh {
+            return Err(FieldModelError::NotCalibrated);
+        }
+        if !(EMPTY_ROOM_REFINEMENT_MIN_SAMPLES..=EMPTY_ROOM_REFINEMENT_MAX_SAMPLES)
+            .contains(&held_out_residuals.len())
+            || held_out_residuals
+                .iter()
+                .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return Err(FieldModelError::InvalidConfig(
+                "held-out empty residuals are missing, excessive, or non-finite".into(),
+            ));
+        }
+        let modes = self.modes.as_mut().ok_or(FieldModelError::NotCalibrated)?;
+        if modes.empty_room_residual_refinement_count != 0 {
+            return Err(FieldModelError::InvalidConfig(
+                "the empty-room boundary already has its one permitted held-out refinement"
+                    .into(),
+            ));
+        }
+        if modes.empty_room_residual_energy_reference.len() + held_out_residuals.len()
+            > CALIBRATION_BACKGROUND_WINDOWS_MAX
+        {
+            return Err(FieldModelError::InvalidConfig(
+                "the empty-room residual reference limit would be exceeded".into(),
+            ));
+        }
+        let threshold_before = modes
+            .empty_room_residual_energy_threshold
+            .ok_or(FieldModelError::NotCalibrated)?
+            .max(EMPTY_ROOM_RESIDUAL_ENERGY_MAX);
+        let held_out_p95 = percentile_95(held_out_residuals.to_vec())
+            .ok_or(FieldModelError::NotCalibrated)?;
+        let proposed = held_out_p95 * EMPTY_ROOM_HELD_OUT_MARGIN;
+        let threshold_after = threshold_before
+            .max(proposed.min(threshold_before * EMPTY_ROOM_REFINEMENT_MAX_LIFT));
+
+        modes
+            .empty_room_residual_energy_reference
+            .extend_from_slice(held_out_residuals);
+        modes
+            .empty_room_residual_energy_reference
+            .sort_by(|left, right| {
+                left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
+            });
+        modes.empty_room_residual_energy_threshold = Some(threshold_after);
+        modes.empty_room_residual_refinement_count = 1;
+
+        Ok(EmptyRoomRefinement {
+            threshold_before,
+            threshold_after,
+            held_out_p95,
+            held_out_sample_count: held_out_residuals.len(),
+            reference_window_count: modes.empty_room_residual_energy_reference.len(),
+        })
     }
 
     /// Export aggregate model state suitable for local restart persistence.
@@ -762,6 +875,7 @@ impl FieldModel {
                 .is_none_or(|threshold| threshold.is_finite() && threshold >= 0.0)
             && modes.empty_room_residual_energy_reference.len()
                 <= CALIBRATION_BACKGROUND_WINDOWS_MAX
+            && modes.empty_room_residual_refinement_count <= 1
             && modes
                 .empty_room_residual_energy_reference
                 .iter()
@@ -1118,6 +1232,7 @@ impl FieldModel {
             baseline_runtime_window_size: None,
             empty_room_residual_energy_threshold: None,
             empty_room_residual_energy_reference: Vec::new(),
+            empty_room_residual_refinement_count: 0,
         };
 
         // The full calibration covariance and a fifty frame runtime covariance
@@ -1227,12 +1342,20 @@ impl FieldModel {
         let residual_energy_threshold = modes
             .empty_room_residual_energy_threshold?
             .max(EMPTY_ROOM_RESIDUAL_ENERGY_MAX);
-        let matches_empty = residual_energy <= residual_energy_threshold;
         let reference_window_count = modes.empty_room_residual_energy_reference.len();
-        let score = if !matches_empty {
-            Some(0.0)
-        } else if reference_window_count == 0 {
+        let maturity = (reference_window_count as f64
+            / MIN_BACKGROUND_REFERENCE_WINDOWS as f64)
+            .clamp(0.0, 1.0);
+        let reliable = reference_window_count >= 10
+            && modes
+                .empty_room_residual_energy_reference
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0);
+        let matches_empty = reliable && residual_energy <= residual_energy_threshold;
+        let score = if !reliable {
             None
+        } else if !matches_empty {
+            Some(0.0)
         } else {
             let at_or_below = modes
                 .empty_room_residual_energy_reference
@@ -1243,6 +1366,12 @@ impl FieldModel {
         Some(EmptyRoomMatch {
             matches_empty,
             score,
+            normalized_residual_z: robust_residual_z(
+                &modes.empty_room_residual_energy_reference,
+                residual_energy,
+            ),
+            maturity,
+            reliable,
             residual_energy,
             residual_energy_threshold,
             window_size,
@@ -2061,9 +2190,50 @@ mod tests {
             .expect("background match");
         assert!(background.matches_empty);
         assert_eq!(background.reference_window_count, 12);
+        assert!(background.reliable);
+        assert_eq!(background.maturity, 0.6);
+        assert!(background.normalized_residual_z.is_some());
         assert!(background
             .score
             .is_some_and(|score| (0.5..=1.0).contains(&score)));
+    }
+
+    #[test]
+    fn held_out_empty_refinement_is_bounded_and_single_use() {
+        let config = FieldModelConfig {
+            n_links: 1,
+            n_subcarriers: 8,
+            n_modes: 2,
+            min_calibration_frames: 100,
+            min_calibration_duration_s: 0.0,
+            baseline_expiry_s: 86_400.0,
+        };
+        let mut model = FieldModel::new(config).unwrap();
+        for frame_index in 0..1_000 {
+            let phase = frame_index as f64 * 0.071;
+            let frame = (0..8)
+                .map(|index| 20.0 + index as f64 * 0.1 + (phase + index as f64).sin())
+                .collect();
+            model.feed_calibration(&[frame]).unwrap();
+        }
+        model.finalize_calibration(1_000_000, 0).unwrap();
+
+        let before = model.empty_room_residual_energy_threshold().unwrap();
+        let residuals = vec![before * 1.4; 12];
+        let receipt = model
+            .refine_empty_room_residual_boundary(&residuals)
+            .unwrap();
+        assert_eq!(receipt.threshold_before, before);
+        assert!(receipt.threshold_after > before);
+        assert!(receipt.threshold_after <= before * EMPTY_ROOM_REFINEMENT_MAX_LIFT);
+        assert_eq!(receipt.held_out_sample_count, 12);
+        assert_eq!(
+            model.modes().unwrap().empty_room_residual_refinement_count,
+            1
+        );
+        assert!(model
+            .refine_empty_room_residual_boundary(&residuals)
+            .is_err());
     }
 
     #[cfg(feature = "eigenvalue")]
@@ -2111,6 +2281,51 @@ mod tests {
         let background = model.empty_room_match(&shifted).expect("shifted match");
         assert!(!background.matches_empty);
         assert_eq!(background.score, Some(0.0));
+        assert!(background.reliable);
+        assert!(background.normalized_residual_z.is_some());
+    }
+
+    #[cfg(feature = "eigenvalue")]
+    #[test]
+    fn sparse_background_reference_cannot_suppress_runtime_change() {
+        let config = FieldModelConfig {
+            n_links: 1,
+            n_subcarriers: 56,
+            n_modes: 3,
+            min_calibration_frames: 500,
+            min_calibration_duration_s: 0.0,
+            baseline_expiry_s: 86_400.0,
+        };
+        let mut model = FieldModel::new(config).unwrap();
+        let mut calibration = Vec::new();
+        for frame_index in 0..600 {
+            let time = frame_index as f64 * 0.071;
+            let frame: Vec<f64> = (0..56)
+                .map(|subcarrier| {
+                    let carrier = subcarrier as f64;
+                    18.0 + carrier * 0.08
+                        + (time + carrier * 0.13).sin() * 0.8
+                        + (time * 0.37 + carrier * 0.031).cos() * 0.35
+                })
+                .collect();
+            model.feed_calibration(&[frame.clone()]).unwrap();
+            calibration.push(frame);
+        }
+        model.finalize_calibration(1_000_000, 0).unwrap();
+        model
+            .modes
+            .as_mut()
+            .unwrap()
+            .empty_room_residual_energy_reference
+            .truncate(9);
+
+        let result = model
+            .empty_room_match(&calibration[550..600])
+            .expect("background comparison");
+        assert!(!result.reliable);
+        assert!(!result.matches_empty);
+        assert_eq!(result.score, None);
+        assert_eq!(result.maturity, 0.45);
     }
 
     #[test]

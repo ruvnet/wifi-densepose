@@ -25,8 +25,10 @@ prior only after two server controlled stages:
 
 1. Normal calibration reaches both 1,000 accepted frames and 600 seconds.
    The frame target represents twenty complete fifty frame runtime windows.
-   Collection binds to the first accepted ESP32 source and rejects frames from
-   other radios for that single link model.
+   A caller may select one currently live ESP32 source. The server checks its
+   freshness before replacing an active bootstrap prior, binds collection to
+   that source, and rejects frames from other radios. When no source is
+   selected, the first accepted ESP32 source preserves legacy behavior.
 2. Promotion observes 12 new samples spaced by at least one second. Each
    sample has a four second bounded acquisition timeout. At least 10 must
    resolve empty, all ticks must be fresh, and none may publish numeric vital
@@ -51,6 +53,14 @@ reduce an uncalibrated false person count, but it cannot authorize calibrated
 evidence or numeric heart and breathing rates. Explicit calibration replaces
 it with fresh statistics. Cancelling an unfinished capture restores a valid
 prior. Administrator scoped reset removes it.
+
+A restored image may receive one operator confirmed held out empty refinement.
+The server measures 12 fresh, source bound runtime residuals at one second
+spacing and requires zero stale samples and zero numeric vital samples. It
+persists only the scalar residuals. The new boundary is the larger of the
+existing threshold and 110 percent of the held out 95th percentile, capped at
+125 percent of the prior threshold. The one use marker persists in the model,
+so repeated requests cannot ratchet the threshold upward.
 
 The status endpoint reports the learned runtime window, residual threshold,
 reference count, current background conformance, and the negative only
@@ -89,6 +99,12 @@ occupied sequences. Empty data is never relabeled as human training.
    gate as `sensing_update`. When the bootstrap background matches, it emits
    absent state, zero people, null numeric rates, and an explicit abstention
    reason instead of forwarding raw edge candidates.
+7. `POST /api/v1/calibration/start?source_node_id=N` selects a live source for
+   deterministic single link capture. A missing or stale selection fails
+   without disabling the active bootstrap prior.
+8. `POST /api/v1/calibration/bootstrap/refine?confirmed_empty=true&source_node_id=N`
+   performs the bounded one time held out refinement. It requires administrator
+   authority when transport authentication is enabled.
 
 ## Measured installation evidence
 
@@ -111,3 +127,8 @@ and data directory. Status must report `binding_mode=bootstrap_only`, zero
 collection frames, and false authority for calibrated evidence and numeric
 vitals. Twelve fresh empty samples must contain no numeric vital signs.
 Starting a new room calibration must replace the prior and begin at frame zero.
+When several radios are live, selecting Node 5 must leave Nodes 3 and 7 out of
+the source set for the entire capture.
+After restart, a confirmed empty holdout may refine the restored boundary once.
+The stored snapshot must reject a second refinement and must continue to deny
+calibrated evidence and numeric vital authority.
