@@ -283,31 +283,36 @@ pub fn calibrated_occupancy(
     })
 }
 
-/// Feed the latest frame to the FieldModel during calibration collection.
+/// Feed the current CSI frame to the FieldModel during calibration.
 ///
 /// Acts while the model is `Uncalibrated` or `Collecting`. The first fed frame
 /// flips a freshly-started (`Uncalibrated`) model to `Collecting` inside
 /// `feed_calibration`; without accepting the `Uncalibrated` state here the two
 /// gates deadlock and the frame count never leaves 0 (calibration/start yields
-/// an `Uncalibrated` model that nothing would ever advance). Wraps the latest
-/// frame as a single-link observation (n_links=1) and feeds it.
-pub fn maybe_feed_calibration(field: &mut FieldModel, frame_history: &VecDeque<Vec<f64>>) {
+/// an `Uncalibrated` model that nothing would ever advance). Edge-vitals
+/// packets have no CSI observation and must never call this helper. The caller
+/// owns the stateful sequence admission gate. Wraps the current frame as a
+/// single-link observation (n_links=1) and feeds it.
+pub fn maybe_feed_calibration(field: &mut FieldModel, amplitudes: &[f64]) -> bool {
     if !matches!(
         field.status(),
         CalibrationStatus::Uncalibrated | CalibrationStatus::Collecting
-    ) {
-        return;
+    ) || amplitudes.is_empty()
+    {
+        return false;
     }
-    if let Some(latest) = frame_history.back() {
-        // Resample the raw amplitude vector onto the FieldModel's canonical
-        // 56-tone grid before feeding. Real HT40 nodes stream 128-wide frames;
-        // feeding those raw made every `feed_calibration` fail DimensionMismatch
-        // (swallowed at debug level), pinning frame_count at 0 even after the
-        // status-gate deadlock was fixed. Single-link observation: [1][56].
-        let canonical = CALIB_NORMALIZER.resample_to_canonical(latest);
-        let observations = vec![canonical];
-        if let Err(e) = field.feed_calibration(&observations) {
+    // Resample the raw amplitude vector onto the FieldModel's canonical
+    // 56-tone grid before feeding. Real HT40 nodes stream 128-wide frames;
+    // feeding those raw made every `feed_calibration` fail DimensionMismatch
+    // (swallowed at debug level), pinning frame_count at 0 even after the
+    // status-gate deadlock was fixed. Single-link observation: [1][56].
+    let canonical = CALIB_NORMALIZER.resample_to_canonical(amplitudes);
+    let observations = vec![canonical];
+    match field.feed_calibration(&observations) {
+        Ok(()) => true,
+        Err(e) => {
             tracing::debug!("FieldModel calibration feed: {e}");
+            false
         }
     }
 }
@@ -418,10 +423,7 @@ mod tests {
 
         // n_subcarriers defaults to 56; one single-link frame of that width.
         let frame = vec![0.5_f64; 56];
-        let mut history: VecDeque<Vec<f64>> = VecDeque::new();
-        history.push_back(frame);
-
-        maybe_feed_calibration(&mut field, &history);
+        assert!(maybe_feed_calibration(&mut field, &frame));
 
         assert_eq!(
             field.status(),
@@ -434,8 +436,8 @@ mod tests {
             "frame count must advance past 0"
         );
 
-        // Subsequent frames keep accumulating while Collecting.
-        maybe_feed_calibration(&mut field, &history);
+        // A subsequent unique frame keeps accumulating while Collecting.
+        assert!(maybe_feed_calibration(&mut field, &frame));
         assert_eq!(field.calibration_frame_count(), 2);
     }
 
@@ -450,10 +452,7 @@ mod tests {
 
         // 128-wide frame (HT40), NOT the model's 56 — would DimensionMismatch raw.
         let wide = vec![0.5_f64; 128];
-        let mut history: VecDeque<Vec<f64>> = VecDeque::new();
-        history.push_back(wide);
-
-        maybe_feed_calibration(&mut field, &history);
+        assert!(maybe_feed_calibration(&mut field, &wide));
 
         assert_eq!(
             field.status(),
@@ -465,6 +464,13 @@ mod tests {
             1,
             "wide frame must accumulate, not be silently dropped"
         );
+    }
+
+    #[test]
+    fn maybe_feed_calibration_rejects_an_empty_observation() {
+        let mut field = FieldModel::new(single_link_config()).expect("field model");
+        assert!(!maybe_feed_calibration(&mut field, &[]));
+        assert_eq!(field.calibration_frame_count(), 0);
     }
 
     #[test]

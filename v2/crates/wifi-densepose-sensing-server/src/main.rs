@@ -849,6 +849,9 @@ struct NodeState {
     latest_sync: Option<wifi_densepose_hardware::SyncPacket>,
     /// Last time a sync packet from this node was received (for staleness).
     latest_sync_at: Option<std::time::Instant>,
+    /// Arrival time of the newest grid-admitted raw CSI frame. Edge-vitals
+    /// packets intentionally do not refresh this clock.
+    latest_accepted_csi_at: Option<std::time::Instant>,
     /// Sequence number of the newest CSI frame admitted to `frame_history`.
     /// Kept alongside the history so multistatic fusion can timestamp the
     /// exact sample it consumes, rather than the host's UDP arrival time.
@@ -1161,6 +1164,7 @@ impl NodeState {
         sync_valid: bool,
         now: std::time::Instant,
     ) -> bool {
+        self.latest_accepted_csi_at = Some(now);
         self.latest_csi_sequence = Some(sequence);
         self.latest_csi_sync_valid = sync_valid;
         self.observe_csi_frame_arrival(now)
@@ -1190,6 +1194,7 @@ impl NodeState {
             edge_vitals: None,
             latest_sync: None,
             latest_sync_at: None,
+            latest_accepted_csi_at: None,
             latest_csi_sequence: None,
             latest_csi_sync_valid: false,
             csi_fps_ema: 20.0,
@@ -1627,6 +1632,12 @@ struct AppStateInner {
     calibration_model_id: Option<String>,
     /// Nodes that actually contributed frames to the current calibration.
     calibration_source_node_ids: std::collections::BTreeSet<u8>,
+    /// Last admitted raw CSI sequence per contributing node. Edge-vitals
+    /// packets do not carry a new CSI observation and cannot advance this map.
+    calibration_last_sequences: HashMap<u8, u32>,
+    /// Nodes whose sequence moved backward during the current session. Without
+    /// a wire boot epoch, the session must stay failed closed after regression.
+    calibration_sequence_fault_node_ids: std::collections::BTreeSet<u8>,
     // ── ADR-044 §5.2: adaptive rolling-p95 normalization ─────────────────────
     /// Rolling P95 of `FeatureInfo.variance` over the last ~30 s (600 frames @ 20 Hz).
     pub(crate) p95_variance: RollingP95,
@@ -1729,7 +1740,74 @@ mod adr323_pose_physics_http_tests {
 /// If no ESP32 frame arrives within this duration, source reverts to offline.
 const ESP32_OFFLINE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CalibrationSequenceOrder {
+    First,
+    Forward,
+    Duplicate,
+    Regression,
+}
+
+fn calibration_sequence_order(previous: Option<u32>, sequence: u32) -> CalibrationSequenceOrder {
+    let Some(previous) = previous else {
+        return CalibrationSequenceOrder::First;
+    };
+    let delta = sequence.wrapping_sub(previous);
+    if delta == 0 {
+        CalibrationSequenceOrder::Duplicate
+    } else if delta < (1_u32 << 31) {
+        CalibrationSequenceOrder::Forward
+    } else {
+        CalibrationSequenceOrder::Regression
+    }
+}
+
 impl AppStateInner {
+    /// Admit at most one raw CSI observation per forward node sequence into
+    /// the current calibration session. This stateful boundary prevents a
+    /// caller from advancing the model with a replayed history tail.
+    fn maybe_feed_calibration_frame(
+        &mut self,
+        node_id: u8,
+        sequence: u32,
+        amplitudes: &[f64],
+    ) -> bool {
+        if !calibration_source_accepts(&self.calibration_source_node_ids, node_id)
+            || self.calibration_sequence_fault_node_ids.contains(&node_id)
+        {
+            return false;
+        }
+        let previous_sequence = self.calibration_last_sequences.get(&node_id).copied();
+        match calibration_sequence_order(previous_sequence, sequence) {
+            CalibrationSequenceOrder::Duplicate => return false,
+            CalibrationSequenceOrder::Regression => {
+                self.calibration_sequence_fault_node_ids.insert(node_id);
+                warn!(
+                    node_id,
+                    previous_sequence,
+                    sequence,
+                    "Calibration source sequence regressed; restart the empty-room capture"
+                );
+                return false;
+            }
+            CalibrationSequenceOrder::First | CalibrationSequenceOrder::Forward => {}
+        }
+        let accepted = self
+            .field_model
+            .as_mut()
+            .is_some_and(|field| field_bridge::maybe_feed_calibration(field, amplitudes));
+        if accepted {
+            self.calibration_source_node_ids.insert(node_id);
+            self.calibration_last_sequences.insert(node_id, sequence);
+        }
+        accepted
+    }
+
+    fn clear_calibration_sequence_state(&mut self) {
+        self.calibration_last_sequences.clear();
+        self.calibration_sequence_fault_node_ids.clear();
+    }
+
     fn field_model_status_at(&self, observed_at_unix_ms: u64) -> Option<CalibrationStatus> {
         self.field_model.as_ref().map(|model| {
             field_bridge::calibration_status_at(model, observed_at_unix_ms.saturating_mul(1_000))
@@ -1972,6 +2050,8 @@ impl AppStateInner {
             bootstrap_baseline_active: false,
             calibration_model_id: None,
             calibration_source_node_ids: std::collections::BTreeSet::new(),
+            calibration_last_sequences: HashMap::new(),
+            calibration_sequence_fault_node_ids: std::collections::BTreeSet::new(),
             p95_variance: RollingP95::new(600, 60),
             p95_motion_band_power: RollingP95::new(600, 60),
             p95_spectral_power: RollingP95::new(600, 60),
@@ -6288,6 +6368,11 @@ fn calibration_source_accepts(
     source_node_ids.is_empty() || source_node_ids.contains(&node_id)
 }
 
+fn calibration_source_has_fresh_csi(node: &NodeState, now: std::time::Instant) -> bool {
+    node.latest_accepted_csi_at
+        .is_some_and(|seen| now.saturating_duration_since(seen) < ESP32_OFFLINE_TIMEOUT)
+}
+
 #[cfg(test)]
 mod bootstrap_vital_publication_tests {
     use super::*;
@@ -6307,6 +6392,148 @@ mod bootstrap_vital_publication_tests {
         assert!(calibration_source_accepts(&sources, 5));
         assert!(!calibration_source_accepts(&sources, 3));
         assert!(!calibration_source_accepts(&sources, 7));
+    }
+
+    #[test]
+    fn edge_vitals_liveness_cannot_authorize_raw_csi_calibration() {
+        let now = std::time::Instant::now();
+        let mut node = NodeState::new();
+        node.last_frame_time = Some(now);
+        assert!(!calibration_source_has_fresh_csi(&node, now));
+
+        node.observe_accepted_csi_frame(9, false, now);
+        assert!(calibration_source_has_fresh_csi(&node, now));
+        assert!(!calibration_source_has_fresh_csi(
+            &node,
+            now + ESP32_OFFLINE_TIMEOUT
+        ));
+    }
+
+    #[test]
+    fn calibration_session_counts_each_unique_bound_csi_sequence_once() {
+        let mut state = AppStateInner::minimal();
+        state.field_model = Some(
+            FieldModel::new(field_bridge::single_link_config()).expect("field model"),
+        );
+        state.calibration_source_node_ids.insert(5);
+
+        let first = vec![0.25; 56];
+        assert!(state.maybe_feed_calibration_frame(5, 41, &first));
+        assert!(!state.maybe_feed_calibration_frame(5, 41, &first));
+
+        let second = vec![0.5; 56];
+        assert!(state.maybe_feed_calibration_frame(5, 42, &second));
+        assert!(!state.maybe_feed_calibration_frame(3, 43, &second));
+
+        let model = state.field_model.as_ref().expect("field model remains active");
+        assert_eq!(model.calibration_frame_count(), 2);
+        assert_eq!(state.calibration_last_sequences.get(&5), Some(&42));
+        assert!(!state.calibration_last_sequences.contains_key(&3));
+    }
+
+    #[test]
+    fn calibration_sequence_regression_latches_session_failure() {
+        let mut state = AppStateInner::minimal();
+        state.field_model = Some(
+            FieldModel::new(field_bridge::single_link_config()).expect("field model"),
+        );
+        state.calibration_source_node_ids.insert(5);
+        let frame = vec![0.25; 56];
+
+        assert!(state.maybe_feed_calibration_frame(5, 10, &frame));
+        assert!(state.maybe_feed_calibration_frame(5, 11, &frame));
+        assert!(!state.maybe_feed_calibration_frame(5, 10, &frame));
+        assert!(!state.maybe_feed_calibration_frame(5, 12, &frame));
+        assert!(state.calibration_sequence_fault_node_ids.contains(&5));
+        assert_eq!(
+            state
+                .field_model
+                .as_ref()
+                .expect("field model")
+                .calibration_frame_count(),
+            2
+        );
+
+        state.clear_calibration_sequence_state();
+        assert!(state.calibration_sequence_fault_node_ids.is_empty());
+        assert!(state.calibration_last_sequences.is_empty());
+    }
+
+    #[test]
+    fn calibration_sequence_wraps_and_failed_empty_input_can_retry() {
+        let mut state = AppStateInner::minimal();
+        state.field_model = Some(
+            FieldModel::new(field_bridge::single_link_config()).expect("field model"),
+        );
+        state.calibration_source_node_ids.insert(5);
+        let frame = vec![0.25; 56];
+
+        assert!(!state.maybe_feed_calibration_frame(5, u32::MAX, &[]));
+        assert!(state.calibration_last_sequences.is_empty());
+        assert!(state.maybe_feed_calibration_frame(5, u32::MAX, &frame));
+        assert!(state.maybe_feed_calibration_frame(5, 0, &frame));
+        assert!(!state.maybe_feed_calibration_frame(5, 0, &frame));
+        assert!(state.maybe_feed_calibration_frame(5, 1, &frame));
+        assert_eq!(
+            state
+                .field_model
+                .as_ref()
+                .expect("field model")
+                .calibration_frame_count(),
+            3
+        );
+    }
+
+    #[test]
+    fn calibration_sequence_order_rejects_backward_and_half_range() {
+        assert_eq!(
+            calibration_sequence_order(None, 7),
+            CalibrationSequenceOrder::First
+        );
+        assert_eq!(
+            calibration_sequence_order(Some(7), 8),
+            CalibrationSequenceOrder::Forward
+        );
+        assert_eq!(
+            calibration_sequence_order(Some(8), 8),
+            CalibrationSequenceOrder::Duplicate
+        );
+        assert_eq!(
+            calibration_sequence_order(Some(8), 7),
+            CalibrationSequenceOrder::Regression
+        );
+        assert_eq!(
+            calibration_sequence_order(Some(0), 1_u32 << 31),
+            CalibrationSequenceOrder::Regression
+        );
+        assert_eq!(
+            calibration_sequence_order(Some(u32::MAX), 0),
+            CalibrationSequenceOrder::Forward
+        );
+    }
+
+    #[tokio::test]
+    async fn calibration_status_and_stop_fail_closed_after_sequence_regression() {
+        let mut inner = AppStateInner::minimal();
+        inner.field_model = Some(
+            FieldModel::new(field_bridge::single_link_config()).expect("field model"),
+        );
+        inner.calibration_model_id = Some("cal-model-test".to_string());
+        inner.calibration_source_node_ids.insert(5);
+        inner.calibration_sequence_fault_node_ids.insert(5);
+        let state = Arc::new(RwLock::new(inner));
+
+        let Json(status) = calibration_status(State(state.clone())).await;
+        assert_eq!(status["sequence_fault_node_ids"], serde_json::json!([5]));
+
+        let Json(stopped) = calibration_stop(State(state)).await;
+        assert_eq!(stopped["success"], false);
+        assert_eq!(
+            stopped["error_code"],
+            "calibration_sequence_discontinuity"
+        );
+        assert_eq!(stopped["model_id"], "cal-model-test");
+        assert_eq!(stopped["source_node_ids"], serde_json::json!([5]));
     }
 
     fn strong_candidates() -> VitalSigns {
@@ -6420,15 +6647,15 @@ async fn calibration_start(
     let mut s = state.write().await;
     if let Some(source_node_id) = query.source_node_id {
         let now = std::time::Instant::now();
-        let source_is_live = s.node_states.get(&source_node_id).is_some_and(|node| {
-            node.last_frame_time
-                .is_some_and(|seen| now.saturating_duration_since(seen) < ESP32_OFFLINE_TIMEOUT)
-        });
+        let source_is_live = s
+            .node_states
+            .get(&source_node_id)
+            .is_some_and(|node| calibration_source_has_fresh_csi(node, now));
         if !source_is_live {
             return Json(serde_json::json!({
                 "success": false,
                 "error_code": "calibration_source_unavailable",
-                "error": "The requested calibration source is missing or stale.",
+                "error": "The requested calibration source is missing or has no fresh raw CSI.",
                 "source_node_id": source_node_id,
             }));
         }
@@ -6463,6 +6690,7 @@ async fn calibration_start(
             s.field_model = Some(fm);
             s.calibration_model_id = Some(opaque_calibration_model_id());
             s.calibration_source_node_ids.clear();
+            s.clear_calibration_sequence_state();
             if let Some(source_node_id) = query.source_node_id {
                 s.calibration_source_node_ids.insert(source_node_id);
             }
@@ -6482,6 +6710,16 @@ async fn calibration_stop(State(state): State<SharedState>) -> Json<serde_json::
     let mut s = state.write().await;
     let model_id = s.calibration_model_id.clone();
     let source_node_ids: Vec<u8> = s.calibration_source_node_ids.iter().copied().collect();
+    if !s.calibration_sequence_fault_node_ids.is_empty() {
+        return Json(serde_json::json!({
+            "success": false,
+            "error_code": "calibration_sequence_discontinuity",
+            "error": "Raw CSI sequence moved backward during capture. Cancel and restart the empty-room calibration.",
+            "model_id": model_id,
+            "source_node_ids": source_node_ids,
+            "sequence_fault_node_ids": s.calibration_sequence_fault_node_ids,
+        }));
+    }
     if let Some(ref mut fm) = s.field_model {
         // Guard: finalizing before enough empty-room frames have accumulated
         // is a client-side sequencing error, not a server fault. Return a
@@ -6585,6 +6823,7 @@ async fn calibration_status(State(state): State<SharedState>) -> Json<serde_json
         "min_duration_s": min_duration_s,
         "model_id": s.calibration_model_id,
         "source_node_ids": s.calibration_source_node_ids,
+        "sequence_fault_node_ids": s.calibration_sequence_fault_node_ids,
         "runtime_reference": runtime_reference,
         "binding_mode": if bootstrap_active { "bootstrap_only" } else if active { "runtime" } else { "none" },
         "bootstrap_baseline": s.bootstrap_baseline.as_ref().map(|metadata| serde_json::json!({
@@ -7016,6 +7255,7 @@ async fn calibration_cancel(State(state): State<SharedState>) -> Json<serde_json
     s.field_model = None;
     s.calibration_model_id = None;
     s.calibration_source_node_ids.clear();
+    s.clear_calibration_sequence_state();
     if let Some(installation_id) = s.installation_id.clone() {
         let path = bootstrap_baseline::path_in(&s.data_dir);
         if let Ok((model, metadata)) = bootstrap_baseline::load(
@@ -7040,6 +7280,7 @@ async fn calibration_reset(State(state): State<SharedState>) -> Json<serde_json:
     s.field_model = None;
     s.calibration_model_id = None;
     s.calibration_source_node_ids.clear();
+    s.clear_calibration_sequence_state();
     s.bootstrap_baseline_active = false;
     let path = bootstrap_baseline::path_in(&s.data_dir);
     let bootstrap_removed = match bootstrap_baseline::remove(&path) {
@@ -7440,8 +7681,18 @@ async fn nodes_endpoint(State(state): State<SharedState>) -> Json<serde_json::Va
                 .last_frame_time
                 .map(|t| now.duration_since(t).as_millis() as u64)
                 .unwrap_or(999999);
+            let csi_elapsed_ms = ns
+                .latest_accepted_csi_at
+                .map(|t| now.saturating_duration_since(t).as_millis() as u64);
             let stale = elapsed_ms > 5000;
             let status = if stale { "stale" } else { "active" };
+            let csi_status = if csi_elapsed_ms.is_some_and(|age| {
+                age < ESP32_OFFLINE_TIMEOUT.as_millis() as u64
+            }) {
+                "active"
+            } else {
+                "stale"
+            };
             let rssi = ns.rssi_history.back().copied().unwrap_or(-90.0);
             let bootstrap_empty = s.bootstrap_baseline_active
                 && s.bootstrap_baseline.as_ref().is_some_and(|metadata| {
@@ -7458,6 +7709,9 @@ async fn nodes_endpoint(State(state): State<SharedState>) -> Json<serde_json::Va
                 "node_id": id,
                 "status": status,
                 "last_seen_ms": elapsed_ms,
+                "csi_status": csi_status,
+                "csi_last_seen_ms": csi_elapsed_ms,
+                "csi_sequence": ns.latest_csi_sequence,
                 "rssi_dbm": rssi,
                 "motion_level": if bootstrap_empty { "absent" } else { &ns.current_motion_level },
                 "person_count": if bootstrap_empty { 0 } else { ns.prev_person_count },
@@ -7812,30 +8066,6 @@ async fn udp_receiver_task(
                             .map(|d| d.as_millis() as i64)
                             .unwrap_or(0);
                         sref.engine_bridge.observe_cycle(&sref.node_states, now_ms);
-                    }
-
-                    // Feed field model calibration if active (use per-node history for ESP32).
-                    if let Some(frame_history) = s
-                        .node_states
-                        .get(&node_id)
-                        .map(|ns| ns.frame_history.clone())
-                    {
-                        let source_allowed =
-                            calibration_source_accepts(&s.calibration_source_node_ids, node_id);
-                        let accepted = if source_allowed {
-                            if let Some(ref mut fm) = s.field_model {
-                                let before = fm.calibration_frame_count();
-                                field_bridge::maybe_feed_calibration(fm, &frame_history);
-                                fm.calibration_frame_count() > before
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
-                        if accepted {
-                            s.calibration_source_node_ids.insert(node_id);
-                        }
                     }
 
                     // Build nodes array with all active nodes.
@@ -8362,29 +8592,13 @@ async fn udp_receiver_task(
                         sref.engine_bridge.observe_cycle(&sref.node_states, now_ms);
                     }
 
-                    // Feed field model calibration if active (use per-node history for ESP32).
-                    if let Some(frame_history) = s
-                        .node_states
-                        .get(&node_id)
-                        .map(|ns| ns.frame_history.clone())
-                    {
-                        let source_allowed =
-                            calibration_source_accepts(&s.calibration_source_node_ids, node_id);
-                        let accepted = if source_allowed {
-                            if let Some(ref mut fm) = s.field_model {
-                                let before = fm.calibration_frame_count();
-                                field_bridge::maybe_feed_calibration(fm, &frame_history);
-                                fm.calibration_frame_count() > before
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
-                        if accepted {
-                            s.calibration_source_node_ids.insert(node_id);
-                        }
-                    }
+                    // Feed only this grid-admitted raw CSI observation. The
+                    // session boundary deduplicates its wrapping sequence.
+                    s.maybe_feed_calibration_frame(
+                        node_id,
+                        frame.sequence,
+                        &frame.amplitudes,
+                    );
 
                     // Build nodes array with all active nodes. ADR-141 output
                     // gating (review finding 1c): when the governed engine
@@ -10157,6 +10371,8 @@ async fn main() {
         bootstrap_baseline_active,
         calibration_model_id: args.calibrate.then(opaque_calibration_model_id),
         calibration_source_node_ids: std::collections::BTreeSet::new(),
+        calibration_last_sequences: HashMap::new(),
+        calibration_sequence_fault_node_ids: std::collections::BTreeSet::new(),
         // ADR-044 §5.2: rolling-P95 over ~30 s at 20 Hz; warm-up after 60 samples.
         p95_variance: RollingP95::new(600, 60),
         p95_motion_band_power: RollingP95::new(600, 60),
