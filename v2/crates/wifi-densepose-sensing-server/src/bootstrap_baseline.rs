@@ -16,7 +16,7 @@ use wifi_densepose_signal::ruvsense::field_model::{
     FieldModel, FieldModelError, FieldModelSnapshotV1,
 };
 
-pub const BOOTSTRAP_BASELINE_SCHEMA: &str = "ruview.bootstrap-empty-field-model.v1";
+pub const BOOTSTRAP_BASELINE_SCHEMA: &str = "ruview.bootstrap-empty-field-model.v2";
 pub const BOOTSTRAP_BASELINE_AUTHORITY: &str = "bootstrap_only";
 pub const BOOTSTRAP_VALIDATION_SAMPLES: usize = 12;
 pub const BOOTSTRAP_VALIDATION_MIN_EMPTY: usize = 10;
@@ -24,13 +24,25 @@ pub const BOOTSTRAP_VALIDATION_MIN_SPACING_MS: u64 = 1_000;
 pub const BOOTSTRAP_VALIDATION_SAMPLE_TIMEOUT_MS: u64 = 4_000;
 const BOOTSTRAP_MAX_FILE_BYTES: u64 = 1_048_576;
 
+/// Exact CSI layout used to train the persisted empty room model.
+///
+/// Restoring code must require incoming frames to match this binding before
+/// the bootstrap image can influence inference.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BootstrapCsiGrid {
+    pub n_subcarriers: u16,
+    pub ppdu_type: u8,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-struct BootstrapPayloadV1 {
+struct BootstrapPayloadV2 {
     schema: String,
     authority: String,
     installation_binding_sha256: String,
     source_node_ids: Vec<u8>,
+    source_grid: BootstrapCsiGrid,
     source_model_id: String,
     created_at_unix_ms: u64,
     expires_at_unix_ms: u64,
@@ -39,14 +51,14 @@ struct BootstrapPayloadV1 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-struct BootstrapImageV1 {
-    payload: BootstrapPayloadV1,
+struct BootstrapImageV2 {
+    payload: BootstrapPayloadV2,
     content_sha256: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct BootstrapImageRawV1 {
+struct BootstrapImageRawV2 {
     payload: Box<RawValue>,
     content_sha256: String,
 }
@@ -55,6 +67,7 @@ struct BootstrapImageRawV1 {
 pub struct BootstrapBaselineMetadata {
     pub authority: &'static str,
     pub source_node_ids: Vec<u8>,
+    pub source_grid: BootstrapCsiGrid,
     pub source_model_id: String,
     pub created_at_unix_ms: u64,
     pub expires_at_unix_ms: u64,
@@ -139,6 +152,7 @@ pub fn store(
     path: &Path,
     installation_id: &str,
     source_node_ids: &[u8],
+    source_grid: BootstrapCsiGrid,
     source_model_id: &str,
     created_at_unix_ms: u64,
     field_model: &FieldModel,
@@ -146,11 +160,12 @@ pub fn store(
     let snapshot = field_model.export_snapshot()?;
     let calibrated_at_ms = snapshot.modes.calibrated_at_us / 1_000;
     let expiry_ms = (snapshot.config.baseline_expiry_s * 1_000.0) as u64;
-    let payload = BootstrapPayloadV1 {
+    let payload = BootstrapPayloadV2 {
         schema: BOOTSTRAP_BASELINE_SCHEMA.to_string(),
         authority: BOOTSTRAP_BASELINE_AUTHORITY.to_string(),
         installation_binding_sha256: installation_binding(installation_id)?,
         source_node_ids: source_node_ids.to_vec(),
+        source_grid,
         source_model_id: source_model_id.to_string(),
         created_at_unix_ms,
         expires_at_unix_ms: calibrated_at_ms.saturating_add(expiry_ms),
@@ -158,7 +173,7 @@ pub fn store(
     };
     validate_payload(&payload, installation_id, created_at_unix_ms)?;
     let content_sha256 = payload_digest(&payload)?;
-    let image = BootstrapImageV1 {
+    let image = BootstrapImageV2 {
         payload,
         content_sha256,
     };
@@ -194,13 +209,13 @@ pub fn load(
     // Verify the exact payload bytes written by storage before decoding the
     // floating point model. Equivalent JSON number spellings may serialize
     // differently, so decode and reserialize is not an integrity contract.
-    let raw_image: BootstrapImageRawV1 = serde_json::from_slice(&bytes)?;
+    let raw_image: BootstrapImageRawV2 = serde_json::from_slice(&bytes)?;
     if hex_sha256(raw_image.payload.get().as_bytes()) != raw_image.content_sha256 {
         return Err(BootstrapBaselineError::DigestMismatch);
     }
-    let payload: BootstrapPayloadV1 = serde_json::from_str(raw_image.payload.get())?;
+    let payload: BootstrapPayloadV2 = serde_json::from_str(raw_image.payload.get())?;
     validate_payload(&payload, installation_id, current_unix_ms)?;
-    let image = BootstrapImageV1 {
+    let image = BootstrapImageV2 {
         payload,
         content_sha256: raw_image.content_sha256,
     };
@@ -226,7 +241,7 @@ pub fn remove(path: &Path) -> Result<bool, BootstrapBaselineError> {
 }
 
 fn validate_payload(
-    payload: &BootstrapPayloadV1,
+    payload: &BootstrapPayloadV2,
     installation_id: &str,
     current_unix_ms: u64,
 ) -> Result<(), BootstrapBaselineError> {
@@ -234,17 +249,14 @@ fn validate_payload(
         || payload.authority != BOOTSTRAP_BASELINE_AUTHORITY
         || payload.source_model_id.is_empty()
         || payload.source_model_id.len() > 128
-        || payload.source_node_ids.is_empty()
-        || payload.source_node_ids.len() > 16
-        || payload
-            .source_node_ids
-            .windows(2)
-            .any(|pair| pair[0] >= pair[1])
+        || payload.source_node_ids.len() != 1
+        || !(1..=2_048).contains(&payload.source_grid.n_subcarriers)
+        || payload.source_grid.ppdu_type > 3
         || payload.created_at_unix_ms == 0
         || payload.expires_at_unix_ms <= payload.created_at_unix_ms
     {
         return Err(BootstrapBaselineError::Malformed(
-            "invalid schema, authority, identity, node set, or lifetime".into(),
+            "invalid schema, authority, identity, node set, source grid, or lifetime".into(),
         ));
     }
     if payload.installation_binding_sha256 != installation_binding(installation_id)? {
@@ -256,14 +268,15 @@ fn validate_payload(
     Ok(())
 }
 
-fn payload_digest(payload: &BootstrapPayloadV1) -> Result<String, serde_json::Error> {
+fn payload_digest(payload: &BootstrapPayloadV2) -> Result<String, serde_json::Error> {
     Ok(hex_sha256(&serde_json::to_vec(payload)?))
 }
 
-fn metadata(image: &BootstrapImageV1) -> BootstrapBaselineMetadata {
+fn metadata(image: &BootstrapImageV2) -> BootstrapBaselineMetadata {
     BootstrapBaselineMetadata {
         authority: BOOTSTRAP_BASELINE_AUTHORITY,
         source_node_ids: image.payload.source_node_ids.clone(),
+        source_grid: image.payload.source_grid,
         source_model_id: image.payload.source_model_id.clone(),
         created_at_unix_ms: image.payload.created_at_unix_ms,
         expires_at_unix_ms: image.payload.expires_at_unix_ms,
@@ -315,6 +328,11 @@ mod tests {
     use super::*;
     use wifi_densepose_signal::ruvsense::field_model::FieldModelConfig;
 
+    const TEST_GRID: BootstrapCsiGrid = BootstrapCsiGrid {
+        n_subcarriers: 192,
+        ppdu_type: 2,
+    };
+
     fn completed_model(now_us: u64) -> FieldModel {
         let mut model = FieldModel::new(FieldModelConfig {
             n_links: 1,
@@ -340,10 +358,11 @@ mod tests {
         let path = path_in(dir.path());
         let now_ms = 1_000_000;
         let model = completed_model(now_ms * 1_000);
-        let stored = store(&path, "home-a", &[5], "model", now_ms, &model).unwrap();
+        let stored = store(&path, "home-a", &[5], TEST_GRID, "model", now_ms, &model).unwrap();
         let text = String::from_utf8(fs::read(&path).unwrap()).unwrap();
         assert!(!text.contains("home-a"));
         assert!(!text.contains("raw_csi"));
+        assert_eq!(stored.source_grid, TEST_GRID);
 
         let (restored, loaded) = load(&path, "home-a", now_ms + 1).unwrap();
         assert_eq!(stored, loaded);
@@ -363,18 +382,18 @@ mod tests {
         let path = path_in(dir.path());
         let now_ms = 1_000_000;
         let model = completed_model(now_ms * 1_000);
-        store(&path, "home-a", &[5], "model", now_ms, &model).unwrap();
+        store(&path, "home-a", &[5], TEST_GRID, "model", now_ms, &model).unwrap();
 
         let mut image: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        image["payload"]["source_model_id"] = serde_json::json!("forged");
+        image["payload"]["source_grid"]["n_subcarriers"] = serde_json::json!(64);
         fs::write(&path, serde_json::to_vec(&image).unwrap()).unwrap();
         assert!(matches!(
             load(&path, "home-a", now_ms + 1),
             Err(BootstrapBaselineError::DigestMismatch)
         ));
 
-        store(&path, "home-a", &[5], "model", now_ms, &model).unwrap();
+        store(&path, "home-a", &[5], TEST_GRID, "model", now_ms, &model).unwrap();
         assert!(matches!(
             load(&path, "home-a", now_ms + 3_600_001),
             Err(BootstrapBaselineError::Expired)
@@ -385,12 +404,89 @@ mod tests {
     }
 
     #[test]
+    fn store_rejects_invalid_source_grid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = path_in(dir.path());
+        let now_ms = 1_000_000;
+        let model = completed_model(now_ms * 1_000);
+
+        for source_grid in [
+            BootstrapCsiGrid {
+                n_subcarriers: 0,
+                ppdu_type: 0,
+            },
+            BootstrapCsiGrid {
+                n_subcarriers: 2_049,
+                ppdu_type: 0,
+            },
+            BootstrapCsiGrid {
+                n_subcarriers: 192,
+                ppdu_type: 4,
+            },
+        ] {
+            assert!(matches!(
+                store(&path, "home-a", &[5], source_grid, "model", now_ms, &model,),
+                Err(BootstrapBaselineError::Malformed(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn store_requires_exactly_one_source_node() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = path_in(dir.path());
+        let now_ms = 1_000_000;
+        let model = completed_model(now_ms * 1_000);
+
+        for source_node_ids in [&[][..], &[5, 7][..]] {
+            assert!(matches!(
+                store(
+                    &path,
+                    "home-a",
+                    source_node_ids,
+                    TEST_GRID,
+                    "model",
+                    now_ms,
+                    &model,
+                ),
+                Err(BootstrapBaselineError::Malformed(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn source_grid_is_required_when_loading_a_v2_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = path_in(dir.path());
+        let now_ms = 1_000_000;
+        let model = completed_model(now_ms * 1_000);
+        store(&path, "home-a", &[5], TEST_GRID, "model", now_ms, &model).unwrap();
+
+        let mut image: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        image["payload"]
+            .as_object_mut()
+            .unwrap()
+            .remove("source_grid");
+        let payload = serde_json::to_vec(&image["payload"]).unwrap();
+        let rewritten = format!(
+            "{{\"payload\":{},\"content_sha256\":\"{}\"}}",
+            String::from_utf8(payload.clone()).unwrap(),
+            hex_sha256(&payload)
+        );
+        fs::write(&path, rewritten).unwrap();
+
+        assert!(matches!(
+            load(&path, "home-a", now_ms + 1),
+            Err(BootstrapBaselineError::Json(_))
+        ));
+    }
+
+    #[test]
     fn promotion_gate_requires_twelve_fresh_samples_and_zero_vitals() {
         assert_eq!(BOOTSTRAP_VALIDATION_MIN_SPACING_MS, 1_000);
         assert_eq!(BOOTSTRAP_VALIDATION_SAMPLE_TIMEOUT_MS, 4_000);
-        assert!(
-            BOOTSTRAP_VALIDATION_SAMPLE_TIMEOUT_MS >= BOOTSTRAP_VALIDATION_MIN_SPACING_MS
-        );
+        assert!(BOOTSTRAP_VALIDATION_SAMPLE_TIMEOUT_MS >= BOOTSTRAP_VALIDATION_MIN_SPACING_MS);
         let passing = vec![
             BootstrapValidationSample {
                 fresh_tick: true,
@@ -415,10 +511,10 @@ mod tests {
         let path = path_in(dir.path());
         let now_ms = 1_000_000;
         let model = completed_model(now_ms * 1_000);
-        store(&path, "home-a", &[5], "model", now_ms, &model).unwrap();
+        store(&path, "home-a", &[5], TEST_GRID, "model", now_ms, &model).unwrap();
 
         let original = fs::read_to_string(&path).unwrap();
-        let image: BootstrapImageRawV1 = serde_json::from_str(&original).unwrap();
+        let image: BootstrapImageRawV2 = serde_json::from_str(&original).unwrap();
         let rewritten_payload = image.payload.get().replacen(
             "\"min_calibration_duration_s\":0.0",
             "\"min_calibration_duration_s\":0.00",

@@ -329,6 +329,59 @@ impl Esp32Frame {
     }
 }
 
+/// Exact CSI symbol grid used by one field model. Subcarrier count alone is
+/// insufficient because HT-LTF and HE-LTF use different tone layouts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+struct CsiGridKey {
+    n_subcarriers: u16,
+    ppdu_type: u8,
+}
+
+impl CsiGridKey {
+    fn from_frame(frame: &Esp32Frame) -> Self {
+        Self {
+            n_subcarriers: frame.n_subcarriers,
+            ppdu_type: frame.ppdu_type.to_byte(),
+        }
+    }
+
+    fn as_bootstrap_grid(self) -> bootstrap_baseline::BootstrapCsiGrid {
+        bootstrap_baseline::BootstrapCsiGrid {
+            n_subcarriers: self.n_subcarriers,
+            ppdu_type: self.ppdu_type,
+        }
+    }
+
+    fn from_bootstrap_grid(grid: bootstrap_baseline::BootstrapCsiGrid) -> Self {
+        Self {
+            n_subcarriers: grid.n_subcarriers,
+            ppdu_type: grid.ppdu_type,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RawGridObservation {
+    grid: CsiGridKey,
+    observed_at: std::time::Instant,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+struct CalibrationGridEvidence {
+    sample_count: usize,
+    span_s: f64,
+    rate_hz: f64,
+    max_gap_s: f64,
+    latest_age_s: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CalibrationGridBinding {
+    source_node_id: u8,
+    grid: CsiGridKey,
+    evidence: Option<CalibrationGridEvidence>,
+}
+
 /// Sensing update broadcast to WebSocket clients
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SensingUpdate {
@@ -886,6 +939,15 @@ struct NodeState {
     /// the two symbol grids in `frame_history` corrupts variance/baseline
     /// statistics. See [`NodeState::accept_grid`].
     active_grid: Option<(u16, wifi_densepose_hardware::PpduType)>,
+    /// Header-only recent raw grid observations used to choose one stable,
+    /// comparable calibration stream. No CSI amplitudes are retained here.
+    raw_grid_observations: VecDeque<RawGridObservation>,
+    /// Runtime history for the exact grid bound into the active field model.
+    /// This must not reuse `frame_history`, whose independent inference grid
+    /// may be wider and therefore not bin-comparable.
+    field_model_history: VecDeque<Vec<f64>>,
+    field_model_latest_sequence: Option<u32>,
+    field_model_latest_seen: Option<std::time::Instant>,
 }
 
 /// Default EMA alpha for temporal keypoint smoothing (RuVector Phase 2).
@@ -909,6 +971,14 @@ const NOVELTY_HISTORY_CAPACITY: usize = 64;
 /// ADR-084 Pass 3 — feature-vector schema version. Bump on changes to
 /// subcarrier ordering / normalisation so banks reject stale data.
 const NOVELTY_SKETCH_VERSION: u16 = 1;
+/// Recent header-only evidence window used to choose a stable field-model
+/// stream. The rate floor is 20% above the 1,000 / 600 s completion minimum.
+const CALIBRATION_GRID_EVIDENCE_WINDOW: std::time::Duration =
+    std::time::Duration::from_secs(20);
+const CALIBRATION_GRID_EVIDENCE_CAPACITY: usize = 1_024;
+const CALIBRATION_GRID_MIN_SPAN_S: f64 = 10.0;
+const CALIBRATION_GRID_MIN_RATE_HZ: f64 = 2.0;
+const CALIBRATION_GRID_MAX_GAP_S: f64 = 5.0;
 
 /// Lower plausibility floor (seconds) for a CSI inter-frame delta.
 ///
@@ -1212,7 +1282,127 @@ impl NodeState {
             ),
             last_novelty_score: None,
             active_grid: None,
+            raw_grid_observations: VecDeque::with_capacity(
+                CALIBRATION_GRID_EVIDENCE_CAPACITY,
+            ),
+            field_model_history: VecDeque::with_capacity(FRAME_HISTORY_CAPACITY),
+            field_model_latest_sequence: None,
+            field_model_latest_seen: None,
         }
+    }
+
+    fn observe_raw_grid(&mut self, grid: CsiGridKey, now: std::time::Instant) {
+        while self
+            .raw_grid_observations
+            .front()
+            .is_some_and(|sample| {
+                now.saturating_duration_since(sample.observed_at)
+                    > CALIBRATION_GRID_EVIDENCE_WINDOW
+            })
+        {
+            self.raw_grid_observations.pop_front();
+        }
+        if self.raw_grid_observations.len() == CALIBRATION_GRID_EVIDENCE_CAPACITY {
+            self.raw_grid_observations.pop_front();
+        }
+        self.raw_grid_observations.push_back(RawGridObservation {
+            grid,
+            observed_at: now,
+        });
+    }
+
+    fn calibration_grid_candidates(
+        &self,
+        now: std::time::Instant,
+    ) -> Vec<(CsiGridKey, CalibrationGridEvidence)> {
+        let mut grouped: Vec<(CsiGridKey, Vec<std::time::Instant>)> = Vec::new();
+        for sample in self.raw_grid_observations.iter().filter(|sample| {
+            now.saturating_duration_since(sample.observed_at)
+                <= CALIBRATION_GRID_EVIDENCE_WINDOW
+        }) {
+            if let Some((_, arrivals)) = grouped
+                .iter_mut()
+                .find(|(candidate, _)| *candidate == sample.grid)
+            {
+                arrivals.push(sample.observed_at);
+            } else {
+                grouped.push((sample.grid, vec![sample.observed_at]));
+            }
+        }
+        grouped
+            .into_iter()
+            .filter_map(|(grid, arrivals)| {
+                let first = *arrivals.first()?;
+                let last = *arrivals.last()?;
+                let span_s = last.saturating_duration_since(first).as_secs_f64();
+                let latest_age_s = now.saturating_duration_since(last).as_secs_f64();
+                let mut max_gap_s = latest_age_s;
+                for pair in arrivals.windows(2) {
+                    max_gap_s = max_gap_s.max(
+                        pair[1]
+                            .saturating_duration_since(pair[0])
+                            .as_secs_f64(),
+                    );
+                }
+                let rate_hz = if span_s > 0.0 {
+                    arrivals.len().saturating_sub(1) as f64 / span_s
+                } else {
+                    0.0
+                };
+                Some((
+                    grid,
+                    CalibrationGridEvidence {
+                        sample_count: arrivals.len(),
+                        span_s,
+                        rate_hz,
+                        max_gap_s,
+                        latest_age_s,
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    fn select_calibration_grid(
+        &self,
+        now: std::time::Instant,
+    ) -> Option<(CsiGridKey, CalibrationGridEvidence)> {
+        self.calibration_grid_candidates(now)
+            .into_iter()
+            .filter(|(grid, evidence)| {
+                grid.ppdu_type <= 3
+                    && evidence.span_s >= CALIBRATION_GRID_MIN_SPAN_S
+                    && evidence.rate_hz >= CALIBRATION_GRID_MIN_RATE_HZ
+                    && evidence.max_gap_s < CALIBRATION_GRID_MAX_GAP_S
+                    && evidence.latest_age_s < CALIBRATION_GRID_MAX_GAP_S
+            })
+            .min_by(|(left_grid, left), (right_grid, right)| {
+                left.max_gap_s
+                    .total_cmp(&right.max_gap_s)
+                    .then_with(|| right.rate_hz.total_cmp(&left.rate_hz))
+                    .then_with(|| right_grid.n_subcarriers.cmp(&left_grid.n_subcarriers))
+                    .then_with(|| left_grid.ppdu_type.cmp(&right_grid.ppdu_type))
+            })
+    }
+
+    fn clear_field_model_history(&mut self) {
+        self.field_model_history.clear();
+        self.field_model_latest_sequence = None;
+        self.field_model_latest_seen = None;
+    }
+
+    fn push_field_model_frame(
+        &mut self,
+        sequence: u32,
+        amplitudes: &[f64],
+        now: std::time::Instant,
+    ) {
+        self.field_model_history.push_back(amplitudes.to_vec());
+        if self.field_model_history.len() > FRAME_HISTORY_CAPACITY {
+            self.field_model_history.pop_front();
+        }
+        self.field_model_latest_sequence = Some(sequence);
+        self.field_model_latest_seen = Some(now);
     }
 
     /// ADR-110 / issue #1005 grid gate: decide whether a frame on `grid`
@@ -1632,6 +1822,9 @@ struct AppStateInner {
     calibration_model_id: Option<String>,
     /// Nodes that actually contributed frames to the current calibration.
     calibration_source_node_ids: std::collections::BTreeSet<u8>,
+    /// Immutable source and CSI symbol grid selected from recent header-only
+    /// evidence for the current field model.
+    calibration_grid_binding: Option<CalibrationGridBinding>,
     /// Last admitted raw CSI sequence per contributing node. Edge-vitals
     /// packets do not carry a new CSI observation and cannot advance this map.
     calibration_last_sequences: HashMap<u8, u32>,
@@ -1754,11 +1947,12 @@ enum CalibrationSequenceOrder {
     Discontinuity,
 }
 
-/// Live Node 5 evidence observed a same-source receive batch ordered as high
-/// water mark, then minus three, minus two, minus one. Four covers that
-/// measured UDP reorder with one frame of margin. At the firmware's 50 Hz
-/// ceiling it spans at most 80 ms; larger backward jumps stay failed closed.
-const CALIBRATION_SEQUENCE_REORDER_WINDOW: u32 = 4;
+/// Two independent live Node 5 captures observed bounded same-source UDP
+/// reordering through depth eleven. Sixteen covers that measured maximum with
+/// five positions of margin. At the firmware's 50 Hz ceiling it spans at most
+/// 320 ms; larger backward jumps stay failed closed. Late packets inside this
+/// window are always dropped and never become model evidence.
+const CALIBRATION_SEQUENCE_REORDER_WINDOW: u32 = 16;
 
 fn calibration_sequence_order(previous: Option<u32>, sequence: u32) -> CalibrationSequenceOrder {
     let Some(previous) = previous else {
@@ -1786,10 +1980,16 @@ impl AppStateInner {
     fn maybe_feed_calibration_frame(
         &mut self,
         node_id: u8,
+        grid: CsiGridKey,
         sequence: u32,
         amplitudes: &[f64],
+        observed_at: std::time::Instant,
     ) -> bool {
-        if !calibration_source_accepts(&self.calibration_source_node_ids, node_id)
+        let binding_matches = self.calibration_grid_binding.is_some_and(|binding| {
+            binding.source_node_id == node_id && binding.grid == grid
+        });
+        if !binding_matches
+            || !calibration_source_accepts(&self.calibration_source_node_ids, node_id)
             || self.calibration_sequence_fault_node_ids.contains(&node_id)
         {
             return false;
@@ -1827,13 +2027,25 @@ impl AppStateInner {
             }
             CalibrationSequenceOrder::First | CalibrationSequenceOrder::Forward => {}
         }
-        let accepted = self
-            .field_model
-            .as_mut()
-            .is_some_and(|field| field_bridge::maybe_feed_calibration(field, amplitudes));
+        let accepted = self.field_model.as_mut().is_some_and(|field| {
+            if matches!(
+                field.status(),
+                CalibrationStatus::Uncalibrated | CalibrationStatus::Collecting
+            ) {
+                field_bridge::maybe_feed_calibration(field, amplitudes)
+            } else {
+                field.check_freshness(
+                    (chrono::Utc::now().timestamp_millis().max(0) as u64)
+                        .saturating_mul(1_000),
+                ) == CalibrationStatus::Fresh
+            }
+        });
         if accepted {
             self.calibration_source_node_ids.insert(node_id);
             self.calibration_last_sequences.insert(node_id, sequence);
+            if let Some(node) = self.node_states.get_mut(&node_id) {
+                node.push_field_model_frame(sequence, amplitudes, observed_at);
+            }
         }
         accepted
     }
@@ -1843,6 +2055,51 @@ impl AppStateInner {
         self.calibration_reordered_packets.clear();
         self.calibration_max_reorder_depth.clear();
         self.calibration_sequence_fault_node_ids.clear();
+    }
+
+    fn clear_field_model_binding(&mut self) {
+        self.calibration_grid_binding = None;
+        for node in self.node_states.values_mut() {
+            node.clear_field_model_history();
+        }
+    }
+
+    fn calibration_grid_is_fresh(
+        &self,
+        binding: CalibrationGridBinding,
+        now: std::time::Instant,
+    ) -> bool {
+        !self
+            .calibration_sequence_fault_node_ids
+            .contains(&binding.source_node_id)
+            && self
+                .node_states
+                .get(&binding.source_node_id)
+                .and_then(|node| node.field_model_latest_seen)
+                .is_some_and(|seen| {
+                    now.saturating_duration_since(seen) < ESP32_OFFLINE_TIMEOUT
+                })
+    }
+
+    fn field_model_holdout_ready(
+        &self,
+        binding: CalibrationGridBinding,
+        required_window_size: usize,
+        now: std::time::Instant,
+    ) -> bool {
+        self.calibration_grid_binding.is_some_and(|current| {
+            current.source_node_id == binding.source_node_id && current.grid == binding.grid
+        }) && self.calibration_grid_is_fresh(binding, now)
+            && self
+                .node_states
+                .get(&binding.source_node_id)
+                .is_some_and(|node| node.field_model_history.len() >= required_window_size)
+    }
+
+    fn begin_field_model_holdout(&mut self, binding: CalibrationGridBinding) {
+        if let Some(node) = self.node_states.get_mut(&binding.source_node_id) {
+            node.clear_field_model_history();
+        }
     }
 
     fn field_model_status_at(&self, observed_at_unix_ms: u64) -> Option<CalibrationStatus> {
@@ -1895,7 +2152,7 @@ impl AppStateInner {
                 let history = if let Some(node_id) = bound_source_node_id {
                     self.node_states
                         .get(&node_id)
-                        .map(|state| &state.frame_history)
+                        .map(|state| &state.field_model_history)
                         .unwrap_or(&self.frame_history)
                 } else if !self.frame_history.is_empty() {
                     &self.frame_history
@@ -1945,7 +2202,23 @@ impl AppStateInner {
         let [source_node_id] = metadata.source_node_ids.as_slice() else {
             return None;
         };
-        let history = &self.node_states.get(source_node_id)?.frame_history;
+        let binding = self.calibration_grid_binding?;
+        if binding.source_node_id != *source_node_id
+            || binding.grid != CsiGridKey::from_bootstrap_grid(metadata.source_grid)
+            || self
+                .calibration_sequence_fault_node_ids
+                .contains(source_node_id)
+        {
+            return None;
+        }
+        let node = self.node_states.get(source_node_id)?;
+        if !node.field_model_latest_seen.is_some_and(|seen| {
+            std::time::Instant::now().saturating_duration_since(seen)
+                < ESP32_OFFLINE_TIMEOUT
+        }) {
+            return None;
+        }
+        let history = &node.field_model_history;
         field_bridge::bootstrap_background_match(
             field_model,
             history,
@@ -2004,6 +2277,10 @@ impl AppStateInner {
 /// Number of frames retained in `frame_history` for temporal analysis.
 /// At 500 ms ticks this covers ~50 seconds; at 100 ms ticks ~10 seconds.
 const FRAME_HISTORY_CAPACITY: usize = 100;
+/// A qualified grid may run at the 2 Hz admission floor. Rebuilding a 50 frame
+/// runtime scoring window then needs 25 seconds, so promotion grants ten more
+/// seconds for ordinary bounded jitter before failing closed.
+const BOOTSTRAP_HOLDOUT_PREWARM_TIMEOUT_MS: u64 = 35_000;
 
 type SharedState = Arc<RwLock<AppStateInner>>;
 
@@ -2087,6 +2364,7 @@ impl AppStateInner {
             bootstrap_baseline_active: false,
             calibration_model_id: None,
             calibration_source_node_ids: std::collections::BTreeSet::new(),
+            calibration_grid_binding: None,
             calibration_last_sequences: HashMap::new(),
             calibration_reordered_packets: HashMap::new(),
             calibration_max_reorder_depth: HashMap::new(),
@@ -2140,12 +2418,30 @@ mod calibration_expiry_tests {
         let baseline = model.modes().unwrap().baseline[0].clone();
         let mut state = AppStateInner::minimal();
         state.frame_history = (0..50).map(|_| baseline.clone()).collect();
+        let mut node = NodeState::new();
+        node.field_model_history = (0..50).map(|_| baseline.clone()).collect();
+        node.field_model_latest_sequence = Some(50);
+        node.field_model_latest_seen = Some(std::time::Instant::now());
+        state.node_states.insert(5, node);
+        state.calibration_source_node_ids.insert(5);
+        state.calibration_grid_binding = Some(CalibrationGridBinding {
+            source_node_id: 5,
+            grid: CsiGridKey {
+                n_subcarriers: 64,
+                ppdu_type: 0,
+            },
+            evidence: None,
+        });
         state.field_model = Some(model);
         state.bootstrap_baseline_active = bootstrap;
         if bootstrap {
             state.bootstrap_baseline = Some(BootstrapBaselineMetadata {
                 authority: bootstrap_baseline::BOOTSTRAP_BASELINE_AUTHORITY,
                 source_node_ids: vec![5],
+                source_grid: bootstrap_baseline::BootstrapCsiGrid {
+                    n_subcarriers: 64,
+                    ppdu_type: 0,
+                },
                 source_model_id: "test-model".to_string(),
                 created_at_unix_ms: 1_000,
                 expires_at_unix_ms: 3_000,
@@ -6416,6 +6712,38 @@ fn calibration_source_has_fresh_csi(node: &NodeState, now: std::time::Instant) -
 mod bootstrap_vital_publication_tests {
     use super::*;
 
+    fn test_grid() -> CsiGridKey {
+        CsiGridKey {
+            n_subcarriers: 64,
+            ppdu_type: 0,
+        }
+    }
+
+    fn bind_test_calibration(state: &mut AppStateInner) {
+        state.calibration_source_node_ids.insert(5);
+        state.calibration_grid_binding = Some(CalibrationGridBinding {
+            source_node_id: 5,
+            grid: test_grid(),
+            evidence: None,
+        });
+        state.node_states.entry(5).or_insert_with(NodeState::new);
+    }
+
+    fn feed_test_frame(
+        state: &mut AppStateInner,
+        node_id: u8,
+        sequence: u32,
+        amplitudes: &[f64],
+    ) -> bool {
+        state.maybe_feed_calibration_frame(
+            node_id,
+            test_grid(),
+            sequence,
+            amplitudes,
+            std::time::Instant::now(),
+        )
+    }
+
     #[test]
     fn single_link_calibration_binds_to_first_source() {
         let mut sources = std::collections::BTreeSet::new();
@@ -6449,20 +6777,135 @@ mod bootstrap_vital_publication_tests {
     }
 
     #[test]
+    fn calibration_grid_selection_prefers_stable_rate_qualified_stream() {
+        let start = std::time::Instant::now();
+        let mut node = NodeState::new();
+        let stable = CsiGridKey {
+            n_subcarriers: 64,
+            ppdu_type: 0,
+        };
+        let sparse = CsiGridKey {
+            n_subcarriers: 192,
+            ppdu_type: 0,
+        };
+        for index in 0..=48 {
+            node.observe_raw_grid(
+                stable,
+                start + std::time::Duration::from_millis(index * 250),
+            );
+        }
+        for index in 0..=6 {
+            node.observe_raw_grid(
+                sparse,
+                start + std::time::Duration::from_secs(index * 2),
+            );
+        }
+        let (selected, evidence) = node
+            .select_calibration_grid(start + std::time::Duration::from_secs(12))
+            .expect("stable grid is eligible");
+        assert_eq!(selected, stable);
+        assert!(evidence.rate_hz >= 3.9);
+        assert!(evidence.max_gap_s < 5.0);
+    }
+
+    #[tokio::test]
+    async fn calibration_start_requires_evidence_then_binds_the_qualified_grid() {
+        let mut inner = AppStateInner::minimal();
+        inner.node_states.insert(5, NodeState::new());
+        let state = Arc::new(RwLock::new(inner));
+
+        let Json(unavailable) = calibration_start(
+            State(state.clone()),
+            Query(CalibrationStartQuery {
+                source_node_id: Some(5),
+            }),
+        )
+        .await;
+        assert_eq!(unavailable["success"], false);
+        assert_eq!(unavailable["error_code"], "calibration_grid_unavailable");
+        {
+            let state = state.read().await;
+            assert!(state.field_model.is_none());
+            assert!(state.calibration_model_id.is_none());
+            assert!(state.calibration_source_node_ids.is_empty());
+            assert!(state.calibration_grid_binding.is_none());
+        }
+
+        let now = std::time::Instant::now();
+        let start = now - std::time::Duration::from_secs(10);
+        {
+            let mut state = state.write().await;
+            let node = state.node_states.get_mut(&5).expect("node");
+            for index in 0..=40 {
+                node.observe_raw_grid(
+                    test_grid(),
+                    start + std::time::Duration::from_millis(index * 250),
+                );
+            }
+        }
+        let Json(started) = calibration_start(
+            State(state.clone()),
+            Query(CalibrationStartQuery {
+                source_node_id: Some(5),
+            }),
+        )
+        .await;
+        assert_eq!(started["success"], true);
+        assert_eq!(started["source_node_ids"], serde_json::json!([5]));
+        assert_eq!(started["source_grid"]["n_subcarriers"], 64);
+        assert_eq!(started["source_grid"]["ppdu_type"], 0);
+        let state = state.read().await;
+        assert!(state.field_model.is_some());
+        assert!(state.calibration_model_id.is_some());
+        assert_eq!(state.calibration_source_node_ids, [5].into_iter().collect());
+        assert_eq!(
+            state.calibration_grid_binding.map(|binding| binding.grid),
+            Some(test_grid())
+        );
+    }
+
+    #[test]
+    fn non_bound_grid_never_enters_field_model_history() {
+        let mut state = AppStateInner::minimal();
+        state.field_model = Some(
+            FieldModel::new(field_bridge::single_link_config()).expect("field model"),
+        );
+        bind_test_calibration(&mut state);
+        let wrong_grid = CsiGridKey {
+            n_subcarriers: 192,
+            ppdu_type: 0,
+        };
+        assert!(!state.maybe_feed_calibration_frame(
+            5,
+            wrong_grid,
+            41,
+            &[0.25; 192],
+            std::time::Instant::now(),
+        ));
+        assert!(state
+            .node_states
+            .get(&5)
+            .expect("node")
+            .field_model_history
+            .is_empty());
+        assert!(state.calibration_last_sequences.is_empty());
+    }
+
+    #[test]
     fn calibration_session_counts_each_unique_bound_csi_sequence_once() {
         let mut state = AppStateInner::minimal();
         state.field_model = Some(
             FieldModel::new(field_bridge::single_link_config()).expect("field model"),
         );
-        state.calibration_source_node_ids.insert(5);
+        bind_test_calibration(&mut state);
 
         let first = vec![0.25; 56];
-        assert!(state.maybe_feed_calibration_frame(5, 41, &first));
-        assert!(!state.maybe_feed_calibration_frame(5, 41, &first));
+        assert!(feed_test_frame(&mut state, 5, 41, &first));
+        assert!(!feed_test_frame(&mut state, 5, 41, &first));
 
         let second = vec![0.5; 56];
-        assert!(state.maybe_feed_calibration_frame(5, 42, &second));
-        assert!(!state.maybe_feed_calibration_frame(3, 43, &second));
+        assert!(feed_test_frame(&mut state, 5, 42, &second));
+        assert!(!feed_test_frame(&mut state, 3, 43, &second));
 
         let model = state.field_model.as_ref().expect("field model remains active");
         assert_eq!(model.calibration_frame_count(), 2);
@@ -6476,17 +6919,17 @@ mod bootstrap_vital_publication_tests {
         state.field_model = Some(
             FieldModel::new(field_bridge::single_link_config()).expect("field model"),
         );
-        state.calibration_source_node_ids.insert(5);
+        bind_test_calibration(&mut state);
         let frame = vec![0.25; 56];
 
-        assert!(state.maybe_feed_calibration_frame(5, 4_119_566, &frame));
-        assert!(!state.maybe_feed_calibration_frame(5, 4_119_563, &frame));
-        assert!(!state.maybe_feed_calibration_frame(5, 4_119_564, &frame));
-        assert!(!state.maybe_feed_calibration_frame(5, 4_119_565, &frame));
-        assert!(state.maybe_feed_calibration_frame(5, 4_119_567, &frame));
+        assert!(feed_test_frame(&mut state, 5, 4_119_566, &frame));
+        assert!(!feed_test_frame(&mut state, 5, 4_119_555, &frame));
+        assert!(!feed_test_frame(&mut state, 5, 4_119_556, &frame));
+        assert!(!feed_test_frame(&mut state, 5, 4_119_557, &frame));
+        assert!(feed_test_frame(&mut state, 5, 4_119_567, &frame));
         assert!(state.calibration_sequence_fault_node_ids.is_empty());
         assert_eq!(state.calibration_reordered_packets.get(&5), Some(&3));
-        assert_eq!(state.calibration_max_reorder_depth.get(&5), Some(&3));
+        assert_eq!(state.calibration_max_reorder_depth.get(&5), Some(&11));
         assert_eq!(
             state
                 .field_model
@@ -6503,12 +6946,12 @@ mod bootstrap_vital_publication_tests {
         state.field_model = Some(
             FieldModel::new(field_bridge::single_link_config()).expect("field model"),
         );
-        state.calibration_source_node_ids.insert(5);
+        bind_test_calibration(&mut state);
         let frame = vec![0.25; 56];
 
-        assert!(state.maybe_feed_calibration_frame(5, 100, &frame));
-        assert!(!state.maybe_feed_calibration_frame(5, 95, &frame));
-        assert!(!state.maybe_feed_calibration_frame(5, 101, &frame));
+        assert!(feed_test_frame(&mut state, 5, 100, &frame));
+        assert!(!feed_test_frame(&mut state, 5, 83, &frame));
+        assert!(!feed_test_frame(&mut state, 5, 101, &frame));
         assert!(state.calibration_sequence_fault_node_ids.contains(&5));
         assert_eq!(
             state
@@ -6532,15 +6975,15 @@ mod bootstrap_vital_publication_tests {
         state.field_model = Some(
             FieldModel::new(field_bridge::single_link_config()).expect("field model"),
         );
-        state.calibration_source_node_ids.insert(5);
+        bind_test_calibration(&mut state);
         let frame = vec![0.25; 56];
 
-        assert!(!state.maybe_feed_calibration_frame(5, u32::MAX, &[]));
+        assert!(!feed_test_frame(&mut state, 5, u32::MAX, &[]));
         assert!(state.calibration_last_sequences.is_empty());
-        assert!(state.maybe_feed_calibration_frame(5, u32::MAX, &frame));
-        assert!(state.maybe_feed_calibration_frame(5, 0, &frame));
-        assert!(!state.maybe_feed_calibration_frame(5, 0, &frame));
-        assert!(state.maybe_feed_calibration_frame(5, 1, &frame));
+        assert!(feed_test_frame(&mut state, 5, u32::MAX, &frame));
+        assert!(feed_test_frame(&mut state, 5, 0, &frame));
+        assert!(!feed_test_frame(&mut state, 5, 0, &frame));
+        assert!(feed_test_frame(&mut state, 5, 1, &frame));
         assert_eq!(
             state
                 .field_model
@@ -6570,11 +7013,11 @@ mod bootstrap_vital_publication_tests {
             CalibrationSequenceOrder::Reordered(1)
         );
         assert_eq!(
-            calibration_sequence_order(Some(8), 4),
-            CalibrationSequenceOrder::Reordered(4)
+            calibration_sequence_order(Some(32), 16),
+            CalibrationSequenceOrder::Reordered(16)
         );
         assert_eq!(
-            calibration_sequence_order(Some(8), 3),
+            calibration_sequence_order(Some(32), 15),
             CalibrationSequenceOrder::Discontinuity
         );
         assert_eq!(
@@ -6603,7 +7046,7 @@ mod bootstrap_vital_publication_tests {
 
         let Json(status) = calibration_status(State(state.clone())).await;
         assert_eq!(status["last_sequence_by_node"]["5"], 41);
-        assert_eq!(status["reorder_window_sequences"], 4);
+        assert_eq!(status["reorder_window_sequences"], 16);
         assert_eq!(status["reordered_packets_by_node"]["5"], 3);
         assert_eq!(status["max_reorder_depth_by_node"]["5"], 3);
         assert_eq!(status["sequence_fault_node_ids"], serde_json::json!([5]));
@@ -6618,6 +7061,77 @@ mod bootstrap_vital_publication_tests {
         assert_eq!(stopped["source_node_ids"], serde_json::json!([5]));
         assert_eq!(stopped["reordered_packets_by_node"]["5"], 3);
         assert_eq!(stopped["max_reorder_depth_by_node"]["5"], 3);
+    }
+
+    #[tokio::test]
+    async fn calibration_stop_rejects_missing_or_stale_grid_identity() {
+        let mut inner = AppStateInner::minimal();
+        inner.field_model = Some(
+            FieldModel::new(field_bridge::single_link_config()).expect("field model"),
+        );
+        inner.calibration_model_id = Some("cal-model-test".to_string());
+        inner.calibration_source_node_ids.insert(5);
+        let state = Arc::new(RwLock::new(inner));
+
+        let Json(missing) = calibration_stop(State(state.clone())).await;
+        assert_eq!(missing["success"], false);
+        assert_eq!(missing["error_code"], "calibration_grid_identity_missing");
+
+        {
+            let mut state = state.write().await;
+            state.calibration_grid_binding = Some(CalibrationGridBinding {
+                source_node_id: 5,
+                grid: test_grid(),
+                evidence: None,
+            });
+            state.node_states.insert(5, NodeState::new());
+        }
+        let Json(stale) = calibration_stop(State(state)).await;
+        assert_eq!(stale["success"], false);
+        assert_eq!(stale["error_code"], "calibration_grid_stale");
+    }
+
+    #[test]
+    fn post_finalize_holdout_excludes_training_history_and_sequence_faults() {
+        let mut state = AppStateInner::minimal();
+        bind_test_calibration(&mut state);
+        let binding = state.calibration_grid_binding.expect("binding");
+        let now = std::time::Instant::now();
+        {
+            let node = state.node_states.get_mut(&5).expect("node");
+            for sequence in 0..50 {
+                node.push_field_model_frame(sequence, &[0.25; 64], now);
+            }
+        }
+        assert!(state.field_model_holdout_ready(binding, 50, now));
+
+        state.begin_field_model_holdout(binding);
+        assert!(state
+            .node_states
+            .get(&5)
+            .expect("node")
+            .field_model_history
+            .is_empty());
+        assert!(!state.field_model_holdout_ready(binding, 50, now));
+
+        {
+            let node = state.node_states.get_mut(&5).expect("node");
+            for sequence in 50..100 {
+                node.push_field_model_frame(sequence, &[0.5; 64], now);
+            }
+        }
+        assert!(state.field_model_holdout_ready(binding, 50, now));
+        state.calibration_sequence_fault_node_ids.insert(5);
+        assert!(!state.field_model_holdout_ready(binding, 50, now));
+    }
+
+    #[test]
+    fn startup_calibration_flag_fails_closed_before_state_creation() {
+        assert!(validate_startup_calibration_request(false).is_ok());
+        let error = validate_startup_calibration_request(true).expect_err("must fail closed");
+        assert!(error.contains("--calibrate"));
+        assert!(error.contains("10 seconds"));
+        assert!(error.contains("source_node_id"));
     }
 
     fn strong_candidates() -> VitalSigns {
@@ -6729,21 +7243,62 @@ async fn calibration_start(
     Query(query): Query<CalibrationStartQuery>,
 ) -> Json<serde_json::Value> {
     let mut s = state.write().await;
-    if let Some(source_node_id) = query.source_node_id {
-        let now = std::time::Instant::now();
-        let source_is_live = s
-            .node_states
-            .get(&source_node_id)
-            .is_some_and(|node| calibration_source_has_fresh_csi(node, now));
-        if !source_is_live {
+    let now = std::time::Instant::now();
+    let selected_binding = if let Some(source_node_id) = query.source_node_id {
+        let Some(node) = s.node_states.get(&source_node_id) else {
             return Json(serde_json::json!({
                 "success": false,
                 "error_code": "calibration_source_unavailable",
-                "error": "The requested calibration source is missing or has no fresh raw CSI.",
+                "error": "The requested calibration source is missing.",
                 "source_node_id": source_node_id,
             }));
+        };
+        let candidates = node.calibration_grid_candidates(now);
+        let Some((grid, evidence)) = node.select_calibration_grid(now) else {
+            return Json(serde_json::json!({
+                "success": false,
+                "error_code": "calibration_grid_unavailable",
+                "error": "No raw CSI grid has at least 10 seconds of evidence, a 2 Hz measured rate, and a maximum gap below 5 seconds.",
+                "source_node_id": source_node_id,
+                "candidates": candidates.into_iter().map(|(grid, evidence)| serde_json::json!({
+                    "grid": grid,
+                    "evidence": evidence,
+                })).collect::<Vec<_>>(),
+            }));
+        };
+        CalibrationGridBinding {
+            source_node_id,
+            grid,
+            evidence: Some(evidence),
         }
-    }
+    } else {
+        let eligible: Vec<CalibrationGridBinding> = s
+            .node_states
+            .iter()
+            .filter_map(|(&source_node_id, node)| {
+                node.select_calibration_grid(now).map(|(grid, evidence)| {
+                    CalibrationGridBinding {
+                        source_node_id,
+                        grid,
+                        evidence: Some(evidence),
+                    }
+                })
+            })
+            .collect();
+        let [binding] = eligible.as_slice() else {
+            return Json(serde_json::json!({
+                "success": false,
+                "error_code": "calibration_source_required",
+                "error": "Choose exactly one eligible ESP32 source for room calibration.",
+                "eligible_sources": eligible.iter().map(|binding| serde_json::json!({
+                    "source_node_id": binding.source_node_id,
+                    "grid": binding.grid,
+                    "evidence": binding.evidence,
+                })).collect::<Vec<_>>(),
+            }));
+        };
+        *binding
+    };
     if s.bootstrap_baseline_active {
         s.field_model = None;
         s.bootstrap_baseline_active = false;
@@ -6774,15 +7329,18 @@ async fn calibration_start(
             s.field_model = Some(fm);
             s.calibration_model_id = Some(opaque_calibration_model_id());
             s.calibration_source_node_ids.clear();
+            s.clear_field_model_binding();
             s.clear_calibration_sequence_state();
-            if let Some(source_node_id) = query.source_node_id {
-                s.calibration_source_node_ids.insert(source_node_id);
-            }
+            s.calibration_source_node_ids
+                .insert(selected_binding.source_node_id);
+            s.calibration_grid_binding = Some(selected_binding);
             Json(serde_json::json!({
                 "success": true,
                 "message": "Calibration started — keep room empty while frames accumulate.",
                 "model_id": s.calibration_model_id,
                 "source_node_ids": s.calibration_source_node_ids,
+                "source_grid": selected_binding.grid,
+                "grid_evidence": selected_binding.evidence,
             }))
         }
         // ADR-080 #2: FieldModel init error chain stays server-side only.
@@ -6794,6 +7352,7 @@ async fn calibration_stop(State(state): State<SharedState>) -> Json<serde_json::
     let mut s = state.write().await;
     let model_id = s.calibration_model_id.clone();
     let source_node_ids: Vec<u8> = s.calibration_source_node_ids.iter().copied().collect();
+    let source_grid = s.calibration_grid_binding.map(|binding| binding.grid);
     let reordered_packets_by_node = s.calibration_reordered_packets.clone();
     let max_reorder_depth_by_node = s.calibration_max_reorder_depth.clone();
     if !s.calibration_sequence_fault_node_ids.is_empty() {
@@ -6803,9 +7362,41 @@ async fn calibration_stop(State(state): State<SharedState>) -> Json<serde_json::
             "error": "Raw CSI sequence moved backward beyond the bounded UDP reorder window. Cancel and restart the empty-room calibration.",
             "model_id": model_id,
             "source_node_ids": source_node_ids,
+            "source_grid": source_grid,
             "reordered_packets_by_node": reordered_packets_by_node,
             "max_reorder_depth_by_node": max_reorder_depth_by_node,
             "sequence_fault_node_ids": s.calibration_sequence_fault_node_ids,
+        }));
+    }
+    let Some(binding) = s.calibration_grid_binding else {
+        return Json(serde_json::json!({
+            "success": false,
+            "error_code": "calibration_grid_identity_missing",
+            "error": "The active calibration has no frozen CSI grid identity. Cancel and restart the empty room capture.",
+            "model_id": model_id,
+            "source_node_ids": source_node_ids,
+        }));
+    };
+    if source_node_ids.as_slice() != [binding.source_node_id]
+        || !s.calibration_grid_is_fresh(binding, std::time::Instant::now())
+    {
+        let latest_seen_ms = s
+            .node_states
+            .get(&binding.source_node_id)
+            .and_then(|node| node.field_model_latest_seen)
+            .map(|seen| {
+                std::time::Instant::now()
+                    .saturating_duration_since(seen)
+                    .as_millis() as u64
+            });
+        return Json(serde_json::json!({
+            "success": false,
+            "error_code": "calibration_grid_stale",
+            "error": "The frozen calibration CSI grid is stale or no longer matches its source. Restore the source and retry before finalizing.",
+            "model_id": model_id,
+            "source_node_ids": source_node_ids,
+            "source_grid": source_grid,
+            "latest_seen_ms": latest_seen_ms,
         }));
     }
     if let Some(ref mut fm) = s.field_model {
@@ -6846,15 +7437,20 @@ async fn calibration_stop(State(state): State<SharedState>) -> Json<serde_json::
             Ok(modes) => {
                 let baseline = modes.baseline_eigenvalue_count;
                 let variance_explained = modes.variance_explained;
+                let holdout_window_size = modes.baseline_runtime_window_size;
+                let final_frame_count = fm.calibration_frame_count();
+                s.begin_field_model_holdout(binding);
                 info!("Field model calibrated: baseline_eigenvalues={baseline}, variance_explained={variance_explained:.2}");
                 Json(serde_json::json!({
                     "success": true,
                     "baseline_eigenvalue_count": baseline,
                     "variance_explained": variance_explained,
-                    "frame_count": fm.calibration_frame_count(),
+                    "frame_count": final_frame_count,
                     "elapsed_s": elapsed_s,
+                    "holdout_window_size": holdout_window_size,
                     "model_id": model_id,
                     "source_node_ids": source_node_ids,
+                    "source_grid": source_grid,
                     "reordered_packets_by_node": reordered_packets_by_node,
                     "max_reorder_depth_by_node": max_reorder_depth_by_node,
                 }))
@@ -6872,6 +7468,7 @@ async fn calibration_stop(State(state): State<SharedState>) -> Json<serde_json::
 
 async fn calibration_status(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
+    let now = std::time::Instant::now();
     let observed_at_unix_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
     let effective_status = s.field_model_status_at(observed_at_unix_ms);
     let active = s.field_model_active_at(observed_at_unix_ms);
@@ -6903,6 +7500,23 @@ async fn calibration_status(State(state): State<SharedState>) -> Json<serde_json
         || "none".to_string(),
         |status| format!("{status:?}").to_lowercase(),
     );
+    let grid_binding = s.calibration_grid_binding.map(|binding| {
+        let node = s.node_states.get(&binding.source_node_id);
+        let latest_seen_ms = node
+            .and_then(|node| node.field_model_latest_seen)
+            .map(|seen| now.saturating_duration_since(seen).as_millis() as u64);
+        serde_json::json!({
+            "source_node_id": binding.source_node_id,
+            "grid": binding.grid,
+            "selection_evidence": binding.evidence,
+            "latest_seen_ms": latest_seen_ms,
+            "runtime_history_frames": node.map_or(0, |node| node.field_model_history.len()),
+            "runtime_history_capacity": FRAME_HISTORY_CAPACITY,
+            "status": if latest_seen_ms.is_some_and(|age| age < ESP32_OFFLINE_TIMEOUT.as_millis() as u64)
+                && !s.calibration_sequence_fault_node_ids.contains(&binding.source_node_id)
+            { "active" } else { "stale" },
+        })
+    });
     Json(serde_json::json!({
         "active": active,
         "status": status,
@@ -6913,6 +7527,7 @@ async fn calibration_status(State(state): State<SharedState>) -> Json<serde_json
         "min_duration_s": min_duration_s,
         "model_id": s.calibration_model_id,
         "source_node_ids": s.calibration_source_node_ids,
+        "grid_binding": grid_binding,
         "last_sequence_by_node": s.calibration_last_sequences,
         "sequence_policy": "forward_only_with_bounded_udp_reorder_drop_v1",
         "reorder_window_sequences": CALIBRATION_SEQUENCE_REORDER_WINDOW,
@@ -6926,6 +7541,7 @@ async fn calibration_status(State(state): State<SharedState>) -> Json<serde_json
             "active": bootstrap_active,
             "authority": metadata.authority,
             "source_node_ids": metadata.source_node_ids,
+            "source_grid": metadata.source_grid,
             "source_model_id": metadata.source_model_id,
             "created_at_unix_ms": metadata.created_at_unix_ms,
             "expires_at_unix_ms": metadata.expires_at_unix_ms,
@@ -6960,7 +7576,7 @@ async fn calibration_status(State(state): State<SharedState>) -> Json<serde_json
 async fn calibration_promote_bootstrap(
     State(state): State<SharedState>,
 ) -> Json<serde_json::Value> {
-    let expected_model_id = {
+    let (expected_model_id, expected_binding, holdout_window_size) = {
         let s = state.read().await;
         let observed_at_unix_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
         if s.bootstrap_baseline_active || !s.explicit_calibration_fresh_at(observed_at_unix_ms) {
@@ -6970,7 +7586,7 @@ async fn calibration_promote_bootstrap(
                 "error": "Finalize an explicit room calibration before validating a startup baseline.",
             }));
         }
-        match s.calibration_model_id.clone() {
+        let model_id = match s.calibration_model_id.clone() {
             Some(model_id) => model_id,
             None => {
                 return Json(serde_json::json!({
@@ -6979,11 +7595,101 @@ async fn calibration_promote_bootstrap(
                     "error": "The active calibration has no server generated model identity.",
                 }));
             }
+        };
+        let Some(binding) = s.calibration_grid_binding else {
+            return Json(serde_json::json!({
+                "success": false,
+                "error_code": "calibration_grid_identity_missing",
+                "error": "The completed calibration has no frozen CSI grid identity.",
+            }));
+        };
+        if s.calibration_sequence_fault_node_ids
+            .contains(&binding.source_node_id)
+        {
+            return Json(serde_json::json!({
+                "success": false,
+                "error_code": "calibration_sequence_discontinuity",
+                "error": "The calibration CSI sequence faulted before validation. The model was not stored.",
+            }));
         }
+        let Some(runtime_window_size) = s
+            .field_model
+            .as_ref()
+            .and_then(|model| model.modes())
+            .and_then(|modes| modes.baseline_runtime_window_size)
+            .filter(|window_size| *window_size > 0 && *window_size <= FRAME_HISTORY_CAPACITY)
+        else {
+            return Json(serde_json::json!({
+                "success": false,
+                "error_code": "calibration_runtime_window_invalid",
+                "error": "The completed calibration has no valid runtime scoring window.",
+            }));
+        };
+        (model_id, binding, runtime_window_size)
     };
 
+    let prewarm_deadline = tokio::time::Instant::now()
+        + Duration::from_millis(BOOTSTRAP_HOLDOUT_PREWARM_TIMEOUT_MS);
+    loop {
+        let (identity_matches, sequence_faulted, ready, current_window_size) = {
+            let s = state.read().await;
+            let observed_at_unix_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+            let identity_matches = s.calibration_model_id.as_deref()
+                == Some(expected_model_id.as_str())
+                && s.explicit_calibration_fresh_at(observed_at_unix_ms)
+                && s.calibration_grid_binding.is_some_and(|binding| {
+                    binding.source_node_id == expected_binding.source_node_id
+                        && binding.grid == expected_binding.grid
+                });
+            let sequence_faulted = s
+                .calibration_sequence_fault_node_ids
+                .contains(&expected_binding.source_node_id);
+            let current_window_size = s
+                .node_states
+                .get(&expected_binding.source_node_id)
+                .map_or(0, |node| node.field_model_history.len());
+            (
+                identity_matches,
+                sequence_faulted,
+                s.field_model_holdout_ready(
+                    expected_binding,
+                    holdout_window_size,
+                    std::time::Instant::now(),
+                ),
+                current_window_size,
+            )
+        };
+        if sequence_faulted {
+            return Json(serde_json::json!({
+                "success": false,
+                "error_code": "calibration_sequence_discontinuity",
+                "error": "The calibration CSI sequence faulted while preparing held out validation. The model was not stored.",
+            }));
+        }
+        if !identity_matches {
+            return Json(serde_json::json!({
+                "success": false,
+                "error_code": "calibration_model_changed",
+                "error": "Calibration changed while preparing held out validation. The model was not stored.",
+            }));
+        }
+        if ready {
+            break;
+        }
+        if tokio::time::Instant::now() >= prewarm_deadline {
+            return Json(serde_json::json!({
+                "success": false,
+                "error_code": "bootstrap_holdout_prewarm_timeout",
+                "error": "A complete fresh CSI scoring window was not available before the held out validation timeout. The model was not stored.",
+                "required_window_size": holdout_window_size,
+                "current_window_size": current_window_size,
+            }));
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
     let mut samples = Vec::with_capacity(BOOTSTRAP_VALIDATION_SAMPLES);
-    let mut last_tick = None;
+    let mut last_sequence = None;
     let mut next_sample_at = tokio::time::Instant::now();
     for _ in 0..BOOTSTRAP_VALIDATION_SAMPLES {
         tokio::time::sleep_until(next_sample_at).await;
@@ -7000,20 +7706,40 @@ async fn calibration_promote_bootstrap(
                 let observed_at_unix_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
                 if s.calibration_model_id.as_deref() != Some(expected_model_id.as_str())
                     || !s.explicit_calibration_fresh_at(observed_at_unix_ms)
+                    || !s.calibration_grid_binding.is_some_and(|binding| {
+                        binding.source_node_id == expected_binding.source_node_id
+                            && binding.grid == expected_binding.grid
+                    })
+                    || s.calibration_sequence_fault_node_ids
+                        .contains(&expected_binding.source_node_id)
                 {
                     None
                 } else {
-                    s.latest_update.as_ref().and_then(|update| {
-                        (Some(update.tick) != last_tick).then_some((
-                            update.tick,
-                            s.person_count() == 0,
-                            update.vital_signs.is_none(),
-                        ))
-                    })
+                    s.node_states
+                        .get(&expected_binding.source_node_id)
+                        .and_then(|node| {
+                            let sequence = node.field_model_latest_sequence?;
+                            let fresh = node.field_model_latest_seen.is_some_and(|seen| {
+                                std::time::Instant::now().saturating_duration_since(seen)
+                                    < ESP32_OFFLINE_TIMEOUT
+                            }) && Some(sequence) != last_sequence;
+                            let held_out = s.field_model_holdout_ready(
+                                expected_binding,
+                                holdout_window_size,
+                                std::time::Instant::now(),
+                            );
+                            (fresh && held_out).then_some((
+                                sequence,
+                                s.person_count() == 0,
+                                s.latest_update
+                                    .as_ref()
+                                    .is_none_or(|update| update.vital_signs.is_none()),
+                            ))
+                        })
                 }
             };
-            if let Some((tick, calibrated_empty, vital_signs_absent)) = observed {
-                last_tick = Some(tick);
+            if let Some((sequence, calibrated_empty, vital_signs_absent)) = observed {
+                last_sequence = Some(sequence);
                 sample = BootstrapValidationSample {
                     fresh_tick: true,
                     calibrated_empty,
@@ -7042,6 +7768,12 @@ async fn calibration_promote_bootstrap(
     let observed_at_unix_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
     if s.calibration_model_id.as_deref() != Some(expected_model_id.as_str())
         || !s.explicit_calibration_fresh_at(observed_at_unix_ms)
+        || !s.calibration_grid_binding.is_some_and(|binding| {
+            binding.source_node_id == expected_binding.source_node_id
+                && binding.grid == expected_binding.grid
+        })
+        || s.calibration_sequence_fault_node_ids
+            .contains(&expected_binding.source_node_id)
     {
         return Json(serde_json::json!({
             "success": false,
@@ -7077,6 +7809,7 @@ async fn calibration_promote_bootstrap(
         &path,
         &installation_id,
         &source_node_ids,
+        expected_binding.grid.as_bootstrap_grid(),
         &expected_model_id,
         created_at_unix_ms,
         field_model,
@@ -7097,6 +7830,7 @@ async fn calibration_promote_bootstrap(
         "success": true,
         "message": "Validated startup baseline stored locally.",
         "validation": validation,
+        "holdout_window_size": holdout_window_size,
         "bootstrap_baseline": stored,
         "calibrated_evidence_authorized": false,
         "numeric_vitals_authorized": false,
@@ -7118,7 +7852,7 @@ async fn calibration_refine_bootstrap(
         }));
     }
 
-    let (expected_model_id, expected_digest, source_node_id) = {
+    let (expected_model_id, expected_digest, source_node_id, expected_grid) = {
         let s = state.read().await;
         let observed_at_unix_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
         let Some(metadata) = s
@@ -7153,6 +7887,7 @@ async fn calibration_refine_bootstrap(
             metadata.source_model_id.clone(),
             metadata.content_sha256.clone(),
             *source_node_id,
+            CsiGridKey::from_bootstrap_grid(metadata.source_grid),
         )
     };
 
@@ -7175,13 +7910,19 @@ async fn calibration_refine_bootstrap(
                         metadata.source_model_id == expected_model_id
                             && metadata.content_sha256 == expected_digest
                             && metadata.source_node_ids.as_slice() == [source_node_id]
+                            && CsiGridKey::from_bootstrap_grid(metadata.source_grid)
+                                == expected_grid
+                    })
+                    && s.calibration_grid_binding.is_some_and(|binding| {
+                        binding.source_node_id == source_node_id
+                            && binding.grid == expected_grid
                     });
                 if !identity_matches {
                     None
                 } else {
                     s.node_states.get(&source_node_id).and_then(|node| {
-                        let sequence = node.latest_csi_sequence?;
-                        let fresh = node.last_frame_time.is_some_and(|seen| {
+                        let sequence = node.field_model_latest_sequence?;
+                        let fresh = node.field_model_latest_seen.is_some_and(|seen| {
                             std::time::Instant::now().saturating_duration_since(seen)
                                 < ESP32_OFFLINE_TIMEOUT
                         }) && Some(sequence) != last_sequence;
@@ -7190,7 +7931,7 @@ async fn calibration_refine_bootstrap(
                         }
                         let model = s.field_model.as_ref()?;
                         let recent_frames: Vec<Vec<f64>> =
-                            node.frame_history.iter().cloned().collect();
+                            node.field_model_history.iter().cloned().collect();
                         let residual = model.empty_room_match(&recent_frames)?.residual_energy;
                         let vital_signs_absent = s
                             .latest_update
@@ -7241,6 +7982,10 @@ async fn calibration_refine_bootstrap(
             metadata.source_model_id == expected_model_id
                 && metadata.content_sha256 == expected_digest
                 && metadata.source_node_ids.as_slice() == [source_node_id]
+                && CsiGridKey::from_bootstrap_grid(metadata.source_grid) == expected_grid
+        })
+        && s.calibration_grid_binding.is_some_and(|binding| {
+            binding.source_node_id == source_node_id && binding.grid == expected_grid
         });
     if !identity_matches {
         return Json(serde_json::json!({
@@ -7298,6 +8043,7 @@ async fn calibration_refine_bootstrap(
         &path,
         &installation_id,
         &[source_node_id],
+        expected_grid.as_bootstrap_grid(),
         &expected_model_id,
         created_at_unix_ms,
         &candidate,
@@ -7350,6 +8096,7 @@ async fn calibration_cancel(State(state): State<SharedState>) -> Json<serde_json
     s.field_model = None;
     s.calibration_model_id = None;
     s.calibration_source_node_ids.clear();
+    s.clear_field_model_binding();
     s.clear_calibration_sequence_state();
     if let Some(installation_id) = s.installation_id.clone() {
         let path = bootstrap_baseline::path_in(&s.data_dir);
@@ -7358,7 +8105,21 @@ async fn calibration_cancel(State(state): State<SharedState>) -> Json<serde_json
             &installation_id,
             chrono::Utc::now().timestamp_millis() as u64,
         ) {
+            let [source_node_id] = metadata.source_node_ids.as_slice() else {
+                return Json(serde_json::json!({
+                    "success": false,
+                    "error_code": "bootstrap_source_invalid",
+                    "error": "The stored bootstrap source identity is invalid.",
+                }));
+            };
+            let binding = CalibrationGridBinding {
+                source_node_id: *source_node_id,
+                grid: CsiGridKey::from_bootstrap_grid(metadata.source_grid),
+                evidence: None,
+            };
             s.field_model = Some(model);
+            s.calibration_source_node_ids.insert(*source_node_id);
+            s.calibration_grid_binding = Some(binding);
             s.bootstrap_baseline = Some(metadata);
             s.bootstrap_baseline_active = true;
         }
@@ -7375,6 +8136,7 @@ async fn calibration_reset(State(state): State<SharedState>) -> Json<serde_json:
     s.field_model = None;
     s.calibration_model_id = None;
     s.calibration_source_node_ids.clear();
+    s.clear_field_model_binding();
     s.clear_calibration_sequence_state();
     s.bootstrap_baseline_active = false;
     let path = bootstrap_baseline::path_in(&s.data_dir);
@@ -7793,13 +8555,8 @@ async fn nodes_endpoint(State(state): State<SharedState>) -> Json<serde_json::Va
                 && s.bootstrap_baseline.as_ref().is_some_and(|metadata| {
                     metadata.source_node_ids.as_slice() == [id]
                 })
-                && s.field_model.as_ref().is_some_and(|field_model| {
-                    field_bridge::bootstrap_empty_prior_applies(
-                        field_model,
-                        &ns.frame_history,
-                        observed_at_unix_ms.saturating_mul(1_000),
-                    )
-                });
+                && s.bootstrap_background_match(observed_at_unix_ms)
+                    .is_some_and(|result| result.matches_empty);
             serde_json::json!({
                 "node_id": id,
                 "status": status,
@@ -8427,7 +9184,25 @@ async fn udp_receiver_task(
 
                     let mut s = state.write().await;
                     s.source = "esp32".to_string();
-                    s.last_esp32_frame = Some(std::time::Instant::now());
+                    let observed_at = std::time::Instant::now();
+                    s.last_esp32_frame = Some(observed_at);
+                    let grid_key = CsiGridKey::from_frame(&frame);
+                    s.node_states
+                        .entry(frame.node_id)
+                        .or_insert_with(NodeState::new)
+                        .observe_raw_grid(grid_key, observed_at);
+
+                    // The field model owns a separate, frozen grid path. Feed
+                    // it before the global inference grid gate so a stable
+                    // 64-bin stream can remain comparable even when the
+                    // independent live feature path prefers a wider grid.
+                    s.maybe_feed_calibration_frame(
+                        frame.node_id,
+                        grid_key,
+                        frame.sequence,
+                        &frame.amplitudes,
+                        observed_at,
+                    );
 
                     // ── ADR-110 / issue #1005: per-node subcarrier-grid gate ──
                     // ESP32-C6 nodes interleave HE-SU 256-bin frames (~84%)
@@ -8686,14 +9461,6 @@ async fn udp_receiver_task(
                             .unwrap_or(0);
                         sref.engine_bridge.observe_cycle(&sref.node_states, now_ms);
                     }
-
-                    // Feed only this grid-admitted raw CSI observation. The
-                    // session boundary deduplicates its wrapping sequence.
-                    s.maybe_feed_calibration_frame(
-                        node_id,
-                        frame.sequence,
-                        &frame.amplitudes,
-                    );
 
                     // Build nodes array with all active nodes. ADR-141 output
                     // gating (review finding 1c): when the governed engine
@@ -9499,6 +10266,14 @@ fn coalesce_ui_path(initial: std::path::PathBuf) -> std::path::PathBuf {
     initial
 }
 
+fn validate_startup_calibration_request(calibrate: bool) -> Result<(), &'static str> {
+    if calibrate {
+        Err("--calibrate cannot safely select a source and CSI grid at process start. Start the server normally, wait at least 10 seconds for live grid evidence, then POST /api/v1/calibration/start with one explicit source_node_id.")
+    } else {
+        Ok(())
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // Initialize tracing; with the `otel` feature and
@@ -9509,6 +10284,11 @@ async fn main() {
 
     let mut args = Args::parse();
     args.ui_path = coalesce_ui_path(args.ui_path);
+
+    if let Err(error) = validate_startup_calibration_request(args.calibrate) {
+        eprintln!("Error: {error}");
+        std::process::exit(2);
+    }
 
     // Handle --benchmark mode: run vital sign benchmark and exit
     if args.benchmark {
@@ -10455,17 +11235,25 @@ async fn main() {
             "Default Room",
             engine_bridge_multistatic_cfg,
         ),
-        field_model: if args.calibrate {
-            info!("Field model calibration enabled — room should be empty during startup");
-            FieldModel::new(field_bridge::single_link_config()).ok()
-        } else {
-            bootstrap_field_model
-        },
+        field_model: bootstrap_field_model,
         installation_id: args.installation_id.clone(),
-        bootstrap_baseline: bootstrap_metadata,
+        bootstrap_baseline: bootstrap_metadata.clone(),
         bootstrap_baseline_active,
-        calibration_model_id: args.calibrate.then(opaque_calibration_model_id),
-        calibration_source_node_ids: std::collections::BTreeSet::new(),
+        calibration_model_id: None,
+        calibration_source_node_ids: bootstrap_metadata
+            .as_ref()
+            .map(|metadata| metadata.source_node_ids.iter().copied().collect())
+            .unwrap_or_default(),
+        calibration_grid_binding: bootstrap_metadata.as_ref().and_then(|metadata| {
+            let [source_node_id] = metadata.source_node_ids.as_slice() else {
+                return None;
+            };
+            Some(CalibrationGridBinding {
+                source_node_id: *source_node_id,
+                grid: CsiGridKey::from_bootstrap_grid(metadata.source_grid),
+                evidence: None,
+            })
+        }),
         calibration_last_sequences: HashMap::new(),
         calibration_reordered_packets: HashMap::new(),
         calibration_max_reorder_depth: HashMap::new(),
