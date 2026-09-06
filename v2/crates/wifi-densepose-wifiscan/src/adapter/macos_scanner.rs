@@ -186,7 +186,8 @@ fn parse_json_line(line: &str, timestamp: Instant) -> Option<BssidObservation> {
 /// Resolve a BSSID string to a [`BssidId`].
 ///
 /// If the MAC is all-zeros (macOS redaction), generate a synthetic
-/// locally-administered MAC from `SHA-256(ssid:channel)`.
+/// locally-administered MAC from the SSID and channel. Abstain when the
+/// real BSSID is unavailable and the SSID is blank.
 fn resolve_bssid(bssid_str: &str, ssid: &str, channel: u8) -> Option<BssidId> {
     // Try parsing the real BSSID first.
     if let Ok(id) = BssidId::parse(bssid_str) {
@@ -196,7 +197,13 @@ fn resolve_bssid(bssid_str: &str, ssid: &str, channel: u8) -> Option<BssidId> {
         }
     }
 
-    // Generate synthetic BSSID: SHA-256(ssid:channel), take first 6 bytes,
+    // Without either identity, unrelated networks on the same channel would
+    // collapse to one synthetic BSSID. Do not emit an observation in that case.
+    if ssid.trim().is_empty() {
+        return None;
+    }
+
+    // Generate synthetic BSSID from SSID and channel, take first 6 bytes,
     // set locally-administered + unicast bits (byte 0: bit 1 set, bit 0 clear).
     Some(synthetic_bssid(ssid, channel))
 }
@@ -354,6 +361,29 @@ mod tests {
         assert_eq!(obs[2].bssid.0[0] & 0x02, 0x02);
         // Should have unicast bit (multicast cleared).
         assert_eq!(obs[2].bssid.0[0] & 0x01, 0x00);
+    }
+
+    #[test]
+    fn unavailable_bssid_without_ssid_abstains() {
+        for bssid in ["00:00:00:00:00:00", "", "invalid"] {
+            for ssid in ["", "   "] {
+                let output = format!(
+                    r#"{{"ssid":"{ssid}","bssid":"{bssid}","rssi":-65,"noise":-88,"channel":36}}"#
+                );
+                assert!(parse_macos_scan_output(&output).unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn real_bssid_without_ssid_is_preserved() {
+        let output = r#"{"ssid":"","bssid":"aa:bb:cc:dd:ee:ff","rssi":-65,"noise":-88,"channel":36}"#;
+        let obs = parse_macos_scan_output(output).unwrap();
+        assert_eq!(obs.len(), 1);
+        assert_eq!(obs[0].bssid.to_string(), "aa:bb:cc:dd:ee:ff");
+        assert!(obs[0].ssid.is_empty());
+        assert_eq!(obs[0].rssi_dbm, -65.0);
+        assert_eq!(obs[0].channel, 36);
     }
 
     #[test]
