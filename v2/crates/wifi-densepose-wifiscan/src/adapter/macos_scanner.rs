@@ -24,8 +24,8 @@
 //!
 //! macOS only. Gated behind `#[cfg(target_os = "macos")]` at the module level.
 
-use std::process::Command;
-use std::time::Instant;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use crate::domain::bssid::{BandType, BssidId, BssidObservation, RadioType};
 use crate::error::WifiScanError;
@@ -64,17 +64,43 @@ impl MacosCoreWlanScanner {
 
     /// Run the Swift helper and parse the output synchronously.
     ///
-    /// Returns one [`BssidObservation`] per BSSID seen in the scan.
+    /// Returns one [`BssidObservation`] for the connected link.
+    /// Helpers that fail to exit within five seconds are killed and reaped.
     pub fn scan_sync(&self) -> Result<Vec<BssidObservation>, WifiScanError> {
-        let output = Command::new(&self.helper_path)
+        let mut child = Command::new(&self.helper_path)
             .arg("--scan-once")
-            .output()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|e| {
                 WifiScanError::ProcessError(format!(
                     "failed to run mac_wifi helper ({}): {e}",
                     self.helper_path
                 ))
             })?;
+
+        // Older helpers ignore --scan-once and stream forever. Bound the
+        // wait so an outdated installation cannot hang capture or auto-detect.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                status => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(WifiScanError::ProcessError(match status {
+                        Err(e) => format!("failed to wait for mac_wifi: {e}"),
+                        _ => "mac_wifi --scan-once timed out; rebuild the Swift helper".into(),
+                    }));
+                }
+            }
+        }
+        let output = child.wait_with_output().map_err(|e| {
+            WifiScanError::ProcessError(format!("failed to read mac_wifi output: {e}"))
+        })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -275,6 +301,32 @@ mod tests {
 {"ssid":"GuestWifi","bssid":"11:22:33:44:55:66","rssi":-71,"noise":-92,"channel":6,"band":"2.4GHz"}
 {"ssid":"Redacted","bssid":"00:00:00:00:00:00","rssi":-65,"noise":-88,"channel":149,"band":"5GHz"}
 "#;
+
+    #[test]
+    fn helper_process_errors_are_reported() {
+        assert!(matches!(
+            MacosCoreWlanScanner::with_path("/usr/bin/false").scan_sync(),
+            Err(WifiScanError::ScanFailed { .. })
+        ));
+        assert!(matches!(
+            MacosCoreWlanScanner::with_path("/dev/null/mac_wifi").scan_sync(),
+            Err(WifiScanError::ProcessError(_))
+        ));
+    }
+
+    #[test]
+    fn legacy_helper_is_timed_out() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("mac-wifi-timeout-{}", std::process::id()));
+        // exec preserves the helper PID, so killing it cannot orphan sleep.
+        std::fs::write(&path, "#!/bin/sh\nexec /bin/sleep 30\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let start = Instant::now();
+        let result = MacosCoreWlanScanner::with_path(path.to_string_lossy()).scan_sync();
+        std::fs::remove_file(path).unwrap();
+        assert!(matches!(result, Err(WifiScanError::ProcessError(ref e)) if e.contains("timed out")));
+        assert!(start.elapsed() < Duration::from_secs(15));
+    }
 
     #[test]
     fn parse_valid_output() {
