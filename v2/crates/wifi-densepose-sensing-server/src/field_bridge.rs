@@ -149,6 +149,18 @@ pub fn single_link_config() -> FieldModelConfig {
     }
 }
 
+/// Resolve the model status at the observation wall clock. `FieldModel::status`
+/// records the state at collection or restore time and does not advance as a
+/// long-running server crosses the stale and expiry boundaries.
+pub fn calibration_status_at(field: &FieldModel, observed_at_us: u64) -> CalibrationStatus {
+    match field.status() {
+        CalibrationStatus::Uncalibrated | CalibrationStatus::Collecting => field.status(),
+        CalibrationStatus::Fresh | CalibrationStatus::Stale | CalibrationStatus::Expired => {
+            field.check_freshness(observed_at_us)
+        }
+    }
+}
+
 /// Estimate occupancy using the FieldModel when calibrated, falling back
 /// to the score-based heuristic otherwise.
 ///
@@ -158,10 +170,11 @@ pub fn single_link_config() -> FieldModelConfig {
 pub fn occupancy_or_fallback(
     field: &FieldModel,
     frame_history: &VecDeque<Vec<f64>>,
+    observed_at_us: u64,
     smoothed_score: f64,
     prev_count: usize,
 ) -> usize {
-    match field.status() {
+    match calibration_status_at(field, observed_at_us) {
         CalibrationStatus::Fresh | CalibrationStatus::Stale => {
             let frames: Vec<Vec<f64>> = frame_history
                 .iter()
@@ -470,6 +483,36 @@ mod tests {
         assert_eq!(
             calibrated_occupancy(&field, &VecDeque::new(), 1_500_000),
             None
+        );
+    }
+
+    #[test]
+    fn occupancy_falls_back_after_expiry_without_a_process_restart() {
+        let field = fresh_test_model();
+        let baseline = field.modes().unwrap().baseline[0].clone();
+        let history: VecDeque<Vec<f64>> =
+            (0..OCCUPANCY_WINDOW).map(|_| baseline.clone()).collect();
+
+        assert_eq!(field.status(), CalibrationStatus::Fresh);
+        assert_eq!(
+            calibration_status_at(&field, 1_500_000),
+            CalibrationStatus::Fresh
+        );
+        assert_eq!(
+            occupancy_or_fallback(&field, &history, 1_500_000, 0.0, 0),
+            0,
+            "a fresh field model may resolve its learned baseline as empty"
+        );
+
+        assert_eq!(field.status(), CalibrationStatus::Fresh);
+        assert_eq!(
+            calibration_status_at(&field, 4_000_000),
+            CalibrationStatus::Expired
+        );
+        assert_eq!(
+            occupancy_or_fallback(&field, &history, 4_000_000, 0.0, 0),
+            score_to_person_count(0.0, 0),
+            "an expired in-memory model must fall back even though its cached status is fresh"
         );
     }
 

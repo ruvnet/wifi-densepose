@@ -1730,12 +1730,38 @@ mod adr323_pose_physics_http_tests {
 const ESP32_OFFLINE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl AppStateInner {
+    fn field_model_status_at(&self, observed_at_unix_ms: u64) -> Option<CalibrationStatus> {
+        self.field_model.as_ref().map(|model| {
+            field_bridge::calibration_status_at(model, observed_at_unix_ms.saturating_mul(1_000))
+        })
+    }
+
+    fn field_model_active_at(&self, observed_at_unix_ms: u64) -> bool {
+        self.field_model_status_at(observed_at_unix_ms)
+            .is_some_and(|status| status != CalibrationStatus::Expired)
+    }
+
+    fn bootstrap_baseline_active_at(&self, observed_at_unix_ms: u64) -> bool {
+        self.bootstrap_baseline_active && self.field_model_active_at(observed_at_unix_ms)
+    }
+
+    fn explicit_calibration_fresh_at(&self, observed_at_unix_ms: u64) -> bool {
+        !self.bootstrap_baseline_active
+            && self.field_model_status_at(observed_at_unix_ms) == Some(CalibrationStatus::Fresh)
+    }
+
     /// Return the effective data source, accounting for ESP32 frame timeout.
     /// If the source is "esp32" but no frame has arrived in 5 seconds, returns
     /// "esp32:offline" so the UI can distinguish active vs stale connections.
     /// Person count: eigenvalue-based if field model is calibrated, else heuristic.
     /// Uses global frame_history if populated, otherwise the freshest per-node history.
-    fn person_count(&self) -> usize {
+    fn person_count_at(&self, observed_at_unix_ms: u64) -> usize {
+        // A persisted bootstrap model has negative-only authority. Its only
+        // allowed occupancy effect is the explicit empty-background suppression
+        // in `bootstrap_empty_prior_applies`; it must never infer positive count.
+        if self.bootstrap_baseline_active {
+            return score_to_person_count(self.smoothed_person_score, self.prev_person_count);
+        }
         match self.field_model.as_ref() {
             Some(fm) => {
                 // A single-link model may score only the source node it was
@@ -1769,12 +1795,17 @@ impl AppStateInner {
                 field_bridge::occupancy_or_fallback(
                     fm,
                     history,
+                    observed_at_unix_ms.saturating_mul(1_000),
                     self.smoothed_person_score,
                     self.prev_person_count,
                 )
             }
             None => score_to_person_count(self.smoothed_person_score, self.prev_person_count),
         }
+    }
+
+    fn person_count(&self) -> usize {
+        self.person_count_at(chrono::Utc::now().timestamp_millis().max(0) as u64)
     }
 
     /// A restored startup image has negative-only authority. It may suppress
@@ -1952,6 +1983,95 @@ impl AppStateInner {
             )
             .expect("default pose physics configuration is valid"),
         }
+    }
+}
+
+#[cfg(test)]
+mod calibration_expiry_tests {
+    use super::*;
+    use wifi_densepose_signal::ruvsense::field_model::FieldModelConfig;
+
+    fn finalized_model(calibrated_at_unix_ms: u64) -> FieldModel {
+        let mut model = FieldModel::new(FieldModelConfig {
+            n_links: 1,
+            n_subcarriers: 56,
+            n_modes: 3,
+            min_calibration_frames: 10,
+            min_calibration_duration_s: 0.0,
+            baseline_expiry_s: 2.0,
+        })
+        .unwrap();
+        for frame_index in 0..20 {
+            let frame = (0..56)
+                .map(|subcarrier| {
+                    10.0 + subcarrier as f64 * 0.01
+                        + (frame_index as f64 * 0.1 + subcarrier as f64 * 0.03).sin() * 0.01
+                })
+                .collect();
+            model.feed_calibration(&[frame]).unwrap();
+        }
+        model
+            .finalize_calibration(calibrated_at_unix_ms.saturating_mul(1_000), 7)
+            .unwrap();
+        model
+    }
+
+    fn state_with_model(bootstrap: bool) -> AppStateInner {
+        let model = finalized_model(1_000);
+        let baseline = model.modes().unwrap().baseline[0].clone();
+        let mut state = AppStateInner::minimal();
+        state.frame_history = (0..50).map(|_| baseline.clone()).collect();
+        state.field_model = Some(model);
+        state.bootstrap_baseline_active = bootstrap;
+        if bootstrap {
+            state.bootstrap_baseline = Some(BootstrapBaselineMetadata {
+                authority: bootstrap_baseline::BOOTSTRAP_BASELINE_AUTHORITY,
+                source_node_ids: vec![5],
+                source_model_id: "test-model".to_string(),
+                created_at_unix_ms: 1_000,
+                expires_at_unix_ms: 3_000,
+                content_sha256: "00".repeat(32),
+            });
+        }
+        state
+    }
+
+    #[test]
+    fn bootstrap_field_model_remains_negative_only_for_person_count() {
+        let runtime = state_with_model(false);
+        assert_eq!(runtime.person_count_at(1_500), 0);
+
+        let bootstrap = state_with_model(true);
+        assert_eq!(
+            bootstrap.person_count_at(1_500),
+            score_to_person_count(0.0, 0),
+            "a bootstrap prior must not derive a positive or negative count through the runtime model path"
+        );
+    }
+
+    #[tokio::test]
+    async fn long_running_expiry_is_not_reported_active_for_runtime_or_bootstrap() {
+        let runtime = Arc::new(RwLock::new(state_with_model(false)));
+        let Json(runtime_status) = calibration_status(State(runtime)).await;
+        assert_eq!(runtime_status["active"], false);
+        assert_eq!(runtime_status["status"], "expired");
+        assert_eq!(runtime_status["binding_mode"], "none");
+
+        let bootstrap = Arc::new(RwLock::new(state_with_model(true)));
+        let Json(bootstrap_status) = calibration_status(State(bootstrap)).await;
+        assert_eq!(bootstrap_status["active"], false);
+        assert_eq!(bootstrap_status["status"], "expired");
+        assert_eq!(bootstrap_status["binding_mode"], "none");
+        assert_eq!(bootstrap_status["bootstrap_baseline"]["stored"], true);
+        assert_eq!(bootstrap_status["bootstrap_baseline"]["active"], false);
+        assert_eq!(
+            bootstrap_status["bootstrap_baseline"]["calibrated_evidence_authorized"],
+            false
+        );
+        assert_eq!(
+            bootstrap_status["bootstrap_baseline"]["numeric_vitals_authorized"],
+            false
+        );
     }
 }
 
@@ -6319,7 +6439,9 @@ async fn calibration_start(
     }
     // Guard: don't discard an in-progress or fresh calibration
     if let Some(ref fm) = s.field_model {
-        match fm.status() {
+        let observed_at_us =
+            (chrono::Utc::now().timestamp_millis().max(0) as u64).saturating_mul(1_000);
+        match field_bridge::calibration_status_at(fm, observed_at_us) {
             CalibrationStatus::Collecting => {
                 return Json(serde_json::json!({
                     "success": false,
@@ -6423,6 +6545,9 @@ async fn calibration_stop(State(state): State<SharedState>) -> Json<serde_json::
 async fn calibration_status(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
     let observed_at_unix_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+    let effective_status = s.field_model_status_at(observed_at_unix_ms);
+    let active = s.field_model_active_at(observed_at_unix_ms);
+    let bootstrap_active = s.bootstrap_baseline_active_at(observed_at_unix_ms);
     let bootstrap_background_match = s.bootstrap_background_match(observed_at_unix_ms);
     let runtime_reference = s.field_model.as_ref().and_then(|model| {
         model.modes().map(|modes| serde_json::json!({
@@ -6434,21 +6559,22 @@ async fn calibration_status(State(state): State<SharedState>) -> Json<serde_json
             "raw_calibration_frames_persisted": false,
         }))
     });
-    let (active, status, frame_count, min_frames, elapsed_s, frames_per_second, min_duration_s) =
-        s.field_model.as_ref().map_or(
-            (false, "none".to_string(), 0, 0, 0.0, 0.0, 0.0),
-            |model| {
-                (
-                    true,
-                    format!("{:?}", model.status()).to_lowercase(),
-                    model.calibration_frame_count(),
-                    model.min_calibration_frames(),
-                    model.calibration_elapsed_s(),
-                    model.calibration_frames_per_second(),
-                    model.min_calibration_duration_s(),
-                )
-            },
-        );
+    let (frame_count, min_frames, elapsed_s, frames_per_second, min_duration_s) = s
+        .field_model
+        .as_ref()
+        .map_or((0, 0, 0.0, 0.0, 0.0), |model| {
+            (
+                model.calibration_frame_count(),
+                model.min_calibration_frames(),
+                model.calibration_elapsed_s(),
+                model.calibration_frames_per_second(),
+                model.min_calibration_duration_s(),
+            )
+        });
+    let status = effective_status.map_or_else(
+        || "none".to_string(),
+        |status| format!("{status:?}").to_lowercase(),
+    );
     Json(serde_json::json!({
         "active": active,
         "status": status,
@@ -6460,10 +6586,10 @@ async fn calibration_status(State(state): State<SharedState>) -> Json<serde_json
         "model_id": s.calibration_model_id,
         "source_node_ids": s.calibration_source_node_ids,
         "runtime_reference": runtime_reference,
-        "binding_mode": if s.bootstrap_baseline_active { "bootstrap_only" } else if active { "runtime" } else { "none" },
+        "binding_mode": if bootstrap_active { "bootstrap_only" } else if active { "runtime" } else { "none" },
         "bootstrap_baseline": s.bootstrap_baseline.as_ref().map(|metadata| serde_json::json!({
             "stored": true,
-            "active": s.bootstrap_baseline_active,
+            "active": bootstrap_active,
             "authority": metadata.authority,
             "source_node_ids": metadata.source_node_ids,
             "source_model_id": metadata.source_model_id,
@@ -6502,11 +6628,8 @@ async fn calibration_promote_bootstrap(
 ) -> Json<serde_json::Value> {
     let expected_model_id = {
         let s = state.read().await;
-        if s.bootstrap_baseline_active
-            || !s.field_model.as_ref().is_some_and(|model| {
-                matches!(model.status(), CalibrationStatus::Fresh)
-            })
-        {
+        let observed_at_unix_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        if s.bootstrap_baseline_active || !s.explicit_calibration_fresh_at(observed_at_unix_ms) {
             return Json(serde_json::json!({
                 "success": false,
                 "error_code": "calibration_not_finalized",
@@ -6540,8 +6663,9 @@ async fn calibration_promote_bootstrap(
         while tokio::time::Instant::now() < interval_deadline {
             let observed = {
                 let s = state.read().await;
+                let observed_at_unix_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
                 if s.calibration_model_id.as_deref() != Some(expected_model_id.as_str())
-                    || s.bootstrap_baseline_active
+                    || !s.explicit_calibration_fresh_at(observed_at_unix_ms)
                 {
                     None
                 } else {
@@ -6581,8 +6705,9 @@ async fn calibration_promote_bootstrap(
     }
 
     let mut s = state.write().await;
+    let observed_at_unix_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
     if s.calibration_model_id.as_deref() != Some(expected_model_id.as_str())
-        || s.bootstrap_baseline_active
+        || !s.explicit_calibration_fresh_at(observed_at_unix_ms)
     {
         return Json(serde_json::json!({
             "success": false,
@@ -6661,7 +6786,11 @@ async fn calibration_refine_bootstrap(
 
     let (expected_model_id, expected_digest, source_node_id) = {
         let s = state.read().await;
-        let Some(metadata) = s.bootstrap_baseline.as_ref().filter(|_| s.bootstrap_baseline_active)
+        let observed_at_unix_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        let Some(metadata) = s
+            .bootstrap_baseline
+            .as_ref()
+            .filter(|_| s.bootstrap_baseline_active_at(observed_at_unix_ms))
         else {
             return Json(serde_json::json!({
                 "success": false,
@@ -6706,7 +6835,8 @@ async fn calibration_refine_bootstrap(
         while tokio::time::Instant::now() < interval_deadline {
             observed = {
                 let s = state.read().await;
-                let identity_matches = s.bootstrap_baseline_active
+                let observed_at_unix_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+                let identity_matches = s.bootstrap_baseline_active_at(observed_at_unix_ms)
                     && s.bootstrap_baseline.as_ref().is_some_and(|metadata| {
                         metadata.source_model_id == expected_model_id
                             && metadata.content_sha256 == expected_digest
@@ -6771,7 +6901,8 @@ async fn calibration_refine_bootstrap(
     }
 
     let mut s = state.write().await;
-    let identity_matches = s.bootstrap_baseline_active
+    let observed_at_unix_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+    let identity_matches = s.bootstrap_baseline_active_at(observed_at_unix_ms)
         && s.bootstrap_baseline.as_ref().is_some_and(|metadata| {
             metadata.source_model_id == expected_model_id
                 && metadata.content_sha256 == expected_digest
@@ -6951,11 +7082,10 @@ fn chrono_timestamp() -> u64 {
 
 async fn vital_signs_endpoint(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
-    let person_count = s.person_count();
-    let explicit_calibration_fresh = !s.bootstrap_baseline_active
-        && s.field_model
-            .as_ref()
-            .is_some_and(|model| matches!(model.status(), CalibrationStatus::Fresh));
+    let observed_at_unix_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+    let person_count = s.person_count_at(observed_at_unix_ms);
+    let explicit_calibration_fresh =
+        s.explicit_calibration_fresh_at(observed_at_unix_ms);
     let published = vitals_for_publication(
         &s.latest_vitals,
         explicit_calibration_fresh,
@@ -7036,11 +7166,9 @@ async fn edge_registry_endpoint(
 /// GET /api/v1/edge-vitals — latest edge vitals from ESP32 (ADR-039).
 async fn edge_vitals_endpoint(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let s = state.read().await;
-    let explicit_single_occupant = !s.bootstrap_baseline_active
-        && s.field_model
-            .as_ref()
-            .is_some_and(|model| matches!(model.status(), CalibrationStatus::Fresh))
-        && s.person_count() == 1;
+    let observed_at_unix_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+    let explicit_single_occupant = s.explicit_calibration_fresh_at(observed_at_unix_ms)
+        && s.person_count_at(observed_at_unix_ms) == 1;
     if !explicit_single_occupant {
         return Json(serde_json::json!({
             "status": "abstained",
@@ -7654,7 +7782,10 @@ async fn udp_receiver_task(
                                 // #803: don't let the saturating activity score
                                 // discard count-aware per-node estimates.
                                 let count =
-                                    aggregate_person_count(s.person_count(), &s.node_states);
+                                    aggregate_person_count(
+                                        s.person_count_at(observed_at_unix_ms),
+                                        &s.node_states,
+                                    );
                                 s.prev_person_count = count;
                                 count.max(1) // presence=true => at least 1
                             }
@@ -7791,10 +7922,8 @@ async fn udp_receiver_task(
                         heartbeat_confidence: if vitals.presence { 0.7 } else { 0.0 },
                         signal_quality: vitals.presence_score as f64,
                     };
-                    let explicit_calibration_fresh = !s.bootstrap_baseline_active
-                        && s.field_model.as_ref().is_some_and(|model| {
-                            matches!(model.status(), CalibrationStatus::Fresh)
-                        });
+                    let explicit_calibration_fresh =
+                        s.explicit_calibration_fresh_at(observed_at_unix_ms);
                     let published_vitals = vitals_for_publication(
                         &vital_candidates,
                         explicit_calibration_fresh,
@@ -8201,7 +8330,10 @@ async fn udp_receiver_task(
                                 // #803: don't let the saturating activity score
                                 // discard count-aware per-node estimates.
                                 let count =
-                                    aggregate_person_count(s.person_count(), &s.node_states);
+                                    aggregate_person_count(
+                                        s.person_count_at(observed_at_unix_ms),
+                                        &s.node_states,
+                                    );
                                 s.prev_person_count = count;
                                 count.max(1)
                             }
@@ -8314,10 +8446,8 @@ async fn udp_receiver_task(
                     } else {
                         debounce_room_classification(&mut s, &room_inference)
                     };
-                    let explicit_calibration_fresh = !s.bootstrap_baseline_active
-                        && s.field_model.as_ref().is_some_and(|model| {
-                            matches!(model.status(), CalibrationStatus::Fresh)
-                        });
+                    let explicit_calibration_fresh =
+                        s.explicit_calibration_fresh_at(observed_at_unix_ms);
                     let published_vitals = vitals_for_publication(
                         &vitals,
                         explicit_calibration_fresh,
