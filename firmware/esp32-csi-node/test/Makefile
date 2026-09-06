@@ -39,6 +39,15 @@ CFLAGS   = -fsanitize=fuzzer,address,undefined -g -O1 \
 STUBS_SRC = stubs/esp_stubs.c
 MAIN_DIR  = ../main
 
+# GNU ld and Apple's ld spell dead section elimination differently.
+# Keep the host sanitation test portable across the Linux CI runner and macOS.
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+DEAD_STRIP_LDFLAGS := -Wl,-dead_strip
+else
+DEAD_STRIP_LDFLAGS := -Wl,--gc-sections
+endif
+
 # Default fuzz duration (seconds) and jobs
 FUZZ_DURATION ?= 30
 FUZZ_JOBS     ?= 1
@@ -55,7 +64,7 @@ all: fuzz_serialize fuzz_edge fuzz_nvs test_adr110 test_vitals test_mmwave_detec
 # unrelated device-only callback code out of this host executable.
 test_csi_sanitize: test_csi_sanitize.c $(MAIN_DIR)/csi_collector.c $(STUBS_SRC)
 	cc -std=c99 -Wall -Wextra -Istubs -I$(MAIN_DIR) -ffunction-sections \
-		$^ -Wl,-dead_strip -o $@ -lm
+		$^ $(DEAD_STRIP_LDFLAGS) -o $@ -lm
 
 run_csi_sanitize: test_csi_sanitize
 	./test_csi_sanitize
