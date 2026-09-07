@@ -30,7 +30,7 @@ mdns-sd = "0.11"
 
 # Serialization
 serde = { workspace = true }
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 
 # Logging
 tracing.workspace = true
