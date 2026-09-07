@@ -243,6 +243,58 @@ where a wedge is rare and a reboot is cheap. If your uplink drops briefly and
 often, a short timeout turns a recoverable gap into a reboot loop; if it wedges
 hard, a long one leaves a node dark for twenty minutes.
 
+### A worked example: the same two options, in one house
+
+MEASURED on a nine-node ESP32-C6 fleet in a single detached house. **These are
+our numbers, not yours.** They are here to show the shape of the decision, and
+how much a building can move it.
+
+Four arms as a 2x2 factorial, 20-minute runs, three Latin-square blocks so slow
+drift landed on every arm equally. Metric is the fraction of transmissions held
+in common by two or more nodes.
+
+| arm | mean |
+|---|---|
+| `elapsed` (per-node gate) | 0.2434 |
+| `mesh` (aligned windows) | 0.2480 |
+| `seq` (keep `rx_seq` divisible by 8) | **0.5605** |
+| `mesh` + `seq` | 0.5452 |
+
+`seq` roughly doubled pairing, +31.7 pp, about 70x the measured drift floor and
+reproduced in all three blocks. Mesh alignment bought **+0.5 pp** -- inside
+noise. Stacking them was very slightly *worse* than `seq` alone.
+
+**Why that happened here, and why yours may differ.** These nodes already
+overheard a great deal in common -- two boards side by side heard the same
+transmissions 72% of the time -- so there was a large pool of shared
+transmissions for `seq` to select from, and little left for window alignment to
+recover. A house with fewer shared transmitters, thicker interior walls, or
+nodes spread so that few pairs hear the same radios has less for `seq` to work
+with, and phase alignment may matter more rather than less. We did not measure
+such a house and do not claim to know.
+
+**It is a trade, not a free win.** At period 8 the `seq` arms carried ~75-95k
+transmissions per 20 minutes against ~120-160k ungated: pairing is bought with
+raw frame rate. Absolute paired transmissions per minute still rose (2629 vs
+2524), because the discarded frames are disproportionately ones only one node
+would have kept. Whether that trade is right depends on what consumes your
+stream. On-device edge processing was **unaffected** here -- frames processed
+stayed ~1900 per node per 4 minutes in both modes, because that pipeline is
+separately rate-limited -- so the cost fell on the uplink, not on local sensing.
+If your uplink is the scarce resource, that changes the answer.
+
+**A prediction we got wrong, kept because it is the useful part.** Our mesh had
+split into two leader domains with three nodes never synchronising at all. We
+expected `seq` to win most on pairs spanning that split. Per-pair yield said
+otherwise: same-domain 5.82x, cross-domain 6.24x, involving a never-synced node
+**5.16x** -- the lowest, the opposite of the prediction -- and within-group
+spread (3.6x-8.1x) dwarfed every between-group difference.
+
+So `seq` is **not** a workaround for broken time sync; it wins roughly
+uniformly, including where sync is healthy. The consequence is negative and
+worth having: repairing the mesh split would probably not have closed the gap,
+and that effort would have been spent for nothing.
+
 ### Measuring rather than guessing
 
 A gate comparison needs a fixed environment, repeated blocks, and every arm run
