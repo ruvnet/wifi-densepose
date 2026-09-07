@@ -97,6 +97,7 @@ typedef struct {
      * the field in IDF's esp_wifi_types_native.h so the harness compiles the
      * real serializer rather than a divergent copy of it. */
     uint16_t           rx_seq;
+    bool               first_word_invalid;
     int16_t            len;     /**< Length of the I/Q buffer in bytes. */
     int8_t            *buf;     /**< Pointer to I/Q data. */
 } wifi_csi_info_t;

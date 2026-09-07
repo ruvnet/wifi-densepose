@@ -139,6 +139,39 @@ pub fn features_from_runtime(feat: &serde_json::Value, amps: &[f64]) -> [f64; N_
     ]
 }
 
+/// Preserve the fifth feature's historical meaning for models trained before
+/// the server began measuring temporal frequency from a frame window.
+///
+/// Version 1 models learned a proxy equal to the strongest subcarrier index
+/// multiplied by 0.05. Version 2 and later models consume the measured
+/// temporal frequency in hertz. Keeping this translation at the model boundary
+/// prevents a server upgrade from silently changing an existing model's input
+/// distribution.
+pub fn compatible_dominant_frequency(
+    model_version: u32,
+    temporal_frequency_hz: f64,
+    amplitudes: &[f64],
+) -> f64 {
+    if model_version >= 2 {
+        return if temporal_frequency_hz.is_finite() {
+            temporal_frequency_hz.max(0.0)
+        } else {
+            0.0
+        };
+    }
+
+    amplitudes
+        .iter()
+        .enumerate()
+        .filter(|(_, amplitude)| amplitude.is_finite())
+        .max_by(|(_, left), (_, right)| {
+            left.partial_cmp(right)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(index, _)| index as f64 * 0.05)
+        .unwrap_or(0.0)
+}
+
 /// Compute statistical features from raw subcarrier amplitudes.
 fn subcarrier_stats(amps: &[f64]) -> (f64, f64, f64, f64, f64, f64, f64, f64) {
     if amps.is_empty() {
@@ -641,4 +674,22 @@ pub fn train_from_recordings(recordings_dir: &Path) -> Result<AdaptiveModel, Str
 /// Default path for the saved adaptive model.
 pub fn model_path() -> PathBuf {
     PathBuf::from("data/adaptive_model.json")
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::compatible_dominant_frequency;
+
+    #[test]
+    fn version_one_keeps_legacy_subcarrier_proxy() {
+        let amplitudes = [1.0, 2.0, 8.0, 3.0];
+        assert_eq!(compatible_dominant_frequency(1, 1.25, &amplitudes), 0.10);
+    }
+
+    #[test]
+    fn version_two_uses_measured_temporal_frequency() {
+        let amplitudes = [1.0, 20.0, 2.0];
+        assert_eq!(compatible_dominant_frequency(2, 1.25, &amplitudes), 1.25);
+        assert_eq!(compatible_dominant_frequency(2, f64::NAN, &amplitudes), 0.0);
+    }
 }

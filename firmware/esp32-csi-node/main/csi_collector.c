@@ -291,8 +291,16 @@ size_t csi_serialize_frame(const wifi_csi_info_t *info, uint8_t *buf, size_t buf
     uint16_t rx_seq = (uint16_t)info->rx_seq;
     memcpy(&buf[26], &rx_seq, 2);
 
-    /* I/Q data */
+    /* I/Q data. ESP-IDF documents that the first four CSI bytes are invalid
+     * when first_word_invalid is set. Never let those hardware artifacts feed
+     * either the host or edge DSP path. Preserve the fixed ADR-018 geometry by
+     * zeroing rather than removing bytes, and mark the sanitation in bit 5. */
     memcpy(&buf[CSI_HEADER_SIZE_V3], info->buf, iq_len);
+    if (info->first_word_invalid && iq_len > 0) {
+        size_t invalid_len = iq_len < 4 ? iq_len : 4;
+        memset(&buf[CSI_HEADER_SIZE_V3], 0, invalid_len);
+        buf[19] |= CSI_FLAG_FIRST_WORD_SANITIZED;
+    }
 
     return frame_size;
 }
@@ -358,13 +366,16 @@ static void wifi_csi_callback(void *ctx, wifi_csi_info_t *info)
      * while the on-device Tier 1/2 pipeline receives a uniform, sustainable
      * stream. Enqueuing every burst frame overloaded the unicore C6 DSP and
      * turned 30-40 callback pps into an irregular approximately 8 Hz subset. */
-    if (info->buf && info->len > 0) {
+    if (frame_len > CSI_HEADER_SIZE_V3) {
         if (s_next_edge_enqueue_us == 0) {
             s_next_edge_enqueue_us = now_us;
         }
 
         if (now_us >= s_next_edge_enqueue_us) {
-            (void)edge_enqueue_csi((const uint8_t *)info->buf, (uint16_t)info->len,
+            /* Reuse the sanitized ADR-018 payload. Feeding info->buf here
+             * would reintroduce first_word_invalid artifacts on device. */
+            (void)edge_enqueue_csi(&frame_buf[CSI_HEADER_SIZE_V3],
+                                   (uint16_t)(frame_len - CSI_HEADER_SIZE_V3),
                                    (int8_t)info->rx_ctrl.rssi, info->rx_ctrl.channel);
 
             /* Preserve the configured sample clock instead of resetting it to

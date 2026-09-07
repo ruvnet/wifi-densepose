@@ -31,6 +31,9 @@
 /** Wire v3 header size: v1 plus tx MAC (6) at [20..25] and rx_seq (2) at [26..27]. */
 #define CSI_HEADER_SIZE_V3 28
 
+/** ADR-018 byte 19: ESP-IDF reported and firmware sanitized invalid CSI prefix. */
+#define CSI_FLAG_FIRST_WORD_SANITIZED (1U << 5)
+
 /** Maximum frame buffer size (header + 4 antennas * 256 subcarriers * 2 bytes). */
 #define CSI_MAX_FRAME_SIZE (CSI_HEADER_SIZE_V3 + 4 * 256 * 2)
 

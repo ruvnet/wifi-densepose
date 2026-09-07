@@ -257,9 +257,16 @@ Offset  Size  Field
 12      4     Sequence number (LE u32)
 16      1     RSSI (i8)
 17      1     Noise floor (i8)
-18      2     Reserved
+18      1     PPDU type (ADR-110; zero when tagging is disabled)
+19      1     Flags: bit0=40 MHz, bit2=STBC, bit4=sync valid,
+              bit5=invalid first CSI word zeroed by firmware
 20      N*2   I/Q pairs (n_antennas * n_subcarriers * 2 bytes)
 ```
+
+When ESP-IDF marks `first_word_invalid`, the firmware preserves packet geometry,
+zeros the first four CSI bytes, and sets byte 19 bit 5. The same sanitized bytes
+feed the edge DSP path. This prevents a documented hardware artifact from being
+learned as motion while keeping older readers wire compatible.
 
 ### Vitals Packet (32 bytes)
 
