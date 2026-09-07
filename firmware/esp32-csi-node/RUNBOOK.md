@@ -283,6 +283,20 @@ stayed ~1900 per node per 4 minutes in both modes, because that pipeline is
 separately rate-limited -- so the cost fell on the uplink, not on local sensing.
 If your uplink is the scarce resource, that changes the answer.
 
+**The two options differ in kind, not just in effect.** Mesh alignment is an
+agreement between receivers: it needs a shared clock, so it inherits whatever
+the sync topology does. Selecting by `rx_seq` needs no agreement at all. The
+802.11 sequence control field is assigned by the TRANSMITTER and is identical
+at every receiver, so it is a coordination-free name for one transmission --
+two nodes that have never heard of each other, sit in different sync domains,
+or run with no mesh whatsoever still keep the same subset of frames.
+
+In the code the seq test runs before any sync check and reads only the frame;
+only the mesh branch calls `c6_sync_espnow_is_valid()`. That asymmetry is the
+reason `seq` had nothing to degrade in our runs, and it is worth weighing
+directly: if your fleet's sync is fragile, `seq` is not merely the better
+performer, it is the one with no dependency that can quietly fail.
+
 **A limitation of our own measurement, which cuts against the mesh arm.** The
 mesh gate uses mesh-time buckets only while `c6_sync_espnow_is_valid()`; a node
 with no valid sync falls back to the elapsed gate rather than gating on a
