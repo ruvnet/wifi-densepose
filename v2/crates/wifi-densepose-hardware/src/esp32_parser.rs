@@ -413,15 +413,16 @@ mod tests {
 
     #[test]
     fn adr110_flags_round_trip_all_bits() {
-        // All known flag bits set: bw40 (0x01) + STBC (0x04) + LDPC (0x08) + 15.4-sync (0x10) = 0x1D
-        let data = build_test_frame_with_he(6, 1, &[(0, 0); 56], 1, 0x1D);
+        // All known flag bits set: bw40 + STBC + LDPC + sync + sanitized prefix = 0x3D.
+        let data = build_test_frame_with_he(6, 1, &[(0, 0); 56], 1, 0x3D);
         let (frame, _) = Esp32CsiParser::parse_frame(&data).unwrap();
         assert!(frame.metadata.adr018_flags.bw40);
         assert!(frame.metadata.adr018_flags.stbc);
         assert!(frame.metadata.adr018_flags.ldpc);
         assert!(frame.metadata.adr018_flags.ieee802154_sync_valid);
+        assert!(frame.metadata.adr018_flags.first_word_sanitized);
         // Round-trip the encoder
-        assert_eq!(frame.metadata.adr018_flags.to_byte(), 0x1D);
+        assert_eq!(frame.metadata.adr018_flags.to_byte(), 0x3D);
     }
 
     #[test]

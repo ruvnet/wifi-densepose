@@ -43,6 +43,8 @@ per ADR-022 Phase 3.
 - **WebSocket broadcast** -- Real-time sensing updates pushed to all connected clients at
   `ws://localhost:8765/ws/sensing`.
 - **Static file serving** -- Hosts the sensing UI on port 8080 with CORS headers.
+- **Private startup baseline** -- Restores a recent, installation-bound empty-room field model
+  without storing raw CSI or authorizing numeric vital signs (ADR-355).
 
 ## Modules
 
@@ -73,6 +75,23 @@ cargo run -p wifi-densepose-sensing-server -- \
     --udp-port 5005 \
     --static-dir ./ui
 ```
+
+### Empty-room startup baseline
+
+Provide a stable installation ID and an application-owned private state directory:
+
+```bash
+cargo run -p wifi-densepose-sensing-server -- \
+    --installation-id installation-01 \
+    --data-dir /path/to/private/application-state
+```
+
+Complete the normal empty-room calibration, then call
+`POST /api/v1/calibration/bootstrap/promote`. The server measures a separate 12-sample holdout
+before storing an aggregate field-model snapshot. On a later start with the same installation ID,
+the snapshot is restored with `bootstrap_only` authority. It can reduce startup background false
+positives, but cannot authorize calibrated evidence or numeric heart and breathing rates. Use
+`POST /api/v1/calibration/reset` with administrator scope to remove it.
 
 ### Using as a library
 
