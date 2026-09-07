@@ -94,6 +94,7 @@ typedef struct {
      * esp_wifi_types_native.h so this harness compiles the REAL serializer
      * rather than a divergent copy. */
     uint16_t           rx_seq;
+    bool               first_word_invalid;
     int16_t            len;     /**< Length of the I/Q buffer in bytes. */
     int8_t            *buf;     /**< Pointer to I/Q data. */
 } wifi_csi_info_t;
