@@ -283,6 +283,23 @@ stayed ~1900 per node per 4 minutes in both modes, because that pipeline is
 separately rate-limited -- so the cost fell on the uplink, not on local sensing.
 If your uplink is the scarce resource, that changes the answer.
 
+**A limitation of our own measurement, which cuts against the mesh arm.** The
+mesh gate uses mesh-time buckets only while `c6_sync_espnow_is_valid()`; a node
+with no valid sync falls back to the elapsed gate rather than gating on a
+meaningless epoch. That is the right behaviour, but it means our `mesh` arms
+were partly `elapsed` arms: three of nine nodes never synchronised, so for those
+three the setting under test was silently not in effect. Read the +0.5 pp as
+"mesh where sync held, elapsed where it did not" rather than as a clean
+fleet-wide measurement of alignment.
+
+This is itself a house-dependent property. Time sync here is leader-elected and
+hub-and-spoke -- one node broadcasts and the rest follow. Whether every node can
+hear that leader is a question about your building, not about the firmware. In a
+larger or more divided house the leader may not reach everyone, the fleet
+fragments into sync domains, and any option that depends on shared time degrades
+quietly for the nodes that fell out. Check `is_leader` and sync validity in
+`/api/v1/mesh` before concluding that an alignment setting did or did not help.
+
 **A prediction we got wrong, kept because it is the useful part.** Our mesh had
 split into two leader domains with three nodes never synchronising at all. We
 expected `seq` to win most on pairs spanning that split. Per-pair yield said
