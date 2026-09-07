@@ -64,6 +64,12 @@
 /** Maximum frame buffer size (largest header + 4 antennas * 256 subcarriers * 2 bytes). */
 #define CSI_MAX_FRAME_SIZE (CSI_HEADER_SIZE_V3 + 4 * 256 * 2)
 
+/** ADR-018 byte 19: ESP-IDF reported and firmware sanitized invalid CSI prefix. */
+#define CSI_FLAG_FIRST_WORD_SANITIZED (1U << 5)
+
+/** Maximum frame buffer size (header + 4 antennas * 256 subcarriers * 2 bytes). */
+#define CSI_MAX_FRAME_SIZE (CSI_HEADER_SIZE + 4 * 256 * 2)
+
 /** Maximum number of channels in the hop table (ADR-029). */
 #define CSI_HOP_CHANNELS_MAX 6
 

@@ -40,12 +40,124 @@ const ENERGY_THRESH_3: f64 = 25.0;
 /// reliable — genuine higher counts come from the multistatic fusion path.
 const MAX_SINGLE_LINK_OCCUPANCY: usize = 3;
 
+/// Low-authority comparison of the current source window with a restored
+/// empty-room bootstrap image. This is background conformance only and cannot
+/// authorize presence, person count, pose, identity, or vital signs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BootstrapBackgroundMatch {
+    pub matches_empty: bool,
+    pub score: Option<f64>,
+    pub normalized_residual_z: Option<f64>,
+    pub maturity: f64,
+    pub reliable: bool,
+    pub residual_energy: f64,
+    pub residual_energy_threshold: f64,
+    pub window_size: usize,
+    pub reference_window_count: usize,
+}
+
+fn mean_frame(frames: &[Vec<f64>]) -> Option<Vec<f64>> {
+    let width = frames.first()?.len();
+    if width == 0 {
+        return None;
+    }
+    let mut mean = vec![0.0_f64; width];
+    let mut count = 0_usize;
+    for frame in frames {
+        if frame.len() != width {
+            continue;
+        }
+        for (sum, value) in mean.iter_mut().zip(frame.iter()) {
+            *sum += value;
+        }
+        count += 1;
+    }
+    if count == 0 {
+        return None;
+    }
+    for value in &mut mean {
+        *value /= count as f64;
+    }
+    Some(mean)
+}
+
+fn perturbation_occupancy(field: &FieldModel, frames: &[Vec<f64>]) -> Option<usize> {
+    let adaptive_threshold = field.empty_room_residual_energy_threshold();
+    let frame = match adaptive_threshold {
+        Some(_) => mean_frame(frames)?,
+        None => frames.first()?.clone(),
+    };
+    let perturbation = field.extract_perturbation(&[frame]).ok()?;
+    let count = match adaptive_threshold {
+        Some(threshold) => {
+            let empty_threshold = threshold.max(1.0);
+            if perturbation.total_energy > empty_threshold * 25.0 {
+                3
+            } else if perturbation.total_energy > empty_threshold * 12.0 {
+                2
+            } else if perturbation.total_energy > empty_threshold {
+                1
+            } else {
+                0
+            }
+        }
+        None => {
+            if perturbation.total_energy > ENERGY_THRESH_3 {
+                3
+            } else if perturbation.total_energy > ENERGY_THRESH_2 {
+                2
+            } else if perturbation.total_energy > 1.0 {
+                1
+            } else {
+                0
+            }
+        }
+    };
+    Some(count)
+}
+
+/// Provenance for a count produced by the calibrated field model. Callers
+/// that attach calibration evidence must never substitute the score heuristic
+/// when the calibrated path cannot evaluate the observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CalibratedOccupancyMethod {
+    Eigenvalue,
+    PerturbationEnergy,
+}
+
+impl CalibratedOccupancyMethod {
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::Eigenvalue => "field_model_eigenvalue_v1",
+            Self::PerturbationEnergy => "field_model_perturbation_energy_v1",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CalibratedOccupancy {
+    pub person_count: usize,
+    pub method: CalibratedOccupancyMethod,
+}
+
 /// Create a FieldModelConfig for single-link mode (one ESP32 node = one link).
 /// This avoids the DimensionMismatch error when feeding single-frame observations.
 pub fn single_link_config() -> FieldModelConfig {
     FieldModelConfig {
         n_links: 1,
         ..FieldModelConfig::default()
+    }
+}
+
+/// Resolve the model status at the observation wall clock. `FieldModel::status`
+/// records the state at collection or restore time and does not advance as a
+/// long-running server crosses the stale and expiry boundaries.
+pub fn calibration_status_at(field: &FieldModel, observed_at_us: u64) -> CalibrationStatus {
+    match field.status() {
+        CalibrationStatus::Uncalibrated | CalibrationStatus::Collecting => field.status(),
+        CalibrationStatus::Fresh | CalibrationStatus::Stale | CalibrationStatus::Expired => {
+            field.check_freshness(observed_at_us)
+        }
     }
 }
 
@@ -58,16 +170,17 @@ pub fn single_link_config() -> FieldModelConfig {
 pub fn occupancy_or_fallback(
     field: &FieldModel,
     frame_history: &VecDeque<Vec<f64>>,
+    observed_at_us: u64,
     smoothed_score: f64,
     prev_count: usize,
 ) -> usize {
-    match field.status() {
+    match calibration_status_at(field, observed_at_us) {
         CalibrationStatus::Fresh | CalibrationStatus::Stale => {
             let frames: Vec<Vec<f64>> = frame_history
                 .iter()
                 .rev()
                 .take(OCCUPANCY_WINDOW)
-                .cloned()
+                .map(|frame| CALIB_NORMALIZER.resample_to_canonical(frame))
                 .collect();
 
             if frames.is_empty() {
@@ -87,51 +200,119 @@ pub fn occupancy_or_fallback(
 
             // Fallback: perturbation energy thresholds.
             // FieldModel expects [n_links][n_subcarriers] — we use n_links=1.
-            let observation = vec![frames[0].clone()];
-            match field.extract_perturbation(&observation) {
-                Ok(perturbation) => {
-                    if perturbation.total_energy > ENERGY_THRESH_3 {
-                        3
-                    } else if perturbation.total_energy > ENERGY_THRESH_2 {
-                        2
-                    } else if perturbation.total_energy > 1.0 {
-                        1
-                    } else {
-                        0
-                    }
-                }
-                Err(_) => score_to_person_count(smoothed_score, prev_count),
-            }
+            perturbation_occupancy(field, &frames)
+                .unwrap_or_else(|| score_to_person_count(smoothed_score, prev_count))
         }
         _ => score_to_person_count(smoothed_score, prev_count),
     }
 }
 
-/// Feed the latest frame to the FieldModel during calibration collection.
+/// Return true only when a restored low-authority bootstrap model has a full
+/// runtime window and that model resolves the window as empty. This helper is
+/// deliberately one-way: a bootstrap prior may suppress an obvious background
+/// false positive, but cannot authorize presence or vital signs.
+pub fn bootstrap_empty_prior_applies(
+    field: &FieldModel,
+    frame_history: &VecDeque<Vec<f64>>,
+    observed_at_us: u64,
+) -> bool {
+    bootstrap_background_match(field, frame_history, observed_at_us)
+        .is_some_and(|result| result.matches_empty)
+}
+
+/// Score the current canonical runtime window against the learned empty-room
+/// residual references. Legacy models without scalar references preserve the
+/// binary match but intentionally return no score.
+pub fn bootstrap_background_match(
+    field: &FieldModel,
+    frame_history: &VecDeque<Vec<f64>>,
+    observed_at_us: u64,
+) -> Option<BootstrapBackgroundMatch> {
+    if frame_history.len() < OCCUPANCY_WINDOW
+        || field.check_freshness(observed_at_us) != CalibrationStatus::Fresh
+    {
+        return None;
+    }
+    let frames: Vec<Vec<f64>> = frame_history
+        .iter()
+        .rev()
+        .take(OCCUPANCY_WINDOW)
+        .map(|frame| CALIB_NORMALIZER.resample_to_canonical(frame))
+        .collect();
+    let result = field.empty_room_match(&frames)?;
+    Some(BootstrapBackgroundMatch {
+        matches_empty: result.matches_empty,
+        score: result.score,
+        normalized_residual_z: result.normalized_residual_z,
+        maturity: result.maturity,
+        reliable: result.reliable,
+        residual_energy: result.residual_energy,
+        residual_energy_threshold: result.residual_energy_threshold,
+        window_size: result.window_size,
+        reference_window_count: result.reference_window_count,
+    })
+}
+
+/// Produce a fail-closed occupancy result from a fresh calibrated model.
+pub fn calibrated_occupancy(
+    field: &FieldModel,
+    frame_history: &VecDeque<Vec<f64>>,
+    observed_at_us: u64,
+) -> Option<CalibratedOccupancy> {
+    if field.check_freshness(observed_at_us) != CalibrationStatus::Fresh {
+        return None;
+    }
+    let frames: Vec<Vec<f64>> = frame_history
+        .iter()
+        .rev()
+        .take(OCCUPANCY_WINDOW)
+        .map(|frame| CALIB_NORMALIZER.resample_to_canonical(frame))
+        .collect();
+    if frames.is_empty() {
+        return None;
+    }
+    if let Ok(person_count) = field.estimate_occupancy(&frames) {
+        return Some(CalibratedOccupancy {
+            person_count: person_count.min(MAX_SINGLE_LINK_OCCUPANCY),
+            method: CalibratedOccupancyMethod::Eigenvalue,
+        });
+    }
+    Some(CalibratedOccupancy {
+        person_count: perturbation_occupancy(field, &frames)?,
+        method: CalibratedOccupancyMethod::PerturbationEnergy,
+    })
+}
+
+/// Feed the current CSI frame to the FieldModel during calibration.
 ///
 /// Acts while the model is `Uncalibrated` or `Collecting`. The first fed frame
 /// flips a freshly-started (`Uncalibrated`) model to `Collecting` inside
 /// `feed_calibration`; without accepting the `Uncalibrated` state here the two
 /// gates deadlock and the frame count never leaves 0 (calibration/start yields
-/// an `Uncalibrated` model that nothing would ever advance). Wraps the latest
-/// frame as a single-link observation (n_links=1) and feeds it.
-pub fn maybe_feed_calibration(field: &mut FieldModel, frame_history: &VecDeque<Vec<f64>>) {
+/// an `Uncalibrated` model that nothing would ever advance). Edge-vitals
+/// packets have no CSI observation and must never call this helper. The caller
+/// owns the stateful sequence admission gate. Wraps the current frame as a
+/// single-link observation (n_links=1) and feeds it.
+pub fn maybe_feed_calibration(field: &mut FieldModel, amplitudes: &[f64]) -> bool {
     if !matches!(
         field.status(),
         CalibrationStatus::Uncalibrated | CalibrationStatus::Collecting
-    ) {
-        return;
+    ) || amplitudes.is_empty()
+    {
+        return false;
     }
-    if let Some(latest) = frame_history.back() {
-        // Resample the raw amplitude vector onto the FieldModel's canonical
-        // 56-tone grid before feeding. Real HT40 nodes stream 128-wide frames;
-        // feeding those raw made every `feed_calibration` fail DimensionMismatch
-        // (swallowed at debug level), pinning frame_count at 0 even after the
-        // status-gate deadlock was fixed. Single-link observation: [1][56].
-        let canonical = CALIB_NORMALIZER.resample_to_canonical(latest);
-        let observations = vec![canonical];
-        if let Err(e) = field.feed_calibration(&observations) {
+    // Resample the raw amplitude vector onto the FieldModel's canonical
+    // 56-tone grid before feeding. Real HT40 nodes stream 128-wide frames;
+    // feeding those raw made every `feed_calibration` fail DimensionMismatch
+    // (swallowed at debug level), pinning frame_count at 0 even after the
+    // status-gate deadlock was fixed. Single-link observation: [1][56].
+    let canonical = CALIB_NORMALIZER.resample_to_canonical(amplitudes);
+    let observations = vec![canonical];
+    match field.feed_calibration(&observations) {
+        Ok(()) => true,
+        Err(e) => {
             tracing::debug!("FieldModel calibration feed: {e}");
+            false
         }
     }
 }
@@ -174,6 +355,33 @@ pub fn parse_node_positions(input: &str) -> Vec<[f32; 3]> {
 mod tests {
     use super::*;
 
+    fn fresh_test_model() -> FieldModel {
+        let config = FieldModelConfig {
+            n_links: 1,
+            n_subcarriers: 56,
+            n_modes: 3,
+            min_calibration_frames: 10,
+            min_calibration_duration_s: 0.0,
+            baseline_expiry_s: 2.0,
+        };
+        let mut field = FieldModel::new(config).expect("field model");
+        for index in 0..20 {
+            let phase = index as f64 * 0.1;
+            let observation = vec![(0..56)
+                .map(|subcarrier| {
+                    1.0 + subcarrier as f64 * 0.01 + (phase + subcarrier as f64 * 0.03).sin() * 0.01
+                })
+                .collect()];
+            field
+                .feed_calibration(&observation)
+                .expect("calibration frame");
+        }
+        field
+            .finalize_calibration(1_000_000, 7)
+            .expect("finalize calibration");
+        field
+    }
+
     #[test]
     fn test_parse_node_positions() {
         let positions = parse_node_positions("0,0,1.5;3,0,1.5;1.5,3,1.5");
@@ -215,10 +423,7 @@ mod tests {
 
         // n_subcarriers defaults to 56; one single-link frame of that width.
         let frame = vec![0.5_f64; 56];
-        let mut history: VecDeque<Vec<f64>> = VecDeque::new();
-        history.push_back(frame);
-
-        maybe_feed_calibration(&mut field, &history);
+        assert!(maybe_feed_calibration(&mut field, &frame));
 
         assert_eq!(
             field.status(),
@@ -231,8 +436,8 @@ mod tests {
             "frame count must advance past 0"
         );
 
-        // Subsequent frames keep accumulating while Collecting.
-        maybe_feed_calibration(&mut field, &history);
+        // A subsequent unique frame keeps accumulating while Collecting.
+        assert!(maybe_feed_calibration(&mut field, &frame));
         assert_eq!(field.calibration_frame_count(), 2);
     }
 
@@ -247,10 +452,7 @@ mod tests {
 
         // 128-wide frame (HT40), NOT the model's 56 — would DimensionMismatch raw.
         let wide = vec![0.5_f64; 128];
-        let mut history: VecDeque<Vec<f64>> = VecDeque::new();
-        history.push_back(wide);
-
-        maybe_feed_calibration(&mut field, &history);
+        assert!(maybe_feed_calibration(&mut field, &wide));
 
         assert_eq!(
             field.status(),
@@ -262,5 +464,130 @@ mod tests {
             1,
             "wide frame must accumulate, not be silently dropped"
         );
+    }
+
+    #[test]
+    fn maybe_feed_calibration_rejects_an_empty_observation() {
+        let mut field = FieldModel::new(single_link_config()).expect("field model");
+        assert!(!maybe_feed_calibration(&mut field, &[]));
+        assert_eq!(field.calibration_frame_count(), 0);
+    }
+
+    #[test]
+    fn calibrated_occupancy_is_fresh_model_only_and_normalizes_runtime_frames() {
+        let field = fresh_test_model();
+        let mut history = VecDeque::new();
+        history.push_back(vec![1.02; 128]);
+        let result =
+            calibrated_occupancy(&field, &history, 1_500_000).expect("fresh calibrated inference");
+        assert!(result.person_count <= MAX_SINGLE_LINK_OCCUPANCY);
+        assert!(matches!(
+            result.method,
+            CalibratedOccupancyMethod::Eigenvalue | CalibratedOccupancyMethod::PerturbationEnergy
+        ));
+        assert_eq!(calibrated_occupancy(&field, &history, 4_000_000), None);
+        assert_eq!(
+            calibrated_occupancy(&field, &VecDeque::new(), 1_500_000),
+            None
+        );
+    }
+
+    #[test]
+    fn occupancy_falls_back_after_expiry_without_a_process_restart() {
+        let field = fresh_test_model();
+        let baseline = field.modes().unwrap().baseline[0].clone();
+        let history: VecDeque<Vec<f64>> =
+            (0..OCCUPANCY_WINDOW).map(|_| baseline.clone()).collect();
+
+        assert_eq!(field.status(), CalibrationStatus::Fresh);
+        assert_eq!(
+            calibration_status_at(&field, 1_500_000),
+            CalibrationStatus::Fresh
+        );
+        assert_eq!(
+            occupancy_or_fallback(&field, &history, 1_500_000, 0.0, 0),
+            0,
+            "a fresh field model may resolve its learned baseline as empty"
+        );
+
+        assert_eq!(field.status(), CalibrationStatus::Fresh);
+        assert_eq!(
+            calibration_status_at(&field, 4_000_000),
+            CalibrationStatus::Expired
+        );
+        assert_eq!(
+            occupancy_or_fallback(&field, &history, 4_000_000, 0.0, 0),
+            score_to_person_count(0.0, 0),
+            "an expired in-memory model must fall back even though its cached status is fresh"
+        );
+    }
+
+    #[test]
+    fn adaptive_runtime_reference_scores_empty_and_rejects_shift() {
+        let config = FieldModelConfig {
+            n_links: 1,
+            n_subcarriers: 56,
+            n_modes: 3,
+            min_calibration_frames: 500,
+            min_calibration_duration_s: 0.0,
+            baseline_expiry_s: 60.0,
+        };
+        let mut field = FieldModel::new(config).expect("field model");
+        let mut calibration = Vec::new();
+        for frame_index in 0..600 {
+            let time = frame_index as f64 * 0.071;
+            let frame: Vec<f64> = (0..56)
+                .map(|subcarrier| {
+                    let carrier = subcarrier as f64;
+                    18.0 + carrier * 0.08
+                        + (time + carrier * 0.13).sin() * 0.8
+                        + (time * 0.37 + carrier * 0.031).cos() * 0.35
+                })
+                .collect();
+            field.feed_calibration(&[frame.clone()]).unwrap();
+            calibration.push(frame);
+        }
+        field.finalize_calibration(1_000_000, 7).unwrap();
+
+        let empty_history: VecDeque<Vec<f64>> = calibration[550..600].iter().cloned().collect();
+        let empty = calibrated_occupancy(&field, &empty_history, 1_500_000)
+            .expect("adaptive perturbation result");
+        assert_eq!(empty.person_count, 0);
+        let background = bootstrap_background_match(&field, &empty_history, 1_500_000)
+            .expect("background score");
+        assert!(background.matches_empty);
+        assert_eq!(background.reference_window_count, 12);
+        assert!(background.reliable);
+        assert_eq!(background.maturity, 0.6);
+        assert!(background.normalized_residual_z.is_some());
+        assert!(background
+            .score
+            .is_some_and(|score| (0.5..=1.0).contains(&score)));
+
+        let short_history: VecDeque<Vec<f64>> = empty_history.iter().take(49).cloned().collect();
+        assert!(!bootstrap_empty_prior_applies(
+            &field,
+            &short_history,
+            1_500_000
+        ));
+
+        let shifted_history: VecDeque<Vec<f64>> = calibration[550..600]
+            .iter()
+            .map(|frame| {
+                frame
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| value + if index % 3 == 0 { 8.0 } else { -5.0 })
+                    .collect()
+            })
+            .collect();
+        let shifted = calibrated_occupancy(&field, &shifted_history, 1_500_000)
+            .expect("shifted perturbation result");
+        assert!(shifted.person_count >= 1);
+        let shifted_background = bootstrap_background_match(&field, &shifted_history, 1_500_000)
+            .expect("shifted background result");
+        assert!(!shifted_background.matches_empty);
+        assert_eq!(shifted_background.score, Some(0.0));
+        assert!(shifted_background.reliable);
     }
 }
