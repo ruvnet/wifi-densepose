@@ -198,3 +198,54 @@ on 2026-09-03; the real answer, once it had settled, was −56 KiB.
 most recently and swings 20+ dB with no physical change. Filter `/api/v1/links`
 by the AP's BSSIDs instead, and read `csi_fps_ema` alongside, because link count
 alone hides a starved node.
+
+---
+
+## 7. Tunables, and which ones depend on your house
+
+`idf.py menuconfig` exposes these. The defaults are what a nine-node ESP32-C6
+fleet in one house settled on; several are **not** universal, and the point of
+listing them here is that you can pick and measure rather than inherit someone
+else's building.
+
+| option | default | depends on your house? |
+|---|---|---|
+| `CSI_GATE_MESH_ALIGNED` | y | **yes** |
+| `CSI_SEQ_DIAG` | n | diagnostic only |
+| `THERMAL_MONITOR` | y | no |
+| `THERMAL_THROTTLE` | n | **yes** |
+| `THERMAL_THROTTLE_C` | 72 | **yes** |
+| `THERMAL_HYSTERESIS_C` | 8 | no |
+| `UPLINK_WATCHDOG` | y | no |
+| `UPLINK_WATCHDOG_TIMEOUT_S` | 1200 | **yes** |
+
+### The ones worth measuring yourself
+
+**`CSI_GATE_MESH_ALIGNED`** decides whether nodes keep the *same* frames or
+merely the same *number* of frames, which is what makes cross-node pairing
+possible at all. Whether alignment helps depends on how much your nodes
+actually overhear in common, and that is a property of your walls and your
+transmitters. In one measured nine-node fleet, aligning windows bought
++0.5 pp of pairing while selecting frames by `rx_seq` bought +31.7 pp -- so do
+not assume the default is doing the heavy lifting in your building.
+
+Turn on `CSI_SEQ_DIAG` to measure it. It logs `(source MAC, rx_seq)` per CSI
+callback, which is what lets you compute the fraction of frames two nodes hold
+in common instead of guessing.
+
+**`THERMAL_THROTTLE` / `THERMAL_THROTTLE_C`** depend on enclosure and placement,
+not on the chip. A bare bench board never reaches 72 C; the same board sealed in
+a printed case on a sunny wall can. Read `die_c` from `/api/v1/mesh` for a few
+days before deciding, because throttling transmit power costs range.
+
+**`UPLINK_WATCHDOG_TIMEOUT_S`** is a bet about your AP. 1200 s suits a network
+where a wedge is rare and a reboot is cheap. If your uplink drops briefly and
+often, a short timeout turns a recoverable gap into a reboot loop; if it wedges
+hard, a long one leaves a node dark for twenty minutes.
+
+### Measuring rather than guessing
+
+A gate comparison needs a fixed environment, repeated blocks, and every arm run
+on every node -- otherwise node placement is confounded with the setting. The
+harness used for the published comparison is in the repository; use it rather
+than eyeballing a frame rate, which moves for reasons unrelated to the setting.
