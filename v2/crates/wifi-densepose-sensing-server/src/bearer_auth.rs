@@ -491,6 +491,10 @@ const READ_SAFE_MUTATIONS: &[&str] = &[
     // Capture and calibration: create data, never destroy it.
     "/api/v1/calibration/start",
     "/api/v1/calibration/stop",
+    // Promotion consumes only server measured held out evidence and stores a
+    // bounded privacy reduced prior. Cancel discards only an unfinished run.
+    "/api/v1/calibration/bootstrap/promote",
+    "/api/v1/calibration/cancel",
     "/api/v1/pose/calibrate",
     "/api/v1/recording/start",
     "/api/v1/recording/stop",
@@ -1970,6 +1974,7 @@ mod scope_gate_polarity_tests {
             (Method::DELETE, "/api/v1/models/m1"),
             (Method::DELETE, "/api/v1/recording/r1"),
             (Method::POST, "/api/v1/config/ground-truth"),
+            (Method::POST, "/api/v1/calibration/reset"),
         ] {
             assert_eq!(
                 required_scope_for(&m, p),

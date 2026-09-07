@@ -311,3 +311,9 @@ v2/crates/wifi-densepose-sensing-server/data/
 # ADR-324: wasm-bindgen output for ruview-offaxis is generated locally
 # (see the crate README); never commit generated artifacts.
 v2/crates/ruview-offaxis/pkg/
+
+# fal.ai visual-teacher LoRA training data/weights -- regenerable, never
+# commit training images or model weights (ADR-353)
+scripts/fal-visual-teacher/training-data/
+scripts/fal-visual-teacher/training-data.zip
+scripts/fal-visual-teacher/output/

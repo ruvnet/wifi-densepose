@@ -39,14 +39,35 @@ CFLAGS   = -fsanitize=fuzzer,address,undefined -g -O1 \
 STUBS_SRC = stubs/esp_stubs.c
 MAIN_DIR  = ../main
 
+# GNU ld and Apple's ld spell dead section elimination differently.
+# Keep the host sanitation test portable across the Linux CI runner and macOS.
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+DEAD_STRIP_LDFLAGS := -Wl,-dead_strip
+else
+DEAD_STRIP_LDFLAGS := -Wl,--gc-sections
+endif
+
 # Default fuzz duration (seconds) and jobs
 FUZZ_DURATION ?= 30
 FUZZ_JOBS     ?= 1
 
 .PHONY: all clean run_serialize run_edge run_nvs run_all test_adr110 run_adr110 \
-        test_vitals run_vitals test_mmwave_detect run_mmwave_detect host_tests
+        test_vitals run_vitals test_mmwave_detect run_mmwave_detect host_tests \
+        test_thermal run_thermal test_csi_sanitize run_csi_sanitize
 
-all: fuzz_serialize fuzz_edge fuzz_nvs test_adr110 test_vitals test_mmwave_detect
+all: fuzz_serialize fuzz_edge fuzz_nvs test_adr110 test_vitals test_mmwave_detect \
+     test_thermal test_csi_sanitize
+
+# --- ESP-IDF invalid first-word sanitation ---
+# Links the production serializer. Function sections and dead stripping keep
+# unrelated device-only callback code out of this host executable.
+test_csi_sanitize: test_csi_sanitize.c $(MAIN_DIR)/csi_collector.c $(STUBS_SRC)
+	cc -std=c99 -Wall -Wextra -Istubs -I$(MAIN_DIR) -ffunction-sections \
+		$^ $(DEAD_STRIP_LDFLAGS) -o $@ -lm
+
+run_csi_sanitize: test_csi_sanitize
+	./test_csi_sanitize
 
 # --- ADR-110 encoding unit tests ---
 # Host-side, no libFuzzer needed — plain C99 deterministic table tests
@@ -80,8 +101,19 @@ test_mmwave_detect: test_mmwave_detect.c $(MAIN_DIR)/mmwave_detect.h
 run_mmwave_detect: test_mmwave_detect
 	./test_mmwave_detect
 
-host_tests: run_adr110 run_vitals run_mmwave_detect
-	@echo "Host tests passed (ADR-110 + vitals #998/#996 + mmwave detect #1135)"
+# --- Thermal state hysteresis ---
+# Host-side. Exercises thermal_next_state() from ../main/thermal.h directly --
+# the same function the device build runs -- so the test and the firmware cannot
+# drift. Pins every edge in both directions, including the CRITICAL -> THROTTLED
+# flap that had no hysteresis at all.
+test_thermal: test_thermal_hysteresis.c $(MAIN_DIR)/thermal.h
+	cc -std=c99 -Wall -Wextra -Istubs -I$(MAIN_DIR) -o $@ $<
+
+run_thermal: test_thermal
+	./test_thermal
+
+host_tests: run_adr110 run_vitals run_mmwave_detect run_thermal run_csi_sanitize
+	@echo "Host tests passed (ADR-110 + CSI sanitation + vitals + mmwave + thermal)"
 
 # --- Serialize fuzzer ---
 # Tests csi_serialize_frame() with random wifi_csi_info_t inputs.
@@ -117,5 +149,6 @@ run_nvs: fuzz_nvs
 run_all: run_serialize run_edge run_nvs
 
 clean:
-	rm -f fuzz_serialize fuzz_edge fuzz_nvs test_adr110 test_vitals
+	rm -f fuzz_serialize fuzz_edge fuzz_nvs test_adr110 test_vitals test_mmwave_detect \
+		test_thermal test_csi_sanitize
 	rm -rf corpus_serialize/ corpus_edge/ corpus_nvs/
