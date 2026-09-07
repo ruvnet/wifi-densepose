@@ -98,6 +98,30 @@ One measurement that made the trade easier here: on-device edge processing was
 in both modes, because that pipeline is separately rate-limited. The cost falls
 on the uplink, not on local sensing.
 
+### The mesh arm was partly an elapsed arm
+
+The mesh gate uses mesh-time buckets only while `c6_sync_espnow_is_valid()`. A
+node without valid sync falls back to the elapsed gate rather than gating on a
+meaningless epoch -- correct behaviour, but it weakens this comparison.
+
+Three of the nine nodes never synchronised during these runs. For those three,
+the `mesh` and `mesh`+`seq` arms silently ran the elapsed gate. So **+0.5 pp is
+not a clean fleet-wide measurement of window alignment**; it is "mesh where sync
+held, elapsed where it did not", and the true effect of alignment on a fully
+synchronised fleet is not measured here.
+
+We are reporting the number as observed rather than reconstructing it, because
+the arms were assigned before we understood the fallback, and a post-hoc
+per-node reanalysis would not be the experiment we ran.
+
+The cause is worth naming because it is environmental, not a firmware defect.
+Time sync is leader-elected and hub-and-spoke: one node broadcasts and the rest
+follow. Whether every node hears that leader is a property of the building. A
+larger or more divided house fragments into sync domains, and any option that
+depends on shared time then degrades quietly for the nodes that fell out --
+which is precisely the situation where someone would most want to trust this
+measurement.
+
 ### A prediction we got wrong
 
 Our mesh had split into two leader domains with three nodes never synchronising
