@@ -431,8 +431,10 @@ pub fn node_positions_by_id(
 /// Malformed entries are skipped with a warning log.
 ///
 /// Positional view, for consumers that index the list rather than key it by
-/// node id — `MultistaticFuser::set_node_positions()` is the one that matters.
-/// Use [`parse_node_position_entries`] where identity is needed.
+/// node id. Since issue #1866 the fusion path is no longer one of them: it
+/// takes the keyed map from [`node_positions_by_id`] via
+/// `MultistaticFuser::set_node_positions_by_id()`. Use
+/// [`parse_node_position_entries`] where identity is needed.
 pub fn parse_node_positions(input: &str) -> Vec<[f32; 3]> {
     parse_node_position_entries(input)
         .into_iter()

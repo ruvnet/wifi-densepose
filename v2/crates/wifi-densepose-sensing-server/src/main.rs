@@ -11246,13 +11246,17 @@ async fn main() {
                     // precisely the bug being fixed, and a loop inside main()
                     // is unreachable from any test.
                     node_positions_config = field_bridge::node_positions_by_id(&entries);
-                    // The fuser indexes this list positionally, matched to
-                    // per-frame iteration order rather than to node id. Left
-                    // as-is deliberately: this change is about the NodeInfo
-                    // output, and quietly altering fusion semantics inside it
-                    // would be the wrong scope. Order given is order passed.
-                    let positions: Vec<[f32; 3]> = entries.iter().map(|e| e.position).collect();
-                    fuser.set_node_positions(positions);
+                    // Issue #1866: the same keyed map now goes to the fuser,
+                    // so one parsed identity serves both the NodeInfo output
+                    // and the effectful fusion path. The fuser previously took
+                    // a positional list and addressed it by cohort rank, which
+                    // stops being a node id the moment a stale or out-of-guard
+                    // node is dropped -- every node above the gap silently
+                    // inherited its neighbour's coordinates. `node_positions_by_id`
+                    // still applies the documented legacy rule (an entry with
+                    // no `node_id:` prefix takes its list index as its id), so
+                    // an existing `--node-positions` string keeps its meaning.
+                    fuser.set_node_positions_by_id(node_positions_config.clone());
                 }
             }
             engine_bridge_multistatic_cfg = Some(MultistaticConfig {
