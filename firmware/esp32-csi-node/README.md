@@ -115,6 +115,30 @@ python -m esptool --chip esp32s3 --port COM7 --baud 460800 \
   0x20000 firmware/esp32-csi-node/build/esp32-csi-node.bin
 ```
 
+#### Seeed XIAO ESP32-C6 external antenna
+
+The XIAO ESP32-C6 has a hardware RF switch between its internal ceramic
+antenna and U.FL connector. Generic C6 boards do not share this wiring, so the
+firmware leaves GPIO3 and GPIO14 untouched by default. For an XIAO with an
+external antenna already attached while powered off, build with one of the
+opt-in overlays:
+
+```bash
+# Controlled A condition: internal antenna, RF path stated in the boot log.
+idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.esp32c6;sdkconfig.defaults.xiao-internal" \
+  set-target esp32c6
+idf.py build
+
+# Controlled B condition: external U.FL antenna.
+idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.esp32c6;sdkconfig.defaults.xiao-external" \
+  set-target esp32c6
+idf.py build
+```
+
+The boot log must report the intended `internal ceramic` or `external U.FL`
+path before that measurement is labelled. The standard C6 build keeps the
+board default and emits no antenna-path claim.
+
 ### 3. Provision WiFi credentials (no reflash needed)
 
 ```bash

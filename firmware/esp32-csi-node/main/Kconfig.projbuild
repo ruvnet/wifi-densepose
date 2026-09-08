@@ -1,5 +1,27 @@
 menu "CSI Node Configuration"
 
+    config C6_XIAO_ANTENNA_SELECT
+        bool "Control the Seeed XIAO ESP32-C6 RF switch"
+        depends on IDF_TARGET_ESP32C6
+        default n
+        help
+            Enable only for Seeed XIAO ESP32-C6 boards. The XIAO uses GPIO3
+            to enable RF-switch control and GPIO14 to choose its internal or
+            external antenna. Leave this disabled for generic ESP32-C6 boards
+            because GPIO3 and GPIO14 may have unrelated functions there.
+
+    choice C6_XIAO_ANTENNA_PATH
+        prompt "Seeed XIAO ESP32-C6 antenna path"
+        depends on C6_XIAO_ANTENNA_SELECT
+        default C6_XIAO_ANTENNA_INTERNAL
+
+        config C6_XIAO_ANTENNA_INTERNAL
+            bool "Internal ceramic antenna"
+
+        config C6_XIAO_ANTENNA_EXTERNAL
+            bool "External U.FL antenna"
+    endchoice
+
     config CSI_NODE_ID
         int "Node ID (0-255)"
         default 1

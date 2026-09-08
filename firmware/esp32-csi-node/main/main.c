@@ -37,6 +37,7 @@
 #include "c6_twt.h"                /* ADR-110: TWT (no-op stub on S3) */
 #include "c6_timesync.h"           /* ADR-110: 802.15.4 mesh time-sync (no-op on S3) */
 #include "c6_lp_core.h"            /* ADR-110: LP-core hibernation (no-op on S3) */
+#include "c6_antenna_select.h"     /* XIAO C6 RF switch (opt-in; generic C6 no-op) */
 #include "c6_sync_espnow.h"        /* ADR-110 D1 workaround: ESP-NOW sync */
 #include "c6_softap_he.h"          /* ADR-110 B1/B2: HE/TWT soft-AP (no-op when disabled) */
 #ifdef CONFIG_CSI_MOCK_ENABLED
@@ -330,6 +331,11 @@ void app_main(void)
 #endif
     ESP_LOGI(TAG, "%s CSI Node (ADR-018 / ADR-110) — v%s — Node ID: %d",
              target_name, app_desc->version, g_nvs_config.node_id);
+
+    /* Apply the opt-in XIAO RF path before WiFi starts. Generic C6 boards keep
+     * ownership of GPIO3 and GPIO14 because the default implementation is a
+     * no-op unless CONFIG_C6_XIAO_ANTENNA_SELECT is enabled. */
+    ESP_ERROR_CHECK(c6_xiao_antenna_apply());
 
     /* Onboard WS2812. C6 wires the LED to GPIO 8; S3 to GPIO 38 (DevKitC-1 v1.0)
      * or GPIO 48 (DevKitC-1 v1.1 / N16R8 — see #962). On S3 we drive 48 (the

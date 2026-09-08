@@ -54,10 +54,20 @@ FUZZ_JOBS     ?= 1
 
 .PHONY: all clean run_serialize run_edge run_nvs run_all test_adr110 run_adr110 \
         test_vitals run_vitals test_mmwave_detect run_mmwave_detect host_tests \
-        test_thermal run_thermal test_csi_sanitize run_csi_sanitize
+        test_thermal run_thermal test_csi_sanitize run_csi_sanitize \
+        test_c6_antenna run_c6_antenna
 
 all: fuzz_serialize fuzz_edge fuzz_nvs test_adr110 test_vitals test_mmwave_detect \
-     test_thermal test_csi_sanitize
+     test_thermal test_csi_sanitize test_c6_antenna
+
+# --- XIAO ESP32-C6 RF switch selection ---
+# Host-side truth table for the GPIO14 antenna selector. GPIO3 is always driven
+# low by the device implementation before this level is applied.
+test_c6_antenna: test_c6_antenna_select.c $(MAIN_DIR)/c6_antenna_select.h
+	cc -std=c99 -Wall -Wextra -I$(MAIN_DIR) -o $@ $<
+
+run_c6_antenna: test_c6_antenna
+	./test_c6_antenna
 
 # --- ESP-IDF invalid first-word sanitation ---
 # Links the production serializer. Function sections and dead stripping keep
@@ -112,8 +122,9 @@ test_thermal: test_thermal_hysteresis.c $(MAIN_DIR)/thermal.h
 run_thermal: test_thermal
 	./test_thermal
 
-host_tests: run_adr110 run_vitals run_mmwave_detect run_thermal run_csi_sanitize
-	@echo "Host tests passed (ADR-110 + CSI sanitation + vitals + mmwave + thermal)"
+host_tests: run_adr110 run_vitals run_mmwave_detect run_thermal run_csi_sanitize \
+            run_c6_antenna
+	@echo "Host tests passed (ADR-110 + CSI sanitation + vitals + mmwave + thermal + C6 antenna)"
 
 # --- Serialize fuzzer ---
 # Tests csi_serialize_frame() with random wifi_csi_info_t inputs.
@@ -150,5 +161,5 @@ run_all: run_serialize run_edge run_nvs
 
 clean:
 	rm -f fuzz_serialize fuzz_edge fuzz_nvs test_adr110 test_vitals test_mmwave_detect \
-		test_thermal test_csi_sanitize
+		test_thermal test_csi_sanitize test_c6_antenna
 	rm -rf corpus_serialize/ corpus_edge/ corpus_nvs/
