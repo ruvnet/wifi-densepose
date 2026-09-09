@@ -1802,7 +1802,7 @@ struct AppStateInner {
     /// entry `i` applies to the i-th smallest currently-active node_id, the
     /// same convention `MultistaticFuser::fuse` uses. See
     /// `node_positions_by_active_id`.
-    node_positions_config: Vec<[f32; 3]>,
+    node_positions_config: HashMap<u8, [f32; 3]>,
     /// Governed trust-path bridge (ADR-135..146): runs the same live frames
     /// through the privacy/provenance/witness control plane. Does not alter
     /// person-count behavior; its trust state (witness, effective class,
@@ -2350,7 +2350,7 @@ impl AppStateInner {
             pose_tracker: PoseTracker::new(),
             last_tracker_instant: None,
             multistatic_fuser: MultistaticFuser::new(),
-            node_positions_config: Vec::new(),
+            node_positions_config: HashMap::new(),
             engine_bridge: engine_bridge::EngineBridge::new(
                 wifi_densepose_bfld::PrivacyMode::PrivateHome,
                 1,
@@ -8605,26 +8605,27 @@ async fn info_page() -> Html<String> {
 /// `node_id -> node_positions_config[node_id]` lookup silently misses for
 /// every real deployment. This mirrors the same ascending-rank convention so
 /// the live `NodeInfo.position` field agrees with what fusion actually used.
+/// Positions of the nodes currently reporting, keyed by node id.
+///
+/// Rank assignment -- giving the Nth-lowest active id the Nth entry of an
+/// ordered list -- makes a position depend on which OTHER nodes happen to be
+/// alive. One node going quiet re-ranks every node above it and silently moves
+/// their coordinates. Keying by id states the mapping instead of inferring it.
+/// The active-node filter is unchanged.
 fn node_positions_by_active_id(
-    node_positions_config: &[[f32; 3]],
+    node_positions_config: &HashMap<u8, [f32; 3]>,
     node_states: &HashMap<u8, NodeState>,
     now: std::time::Instant,
 ) -> HashMap<u8, [f64; 3]> {
-    let mut active_ids: Vec<u8> = node_states
+    node_states
         .iter()
         .filter(|(_, n)| {
             n.last_frame_time
                 .is_some_and(|t| now.duration_since(t).as_secs() < 10)
         })
-        .map(|(&id, _)| id)
-        .collect();
-    active_ids.sort_unstable();
-    active_ids
-        .into_iter()
-        .enumerate()
-        .filter_map(|(rank, id)| {
+        .filter_map(|(&id, _)| {
             node_positions_config
-                .get(rank)
+                .get(&id)
                 .map(|p| (id, [p[0] as f64, p[1] as f64, p[2] as f64]))
         })
         .collect()
@@ -8640,18 +8641,25 @@ mod node_positions_by_active_id_tests {
         ns
     }
 
+    fn cfg(entries: &[(u8, [f32; 3])]) -> HashMap<u8, [f32; 3]> {
+        entries.iter().copied().collect()
+    }
+
     #[test]
-    fn non_sequential_node_ids_get_positions_by_ascending_rank() {
-        // Real fleets use logical IDs like 11, 12, 13 — not 0, 1, 2. The
-        // configured position list must map by ascending node_id rank, not
-        // by treating node_id as a direct index into the list.
+    fn non_sequential_node_ids_get_their_own_position() {
+        // Real fleets use logical IDs like 11, 12, 13 -- not 0, 1, 2. Rank
+        // assignment handled that by sorting; keying by id states it directly.
         let now = std::time::Instant::now();
         let mut node_states = HashMap::new();
         node_states.insert(13, active_node(now));
         node_states.insert(11, active_node(now));
         node_states.insert(12, active_node(now));
 
-        let configured = [[1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, 0.0]];
+        let configured = cfg(&[
+            (11, [1.0, 0.0, 0.0]),
+            (12, [2.0, 0.0, 0.0]),
+            (13, [3.0, 0.0, 0.0]),
+        ]);
         let resolved = node_positions_by_active_id(&configured, &node_states, now);
 
         assert_eq!(resolved.get(&11), Some(&[1.0, 0.0, 0.0]));
@@ -8660,22 +8668,36 @@ mod node_positions_by_active_id_tests {
     }
 
     #[test]
-    fn stale_nodes_are_excluded_from_rank_assignment() {
+    fn a_stale_node_does_not_move_the_others() {
+        // THE REASON THIS IS KEYED BY ID. Under rank assignment a node going
+        // quiet re-ranks everything above it, so node 13 inherits node 12's
+        // coordinates -- a silent position error across the fleet caused by
+        // nothing more than one board missing a beacon.
         let now = std::time::Instant::now();
+        let configured = cfg(&[
+            (11, [1.0, 0.0, 0.0]),
+            (12, [2.0, 0.0, 0.0]),
+            (13, [3.0, 0.0, 0.0]),
+        ]);
+
         let mut node_states = HashMap::new();
         node_states.insert(11, active_node(now));
-        let mut stale = NodeState::new();
-        stale.last_frame_time =
-            Some(now - std::time::Duration::from_secs(30));
-        node_states.insert(12, stale);
+        node_states.insert(12, active_node(now));
         node_states.insert(13, active_node(now));
+        let all_up = node_positions_by_active_id(&configured, &node_states, now);
 
-        let configured = [[1.0, 0.0, 0.0], [3.0, 0.0, 0.0]];
-        let resolved = node_positions_by_active_id(&configured, &node_states, now);
+        let mut stale = NodeState::new();
+        stale.last_frame_time = Some(now - std::time::Duration::from_secs(30));
+        node_states.insert(12, stale);
+        let one_down = node_positions_by_active_id(&configured, &node_states, now);
 
-        assert_eq!(resolved.get(&11), Some(&[1.0, 0.0, 0.0]));
-        assert_eq!(resolved.get(&12), None, "stale node must not consume a rank");
-        assert_eq!(resolved.get(&13), Some(&[3.0, 0.0, 0.0]));
+        assert_eq!(one_down.get(&12), None, "a stale node reports no position");
+        assert_eq!(one_down.get(&11), all_up.get(&11), "node 11 must not move");
+        assert_eq!(
+            one_down.get(&13),
+            all_up.get(&13),
+            "node 13 must not inherit node 12's coordinates"
+        );
     }
 
     #[test]
@@ -8684,7 +8706,7 @@ mod node_positions_by_active_id_tests {
         let mut node_states = HashMap::new();
         node_states.insert(11, active_node(now));
 
-        let resolved = node_positions_by_active_id(&[], &node_states, now);
+        let resolved = node_positions_by_active_id(&cfg(&[]), &node_states, now);
         assert_eq!(resolved.get(&11), None);
     }
 }
@@ -11123,7 +11145,7 @@ async fn main() {
     // threaded into `engine_bridge` so both fusion paths honor the same
     // WDP_TDM_SLOTS/WDP_GUARD_INTERVAL_US-derived guard (#1049/#1057).
     let mut engine_bridge_multistatic_cfg: Option<MultistaticConfig> = None;
-    let mut node_positions_config: Vec<[f32; 3]> = Vec::new();
+    let mut node_positions_config: HashMap<u8, [f32; 3]> = HashMap::new();
     let state: SharedState = Arc::new(RwLock::new(AppStateInner {
         latest_update: None,
         rssi_history: VecDeque::new(),
@@ -11211,14 +11233,30 @@ async fn main() {
                 ..cfg.clone()
             });
             if let Some(ref pos_str) = args.node_positions {
-                let positions = field_bridge::parse_node_positions(pos_str);
-                if !positions.is_empty() {
+                let entries = field_bridge::parse_node_position_entries(pos_str);
+                if !entries.is_empty() {
                     info!(
                         "Configured {} node positions for multistatic fusion",
-                        positions.len()
+                        entries.len()
                     );
-                    node_positions_config = positions.clone();
-                    fuser.set_node_positions(positions);
+                    // Identity comes from the explicit `node_id:` prefix when
+                    // given, and from the list index otherwise. Built by a
+                    // tested function rather than inline here, because keying
+                    // this map by index while reading it back by node_id is
+                    // precisely the bug being fixed, and a loop inside main()
+                    // is unreachable from any test.
+                    node_positions_config = field_bridge::node_positions_by_id(&entries);
+                    // Issue #1866: the same keyed map now goes to the fuser,
+                    // so one parsed identity serves both the NodeInfo output
+                    // and the effectful fusion path. The fuser previously took
+                    // a positional list and addressed it by cohort rank, which
+                    // stops being a node id the moment a stale or out-of-guard
+                    // node is dropped -- every node above the gap silently
+                    // inherited its neighbour's coordinates. `node_positions_by_id`
+                    // still applies the documented legacy rule (an entry with
+                    // no `node_id:` prefix takes its list index as its id), so
+                    // an existing `--node-positions` string keeps its meaning.
+                    fuser.set_node_positions_by_id(node_positions_config.clone());
                 }
             }
             engine_bridge_multistatic_cfg = Some(MultistaticConfig {
