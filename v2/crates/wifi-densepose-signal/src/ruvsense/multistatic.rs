@@ -154,8 +154,31 @@ impl MultistaticConfig {
     /// maximum legitimate spread between two paired node frames in one cycle is
     /// the full cycle length `tdm_total_slots × slot_duration_us` (last slot vs
     /// first slot). The hard guard is set to that cycle length plus 20% jitter
-    /// headroom; the soft guard to ~⅓ of the cycle (a normal adjacent-slot pair
-    /// fuses cleanly, a near-full-cycle spread is flagged as loose alignment).
+    /// headroom; the soft guard to the schedule's own **designed stagger**,
+    /// `(slots - 1) * slot_duration_us` -- the offset between the first and
+    /// last slot, which is the spread a complete, healthy cycle produces.
+    ///
+    /// # Why not ~⅓ of the cycle (issue #1866-adjacent, corrected)
+    ///
+    /// The soft guard was previously `cycle_us / 3`, reasoned about as "a
+    /// normal *adjacent-slot pair* fuses cleanly". But [`MultistaticFuser::fuse_scored`]
+    /// does not compare pairs -- it takes `max(timestamp) - min(timestamp)`
+    /// across the **whole cohort**, so the spread it measures is always the
+    /// first-to-last offset, `(N - 1)` slots. Against that:
+    ///
+    /// ```text
+    ///   soft < stagger  <=>  N*slot/3 < (N-1)*slot  <=>  N/3 < N-1  <=>  N > 1.5
+    /// ```
+    ///
+    /// which holds for **every** `N >= 2`. The derived soft guard therefore
+    /// never covered the schedule it was derived from, at any fleet size, and
+    /// a complete healthy cycle was flagged as a `TimestampMismatch`
+    /// contradiction -- which demotes the BFLD privacy class one step
+    /// (ADR-137 §2.7 -> ADR-141) and suppresses raw outputs.
+    ///
+    /// The doc example below is the smallest demonstration: the 2-slot mesh
+    /// whose **measured** 18,194 µs spread motivated this constructor derived
+    /// a 12,000 µs soft guard, below its own motivating measurement.
     ///
     /// `tdm_total_slots` is clamped to ≥ 1. All other fields take their
     /// [`Default`] values.
@@ -167,6 +190,9 @@ impl MultistaticConfig {
     /// // reported 18,194 µs 2-slot spread.
     /// let cfg = MultistaticConfig::for_tdm_schedule(2, 18_000);
     /// assert!(cfg.guard_interval_us >= 18_194);
+    /// // ...and the soft guard now covers it too, so a healthy 2-slot cycle
+    /// // is not recorded as a contradiction.
+    /// assert!(cfg.soft_guard_us >= 18_194);
     /// ```
     #[must_use]
     pub fn for_tdm_schedule(tdm_total_slots: usize, slot_duration_us: u64) -> Self {
@@ -174,8 +200,19 @@ impl MultistaticConfig {
         let cycle_us = slots.saturating_mul(slot_duration_us);
         // +20% jitter headroom on the full cycle.
         let guard_interval_us = cycle_us.saturating_add(cycle_us / 5).max(1);
-        // Soft band at ~⅓ cycle, kept strictly below the hard guard.
-        let soft_guard_us = (cycle_us / 3).clamp(1, guard_interval_us.saturating_sub(1).max(1));
+        // Soft band at the schedule's designed stagger -- the first-to-last
+        // slot offset, which is what `fuse_scored` measures. Kept strictly
+        // below the hard guard, so a spread approaching a full cycle is still
+        // flagged as loose alignment.
+        // +20% jitter headroom, mirroring the hard guard: the *nominal* stagger
+        // is not the observed one. The 2-slot mesh below has an 18,000 us
+        // nominal stagger but a MEASURED 18,194 us spread, so a bare nominal
+        // bound would flag the very cycle it was derived from. Always strictly
+        // below the hard guard, since stagger < cycle.
+        let stagger_us = slots.saturating_sub(1).saturating_mul(slot_duration_us);
+        let soft_guard_us = stagger_us
+            .saturating_add(stagger_us / 5)
+            .clamp(1, guard_interval_us.saturating_sub(1).max(1));
         Self {
             guard_interval_us,
             soft_guard_us,
@@ -1034,6 +1071,88 @@ mod tests {
                 Err(MultistaticError::TimestampMismatch { .. })
             ),
             "a spread beyond a full TDM cycle must still be rejected"
+        );
+    }
+
+    /// A derived schedule must not flag its own healthy cycle as a
+    /// contradiction.
+    ///
+    /// Every prior assertion on `soft_guard_us` was *relational* (`soft <
+    /// hard`, `soft >= 1`), so nothing compared it to a spread the schedule
+    /// actually produces -- which is how `cycle/3` survived. `fuse_scored`
+    /// measures `max - min` across the whole cohort, i.e. `(N-1)` slots, so
+    /// that is what the soft guard must cover.
+    #[test]
+    fn derived_soft_guard_covers_the_schedules_own_stagger() {
+        for (slots, slot_us) in [
+            (2_usize, 18_000_u64), // the measured 2-slot mesh in the doc comment
+            (3, 27_000),
+            (4, 12_500),
+            (6, 33_300),
+            (9, 35_600),  // a nine-node fleet: 320 ms cycle
+            (13, 36_900),
+        ] {
+            let cfg = MultistaticConfig::for_tdm_schedule(slots, slot_us);
+            // Nominal stagger; the derived guard must clear it WITH headroom,
+            // because observed spread runs slightly over nominal (18,194 us
+            // measured against an 18,000 us nominal 2-slot stagger).
+            let stagger = (slots as u64 - 1) * slot_us;
+            assert!(
+                cfg.soft_guard_us > stagger,
+                "{slots} slots x {slot_us} us: soft guard {} us is below the \
+                 schedule's own first-to-last stagger of {stagger} us, so a \
+                 complete healthy cycle is recorded as a TimestampMismatch \
+                 contradiction and demotes the privacy class",
+                cfg.soft_guard_us
+            );
+            assert!(cfg.soft_guard_us < cfg.guard_interval_us);
+        }
+    }
+
+    /// End to end: a full, evenly-staggered cycle fuses with **no**
+    /// contradiction under its own derived config.
+    #[test]
+    fn a_healthy_full_cycle_raises_no_contradiction() {
+        let (slots, slot_us) = (9_usize, 35_600_u64);
+        let cfg = MultistaticConfig::for_tdm_schedule(slots, slot_us);
+        let fuser = MultistaticFuser::with_config(cfg.clone());
+
+        // Node k transmits in slot k -- the schedule working exactly as designed.
+        let frames: Vec<MultiBandCsiFrame> = (0..slots)
+            .map(|k| make_node_frame(k as u8, k as u64 * slot_us, 56, 1.0))
+            .collect();
+
+        let (_fused, score) = fuser
+            .fuse_scored(&frames, 0.0)
+            .expect("a healthy cycle must fuse");
+        assert!(
+            !score.forces_privacy_demotion(),
+            "a complete {slots}-slot cycle is the schedule operating normally \
+             and must not demote the privacy class; flags: {:?}",
+            score.contradiction_flags
+        );
+    }
+
+    /// The soft band still does its job: a spread beyond the designed stagger
+    /// is flagged.
+    #[test]
+    fn a_spread_beyond_the_stagger_is_still_flagged() {
+        let (slots, slot_us) = (9_usize, 35_600_u64);
+        let cfg = MultistaticConfig::for_tdm_schedule(slots, slot_us);
+        let hard = cfg.guard_interval_us;
+        let fuser = MultistaticFuser::with_config(cfg);
+
+        // Two nodes, inside the hard guard but wider than a full cycle's stagger.
+        let late = hard - 1;
+        let frames = vec![
+            make_node_frame(0, 0, 56, 1.0),
+            make_node_frame(1, late, 56, 1.0),
+        ];
+        let (_f, score) = fuser.fuse_scored(&frames, 0.0).expect("within hard guard");
+        assert!(
+            score.forces_privacy_demotion(),
+            "a spread of {late} us exceeds the designed stagger and must still \
+             be recorded as loose alignment"
         );
     }
 
