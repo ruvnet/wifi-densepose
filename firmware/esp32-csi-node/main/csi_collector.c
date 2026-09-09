@@ -114,6 +114,9 @@ static int64_t s_last_send_us = 0;
  */
 #define CSI_MIN_PROCESS_INTERVAL_US  (20 * 1000)  /* 50 Hz */
 static int64_t s_last_process_us = 0;
+/* Mesh-epoch window index of the last accepted frame. UINT64_MAX means "none
+ * yet", which no real bucket can collide with. */
+static uint64_t s_last_gate_bucket = UINT64_MAX;
 static uint32_t s_early_drop = 0;
 
 /* ---- ADR-029: Channel-hop state ---- */
@@ -263,8 +266,16 @@ size_t csi_serialize_frame(const wifi_csi_info_t *info, uint8_t *buf, size_t buf
     buf[19] = 0;
 #endif
 
-    /* I/Q data */
+    /* I/Q data. ESP-IDF documents that the first four CSI bytes are invalid
+     * when first_word_invalid is set. Never let those hardware artifacts feed
+     * either the host or edge DSP path. Preserve the fixed ADR-018 geometry by
+     * zeroing rather than removing bytes, and mark the sanitation in bit 5. */
     memcpy(&buf[CSI_HEADER_SIZE], info->buf, iq_len);
+    if (info->first_word_invalid && iq_len > 0) {
+        size_t invalid_len = iq_len < 4 ? iq_len : 4;
+        memset(&buf[CSI_HEADER_SIZE], 0, invalid_len);
+        buf[19] |= CSI_FLAG_FIRST_WORD_SANITIZED;
+    }
 
     return frame_size;
 }
@@ -277,9 +288,53 @@ static void wifi_csi_callback(void *ctx, wifi_csi_info_t *info)
     (void)ctx;
 
     /* Early rate gate: drop excess callbacks to ~50 Hz to prevent
-     * SPI flash cache crash in WiFi ISR (wDev_ProcessFiq). */
+     * SPI flash cache crash in WiFi ISR (wDev_ProcessFiq).
+     *
+     * HOW the rate is limited decides whether cross-node fusion is possible.
+     *
+     * The original gate is "at least 20 ms since MY last accept". Each node
+     * therefore has an independent phase: node A can accept at t=0,20,40 ms
+     * while node B accepts at 7,27,47. Both are perfectly healthy and both hit
+     * 50 Hz, yet they accept disjoint frames and nothing can be paired.
+     *
+     * MEASURED 2026-08-30, two boards side by side: they HEARD the same
+     * transmissions 72% of the time but only 25% of accepted frames were
+     * common. The frames were there; the gate was throwing away the pairing.
+     *
+     * So gate on a bucket of the MESH-ALIGNED epoch instead: every node takes
+     * the first frame it hears in the same absolute 20 ms window. Two nodes
+     * that heard the same frame now both accept it. Mesh sync is good to
+     * roughly 490 us against a 20 ms bucket -- about 2.5% of a window -- so
+     * boundary disagreements are rare.
+     *
+     * Falls back to the original elapsed-time gate whenever mesh sync is not
+     * valid (no leader heard yet, or a node that just booted), because an
+     * unsynced epoch would otherwise gate on a meaningless number. A node
+     * running unsynced simply gets the old behaviour rather than no gate.
+     *
+     * The half-interval floor below keeps the crash protection honest: bucket
+     * gating alone could accept at the end of one window and the start of the
+     * next, back to back. The floor bounds that to ~100 Hz for a single pair
+     * while the average stays at 50 Hz. Do not remove it; the gate exists for
+     * a crash, not for tidiness. */
     int64_t now_us = esp_timer_get_time();
-    if ((now_us - s_last_process_us) < CSI_MIN_PROCESS_INTERVAL_US) {
+    bool take;
+#ifdef CONFIG_CSI_GATE_MESH_ALIGNED
+    if (c6_sync_espnow_is_valid()) {
+        uint64_t bucket = c6_sync_espnow_get_epoch_us()
+                        / (uint64_t)CSI_MIN_PROCESS_INTERVAL_US;
+        take = (bucket != s_last_gate_bucket)
+            && ((now_us - s_last_process_us) >= CSI_MIN_PROCESS_INTERVAL_US / 2);
+        if (take) {
+            s_last_gate_bucket = bucket;
+        }
+    } else {
+        take = (now_us - s_last_process_us) >= CSI_MIN_PROCESS_INTERVAL_US;
+    }
+#else
+    take = (now_us - s_last_process_us) >= CSI_MIN_PROCESS_INTERVAL_US;
+#endif
+    if (!take) {
         s_early_drop++;
         return;
     }
@@ -330,13 +385,16 @@ static void wifi_csi_callback(void *ctx, wifi_csi_info_t *info)
      * while the on-device Tier 1/2 pipeline receives a uniform, sustainable
      * stream. Enqueuing every burst frame overloaded the unicore C6 DSP and
      * turned 30-40 callback pps into an irregular approximately 8 Hz subset. */
-    if (info->buf && info->len > 0) {
+    if (frame_len > CSI_HEADER_SIZE) {
         if (s_next_edge_enqueue_us == 0) {
             s_next_edge_enqueue_us = now_us;
         }
 
         if (now_us >= s_next_edge_enqueue_us) {
-            (void)edge_enqueue_csi((const uint8_t *)info->buf, (uint16_t)info->len,
+            /* Reuse the sanitized ADR-018 payload. Feeding info->buf here
+             * would reintroduce first_word_invalid artifacts on device. */
+            (void)edge_enqueue_csi(&frame_buf[CSI_HEADER_SIZE],
+                                   (uint16_t)(frame_len - CSI_HEADER_SIZE),
                                    (int8_t)info->rx_ctrl.rssi, info->rx_ctrl.channel);
 
             /* Preserve the configured sample clock instead of resetting it to

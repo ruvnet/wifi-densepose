@@ -26,6 +26,7 @@
 //! - `ruvector-attn-mincut` for cross-node spectrogram attention gating
 //! - `ruvector-mincut` for person separation (DynamicMinCut)
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::cir::{CirConfig, CirEstimator};
@@ -72,6 +73,12 @@ pub struct FusedSensingFrame {
     /// Per-node multi-band frames (preserved for geometry computations).
     pub node_frames: Vec<MultiBandCsiFrame>,
     /// Node positions (x, y, z) in meters from deployment configuration.
+    ///
+    /// Parallel to [`Self::node_frames`]: `node_positions[i]` is the
+    /// configured position of `node_frames[i].node_id`, resolved by identity
+    /// rather than by rank (issue #1866). Nodes with no configured position
+    /// appear at the origin. Index `i` is this cycle's cohort rank, which is
+    /// *not* a node id -- read the id from the paired frame.
     pub node_positions: Vec<[f32; 3]>,
     /// Number of active nodes contributing to this frame.
     pub active_nodes: usize,
@@ -147,8 +154,31 @@ impl MultistaticConfig {
     /// maximum legitimate spread between two paired node frames in one cycle is
     /// the full cycle length `tdm_total_slots × slot_duration_us` (last slot vs
     /// first slot). The hard guard is set to that cycle length plus 20% jitter
-    /// headroom; the soft guard to ~⅓ of the cycle (a normal adjacent-slot pair
-    /// fuses cleanly, a near-full-cycle spread is flagged as loose alignment).
+    /// headroom; the soft guard to the schedule's own **designed stagger**,
+    /// `(slots - 1) * slot_duration_us` -- the offset between the first and
+    /// last slot, which is the spread a complete, healthy cycle produces.
+    ///
+    /// # Why not ~⅓ of the cycle (issue #1866-adjacent, corrected)
+    ///
+    /// The soft guard was previously `cycle_us / 3`, reasoned about as "a
+    /// normal *adjacent-slot pair* fuses cleanly". But [`MultistaticFuser::fuse_scored`]
+    /// does not compare pairs -- it takes `max(timestamp) - min(timestamp)`
+    /// across the **whole cohort**, so the spread it measures is always the
+    /// first-to-last offset, `(N - 1)` slots. Against that:
+    ///
+    /// ```text
+    ///   soft < stagger  <=>  N*slot/3 < (N-1)*slot  <=>  N/3 < N-1  <=>  N > 1.5
+    /// ```
+    ///
+    /// which holds for **every** `N >= 2`. The derived soft guard therefore
+    /// never covered the schedule it was derived from, at any fleet size, and
+    /// a complete healthy cycle was flagged as a `TimestampMismatch`
+    /// contradiction -- which demotes the BFLD privacy class one step
+    /// (ADR-137 §2.7 -> ADR-141) and suppresses raw outputs.
+    ///
+    /// The doc example below is the smallest demonstration: the 2-slot mesh
+    /// whose **measured** 18,194 µs spread motivated this constructor derived
+    /// a 12,000 µs soft guard, below its own motivating measurement.
     ///
     /// `tdm_total_slots` is clamped to ≥ 1. All other fields take their
     /// [`Default`] values.
@@ -160,6 +190,9 @@ impl MultistaticConfig {
     /// // reported 18,194 µs 2-slot spread.
     /// let cfg = MultistaticConfig::for_tdm_schedule(2, 18_000);
     /// assert!(cfg.guard_interval_us >= 18_194);
+    /// // ...and the soft guard now covers it too, so a healthy 2-slot cycle
+    /// // is not recorded as a contradiction.
+    /// assert!(cfg.soft_guard_us >= 18_194);
     /// ```
     #[must_use]
     pub fn for_tdm_schedule(tdm_total_slots: usize, slot_duration_us: u64) -> Self {
@@ -167,8 +200,19 @@ impl MultistaticConfig {
         let cycle_us = slots.saturating_mul(slot_duration_us);
         // +20% jitter headroom on the full cycle.
         let guard_interval_us = cycle_us.saturating_add(cycle_us / 5).max(1);
-        // Soft band at ~⅓ cycle, kept strictly below the hard guard.
-        let soft_guard_us = (cycle_us / 3).clamp(1, guard_interval_us.saturating_sub(1).max(1));
+        // Soft band at the schedule's designed stagger -- the first-to-last
+        // slot offset, which is what `fuse_scored` measures. Kept strictly
+        // below the hard guard, so a spread approaching a full cycle is still
+        // flagged as loose alignment.
+        // +20% jitter headroom, mirroring the hard guard: the *nominal* stagger
+        // is not the observed one. The 2-slot mesh below has an 18,000 us
+        // nominal stagger but a MEASURED 18,194 us spread, so a bare nominal
+        // bound would flag the very cycle it was derived from. Always strictly
+        // below the hard guard, since stagger < cycle.
+        let stagger_us = slots.saturating_sub(1).saturating_mul(slot_duration_us);
+        let soft_guard_us = stagger_us
+            .saturating_add(stagger_us / 5)
+            .clamp(1, guard_interval_us.saturating_sub(1).max(1));
         Self {
             guard_interval_us,
             soft_guard_us,
@@ -191,8 +235,16 @@ impl MultistaticConfig {
 /// disable the CIR path and keep the legacy frequency-domain coherence only.
 pub struct MultistaticFuser {
     config: MultistaticConfig,
-    /// Node positions in 3D space (meters).
-    node_positions: Vec<[f32; 3]>,
+    /// Node positions in 3D space (meters), keyed by node id (issue #1866).
+    ///
+    /// Keyed rather than indexed because [`Self::fuse`] receives a *compacted*
+    /// cohort: `node_frames_from_states_with_guard` drops nodes that are
+    /// stale, outside the timestamp guard, or have an empty history. Under
+    /// index addressing, one node missing a single beacon re-ranks every node
+    /// above it and silently hands them their neighbour's coordinates. Each
+    /// `MultiBandCsiFrame` carries its own `node_id`, so the position is
+    /// looked up by identity and a silent node moves nobody.
+    node_positions: HashMap<u8, [f32; 3]>,
     /// Optional shared CIR estimator (ADR-134).  `None` = legacy path only.
     cir_estimator: Option<Arc<CirEstimator>>,
 }
@@ -212,7 +264,7 @@ impl MultistaticFuser {
     pub fn new() -> Self {
         Self {
             config: MultistaticConfig::default(),
-            node_positions: Vec::new(),
+            node_positions: HashMap::new(),
             cir_estimator: None,
         }
     }
@@ -221,7 +273,7 @@ impl MultistaticFuser {
     pub fn with_config(config: MultistaticConfig) -> Self {
         Self {
             config,
-            node_positions: Vec::new(),
+            node_positions: HashMap::new(),
             cir_estimator: None,
         }
     }
@@ -267,9 +319,37 @@ impl MultistaticFuser {
         fuser
     }
 
-    /// Set node positions for geometric diversity computations.
+    /// Set node positions from a positional list (**legacy compatibility**).
+    ///
+    /// The list index is the node id: `positions[i]` belongs to node `i`. That
+    /// is the meaning the `--node-positions` flag has always carried when its
+    /// entries are given without an explicit `node_id:` prefix, so this
+    /// mapping is preserved exactly rather than reinterpreted.
+    ///
+    /// This is only correct for fleets whose ids are dense and zero-based.
+    /// Prefer [`Self::set_node_positions_by_id`], which states the identity
+    /// instead of inferring it from ordering.
     pub fn set_node_positions(&mut self, positions: Vec<[f32; 3]>) {
+        self.node_positions = positions
+            .into_iter()
+            .enumerate()
+            .map(|(idx, position)| (idx as u8, position))
+            .collect();
+    }
+
+    /// Set node positions keyed by node id (issue #1866, preferred).
+    ///
+    /// The position travels with the board it was measured for. Nodes absent
+    /// from the map fuse at the origin, exactly as before; nodes present but
+    /// not currently reporting cost nothing and shift nobody.
+    pub fn set_node_positions_by_id(&mut self, positions: HashMap<u8, [f32; 3]>) {
         self.node_positions = positions;
+    }
+
+    /// Return the configured position for one node id, if any.
+    #[must_use]
+    pub fn node_position(&self, node_id: u8) -> Option<[f32; 3]> {
+        self.node_positions.get(&node_id).copied()
     }
 
     /// Return the configured hard timestamp guard in microseconds.
@@ -283,9 +363,31 @@ impl MultistaticFuser {
         self.config.guard_interval_us
     }
 
-    /// Return the current node positions.
-    pub fn node_positions(&self) -> &[[f32; 3]] {
+    /// Return the configured positions keyed by node id.
+    #[must_use]
+    pub fn node_positions_by_id(&self) -> &HashMap<u8, [f32; 3]> {
         &self.node_positions
+    }
+
+    /// Return the configured positions as a dense id-indexed list
+    /// (**legacy compatibility view**).
+    ///
+    /// Entry `i` is node `i`'s position, with unconfigured ids filled at the
+    /// origin, so this round-trips [`Self::set_node_positions`]. It is a view
+    /// of the configuration, *not* of what any particular fusion cycle used —
+    /// a cycle's cohort is compacted, so read
+    /// [`FusedSensingFrame::node_positions`] alongside its `node_frames` for
+    /// that.
+    #[must_use]
+    pub fn node_positions(&self) -> Vec<[f32; 3]> {
+        let Some(&max_id) = self.node_positions.keys().max() else {
+            return Vec::new();
+        };
+        let mut dense = vec![[0.0_f32, 0.0, 0.0]; max_id as usize + 1];
+        for (&id, &position) in &self.node_positions {
+            dense[id as usize] = position;
+        }
+        dense
     }
 
     /// Fuse multiple node frames into a single `FusedSensingFrame`.
@@ -360,11 +462,19 @@ impl MultistaticFuser {
         timestamps.sort_unstable();
         let timestamp_us = timestamps[timestamps.len() / 2];
 
-        // Build node positions list, filling with origin for unknown nodes
-        let positions: Vec<[f32; 3]> = (0..n_nodes)
-            .map(|i| {
+        // Build the node positions list parallel to `node_frames`, resolving
+        // each entry by that frame's own `node_id` (issue #1866). The cohort
+        // handed to `fuse` is compacted -- stale, out-of-guard and
+        // empty-history nodes are already dropped -- so a frame's index here
+        // is its rank in this cycle, not its identity. Addressing by index
+        // gave every node above a gap its neighbour's coordinates whenever a
+        // single board missed a beacon. Unknown nodes still fill with the
+        // origin, unchanged.
+        let positions: Vec<[f32; 3]> = node_frames
+            .iter()
+            .map(|frame| {
                 self.node_positions
-                    .get(i)
+                    .get(&frame.node_id)
                     .copied()
                     .unwrap_or([0.0, 0.0, 0.0])
             })
@@ -964,6 +1074,88 @@ mod tests {
         );
     }
 
+    /// A derived schedule must not flag its own healthy cycle as a
+    /// contradiction.
+    ///
+    /// Every prior assertion on `soft_guard_us` was *relational* (`soft <
+    /// hard`, `soft >= 1`), so nothing compared it to a spread the schedule
+    /// actually produces -- which is how `cycle/3` survived. `fuse_scored`
+    /// measures `max - min` across the whole cohort, i.e. `(N-1)` slots, so
+    /// that is what the soft guard must cover.
+    #[test]
+    fn derived_soft_guard_covers_the_schedules_own_stagger() {
+        for (slots, slot_us) in [
+            (2_usize, 18_000_u64), // the measured 2-slot mesh in the doc comment
+            (3, 27_000),
+            (4, 12_500),
+            (6, 33_300),
+            (9, 35_600),  // a nine-node fleet: 320 ms cycle
+            (13, 36_900),
+        ] {
+            let cfg = MultistaticConfig::for_tdm_schedule(slots, slot_us);
+            // Nominal stagger; the derived guard must clear it WITH headroom,
+            // because observed spread runs slightly over nominal (18,194 us
+            // measured against an 18,000 us nominal 2-slot stagger).
+            let stagger = (slots as u64 - 1) * slot_us;
+            assert!(
+                cfg.soft_guard_us > stagger,
+                "{slots} slots x {slot_us} us: soft guard {} us is below the \
+                 schedule's own first-to-last stagger of {stagger} us, so a \
+                 complete healthy cycle is recorded as a TimestampMismatch \
+                 contradiction and demotes the privacy class",
+                cfg.soft_guard_us
+            );
+            assert!(cfg.soft_guard_us < cfg.guard_interval_us);
+        }
+    }
+
+    /// End to end: a full, evenly-staggered cycle fuses with **no**
+    /// contradiction under its own derived config.
+    #[test]
+    fn a_healthy_full_cycle_raises_no_contradiction() {
+        let (slots, slot_us) = (9_usize, 35_600_u64);
+        let cfg = MultistaticConfig::for_tdm_schedule(slots, slot_us);
+        let fuser = MultistaticFuser::with_config(cfg.clone());
+
+        // Node k transmits in slot k -- the schedule working exactly as designed.
+        let frames: Vec<MultiBandCsiFrame> = (0..slots)
+            .map(|k| make_node_frame(k as u8, k as u64 * slot_us, 56, 1.0))
+            .collect();
+
+        let (_fused, score) = fuser
+            .fuse_scored(&frames, 0.0)
+            .expect("a healthy cycle must fuse");
+        assert!(
+            !score.forces_privacy_demotion(),
+            "a complete {slots}-slot cycle is the schedule operating normally \
+             and must not demote the privacy class; flags: {:?}",
+            score.contradiction_flags
+        );
+    }
+
+    /// The soft band still does its job: a spread beyond the designed stagger
+    /// is flagged.
+    #[test]
+    fn a_spread_beyond_the_stagger_is_still_flagged() {
+        let (slots, slot_us) = (9_usize, 35_600_u64);
+        let cfg = MultistaticConfig::for_tdm_schedule(slots, slot_us);
+        let hard = cfg.guard_interval_us;
+        let fuser = MultistaticFuser::with_config(cfg);
+
+        // Two nodes, inside the hard guard but wider than a full cycle's stagger.
+        let late = hard - 1;
+        let frames = vec![
+            make_node_frame(0, 0, 56, 1.0),
+            make_node_frame(1, late, 56, 1.0),
+        ];
+        let (_f, score) = fuser.fuse_scored(&frames, 0.0).expect("within hard guard");
+        assert!(
+            score.forces_privacy_demotion(),
+            "a spread of {late} us exceeds the designed stagger and must still \
+             be recorded as loose alignment"
+        );
+    }
+
     /// The derived soft guard stays strictly below the hard guard, and a
     /// degenerate (0-slot) schedule clamps to a usable config.
     #[test]
@@ -1064,10 +1256,16 @@ mod tests {
 
     #[test]
     fn node_positions_set_and_retrieved() {
+        // The legacy positional setter round-trips through the dense view:
+        // index i in, index i out. Storage is keyed by id underneath, and
+        // `positions[i]` is documented to mean node i.
         let mut fuser = MultistaticFuser::new();
         let positions = vec![[0.0, 0.0, 1.0], [3.0, 0.0, 1.0]];
         fuser.set_node_positions(positions.clone());
-        assert_eq!(fuser.node_positions(), &positions[..]);
+        assert_eq!(fuser.node_positions(), positions);
+        assert_eq!(fuser.node_position(0), Some([0.0, 0.0, 1.0]));
+        assert_eq!(fuser.node_position(1), Some([3.0, 0.0, 1.0]));
+        assert_eq!(fuser.node_position(2), None);
     }
 
     #[test]
@@ -1081,6 +1279,255 @@ mod tests {
         let fused = fuser.fuse(&frames).unwrap();
         assert_eq!(fused.node_positions[0], [1.0, 2.0, 3.0]);
         assert_eq!(fused.node_positions[1], [0.0, 0.0, 0.0]); // default
+    }
+
+    /// Issue #1866 regressions: a fused contribution must carry the position
+    /// belonging to its own `node_id`, under every cohort shape the live
+    /// collector can produce.
+    ///
+    /// `node_frames_from_states_with_guard` hands `fuse` a *compacted* cohort:
+    /// stale, out-of-guard and empty-history nodes are already gone. So the
+    /// index of a frame is its rank in this cycle, never its identity.
+    mod positions_keyed_by_node_id {
+        use super::*;
+
+        fn positions(entries: &[(u8, [f32; 3])]) -> HashMap<u8, [f32; 3]> {
+            entries.iter().copied().collect()
+        }
+
+        /// Every frame gets its own node's coordinates -- the core assertion.
+        fn assert_each_frame_owns_its_position(
+            configured: &HashMap<u8, [f32; 3]>,
+            frames: &[MultiBandCsiFrame],
+        ) {
+            let mut fuser = MultistaticFuser::new();
+            fuser.set_node_positions_by_id(configured.clone());
+            let fused = fuser.fuse(frames).expect("cohort fuses");
+
+            assert_eq!(fused.node_positions.len(), frames.len());
+            for (frame, position) in fused.node_frames.iter().zip(&fused.node_positions) {
+                let expected = configured
+                    .get(&frame.node_id)
+                    .copied()
+                    .unwrap_or([0.0, 0.0, 0.0]);
+                assert_eq!(
+                    *position, expected,
+                    "node {} received the wrong position",
+                    frame.node_id
+                );
+            }
+        }
+
+        #[test]
+        fn sparse_node_ids_each_get_their_own_position() {
+            // Real fleets use logical ids like 11/12/13. Under rank addressing
+            // every one of these resolved to the origin, because indices
+            // 11..13 do not exist in a 3-entry list.
+            let configured = positions(&[
+                (11, [1.0, 0.0, 0.0]),
+                (12, [2.0, 0.0, 0.0]),
+                (13, [3.0, 0.0, 0.0]),
+            ]);
+            let frames = vec![
+                make_node_frame(11, 100, 56, 1.0),
+                make_node_frame(12, 101, 56, 1.0),
+                make_node_frame(13, 102, 56, 1.0),
+            ];
+            assert_each_frame_owns_its_position(&configured, &frames);
+
+            let mut fuser = MultistaticFuser::new();
+            fuser.set_node_positions_by_id(configured);
+            let fused = fuser.fuse(&frames).expect("cohort fuses");
+            assert_eq!(fused.node_positions[0], [1.0, 0.0, 0.0]);
+            assert_eq!(fused.node_positions[2], [3.0, 0.0, 0.0]);
+        }
+
+        #[test]
+        fn configuration_order_does_not_change_any_position() {
+            // Insertion order must be irrelevant: identity is stated, not
+            // inferred from where an entry sat in the config.
+            let ascending = positions(&[
+                (3, [3.0, 0.0, 0.0]),
+                (5, [5.0, 0.0, 0.0]),
+                (9, [9.0, 0.0, 0.0]),
+            ]);
+            let reversed = positions(&[
+                (9, [9.0, 0.0, 0.0]),
+                (5, [5.0, 0.0, 0.0]),
+                (3, [3.0, 0.0, 0.0]),
+            ]);
+            let frames = vec![
+                make_node_frame(3, 100, 56, 1.0),
+                make_node_frame(5, 101, 56, 1.0),
+                make_node_frame(9, 102, 56, 1.0),
+            ];
+
+            let mut a = MultistaticFuser::new();
+            a.set_node_positions_by_id(ascending);
+            let mut b = MultistaticFuser::new();
+            b.set_node_positions_by_id(reversed);
+
+            assert_eq!(
+                a.fuse(&frames).expect("fuses").node_positions,
+                b.fuse(&frames).expect("fuses").node_positions
+            );
+        }
+
+        #[test]
+        fn a_silent_node_does_not_move_the_others() {
+            // THE REASON THIS IS KEYED BY ID. Node 2 misses a beacon and drops
+            // out of the cohort. Under rank addressing nodes 3 and 4 shift
+            // down one slot and silently inherit their neighbours' coordinates
+            // -- a fleet-wide position error caused by one dropped frame.
+            let configured = positions(&[
+                (1, [1.0, 0.0, 0.0]),
+                (2, [2.0, 0.0, 0.0]),
+                (3, [3.0, 0.0, 0.0]),
+                (4, [4.0, 0.0, 0.0]),
+            ]);
+            let mut fuser = MultistaticFuser::new();
+            fuser.set_node_positions_by_id(configured);
+
+            let all_up = vec![
+                make_node_frame(1, 100, 56, 1.0),
+                make_node_frame(2, 101, 56, 1.0),
+                make_node_frame(3, 102, 56, 1.0),
+                make_node_frame(4, 103, 56, 1.0),
+            ];
+            let two_silent = vec![
+                make_node_frame(1, 100, 56, 1.0),
+                make_node_frame(3, 102, 56, 1.0),
+                make_node_frame(4, 103, 56, 1.0),
+            ];
+
+            let full = fuser.fuse(&all_up).expect("fuses");
+            let gapped = fuser.fuse(&two_silent).expect("fuses");
+
+            assert_eq!(full.node_positions[2], [3.0, 0.0, 0.0]);
+            assert_eq!(full.node_positions[3], [4.0, 0.0, 0.0]);
+            // Node 3 is now at rank 1 and node 4 at rank 2, but both keep
+            // their own coordinates.
+            assert_eq!(gapped.node_positions[0], [1.0, 0.0, 0.0]);
+            assert_eq!(gapped.node_positions[1], [3.0, 0.0, 0.0]);
+            assert_eq!(gapped.node_positions[2], [4.0, 0.0, 0.0]);
+        }
+
+        #[test]
+        fn join_and_leave_churn_never_reassigns_a_position() {
+            // Walk a node through leave -> rejoin. Every cohort shape must
+            // still pair each frame with its own configured coordinates.
+            let configured = positions(&[
+                (0, [0.0, 0.0, 0.0]),
+                (1, [1.0, 1.0, 0.0]),
+                (2, [2.0, 2.0, 0.0]),
+                (3, [3.0, 3.0, 0.0]),
+            ]);
+            let cohorts: Vec<Vec<u8>> = vec![
+                vec![0, 1, 2, 3],
+                vec![0, 2, 3],
+                vec![2, 3],
+                vec![3],
+                vec![0, 3],
+                vec![0, 1, 2, 3],
+            ];
+            for ids in cohorts {
+                let frames: Vec<MultiBandCsiFrame> = ids
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &id)| make_node_frame(id, 100 + i as u64, 56, 1.0))
+                    .collect();
+                assert_each_frame_owns_its_position(&configured, &frames);
+            }
+        }
+
+        #[test]
+        fn a_configured_but_absent_node_costs_nothing() {
+            // Positions may be configured for boards that are not reporting.
+            // They must not consume a slot or displace anyone.
+            let configured = positions(&[
+                (1, [1.0, 0.0, 0.0]),
+                (7, [7.0, 0.0, 0.0]),
+                (42, [42.0, 0.0, 0.0]),
+            ]);
+            let frames = vec![
+                make_node_frame(1, 100, 56, 1.0),
+                make_node_frame(7, 101, 56, 1.0),
+            ];
+            assert_each_frame_owns_its_position(&configured, &frames);
+
+            let mut fuser = MultistaticFuser::new();
+            fuser.set_node_positions_by_id(configured);
+            let fused = fuser.fuse(&frames).expect("fuses");
+            assert_eq!(fused.node_positions.len(), 2);
+            assert_eq!(fused.node_positions[1], [7.0, 0.0, 0.0]);
+        }
+
+        #[test]
+        fn an_unconfigured_node_still_fuses_at_the_origin() {
+            // Unchanged fallback behaviour: unknown node -> origin, and it
+            // must not disturb its neighbours.
+            let configured = positions(&[(1, [1.0, 0.0, 0.0]), (3, [3.0, 0.0, 0.0])]);
+            let frames = vec![
+                make_node_frame(1, 100, 56, 1.0),
+                make_node_frame(2, 101, 56, 1.0),
+                make_node_frame(3, 102, 56, 1.0),
+            ];
+            assert_each_frame_owns_its_position(&configured, &frames);
+
+            let mut fuser = MultistaticFuser::new();
+            fuser.set_node_positions_by_id(configured);
+            let fused = fuser.fuse(&frames).expect("fuses");
+            assert_eq!(fused.node_positions[1], [0.0, 0.0, 0.0]);
+        }
+
+        #[test]
+        fn legacy_positional_setter_still_means_index_equals_node_id() {
+            // Documented compatibility mapping: a bare `--node-positions`
+            // list has always meant "the i-th entry is node i". Preserved
+            // exactly, so existing deployments are unaffected.
+            let mut fuser = MultistaticFuser::new();
+            fuser.set_node_positions(vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [2.0, 0.0, 0.0],
+            ]);
+            let frames = vec![
+                make_node_frame(0, 100, 56, 1.0),
+                make_node_frame(1, 101, 56, 1.0),
+                make_node_frame(2, 102, 56, 1.0),
+            ];
+            let fused = fuser.fuse(&frames).expect("fuses");
+            assert_eq!(fused.node_positions[0], [0.0, 0.0, 0.0]);
+            assert_eq!(fused.node_positions[1], [1.0, 0.0, 0.0]);
+            assert_eq!(fused.node_positions[2], [2.0, 0.0, 0.0]);
+        }
+
+        /// Negative control: the pre-fix behaviour must actually be gone.
+        ///
+        /// Rank addressing over a dense zero-based config only diverges from
+        /// id addressing once the cohort is compacted, so this pins the exact
+        /// case the old code got wrong rather than restating the happy path.
+        #[test]
+        fn rank_addressing_would_have_failed_this_cohort() {
+            let configured = positions(&[
+                (0, [0.0, 0.0, 0.0]),
+                (1, [1.0, 0.0, 0.0]),
+                (2, [2.0, 0.0, 0.0]),
+            ]);
+            let mut fuser = MultistaticFuser::new();
+            fuser.set_node_positions_by_id(configured);
+
+            // Node 1 is silent; the cohort is [0, 2].
+            let frames = vec![
+                make_node_frame(0, 100, 56, 1.0),
+                make_node_frame(2, 101, 56, 1.0),
+            ];
+            let fused = fuser.fuse(&frames).expect("fuses");
+
+            // Rank addressing would hand rank 1 the position of node 1.
+            assert_ne!(fused.node_positions[1], [1.0, 0.0, 0.0]);
+            assert_eq!(fused.node_positions[1], [2.0, 0.0, 0.0]);
+        }
     }
 
     #[test]

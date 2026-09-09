@@ -9,6 +9,7 @@
 //! - Real-time CSI introspection / low-latency tap (`introspection`, ADR-099)
 
 pub mod bearer_auth;
+pub mod bootstrap_baseline;
 pub mod browser_session;
 pub mod ws_ticket;
 pub mod cli;

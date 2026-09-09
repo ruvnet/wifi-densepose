@@ -14,6 +14,7 @@ set(SRCS
     "c6_twt.c"
     "c6_timesync.c"
     "c6_lp_core.c"
+    "c6_antenna_select.c"
     # ADR-110 D1 workaround — ESP-NOW cross-node sync (works on S3+C6)
     "c6_sync_espnow.c"
     # ADR-110 B1/B2 unblock — soft-AP HE/TWT (C6-only when enabled)
@@ -46,6 +47,12 @@ set(REQUIRES
 # we use the IDF_TARGET variable that idf.py sets from sdkconfig.defaults / set-target.
 if(IDF_TARGET STREQUAL "esp32c6")
     list(APPEND REQUIRES ieee802154 ulp esp_hw_support)
+endif()
+
+# ESP-IDF 6 split the temperature sensor driver out of the legacy `driver`
+# component. Keep the 5.4 lane working while declaring the v6 dependency.
+if(IDF_VERSION_MAJOR GREATER_EQUAL 6)
+    list(APPEND REQUIRES esp_driver_tsens)
 endif()
 
 # ADR-061: Mock CSI generator for QEMU testing + ADR-081 mock radio binding

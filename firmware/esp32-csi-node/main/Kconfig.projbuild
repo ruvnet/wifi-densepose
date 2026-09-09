@@ -1,5 +1,27 @@
 menu "CSI Node Configuration"
 
+    config C6_XIAO_ANTENNA_SELECT
+        bool "Control the Seeed XIAO ESP32-C6 RF switch"
+        depends on IDF_TARGET_ESP32C6
+        default n
+        help
+            Enable only for Seeed XIAO ESP32-C6 boards. The XIAO uses GPIO3
+            to enable RF-switch control and GPIO14 to choose its internal or
+            external antenna. Leave this disabled for generic ESP32-C6 boards
+            because GPIO3 and GPIO14 may have unrelated functions there.
+
+    choice C6_XIAO_ANTENNA_PATH
+        prompt "Seeed XIAO ESP32-C6 antenna path"
+        depends on C6_XIAO_ANTENNA_SELECT
+        default C6_XIAO_ANTENNA_INTERNAL
+
+        config C6_XIAO_ANTENNA_INTERNAL
+            bool "Internal ceramic antenna"
+
+        config C6_XIAO_ANTENNA_EXTERNAL
+            bool "External U.FL antenna"
+    endchoice
+
     config CSI_NODE_ID
         int "Node ID (0-255)"
         default 1
@@ -651,3 +673,20 @@ config UPLINK_WATCHDOG_TIMEOUT_S
       packet's health field before assuming the watchdog is responsible.
 
 endmenu
+
+config CSI_GATE_MESH_ALIGNED
+    bool "Align the CSI rate gate to mesh time (enables cross-node pairing)"
+    default y
+    help
+      The per-node elapsed gate ("20 ms since MY last accept") gives every node
+      an independent phase, so two healthy nodes at 50 Hz accept disjoint
+      frames and nothing can be paired across them. This aligns the 20 ms
+      window to mesh time so nodes choose the same windows.
+
+config CSI_SEQ_DIAG
+    bool "Log (source MAC, rx_seq) for every CSI callback (ADR-345 phase 2 probe)"
+    default n
+    help
+      Diagnostic. Emits the transmitter address and 802.11 sequence number for
+      each CSI callback so the effect of the gate above can be measured rather
+      than assumed. Verbose; leave off in normal operation.
