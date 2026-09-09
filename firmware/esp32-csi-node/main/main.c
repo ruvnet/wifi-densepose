@@ -21,6 +21,7 @@
 #include "led_strip.h"
 
 #include "csi_collector.h"
+#include "node_log.h"
 #include "thermal.h"
 #include "stream_sender.h"
 #include "nvs_config.h"
@@ -116,6 +117,10 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *)event_data;
         ESP_LOGW(TAG, "WiFi disconnected, reason=%d rssi=%d", disc->reason, disc->rssi);
+        /* The 7.5 h outage was root-caused to the MAX_RETRY latch only because
+         * someone was watching the console at the time. Persist it. */
+        node_log_note_disconnect((uint8_t)disc->reason, (int8_t)disc->rssi);
+        node_log_event(NODE_LOG_EV_WIFI_DISCONNECT, disc->reason, disc->rssi);
         s_retry_num++;
         /* Release the boot wait once, so a node that comes up while the AP is
          * down still starts CSI capture and the mesh instead of blocking in
@@ -451,6 +456,24 @@ void app_main(void)
         } else {
             ESP_LOGI(TAG, "reset reason: %s (%d)", why, (int)rr);
         }
+
+        /* And persist it. The console line above is exactly what a power cycle
+         * destroys, which is the whole reason this fleet has no post-mortem for
+         * a remote fault. node_log_init failing is non-fatal by design -- the
+         * node comes up either way, it just has no memory. */
+        if (node_log_init() == ESP_OK) {
+            uint32_t prev_uptime_s = 0;
+            nvs_handle_t nh;
+            if (nvs_open("nodelog", NVS_READWRITE, &nh) == ESP_OK) {
+                nvs_get_u32(nh, "last_up_s", &prev_uptime_s);
+                nvs_set_u32(nh, "last_up_s", 0);
+                nvs_commit(nh);
+                nvs_close(nh);
+            }
+            node_log_boot((uint32_t)rr, prev_uptime_s);
+            ESP_LOGI(TAG, "on-node log active: boot_id=%u, %u records retained",
+                     (unsigned)node_log_boot_id(), (unsigned)node_log_count());
+        }
     }
 
     /* Bring thermal monitoring up before the radio is loaded, so the first
@@ -655,5 +678,24 @@ void app_main(void)
 #ifdef CONFIG_UPLINK_WATCHDOG
         uplink_watchdog_tick();
 #endif
+        /* Offered every 10 s; node_log enforces its own floor, so the cadence
+         * lives in one place rather than being implied by this loop's delay.
+         * Also refresh the uptime NVS cell, which is what lets the NEXT boot
+         * record say how long the previous session actually survived -- the
+         * difference between "it rebooted" and "it wedged after 225 s". */
+        node_log_periodic();
+        {
+            static uint32_t s_last_persist_s;
+            uint32_t up_s = (uint32_t)(esp_timer_get_time() / 1000000);
+            if (up_s - s_last_persist_s >= 60) {
+                s_last_persist_s = up_s;
+                nvs_handle_t nh;
+                if (nvs_open("nodelog", NVS_READWRITE, &nh) == ESP_OK) {
+                    nvs_set_u32(nh, "last_up_s", up_s);
+                    nvs_commit(nh);
+                    nvs_close(nh);
+                }
+            }
+        }
     }
 }
