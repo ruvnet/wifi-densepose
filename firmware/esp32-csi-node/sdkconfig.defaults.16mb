@@ -1,0 +1,23 @@
+# ESP32-C6 CSI Node - 16MB Flash SDK Configuration
+# For boards with 16MB flash (e.g. ESP32-C6 DevKitC-1 N16).
+#
+# Layered on top of sdkconfig.defaults.esp32c6, which keeps a 4MB layout
+# because 4MB C6 devkits are the common case and must not be silently
+# repartitioned by inheriting this.
+#
+# Build:
+#   idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.esp32c6;sdkconfig.defaults.16mb" build
+#
+# Confirm before flashing a deployed node: /ota/status must report
+# max_size 4194304. Writing a smaller table over a 16MB node relocates NVS
+# and destroys its provisioning.
+
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_16mb.csv"
+
+# Firmware rollback: an OTA'd image boots PENDING_VERIFY and must confirm
+# itself, or the bootloader reverts on the next boot. See ota_rollback_* in
+# ota_update.c for when confirmation happens and why.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
