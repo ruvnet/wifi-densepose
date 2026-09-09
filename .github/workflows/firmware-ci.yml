@@ -98,6 +98,8 @@ jobs:
         run: |
           make test_adr110
           ./test_adr110
+          make test_c6_antenna
+          ./test_c6_antenna
 
       - name: Verify binary size budget
         working-directory: firmware/esp32-csi-node
@@ -184,3 +186,22 @@ jobs:
           name: esp32-csi-node-firmware-${{ matrix.variant }}
           path: firmware/esp32-csi-node/release-staging/
           retention-days: 90
+
+  build-c6-idf6:
+    name: Build XIAO C6 external antenna (ESP-IDF 6.0.2)
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v6.0.2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          submodules: recursive
+
+      - name: Build the IDF 6 canary image
+        working-directory: firmware/esp32-csi-node
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.esp32c6;sdkconfig.defaults.xiao-external" set-target esp32c6
+          idf.py build
+          test "$(stat -c%s build/esp32-csi-node.bin)" -le $((1152 * 1024))
+          strings build/esp32-csi-node.bin | grep -F "external U.FL"
