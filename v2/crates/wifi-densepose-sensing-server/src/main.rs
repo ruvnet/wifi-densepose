@@ -819,6 +819,51 @@ mod debounce_room_classification_tests {
     }
 }
 
+/// Upper plausibility ceiling (dBm) for a real 2.4/5 GHz WiFi RSSI reading.
+///
+/// A received WiFi signal is always attenuated by free-space path loss and
+/// receiver noise floor; no deployed node has ever measured better than
+/// roughly -20 dBm. The ESP32 edge-vitals packet (magic 0xC511_0002,
+/// ADR-039) carries a raw `i8` RSSI byte with no "valid" flag, and has been
+/// observed sending near-zero sentinel values (e.g. -1, -2 dBm) when the
+/// edge pipeline hasn't sampled a real reading yet. Left unguarded, that
+/// sentinel overwrote the node's `rssi_history` and the room's fused
+/// `mean_rssi` for the tick it arrived on (found 2026-09-09: node 3
+/// reporting -2.0 dBm while simultaneously showing a real ~-50 dBm CSI
+/// reading on the same node).
+pub(crate) const MAX_PLAUSIBLE_RSSI_DBM: i8 = -10;
+
+/// Returns `true` if `rssi_dbm` is a physically plausible WiFi RSSI
+/// reading (see [`MAX_PLAUSIBLE_RSSI_DBM`]).
+pub(crate) fn is_plausible_rssi(rssi_dbm: i8) -> bool {
+    rssi_dbm <= MAX_PLAUSIBLE_RSSI_DBM
+}
+
+#[cfg(test)]
+mod rssi_plausibility_tests {
+    use super::{is_plausible_rssi, MAX_PLAUSIBLE_RSSI_DBM};
+
+    #[test]
+    fn realistic_readings_are_plausible() {
+        assert!(is_plausible_rssi(-42));
+        assert!(is_plausible_rssi(-53));
+        assert!(is_plausible_rssi(-90));
+    }
+
+    #[test]
+    fn near_zero_sentinel_values_are_rejected() {
+        assert!(!is_plausible_rssi(-1));
+        assert!(!is_plausible_rssi(-2));
+        assert!(!is_plausible_rssi(0));
+    }
+
+    #[test]
+    fn boundary_is_inclusive() {
+        assert!(is_plausible_rssi(MAX_PLAUSIBLE_RSSI_DBM));
+        assert!(!is_plausible_rssi(MAX_PLAUSIBLE_RSSI_DBM + 1));
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SignalField {
     grid_size: [usize; 3],
@@ -8889,10 +8934,18 @@ async fn udp_receiver_task(
                         warn!(name: semconv::EVENT_RUVIEW_FALL_DETECTED, { "ruview.node.id" = node_id }, "fall detected by node {node_id}");
                     }
                     ns.edge_vitals = Some(vitals.clone());
-                    ns.rssi_history.push_back(vitals.rssi as f64);
-                    if ns.rssi_history.len() > 60 {
-                        ns.rssi_history.pop_front();
-                    }
+                    // An implausible RSSI (e.g. -1/-2 dBm, see
+                    // `is_plausible_rssi`) is a firmware sentinel, not a
+                    // measurement — don't let it clobber the node's history.
+                    let mean_rssi_dbm = if is_plausible_rssi(vitals.rssi) {
+                        ns.rssi_history.push_back(vitals.rssi as f64);
+                        if ns.rssi_history.len() > 60 {
+                            ns.rssi_history.pop_front();
+                        }
+                        vitals.rssi as f64
+                    } else {
+                        ns.rssi_history.back().copied().unwrap_or(0.0)
+                    };
 
                     // Store per-node person count from edge vitals.
                     let node_est = if vitals.presence {
@@ -9010,7 +9063,7 @@ async fn udp_receiver_task(
                     );
 
                     let features = FeatureInfo {
-                        mean_rssi: vitals.rssi as f64,
+                        mean_rssi: mean_rssi_dbm,
                         variance: vitals.motion_energy as f64,
                         motion_band_power: vitals.motion_energy as f64,
                         breathing_band_power: if vitals.presence { 0.5 } else { 0.0 },
