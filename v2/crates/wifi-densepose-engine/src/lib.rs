@@ -234,9 +234,30 @@ impl StreamingEngine {
     /// WiFi/ESP-NOW-synced multi-node deployments spuriously fail governed
     /// trust cycles even after widening the guard elsewhere.
     ///
-    /// Rebuilds the fuser, so call before any frames are processed.
+    /// Rebuilds the fuser, so call before any frames are processed. Preserves
+    /// any node positions configured via [`Self::set_node_positions`] across
+    /// the rebuild (issue #1870) — a caller that configures positions once at
+    /// startup and calls this later (e.g. after deriving a TDM schedule) must
+    /// not have that configuration silently discarded.
     pub fn set_multistatic_config(&mut self, cfg: MultistaticConfig) {
+        let positions = self.fuser.node_positions_by_id().clone();
         self.fuser = MultistaticFuser::with_config(cfg);
+        self.fuser.set_node_positions_by_id(positions);
+    }
+
+    /// Configure node positions for the governed multistatic fuser, keyed by
+    /// node id (issue #1870). Without this, `StreamingEngine`'s fuser — the
+    /// one behind `fuse_scored_calibrated`, which feeds provenance and the
+    /// witness — always fuses with every node at the origin, regardless of
+    /// deployment configuration, because nothing ever called this on it. This
+    /// is a separate `MultistaticFuser` instance from the one
+    /// `wifi-densepose-sensing-server`'s `AppState` owns (fixed for that
+    /// instance in #1860); each fuser instance needs positions set on it
+    /// independently. Safe to call before or after [`Self::set_multistatic_config`] —
+    /// order does not matter, since that method now preserves whatever
+    /// positions are already set across its rebuild.
+    pub fn set_node_positions(&mut self, positions: std::collections::HashMap<u8, [f32; 3]>) {
+        self.fuser.set_node_positions_by_id(positions);
     }
 
     /// Activate a per-room calibration adapter (ADR-150 §3.4). From the next
@@ -1357,6 +1378,66 @@ mod tests {
             witness_of(&a, class),
             witness_of(&b, class),
             "an extra evidence ref must not collide with a model_version that absorbs it"
+        );
+    }
+
+    // ---- Issue #1870: StreamingEngine's own fuser never received positions ----
+
+    /// The governed path (`fuse_scored_calibrated`, feeding provenance and the
+    /// witness) must carry each node's configured position -- not the origin
+    /// for every node, which is what happened before `set_node_positions`
+    /// existed on `StreamingEngine` and nothing ever configured this fuser
+    /// instance (distinct from the one `wifi-densepose-sensing-server`'s
+    /// `AppState` owns, fixed separately in #1860).
+    #[test]
+    fn governed_fuse_carries_each_nodes_configured_position() {
+        let (mut e, _room) = engine();
+        let mut positions = std::collections::HashMap::new();
+        positions.insert(0u8, [1.0, 2.0, 3.0]);
+        positions.insert(1u8, [4.0, 5.0, 6.0]);
+        e.set_node_positions(positions.clone());
+
+        let frames = [node_frame(0, 1000, 56), node_frame(1, 1001, 56)];
+        let (fused, _score) = e
+            .fuser
+            .fuse_scored_calibrated(&frames, &[None, None], StreamingEngine::DEFAULT_COHERENCE_ACCEPT)
+            .expect("cohort fuses");
+
+        assert_eq!(fused.node_positions.len(), frames.len());
+        for (frame, position) in fused.node_frames.iter().zip(&fused.node_positions) {
+            let expected = positions
+                .get(&frame.node_id)
+                .copied()
+                .expect("every configured node has a position in this test");
+            assert_eq!(
+                *position, expected,
+                "node {} received the wrong position on the governed path",
+                frame.node_id
+            );
+        }
+    }
+
+    /// `set_multistatic_config` used to rebuild the fuser from scratch,
+    /// silently discarding any positions configured before it. A caller that
+    /// sets positions once at startup and derives/applies a TDM-schedule
+    /// config later (a real, documented ordering per #1049/#1057) must not
+    /// lose them.
+    #[test]
+    fn positions_survive_a_later_set_multistatic_config() {
+        let (mut e, _room) = engine();
+        let mut positions = std::collections::HashMap::new();
+        positions.insert(0u8, [7.0, 8.0, 9.0]);
+        e.set_node_positions(positions.clone());
+
+        e.set_multistatic_config(MultistaticConfig {
+            guard_interval_us: 30_000,
+            ..MultistaticConfig::default()
+        });
+
+        assert_eq!(
+            e.fuser.node_position(0),
+            Some([7.0, 8.0, 9.0]),
+            "set_multistatic_config must not discard previously-configured positions"
         );
     }
 }
