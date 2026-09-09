@@ -139,4 +139,22 @@ uint16_t csi_collector_get_pkt_yield_per_sec(void);
  */
 uint16_t csi_collector_get_send_fail_count(void);
 
+/** Reported by the gate accessors when this build has no selectable gate. */
+#define CSI_GATE_NOT_CONFIGURABLE 0xFF
+
+/**
+ * Report which frame-selection gate is in force, for the on-node log.
+ *
+ * This build has exactly one gate -- mesh-aligned bucketing with an
+ * elapsed-time fallback -- fixed at compile time, so there is no mode or
+ * period to report and both accessors return CSI_GATE_NOT_CONFIGURABLE.
+ *
+ * They exist so the log record keeps a field of fixed width and meaning
+ * whether or not a build can select a gate at runtime, and so an explicit
+ * "not applicable" is stored rather than a plausible number that would
+ * later be reasoned from.
+ */
+uint8_t csi_collector_get_gate_mode(void);
+uint8_t csi_collector_get_gate_seq_period(void);
+
 #endif /* CSI_COLLECTOR_H */

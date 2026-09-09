@@ -1,5 +1,5 @@
 set(SRCS
-    "main.c" "csi_collector.c"
+    "main.c" "csi_collector.c" "node_log.c"
     "thermal.c" "stream_sender.c" "nvs_config.c"
     "edge_processing.c" "ota_update.c" "power_mgmt.c"
     "wasm_runtime.c" "wasm_upload.c" "rvf_parser.c"
@@ -32,6 +32,9 @@ set(REQUIRES
     esp_http_client
     esp_app_format
     esp_timer
+    fatfs                 # node_log.c: the storage FAT volume
+    wear_levelling        # node_log.c: wl_mount behind that volume
+    espcoredump           # coredump-to-flash readback
     esp_pm
     esp_driver_uart
     esp_driver_gpio

@@ -750,6 +750,20 @@ uint16_t csi_collector_get_send_fail_count(void)
     return (f > 0xFFFFu) ? 0xFFFFu : (uint16_t)f;
 }
 
+/* The gate here is fixed at compile time (mesh-aligned bucketing, falling
+ * back to elapsed time when unsynced), so there is no mode or period to
+ * report. Return the explicit sentinel rather than a number that reads as
+ * a real setting. */
+uint8_t csi_collector_get_gate_mode(void)
+{
+    return CSI_GATE_NOT_CONFIGURABLE;
+}
+
+uint8_t csi_collector_get_gate_seq_period(void)
+{
+    return CSI_GATE_NOT_CONFIGURABLE;
+}
+
 /* ---- ADR-029: Channel hopping ---- */
 
 void csi_collector_set_hop_table(const uint8_t *channels, uint8_t hop_count, uint32_t dwell_ms)
