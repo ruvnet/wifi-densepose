@@ -167,6 +167,8 @@ export async function readMmwave(args, deps) {
     if (frames.length < 2) continue;
     let bytes = cap.bytes.length;
     let elapsed = cap.seconds;
+    let captureIncomplete = Boolean(cap.captureIncomplete);
+    const warnings = [...(cap.warnings || [])];
     const remaining = seconds - probeSeconds;
     if (auto && remaining >= 0.5) {
       const more = await capture(model, remaining);
@@ -177,12 +179,19 @@ export async function readMmwave(args, deps) {
         errors += extra.errors;
         bytes += more.bytes.length;
         elapsed += more.seconds;
+        captureIncomplete ||= Boolean(more.captureIncomplete);
+        warnings.push(...(more.warnings || []));
+      } else {
+        captureIncomplete = true;
+        warnings.push('remaining serial capture failed; only probe frames retained');
       }
     }
     return {
       ok: true,
       ...summarizeMmwave(model, frames, errors, bytes, elapsed),
       ...(auto ? { detected: model } : {}),
+      ...(captureIncomplete ? { captureIncomplete: true } : {}),
+      ...(warnings.length ? { warnings } : {}),
       evidence: 'MEASURED: device-reported radar values read on this host (not an accuracy claim)',
     };
   }

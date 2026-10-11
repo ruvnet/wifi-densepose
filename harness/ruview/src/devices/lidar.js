@@ -69,7 +69,7 @@ export async function readRplidar(args, deps) {
   if (!summary.validPoints) {
     return { ok: false, reason: 'no_scan_points', bytes: cap.bytes.length, ...summary, remedy: 'A2/A3/S-series need 115200/256000/1000000 baud per model; check the USB adapter powers the motor (A1 motor follows DTR).' };
   }
-  return { ok: true, source: 'rplidar', bytes: cap.bytes.length, ...summary, ...(cap.warnings ? { warnings: cap.warnings } : {}), evidence: 'MEASURED: live scan read on this host' };
+  return { ok: true, source: 'rplidar', bytes: cap.bytes.length, ...summary, ...(cap.captureIncomplete ? { captureIncomplete: true } : {}), ...(cap.warnings ? { warnings: cap.warnings } : {}), evidence: 'MEASURED: live scan read on this host' };
 }
 
 /** Validate and reduce one ruview.lidar.depth.v1 packet to statistics. */
