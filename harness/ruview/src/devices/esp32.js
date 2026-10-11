@@ -305,7 +305,7 @@ class FrameCollector {
   /** The requested node's (or the busiest node's) dominant shape. */
   pick(nodeId) {
     const all = [...this.byNode.values()].filter((c) => nodeId === undefined || c.nodeId === nodeId);
-    return all.sort((a, b) => b.frames.length - a.frames.length)[0] || null;
+    return all.sort((a, b) => (b.frames.length + b.dropped) - (a.frames.length + a.dropped))[0] || null;
   }
 }
 
