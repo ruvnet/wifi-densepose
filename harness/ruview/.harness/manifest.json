@@ -47,7 +47,7 @@
     "src/cli-ui.js": "507fbd4444c6639c69354790ed3aed2addcb826929a6b3ad7ddb752f058c1f2f",
     "src/cli.js": "5e8467f0d0fb90d81347715143b3777e239165d707dd9d8c5d647294509a7fc3",
     "src/devices/esp32.js": "4d7ff3d63d751222756e227a98de38c70a707e8be2a431d1b3ac604622f94225",
-    "src/devices/esphome.js": "83b0fbd8c9075e233a401fa9f9dad04fc911e04819e7a0c48eb32d7e35d226af",
+    "src/devices/esphome.js": "f2ea7be98295ebccaeba0fe3506f0f42d471d5e19b30d950e601c919fbb06efb",
     "src/devices/lidar.js": "d753d88375358ced5174376753c276b5ca621f38ae48eac58dbb307b9004b629",
     "src/devices/mmwave.js": "09d828e3b3e140926194ab83bf27e7c63cbda1cf438385c82c0e89b9d8e4b526",
     "src/devices/registry.js": "26725e43adaa908b41462f492c5f6bf63e9193f3ee076e3d64ebaa012b66f6be",
@@ -75,7 +75,7 @@
     "src/training.js": "b8451c48db69c7d077d75f07500996213beaa52705116f64afafe084e68e3956",
     "src/ui/console-widget.js": "0d2f707d57b5ec54968dee1dc80f31c7db9152dcadfc48700c18379dabb55462"
   },
-  "filesDigest": "60935843295b67f3354b4b02cc31df62bac8b5093568b11f896dfc7fc3a91545",
+  "filesDigest": "6817bde33576f36e15519538fbc0177a06207f2bd33f22d71cdb7ed7bd87c5a3",
   "brainDigest": "c0fb7b079ded157059b91601361429944697dae3cc42abc00dfe1a680986b0f4",
   "gateFingerprint": "6e53c784eee38310188948fc75fb49e6b4ebc04e247d01b903fa8c8a92d67bdd",
   "developmentPins": {

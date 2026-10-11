@@ -135,9 +135,9 @@ async function resolveHost(host, deps) {
 
 // --- radar roles -----------------------------------------------------------------
 const ROLES = [
-  ['heartBpm', (e) => /heart/i.test(e.name + e.objectId)],
-  ['breathingBpm', (e) => /respir|breath/i.test(e.name + e.objectId)],
-  ['distanceCm', (e) => /distance/i.test(e.name + e.objectId)],
+  ['heartBpm', (e) => e.kind === 'sensor' && /heart/i.test(e.name + e.objectId)],
+  ['breathingBpm', (e) => e.kind === 'sensor' && /respir|breath/i.test(e.name + e.objectId)],
+  ['distanceCm', (e) => e.kind === 'sensor' && /distance/i.test(e.name + e.objectId)],
   ['targets', (e) => /target/i.test(e.name + e.objectId) && e.kind === 'sensor'],
   ['present', (e) => e.kind === 'binary' && /person|presence|occup|motion|human/i.test(e.name + e.objectId)],
 ];
