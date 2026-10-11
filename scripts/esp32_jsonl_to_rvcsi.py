@@ -116,7 +116,15 @@ def main():
                 stats["read"] -= 1
                 break
             iq_hex = d.get("iq_hex", "")
-            raw = bytes.fromhex(iq_hex)
+            try:
+                raw = bytes.fromhex(iq_hex)
+            except (TypeError, ValueError):
+                stats["rej_len"] += 1
+                continue
+            # A partial I/Q pair cannot be reconstructed from this recording.
+            if len(raw) % 2:
+                stats["rej_len"] += 1
+                continue
             n_pairs = len(raw) // 2
             # ESP-IDF CSI buffer layout: [imag0, real0, imag1, real1, ...] as int8
             i_vals, q_vals, amp, ph = [], [], [], []
