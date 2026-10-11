@@ -164,7 +164,7 @@ export async function readMmwave(args, deps) {
     if (!cap.ok) return { ok: false, reason: cap.reason, detail: cap.detail, remedy: cap.remedy };
     let { frames, errors } = parseMmwave(model, cap.bytes);
     attempts.push({ model, bytes: cap.bytes.length, frames: frames.length, errors });
-    if (frames.length < 2) continue;
+    if (frames.length < (auto ? 2 : 1)) continue;
     let bytes = cap.bytes.length;
     let elapsed = cap.seconds;
     const remaining = seconds - probeSeconds;
