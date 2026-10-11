@@ -159,6 +159,22 @@ export function parsePacket(buf, opts = {}) {
       leader: Boolean(buf.readUInt8(6) & 1), highWaterSeq: buf.readUInt32LE(24),
     };
   }
+  if (kind === 'features' && buf.length < 48) return { kind: 'malformed', reason: 'features length' };
+  if (kind === 'compressed') {
+    if (buf.length < 10) return { kind: 'malformed', reason: 'compressed header' };
+    const originalLength = buf.readUInt16LE(6);
+    const compressedLength = buf.readUInt16LE(8);
+    if (!originalLength || !compressedLength || buf.length !== 10 + compressedLength) return { kind: 'malformed', reason: 'compressed payload' };
+  }
+  if (kind === 'feature-state') {
+    if (buf.length !== 60) return { kind: 'malformed', reason: 'feature-state length' };
+    if (crc32(buf, 56) !== buf.readUInt32LE(56)) return { kind: 'malformed', reason: 'feature-state crc' };
+  }
+  if (kind === 'wasm-output') {
+    if (buf.length < 8) return { kind: 'malformed', reason: 'wasm-output header' };
+    const events = buf.readUInt16LE(6);
+    if (events > 16 || buf.length !== 8 + 5 * events) return { kind: 'malformed', reason: 'wasm-output payload' };
+  }
   return { kind, source: 'esp32', nodeId: buf.length > 4 ? buf.readUInt8(4) : null, bytes: buf.length };
 }
 

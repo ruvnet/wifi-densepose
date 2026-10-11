@@ -243,3 +243,29 @@ test('spectrum draws multi-antenna ESP32 nodes from their first chain (ADR-018 a
   assert.deepEqual([s.nodeId, s.shape, s.bins], [9, '2x8', 8]);
   assert.ok(s.frames.every((f) => f.every((v) => v === 3)));
 });
+
+function auxiliaryPackets() {
+  const features = Buffer.alloc(48); features.writeUInt32LE(0xC5110003, 0); features[4] = 7;
+  const compressed = Buffer.alloc(12); compressed.writeUInt32LE(0xC5110005, 0); compressed[4] = 7;
+  compressed.writeUInt16LE(4, 6); compressed.writeUInt16LE(2, 8); compressed[11] = 4; // identical prior frame: RLE [0, 4]
+  const state = Buffer.alloc(60); state.writeUInt32LE(0xC5110006, 0); state[4] = 7; state.writeUInt32LE(crc32(state, 56), 56);
+  const wasm = Buffer.alloc(13); wasm.writeUInt32LE(0xC5110007, 0); wasm[4] = 7; wasm.writeUInt16LE(1, 6); wasm[8] = 1; wasm.writeFloatLE(50, 9);
+  return [features, compressed, state, wasm];
+}
+
+test('auxiliary node reports require complete wire payloads and feature-state CRC', async () => {
+  const valid = auxiliaryPackets();
+  const prefixes = valid.map((packet) => packet.subarray(0, 4));
+  const corruptState = Buffer.from(valid[2]); corruptState[20] ^= 1;
+  const shortCompressed = valid[1].subarray(0, 11);
+  const shortWasm = valid[3].subarray(0, 12);
+  const shortFeatures = valid[0].subarray(0, 47);
+  const invalid = [...prefixes, corruptState, shortCompressed, shortWasm, shortFeatures];
+  const result = await capture({ max_packets: invalid.length + valid.length }, [...invalid, ...valid]);
+  assert.equal(result.ok, true);
+  assert.equal(result.packets, 12);
+  assert.equal(result.malformedPackets, 8);
+  assert.equal(result.decodedPackets, 4);
+  assert.equal(result.nodes.length, 1, 'invalid prefixes must not create phantom node -1');
+  assert.deepEqual(result.nodes[0].packets, { features: 1, compressed: 1, 'feature-state': 1, 'wasm-output': 1 });
+});
