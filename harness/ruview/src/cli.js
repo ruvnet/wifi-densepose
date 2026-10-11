@@ -45,12 +45,15 @@ const BOOLEAN_FLAGS = new Set(['confirm', 'cuda', 'allow_unverified', 'analyze',
 // Presentation-only flags never reach a tool schema.
 const UI_FLAGS = new Set(['json', 'watch', 'interval']);
 
+// Leave absent flag values uncoerced so the tool schema rejects them.
+const numericFlag = (value) => typeof value === 'boolean' || (typeof value === 'string' && value.trim() === '') ? value : Number(value);
+
 function toSchemaArgs(flags) {
   const out = {};
   for (const [key, value] of Object.entries(flags)) {
     const k = key.replaceAll('-', '_');
     if (UI_FLAGS.has(k)) continue;
-    if (NUMERIC_FLAGS.has(k)) out[k] = Number(value);
+    if (NUMERIC_FLAGS.has(k)) out[k] = numericFlag(value);
     else if (BOOLEAN_FLAGS.has(k)) out[k] = value === true || value === 'true';
     else if (k === 'train_subjects' || k === 'test_subjects') out[k] = String(value).split(',').filter(Boolean);
     else out[k] = value;
