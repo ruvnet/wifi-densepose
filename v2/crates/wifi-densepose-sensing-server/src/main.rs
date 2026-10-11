@@ -474,6 +474,19 @@ struct CalibratedPresenceEvidence {
     inference_method: String,
     presence: bool,
     person_count: usize,
+    #[serde(skip)]
+    diagnostics: Option<DetectorDiagnostics>,
+}
+
+/// Bounded decision explanation, separate from the strict authority envelope.
+#[derive(Debug, Clone, Serialize)]
+struct DetectorDiagnostics {
+    schema: &'static str,
+    scored_node_id: u8,
+    source_age_ms: u64,
+    source_sequence: u32,
+    required_window_frames: usize,
+    runtime: field_bridge::OccupancyDiagnostics,
 }
 
 /// Sensing update broadcast to WebSocket clients
@@ -495,6 +508,8 @@ struct SensingUpdate {
     /// active model receipt. Omitted when no calibrated result is available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     calibrated_presence_evidence: Option<CalibratedPresenceEvidence>,
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
+    detector_diagnostics: Option<DetectorDiagnostics>,
     // ── ADR-022 Phase 3: Enhanced multi-BSSID pipeline fields ──
     /// Enhanced motion estimate from multi-BSSID pipeline.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2793,6 +2808,17 @@ impl AppStateInner {
             inference_method: occupancy.method.wire_name().to_string(),
             presence: occupancy.person_count > 0,
             person_count: occupancy.person_count,
+            diagnostics: self.calibration_grid_binding.and_then(|binding| {
+                let node = self.node_states.get(&binding.source_node_id)?;
+                Some(DetectorDiagnostics {
+                    schema: field_bridge::DETECTOR_DIAGNOSTICS_SCHEMA,
+                    scored_node_id: binding.source_node_id,
+                    source_age_ms: node.field_model_latest_seen?.elapsed().as_millis().min(u64::MAX as u128) as u64,
+                    source_sequence: node.field_model_latest_sequence?,
+                    required_window_frames: self.field_model.as_ref()?.modes()?.baseline_runtime_window_size.unwrap_or(50),
+                    runtime: occupancy.diagnostics,
+                })
+            }),
         })
     }
 
@@ -3233,6 +3259,21 @@ mod calibration_expiry_tests {
         snapshot.modes.baseline_runtime_window_size = Some(50);
         *model = FieldModel::from_snapshot(snapshot, 1_500_000).unwrap();
         state
+    }
+
+    #[test]
+    fn diagnostics_stay_outside_the_strict_calibration_authority_envelope() {
+        let state = state_with_runtime_window();
+        let evidence = state.calibrated_presence_evidence(5, 77, 1_500).unwrap();
+        let diagnostic = evidence.diagnostics.as_ref().expect("bound source diagnostics");
+        assert_eq!(diagnostic.scored_node_id, 5);
+        assert_eq!(diagnostic.runtime.window_frames, 50);
+        let encoded = serde_json::to_value(&evidence).unwrap();
+        assert!(encoded.get("diagnostics").is_none());
+        assert_eq!(encoded.as_object().unwrap().len(), 13);
+        assert_eq!(encoded["person_count"], 0);
+        assert_eq!(serde_json::to_value(diagnostic).unwrap()["schema"],
+            field_bridge::DETECTOR_DIAGNOSTICS_SCHEMA);
     }
 
     #[test]
@@ -5058,6 +5099,7 @@ async fn wifi_task(state: SharedState, tick_ms: u64) {
             ),
             vital_signs: None,
             calibrated_presence_evidence: None,
+            detector_diagnostics: None,
             enhanced_motion,
             enhanced_breathing,
             posture: posture_str,
@@ -5227,6 +5269,7 @@ async fn windows_wifi_fallback_tick(state: &SharedState, seq: u32) {
         ),
         vital_signs: None,
         calibrated_presence_evidence: None,
+        detector_diagnostics: None,
         enhanced_motion: None,
         enhanced_breathing: None,
         posture: None,
@@ -6117,6 +6160,7 @@ mod latest_update_staleness_tests {
             classifier: None,
             activity: None,
             calibrated_presence_evidence: None,
+            detector_diagnostics: None,
             enhanced_motion: None,
             enhanced_breathing: None,
             posture: None,
@@ -10036,12 +10080,14 @@ async fn calibration_promote_bootstrap(
     }
 
     let validation = bootstrap_baseline::evaluate_validation(&samples);
+    let validation_diagnostics = validation.diagnostics();
     if !validation.passed {
         return Json(serde_json::json!({
             "success": false,
             "error_code": "bootstrap_validation_failed",
-            "error": "The held out empty room check did not pass. The model was not stored.",
+            "error": format!("The held out empty room check did not pass: {}. The model was not stored.", validation_diagnostics.failure_summary()),
             "validation": validation,
+            "validation_diagnostics": validation_diagnostics,
         }));
     }
 
@@ -10107,6 +10153,7 @@ async fn calibration_promote_bootstrap(
         "success": true,
         "message": "Validated startup baseline stored locally.",
         "validation": validation,
+        "validation_diagnostics": validation_diagnostics,
         "holdout_window_size": holdout_window_size,
         "bootstrap_baseline": stored,
         "calibrated_evidence_authorized": false,
@@ -10236,6 +10283,12 @@ async fn calibration_refine_bootstrap(
             + Duration::from_millis(BOOTSTRAP_VALIDATION_MIN_SPACING_MS);
     }
 
+    let validation_diagnostics = bootstrap_baseline::validation_diagnostics(
+        residuals.len(),
+        None,
+        stale_sample_count,
+        vital_sign_sample_count,
+    );
     if residuals.len() != BOOTSTRAP_VALIDATION_SAMPLES
         || stale_sample_count != 0
         || vital_sign_sample_count != 0
@@ -10243,12 +10296,13 @@ async fn calibration_refine_bootstrap(
         return Json(serde_json::json!({
             "success": false,
             "error_code": "bootstrap_refinement_validation_failed",
-            "error": "The fresh empty-room refinement gate did not pass. The stored baseline was not changed.",
+            "error": format!("The fresh empty-room refinement gate did not pass: {}. The stored baseline was not changed.", validation_diagnostics.failure_summary()),
             "validation": {
                 "sample_count": residuals.len(),
                 "stale_sample_count": stale_sample_count,
                 "vital_sign_sample_count": vital_sign_sample_count,
             },
+            "validation_diagnostics": validation_diagnostics,
         }));
     }
 
@@ -10335,6 +10389,7 @@ async fn calibration_refine_bootstrap(
     Json(serde_json::json!({
         "success": true,
         "message": "The local empty-room startup baseline was refined.",
+        "validation_diagnostics": validation_diagnostics,
         "validation": {
             "sample_count": residuals.len(),
             "stale_sample_count": stale_sample_count,
@@ -11709,6 +11764,7 @@ fn mediatek_room_update(
         },
         vital_signs: None,
         calibrated_presence_evidence: None,
+        detector_diagnostics: None,
         enhanced_motion: None,
         enhanced_breathing: None,
         posture: None,
@@ -12629,6 +12685,7 @@ async fn udp_receiver_task(
                         classification,
                         signal_field,
                         vital_signs: published_vitals,
+                        detector_diagnostics: calibrated_presence_evidence.as_ref().and_then(|e| e.diagnostics.clone()),
                         calibrated_presence_evidence,
                         enhanced_motion: None,
                         enhanced_breathing: None,
@@ -13124,6 +13181,7 @@ async fn udp_receiver_task(
                             &sub_variances,
                         ),
                         vital_signs: published_vitals,
+                        detector_diagnostics: calibrated_presence_evidence.as_ref().and_then(|e| e.diagnostics.clone()),
                         calibrated_presence_evidence,
                         enhanced_motion: None,
                         enhanced_breathing: None,
@@ -13364,6 +13422,7 @@ async fn simulated_data_task(state: SharedState, tick_ms: u64) {
             ),
             vital_signs: None,
             calibrated_presence_evidence: None,
+            detector_diagnostics: None,
             enhanced_motion: None,
             enhanced_breathing: None,
             posture: None,
@@ -16068,6 +16127,7 @@ mod observatory_persons_field_position_tests {
             signal_field,
             vital_signs: None,
             calibrated_presence_evidence: None,
+            detector_diagnostics: None,
             enhanced_motion: None,
             enhanced_breathing: None,
             posture: None,
