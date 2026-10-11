@@ -397,13 +397,15 @@ export function captureEsp32(args = {}, deps = {}) {
   return new Promise((resolve) => {
     const socket = createSocket(bind.includes(':') ? 'udp6' : 'udp4');
     let timer;
+    let startedAt = null;
     let done = false;
     const finish = async (extra = {}) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
       try { socket.close(); } catch { /* already closed */ }
-      const summary = stats.summary(seconds);
+      const elapsedSeconds = startedAt === null ? 0 : Math.max((performance.now() - startedAt) / 1000, Number.EPSILON);
+      const summary = stats.summary(elapsedSeconds || seconds);
       const csiNodes = summary.nodes.filter((n) => (n.packets.csi || 0) > 0).length;
       const decoded = packets - summary.unknownPackets - summary.malformedPackets;
       let failure = null;
@@ -417,7 +419,7 @@ export function captureEsp32(args = {}, deps = {}) {
       const result = {
         ok: !failure,
         ...(failure || {}),
-        listen: `${bind}:${port}`, seconds, packets, decodedPackets: decoded, csiNodes, ...summary,
+        listen: `${bind}:${port}`, seconds, elapsedSeconds, packets, decodedPackets: decoded, csiNodes, ...summary,
         evidence: failure ? null : 'MEASURED: live UDP packets received and decoded on this host',
         ...extra,
       };
@@ -445,7 +447,7 @@ export function captureEsp32(args = {}, deps = {}) {
       }
       if (packets >= maxPackets) finish({ truncated: true });
     });
-    socket.bind(port, bind, () => { timer = setTimeout(() => finish(), seconds * 1000); });
+    socket.bind(port, bind, () => { startedAt = performance.now(); timer = setTimeout(() => finish(), seconds * 1000); });
   });
 }
 

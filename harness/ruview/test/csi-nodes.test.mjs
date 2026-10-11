@@ -243,3 +243,11 @@ test('spectrum draws multi-antenna ESP32 nodes from their first chain (ADR-018 a
   assert.deepEqual([s.nodeId, s.shape, s.bins], [9, '2x8', 8]);
   assert.ok(s.frames.every((f) => f.every((v) => v === 3)));
 });
+
+test('packet-limited captures report the observed interval and rate', async () => {
+  const r = await capture({ seconds: 30, max_packets: 2 }, [esp32Csi({ seq: 1 }), esp32Csi({ seq: 2 })]);
+  assert.equal(r.truncated, true);
+  assert.equal(r.seconds, 30, 'configured duration remains available');
+  assert.ok(r.elapsedSeconds > 0 && r.elapsedSeconds < 5, JSON.stringify(r));
+  assert.equal(r.nodes[0].csiRateHz, Number((2 / r.elapsedSeconds).toFixed(2)));
+ });
