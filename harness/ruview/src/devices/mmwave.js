@@ -119,7 +119,7 @@ const mean = (xs) => (xs.length ? Number((xs.reduce((a, b) => a + b, 0) / xs.len
 
 /** Summarize decoded frames from either model. */
 export function summarizeMmwave(model, frames, errors, bytes, seconds) {
-  const pick = (key) => frames.map((f) => f[key]).filter((v) => typeof v === 'number' && Number.isFinite(v));
+  const pick = (key, include = () => true) => frames.filter(include).map((f) => f[key]).filter((v) => typeof v === 'number' && Number.isFinite(v));
   const presence = frames.filter((f) => typeof f.present === 'boolean');
   const types = {};
   for (const f of frames) types[f.type] = (types[f.type] || 0) + 1;
@@ -129,7 +129,7 @@ export function summarizeMmwave(model, frames, errors, bytes, seconds) {
     presentFraction: presence.length ? Number((presence.filter((f) => f.present).length / presence.length).toFixed(3)) : null,
     breathingBpmMean: mean(pick('breathingBpm')),
     heartBpmMean: mean(pick('heartBpm')),
-    distanceCmMean: mean(pick('distanceCm')),
+    distanceCmMean: mean(pick('distanceCm', (f) => f.type !== 'target' || f.present !== false)),
     last: frames.slice(-5),
   };
 }
