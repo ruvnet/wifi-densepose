@@ -46,7 +46,7 @@ export function createRuView({ strict = false, deps = OPERATOR_DEPS } = {}) {
 
     onboard: (path) => call('ruview_onboard', path ? { path } : {}),
     guidance: (args = {}) => call('ruview_guidance', args),
-    memorySearch: (query, limit) => call('ruview_memory_search', limit ? { query, limit } : { query }),
+    memorySearch: (query, limit) => call('ruview_memory_search', limit !== undefined ? { query, limit } : { query }),
     claimCheck: (text) => call('ruview_claim_check', { text }),
     verify: (repo) => call('ruview_verify', repo ? { repo } : {}),
     spaces: (args = {}) => call('ruview_spaces_list', args),
