@@ -260,7 +260,7 @@ export async function readEsphome(args = {}, deps = {}) {
             const e = session.entities.get(fKey(f, 1));
             if (!e) break;
             const value = type === T.STATE_SENSOR ? fFloat(f, 2) : type === T.STATE_BINARY ? fBool(f, 2) : fStr(f, 2);
-            const sample = { value, missing: fBool(f, 3) };
+            const sample = { value, missing: fBool(f, 3) || (type === T.STATE_SENSOR && !Number.isFinite(value)) };
             session.updates += 1;
             if (e.samples.length < 10_000) e.samples.push(sample);
             e.last = sample;
