@@ -13,7 +13,7 @@ const pbKey = (f, k) => { const b = Buffer.alloc(4); b.writeUInt32LE(k); return 
 const pbFloat = (f, v) => { const b = Buffer.alloc(4); b.writeFloatLE(v); return Buffer.concat([encodeVarint((f << 3) | 5), b]); };
 
 /** A fake MR60BHA2 kit. mode: 'ok' | 'encrypted' | 'password'. */
-function fakeDevice({ mode = 'ok', states } = {}) {
+function fakeDevice({ mode = 'ok', states, distanceUnit = 'cm' } = {}) {
   const seen = [];
   const server = net.createServer((sock) => {
     if (mode === 'encrypted') { sock.write(Buffer.from([0x01, 0x00, 0x00])); return; }
@@ -31,7 +31,7 @@ function fakeDevice({ mode = 'ok', states } = {}) {
           sock.write(encodeFrame(12, Buffer.concat([pbStr(1, 'person_information'), pbKey(2, 1), pbStr(3, 'Person Information')])));
           sock.write(encodeFrame(16, Buffer.concat([pbStr(1, 'real_time_heart_rate'), pbKey(2, 2), pbStr(3, 'Real-time heart rate'), pbStr(6, 'bpm')])));
           sock.write(encodeFrame(16, Buffer.concat([pbStr(1, 'real_time_respiratory_rate'), pbKey(2, 3), pbStr(3, 'Real-time respiratory rate')])));
-          sock.write(encodeFrame(16, Buffer.concat([pbStr(1, 'distance'), pbKey(2, 4), pbStr(3, 'Distance to detection object'), pbStr(6, 'cm')])));
+          sock.write(encodeFrame(16, Buffer.concat([pbStr(1, 'distance'), pbKey(2, 4), pbStr(3, 'Distance to detection object'), pbStr(6, distanceUnit)])));
           sock.write(encodeFrame(15, pbStr(1, 'rgb_light'))); // a light: ignored by the read-only client
           sock.write(encodeFrame(19));
         }
@@ -100,3 +100,13 @@ test('mmwave tool routes source=esphome and validates per-source arguments', asy
   const empty = summarizeEsphome({ device: {}, entities: new Map(), updates: 0 }, 5);
   assert.deepEqual([empty.presentNow, empty.heartBpmMean, empty.updateRateHz], [null, null, 0]);
 });
+
+for (const [unit, distance] of [['mm', 500], ['m', 0.5], ['cm', 50]]) {
+  test(`native ESPHome distance ${unit} is reported in centimetres`, async (t) => {
+    const dev = await fakeDevice({ states: [sensor(4, distance)], distanceUnit: unit });
+    t.after(() => dev.server.close());
+    const result = await readEsphome({ host: '127.0.0.1', api_port: dev.port, seconds: 1 });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.distanceCmMean, 50);
+  });
+}

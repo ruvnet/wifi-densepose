@@ -151,7 +151,11 @@ export function summarizeEsphome(session, seconds) {
   for (const e of entities) { const r = roleOf(e); if (r && !byRole[r]) byRole[r] = e; }
   const values = (e) => (e ? e.samples.filter((s) => !s.missing).map((s) => s.value) : []);
   const presence = values(byRole.present);
-  const toCm = (e) => (e && /^m$/i.test(e.unit || '') ? values(e).map((v) => v * 100) : values(e));
+  const toCm = (e) => {
+    const unit = (e?.unit || '').toLowerCase();
+    const scale = unit === 'm' ? 100 : unit === 'mm' ? 0.1 : 1;
+    return values(e).map((value) => value * scale);
+  };
   return {
     source: 'esphome',
     device: session.device,
