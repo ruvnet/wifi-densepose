@@ -37,7 +37,7 @@ function fakeDevice({ mode = 'ok', states } = {}) {
         }
         if (type === 20) {
           sock.write(encodeFrame(7)); // device pings the client; it must answer
-          for (const s of states) sock.write(encodeFrame(s.type, s.payload));
+          sock.write(Buffer.concat(states.map((s) => encodeFrame(s.type, s.payload))));
         }
       }
     });
@@ -59,6 +59,8 @@ test('reads presence and vitals from an ESPHome radar kit, honouring missing_sta
   assert.equal(r.breathingBpmMean, 15, 'missing_state samples are excluded');
   assert.equal(r.distanceCmMean, 40.5, 'zero distance (proto3 default) is not averaged in');
   assert.equal(r.stateUpdates, 7);
+  assert.equal(r.entities.find((e) => e.role === 'distanceCm').updates, 2);
+  assert.equal(r.entities.find((e) => e.role === 'distanceCm').droppedSamples, 0);
   assert.deepEqual(r.entities.map((e) => e.role), ['present', 'heartBpm', 'breathingBpm', 'distanceCm']);
   assert.ok(dev.seen.includes(8), 'answered the device ping');
   assert.ok(!dev.seen.some((ty) => [30, 31, 32, 33].includes(ty)), 'never sends a command');
@@ -99,4 +101,17 @@ test('mmwave tool routes source=esphome and validates per-source arguments', asy
   assert.equal(denied.reason, 'authority_denied');
   const empty = summarizeEsphome({ device: {}, entities: new Map(), updates: 0 }, 5);
   assert.deepEqual([empty.presentNow, empty.heartBpmMean, empty.updateRateHz], [null, null, 0]);
+});
+
+test('entity update counters retain arrivals beyond the aggregation sample cap', async (t) => {
+  const dev = await fakeDevice({ states: Array.from({ length: 10_001 }, () => sensor(4, 50)) });
+  t.after(() => dev.server.close());
+  const result = await readEsphome({ host: '127.0.0.1', api_port: dev.port, seconds: 1 });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.stateUpdates, 10_001);
+  const distance = result.entities.find((entity) => entity.role === 'distanceCm');
+  assert.equal(distance.updates, 10_001);
+  assert.equal(distance.sampledUpdates, 10_000);
+  assert.equal(distance.droppedSamples, 1);
+  assert.equal(result.distanceCmMean, 50);
 });
