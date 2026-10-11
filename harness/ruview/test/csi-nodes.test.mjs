@@ -258,3 +258,14 @@ test('unmarked Realtek frames keep ordinary analysis provenance', async () => {
   assert.equal(r.analysis.input.synthetic, false);
   assert.doesNotMatch(r.analysis.note, /synthetic/i);
 });
+
+test('ordinary CSI shape summaries retain synthetic provenance across the window', async () => {
+  const result = await capture({ max_packets: 2 }, [rac1({ seq: 1, synthetic: 1 }), rac1({ seq: 2 })]);
+  assert.equal(result.nodes[0].csi.frames, 2);
+  assert.equal(result.nodes[0].csi.synthetic, true);
+});
+
+test('ordinary unmarked CSI shape summaries remain unmarked', async () => {
+  const result = await capture({ max_packets: 2 }, [rac1({ seq: 1 }), rac1({ seq: 2 })]);
+  assert.equal(result.nodes[0].csi.synthetic, false);
+});

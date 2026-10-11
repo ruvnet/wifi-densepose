@@ -234,8 +234,8 @@ export class NodeStats {
       n.rssiSum += pkt.rssi; n.rssiCount += 1;
       trackSequence(n, pkt.seq);
       const shape = shapeKey(pkt);
-      const sh = n.shapes.get(shape) || { count: 0, ampSum: 0, last: null };
-      sh.count += 1; sh.ampSum += pkt.meanAmplitude; sh.last = pkt;
+      const sh = n.shapes.get(shape) || { count: 0, ampSum: 0, last: null, synthetic: false };
+      sh.count += 1; sh.ampSum += pkt.meanAmplitude; sh.last = pkt; sh.synthetic ||= Boolean(pkt.synthetic);
       n.shapes.set(shape, sh);
     } else if (pkt.kind === 'vitals') {
       n.rssiSum += pkt.rssi; n.rssiCount += 1;
@@ -255,7 +255,7 @@ export class NodeStats {
           const p = sh.last;
           return {
             shape, frames: sh.count, antennas: p.antennas, subcarriers: p.subcarriers,
-            ...(p.source === 'esp32' ? { freqMhz: p.freqMhz, ppdu: p.ppdu } : { channel: p.channel, protocol: p.protocol, bitsPerTone: p.bitsPerTone, synthetic: p.synthetic }),
+            ...(p.source === 'esp32' ? { freqMhz: p.freqMhz, ppdu: p.ppdu } : { channel: p.channel, protocol: p.protocol, bitsPerTone: p.bitsPerTone, synthetic: sh.synthetic }),
             bw40: p.bw40, meanAmplitude: Number((sh.ampSum / sh.count).toFixed(2)),
           };
         };
