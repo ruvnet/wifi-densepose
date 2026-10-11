@@ -41,7 +41,8 @@ export function parseRplidar(bytes) {
 const median = (xs) => {
   if (!xs.length) return null;
   const s = [...xs].sort((a, b) => a - b);
-  return s[Math.floor(s.length / 2)];
+  const middle = Math.floor(s.length / 2);
+  return s.length % 2 ? s[middle] : (s[middle - 1] + s[middle]) / 2;
 };
 
 export function summarizeScan({ points, invalid, revolutions }, seconds) {
