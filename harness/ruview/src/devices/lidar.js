@@ -48,10 +48,13 @@ export function summarizeScan({ points, invalid, revolutions }, seconds) {
   const valid = points.filter((p) => p.distanceMm > 0);
   const d = valid.map((p) => p.distanceMm);
   const sectors = new Set(valid.map((p) => Math.floor(p.angle / 10) % 36));
+  let min = Infinity;
+  let max = -Infinity;
+  for (const value of d) { min = Math.min(min, value); max = Math.max(max, value); }
   return {
     points: points.length, validPoints: valid.length, resyncBytes: invalid, revolutions,
     scanRateHz: Number((revolutions / seconds).toFixed(2)),
-    rangeMm: d.length ? { min: Math.min(...d), median: median(d), max: Math.max(...d) } : null,
+    rangeMm: d.length ? { min, median: median(d), max } : null,
     angularCoverage: Number((sectors.size / 36).toFixed(2)),
   };
 }
