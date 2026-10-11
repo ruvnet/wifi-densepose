@@ -16,6 +16,12 @@ const pbFloat = (f, v) => { const b = Buffer.alloc(4); b.writeFloatLE(v); return
 function fakeDevice({ mode = 'ok', states } = {}) {
   const seen = [];
   const server = net.createServer((sock) => {
+    sock.on('error', (error) => {
+      // Rejecting encryption/password intentionally closes the reader socket.
+      // Only that fixture lifecycle may reset; all unexpected errors still fail.
+      if ((mode === 'encrypted' || mode === 'password') && error.code === 'ECONNRESET') return;
+      throw error;
+    });
     if (mode === 'encrypted') { sock.write(Buffer.from([0x01, 0x00, 0x00])); return; }
     let buf = Buffer.alloc(0);
     sock.on('data', (d) => {
@@ -99,4 +105,43 @@ test('mmwave tool routes source=esphome and validates per-source arguments', asy
   assert.equal(denied.reason, 'authority_denied');
   const empty = summarizeEsphome({ device: {}, entities: new Map(), updates: 0 }, 5);
   assert.deepEqual([empty.presentNow, empty.heartBpmMean, empty.updateRateHz], [null, null, 0]);
+});
+
+// Controlled resets reproduce the owned server-side rejection lifecycle without
+// relying on OS scheduling to deliver a late ECONNRESET after the test ends.
+async function withFixtureSocket(mode, inspect) {
+  const dev = await fakeDevice({ mode, states: [] });
+  let peer;
+  dev.server.once('connection', socket => { peer = socket; });
+  try {
+    const report = await readEsphome({ host: '127.0.0.1', api_port: dev.port, seconds: 0.01 });
+    assert.ok(peer, 'actual reader must connect to the owned fixture');
+    inspect(peer, report);
+  } finally {
+    // Cleanup must not emit a second uncontrolled error in the failing baseline.
+    peer?.on('error', () => {});
+    peer?.destroy();
+    await new Promise(resolve => dev.server.close(resolve));
+  }
+}
+for (const mode of ['encrypted', 'password']) {
+  test(`owned ${mode} rejection fixture handles its expected connection reset`, async () => {
+    await withFixtureSocket(mode, (socket, report) => {
+      assert.equal(report.reason, mode === 'encrypted' ? 'esphome_encrypted' : 'esphome_password_required');
+      const reset = Object.assign(new Error('controlled rejection reset'), { code: 'ECONNRESET' });
+      assert.doesNotThrow(() => socket.emit('error', reset));
+    });
+  });
+}
+test('owned rejection fixture still fails unexpected socket error codes', async () => {
+  await withFixtureSocket('encrypted', socket => {
+    const unexpected = Object.assign(new Error('unexpected fixture I/O'), { code: 'EIO' });
+    assert.throws(() => socket.emit('error', unexpected), /unexpected fixture I\/O/);
+  });
+});
+test('ordinary owned fixture still fails connection resets', async () => {
+  await withFixtureSocket('ok', socket => {
+    const reset = Object.assign(new Error('unexpected ordinary reset'), { code: 'ECONNRESET' });
+    assert.throws(() => socket.emit('error', reset), /unexpected ordinary reset/);
+  });
 });
