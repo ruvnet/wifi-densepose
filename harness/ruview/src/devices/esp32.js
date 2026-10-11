@@ -141,8 +141,8 @@ export function parsePacket(buf, opts = {}) {
       ...(chain0 ? { chain0Amplitudes: chain0 } : {}),
     };
   }
-  if (kind === 'vitals') {
-    if (buf.length < 32) return { kind: 'malformed', reason: 'vitals length' };
+  if (kind === 'vitals' || kind === 'fused-vitals') {
+    if (buf.length < (kind === 'fused-vitals' ? 48 : 32)) return { kind: 'malformed', reason: `${kind} length` };
     const flags = buf.readUInt8(5);
     return {
       kind, source: 'esp32', nodeId: buf.readUInt8(4),
@@ -150,6 +150,11 @@ export function parsePacket(buf, opts = {}) {
       breathingBpm: buf.readUInt16LE(6) / 100, heartBpm: buf.readUInt32LE(8) / 10000,
       rssi: buf.readInt8(12), persons: buf.readUInt8(13),
       motionEnergy: buf.readFloatLE(16), presenceScore: buf.readFloatLE(20), uptimeMs: buf.readUInt32LE(24),
+      ...(kind === 'fused-vitals' ? {
+        mmwavePresent: Boolean(flags & 8), mmwaveType: buf.readUInt8(14), fusionConfidence: buf.readUInt8(15),
+        mmwaveHeartBpm: buf.readFloatLE(28), mmwaveBreathingBpm: buf.readFloatLE(32), mmwaveDistanceCm: buf.readFloatLE(36),
+        mmwaveTargets: buf.readUInt8(40), mmwaveConfidence: buf.readUInt8(41),
+      } : {}),
     };
   }
   if (kind === 'sync') {
@@ -237,7 +242,7 @@ export class NodeStats {
       const sh = n.shapes.get(shape) || { count: 0, ampSum: 0, last: null };
       sh.count += 1; sh.ampSum += pkt.meanAmplitude; sh.last = pkt;
       n.shapes.set(shape, sh);
-    } else if (pkt.kind === 'vitals') {
+    } else if (pkt.kind === 'vitals' || pkt.kind === 'fused-vitals') {
       n.rssiSum += pkt.rssi; n.rssiCount += 1;
       const { kind, nodeId, source, ...rest } = pkt;
       n.vitals = rest;

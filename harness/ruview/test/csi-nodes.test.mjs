@@ -243,3 +243,39 @@ test('spectrum draws multi-antenna ESP32 nodes from their first chain (ADR-018 a
   assert.deepEqual([s.nodeId, s.shape, s.bins], [9, '2x8', 8]);
   assert.ok(s.frames.every((f) => f.every((v) => v === 3)));
 });
+
+function fusedVitals() {
+  // Exact packed edge_fused_vitals_pkt_t offsets from edge_processing.h.
+  const packet = Buffer.alloc(48);
+  packet.writeUInt32LE(0xC5110004, 0); packet[4] = 7; packet[5] = 9;
+  packet.writeUInt16LE(1500, 6); packet.writeUInt32LE(720000, 8);
+  packet.writeInt8(-45, 12); packet[13] = 1; packet[14] = 2; packet[15] = 85;
+  packet.writeFloatLE(0.25, 16); packet.writeFloatLE(0.75, 20); packet.writeUInt32LE(12345, 24);
+  packet.writeFloatLE(73, 28); packet.writeFloatLE(16, 32); packet.writeFloatLE(120, 36);
+  packet[40] = 2; packet[41] = 90;
+  return packet;
+}
+
+test('firmware fused vitals update public node diagnostics with wire units', async () => {
+  const result = await capture({ max_packets: 1 }, [fusedVitals()]);
+  assert.equal(result.ok, true);
+  const node = result.nodes[0];
+  assert.equal(node.packets['fused-vitals'], 1);
+  assert.equal(node.rssiMean, -45);
+  assert.equal(node.lastVitals.heartBpm, 72);
+  assert.equal(node.lastVitals.breathingBpm, 15);
+  assert.equal(node.lastVitals.uptimeMs, 12345);
+  assert.equal(node.lastVitals.mmwavePresent, true);
+  assert.equal(node.lastVitals.mmwaveHeartBpm, 73);
+  assert.equal(node.lastVitals.mmwaveBreathingBpm, 16);
+  assert.equal(node.lastVitals.mmwaveDistanceCm, 120);
+  assert.equal(node.lastVitals.mmwaveTargets, 2);
+  assert.equal(node.lastVitals.mmwaveConfidence, 90);
+  assert.equal(node.lastVitals.fusionConfidence, 85);
+});
+
+test('truncated fused-vitals packets are not accepted as decoded node reports', () => {
+  for (const length of [4, 28, 32, 47]) {
+    assert.equal(parsePacket(fusedVitals().subarray(0, length)).kind, 'malformed');
+  }
+});
