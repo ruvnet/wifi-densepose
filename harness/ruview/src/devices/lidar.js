@@ -162,6 +162,7 @@ export function readIphoneLidar(args, deps = {}) {
     ws.onclose = (event) => {
       if (!opened) finish();
       else if (!frames.length && event?.code && event.code !== 1000) finish({ ok: false, reason: 'relay_closed', detail: `close code ${event.code}${event.code === 1008 ? ' (token rejected?)' : ''}` });
+      else finish(); // The closed stream cannot contribute another frame.
     };
   });
 }
