@@ -90,6 +90,10 @@ async function watchCapture(args, flags) {
   const tty = process.stdout.isTTY && flags.json !== true;
   while (!stop) {
     const res = await runTool('ruview_esp32_capture', window, { source: 'cli' });
+    const present = new Set((res.nodes || []).map(n => `${n.source}:${n.nodeId}`));
+    for (const [key, values] of history) {
+      if (!present.has(key)) history.set(key, [...values, null].slice(-30));
+    }
     for (const n of res.nodes || []) {
       const key = `${n.source}:${n.nodeId}`;
       history.set(key, [...(history.get(key) || []), n.csiRateHz].slice(-30));
