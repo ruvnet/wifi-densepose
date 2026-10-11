@@ -94,11 +94,12 @@ async function watchCapture(args, flags) {
       const key = `${n.source}:${n.nodeId}`;
       history.set(key, [...(history.get(key) || []), n.csiRateHz].slice(-30));
     }
-    if (!tty) { console.log(JSON.stringify(res)); continue; }
+    const terminalError = ['port_in_use', 'invalid_port', 'invalid_bind', 'invalid_arguments'].includes(res.reason);
+    if (!tty) { console.log(JSON.stringify(res)); if (terminalError) return 1; continue; }
     process.stdout.write('\x1b[2J\x1b[H');
     console.log(renderResult('ruview_esp32_capture', res, { color: colorEnabled(), history }));
     console.log(`\n${new Date().toLocaleTimeString()} · ${window.seconds}s windows · Ctrl+C to stop`);
-    if (res.reason === 'port_in_use' || res.reason === 'invalid_port' || res.reason === 'invalid_bind') return 1;
+    if (terminalError) return 1;
   }
   return 0;
 }
