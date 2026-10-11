@@ -243,3 +243,18 @@ test('spectrum draws multi-antenna ESP32 nodes from their first chain (ADR-018 a
   assert.deepEqual([s.nodeId, s.shape, s.bins], [9, '2x8', 8]);
   assert.ok(s.frames.every((f) => f.every((v) => v === 3)));
 });
+
+test('synthetic Realtek frames retain provenance in kernel analysis', async () => {
+  const r = await capture({ analyze: true, max_packets: 3 }, [rac1({ seq: 1, synthetic: 1 }), rac1({ seq: 2 }), rac1({ seq: 3 })], {
+    analyze: async () => ({ ok: true, estimate: 1 }),
+  });
+  assert.equal(r.analysis.ok, true);
+  assert.equal(r.analysis.input.synthetic, true);
+  assert.match(r.analysis.note, /synthetic/i);
+});
+
+test('unmarked Realtek frames keep ordinary analysis provenance', async () => {
+  const r = await capture({ analyze: true, max_packets: 2 }, [rac1({ seq: 1 }), rac1({ seq: 2 })], { analyze: async () => ({ ok: true }) });
+  assert.equal(r.analysis.input.synthetic, false);
+  assert.doesNotMatch(r.analysis.note, /synthetic/i);
+});
