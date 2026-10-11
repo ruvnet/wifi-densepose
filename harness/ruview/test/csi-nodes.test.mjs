@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import dgram from 'node:dgram';
-import { binAmplitudes, captureEsp32, crc32, parsePacket, RAC1_MAGIC, RHB1_MAGIC, SpectrumCollector } from '../src/devices/esp32.js';
+import { binAmplitudes, captureEsp32, crc32, parsePacket, RAC1_MAGIC, RHB1_MAGIC, SpectrumCollector, NodeStats, SEQ_WINDOW } from '../src/devices/esp32.js';
 import { classifyPort } from '../src/devices/registry.js';
 import { kernelAnalyzer } from '../src/kernel.js';
 import { runTool, TOOLS } from '../src/tools.js';
@@ -242,4 +242,34 @@ test('spectrum draws multi-antenna ESP32 nodes from their first chain (ADR-018 a
   const [s] = res.spectrum;
   assert.deepEqual([s.nodeId, s.shape, s.bins], [9, '2x8', 8]);
   assert.ok(s.frames.every((f) => f.every((v) => v === 3)));
+});
+
+
+test('only missing CSI sequence numbers recover counted packet loss', async () => {
+  for (const [seqs, gaps] of [
+    [[100, 103, 101, 101], 1], // duplicated recovery must not fill missing 102
+    [[100, 102, 100], 1], // an already-received packet cannot fill missing 101
+    [[100, 102, 99], 1], // a pre-capture packet cannot fill missing 101
+    [[100, 103, 102, 101], 0], // distinct actual gap recoveries still work
+  ]) {
+    const result = await capture({ max_packets: seqs.length }, seqs.map((seq) => rac1({ seq })));
+    assert.equal(result.nodes[0].csiLossFraction, Number((gaps / (seqs.length + gaps)).toFixed(4)),
+      `loss for ${seqs.join(',')}`);
+  }
+});
+
+
+test('CSI recovery bookkeeping stays within the reorder window', () => {
+  const stats = new NodeStats();
+  for (let seq = 0; seq <= SEQ_WINDOW * 10; seq += 64) {
+    stats.add(parsePacket(rac1({ seq })), '127.0.0.1');
+    const node = stats.nodes.get('realtek:3');
+    assert.ok(node.missingSeq.size < SEQ_WINDOW);
+  }
+  const node = stats.nodes.get('realtek:3');
+  const historicalGaps = node.seqGaps;
+  stats.add(parsePacket(rac1({ seq: 1 })), '127.0.0.1');
+  stats.add(parsePacket(rac1({ seq: 2 })), '127.0.0.1');
+  assert.equal(node.missingSeq.size, 0, 'a confirmed counter reset clears old recovery identities');
+  assert.equal(node.seqGaps, historicalGaps, 'historical loss remains counted');
 });

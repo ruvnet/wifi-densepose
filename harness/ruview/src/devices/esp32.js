@@ -178,15 +178,22 @@ function trackSequence(n, seq) {
   if (n.lastSeq === null) { n.lastSeq = seq; return; }
   const d = seq - n.lastSeq;
   if (d >= 1 && d <= SEQ_WINDOW) {
+    // Only distinct packets corresponding to counted holes can recover loss.
+    // Retain at most the existing reorder window; older gaps remain counted.
+    for (const missing of n.missingSeq) {
+      if (seq - missing >= SEQ_WINDOW) n.missingSeq.delete(missing);
+    }
+    for (let missing = n.lastSeq + 1; missing < seq; missing++) n.missingSeq.add(missing);
     n.seqGaps += d - 1;
     n.lastSeq = seq;
     n.pendingSeq = null;
   } else if (d <= 0 && d > -SEQ_WINDOW) {
     n.reordered += 1; // late or duplicate; a late packet fills one counted gap
-    if (d < 0 && n.seqGaps > 0) n.seqGaps -= 1;
+    if (d < 0 && n.missingSeq.delete(seq)) n.seqGaps -= 1;
   } else if (n.pendingSeq != null && seq - n.pendingSeq >= 1 && seq - n.pendingSeq <= SEQ_WINDOW) {
     n.strays -= 1; // the previous out-of-window frame started a new range
     n.resyncs += 1;
+    n.missingSeq.clear();
     n.lastSeq = seq;
     n.pendingSeq = null;
   } else {
@@ -226,7 +233,7 @@ export class NodeStats {
     const key = `${pkt.source}:${pkt.nodeId ?? -1}`;
     let n = this.nodes.get(key);
     if (!n) {
-      n = { source: pkt.source, nodeId: pkt.nodeId ?? -1, packets: {}, rssiSum: 0, rssiCount: 0, lastSeq: null, pendingSeq: null, seqGaps: 0, reordered: 0, strays: 0, resyncs: 0, shapes: new Map(), vitals: null };
+      n = { source: pkt.source, nodeId: pkt.nodeId ?? -1, packets: {}, rssiSum: 0, rssiCount: 0, lastSeq: null, pendingSeq: null, seqGaps: 0, missingSeq: new Set(), reordered: 0, strays: 0, resyncs: 0, shapes: new Map(), vitals: null };
       this.nodes.set(key, n);
     }
     n.packets[pkt.kind] = (n.packets[pkt.kind] || 0) + 1;
