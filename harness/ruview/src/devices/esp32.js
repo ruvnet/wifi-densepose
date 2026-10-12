@@ -234,8 +234,8 @@ export class NodeStats {
       n.rssiSum += pkt.rssi; n.rssiCount += 1;
       trackSequence(n, pkt.seq);
       const shape = shapeKey(pkt);
-      const sh = n.shapes.get(shape) || { count: 0, ampSum: 0, last: null };
-      sh.count += 1; sh.ampSum += pkt.meanAmplitude; sh.last = pkt;
+      const sh = n.shapes.get(shape) || { count: 0, ampSum: 0, last: null, synthetic: false };
+      sh.count += 1; sh.ampSum += pkt.meanAmplitude; sh.last = pkt; sh.synthetic ||= Boolean(pkt.synthetic);
       n.shapes.set(shape, sh);
     } else if (pkt.kind === 'vitals') {
       n.rssiSum += pkt.rssi; n.rssiCount += 1;
@@ -255,7 +255,7 @@ export class NodeStats {
           const p = sh.last;
           return {
             shape, frames: sh.count, antennas: p.antennas, subcarriers: p.subcarriers,
-            ...(p.source === 'esp32' ? { freqMhz: p.freqMhz, ppdu: p.ppdu } : { channel: p.channel, protocol: p.protocol, bitsPerTone: p.bitsPerTone, synthetic: p.synthetic }),
+            ...(p.source === 'esp32' ? { freqMhz: p.freqMhz, ppdu: p.ppdu } : { channel: p.channel, protocol: p.protocol, bitsPerTone: p.bitsPerTone, synthetic: sh.synthetic }),
             bw40: p.bw40, meanAmplitude: Number((sh.ampSum / sh.count).toFixed(2)),
           };
         };
@@ -297,8 +297,9 @@ class FrameCollector {
     if (pkt.kind !== 'csi' || !pkt.amplitudes) return;
     const key = `${pkt.source}:${pkt.nodeId}|${shapeKey(pkt)}`;
     let c = this.byNode.get(key);
-    if (!c) { c = { source: pkt.source, nodeId: pkt.nodeId, subcarriers: pkt.subcarriers, frames: [], first: t, last: t, dropped: 0 }; this.byNode.set(key, c); }
+    if (!c) { c = { source: pkt.source, nodeId: pkt.nodeId, subcarriers: pkt.subcarriers, frames: [], first: t, last: t, dropped: 0, synthetic: false }; this.byNode.set(key, c); }
     if (c.frames.length >= this.max) { c.dropped += 1; return; }
+    c.synthetic ||= Boolean(pkt.synthetic);
     c.frames.push({ amplitudes: pkt.amplitudes, phases: pkt.phases });
     c.last = t;
   }
@@ -456,14 +457,16 @@ async function runAnalysis(collector, nodeId, analyzeFn) {
   }
   const spanSec = (c.last - c.first) / 1000;
   const sampleRateHz = spanSec > 0 ? (c.frames.length - 1) / spanSec : 0;
-  const input = { source: c.source, nodeId: c.nodeId, frames: c.frames.length, droppedOverCap: c.dropped, subcarriers: c.subcarriers, sampleRateHz: Number(sampleRateHz.toFixed(3)) };
+  const input = { source: c.source, nodeId: c.nodeId, frames: c.frames.length, droppedOverCap: c.dropped, synthetic: c.synthetic, subcarriers: c.subcarriers, sampleRateHz: Number(sampleRateHz.toFixed(3)) };
   if (!(sampleRateHz > 0)) return { ok: false, input, reason: 'no_frames', detail: 'frames arrived without a measurable time span' };
   const config = { n_subcarriers: c.subcarriers, sample_rate_hz: input.sampleRateHz };
   try {
     const out = await analyzeFn(c.frames, config);
     return {
       input, ...out,
-      note: 'Signal-processing estimates from live CSI with no reference measurement; not clinical or camera-grade. The sample rate is the measured arrival rate.',
+      note: c.synthetic
+        ? 'Signal-processing estimates include firmware-marked synthetic CSI with no reference measurement; not clinical or camera-grade. The sample rate is the measured arrival rate.'
+        : 'Signal-processing estimates from live CSI with no reference measurement; not clinical or camera-grade. The sample rate is the measured arrival rate.',
     };
   } catch (error) {
     return { ok: false, input, reason: error?.code || 'kernel_error', detail: String(error?.message || error) };
