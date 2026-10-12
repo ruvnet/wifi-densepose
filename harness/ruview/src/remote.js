@@ -60,10 +60,14 @@ const OWNER_ONLY_ACL = [
  * inherited ACLs. Replace them with a single full-control grant for the owner.
  * Fails closed: an unrestricted hosts file is an error, not a warning.
  */
-export function restrictToOwner(path, { platform = process.platform, exec = spawnSync } = {}) {
+export function restrictToOwner(path, { platform = process.platform, exec = spawnSync, env = process.env } = {}) {
   if (platform !== 'win32') return 'posix-0600';
+  // pwsh -> node -> powershell.exe otherwise inherits PS7's incompatible
+  // module paths. Let Windows PowerShell construct its own defaults without
+  // changing the caller's environment or execution policy (about_PSModulePath).
+  const childEnv = Object.fromEntries(Object.entries(env).filter(([key]) => key.toUpperCase() !== 'PSMODULEPATH'));
   const r = exec('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', OWNER_ONLY_ACL], {
-    input: JSON.stringify({ path }), encoding: 'utf8', windowsHide: true, timeout: 10_000, maxBuffer: 16_384,
+    input: JSON.stringify({ path }), env: childEnv, encoding: 'utf8', windowsHide: true, timeout: 10_000, maxBuffer: 16_384,
   });
   if (r.error || r.status !== 0) {
     throw new Error(`could not restrict ${path} to the current user (ACL helper exit ${r.status ?? r.error?.code}); the hosts file was not made private`);

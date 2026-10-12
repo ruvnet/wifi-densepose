@@ -66,7 +66,7 @@
     "src/policy.js": "baad5eb8c3eb2e416e0a71b342ad850d7c8413d7d976571ebf596937f69da8e2",
     "src/process-runner.js": "49533b038044dfb8bc76ed01c030d06a9856ead0836157fb693e2a7d40f786d6",
     "src/redact.js": "ebf1afff46341078706b0401838c53db043603586e280d51ece5cf1feba35189",
-    "src/remote.js": "68f901411063fd515a52dad41ffd5c599765a53de34a080715232825eaf207b3",
+    "src/remote.js": "ea433cf719729963a50ebede9442136e72f1eff145c0b3c5e837c6c56fa1ccdf",
     "src/repo-trust.js": "06e2a94d7113ed936f208a12b7fcc785801c215a3e2c5e7418f6238d991a289c",
     "src/sdk.d.ts": "d4c80689248c197b2ddb1ebf4cd7d8f2e55716722074d9e1cdb8029b2dfa19f7",
     "src/sdk.js": "1ac29fb389ed86e0f62ecfddbbd31614c58e832a8181495caa83fe5cf8b30bc4",
@@ -75,7 +75,7 @@
     "src/training.js": "bd8a6c12eba4f9d2f8990fa9692cd04c743ea247f9b13e10f8717ceefcbd09ac",
     "src/ui/console-widget.js": "0d2f707d57b5ec54968dee1dc80f31c7db9152dcadfc48700c18379dabb55462"
   },
-  "filesDigest": "f609508982d1fdc67fa7b90e1286e25945f920ba45e8fde95f76234848cf3be9",
+  "filesDigest": "edc6be28115ad21f18954066e989a6b4aaae2137b2f4e6d6571312beef610288",
   "brainDigest": "c0fb7b079ded157059b91601361429944697dae3cc42abc00dfe1a680986b0f4",
   "gateFingerprint": "6e53c784eee38310188948fc75fb49e6b4ebc04e247d01b903fa8c8a92d67bdd",
   "developmentPins": {

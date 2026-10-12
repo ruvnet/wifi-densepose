@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir, userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -131,15 +131,49 @@ test('Windows hosts-file restriction removes explicit grants and handles literal
   });
 });
 
+test('Windows ACL helper isolates incompatible inherited PowerShell modules', { skip: process.platform !== 'win32' }, async () => {
+  await withHosts(async (path) => {
+    const modules = join(dirname(path), 'modules');
+    const utility = join(modules, 'Microsoft.PowerShell.Utility');
+    mkdirSync(utility, { recursive: true });
+    // Reproduce pwsh7 -> node -> Windows PowerShell5 without installing pwsh:
+    // this higher-priority module advertises the cmdlet but requires PS7.
+    writeFileSync(join(utility, 'Microsoft.PowerShell.Utility.psd1'),
+      "@{ ModuleVersion='7.0.0'; PowerShellVersion='7.0'; CmdletsToExport=@('ConvertFrom-Json') }");
+    const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== 'PSMODULEPATH'));
+    inherited.PSModulePath = `${modules};${process.env.PSModulePath || ''}`;
+    const original = { ...inherited };
+    const parentPath = process.env.PSModulePath;
+    const control = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "'{}' | ConvertFrom-Json"], {
+      env: inherited, encoding: 'utf8', windowsHide: true, timeout: 10_000,
+    });
+    assert.equal(control.status, 1, control.stderr);
+    assert.match(control.stderr, /CouldNotAutoloadMatchingModule/);
+    const saved = saveHost({ name: 'pi', ssh: 'ruv@pi.local' }, path, { env: inherited });
+    assert.equal(saved.access, 'windows-acl-owner-only');
+    assert.ok(Object.keys(inherited).length === Object.keys(original).length
+      && Object.entries(original).every(([key, value]) => inherited[key] === value),
+    'the caller environment is unchanged');
+    assert.equal(process.env.PSModulePath, parentPath, 'the process environment is unchanged');
+    const acl = spawnSync('icacls', [path], { encoding: 'utf8' });
+    assert.equal(acl.status, 0, acl.stderr);
+    const grants = acl.stdout.split('\n').filter(line => /:\(/.test(line));
+    assert.equal(grants.length, 1, acl.stdout);
+  });
+});
+
 test('Windows hosts-file restriction fails closed and keeps input out of PowerShell source', () => {
   const calls = [];
   const path = "C:/x/hosts $(throw 'injected').json";
-  const ok = restrictToOwner(path, { platform: 'win32', exec: (cmd, args, options) => { calls.push({ cmd, args, options }); return { status: 0 }; } });
+  const env = { SystemRoot: 'C:/Windows', pSmOdUlEpAtH: 'incompatible-PS7-modules', KEEP: 'unchanged' };
+  const ok = restrictToOwner(path, { platform: 'win32', env, exec: (cmd, args, options) => { calls.push({ cmd, args, options }); return { status: 0 }; } });
   assert.equal(ok, 'windows-acl-owner-only');
   assert.equal(calls[0].cmd, 'powershell.exe');
   assert.deepEqual(calls[0].args.slice(0, 4), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command']);
   assert.ok(!calls[0].args.at(-1).includes(path));
   assert.deepEqual(JSON.parse(calls[0].options.input), { path });
+  assert.deepEqual(calls[0].options.env, { SystemRoot: 'C:/Windows', KEEP: 'unchanged' });
+  assert.equal(env.pSmOdUlEpAtH, 'incompatible-PS7-modules');
   for (const result of [{ status: 5 }, { status: null, error: { code: 'ENOENT' } }, { status: null, error: { code: 'ETIMEDOUT' } }]) {
     assert.throws(() => restrictToOwner(path, { platform: 'win32', exec: () => result }), /not made private/);
   }
