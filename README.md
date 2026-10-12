@@ -1,5 +1,11 @@
 # π RuView
 
+<p align="center">
+  <a href="https://cognitum.one/seed">
+    <img src="assets/ruview-hero-h3-v3.gif" alt="RuView - WiFi DensePose — animated visualization of real-time pose estimation, breathing, and heart-rate sensing through WiFi" width="100%">
+  </a>
+</p>
+
 [![RuView: spaces become signals, with an animated conceptual RF field](assets/readme/hero.svg)](docs/user-guide.md)
 
 <table>
@@ -14,17 +20,6 @@
 <td align="center" width="33%"><a href="https://cognitum.one/seed"><img src="assets/readme/nav-seed.svg" width="180" alt="Cognitum Seed" /></a><br/><a href="https://cognitum.one/seed">Cognitum Seed</a></td>
 </tr>
 </table>
-
-<details>
-<summary>Watch the original RuView sensing demo</summary>
-
-<p align="center">
-  <a href="https://cognitum.one/seed">
-    <img src="assets/ruview-hero-h3-v3.gif" alt="RuView - WiFi DensePose — animated visualization of real-time pose estimation, breathing, and heart-rate sensing through WiFi" width="100%">
-  </a>
-</p>
-
-</details>
 
 <p align="center">
   <a href="https://ruos.cognitum.one">
