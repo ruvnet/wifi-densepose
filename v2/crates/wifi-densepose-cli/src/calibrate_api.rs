@@ -636,9 +636,14 @@ async fn finalize(
     let path = format!("{output_dir}/{room_id}-{uuid}.bin");
     let bytes = baseline.to_bytes();
     // Async write — never block the ingest task's UDP/command path.
-    tokio::fs::write(&path, &bytes)
-        .await
-        .map_err(|e| format!("cannot write {path}: {e}"))?;
+    if let Err(error) = tokio::fs::write(&path, &bytes).await {
+        let message = format!("cannot write {path}: {error}");
+        let note = format!("aborted: {message}");
+        aborted_snapshot.note = Some(note.clone());
+        status.write().await.session = Some(aborted_snapshot);
+        eprintln!("[calibrate-serve] {note}");
+        return Err(message);
+    }
 
     let summary = ResultSummary {
         calibration_id: uuid,
@@ -1091,6 +1096,70 @@ mod tests {
         let session = guard.session.as_ref().expect("terminal session status");
         assert_eq!(session.state, "aborted");
         assert!(session.note.as_deref().unwrap_or_default().contains("finalize failed"));
+    }
+
+    fn complete_test_session() -> ActiveSession {
+        let mut config = tier_config("ht20");
+        config.min_frames = 2;
+        let mut recorder = CalibrationRecorder::new(config);
+        let mut packet = vec![0u8; 20 + 64 * 2];
+        packet[..4].copy_from_slice(&0xC511_0001u32.to_le_bytes());
+        packet[4] = 1;
+        packet[5] = 1;
+        packet[6..8].copy_from_slice(&64u16.to_le_bytes());
+        packet[8..12].copy_from_slice(&2437u32.to_le_bytes());
+        packet[20..].fill(3);
+        let frame = parse_csi_packet(&packet, "ht20").unwrap();
+        recorder.record(&frame).unwrap();
+        recorder.record(&frame).unwrap();
+        ActiveSession {
+            recorder,
+            room_id: "test".into(),
+            tier: "ht20".into(),
+            started: Instant::now(),
+            deadline: Instant::now(),
+            target_frames: 2,
+            z_median: 0.0,
+            z_max: 0.0,
+            motion_flagged: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn finalize_write_failure_marks_session_aborted_without_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocked = dir.path().join("not-a-directory");
+        std::fs::write(&blocked, b"owned test fixture").unwrap();
+        let status = Arc::new(RwLock::new(SharedStatus::default()));
+        let error = finalize(complete_test_session(), blocked.to_str().unwrap(), &status)
+            .await
+            .expect_err("a regular file cannot hold the baseline");
+        assert!(error.starts_with("cannot write "));
+        let guard = status.read().await;
+        let session = guard.session.as_ref().unwrap();
+        assert_eq!(session.state, "aborted");
+        assert!(session.note.as_deref().unwrap().contains("cannot write "));
+        assert!(guard.last_result.is_none());
+        assert_eq!(std::fs::read(blocked).unwrap(), b"owned test fixture");
+    }
+
+    #[tokio::test]
+    async fn finalize_success_publishes_a_readable_baseline_and_complete_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let status = Arc::new(RwLock::new(SharedStatus::default()));
+        let summary = finalize(complete_test_session(), dir.path().to_str().unwrap(), &status)
+            .await
+            .unwrap();
+        let bytes = std::fs::read(&summary.output_path).unwrap();
+        let baseline = BaselineCalibration::from_bytes(&bytes).unwrap();
+        assert_eq!(baseline.frame_count, 2);
+        assert_eq!(summary.saved_bytes, bytes.len());
+        let guard = status.read().await;
+        let session = guard.session.as_ref().unwrap();
+        assert_eq!(session.state, "complete");
+        assert_eq!(session.progress, 1.0);
+        assert!(session.note.is_none());
+        assert_eq!(guard.last_result.as_ref().unwrap().calibration_id, summary.calibration_id);
     }
 
     #[test]
