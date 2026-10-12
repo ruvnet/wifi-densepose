@@ -143,6 +143,21 @@ def prepare(archive, output, pool=5):
 
 
 def load_dataset(manifest):
+    """Load all partitions for a final frozen evaluation, including test signals."""
+    return _load_partitions(manifest, ('train', 'validation', 'test'))
+
+
+def load_development(manifest):
+    """Load only train/validation tensors for model development.
+
+    The entire bundle is hashed and every array header inspected for integrity.
+    Test array payloads are never deserialized or returned. Identity columns are
+    room, participant, numeric activity, trial, suitable for grouped inner folds.
+    """
+    return _load_partitions(manifest, ('train', 'validation'))
+
+
+def _load_partitions(manifest, splits):
     path = Path(manifest).resolve()
     if path.stat().st_size > 3_000_000:
         raise ValueError('manifest too large')
@@ -200,7 +215,7 @@ def load_dataset(manifest):
                     raise ValueError('invalid numpy header or payload size')
     parts, groups, signals, identities_seen = {}, {}, set(), set()
     with np.load(npz, allow_pickle=False) as data:
-        for split in ('train', 'validation', 'test'):
+        for split in splits:
             x, y, identities = (data[split + suffix] for suffix in ('_x', '_y', '_identity'))
             if (x.dtype != np.float32 or x.ndim != 3 or x.shape[1:] != (52, meta['window_samples'])
                     or not 0 < len(x) <= 2240 or not np.isfinite(x).all()
@@ -222,15 +237,18 @@ def load_dataset(manifest):
                     raise ValueError('duplicate signal across dataset')
                 signals.add(h)
             groups[split] = (set(identities[:, 0]), set(identities[:, 1]))
-            parts[split] = {'x': x, 'y': y}
+            parts[split] = {'x': x, 'y': y, 'identity': identities}
     for a, b in (('train', 'validation'), ('train', 'test'), ('validation', 'test')):
-        if any(groups[a][i] & groups[b][i] for i in (0, 1)):
+        if a in groups and b in groups and any(groups[a][i] & groups[b][i] for i in (0, 1)):
             raise ValueError('room or participant leakage')
-    if identities_seen != {i for i, r in lookup.items() if r['split'] is not None}:
+    if identities_seen != {i for i, r in lookup.items() if r['split'] in splits}:
         raise ValueError('incomplete retained population')
-    if meta.get('counts') != {s: len(v['y']) for s, v in parts.items()}:
+    expected_counts = {s: sum(r['split'] == s for r in records)
+                       for s in ('train', 'validation', 'test')}
+    if meta.get('counts') != expected_counts:
         raise ValueError('split counts mismatch')
     meta['manifest_sha256'] = digest(path)
+    meta['loaded_partitions'] = list(splits)
     return parts, meta
 
 

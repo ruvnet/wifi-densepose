@@ -131,3 +131,94 @@ includes input checks and normalization but excludes temporal pooling and I/O.
 An earlier 300-pair measurement also improved p50 by 15.2%, but worsened p95
 from 0.316924 to 0.349389 ms. Shared-host timing noise prevents a stable tail
 latency claim. Both observations are retained; no hardware SLA is implied.
+
+## Development-only domain generalization
+
+The follow-up search uses a separate loader that does not deserialize test
+arrays. The old final test has already been opened and cannot be reused as an
+independent acceptance set. The existing validation set is also development
+evidence, including when a new candidate outperforms the original model there.
+
+```sh
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python scripts/improve-espfi.py \
+  --manifest /private/espfi/prepared/manifest.json \
+  --baseline /private/espfi/run-001 \
+  --output /private/espfi/generalization-001 --max-seconds 600
+```
+
+The frozen grid comprises raw statistics, relative temporal features, relative
+spectral features and a combined family, each at ridge alpha 0.1, 1, 10 and 100.
+Relative features log amplitudes, remove per-channel temporal means, and
+normalize by each recording's motion RMS. Frequency bands are in normalized
+sample units; no physical sampling rate is inferred.
+
+Two folds use only original training data. Each fits on participants 1 through
+4 in one room and evaluates participants 5 and 6 in the other room, then swaps
+room direction. Scalers fit only fold training data. Mean fold macro F1 selects
+the family and alpha, with feature count and declaration order breaking ties.
+Only then is the model fit to the full original training partition and compared
+with the frozen baseline on the existing 70-record development partition.
+
+Every candidate score is retained, including losing candidates. Artifacts
+include exact source and model digests, safe reload checks, latency scope and
+explicit nonpromotion status. No claim of improved final-test performance
+follows from this development search.
+
+### Measured development result
+
+The train-only search selected relative spectral features with ridge alpha 10.
+The mean inner-fold macro F1 was 0.297443. Best scores by family were 0.200165
+for raw statistics, 0.214085 for relative temporal features and 0.278602 for
+the combined family. All 16 configurations are retained in the receipt.
+
+On the existing 70-record development partition, macro F1 increased from
+0.327905 to 0.366065, an absolute gain of 0.038160 and relative gain of 11.64%.
+Accuracy remained 29/70 (41.43%). The three previously zero-F1 classes gained
+nonzero scores, while classes 1, 2 and 3 regressed. This is a balanced-metric
+tradeoff, not uniform improvement. No new final-test metric was computed.
+
+The classifier has 3,283 fitted parameters and 936 additional preprocessing
+scalars. Its first float64 safetensors artifact is 34,016 bytes, larger than
+the original float32 MLP despite fewer model parameters. The 16-configuration
+search took 0.81 seconds on this CPU, excluding intake. Feature extraction,
+scaling and classification measured p50 0.129795 ms and p95 0.180376 ms over
+200 calls; this unpaired timing alone is not proof of a speedup.
+
+### Frozen float32 export
+
+After statistical selection was complete, the fitted tensors and extracted
+feature vector were converted to float32. Feature extraction itself retains
+float64 arithmetic. The exported file is 17,140 bytes, 49.6% smaller than the
+float64 candidate and 19.6% smaller than the original 21,316-byte MLP.
+All 70 development predictions remain identical; maximum logit difference is
+6.663e-7 and exported reload is exact. These are precision checks, not new
+accuracy evidence.
+
+```sh
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python scripts/improve-espfi.py \
+  --manifest /private/espfi/prepared/manifest.json \
+  --baseline /private/espfi/run-001 \
+  --optimized-baseline /private/espfi/run-001-folded \
+  --optimize-bundle /private/espfi/generalization-001 \
+  --output /private/espfi/generalization-001-float32
+```
+
+The paired benchmark rotates call order over 1,000 repetitions. It includes
+complete public inference APIs, input/output checks and preprocessing, but
+excludes acquisition, temporal pooling and I/O. PyTorch and BLAS use one thread.
+
+| Bundle | p50 ms | p95 ms |
+| --- | ---: | ---: |
+| Original MLP | 0.196385 | 0.284381 |
+| Previously folded MLP | 0.164547 | 0.256346 |
+| Spectral ridge float64 | 0.178709 | 0.258502 |
+| Spectral ridge float32 | 0.150447 | 0.224474 |
+
+Median latency is 8.57% lower than the strongest previous folded baseline in
+this experiment. Shared-host timing is not a device SLA. Load the candidate
+with `csi_training.espfi_generalize.GeneralizationBundle`, which includes
+the required feature transform, scaler and classifier. Never feed it the
+old encoder's eight engineered features.
+
+Acceptance remains a new untouched room and participant, resolved semantic
+labels, and target-device measurement before any production promotion.

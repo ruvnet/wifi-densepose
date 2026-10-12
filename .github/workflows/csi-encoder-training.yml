@@ -6,6 +6,7 @@ on:
       - 'scripts/csi_training/**'
       - 'scripts/train-csi-encoder.py'
       - 'scripts/train-espfi.py'
+      - 'scripts/improve-espfi.py'
       - 'scripts/requirements-espfi-training.txt'
       - 'scripts/requirements-csi-training.txt'
       - 'scripts/tests/test_csi_training*.py'

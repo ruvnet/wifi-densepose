@@ -5,6 +5,7 @@ import zipfile
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -103,6 +104,25 @@ class EspfiTests(unittest.TestCase):
             manifest.write_text(json.dumps(meta))
             with self.assertRaisesRegex(ValueError, 'provenance'):
                 espfi.load_dataset(manifest)
+
+    def test_development_never_deserializes_test_arrays(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest, _, _, _ = self.fixture(tmp)
+            npz_class = np.lib.npyio.NpzFile
+            original = npz_class.__getitem__
+            accessed = []
+            def guarded(data, key):
+                if key.startswith('test_'):
+                    raise AssertionError('test payload accessed during development')
+                accessed.append(key)
+                return original(data, key)
+            with patch.object(npz_class, '__getitem__', guarded):
+                parts, meta = espfi.load_development(manifest)
+            self.assertEqual(set(parts), {'train', 'validation'})
+            self.assertEqual(set(accessed), {s + suffix for s in parts
+                                            for suffix in ('_x', '_y', '_identity')})
+            self.assertEqual(parts['train']['identity'].shape, (840, 4))
+            self.assertEqual(meta['loaded_partitions'], ['train', 'validation'])
 
     def test_forged_numpy_shape_rejected_before_allocation(self):
         with tempfile.TemporaryDirectory() as tmp:

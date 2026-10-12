@@ -57,3 +57,22 @@ claim for later tuning; retain an external confirmation set for that work.
 * https://github.com/AutoSmartGroup/ESP-Fi-HAR
 * https://doi.org/10.1016/j.adhoc.2026.104192
 * ADR-419 and ADR-299
+
+## Development-only generalization extension
+
+After the initial test was opened, further optimization must not treat it as
+an untouched evaluation. A separate development loader validates the complete
+archive-derived bundle but deserializes only training and validation arrays.
+The original test is absent from the model search API.
+
+Freeze four feature families and four ridge regularization strengths before
+searching. Select using two inner folds entirely within the original training
+partition: room 1 participants 1 through 4 to room 2 participants 5 and 6,
+and the reverse room direction with the same participant separation. Fit every
+scaler on the fitting side of its fold. Select by mean inner macro F1, then fit
+all original training data. Compare once on existing validation against the
+original frozen bundle and label this development evidence, not a new test.
+
+Only a fresh independent confirmation dataset can authorize a stronger
+generalization claim. Feature extraction, model latency and artifact integrity
+must be measured together for the new artifact family.
