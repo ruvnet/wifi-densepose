@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'scripts/csi_training/**'
+      - 'scripts/field-context-probe/**'
       - 'scripts/train-csi-encoder.py'
       - 'scripts/train-espfi.py'
       - 'scripts/improve-espfi.py'
@@ -39,10 +40,31 @@ jobs:
       - name: Validate real training code using temporary synthetic data
         env:
           PYTHONPATH: scripts
+          OPENBLAS_NUM_THREADS: '1'
+          OMP_NUM_THREADS: '1'
         run: python -m unittest discover -s scripts/tests -p 'test_csi_training*.py' -v
       - name: Validate public amplitude intake and optimization with synthetic fixtures
         env:
           PYTHONPATH: scripts
+          OPENBLAS_NUM_THREADS: '1'
+          OMP_NUM_THREADS: '1'
         run: python -m unittest discover -s scripts/tests -p 'test_espfi*.py' -v
       - name: Enforce capture data policy
         run: bash scripts/csi-data-policy-check.sh --tracked
+
+  field-context-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: scripts/field-context-probe
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install fixed Rust toolchain
+        run: rustup toolchain install 1.90.0 --profile minimal
+      - name: Verify actual field and graph library contracts
+        run: cargo +1.90.0 test --locked
+      - name: Exercise synthetic evidence pipeline
+        run: cargo +1.90.0 run --locked --quiet --bin ruview-field-context-probe

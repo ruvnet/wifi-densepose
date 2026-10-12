@@ -76,3 +76,25 @@ original frozen bundle and label this development evidence, not a new test.
 Only a fresh independent confirmation dataset can authorize a stronger
 generalization claim. Feature extraction, model latency and artifact integrity
 must be measured together for the new artifact family.
+
+## Field context research boundary
+
+The RuField and WorldGraph exploration uses two explicitly separate paths.
+The Python amplitude experiment may add temporal descriptors within a trial;
+it cannot invent continuous chronology, verified empty room calibration,
+positions or room topology. The standalone Rust integrity probe calls pinned
+actual RuField and WorldGraph crates using authored synthetic events. Public
+unlabeled replay is inspected for format only and never promoted to labeled
+activity evidence or graph beliefs.
+
+Root sensor evidence and derived graph beliefs remain distinct. The probe
+bridge rejects derived input as new independent roots, duplicate event hashes,
+stale observations and expired or untraceable beliefs. The bridge is not a
+production graph cycle detector or an enrollment authority. Native WorldGraph
+permits cycles, and native RuField simulation trust does not enforce wall clock
+freshness. Neither behavior proves a production defect when used as documented.
+
+The frozen temporal extension improved internal training folds but regressed
+development accuracy and macro F1. Reject it and preserve the retained motion
+ACF model. Evidence, executable commands and future field acceptance are in
+[`espfi-field-context-research.md`](../espfi-field-context-research.md).

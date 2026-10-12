@@ -464,3 +464,18 @@ explicit float64 artifact is larger. One class remains at zero F1 and two
 classes regress. The optimized compact incumbent remains available. The audit
 contains source revisions, all retention checks, full limitations and commands
 to reproduce both policies without opening final test arrays.
+
+## RuField and WorldGraph context experiment
+
+The [field context research report](espfi-field-context-research.md) separates
+an actual Rust library integrity probe from a Python temporal model ablation.
+The frozen 18-candidate experiment adds ordered means and signed trends within
+individual recordings. Its selected candidate improves both training folds but
+regresses development accuracy to 34/70 and macro F1 to 0.437458. It is rejected;
+the retained motion ACF model stays at 39/70 and 0.499871 on these reused data.
+
+Actual RuField and WorldGraph tests verify source ancestry and conservative
+rejection policies. Public unlabeled replay is inspected for format only, with
+no assumed empty room, activity labels or fabricated positions. Software
+integrity and synthetic timing are not predictive accuracy evidence. The report
+and aggregate receipts preserve that distinction and the negative model result.
