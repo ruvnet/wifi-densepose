@@ -284,3 +284,52 @@ are retained; the replay is verification, not independent accuracy evidence.
 Decision: retain the small spectral model and archive the nonlinear model
 as an accuracy experiment. No deployed model is replaced, no final-test
 arrays were evaluated, and neither candidate establishes SOTA.
+
+
+## Rejected blend and lossless seed encoding
+
+A frozen five-weight blend combined the preceding spectral ridge and RFF
+candidates using raw regression scores. Training-only mean fold macro F1
+selected equal weights (0.323484), but development macro F1 fell to 0.348261,
+with activities 3 and 7 still at zero F1. Accuracy was 30/70. The reproduced
+controls matched the previous development scores exactly: spectral 0.366065
+and RFF 0.383999. The blend is rejected; its complete receipt remains available.
+No other development weights were evaluated or substituted after selection.
+
+```sh
+python scripts/improve-espfi-blend.py \\
+  --manifest /private/espfi/prepared/manifest.json \\
+  --output /private/espfi/blend-001
+```
+
+The separate seed encoding changes only the representation of the fixed RFF
+projection. It stores 1,967 fitted and preprocessing scalars, then regenerates
+60,032 random-map scalars from seed 42 at load. Both regenerated arrays must
+match the exact export hashes before inference. Unexpected generator behavior,
+tampered model bytes, invalid shapes and nonfinite state fail closed.
+
+```python
+from csi_training.espfi_kernel import KernelBundle
+from csi_training.espfi_seeded import export_seeded, SeededKernelBundle
+parent = KernelBundle('/private/espfi/kernel-001-verified')
+export_seeded(parent.state, '/private/espfi/seeded-001')
+model = SeededKernelBundle('/private/espfi/seeded-001')
+logits = model.predict(amplitudes)
+```
+
+MEASURED on the ruOS CPU executor: weight bytes decreased from 496,488 to
+16,088 (96.76%); required metadata adds 913 bytes. All 70 development logits
+were exactly identical, maximum absolute error zero. Median loading time over
+30 loads was 1.948925 ms. Runtime state remains 61,999 float64 scalars, so this
+is a storage and distribution improvement, not RAM or sensing speed reduction.
+The separate parity receipt binds parent model digest and dataset provenance.
+The RFF candidate still has two zero-F1 activities and is not deployment ready.
+
+This round used a different CPU host. In a paired 500-call comparison on that
+host, float64 spectral, RFF and blend p50 latencies were 0.352430, 0.443975 and
+0.804585 ms. These timings cannot be compared directly with prior-host timings
+or with the prior float32 spectral deployment artifact.
+
+The earlier security workflow fails on preexisting Rust dependency alerts in
+unchanged `v2/Cargo.lock`; the Python checks pass. That remains a release gate,
+alongside independent room/person confirmation. No SOTA or promotion claim.

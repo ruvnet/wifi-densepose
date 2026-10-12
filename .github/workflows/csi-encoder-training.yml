@@ -8,6 +8,7 @@ on:
       - 'scripts/train-espfi.py'
       - 'scripts/improve-espfi.py'
       - 'scripts/improve-espfi-kernel.py'
+      - 'scripts/improve-espfi-blend.py'
       - 'scripts/requirements-espfi-training.txt'
       - 'scripts/requirements-csi-training.txt'
       - 'scripts/tests/test_csi_training*.py'
