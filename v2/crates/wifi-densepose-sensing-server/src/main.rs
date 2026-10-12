@@ -10,6 +10,8 @@
 #![allow(dead_code)]
 
 mod adaptive_classifier;
+mod companion_integration;
+mod companion_room;
 pub mod cli;
 pub mod csi;
 mod engine_bridge;
@@ -168,6 +170,10 @@ struct Args {
     /// Bind address (default 127.0.0.1; set to 0.0.0.0 for network access)
     #[arg(long, default_value = "127.0.0.1", env = "SENSING_BIND_ADDR")]
     bind_addr: String,
+
+    /// Enable QR-pinned HTTPS companion service on this separate port.
+    #[arg(long, env = "RUVIEW_COMPANION_PORT")]
+    companion_port: Option<u16>,
 
     /// Disable local `_ruview._tcp` discovery. Discovery is automatically
     /// skipped for loopback-only binds and never carries sensor data.
@@ -5805,8 +5811,13 @@ fn generate_simulated_frame(tick: u64) -> Esp32Frame {
 async fn ws_sensing_handler(
     ws: WebSocketUpgrade,
     State(state): State<SharedState>,
+    grant: Option<Extension<wifi_densepose_sensing_server::companion::Grant>>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(|socket| handle_ws_client(socket, state))
+    ws.on_upgrade(move |socket| async move {
+        if let Some(Extension(grant)) = grant {
+            companion_integration::guard_stream(grant, handle_ws_client(socket, state)).await;
+        } else { handle_ws_client(socket, state).await; }
+    })
 }
 
 async fn handle_ws_client(mut socket: WebSocket, state: SharedState) {
@@ -8853,6 +8864,8 @@ mod bootstrap_vital_publication_tests {
             Query(CalibrationStartQuery {
                 source_node_id: Some(5),
             }),
+            None,
+            None,
             Json(test_binding_request(vec![5])),
         )
         .await;
@@ -8883,6 +8896,8 @@ mod bootstrap_vital_publication_tests {
             Query(CalibrationStartQuery {
                 source_node_id: Some(5),
             }),
+            None,
+            None,
             Json(test_binding_request(vec![5])),
         )
         .await;
@@ -9709,8 +9724,13 @@ mod bootstrap_recovery_tests {
 async fn calibration_start(
     State(state): State<SharedState>,
     Query(query): Query<CalibrationStartQuery>,
+    companion_grant: Option<Extension<wifi_densepose_sensing_server::companion::Grant>>,
+    shared_room: Option<Extension<Arc<companion_room::SharedRoomStore>>>,
     Json(request): Json<CalibrationBindingRequest>,
 ) -> Json<serde_json::Value> {
+    if companion_grant.is_some() && !shared_room.as_ref().is_some_and(|Extension(room)| room.matches_binding(&request.binding_digest, &request.source_node_ids)) {
+        return Json(serde_json::json!({"success":false,"error_code":"shared_room_binding_required","error":"Import the current Mac room revision before starting calibration."}));
+    }
     let mut s = state.write().await;
     if !valid_binding_digest(&request.binding_digest)
         || !valid_source_node_ids(&request.source_node_ids)
@@ -15250,6 +15270,9 @@ async fn main() {
         }
     }
 
+    let companion = companion_integration::Integration::prepare(&args, &state, bearer_auth_state.clone()).await
+        .unwrap_or_else(|error| { error!("Companion startup refused: {error}"); std::process::exit(1) });
+
     // DNS-rebinding defense: validate the `Host` header against an allowlist
     // before any handler runs. Default is loopback-only (`localhost`,
     // `127.0.0.1`, `[::1]`, each with or without a port). Operators extend
@@ -15323,7 +15346,7 @@ async fn main() {
 
     // HTTP server (serves UI + full DensePose-compatible REST API)
     let ui_path = args.ui_path.clone();
-    let http_app = Router::new()
+    let mut http_app = Router::new()
         .route("/", get(info_page))
         // Health endpoints (DensePose-compatible)
         .route("/health", get(health))
@@ -15513,6 +15536,13 @@ async fn main() {
             wifi_densepose_sensing_server::host_validation::require_allowed_host,
         ));
 
+    if let Some(companion) = companion {
+        let owner_router = companion.owner_router();
+        http_app = companion.protect_control(http_app);
+        companion.start(http_app.clone()).await;
+        http_app = http_app.merge(owner_router);
+    }
+
     let http_addr = SocketAddr::from((bind_ip, args.http_port));
     let http_listener = tokio::net::TcpListener::bind(http_addr)
         .await
@@ -15551,7 +15581,7 @@ async fn main() {
 
     // Run the HTTP server with graceful shutdown support
     let shutdown_state = state.clone();
-    let server = axum::serve(http_listener, http_app).with_graceful_shutdown(async {
+    let server = axum::serve(http_listener, http_app.into_make_service_with_connect_info::<SocketAddr>()).with_graceful_shutdown(async {
         tokio::signal::ctrl_c()
             .await
             .expect("failed to install CTRL+C handler");
