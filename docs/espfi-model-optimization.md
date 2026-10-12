@@ -222,3 +222,65 @@ old encoder's eight engineered features.
 
 Acceptance remains a new untouched room and participant, resolved semantic
 labels, and target-device measurement before any production promotion.
+
+## Nonlinear development search
+
+The next frozen grid contains 56 candidates on the same two training-only
+folds. Relative spectral and combined features each use random Fourier maps
+of 128 or 512 dimensions, gamma multipliers 0.1, 1 or 10 divided by the input
+feature count, and ridge alpha 0.01, 0.1, 1 or 10. Projection seed is 42.
+Six linear controls use alpha 1, 10 or 100; two nearest-centroid controls
+complete the grid. Fold scalers see only their training records. Mean fold
+macro F1 selects the candidate before development evaluation.
+
+```sh
+python scripts/improve-espfi-kernel.py \
+  --manifest /private/espfi/prepared/manifest.json \
+  --baseline /private/espfi/generalization-001-float32 \
+  --output /private/espfi/kernel-001 --max-seconds 600
+```
+
+The CLI fixes BLAS and OpenMP to one thread before imports. The output records
+the frozen search contract before fitting and the complete candidate selection
+before external development inference. Load completed candidates using
+`csi_training.espfi_kernel.KernelBundle` and the same pooled amplitude contract.
+
+Random Fourier maps permit nonlinear decision boundaries without including
+training support vectors in the exported model. Account for their stored
+projection matrices separately from fitted classifier parameters. Compare
+the selected candidate with the frozen float32 spectral ridge using paired
+full-API latency and artifact bytes as well as development macro F1.
+
+The same development partition has now informed multiple research rounds.
+It cannot establish independent generalization, and the previously opened
+test cannot recover that role by being renamed. See the primary-source
+[benchmark evidence](espfi-sota-evidence.md) for the distinct source-only,
+calibration and deployment protocols and the gate for a SOTA claim.
+
+### Measured nonlinear result
+
+Training-only selection chose combined features, 128 Fourier dimensions,
+gamma multiplier 0.1 and ridge alpha 0.01. Mean inner-fold macro F1 was
+0.306028, versus 0.297443 for the spectral ridge control. Development macro
+F1 reached 0.383999, versus 0.366065 for the incumbent. Accuracy rose from
+29/70 to 31/70. Activities 3 and 7 regressed to zero F1, so this candidate
+does not improve every class.
+
+The float64 export contains 903 classifier scalars, 60,032 fixed random-map
+scalars and 1,064 preprocessing scalars. Its 496,488-byte artifact is 28.97
+times the incumbent's 17,140 bytes. In the verified 500-pair full-API timing,
+candidate p50/p95 were 0.168208/0.312287 ms, versus incumbent
+0.134792/0.238876 ms. Median latency was 24.79% higher on this shared CPU.
+No hardware or stable tail-latency claim follows.
+
+The first real run was launched before a failed synthetic reload check was
+inspected. That check exposed floating-point evaluation differences caused
+by transposed, noncontiguous centroid weights. Canonical contiguous fitted
+state fixed the software issue. After tests passed, the unchanged frozen
+grid was replayed. Selection, model bytes and all 70 development logits
+were identical to the original real run. Both source snapshots and receipts
+are retained; the replay is verification, not independent accuracy evidence.
+
+Decision: retain the small spectral model and archive the nonlinear model
+as an accuracy experiment. No deployed model is replaced, no final-test
+arrays were evaluated, and neither candidate establishes SOTA.
