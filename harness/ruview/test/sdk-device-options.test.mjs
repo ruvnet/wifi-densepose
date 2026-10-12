@@ -10,6 +10,7 @@ const str = (f, s) => { const b = Buffer.from(s); return Buffer.concat([encodeVa
 const key = (f, n) => { const b = Buffer.alloc(4); b.writeUInt32LE(n); return Buffer.concat([encodeVarint((f << 3) | 5), b]); };
 const float = (f, v) => { const b = Buffer.alloc(4); b.writeFloatLE(v); return Buffer.concat([encodeVarint((f << 3) | 5), b]); };
 const pause = ms => new Promise(r => setTimeout(r, ms));
+const hasNativeWebSocket = typeof globalThis.WebSocket === 'function';
 
 async function ownServer(t, server) {
   const sockets = new Set();
@@ -57,7 +58,18 @@ test('public SDK accepts spectrum options and returns real UDP amplitude rows', 
   assert.deepEqual(result.spectrum[0].frames, [Array(8).fill(5)]);
 });
 
-test('public SDK accepts iPhone max_frames and terminates at the packet cap', async t => {
+test('public SDK reports unavailable iPhone transport without connecting', { skip: hasNativeWebSocket && 'native WebSocket is available' }, async t => {
+  const server = http.createServer();
+  let connections = 0;
+  server.on('connection', socket => { connections++; socket.destroy(); });
+  const port = await ownServer(t, server);
+  const result = await createRuView().devices.lidar({ source: 'iphone', url: `ws://127.0.0.1:${port}/ws/lidar`, seconds: 2, max_frames: 1 });
+  assert.deepEqual(result, { ok: false, reason: 'websocket_unavailable', remedy: 'Use Node 22+ (built-in WebSocket client).' });
+  await new Promise(r => setImmediate(r));
+  assert.equal(connections, 0, 'unavailable transport must not open a connection');
+});
+
+test('public SDK accepts iPhone max_frames and terminates at the packet cap', { skip: !hasNativeWebSocket && 'requires the native WebSocket client (Node 22+)' }, async t => {
   const server = http.createServer();
   server.on('upgrade', (req, sock) => {
     const accept = createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');

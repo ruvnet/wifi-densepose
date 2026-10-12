@@ -4,6 +4,9 @@ import http from 'node:http';
 import { createHash } from 'node:crypto';
 import { readIphoneLidar } from '../src/devices/lidar.js';
 
+const hasNativeWebSocket = typeof globalThis.WebSocket === 'function';
+const needsWebSocket = { skip: !hasNativeWebSocket && 'requires the native WebSocket client (Node 22+)' };
+
 // A real owned loopback WebSocket producer: upgrade, optional depth frame,
 // close handshake. No injected client event callbacks or hardware.
 async function relay(t, { frame = true, code = 1000 } = {}) {
@@ -28,7 +31,19 @@ async function relay(t, { frame = true, code = 1000 } = {}) {
   return `ws://127.0.0.1:${server.address().port}/ws/lidar`;
 }
 
-test('public iPhone reader completes when a successful relay stream closes', async t => {
+test('public iPhone reader reports an unavailable WebSocket without connecting', { skip: hasNativeWebSocket && 'native WebSocket is available' }, async t => {
+  const server = http.createServer();
+  let connections = 0;
+  server.on('connection', socket => { connections++; socket.destroy(); });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  t.after(() => new Promise(r => server.close(r)));
+  const result = await readIphoneLidar({ url: `ws://127.0.0.1:${server.address().port}/ws/lidar`, seconds: 2 });
+  assert.deepEqual(result, { ok: false, reason: 'websocket_unavailable', remedy: 'Use Node 22+ (built-in WebSocket client).' });
+  await new Promise(r => setImmediate(r));
+  assert.equal(connections, 0, 'unavailable transport must not open a connection');
+});
+
+test('public iPhone reader completes when a successful relay stream closes', needsWebSocket, async t => {
   const url = await relay(t);
   const started = performance.now();
   const result = await readIphoneLidar({ url, seconds: 2 });
@@ -38,7 +53,7 @@ test('public iPhone reader completes when a successful relay stream closes', asy
   assert.ok(performance.now() - started < 1000, 'closed relay must finish before the capture timeout');
 });
 
-test('normal empty relay close completes as no_frames', async t => {
+test('normal empty relay close completes as no_frames', needsWebSocket, async t => {
   const url = await relay(t, { frame: false });
   const started = performance.now();
   const result = await readIphoneLidar({ url, seconds: 2 });
@@ -47,7 +62,7 @@ test('normal empty relay close completes as no_frames', async t => {
   assert.ok(performance.now() - started < 1000, 'empty closed relay must finish before timeout');
 });
 
-test('abnormal empty relay close and packet limit controls retain semantics', async t => {
+test('abnormal empty relay close and packet limit controls retain semantics', needsWebSocket, async t => {
   const denied = await readIphoneLidar({ url: await relay(t, { frame: false, code: 1008 }), seconds: 2 });
   assert.equal(denied.reason, 'relay_closed');
   assert.match(denied.detail, /1008/);
