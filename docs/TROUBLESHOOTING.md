@@ -6,7 +6,9 @@ Known issues and fixes from the rebase-to-upstream branch (upstream #301).
 
 ## 1. Node not appearing in /api/v1/nodes
 
-**Symptom:** ESP32-S3 node associates with WiFi, LED blinks, but no CSI frames arrive at the server. Node missing from `/api/v1/spatial/nodes`.
+**Symptom:** ESP32-S3 node associates with WiFi, LED blinks, but no CSI frames arrive at the server. Node missing from `/api/v1/nodes`.
+
+**Check the server first:** the UDP receiver listens on `127.0.0.1` by default (ADR-296), so a natively run `sensing-server` never hears nodes on your network unless it was started with `--udp-bind 0.0.0.0 --udp-allow <node-ip-or-cidr>` (or `--udp-insecure-lan`). The startup log line for the UDP receiver says `loopback-only` when this is the problem. For Docker, see "Receiving ESP32 frames in Docker" in the [user guide](user-guide.md).
 
 **Root cause:** After USB flash, the node enters a limping state where WiFi associates but the UDP CSI sender silently fails. The SoftAP + mDNS stack initializes but the CSI callback never fires.
 

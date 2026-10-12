@@ -181,8 +181,15 @@ password when run from a terminal. `--password` still works, but it shows up in
 ### 4. Start the sensing server
 
 ```bash
-cargo run -p wifi-densepose-sensing-server -- --http-port 3000 --source auto
+cd v2
+cargo run -p wifi-densepose-sensing-server -- --http-port 3000 --source auto \
+  --udp-bind 0.0.0.0 --udp-allow 192.168.1.0/24
 ```
+
+Use your nodes' subnet for `--udp-allow`. The server only listens on
+`127.0.0.1` by default, so without these two flags the frames from the node
+never arrive and `--source auto` stays on simulated (or host WiFi) data
+instead of switching to the node.
 
 ### 5. Open the UI
 

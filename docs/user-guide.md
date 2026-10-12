@@ -366,7 +366,8 @@ Real Channel State Information at 20 Hz with 56-192 subcarriers. Required for po
 
 ```bash
 # From source
-./target/release/sensing-server --source esp32 --udp-port 5005 --http-port 3000 --ws-port 3001
+./target/release/sensing-server --source esp32 --udp-port 5005 --http-port 3000 --ws-port 3001 \
+  --udp-bind 0.0.0.0 --udp-allow <node-ip-or-cidr>
 
 # Docker (use CSI_SOURCE environment variable)
 docker run -p 127.0.0.1:3000:3000 -p 127.0.0.1:3001:3001 -p 5005:5005/udp \
@@ -375,6 +376,8 @@ docker run -p 127.0.0.1:3000:3000 -p 127.0.0.1:3001:3001 -p 5005:5005/udp \
 ```
 
 The ESP32 nodes stream binary CSI frames over UDP to port 5005. See [Hardware Setup](#esp32-s3-mesh) for flashing instructions.
+
+The server only listens for those frames on `127.0.0.1` unless you tell it otherwise (ADR-296), so a native run needs `--udp-bind 0.0.0.0` to hear nodes on your network, plus `--udp-allow` with their IP or subnet (for example `192.168.1.0/24`). Without them the server starts fine but no node ever shows up. If you'd rather accept frames from any source on a trusted network, use `--udp-insecure-lan` instead of `--udp-allow`.
 
 #### Receiving ESP32 frames in Docker
 
@@ -408,7 +411,8 @@ For higher accuracy with through-wall tracking, deploy 3-6 ESP32-S3 nodes in a *
 
 ```bash
 # Start the aggregator with multistatic mode
-./target/release/sensing-server --source esp32 --udp-port 5005 --http-port 3000 --ws-port 3001
+./target/release/sensing-server --source esp32 --udp-port 5005 --http-port 3000 --ws-port 3001 \
+  --udp-bind 0.0.0.0 --udp-allow <node-ip-or-cidr>
 ```
 
 The mesh uses a **Time-Division Multiplexing (TDM)** protocol so nodes take turns transmitting, avoiding self-interference. Key features:
@@ -443,9 +447,11 @@ cd v2
 cargo run -p wifi-densepose-sensing-server -- \
   --source esp32 \
   --udp-port 5005 \
+  --udp-bind 0.0.0.0 \
+  --udp-allow <node-ip-or-cidr> \
   --http-port 3000 \
   --ws-port 3001 \
-  --ui-path ../../ui
+  --ui-path ../ui
 
 # Docker
 docker run --rm \
@@ -1346,8 +1352,11 @@ The Rust sensing server binary accepts the following flags:
 | `--http-port` | `8080` | HTTP port for REST API and UI |
 | `--ws-port` | `8765` | WebSocket port |
 | `--udp-port` | `5005` | UDP port for ESP32 CSI frames |
-| `--ui-path` | (none) | Path to UI static files directory |
-| `--tick-ms` | `50` | Simulated frame interval (milliseconds) |
+| `--udp-bind` | `127.0.0.1` | Address the UDP receiver listens on. Use `0.0.0.0` to receive frames from nodes on your network; that also needs `--udp-allow` or `--udp-insecure-lan` |
+| `--udp-allow` | (none) | Comma-separated IPs/CIDRs allowed to send CSI frames, e.g. `192.168.1.0/24` |
+| `--udp-insecure-lan` | off | Accept frames from any source on a routable bind (the UDP data plane is not authenticated) |
+| `--ui-path` | `../ui` | Path to UI static files directory (falls back to `./ui` or `../../ui` if it doesn't exist) |
+| `--tick-ms` | `100` | Simulated frame interval (milliseconds) |
 | `--benchmark` | off | Run vital sign benchmark (1000 frames) and exit |
 | `--train` | off | Train a model from dataset |
 | `--dataset` | (none) | Path to dataset directory (MM-Fi or Wi-Pose) |
@@ -1363,10 +1372,11 @@ The Rust sensing server binary accepts the following flags:
 
 ```bash
 # Simulated mode with UI (development)
-./target/release/sensing-server --source simulate --http-port 3000 --ws-port 3001 --ui-path ../../ui
+./target/release/sensing-server --source simulate --http-port 3000 --ws-port 3001 --ui-path ../ui
 
 # ESP32 hardware mode
-./target/release/sensing-server --source esp32 --udp-port 5005
+./target/release/sensing-server --source esp32 --udp-port 5005 \
+  --udp-bind 0.0.0.0 --udp-allow <node-ip-or-cidr>
 
 # Windows WiFi RSSI
 ./target/release/sensing-server --source wifi --tick-ms 500
@@ -1711,7 +1721,8 @@ The pipeline runs 10 phases:
 ### Step 3: Use the Trained Model
 
 ```bash
-./target/release/sensing-server --model model.rvf --progressive --source esp32
+./target/release/sensing-server --model model.rvf --progressive --source esp32 \
+  --udp-bind 0.0.0.0 --udp-allow <node-ip-or-cidr>
 ```
 
 Progressive loading enables instant startup (Layer A loads in <5ms with basic inference), with full model loading in the background.
@@ -2109,8 +2120,9 @@ Binary size: 990 KB (8MB flash, 52% free) or 773 KB (4MB flash). v0.5.0 adds mmW
 **Start the aggregator:**
 
 ```bash
-# From source
-./target/release/sensing-server --source esp32 --udp-port 5005 --http-port 3000 --ws-port 3001
+# From source (--udp-bind/--udp-allow let it hear nodes on your network)
+./target/release/sensing-server --source esp32 --udp-port 5005 --http-port 3000 --ws-port 3001 \
+  --udp-bind 0.0.0.0 --udp-allow <node-ip-or-cidr>
 
 # Docker (see "Receiving ESP32 frames in Docker" for the UDP source guard)
 docker run -p 127.0.0.1:3000:3000 -p 127.0.0.1:3001:3001 -p 5005:5005/udp \
@@ -2837,7 +2849,8 @@ The server applies a 3-stage smoothing pipeline (ADR-048). If readings are still
 
 - Verify the sensing server is running: `curl http://localhost:3000/health`
 - Access Observatory via the server URL: `http://localhost:3000/ui/observatory.html` (not a file:// URL)
-- If a standalone `aggregator` command is already listening on UDP `:5005`, stop it and run `sensing-server --source esp32 --udp-port 5005` instead; the Observatory reads the server WebSocket, not the standalone aggregator output
+- If a standalone `aggregator` command is already listening on UDP `:5005`, stop it and run `sensing-server --source esp32 --udp-port 5005 --udp-bind 0.0.0.0 --udp-allow <node-ip-or-cidr>` instead; the Observatory reads the server WebSocket, not the standalone aggregator output
+- On a native run, make sure the server was started with `--udp-bind 0.0.0.0` and `--udp-allow` (or `--udp-insecure-lan`). It listens on `127.0.0.1` by default, so frames from your nodes never reach it otherwise
 - Verify the ESP32 nodes are provisioned to the IP address of the machine running `sensing-server`
 - Hard refresh with Ctrl+Shift+R to clear cached settings
 - The auto-detect probes `/health` on the same origin — cross-origin won't work
