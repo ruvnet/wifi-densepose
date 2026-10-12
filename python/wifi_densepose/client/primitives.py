@@ -13,12 +13,12 @@ The 10 v1 primitives (ADR-115 §3.12.1):
 | `SomeoneSleeping` | `someone_sleeping` | binary_sensor |
 | `PossibleDistress` | `possible_distress` | binary_sensor + event |
 | `RoomActive` | `room_active` | binary_sensor |
-| `ElderlyInactivityAnomaly` | `elderly_inactivity` | binary_sensor + event |
+| `ElderlyInactivityAnomaly` | `elderly_inactivity_anomaly` | binary_sensor + event |
 | `MeetingInProgress` | `meeting_in_progress` | binary_sensor |
 | `BathroomOccupied` | `bathroom_occupied` | binary_sensor |
 | `FallRiskElevated` | `fall_risk_elevated` | sensor (0–100) + event |
 | `BedExit` | `bed_exit` | event |
-| `NoMovementSafety` | `no_movement_safety` | binary_sensor + event |
+| `NoMovementSafety` | `no_movement` | binary_sensor + event |
 | `MultiRoomTransition` | `multi_room_transition` | event |
 """
 
@@ -38,12 +38,12 @@ class SemanticPrimitive(enum.Enum):
     SomeoneSleeping = "someone_sleeping"
     PossibleDistress = "possible_distress"
     RoomActive = "room_active"
-    ElderlyInactivityAnomaly = "elderly_inactivity"
+    ElderlyInactivityAnomaly = "elderly_inactivity_anomaly"
     MeetingInProgress = "meeting_in_progress"
     BathroomOccupied = "bathroom_occupied"
     FallRiskElevated = "fall_risk_elevated"
     BedExit = "bed_exit"
-    NoMovementSafety = "no_movement_safety"
+    NoMovementSafety = "no_movement"
     MultiRoomTransition = "multi_room_transition"
 
     @classmethod
@@ -214,7 +214,8 @@ def _decode_event(
     return SemanticPrimitiveEvent(
         kind=primitive,
         node_id=node_id,
-        state=str(body.get("state", "")),
+        # Score sensors (fall_risk_elevated) publish `{"score": ..., "ts": ...}`.
+        state=str(body.get("state", body.get("score", ""))),
         confidence=float(body.get("confidence", 0.0)),
         explanation=expl_tuple,
         timestamp=float(body.get("timestamp", 0.0)),
