@@ -243,3 +243,23 @@ test('spectrum draws multi-antenna ESP32 nodes from their first chain (ADR-018 a
   assert.deepEqual([s.nodeId, s.shape, s.bins], [9, '2x8', 8]);
   assert.ok(s.frames.every((f) => f.every((v) => v === 3)));
 });
+
+test('kernel analysis selects the busiest stream after both buffers reach their cap', async () => {
+  const datagrams = [];
+  for (let seq = 0; seq < 70; seq++) datagrams.push(esp32Csi({ node: 1, seq }));
+  for (let seq = 0; seq < 100; seq++) datagrams.push(esp32Csi({ node: 2, seq }));
+  const result = await capture({ analyze: true, analyze_max_frames: 64, max_packets: datagrams.length }, datagrams, { analyze: async () => ({ ok: true }) });
+  assert.equal(result.analysis.input.nodeId, 2);
+  assert.equal(result.analysis.input.frames, 64);
+  assert.equal(result.analysis.input.droppedOverCap, 36);
+});
+
+test('requested node selection remains authoritative after analysis buffers fill', async () => {
+  const datagrams = [];
+  for (let seq = 0; seq < 70; seq++) datagrams.push(esp32Csi({ node: 1, seq }));
+  for (let seq = 0; seq < 100; seq++) datagrams.push(esp32Csi({ node: 2, seq }));
+  const result = await capture({ analyze: true, node_id: 1, analyze_max_frames: 64, max_packets: datagrams.length }, datagrams, { analyze: async () => ({ ok: true }) });
+  assert.equal(result.analysis.input.nodeId, 1);
+  assert.equal(result.analysis.input.frames, 64);
+  assert.equal(result.analysis.input.droppedOverCap, 6);
+});
