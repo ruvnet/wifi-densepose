@@ -126,7 +126,8 @@ listener.on(SemanticPrimitive.PossibleDistress, lambda e: alert(e))
 
 client = RuViewMqttClient(broker_host="homeassistant.local")
 client.on_message(
-    "homeassistant/+/wifi_densepose_+/+/state",
+    # MQTT `+` must fill a whole topic level; the listener skips non-RuView topics.
+    "homeassistant/+/+/+/state",
     listener.handle_mqtt_message,
 )
 client.start()

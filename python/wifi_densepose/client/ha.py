@@ -143,9 +143,10 @@ class HABlueprintHelper:
     structured queries against them.
 
     Intended use: subscribe a RuViewMqttClient to
-    `homeassistant/+/wifi_densepose_+/+/config`, feed every message
-    into `add_payload()`, then ask the helper "what entities does
-    node X expose?" or "what binary_sensors are presence-class?".
+    `homeassistant/+/+/+/config`, feed every message into
+    `add_payload()` (it ignores non-RuView topics), then ask the helper
+    "what entities does node X expose?" or "what binary_sensors are
+    presence-class?".
     """
 
     def __init__(self) -> None:
