@@ -333,3 +333,38 @@ or with the prior float32 spectral deployment artifact.
 The earlier security workflow fails on preexisting Rust dependency alerts in
 unchanged `v2/Cargo.lock`; the Python checks pass. That remains a release gate,
 alongside independent room/person confirmation. No SOTA or promotion claim.
+
+
+## Measured float32 seeded inference
+
+The optional float32 export converts the fitted tensors and regenerated map
+at load. The RFF normalization constant now follows the state dtype, avoiding
+an unintended NumPy float64 promotion. Existing float64 metadata without a
+precision field remains supported. Unsupported precision values are rejected.
+
+```python
+from csi_training.espfi_seeded import export_seeded, SeededKernelBundle
+baseline = SeededKernelBundle('/private/espfi/seeded-001')
+export_seeded(baseline.state, '/private/espfi/seeded-002', precision='float32')
+candidate = SeededKernelBundle('/private/espfi/seeded-002')
+```
+
+MEASURED: all 70 development class predictions are unchanged. Maximum absolute
+logit error is 1.119643e-6, below the predeclared 1e-4 tolerance. Reload is exact.
+Weights occupy 8,220 bytes plus 1,069 metadata bytes. Retained model tensors use
+247,996 bytes instead of 495,992, a 50% reduction. Feature extraction and the
+temporary map generated during loading remain float64, so total process memory
+and peak loading memory are not halved. This precision conversion is not
+bitwise lossless and establishes no new accuracy or final-test result.
+
+A 1,000-pair benchmark alternated call order and cycled all 70 development
+records. Float64 p50/p95 were 0.401590/0.568780 ms; float32 were
+0.390610/0.556713 ms. The 2.73% median difference is too small for a reliable
+speed claim on a shared host. Float32 median load time across 30 loads was
+1.633650 ms. Input checks, feature extraction and classification are included;
+acquisition, temporal pooling and I/O are excluded. NumPy 2.4.4, Python 3.12.3,
+x86_64 and one BLAS thread were used.
+
+Decision: retain the verified precision option for smaller model state and
+storage. Keep float64 for numerical comparison. Generalization weaknesses,
+independent room/person evaluation and the existing Rust security gate remain.

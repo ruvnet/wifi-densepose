@@ -27,7 +27,7 @@ def transformed(state, values):
     values = np.asarray(values, dtype=state['feature_mean'].dtype)
     z = (values - state['feature_mean']) / state['feature_scale']
     if 'projection' in state:
-        return np.sqrt(2. / state['phase'].size) * np.cos(z @ state['projection'] + state['phase'])
+        return np.asarray(np.sqrt(2. / state['phase'].size), dtype=z.dtype) * np.cos(z @ state['projection'] + state['phase'])
     return z
 
 
