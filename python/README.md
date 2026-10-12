@@ -139,8 +139,8 @@ client.wait_connected()
 import numpy as np
 from wifi_densepose import BfldFrame, BfldKind
 
-# Parse compressed BFR from a Wireshark capture into a Complex64 ndarray ...
-fb = np.zeros((2, 1, 996), dtype=np.complex64)  # Nr=2 Nc=1 Nsc=996 for HE80
+# Parse compressed BFR from a Wireshark capture into a complex128 ndarray ...
+fb = np.zeros((2, 1, 996), dtype=np.complex128)  # Nr=2 Nc=1 Nsc=996 for HE80
 
 frame = BfldFrame.from_compressed_feedback(
     timestamp_ms=ts,
