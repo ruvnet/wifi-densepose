@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { buildSshArgs, restrictToOwner, runRemote, saveHost, shellQuote, validateHost } from '../src/remote.js';
 import { isRemoteReadOnlyTool, runTool, TOOLS } from '../src/tools.js';
 import { validateArguments } from '../src/policy.js';
@@ -17,13 +17,21 @@ test('host entries reject ssh option injection and shell metacharacters', () => 
   assert.deepEqual(validateHost({ name: 'lab-pi', ssh: 'ruv@pi.local', port: 2222 }), { name: 'lab-pi', ssh: 'ruv@pi.local', port: 2222 });
 });
 
-test('remote command is fully shell-quoted and ssh options are fixed', () => {
+test('remote command is fully shell-quoted and ssh options are fixed', t => {
   assert.equal(shellQuote("a'b"), `'a'\\''b'`);
   const argv = buildSshArgs({ ssh: 'ruv@pi.local', port: 2222 }, ['npx', '-y', '@ruvnet/ruview@0.7.0', 'call', 'ruview_doctor', '--read-only', '--args-json', '{"x":"$(id); `rm`"}']);
   assert.deepEqual(argv.slice(0, 11), ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'StrictHostKeyChecking=yes', '-T', '-p', '2222', '--', 'ruv@pi.local']);
   const remote = argv.at(-1);
+  let shell = 'sh';
+  if (process.platform === 'win32' && spawnSync(shell, ['-c', 'exit 0']).status !== 0) {
+    const git = spawnSync('where.exe', ['git'], { encoding: 'utf8' }).stdout?.trim().split(/\r?\n/)[0];
+    const gitShell = git && resolve(dirname(git), '..', 'bin', 'sh.exe');
+    if (!gitShell || !existsSync(gitShell)) { t.skip('POSIX shell unavailable; Linux CI exercises shell interpretation'); return; }
+    shell = gitShell;
+  }
   // Every token is single-quoted, so the remote shell sees literal text.
-  const sh = spawnSync('sh', ['-c', `for a in ${remote}; do printf '%s\\n' "$a"; done`], { encoding: 'utf8' });
+  const sh = spawnSync(shell, ['-c', `for a in ${remote}; do printf '%s\\n' "$a"; done`], { encoding: 'utf8' });
+  assert.equal(sh.status, 0, sh.stderr || sh.error?.message);
   assert.equal(sh.stdout.trim().split('\n').at(-1), '{"x":"$(id); `rm`"}');
 });
 

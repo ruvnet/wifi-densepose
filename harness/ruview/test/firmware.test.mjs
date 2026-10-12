@@ -101,6 +101,46 @@ test('4 MB variant prefers 4 MB images and 8 MB refuses a 4 MB partition table',
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('official C6 bundle names verify checksums and remain scoped to the C6 variant', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ruview-fw-c6-'));
+  try {
+    const files = {
+      'bootloader.bin': 'C6_BOOT',
+      'partition-table-c6.bin': 'C6_PT',
+      'esp32-csi-node-c6.bin': 'C6_APP',
+      'ota_data_initial.bin': 'C6_OTA',
+    };
+    for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, name), body);
+    writeFileSync(join(dir, 'SHA256SUMS.txt'), Object.entries(files).map(([name, body]) => `${sha(body)}  ${name}`).join('\n'));
+    const bundle = resolveBundle(dir, 'c6');
+    assert.equal(bundle.chip, 'esp32c6');
+    assert.equal(bundle.flashSize, '4MB');
+    assert.deepEqual(bundle.images.map(({ relative, integrity }) => [relative, integrity]), [
+      ['bootloader.bin', 'verified'], ['partition-table-c6.bin', 'verified'],
+      ['ota_data_initial.bin', 'verified'], ['esp32-csi-node-c6.bin', 'verified'],
+    ]);
+    for (const variant of ['s3-8mb', 's3-4mb']) {
+      assert.throws(() => resolveBundle(dir, variant), (error) => error.reason === 'image_missing');
+    }
+    // A local build may also be copied into the folder: prefer the release's
+    // explicit C6 images, never accidentally fall back to an unrelated app.
+    writeFileSync(join(dir, 'esp32-csi-node.bin'), 'OTHER_APP');
+    assert.equal(resolveBundle(dir, 'c6').images.find((image) => image.role === 'app').relative, 'esp32-csi-node-c6.bin');
+    writeFileSync(join(dir, 'esp32-csi-node-c6.bin'), 'TAMPERED');
+    assert.throws(() => resolveBundle(dir, 'c6'), (error) => error.reason === 'checksum_mismatch');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('C6 keeps generic ESP-IDF build directory support', () => {
+  const dir = makeBundle();
+  try {
+    const bundle = resolveBundle(dir, 'c6');
+    assert.equal(bundle.chip, 'esp32c6');
+    assert.equal(bundle.images.find((image) => image.role === 'app').relative, 'esp32-csi-node.bin');
+    assert.ok(bundle.images.every((image) => image.integrity === 'verified'));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('flash without confirm is a plan and touches no hardware', async () => {
   const dir = makeBundle({ otadata: false });
   const deps = fakeDeps();
