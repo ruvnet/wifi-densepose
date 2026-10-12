@@ -912,11 +912,7 @@ Presence, motion, person count, zones and the coarse posture label are still ser
 
 ### Matter Bridge (Apple Home / Google Home / Alexa / SmartThings)
 
-```bash
-sensing-server --matter --matter-setup-file /var/run/ruview-matter.txt
-```
-
-Open `/var/run/ruview-matter.txt` for the Matter pairing QR / 11-digit setup code. Scan it from Apple Home / Google Home / your HA Matter integration. RuView appears as a Bridged Device with one occupancy endpoint per node + per zone, plus a momentary switch for fall events.
+Not available yet. The `--matter` and `--matter-setup-file` flags from ADR-115 are defined in the crate's library CLI, but the `sensing-server` binary doesn't accept them (`error: unexpected argument '--matter' found`), so there's no way to start the Matter bridge today. Use the MQTT integration above for Home Assistant in the meantime.
 
 Detailed entity reference, blueprint catalog, troubleshooting recipe matrix: see [`docs/integrations/home-assistant.md`](integrations/home-assistant.md).
 
@@ -1953,17 +1949,7 @@ python firmware/esp32-csi-node/provision.py --port COM7 \
 
 Replace `192.168.1.20` with the IP of the machine running the sensing server.
 
-**Mesh key provisioning (secure mode):**
-
-For multistatic mesh deployments with authenticated beacons (ADR-032), provision a shared mesh key:
-
-```bash
-python firmware/esp32-csi-node/provision.py --port COM7 \
-  --ssid "YourWiFi" --password "YourPassword" --target-ip 192.168.1.20 \
-  --mesh-key "$(openssl rand -hex 32)"
-```
-
-All nodes in a mesh must share the same 256-bit mesh key for HMAC-SHA256 beacon authentication. The key is stored in ESP32 NVS flash and zeroed on firmware erase.
+**Mesh key provisioning:** ADR-032 describes giving every node in a multistatic mesh a shared mesh key, but that isn't wired up yet. `provision.py` has no `--mesh-key` option and the firmware doesn't read a mesh key from NVS, so there's nothing to provision for now.
 
 ### ESP32-C6 (Wi-Fi 6 + 802.15.4 research target — ADR-110)
 
@@ -2378,19 +2364,19 @@ WiFi sensing can monitor health metrics without any wearable or camera:
 
 ```bash
 # Sleep quality monitoring (run overnight)
-node scripts/sleep-monitor.js --port 5006 --bind 192.168.1.20
+node scripts/sleep-monitor.js --port 5006
 
 # Breathing disorder pre-screening
-node scripts/apnea-detector.js --port 5006 --bind 192.168.1.20
+node scripts/apnea-detector.js --port 5006
 
 # Stress detection via heart rate variability
-node scripts/stress-monitor.js --port 5006 --bind 192.168.1.20
+node scripts/stress-monitor.js --port 5006
 
 # Walking analysis + tremor detection
-node scripts/gait-analyzer.js --port 5006 --bind 192.168.1.20
+node scripts/gait-analyzer.js --port 5006
 
-# Replay on recorded data (no live hardware needed)
-node scripts/sleep-monitor.js --replay data/recordings/*.csi.jsonl
+# Replay one recording (no live hardware needed)
+node scripts/sleep-monitor.js --replay data/recordings/<recording>.csi.jsonl
 ```
 
 > **Note:** These are pre-screening tools, not medical devices. Consult a healthcare professional for diagnosis.
