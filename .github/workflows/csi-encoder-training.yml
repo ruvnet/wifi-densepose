@@ -10,6 +10,7 @@ on:
       - 'scripts/improve-espfi-kernel.py'
       - 'scripts/improve-espfi-blend.py'
       - 'scripts/requirements-espfi-training.txt'
+      - 'scripts/requirements-espfi-inference.txt'
       - 'scripts/requirements-csi-training.txt'
       - 'scripts/tests/test_csi_training*.py'
       - 'scripts/tests/test_espfi*.py'

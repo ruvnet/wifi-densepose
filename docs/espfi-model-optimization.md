@@ -368,3 +368,83 @@ x86_64 and one BLAS thread were used.
 Decision: retain the verified precision option for smaller model state and
 storage. Keep float64 for numerical comparison. Generalization weaknesses,
 independent room/person evaluation and the existing Rust security gate remain.
+
+## Buffered inference runtime
+
+`csi_training.espfi_runtime.BufferedKernelBundle` uses NumPy and safetensors
+only. It does not import PyTorch, SciPy, the trainer, or the dataset loader.
+The same bounded model bytes are hashed and deserialized. Legacy seeded
+float64 and float32 bundles remain loadable; no new weight artifact is needed.
+
+```sh
+python -m pip install -r scripts/requirements-espfi-inference.txt
+```
+
+```python
+from csi_training.espfi_runtime import BufferedKernelBundle
+model = BufferedKernelBundle('/private/espfi/seeded-002')
+scores = model.predict(amplitudes)  # finite nonnegative (N, 52, 190)
+```
+
+Keep the instance alive across windows. A locked workspace reuses centering,
+power, pooling and projection buffers. Returned scores own their storage.
+Calls on one instance serialize; use separate instances for concurrent workers.
+Batch inputs are bounded to 4096 windows and processed one window at a time.
+This targets live stream latency, not optimized large batch throughput.
+
+Feature extraction remains float64, including the amplitude floor operation.
+The 190 point FFT, bands and temporal bin lengths 48, 48, 47, 47 are unchanged.
+The default folds feature normalization into the projection and output centering
+into the classifier bias at load. `fuse=False` supplies the buffered control.
+`SeededKernelBundle` retains the original calculation as the rollback reference.
+
+MEASURED on the same ruOS x86_64 CPU, Python 3.12.3, NumPy 2.4.4 and one BLAS
+thread: all 70 development predictions remain unchanged. Maximum absolute
+logit error is 1.415611e-6, below the predeclared 1e-4 tolerance. Three separate
+rounds each rotate call order across 1000 paired calls and cycle development
+windows. Values below include validation, feature extraction and classification.
+
+| Round | Reference p50 ms | Fused p50 ms | Reference p95 ms | Fused p95 ms |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 0.407790 | 0.330460 | 0.596976 | 0.472106 |
+| 2 | 0.402875 | 0.327070 | 0.577802 | 0.470141 |
+| 3 | 0.408875 | 0.327970 | 0.574514 | 0.478745 |
+
+Median latency falls 18.82% to 19.79%; p95 falls 16.67% to 20.92%.
+Every round passes the declared 10% median improvement and nonregressing p95
+gate. This is shared CPU evidence, not a device SLA. Acquisition, temporal
+pooling and I/O are excluded. Runtime retains 243,740 model tensor bytes plus
+204,560 workspace bytes, excluding FFT temporaries and outputs. Buffer reuse
+trades persistent scratch memory for fewer allocations; total process memory
+was not measured. The stored 8,220 byte model remains unchanged.
+
+A full float32 feature probe preserved development predictions but failed the
+synthetic nearly constant signal test: maximum logit error 1.710676. It is
+rejected and is only available inside the diagnostic benchmark. This catches
+a cancellation failure that ordinary development parity would have missed.
+
+Reproduce the acceptance test with training dependencies installed for loading
+the authorized public bundle and comparing against the reference:
+
+```sh
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 PYTHONPATH=scripts \
+python -m csi_training.espfi_runtime_benchmark \
+  --manifest /private/espfi/manifest.json \
+  --model /private/espfi/seeded-002 \
+  --output /private/espfi/runtime-verification.json
+```
+
+The output path must be new. Require `status=complete`, both prediction parity
+and error tolerance, and `parity.fused.speed_gate_passed=true`. The receipt
+binds model, metadata, feature, classifier, runtime and benchmark source hashes
+to full intake provenance. Reviewed aggregate results are in
+[`validation/espfi-runtime-20261012.json`](validation/espfi-runtime-20261012.json).
+
+Focused tests cover precision and mixed amplitude floors, extreme and nearly
+constant inputs, exact window boundaries, strided batches, concurrent calls,
+owned outputs, rejected inputs, artifact tampering and absent training imports.
+All 64 relevant tests pass on ruOS. Independent review found the amplitude
+floor precision issue, verified the fix and returned NO BLOCK. No training,
+new final test evaluation, model publication or production promotion occurred.
+Development accuracy remains 31/70 with two classes at zero F1; fresh independent
+rooms and participants remain necessary before a deployment claim.
