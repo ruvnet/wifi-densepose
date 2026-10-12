@@ -71,11 +71,11 @@
     "src/sdk.d.ts": "82e73721de433551a2b4339821ebf7b2c9d44133c766498ae91d15483ed8a073",
     "src/sdk.js": "a07b5e5777ee897a50c12f6002065c3ca781e087d625541d54e5f5308ede2116",
     "src/spaces.js": "45ef786537cb2a446db5e926e5a1c10b73639d2767dec84611f914f78d4325eb",
-    "src/tools.js": "7c41347b4be063457d7759ddb8f1f5dd608cbe28baa1c80e4a27d6567af6bc98",
+    "src/tools.js": "1b81750fe6271fa632bf7dfc35f7a072ef3f26baeed9c58cfbc82ad27b0fed30",
     "src/training.js": "b8451c48db69c7d077d75f07500996213beaa52705116f64afafe084e68e3956",
     "src/ui/console-widget.js": "0d2f707d57b5ec54968dee1dc80f31c7db9152dcadfc48700c18379dabb55462"
   },
-  "filesDigest": "60935843295b67f3354b4b02cc31df62bac8b5093568b11f896dfc7fc3a91545",
+  "filesDigest": "defa32c741ec7e4d23f1dc2ea25f0e6d6ea19488ceb17123f0e6b5b6dcfc3544",
   "brainDigest": "c0fb7b079ded157059b91601361429944697dae3cc42abc00dfe1a680986b0f4",
   "gateFingerprint": "6e53c784eee38310188948fc75fb49e6b4ebc04e247d01b903fa8c8a92d67bdd",
   "developmentPins": {

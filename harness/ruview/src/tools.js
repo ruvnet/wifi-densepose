@@ -170,7 +170,7 @@ export const MONITOR_SCRIPT = [
   ' if not ln: continue',
   " s=ln.decode('utf-8','replace')",
   ' n+=1',
-  " if 'CSI cb' in s or 'csi_collector' in s or 'RUVIEW_CSI: frame #' in s: csi+=1",
+  " if 'CSI cb #' in s or 'RUVIEW_CSI: frame #' in s: csi+=1",
   " if 'MGMT+DATA' in s: print('UPGRADE_MGMT_DATA')",
   " if 'lack of csi buf' in s or 'csi buf not enough' in s: starved+=1",
   'ser.close()',
