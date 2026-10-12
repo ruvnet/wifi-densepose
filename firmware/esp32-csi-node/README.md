@@ -274,8 +274,8 @@ Adds real-time health and safety monitoring.
   drives the on-screen skeleton from signal-based heuristics (amplitude
   variance, motion-band power), not from learned keypoint inference. The
   repository does not ship pre-trained weights — see issues
-  [#509](../../issues/509) and [#506](../../issues/506) for context, and
-  [ADR-079](../../docs/adr/ADR-079-camera-supervised-pose-finetune.md) for
+  [#509](https://github.com/ruvnet/RuView/issues/509) and [#506](https://github.com/ruvnet/RuView/issues/506) for context, and
+  [ADR-079](../../docs/adr/ADR-079-camera-ground-truth-training.md) for
   the planned training path (phases P7-P9 are `Pending`).
 - The presence indicator is a calibrated variance threshold and **will
   false-positive** under strong RF interference from non-human sources
@@ -949,12 +949,12 @@ This firmware implements or references the following ADRs:
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| [ADR-018](../../docs/adr/ADR-018-csi-binary-frame-format.md) | CSI binary frame format | Accepted |
+| [ADR-018](../../docs/adr/ADR-018-esp32-dev-implementation.md) | CSI binary frame format | Accepted |
 | [ADR-029](../../docs/adr/ADR-029-ruvsense-multistatic-sensing-mode.md) | Channel hopping and TDM protocol | Accepted |
 | [ADR-039](../../docs/adr/ADR-039-esp32-edge-intelligence.md) | Edge intelligence tiers 0-2 | Accepted |
 | [ADR-040](../../docs/adr/) | WASM programmable sensing (Tier 3) with RVF container format | Alpha |
-| [ADR-057](../../docs/adr/ADR-057-build-time-csi-guard.md) | Build-time CSI guard (`CONFIG_ESP_WIFI_CSI_ENABLED`) | Accepted |
-| [ADR-060](../../docs/adr/ADR-060-channel-mac-filter.md) | Channel override and MAC address filter | Accepted |
+| [ADR-057](../../docs/adr/ADR-057-firmware-csi-build-guard.md) | Build-time CSI guard (`CONFIG_ESP_WIFI_CSI_ENABLED`) | Accepted |
+| [ADR-060](../../docs/adr/ADR-060-provision-channel-mac-filter.md) | Channel override and MAC address filter | Accepted |
 | [ADR-061](../../docs/adr/ADR-061-qemu-esp32s3-firmware-testing.md) | QEMU ESP32-S3 emulation for firmware testing | Proposed |
 
 ---
