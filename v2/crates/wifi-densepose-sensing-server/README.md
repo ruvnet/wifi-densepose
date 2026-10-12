@@ -69,11 +69,11 @@ cargo build -p wifi-densepose-sensing-server
 # Run with default settings (HTTP :8080, UDP :5005, WS :8765)
 cargo run -p wifi-densepose-sensing-server
 
-# Run with custom ports
+# Run with custom ports (from v2/, where ../ui is the repo's UI)
 cargo run -p wifi-densepose-sensing-server -- \
     --http-port 9000 \
     --udp-port 5005 \
-    --static-dir ./ui
+    --ui-path ../ui
 ```
 
 ### Empty-room startup baseline
@@ -123,15 +123,15 @@ use wifi_densepose_sensing_server::vital_signs::VitalSignDetector;
 // Create a detector with 20 Hz sample rate
 let mut detector = VitalSignDetector::new(20.0);
 
-// Feed CSI amplitude samples
-for amplitude in csi_amplitudes.iter() {
-    detector.push_sample(*amplitude);
-}
-
-// Extract vital signs
-if let Some(vitals) = detector.detect() {
-    println!("Breathing: {:.1} BPM", vitals.breathing_rate_bpm);
-    println!("Heart rate: {:.0} BPM", vitals.heart_rate_bpm);
+// Feed one CSI frame at a time: per-subcarrier amplitude and phase
+for (amplitude, phase) in csi_frames.iter() {
+    let vitals = detector.process_frame(amplitude, phase);
+    if let Some(bpm) = vitals.breathing_rate_bpm {
+        println!("Breathing: {bpm:.1} BPM");
+    }
+    if let Some(bpm) = vitals.heart_rate_bpm {
+        println!("Heart rate: {bpm:.0} BPM");
+    }
 }
 ```
 

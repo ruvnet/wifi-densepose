@@ -39,3 +39,18 @@ test('policy files list exactly the registry tools (no drift)', () => {
   const confirmed = Object.entries(TOOL_POLICY).filter(([, p]) => p.confirmField).map(([n]) => n).sort();
   assert.deepEqual(Object.keys(mcp.dangerousTools).sort(), confirmed);
 });
+
+
+test('SDK forwards explicit search limits to the registry validator', async () => {
+  const sdk = createRuView();
+  for (const limit of [0, NaN, -1, 26]) {
+    const result = await sdk.memorySearch('firmware', limit);
+    assert.equal(result.ok, false, `invalid limit ${String(limit)} must not become the default`);
+    assert.equal(result.reason, 'invalid_arguments');
+  }
+  const strict = createRuView({ strict: true });
+  await assert.rejects(() => strict.memorySearch('firmware', 0),
+    (error) => error instanceof RuViewError && error.reason === 'invalid_arguments');
+  assert.deepEqual(await sdk.memorySearch('firmware'), await sdk.call('ruview_memory_search', { query: 'firmware' }));
+  assert.deepEqual(await sdk.memorySearch('firmware', 1), await sdk.call('ruview_memory_search', { query: 'firmware', limit: 1 }));
+});
