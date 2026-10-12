@@ -100,3 +100,15 @@ test('mmwave tool routes source=esphome and validates per-source arguments', asy
   const empty = summarizeEsphome({ device: {}, entities: new Map(), updates: 0 }, 5);
   assert.deepEqual([empty.presentNow, empty.heartBpmMean, empty.updateRateHz], [null, null, 0]);
 });
+
+for (const value of [NaN, Infinity, -Infinity]) {
+  test(`native ESPHome treats nonfinite sensor value ${value} as unavailable`, async (t) => {
+    const dev = await fakeDevice({ states: [sensor(4, 50), { type: 25, payload: Buffer.concat([pbKey(1, 4), pbFloat(2, value)]) }] });
+    t.after(() => dev.server.close());
+    const result = await readEsphome({ host: '127.0.0.1', api_port: dev.port, seconds: 1 });
+    assert.equal(result.ok, true);
+    assert.equal(result.distanceCmMean, 50);
+    assert.equal(result.entities.find((entity) => entity.role === 'distanceCm').last, null);
+    assert.equal(result.stateUpdates, 2);
+  });
+}
