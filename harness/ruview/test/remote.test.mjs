@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { buildSshArgs, restrictToOwner, runRemote, saveHost, shellQuote, validateHost } from '../src/remote.js';
 import { isRemoteReadOnlyTool, runTool, TOOLS } from '../src/tools.js';
@@ -64,6 +64,7 @@ test('hosts file is private and remote runs are read-only, validated, and versio
       const grants = acl.split('\n').map((l) => l.replace(path, '').trim()).filter((l) => /:\(/.test(l));
       assert.equal(grants.length, 1, acl);
       assert.match(grants[0], /:\(F\)$/);
+      assert.ok(grants[0].toLowerCase().includes(`${userInfo().username.toLowerCase()}:(F)`.toLowerCase()), acl);
     } else {
       assert.equal(saved.access, 'posix-0600');
       assert.equal(statSync(path).mode & 0o777, 0o600);
@@ -109,11 +110,38 @@ test('`call --read-only` refuses mutating tools (what remote hosts execute)', ()
   assert.equal(JSON.parse(allowed.stdout).verdict, 'FAIL');
 });
 
-test('Windows hosts-file restriction fails closed when icacls fails', () => {
+test('Windows hosts-file restriction removes explicit grants and handles literal Unicode paths', { skip: process.platform !== 'win32' }, async () => {
+  await withHosts(async (path) => {
+    // Wildcards and PowerShell expressions are legal filename characters. A
+    // literal path on stdin must neither expand nor execute any of this text.
+    const literal = join(dirname(path), "hosts-é [x] $(throw 'path-executed').json");
+    saveHost({ name: 'pi', ssh: 'ruv@pi.local' }, literal);
+    const grant = spawnSync('icacls', [literal, '/grant', '*S-1-1-0:R', '*S-1-5-18:F'], { encoding: 'utf8' });
+    assert.equal(grant.status, 0, grant.stderr || grant.stdout);
+    const before = spawnSync('icacls', [literal], { encoding: 'utf8' });
+    assert.equal(before.status, 0, before.stderr);
+    assert.ok(before.stdout.split('\n').filter(line => /:\(/.test(line)).length >= 3, before.stdout);
+    assert.equal(restrictToOwner(literal), 'windows-acl-owner-only');
+    const after = spawnSync('icacls', [literal], { encoding: 'utf8' });
+    assert.equal(after.status, 0, after.stderr);
+    const grants = after.stdout.split('\n').map(line => line.replace(literal, '').trim()).filter(line => /:\(/.test(line));
+    assert.equal(grants.length, 1, after.stdout);
+    assert.ok(grants[0].toLowerCase().includes(`${userInfo().username}:(F)`.toLowerCase()), after.stdout);
+    assert.equal(JSON.parse(readFileSync(literal, 'utf8')).hosts[0].name, 'pi');
+  });
+});
+
+test('Windows hosts-file restriction fails closed and keeps input out of PowerShell source', () => {
   const calls = [];
-  const ok = restrictToOwner('C:/x/hosts.json', { platform: 'win32', user: () => 'alice', exec: (cmd, args) => { calls.push([cmd, ...args]); return { status: 0 }; } });
+  const path = "C:/x/hosts $(throw 'injected').json";
+  const ok = restrictToOwner(path, { platform: 'win32', exec: (cmd, args, options) => { calls.push({ cmd, args, options }); return { status: 0 }; } });
   assert.equal(ok, 'windows-acl-owner-only');
-  assert.deepEqual(calls[0], ['icacls', 'C:/x/hosts.json', '/inheritance:r', '/grant:r', 'alice:F']);
-  assert.throws(() => restrictToOwner('C:/x/hosts.json', { platform: 'win32', user: () => 'alice', exec: () => ({ status: 5 }) }), /not made private/);
+  assert.equal(calls[0].cmd, 'powershell.exe');
+  assert.deepEqual(calls[0].args.slice(0, 4), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command']);
+  assert.ok(!calls[0].args.at(-1).includes(path));
+  assert.deepEqual(JSON.parse(calls[0].options.input), { path });
+  for (const result of [{ status: 5 }, { status: null, error: { code: 'ENOENT' } }, { status: null, error: { code: 'ETIMEDOUT' } }]) {
+    assert.throws(() => restrictToOwner(path, { platform: 'win32', exec: () => result }), /not made private/);
+  }
   assert.equal(restrictToOwner('/tmp/h.json', { platform: 'linux', exec: () => { throw new Error('must not run'); } }), 'posix-0600');
 });
