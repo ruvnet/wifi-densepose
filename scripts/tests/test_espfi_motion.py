@@ -7,7 +7,7 @@ import tempfile
 import unittest
 import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from csi_training.espfi_motion import CONTRACT, GRID, WIDTHS, MotionBundle, motion_features, search
+from csi_training.espfi_motion import CONTRACT, ROBUST_CONTRACT, GRID, WIDTHS, MotionBundle, motion_features, search
 from csi_training.espfi_generalize import features
 from csi_training.espfi_kernel import fit
 from csi_training.espfi_seeded import SPEC, export_seeded
@@ -71,6 +71,12 @@ class MotionTests(unittest.TestCase):
             b = search(changed, provenance, root/'baseline', receipt, root/'b')
             self.assertEqual(a['selected'], b['selected'])
             self.assertEqual(a['model_sha256'], b['model_sha256'])
+            robust = search(parts, provenance, root/'baseline', receipt, root/'robust', selection='worst')
+            winner = max(robust['candidates'], key=lambda row: (
+                min(f['macro_f1'] for f in row['folds']), row['mean_cv_macro_f1'], -row['scalar_count']))
+            self.assertEqual(robust['selected'], winner)
+            self.assertEqual(robust['contract'], ROBUST_CONTRACT)
+            self.assertEqual(MotionBundle(root/'robust').predict(parts['validation']['x']).shape, (7, 7))
             self.assertFalse(a['promotionAuthorized'])
             self.assertEqual(a['reload_max_abs_logit_error'], 0)
             self.assertNotIn('test', a)

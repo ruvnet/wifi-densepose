@@ -448,3 +448,19 @@ floor precision issue, verified the fix and returned NO BLOCK. No training,
 new final test evaluation, model publication or production promotion occurred.
 Development accuracy remains 31/70 with two classes at zero F1; fresh independent
 rooms and participants remain necessary before a deployment claim.
+
+## Source informed motion candidate
+
+The [ecosystem and industry audit](espfi-ecosystem-research-20261012.md) records
+two frozen selection policies over 24 source only representation candidates.
+Mean fold selection chose local spectra and failed retention. A separately
+declared adaptive followup selecting the worst training fold chose motion
+autocorrelation and differences. Its development accuracy is 39/70 versus
+31/70, macro F1 0.499871 versus 0.383999, and CPU median/p95 is
+0.430715/0.614615 ms versus 0.313720/0.457686 ms in paired timing.
+
+The new model is retained only for research. It is slower and its current
+explicit float64 artifact is larger. One class remains at zero F1 and two
+classes regress. The optimized compact incumbent remains available. The audit
+contains source revisions, all retention checks, full limitations and commands
+to reproduce both policies without opening final test arrays.

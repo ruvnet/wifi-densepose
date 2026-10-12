@@ -31,6 +31,7 @@ CONTRACT = {'seed': 42, 'grid': GRID, 'input': 'nonnegative_amplitude_N52T190',
                                'accuracy_nonregression': True, 'no_additional_zero_f1_classes': True,
                                'paired_p95_limit_ms': 1.0},
             'promotionAuthorized': False}
+ROBUST_CONTRACT = dict(CONTRACT, selection='minimum training-fold macro F1, then mean, then fewer scalars, then declaration order')
 
 
 def motion_features(values, family):
@@ -91,7 +92,8 @@ class MotionBundle:
         if (not isinstance(status, dict) or not isinstance(report, dict)
                 or status.get('status') != 'complete' or status.get('promotionAuthorized') is not False
                 or report.get('status') != 'complete' or report.get('promotionAuthorized') is not False
-                or report.get('contract') != CONTRACT or report.get('task') != 'public_motion_ablation'):
+                or report.get('contract') not in (CONTRACT, ROBUST_CONTRACT)
+                or report.get('task') != 'public_motion_ablation'):
             raise ValueError('Invalid completed motion artifact')
         self.candidate = report['selected']['candidate']
         if self.candidate not in GRID:
@@ -129,9 +131,10 @@ def _validate(parts):
     return folds(parts['train']['identity'], parts['train']['y'])
 
 
-def search(parts, provenance, baseline_directory, baseline_receipt, output, max_seconds=600):
-    if not 1 <= max_seconds <= 3600:
+def search(parts, provenance, baseline_directory, baseline_receipt, output, max_seconds=600, selection='mean'):
+    if not 1 <= max_seconds <= 3600 or selection not in ('mean', 'worst'):
         raise ValueError('Invalid time budget')
+    contract = CONTRACT if selection == 'mean' else ROBUST_CONTRACT
     fold_ids = _validate(parts)
     baseline = BufferedKernelBundle(baseline_directory)
     prior = json.loads(_read(baseline_receipt, 16*1024**2))
@@ -141,7 +144,7 @@ def search(parts, provenance, baseline_directory, baseline_receipt, output, max_
     root = Path(output)
     root.mkdir(exist_ok=False, parents=True)
     write_json(root/'status.json', {'status': 'running', 'promotionAuthorized': False})
-    write_json(root/'search_contract.json', CONTRACT)
+    write_json(root/'search_contract.json', contract)
     start = time.monotonic()
     try:
         train, dev = parts['train'], parts['validation']
@@ -159,10 +162,11 @@ def search(parts, provenance, baseline_directory, baseline_receipt, output, max_
                    'mean_cv_macro_f1': float(np.mean([v['macro_f1'] for v in evaluations])),
                    'scalar_count': sum(v.size for v in state.values())}
             results.append(row)
-            value = (row['mean_cv_macro_f1'], -row['scalar_count'])
+            value = ((min(v['macro_f1'] for v in evaluations) if selection == 'worst'
+                      else row['mean_cv_macro_f1']), row['mean_cv_macro_f1'], -row['scalar_count'])
             if rank is None or value > rank:
                 selected, rank = row, value
-        write_json(root/'selection.json', {'selected': selected, 'candidates': results, 'contract': CONTRACT})
+        write_json(root/'selection.json', {'selected': selected, 'candidates': results, 'contract': contract})
         chosen = selected['candidate']
         state = fit(cache[chosen['family']], train['y'], chosen)
         save_file(state, str(root/'model.safetensors'))
@@ -192,7 +196,7 @@ def search(parts, provenance, baseline_directory, baseline_receipt, output, max_
                   'no_additional_zero_f1_classes': all(b == 0 or a > 0 for a, b in zip(measured['per_class_f1'], incumbent['per_class_f1'])),
                   'p95_under_1ms': timing['candidate']['p95_ms'] < 1.0}
         report = {'status': 'complete', 'promotionAuthorized': False, 'task': 'public_motion_ablation',
-                  'contract': CONTRACT, 'selected': selected, 'candidates': results,
+                  'contract': contract, 'selected': selected, 'candidates': results,
                   'evidence': 'SYNTHETIC' if provenance.get('evidence') == 'SYNTHETIC' else 'MEASURED',
                   'provenance': provenance, 'development': measured, 'incumbent_development': incumbent,
                   'retention_checks': checks, 'retained_as_research_candidate': all(checks.values()),
@@ -220,10 +224,11 @@ def main():
     for arg in ('manifest', 'baseline', 'baseline-receipt', 'output'):
         parser.add_argument('--'+arg, required=True)
     parser.add_argument('--max-seconds', type=int, default=600)
+    parser.add_argument('--selection', choices=('mean', 'worst'), default='mean')
     args = parser.parse_args()
     from .espfi import load_development
     parts, provenance = load_development(args.manifest)
-    report = search(parts, provenance, args.baseline, args.baseline_receipt, args.output, args.max_seconds)
+    report = search(parts, provenance, args.baseline, args.baseline_receipt, args.output, args.max_seconds, args.selection)
     print(json.dumps({k: report[k] for k in ('selected', 'development', 'incumbent_development',
                      'retention_checks', 'retained_as_research_candidate', 'latency', 'model_bytes')}, indent=2))
 
