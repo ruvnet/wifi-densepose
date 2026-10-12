@@ -1,6 +1,6 @@
 # ADR-383: Secure local Mac–iPhone companion pairing
 
-- Status: Accepted decision (2026-10-12); implementation and verification in progress
+- Status: Accepted decision (2026-10-12); implemented; software verified, physical qualification pending
 - Decision owner: product owner, approved in the implementation session
 - Related: ADR-271 (OAuth), ADR-272 (WebSocket tickets); ruview-mobile ADR-046
 
@@ -32,6 +32,9 @@ expiry requires explicit pairing again. A paired phone obtains a 12-hour access
 token, capped by pairing expiry; access tokens and calibration grants are not
 persisted on the server. Restart refresh uses the durable device proof over pinned
 TLS. Permission to calibrate is a separate owner-granted 15-minute capability.
+Only one phone holds calibration authority at a time; granting another phone
+explicitly transfers control and removes the previous grant, while read access
+remains.
 Read authority never authorizes model, recording, configuration or administrator
 mutations. Existing OAuth scope semantics are unchanged.
 
@@ -74,3 +77,13 @@ scope; revocation of live streams; durable restart and corrupt-state behavior;
 shared-room digest parity, revision conflicts and no stale-evidence import; native
 iOS and Mac builds; actual phone–Mac pairing and reconnect. Synthetic tests and
 authenticated transport are not physical sensing or room-selectivity acceptance.
+
+## Implementation evidence (2026-10-12)
+
+Producer PR #2249 and consumer `cognitum-one/ruview-mobile#57` implement this
+contract. The producer package passed 1,143 tests (three existing ignores); the
+compiled debug and release helpers each passed the 26-check real-socket probe.
+The consumer passed 1,547 Jest tests, iOS/Mac builds and production Swift TLS,
+path, recovery and disconnect-race checks. Adversarial review has no remaining
+evidence-backed blocker for PR review. These results do not establish physical
+QR scanning, room controls or distribution acceptance.
