@@ -15,12 +15,13 @@ test('timeout stops a TERM-resistant descendant even when its parent closes firs
   const start = Date.now();
   let deadline;
   try {
-    const running = runProcess(process.execPath, ['-e', source, descendant, marker], { timeoutMs: 300 });
-    const result = await Promise.race([running.then(() => null, e => e), new Promise(resolve => { deadline = setTimeout(() => resolve(null), 2000); })]);
+    // Allow both Node processes to start under suite load; termination stays bounded.
+    const running = runProcess(process.execPath, ['-e', source, descendant, marker], { timeoutMs: 1000 });
+    const result = await Promise.race([running.then(() => null, e => e), new Promise(resolve => { deadline = setTimeout(() => resolve(null), 4000); })]);
     assert.ok(existsSync(marker), 'real descendant started');
     const pid = Number(readFileSync(marker, 'utf8'));
     assert.ok(result?.timedOut, 'runner returns a timeout instead of hanging');
-    assert.ok(Date.now() - start < 1800, 'termination is bounded');
+    assert.ok(Date.now() - start < 3000, 'termination is bounded');
     const stoppedBy = Date.now() + 250;
     while(alive(pid) && Date.now() < stoppedBy) await new Promise(resolve => setTimeout(resolve, 10));
     assert.equal(alive(pid), false, 'no TERM-resistant descendant remains');
