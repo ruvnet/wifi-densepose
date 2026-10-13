@@ -16,12 +16,25 @@ def fixture():
         for activity in range(7):
             for trial in range(10 if split == 'confirmation' else 1):
                 name = f'{split}:{activity}:{trial}'
+                group = {'train': 1, 'development': 2}.get(split, 3 + trial % 2)
                 records.append(dict(id=name, signal_sha256=hashlib.sha256(name.encode()).hexdigest(),
                     source={'dataset':'synthetic', 'revision':'1'}, split=split,
-                    room=f'{split}:room:{trial%2}', participant=f'{split}:person:{trial%2}',
+                    room=f'room:{group}', participant=f'participant:{group}',
                     session=f'{split}:session:{trial%2}', device=f'{split}:device', activity=activity))
     return {'schema_version':1, 'protocol_sha256':'a'*64,
             'claim':'new_room_person_device', 'records':records}, {'schema_version':1,'exposed_sources':[]}
+
+
+def dataset_fixture(manifest):
+    split_map = {'train':'train', 'development':'validation', 'confirmation':'test'}
+    return {'schema_version':1, 'dataset':'synthetic', 'source_revision':'1',
+            'records':[{'signal_sha256':row['signal_sha256'],
+                        'split':split_map[row['split']],
+                        'identity':[int(row['room'].split(':')[1]),
+                                    int(row['participant'].split(':')[1]),
+                                    row['activity'] + 1, index + 1],
+                        'session_id':row['session'], 'device_id':row['device']}
+                       for index,row in enumerate(manifest['records'])]}
 
 
 class ConfirmationTests(unittest.TestCase):
@@ -96,7 +109,7 @@ class ConfirmationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             m,l=fixture();root=Path(d);dataset=root/'dataset.json'
             p=root/'m.json';q=root/'l.json'
-            dataset.write_text('{"schema_version":1}')
+            dataset.write_text(json.dumps(dataset_fixture(m)))
             p.write_text(json.dumps(m));q.write_text(json.dumps(l))
             frozen=regular_sha256(dataset)
             report=training_gate(p,q,dataset,'a'*64,frozen)
@@ -105,6 +118,82 @@ class ConfirmationTests(unittest.TestCase):
             self.assertNotIn('records',report)
             self.assertIn('protocol_digest_mismatch',training_gate(p,q,dataset,'b'*64,frozen)['reasons'])
             self.assertIn('dataset_manifest_digest_mismatch',training_gate(p,q,dataset,'a'*64,'0'*64)['reasons'])
+
+    def test_training_gate_binds_each_dataset_record_field(self):
+        changes = [('signal_sha256','dataset_record_set_mismatch'),
+                   ('source','dataset_source_mismatch'),
+                   ('split','dataset_split_mismatch'),
+                   ('activity','dataset_activity_mismatch'),
+                   ('room','dataset_room_mismatch'),
+                   ('participant','dataset_participant_mismatch'),
+                   ('session','dataset_session_mismatch'),
+                   ('device','dataset_device_mismatch')]
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+            for field,reason in changes:
+                with self.subTest(field=field):
+                    m,l=fixture();dataset=dataset_fixture(m)
+                    if field == 'signal_sha256':
+                        dataset['records'][0]['signal_sha256']='f'*64
+                    elif field == 'source':
+                        m['records'][0]['source']={'dataset':'other','revision':'1'}
+                    elif field == 'split':
+                        dataset['records'][0]['split']='validation'
+                    elif field == 'activity':
+                        dataset['records'][0]['identity'][2]=2 if m['records'][0]['activity'] != 1 else 3
+                    elif field == 'room':
+                        dataset['records'][0]['identity'][0]=8
+                    elif field == 'participant':
+                        dataset['records'][0]['identity'][1]=8
+                    elif field == 'session':
+                        dataset['records'][0]['session_id']='other:session'
+                    else:
+                        dataset['records'][0]['device_id']='other:device'
+                    p=root/'m.json';q=root/'l.json';data=root/'dataset.json'
+                    p.write_text(json.dumps(m));q.write_text(json.dumps(l));data.write_text(json.dumps(dataset))
+                    report=training_gate(p,q,data,'a'*64,regular_sha256(data))
+                    self.assertIn(reason,report['reasons'])
+                    self.assertFalse(report['preflight_passed'])
+
+    def test_training_gate_rejects_duplicate_retained_signal(self):
+        with tempfile.TemporaryDirectory() as d:
+            m,l=fixture();dataset=dataset_fixture(m)
+            dataset['records'][1]['signal_sha256']=dataset['records'][0]['signal_sha256']
+            root=Path(d);p=root/'m';q=root/'l';data=root/'data'
+            p.write_text(json.dumps(m));q.write_text(json.dumps(l));data.write_text(json.dumps(dataset))
+            reasons=training_gate(p,q,data,'a'*64,regular_sha256(data))['reasons']
+            self.assertIn('dataset_duplicate_signal_digest',reasons)
+            self.assertIn('dataset_record_set_mismatch',reasons)
+
+    def test_training_gate_ignores_excluded_dataset_record(self):
+        with tempfile.TemporaryDirectory() as d:
+            m,l=fixture();dataset=dataset_fixture(m)
+            dataset['records'].append({'signal_sha256':'f'*64, 'split':None,
+                                       'identity':[9,9,1,1]})
+            root=Path(d);p=root/'m';q=root/'l';data=root/'data'
+            p.write_text(json.dumps(m));q.write_text(json.dumps(l));data.write_text(json.dumps(dataset))
+            report=training_gate(p,q,data,'a'*64,regular_sha256(data))
+            self.assertTrue(report['preflight_passed'],report['reasons'])
+            self.assertTrue(report['dataset_binding']['exact_record_set'])
+
+    def test_training_gate_rejects_malformed_dataset_binding(self):
+        with tempfile.TemporaryDirectory() as d:
+            m,l=fixture();dataset=dataset_fixture(m);dataset['records'][0]['identity'][2]=True
+            root=Path(d);p=root/'m';q=root/'l';data=root/'data'
+            p.write_text(json.dumps(m));q.write_text(json.dumps(l));data.write_text(json.dumps(dataset))
+            with self.assertRaises(ValueError):
+                training_gate(p,q,data,'a'*64,regular_sha256(data))
+
+    def test_training_gate_fails_closed_without_session_or_device_identity(self):
+        with tempfile.TemporaryDirectory() as d:
+            m,l=fixture();dataset=dataset_fixture(m)
+            for row in dataset['records']:
+                row.pop('session_id');row.pop('device_id')
+            root=Path(d);p=root/'m';q=root/'l';data=root/'data'
+            p.write_text(json.dumps(m));q.write_text(json.dumps(l));data.write_text(json.dumps(dataset))
+            reasons=training_gate(p,q,data,'a'*64,regular_sha256(data))['reasons']
+            self.assertIn('dataset_session_identity_unbound',reasons)
+            self.assertIn('dataset_device_identity_unbound',reasons)
 
     def test_regular_sha256_rejects_unsafe_files(self):
         with tempfile.TemporaryDirectory() as d:

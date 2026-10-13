@@ -378,10 +378,12 @@ def main(argv=None):
     preflight = None
     if gate_enabled:
         from .confirmation import training_gate
+        from .espfi import DATASET, REVISION
         try:
             preflight = training_gate(args.confirmation_manifest, args.exposure_ledger,
                                       args.manifest, args.expected_protocol_sha256,
-                                      args.expected_dataset_manifest_sha256)
+                                      args.expected_dataset_manifest_sha256,
+                                      required_source=(DATASET, REVISION))
         except (ValueError, OSError, TypeError, RecursionError, OverflowError):
             print(json.dumps({'status': 'invalid_input', 'promotionAuthorized': False}))
             raise SystemExit(1)

@@ -14,6 +14,7 @@ import zipfile
 import numpy as np
 
 REVISION = 'c8bf6aa0d680fa02695c85a82b05e79b3ebb10c4'
+DATASET = 'ESP-Fi HAR'
 ARCHIVE_SHA256 = '85f3df633c5b1a48ca4b1423467fce22821b21eeb3eed085a8d9f983dc156660'
 ARCHIVE_BYTES = 644939981
 SOURCE_URL = f'https://media.githubusercontent.com/media/AutoSmartGroup/ESP-Fi-HAR/{REVISION}/ESP-Fi_dataset.rar'
@@ -126,7 +127,7 @@ def prepare(archive, output, pool=5):
     output.mkdir(parents=True)
     target = output / 'amplitudes.npz'
     np.savez_compressed(target, **arrays)
-    manifest = {'schema_version': 1, 'dataset': 'ESP-Fi HAR', 'source_url': SOURCE_URL,
+    manifest = {'schema_version': 1, 'dataset': DATASET, 'source_url': SOURCE_URL,
                 'source_revision': REVISION, 'archive_sha256': ARCHIVE_SHA256,
                 'license': 'CC-BY-4.0', 'license_url': f'https://github.com/AutoSmartGroup/ESP-Fi-HAR/blob/{REVISION}/Model%20Code/DATA_LICENSE.txt',
                 'attribution': 'Wen et al. ESP-Fi HAR. Ad Hoc Networks 186 (2026) 104192. doi:10.1016/j.adhoc.2026.104192',
@@ -164,7 +165,7 @@ def _load_partitions(manifest, splits):
     meta = json.loads(path.read_text())
     if meta.get('schema_version') != 1 or meta.get('classes') != CLASSES:
         raise ValueError('unsupported dataset contract')
-    if (meta.get('source_revision') != REVISION or meta.get('archive_sha256') != ARCHIVE_SHA256
+    if (meta.get('dataset') != DATASET or meta.get('source_revision') != REVISION or meta.get('archive_sha256') != ARCHIVE_SHA256
             or meta.get('source_url') != SOURCE_URL or meta.get('license') != 'CC-BY-4.0'
             or meta.get('split_policy') != 'joint_room_subject_intersection_v1'
             or meta.get('temporal_mean_pool') not in (1, 2, 5, 10, 19, 25, 50, 95)

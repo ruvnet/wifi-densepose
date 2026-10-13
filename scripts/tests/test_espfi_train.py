@@ -13,7 +13,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from csi_training.espfi_train import AmplitudeBundle, AmplitudeClassifier, main, optimize, optimize_bundle, scores
 from csi_training.confirmation import regular_sha256
-from scripts.tests.test_csi_training_confirmation import fixture as confirmation_fixture
+from scripts.tests.test_csi_training_confirmation import dataset_fixture, fixture as confirmation_fixture
 
 
 def fixture():
@@ -116,7 +116,7 @@ class ConfirmationGateIntegrationTests(unittest.TestCase):
         plan, ledger = confirmation_fixture()
         dataset = root / 'dataset.json'
         plan_path, ledger_path = root / 'plan.json', root / 'ledger.json'
-        dataset.write_text('{"schema_version":1}')
+        dataset.write_text(json.dumps(dataset_fixture(plan)))
         plan_path.write_text(json.dumps(plan))
         ledger_path.write_text(json.dumps(ledger))
         return dataset, plan_path, ledger_path
@@ -132,7 +132,8 @@ class ConfirmationGateIntegrationTests(unittest.TestCase):
             root=Path(d);dataset,plan,ledger=self.gate_files(root)
             value=json.loads(plan.read_text());value['records'][-1]['room']=value['records'][0]['room']
             plan.write_text(json.dumps(value))
-            with patch('csi_training.espfi.load_dataset') as load, patch('csi_training.espfi_train.optimize') as train:
+            with patch.multiple('csi_training.espfi',DATASET='synthetic',REVISION='1'), \
+                 patch('csi_training.espfi.load_dataset') as load, patch('csi_training.espfi_train.optimize') as train:
                 with self.assertRaisesRegex(SystemExit, '2'):
                     main(self.argv(root,dataset,plan,ledger))
                 load.assert_not_called();train.assert_not_called()
@@ -144,12 +145,16 @@ class ConfirmationGateIntegrationTests(unittest.TestCase):
             cases=[(self.argv(root,dataset,plan,ledger)[:-2],1),
                    (self.argv(root,dataset,plan,ledger)[:-1]+['0'*64],2)]
             for args,code in cases:
-                with self.subTest(code=code), patch('csi_training.espfi.load_dataset') as load, patch('csi_training.espfi_train.optimize') as train:
+                with self.subTest(code=code), \
+                     patch.multiple('csi_training.espfi',DATASET='synthetic',REVISION='1'), \
+                     patch('csi_training.espfi.load_dataset') as load, \
+                     patch('csi_training.espfi_train.optimize') as train:
                     with self.assertRaisesRegex(SystemExit,str(code)):main(args)
                     load.assert_not_called();train.assert_not_called()
                 self.assertFalse((root/'out').exists())
             plan.write_text('{bad json')
-            with patch('csi_training.espfi.load_dataset') as load, patch('csi_training.espfi_train.optimize') as train:
+            with patch.multiple('csi_training.espfi',DATASET='synthetic',REVISION='1'), \
+                 patch('csi_training.espfi.load_dataset') as load, patch('csi_training.espfi_train.optimize') as train:
                 with self.assertRaisesRegex(SystemExit,'1'):
                     main(self.argv(root,dataset,plan,ledger))
                 load.assert_not_called();train.assert_not_called()
@@ -181,15 +186,39 @@ class ConfirmationGateIntegrationTests(unittest.TestCase):
             root=Path(d);dataset,plan,ledger=self.gate_files(root)
             args=self.argv(root,dataset,plan,ledger)
             args[args.index('--expected-protocol-sha256')+1]='b'*64
-            with patch('csi_training.espfi.load_dataset') as load, patch('csi_training.espfi_train.optimize') as train:
+            with patch.multiple('csi_training.espfi',DATASET='synthetic',REVISION='1'), \
+                 patch('csi_training.espfi.load_dataset') as load, \
+                 patch('csi_training.espfi_train.optimize') as train:
                 with self.assertRaisesRegex(SystemExit,'2'):main(args)
                 load.assert_not_called();train.assert_not_called()
+
+    def test_record_binding_mismatch_never_loads(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);dataset,plan,ledger=self.gate_files(root)
+            value=json.loads(dataset.read_text());value['records'][0]['split']='validation'
+            dataset.write_text(json.dumps(value))
+            with patch.multiple('csi_training.espfi',DATASET='synthetic',REVISION='1'), \
+                 patch('csi_training.espfi.load_dataset') as load, patch('csi_training.espfi_train.optimize') as train:
+                with self.assertRaisesRegex(SystemExit,'2'):
+                    main(self.argv(root,dataset,plan,ledger))
+                load.assert_not_called();train.assert_not_called()
+            self.assertFalse((root/'out').exists())
+
+    def test_canonical_source_mismatch_never_loads(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);dataset,plan,ledger=self.gate_files(root)
+            with patch('csi_training.espfi.load_dataset') as load, patch('csi_training.espfi_train.optimize') as train:
+                with self.assertRaisesRegex(SystemExit,'2'):
+                    main(self.argv(root,dataset,plan,ledger))
+                load.assert_not_called();train.assert_not_called()
+            self.assertFalse((root/'out').exists())
 
     def test_manifest_race_stops_before_training(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);dataset,plan,ledger=self.gate_files(root)
             parts,provenance=fixture();provenance['manifest_sha256']='f'*64
-            with patch('csi_training.espfi.load_dataset',return_value=(parts,provenance)) as load, \
+            with patch.multiple('csi_training.espfi',DATASET='synthetic',REVISION='1'), \
+                 patch('csi_training.espfi.load_dataset',return_value=(parts,provenance)) as load, \
                  patch('csi_training.espfi_train.optimize') as train:
                 with self.assertRaisesRegex(ValueError,'changed'):
                     main(self.argv(root,dataset,plan,ledger))
@@ -209,7 +238,8 @@ class ConfirmationGateIntegrationTests(unittest.TestCase):
             root=Path(d);dataset,plan,ledger=self.gate_files(root)
             parts,provenance=fixture();provenance['manifest_sha256']=regular_sha256(dataset)
             report={'variant':'statistics','test':{},'latency':{},'promotionAuthorized':False}
-            with patch('csi_training.espfi.load_dataset',return_value=(parts,provenance)) as load, \
+            with patch.multiple('csi_training.espfi',DATASET='synthetic',REVISION='1'), \
+                 patch('csi_training.espfi.load_dataset',return_value=(parts,provenance)) as load, \
                  patch('csi_training.espfi_train.optimize',return_value=report) as train:
                 main(self.argv(root,dataset,plan,ledger))
                 load.assert_called_once();train.assert_called_once()

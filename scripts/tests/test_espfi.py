@@ -83,7 +83,7 @@ class EspfiTests(unittest.TestCase):
                             'signal_sha256': selected.get(i, hashlib.sha256(str(i).encode()).hexdigest())})
         npz = Path(tmp) / 'amplitudes.npz'
         np.savez_compressed(npz, **arrays)
-        meta = dict(schema_version=1, classes=espfi.CLASSES, source_revision=espfi.REVISION,
+        meta = dict(schema_version=1, dataset=espfi.DATASET, classes=espfi.CLASSES, source_revision=espfi.REVISION,
                     source_url=espfi.SOURCE_URL, archive_sha256=espfi.ARCHIVE_SHA256,
                     license='CC-BY-4.0', split_policy='joint_room_subject_intersection_v1',
                     temporal_mean_pool=95, window_samples=10, records=records,
@@ -147,6 +147,16 @@ class EspfiTests(unittest.TestCase):
             p.write_text(json.dumps({'schema_version': 1, 'classes': espfi.CLASSES}))
             with self.assertRaisesRegex(ValueError, 'provenance'):
                 espfi.load_dataset(p)
+
+    def test_loader_rejects_source_alias(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest, _, _, meta = self.fixture(tmp)
+            for value in (None, 'renamed-source'):
+                with self.subTest(value=value):
+                    meta['dataset'] = value
+                    manifest.write_text(json.dumps(meta))
+                    with self.assertRaisesRegex(ValueError, 'provenance'):
+                        espfi.load_dataset(manifest)
 
 
 if __name__ == '__main__':

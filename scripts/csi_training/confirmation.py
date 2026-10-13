@@ -113,45 +113,111 @@ def _pairs(pairs):
     return result
 
 
-def read_json(path):
-    if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_NONBLOCK'):
+def _read_regular(path, maximum):
+    if (type(maximum) is not int or not 1 <= maximum <= 16 * 1024 * 1024
+            or not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_NONBLOCK')):
         raise ValueError('Safe file intake unavailable on this platform')
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, 'rb') as handle:
         info = os.fstat(handle.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BYTES:
+        if not stat.S_ISREG(info.st_mode) or info.st_size > maximum:
             raise ValueError('Expected bounded regular file')
-        raw = handle.read(MAX_BYTES + 1)
-    if len(raw) > MAX_BYTES: raise ValueError('Input too large')
+        raw = handle.read(info.st_size + 1)
+    if len(raw) != info.st_size:
+        raise ValueError('File changed during read')
+    return raw
+
+
+def read_json_and_sha256(path, maximum=MAX_BYTES):
+    raw = _read_regular(path, maximum)
     def invalid(value): raise ValueError('Nonfinite JSON constant')
-    return json.loads(raw, object_pairs_hook=_pairs, parse_constant=invalid)
+    return (json.loads(raw, object_pairs_hook=_pairs, parse_constant=invalid),
+            hashlib.sha256(raw).hexdigest())
+
+
+def read_json(path):
+    return read_json_and_sha256(path)[0]
 
 
 def regular_sha256(path, maximum=MAX_DATASET_MANIFEST_BYTES):
     """Hash one bounded regular file through the descriptor that was checked."""
-    if (type(maximum) is not int or not 1 <= maximum <= 16 * 1024 * 1024
-            or not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_NONBLOCK')):
-        raise ValueError('Safe file hashing unavailable')
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    digest_value = hashlib.sha256()
-    with os.fdopen(fd, 'rb') as handle:
-        info = os.fstat(handle.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_size > maximum:
-            raise ValueError('Expected bounded regular file')
-        remaining = info.st_size
-        while remaining:
-            block = handle.read(min(1024 * 1024, remaining))
-            if not block:
-                raise ValueError('File changed during hashing')
-            digest_value.update(block)
-            remaining -= len(block)
-        if handle.read(1):
-            raise ValueError('File changed during hashing')
-    return digest_value.hexdigest()
+    return hashlib.sha256(_read_regular(path, maximum)).hexdigest()
+
+
+def _dataset_binding(manifest, dataset, required_source=None):
+    """Bind declared confirmation records to a supervised ESP-Fi manifest."""
+    if type(dataset) is not dict:
+        raise ValueError('Dataset manifest must be an object')
+    if type(dataset.get('schema_version')) is not int or dataset['schema_version'] != 1:
+        raise ValueError('Unsupported dataset manifest version')
+    dataset_name = dataset.get('dataset')
+    revision = dataset.get('source_revision')
+    if type(dataset_name) is not str or not 1 <= len(dataset_name) <= 128:
+        raise ValueError('Invalid dataset identity')
+    token(revision)
+    dataset_source = (dataset_name, revision)
+    records = dataset.get('records')
+    if type(records) is not list or not 1 <= len(records) <= MAX_RECORDS:
+        raise ValueError('Invalid dataset record count')
+    split_map = {'train': 'train', 'validation': 'development', 'test': 'confirmation'}
+    retained, duplicates = {}, False
+    for row in records:
+        if type(row) is not dict or row.get('split') not in (*split_map, None):
+            raise ValueError('Invalid dataset record')
+        signal = digest(row.get('signal_sha256'))
+        identity = row.get('identity')
+        if (type(identity) is not list or len(identity) != 4
+                or any(type(value) is not int for value in identity)
+                or not 1 <= identity[2] <= 7):
+            raise ValueError('Invalid dataset identity tuple')
+        if row['split'] is not None:
+            if signal in retained:
+                duplicates = True
+            retained[signal] = row
+    planned = {row['signal_sha256']: row for row in manifest['records']}
+    common = set(retained) & set(planned)
+    reasons = set()
+    if required_source is not None:
+        if (type(required_source) is not tuple or len(required_source) != 2
+                or type(required_source[0]) is not str or type(required_source[1]) is not str):
+            raise ValueError('Invalid required source')
+        if dataset_source != required_source:
+            reasons.add('canonical_dataset_source_mismatch')
+    if duplicates:
+        reasons.add('dataset_duplicate_signal_digest')
+    if set(retained) != set(planned):
+        reasons.add('dataset_record_set_mismatch')
+    expected_source = dataset_source
+    for signal in common:
+        plan, row = planned[signal], retained[signal]
+        if source(plan['source']) != expected_source:
+            reasons.add('dataset_source_mismatch')
+        if plan['split'] != split_map[row['split']]:
+            reasons.add('dataset_split_mismatch')
+        if plan['activity'] != row['identity'][2] - 1:
+            reasons.add('dataset_activity_mismatch')
+        if plan['room'] != 'room:' + str(row['identity'][0]):
+            reasons.add('dataset_room_mismatch')
+        if plan['participant'] != 'participant:' + str(row['identity'][1]):
+            reasons.add('dataset_participant_mismatch')
+        session = row.get('session_id')
+        if session is None:
+            reasons.add('dataset_session_identity_unbound')
+        elif plan['session'] != token(session):
+            reasons.add('dataset_session_mismatch')
+        if manifest['claim'].endswith('_device'):
+            device = row.get('device_id')
+            if device is None:
+                reasons.add('dataset_device_identity_unbound')
+            elif plan['device'] != token(device):
+                reasons.add('dataset_device_mismatch')
+    return reasons, {'retained_records': len(retained), 'planned_records': len(planned),
+                     'matched_records': len(common), 'exact_record_set': set(retained) == set(planned)}
 
 
 def training_gate(manifest_path, ledger_path, dataset_manifest_path,
-                  expected_protocol_sha256, expected_dataset_manifest_sha256):
+                  expected_protocol_sha256, expected_dataset_manifest_sha256,
+                  required_source=None):
     """Evaluate declared metadata and bind it to frozen protocol/dataset bytes.
 
     This remains a metadata gate. It does not authenticate captures, consent,
@@ -159,19 +225,23 @@ def training_gate(manifest_path, ledger_path, dataset_manifest_path,
     """
     digest(expected_protocol_sha256)
     digest(expected_dataset_manifest_sha256)
-    report = evaluate(read_json(manifest_path), read_json(ledger_path))
+    manifest = read_json(manifest_path)
+    report = evaluate(manifest, read_json(ledger_path))
     reasons = set(report['reasons'])
     if report['protocol_sha256'] != expected_protocol_sha256:
         reasons.add('protocol_digest_mismatch')
-    actual = regular_sha256(dataset_manifest_path)
+    dataset, actual = read_json_and_sha256(dataset_manifest_path, MAX_DATASET_MANIFEST_BYTES)
     if actual != expected_dataset_manifest_sha256:
         reasons.add('dataset_manifest_digest_mismatch')
+    binding_reasons, binding = _dataset_binding(manifest, dataset, required_source)
+    reasons.update(binding_reasons)
     result = dict(report)
     result.update({'preflight_passed': not reasons,
                    'reasons': sorted(reasons),
                    'dataset_manifest_sha256': actual,
                    'expected_dataset_manifest_sha256': expected_dataset_manifest_sha256,
-                   'scope': report['scope'] + ' Dataset bytes are hash-pinned; provenance claims remain unauthenticated.'})
+                   'dataset_binding': binding,
+                   'scope': report['scope'] + ' Dataset records and bytes are bound to declarations; provenance claims remain unauthenticated.'})
     return result
 
 

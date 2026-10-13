@@ -17,7 +17,16 @@ trainer. The mode requires a complete metadata plan, exposure ledger, frozen
 protocol SHA-256 and frozen dataset-manifest SHA-256. Before importing the
 dataset loader, decoding data, creating output, or training, the gate validates
 bounded regular files, leakage declarations, exposure history, coverage, and
-both frozen hashes. Invalid input exits 1; valid but blocked evidence exits 2.
+both frozen hashes. It also requires the plan and dataset manifest to have the
+same retained signal-digest set, canonical dataset/revision, partition mapping
+(`train`, `validation`, `test` to `train`, `development`, `confirmation`) and
+numeric activity IDs. Room and participant declarations bind to the loader's
+numeric source identities using canonical `room:N` and `participant:N` tokens.
+Session and, when claimed, device identifiers must also exist in the dataset
+manifest and match; missing provenance blocks the gate. Trial number is not
+treated as a physical session. This binds supplied declarations to the exact
+records the supervised loader will consume without assigning activity semantics. Invalid
+input exits 1; valid but blocked evidence exits 2.
 The dataset loader's returned manifest digest is checked again before training.
 Confirmation mode cannot optimize an existing bundle and every receipt remains
 `promotionAuthorized: false`.
@@ -30,10 +39,15 @@ the legacy training path.
 ## Consequences
 
 This closes accidental gate bypass within the selected mode and binds the
-declared review to exact manifest bytes. It does not authenticate captures,
+declared review to exact manifest bytes and retained record identities. It does not authenticate captures,
 consent, licenses, aliases, stable physical identities, or exposure-ledger
 completeness. The inputs are unsigned. The manifest hash binds declarations and
 referenced payload hashes, not provenance truth. A concurrent manifest change
 may be decoded before the loader's digest mismatch aborts, although it cannot
 reach training. Passing software tests makes no sensing-accuracy claim.
+
+The current ESP-Fi adapter pins the canonical dataset name and source revision,
+but its upstream records do not establish physical session or device identity.
+Together with its prior exposure, this makes it correctly ineligible for an
+independent-confirmation run even when its file hashes are intact.
 
