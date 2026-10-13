@@ -1,0 +1,52 @@
+{
+  "decision": "INCONCLUSIVE",
+  "date": "2026-10-13",
+  "hypothesis": "Compact export lineage and retention metadata must remain bound to the exact baseline receipt and model bytes admitted by MotionBundle, even if the source paths change after validation.",
+  "baseline": {
+    "commit": "8282a6b21e83756f636d377c4fe5be4a1e489792",
+    "tree": "6a4e65ec1dc9d22e946c6a39978ee6e291543201",
+    "source_sha256": {
+      "scripts/csi_training/espfi_motion.py": "c6a8529ccf9d9f834383a2bdf5b14626764ec7ca2ade7ad5d4c1c14797d76054",
+      "scripts/csi_training/espfi_motion_compact.py": "8da946e1c575ae20b96dc3fdb229bb85cdc5054f6c2efb774aca506773770c2e",
+      "scripts/tests/test_espfi_motion_compact.py": "109031ec230bb0aeadd26acabe2f5c119d714b4c71f9fc28351cf801176c65c5"
+    },
+    "adversarial_result": "FAIL: a forged second receipt read changed emitted parent lineage"
+  },
+  "candidate_source_sha256": {
+    "scripts/csi_training/espfi_motion.py": "25d4f84e16c0b699654caef5c19614ef1d23c7ef0cc1e224e931cc5b95195b63",
+    "scripts/csi_training/espfi_motion_compact.py": "33886d88705410646787a73b05474e36e50be0d4a26535147a1a3bfaddd4b037",
+    "scripts/tests/test_espfi_motion_compact.py": "68b562b1e31ef21ce1db10457f0965d5a882e853e3d8aa40240e82fc47a798e3"
+  },
+  "data_and_split_policy": "No dataset, split, preprocessing, model weights, thresholds, predictions, or final-test payloads were read or changed.",
+  "acceptance": {
+    "adversarial_lineage_and_size_test": "PASS",
+    "focused_compact_tests": "4/4 PASS",
+    "motion_regression_tests": "40/40 PASS",
+    "broader_csi_tests": "72 PASS; collection stopped on missing local optional h5py dependency",
+    "diff_check": "PASS",
+    "independent_security_review": "NO BLOCK",
+    "hosted_ci": "PENDING"
+  },
+  "load_benchmark": {
+    "workload": "500 alternating loads after 20 warmups; 100 traced loads per arm",
+    "baseline": {
+      "p50_ms": 0.974565,
+      "p95_ms": 1.322553,
+      "peak_bytes": 16793369
+    },
+    "candidate": {
+      "p50_ms": 0.98026,
+      "p95_ms": 1.285652,
+      "peak_bytes": 16793409
+    },
+    "frozen_gate": "candidate p95 <= max(1.2 * baseline p95, baseline p95 + 0.1 ms) and peak <= baseline + 4096 bytes",
+    "result": "PASS"
+  },
+  "security_scope": {
+    "fixed": "Parent receipt hash, model hash, model byte count, and retention gate use the exact buffers validated by MotionBundle.",
+    "residual": "Initial multi-path intake is not an authenticated atomic directory snapshot; coherent pre-validation substitution remains outside this patch."
+  },
+  "cost": "Existing authorized ruOS CPU only; monetary cost unknown.",
+  "rollback": "Revert the containing commit.",
+  "next_action": "Require terminal hosted CI at the exact published head before accepting the candidate."
+}

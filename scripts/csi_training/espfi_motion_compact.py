@@ -89,10 +89,8 @@ def export(parts, provenance, baseline_directory, output, max_seconds=600):
         raise ValueError('Invalid time budget')
     _validate(parts)
     baseline = MotionBundle(baseline_directory)
-    prior_bytes = _read(Path(baseline_directory)/'metrics.json',16*1024**2)
-    prior = json.loads(prior_bytes)
     if (baseline.candidate != BASELINE or not provenance.get('manifest_sha256')
-            or prior.get('provenance',{}).get('manifest_sha256') != provenance['manifest_sha256']):
+            or baseline._verified_manifest_sha256 != provenance['manifest_sha256']):
         raise ValueError('Baseline candidate or provenance mismatch')
     root = Path(output)
     root.mkdir(parents=True, exist_ok=False)
@@ -148,15 +146,15 @@ def export(parts, provenance, baseline_directory, output, max_seconds=600):
                 timings[name].append((time.perf_counter_ns()-before)/1e6)
         latency = {k:{'p50_ms':float(np.percentile(v,50)),'p95_ms':float(np.percentile(v,95))} for k,v in timings.items()}
         size = (root/'model.safetensors').stat().st_size
-        old_size = (Path(baseline_directory)/'model.safetensors').stat().st_size
+        old_size = baseline._verified_model_bytes
         checks = {'model_below_10percent':size<.1*old_size,
                   'parity_all_admitted':True,
                   'p95_within_5percent':latency['candidate']['p95_ms']<=1.05*latency['incumbent']['p95_ms']}
         metadata = {'status':'complete','promotionAuthorized':False,'spec':SPEC,
                     'model_sha256':digest(root/'model.safetensors'),
                     'random_map_sha256':{k:tensor_hash(v) for k,v in generated.items()},
-                    'baseline_model_sha256':prior['model_sha256'],
-                    'baseline_receipt_sha256':hashlib.sha256(prior_bytes).hexdigest(),
+                    'baseline_model_sha256':baseline._verified_model_sha256,
+                    'baseline_receipt_sha256':baseline._verified_receipt_sha256,
                     'provenance':{'manifest_sha256':provenance['manifest_sha256']}}
         report = dict(metadata, provenance=provenance, evidence='SYNTHETIC' if provenance.get('evidence')=='SYNTHETIC' else 'MEASURED',
                       parity=parity,latency=latency,model_bytes=size,baseline_model_bytes=old_size,

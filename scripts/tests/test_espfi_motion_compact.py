@@ -1,9 +1,11 @@
 """Synthetic storage and numerical-parity contracts, not sensing evidence."""
+import hashlib
 import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import numpy as np
 from safetensors.numpy import load, save_file
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -12,6 +14,7 @@ from csi_training.espfi_motion import MotionBundle
 from csi_training.espfi_train import digest, write_json
 from test_espfi_context import make_baseline
 from test_espfi_generalize import fixture
+import csi_training.espfi_motion_compact as compact_module
 
 
 class CompactMotionTests(unittest.TestCase):
@@ -103,6 +106,44 @@ class CompactMotionTests(unittest.TestCase):
             write_json(status_path,status)
             with self.assertRaisesRegex(ValueError,'Invalid compact'):
                 CompactMotionBundle(root/'compact')
+
+    def test_export_parent_lineage_uses_verified_baseline_generation(self):
+        parts,provenance=fixture()
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            baseline=root/'baseline'
+            make_baseline(parts,provenance,baseline)
+            expected_model=digest(baseline/'model.safetensors')
+            expected_receipt=digest(baseline/'metrics.json')
+            expected_model_bytes=(baseline/'model.safetensors').stat().st_size
+            forged=json.loads((baseline/'metrics.json').read_text())
+            forged['model_sha256']='f'*64
+            forged_bytes=json.dumps(forged,separators=(',',':'),sort_keys=True).encode()
+            forged_receipt=hashlib.sha256(forged_bytes).hexdigest()
+            real_read=compact_module._read
+            injected=[]
+            swapped=[]
+
+            def replace_second_receipt(path,limit):
+                if Path(path)==baseline/'metrics.json':
+                    injected.append(Path(path))
+                    return forged_bytes
+                result=real_read(path,limit)
+                if Path(path)==root/'compact'/'model.safetensors' and not swapped:
+                    (baseline/'model.safetensors').write_bytes(b'x')
+                    swapped.append(Path(path))
+                return result
+
+            with patch.object(compact_module,'_read',side_effect=replace_second_receipt):
+                report=export(parts,provenance,baseline,root/'compact')
+            metadata=json.loads((root/'compact'/'metadata.json').read_text())
+            self.assertEqual(injected,[])
+            self.assertEqual(len(swapped),1)
+            self.assertEqual(metadata['baseline_model_sha256'],expected_model)
+            self.assertEqual(metadata['baseline_receipt_sha256'],expected_receipt)
+            self.assertNotEqual(metadata['baseline_receipt_sha256'],forged_receipt)
+            self.assertEqual(report['baseline_model_bytes'],expected_model_bytes)
+            self.assertTrue(report['retention_checks']['model_below_10percent'])
 
 if __name__=='__main__':
     unittest.main()
