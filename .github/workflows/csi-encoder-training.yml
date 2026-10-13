@@ -19,6 +19,7 @@ on:
       - 'scripts/requirements-espfi-training.txt'
       - 'scripts/requirements-espfi-inference.txt'
       - 'scripts/requirements-csi-training.txt'
+      - 'scripts/requirements-zenodo-intake.txt'
       - 'scripts/tests/test_csi_training*.py'
       - 'scripts/tests/test_espfi*.py'
       - '.github/workflows/csi-encoder-training.yml'
@@ -43,6 +44,7 @@ jobs:
           python -m pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
           python -m pip install -r scripts/requirements-csi-training.txt
           python -m pip install -r scripts/requirements-espfi-training.txt
+          python -m pip install -r scripts/requirements-zenodo-intake.txt
       - name: Validate real training code using temporary synthetic data
         env:
           PYTHONPATH: scripts
