@@ -391,7 +391,10 @@ def main(argv=None):
             print(json.dumps(preflight, sort_keys=True))
             raise SystemExit(2)
     from .espfi import load_dataset
-    partitions, provenance = load_dataset(args.manifest)
+    partitions, provenance = load_dataset(
+        args.manifest,
+        expected_manifest_sha256=(preflight['dataset_manifest_sha256']
+                                  if preflight else None))
     if preflight:
         if provenance.get('manifest_sha256') != preflight['dataset_manifest_sha256']:
             raise ValueError('Dataset manifest changed after confirmation preflight')

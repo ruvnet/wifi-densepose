@@ -143,9 +143,10 @@ def prepare(archive, output, pool=5):
     return path
 
 
-def load_dataset(manifest):
+def load_dataset(manifest, expected_manifest_sha256=None):
     """Load all partitions for a final frozen evaluation, including test signals."""
-    return _load_partitions(manifest, ('train', 'validation', 'test'))
+    return _load_partitions(manifest, ('train', 'validation', 'test'),
+                            expected_manifest_sha256)
 
 
 def load_development(manifest):
@@ -158,11 +159,25 @@ def load_development(manifest):
     return _load_partitions(manifest, ('train', 'validation'))
 
 
-def _load_partitions(manifest, splits):
-    path = Path(manifest).resolve()
-    if path.stat().st_size > 3_000_000:
-        raise ValueError('manifest too large')
-    meta = json.loads(path.read_text())
+def _load_partitions(manifest, splits, expected_manifest_sha256=None):
+    supplied_path = Path(manifest)
+    if expected_manifest_sha256 is not None:
+        from .confirmation import (MAX_DATASET_MANIFEST_BYTES, digest as checked_digest,
+                                   read_json_and_sha256)
+        checked_digest(expected_manifest_sha256)
+        meta, manifest_sha256 = read_json_and_sha256(
+            supplied_path, MAX_DATASET_MANIFEST_BYTES)
+        if manifest_sha256 != expected_manifest_sha256:
+            raise ValueError('Dataset manifest changed after confirmation preflight')
+        # The final manifest component is not reopened. Parent directories remain
+        # a trusted deployment boundary for resolving the referenced NPZ.
+        path = supplied_path.parent.resolve() / supplied_path.name
+    else:
+        path = supplied_path.resolve()
+        if path.stat().st_size > 3_000_000:
+            raise ValueError('manifest too large')
+        meta = json.loads(path.read_text())
+        manifest_sha256 = digest(path)
     if meta.get('schema_version') != 1 or meta.get('classes') != CLASSES:
         raise ValueError('unsupported dataset contract')
     if (meta.get('dataset') != DATASET or meta.get('source_revision') != REVISION or meta.get('archive_sha256') != ARCHIVE_SHA256
@@ -248,7 +263,7 @@ def _load_partitions(manifest, splits):
                        for s in ('train', 'validation', 'test')}
     if meta.get('counts') != expected_counts:
         raise ValueError('split counts mismatch')
-    meta['manifest_sha256'] = digest(path)
+    meta['manifest_sha256'] = manifest_sha256
     meta['loaded_partitions'] = list(splits)
     return parts, meta
 

@@ -242,7 +242,9 @@ class ConfirmationGateIntegrationTests(unittest.TestCase):
                  patch('csi_training.espfi.load_dataset',return_value=(parts,provenance)) as load, \
                  patch('csi_training.espfi_train.optimize',return_value=report) as train:
                 main(self.argv(root,dataset,plan,ledger))
-                load.assert_called_once();train.assert_called_once()
+                load.assert_called_once_with(
+                    str(dataset), expected_manifest_sha256=regular_sha256(dataset))
+                train.assert_called_once()
                 attached=train.call_args.args[1]['confirmation_preflight']
                 self.assertTrue(attached['preflight_passed'])
                 self.assertFalse(attached['promotionAuthorized'])

@@ -27,7 +27,9 @@ manifest and match; missing provenance blocks the gate. Trial number is not
 treated as a physical session. This binds supplied declarations to the exact
 records the supervised loader will consume without assigning activity semantics. Invalid
 input exits 1; valid but blocked evidence exits 2.
-The dataset loader's returned manifest digest is checked again before training.
+The dataset loader parses and hashes the manifest through one checked descriptor,
+then compares that digest before resolving or decoding the referenced dataset
+bundle. Its returned digest is checked again before training.
 Confirmation mode cannot optimize an existing bundle and every receipt remains
 `promotionAuthorized: false`.
 
@@ -42,9 +44,10 @@ This closes accidental gate bypass within the selected mode and binds the
 declared review to exact manifest bytes and retained record identities. It does not authenticate captures,
 consent, licenses, aliases, stable physical identities, or exposure-ledger
 completeness. The inputs are unsigned. The manifest hash binds declarations and
-referenced payload hashes, not provenance truth. A concurrent manifest change
-may be decoded before the loader's digest mismatch aborts, although it cannot
-reach training. Passing software tests makes no sensing-accuracy claim.
+referenced payload hashes, not provenance truth. Parent directories remain a
+trusted deployment boundary, and the separately referenced NPZ still has its
+own digest/open race boundary. Passing software tests makes no sensing-accuracy
+claim.
 
 The current ESP-Fi adapter pins the canonical dataset name and source revision,
 but its upstream records do not establish physical session or device identity.

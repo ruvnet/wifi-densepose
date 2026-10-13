@@ -105,6 +105,31 @@ class EspfiTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'provenance'):
                 espfi.load_dataset(manifest)
 
+    def test_expected_manifest_hash_checked_before_bundle_decode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest, _, _, _ = self.fixture(tmp)
+            expected = espfi.digest(manifest)
+            _, provenance = espfi.load_dataset(
+                manifest, expected_manifest_sha256=expected)
+            self.assertEqual(provenance['manifest_sha256'], expected)
+            manifest.write_bytes(manifest.read_bytes() + b' ')
+            with patch('csi_training.espfi.zipfile.ZipFile') as archive, \
+                 patch('csi_training.espfi.np.load') as load:
+                with self.assertRaisesRegex(ValueError, 'changed'):
+                    espfi.load_dataset(manifest, expected_manifest_sha256=expected)
+                archive.assert_not_called();load.assert_not_called()
+
+    def test_expected_manifest_hash_rejects_symlink_before_bundle_decode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest, _, _, _ = self.fixture(tmp)
+            expected = espfi.digest(manifest)
+            link = Path(tmp) / 'manifest-link.json'
+            link.symlink_to(manifest)
+            with patch('csi_training.espfi.np.load') as load:
+                with self.assertRaises(OSError):
+                    espfi.load_dataset(link, expected_manifest_sha256=expected)
+                load.assert_not_called()
+
     def test_development_never_deserializes_test_arrays(self):
         with tempfile.TemporaryDirectory() as tmp:
             manifest, _, _, _ = self.fixture(tmp)
