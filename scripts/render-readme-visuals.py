@@ -5,7 +5,8 @@ from html import escape
 import math,json
 from readme_visuals_xml import parse_svg
 ROOT=Path(__file__).resolve().parents[1];OUT=ROOT/'assets/readme';OUT.mkdir(parents=True,exist_ok=True)
-C='#72eee0';BLUE='#70b6ff';INK='#041117';WHITE='#ecfafb';MUTED='#9abac5'
+C='#78cfff';BLUE='#438fff';INK='#071124';WHITE='#f3f7ff';MUTED='#b0c2db'
+LIME='#b8f36c';AMBER='#ffb45e'
 def text(x,y,value,size=16,color=MUTED,anchor='start',extra=''):
  weight='font-weight="650" letter-spacing="-0.6"' if size>=25 else 'font-weight="500"'
  return f'<text x="{x}" y="{y}" font-size="{size}" fill="{color}" text-anchor="{anchor}" {weight} {extra}>{escape(value)}</text>'
@@ -21,12 +22,13 @@ def icon(kind,x,y,scale=1):
   for r in [13,25,38]:s+=path(f'M{-r*.8} {-r*.4}Q0 {-r*1.4} {r*.8} {-r*.4}',extra=f'class="breathe" style="animation-delay:-{r/20}s"')
   s+=circle(0,20,4,extra='fill="#72eee0"')+path('M0 12V-1')
  elif kind in ['presence','pose']:
-  s+=circle(0,-28,8)+path('M0 -20V12M-24 -6L0 -14L24 -6M0 12L-18 38M0 12L18 38',width=2)
+  s+=circle(0,-28,8,LIME)+path('M0 -20V12M-24 -6L0 -14L24 -6M0 12L-18 38M0 12L18 38',LIME,width=2)
+  for px,py in [(0,-14),(0,12),(-24,-6),(24,-6)]:s+=circle(px,py,2.3,AMBER,extra=f'fill="{AMBER}" class="spark"')
   if kind=='pose':
-   for px,py in [(0,-14),(0,12),(-24,-6),(24,-6),(-18,38),(18,38)]:s+=circle(px,py,3,BLUE,extra='fill="#041117" class="breathe"')
+   for px,py in [(-18,38),(18,38)]:s+=circle(px,py,3,AMBER,extra='fill="#041117" class="breathe"')
   else:s+=f'<ellipse cx="0" cy="14" rx="40" ry="13" fill="none" stroke="{BLUE}" stroke-dasharray="3 8" class="flow"/>'
  elif kind in ['vitals','models']:
-  s+=path('M-42 6H-27L-18 -10L-9 25L3 -25L14 10L24 -3L31 6H43',width=2,extra='class="trace"')+path('M-42 31H43','#214451',1)
+  s+=path('M-42 6H-27L-18 -10L-9 25L3 -25L14 10L24 -3L31 6H43',LIME,width=2,extra='class="trace"')+path('M-42 31H43','#214451',1)
  elif kind in ['edge','hardware']:
   s+='<rect x="-25" y="-25" width="50" height="50" rx="7" fill="#0a2630" stroke="#72eee0"/>'
   s+='<rect x="-13" y="-13" width="26" height="26" rx="3" fill="none" stroke="#70b6ff"/>'
@@ -55,6 +57,7 @@ def spatial(x,y,scale=1):
  for px,py in [(-40,6),(0,-15),(40,6),(-20,30),(20,30),(0,49)]:
   s+=circle(px,py,2,BLUE,extra='fill="#70b6ff" class="spark"')
  s+='<g class="orbit"><ellipse cx="0" cy="4" rx="102" ry="30" fill="none" stroke="#70b6ff" stroke-opacity=".4" stroke-dasharray="2 8"/><circle cx="102" cy="4" r="4" fill="#91f6df"/></g>'
+ s+='<ellipse cx="0" cy="36" rx="85" ry="28" fill="none" stroke="#70b6ff" class="wave"/>'
  return f'<g transform="translate({x} {y}) scale({scale})">{s}</g>'
 def _frame(w,h,title,desc,body):
  return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" role="img" aria-labelledby="title desc"><title id="title">{escape(title)}</title><desc id="desc">{escape(desc)}</desc><defs><linearGradient id="wash" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0b303a"/><stop offset=".55" stop-color="#06171e"/><stop offset="1" stop-color="#030c13"/></linearGradient><linearGradient id="accent"><stop stop-color="#91f6df"/><stop offset="1" stop-color="#26bad7"/></linearGradient><radialGradient id="halo"><stop stop-color="#35d4db" stop-opacity=".17"/><stop offset="1" stop-color="#35d4db" stop-opacity="0"/></radialGradient></defs><style>text{{font-family:Arial,Helvetica,sans-serif}}.mono{{font-family:ui-monospace,Consolas,monospace;letter-spacing:2px}}.flow{{stroke-dasharray:5 12;animation:flow 12s linear infinite}}.breathe{{animation:breathe 6s ease-in-out infinite}}.trace{{stroke-dasharray:400;stroke-dashoffset:0;animation:trace 10s ease-in-out infinite}}.float{{animation:float 9s ease-in-out infinite}}@keyframes flow{{to{{stroke-dashoffset:-136}}}}@keyframes breathe{{50%{{opacity:.4}}}}@keyframes trace{{0%,100%{{stroke-dashoffset:0}}50%{{stroke-dashoffset:90}}}}@keyframes float{{50%{{transform:translateY(-6px)}}}}@media(prefers-reduced-motion:reduce){{*{{animation:none!important}}}}</style><rect x=".5" y=".5" width="{w-1}" height="{h-1}" rx="18" fill="url(#wash)" stroke="#245360"/>{body}</svg>'''
@@ -68,6 +71,7 @@ text{font-family:"Avenir Next","Segoe UI",Helvetica,Arial,sans-serif}
 .scan{animation:scan 7s ease-in-out infinite}
 .orbit{transform-box:fill-box;transform-origin:center;animation:orbit 18s linear infinite}
 .spark{animation:spark 3.5s ease-in-out infinite}
+.wave{transform-box:fill-box;transform-origin:center;animation:wave 4s ease-out infinite}
 @keyframes float{0%,100%{transform:translate(0,0)}50%{transform:translate(3px,-10px)}}
 @keyframes scan{0%,100%{transform:translateY(0)}50%{transform:translateY(-76px)}}
 @keyframes orbit{to{transform:rotate(360deg)}}
@@ -75,15 +79,26 @@ text{font-family:"Avenir Next","Segoe UI",Helvetica,Arial,sans-serif}
 @keyframes flow{to{stroke-dashoffset:-136}}
 @keyframes breathe{50%{opacity:.4}}
 @keyframes trace{0%,100%{stroke-dashoffset:0}50%{stroke-dashoffset:90}}
+@keyframes wave{0%{transform:scale(.5);opacity:.7}100%{transform:scale(1.3);opacity:0}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important}}
 </style>'''
 
 def frame(w,h,title,desc,body):
  value=_frame(w,h,title,desc,body)
- return value[:value.index('<style>')]+MOTION+value[value.index('</style>')+8:]
+ value=value[:value.index('<style>')]+MOTION+value[value.index('</style>')+8:]
+ palette={'#0b303a':'#102749','#06171e':'#071429','#030c13':'#03091a',
+          '#245360':'#2d4e77','#91f6df':'#9ee7ff','#26bad7':'#348bff',
+          '#35d4db':'#348bff','#72eee0':C,'#70b6ff':BLUE,'#041117':INK,
+          '#133a45':'#142c50','#285c68':'#2e527d','#0a2733':'#0b1b35',
+          '#286171':'#2e5b8e','#366d80':'#4473a5','#5fe3d8':'#438fff',
+          '#0a2630':'#0c2242','#12343d':'#162f50','#4b9ba4':'#5490c5',
+          '#071b23':'#091b35','#285360':'#315685','#214451':'#233f63','#3c8897':'#437cb2'}
+ for old,new in palette.items():value=value.replace(old,new)
+ return value
 
 manifest=[]
 def save(name,w,h,title,desc,body,target):
+ name+='-spatial-v3'
  s=frame(w,h,title,desc,body);raw=(s+'\n').encode('utf-8');parse_svg(raw);(OUT/(name+'.svg')).write_bytes(raw);manifest.append({'file':'assets/readme/'+name+'.svg','title':title,'target':target,'width':w,'height':h})
 # Main title panel: a radio field passes through an illustrated room.
 s=text(48,44,'RUVIEW / COGNITUM ECOSYSTEM',13,C,extra='class="mono"')+text(48,121,'RuView',76,WHITE)+text(48,184,'Spaces become signals.',38,WHITE)+text(48,234,'Signals become understanding.',32,C)+text(50,279,'Explore RF sensing, edge inference and local automation.',18)
@@ -95,6 +110,8 @@ for y in [306,336,372,418]:s+=path(f'M680 {y}H1168','#12343d',1)
 s+='<g class="float">'+path('M803 157L1008 106L1137 177L930 236ZM803 157V314L930 391L1137 324V177M930 236V391M1008 106V268L803 314M1008 268L1137 324','#4b9ba4',1.5)+'</g>'
 s+='<g transform="translate(0 80)"><g class="scan"><path d="M803 157L1008 106L1137 177L930 236Z" fill="#72eee0" fill-opacity=".1" stroke="#72eee0" stroke-opacity=".6"/></g></g>'
 s+='<g transform="translate(974 282)"><g class="orbit"><ellipse rx="135" ry="36" fill="none" stroke="#70b6ff" stroke-dasharray="3 11" opacity=".4"/><circle cx="135" cy="0" r="4" fill="#91f6df"/></g></g>'
+for i in range(3):
+ s+=f'<g transform="translate(974 312)"><ellipse rx="140" ry="44" fill="none" stroke="{BLUE}" class="wave" style="animation-delay:-{i*1.3}s"/></g>'
 for i in range(24):
  s+=circle(849+(i%6)*44,198+(i//6)*35,1.7,BLUE,extra=f'fill="#70b6ff" class="spark" style="animation-delay:-{i%7/2}s"')
 s+=icon('presence',976,265,1.35)+icon('edge',780,349,.7)
@@ -133,5 +150,5 @@ s+='<rect x="44" y="224" width="256" height="46" rx="11" fill="url(#accent)"/>'+
 s+='<circle cx="947" cy="151" r="173" fill="url(#halo)"/>'+spatial(945,173,1.55)+icon('seed',945,145,1.65)
 for j in range(3):s+=f'<ellipse cx="945" cy="150" rx="{140+j*20}" ry="{30+j*13}" transform="rotate(-25 945 150)" fill="none" stroke="#3c8897" stroke-dasharray="5 18" class="flow"/>'
 save('cognitum',1200,304,'Explore Cognitum One','Ambient Intelligence at the edge of the physical world. Open cognitum.one.',s,'https://cognitum.one')
-(OUT/'manifest.json').write_bytes((json.dumps({'schema_version':1,'style':'Cognitum cyan on midnight','motion':'Decorative CSS; prefers-reduced-motion supported; no script or remote dependencies','assets':manifest},indent=2)+'\n').encode('utf-8'))
+(OUT/'manifest.json').write_bytes((json.dumps({'schema_version':1,'style':'RuView navy, electric blue, lime and amber','motion':'Decorative CSS; prefers-reduced-motion supported; no script or remote dependencies','assets':manifest},indent=2)+'\n').encode('utf-8'))
 print(f'Generated {len(manifest)} SVGs, {sum((ROOT/x["file"]).stat().st_size for x in manifest):,} bytes')
