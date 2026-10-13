@@ -492,3 +492,23 @@ naming conflicts and a separate benchmark output-index mapping. Consistent
 semantic renaming cannot improve numeric class accuracy or macro F1. The
 original final test was opened in the first pilot and is not reopened here;
 repeated development scores remain adaptive research evidence.
+
+## Cross-carrier ablation and compact ACF runtime, 2026-10-13
+
+The [cross-carrier experiment](espfi-spatial-experiment.md) adds normalized
+carrier correlations alone and alongside motion features. Both lose to the
+exact retained control under the frozen training-fold selection. No accuracy
+improvement or replacement model is claimed.
+
+The [compact runtime protocol](espfi-motion-compact.md) separately removes
+reconstructable random-map storage and folds classifier affine operations while
+retaining float64 feature extraction. It requires all admitted-record prediction
+parity before accepting a storage or execution improvement.
+The retained compact weights occupy 16,088 bytes versus 496,488 bytes, with
+identical predictions on all 907 admitted records. The small measured latency
+difference misses the 10% speed threshold, so only the storage gain is claimed.
+
+The [independent dataset audit](espfi-independent-data-20261013.md) verifies
+corrected CSI-Bench metadata and distinguishes restrictive data terms from
+repository licenses. Neither CSI-Bench nor WiFiTAD has been ingested or scored
+as new confirmation evidence in this round.

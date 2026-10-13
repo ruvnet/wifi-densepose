@@ -118,3 +118,23 @@ See [protocol and results](../espfi-resolution-experiment.md) and the
 [semantic label audit](../espfi-label-audit-20261013.md). Numeric label renaming
 alone cannot improve accuracy or macro F1. Deployment requires independent
 confirmation and target device measurement even if a research gate passes.
+
+## Cross-carrier and compact runtime boundary, 2026-10-13
+
+The cross-carrier experiment keeps the original 190-sample inputs and training
+folds. Deterministic centered log-amplitude correlations add no physical
+coordinates or field history. Its frozen 18-configuration search selects the
+unchanged control; reject both new representations and retain the negative
+result in [the experiment report](../espfi-spatial-experiment.md).
+
+Compact storage is a separate numerical transformation of the retained ACF
+classifier. Reconstruct its exact seeded random map and preserve the original
+float64 feature extraction. Require exact unfused logits and class predictions,
+bounded folded error, provenance and artifact integrity before retaining it.
+Storage savings do not establish runtime memory savings or speed gains. See
+[the compact protocol](../espfi-motion-compact.md).
+
+The [independent data audit](../espfi-independent-data-20261013.md) distinguishes
+dataset terms from code licenses, anonymous metadata access from signal intake,
+and compatible labels from similar activity names. No external dataset is
+silently admitted as independent confirmation for this seven-class model.
