@@ -6,7 +6,7 @@
   </a>
 </p>
 
-[![RuView: spaces become signals, with an animated conceptual RF field](assets/readme/hero-spatial-v5.svg)](docs/user-guide.md)
+[![RuView: spaces become signals, with an animated conceptual RF field](assets/readme/hero-spatial-v6.svg)](docs/user-guide.md)
 
 <table>
 <tr>
@@ -67,7 +67,7 @@ Every WiFi router already fills your space with radio waves. When people move, b
 <td width="50%"><a href="v2/crates/wifi-densepose-signal/README.md"><img src="assets/readme/feature-vitals-spatial-v4.svg" width="580" alt="Breathing and vital signals: open documentation and current limitations" /></a><br/><a href="v2/crates/wifi-densepose-signal/README.md">Breathing and vital signals</a></td>
 </tr>
 <tr>
-<td width="50%"><a href="docs/benchmarks/pose-estimation-cog.md"><img src="assets/readme/feature-pose-spatial-v5.svg" width="580" alt="Pose research and limitations: open documentation and current limitations" /></a><br/><a href="docs/benchmarks/pose-estimation-cog.md">Pose research and limitations</a></td>
+<td width="50%"><a href="docs/benchmarks/pose-estimation-cog.md"><img src="assets/readme/feature-pose-spatial-v6.svg" width="580" alt="Pose research and limitations: open documentation and current limitations" /></a><br/><a href="docs/benchmarks/pose-estimation-cog.md">Pose research and limitations</a></td>
 <td width="50%"><a href="firmware/esp32-csi-node/README.md"><img src="assets/readme/feature-edge-spatial-v4.svg" width="580" alt="Edge sensor mesh: open documentation and current limitations" /></a><br/><a href="firmware/esp32-csi-node/README.md">Edge sensor mesh</a></td>
 </tr>
 <tr>

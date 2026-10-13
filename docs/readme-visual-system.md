@@ -54,8 +54,15 @@ The overview and RF room are conceptual illustrations, not live measurements or 
 
 Sources: `docs/user-guide.md`, `docs/benchmarks/pose-estimation-cog.md`, `v2/crates/wifi-densepose-signal/README.md`, `firmware/esp32-csi-node/README.md`, `docs/integrations/home-assistant.md`, and `harness/ruview/README.md`.
 
-The hero and pose card use `-spatial-v5.svg`: an original anatomical human
+The hero and pose card use `-spatial-v6.svg`: an original anatomical human
 silhouette with shaded torso, head, hands and feet, overlapping limbs, surface
-contours and amber joint markers. Subtle limb motion pivots behind the torso
-to preserve joint continuity. This is vector artwork, not a real body scan or
+contours and amber joint markers. A 1.6-second gait drives opposing arm and leg swings, weight shifts and ground
+shadow compression. An 8-second CSS perspective turn and moving surface light
+give the anatomical illustration depth. Each limb pivots at its own shoulder
+or hip. The effect remains a projected SVG illustration, not a skinned WebGL
+model. The stylesheet disables gait and perspective movement for reduced motion.
+Chrome 154 validation confirmed the 3D transform, opposing limb transforms,
+animation in an HTML image, and a frozen standalone SVG under reduced motion.
+Reduced-motion emulation did not freeze the embedded image in that test; image
+preference propagation remains a browser-dependent limitation. This is vector artwork, not a real body scan or
 measured pose reconstruction. Other assets retain their v4 filenames.

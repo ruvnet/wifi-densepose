@@ -26,13 +26,13 @@ def icon(kind,x,y,scale=1):
  elif kind=='pose':
   # Authored anatomical mesh silhouette; a conceptual figure, not captured pose data.
   s+='<defs><linearGradient id="humanSurface" x1="0" y1="0" x2="1" y2=".3"><stop stop-color="#153d48"/><stop offset=".42" stop-color="#338469"/><stop offset=".7" stop-color="#83c766"/><stop offset="1" stop-color="#163c4a"/></linearGradient><linearGradient id="humanRear"><stop stop-color="#0f2d40"/><stop offset="1" stop-color="#397a68"/></linearGradient></defs>'
-  s+='<g stroke="#88d783" stroke-width=".65" stroke-linejoin="round">'
+  s+='<g class="humanTurn"><g stroke="#88d783" stroke-width=".65" stroke-linejoin="round">'
   # Far arm and leg provide occlusion and depth.
-  s+='<g class="limb"><path d="M-9 -25C-15 -25 -18 -19 -21 -13L-29 -5C-32 -3 -33 1 -30 3L-25 2L-14 -7C-9 -12 -6 -19 -6 -23Z" fill="url(#humanRear)"/></g>'
-  s+='<g class="stride"><path d="M-6 5C-13 10 -15 18 -17 26L-25 43L-29 47C-30 49 -28 51 -24 51L-17 50L-16 46L-8 30C-4 23 2 15 3 10Z" fill="url(#humanRear)"/>'
-  s+='<path d="M3 5C10 7 14 17 19 23C24 28 23 35 24 41L29 45C32 47 32 49 28 50L20 49C17 48 17 46 17 42L14 32C8 28 2 23 -3 16L-4 10Z" fill="url(#humanSurface)"/></g>'
+  s+='<g class="armFar"><path d="M-9 -25C-15 -25 -18 -19 -21 -13L-29 -5C-32 -3 -33 1 -30 3L-25 2L-14 -7C-9 -12 -6 -19 -6 -23Z" fill="url(#humanRear)"/></g>'
+  s+='<g class="legFar"><path d="M-6 5C-13 10 -15 18 -17 26L-25 43L-29 47C-30 49 -28 51 -24 51L-17 50L-16 46L-8 30C-4 23 2 15 3 10Z" fill="url(#humanRear)"/><circle cx="-15" cy="26" r="1.8" fill="#ffb45e"/></g>'
+  s+='<g class="legNear"><path d="M3 5C10 7 14 17 19 23C24 28 23 35 24 41L29 45C32 47 32 49 28 50L20 49C17 48 17 46 17 42L14 32C8 28 2 23 -3 16L-4 10Z" fill="url(#humanSurface)"/><circle cx="19" cy="28" r="1.8" fill="#ffb45e"/></g>'
   # Near arm: shoulder, upper arm, elbow, forearm and closed hand.
-  s+='<g class="limb"><path d="M7 -26C14 -25 17 -20 20 -13L24 -17L29 -24C30 -27 33 -29 35 -26L35 -22L30 -16L24 -8C22 -5 18 -5 16 -8L8 -17Z" fill="url(#humanSurface)"/></g>'
+  s+='<g class="armNear"><path d="M7 -26C14 -25 17 -20 20 -13L24 -17L29 -24C30 -27 33 -29 35 -26L35 -22L30 -16L24 -8C22 -5 18 -5 16 -8L8 -17Z" fill="url(#humanSurface)"/></g>'
   # Shoulder and chest taper into abdomen and pelvis.
   s+='<path d="M-4 -32L4 -33L6 -28C11 -27 14 -24 13 -19L9 -5L10 7C10 13 2 15 -5 12L-10 7L-8 -5L-12 -20C-13 -25 -8 -28 -5 -28Z" fill="url(#humanSurface)"/>'
   # Three-quarter head with jaw, nose and ear contour.
@@ -40,10 +40,12 @@ def icon(kind,x,y,scale=1):
   s+='</g>'
   # Surface contours make volume legible at README scale.
   s+=path('M-9 -23Q-2 -18 10 -23M-7 -15Q0 -11 9 -16M-6 -8Q1 -5 8 -9M-7 1Q1 5 9 1M0 -26L2 9M-4 -40Q0 -42 7 -40M2 -32L6 -34',LIME,.55,extra='opacity=".65"')
-  s+=path('M-5 -45Q1 -49 6 -46M-10 -22L-6 -8M9 17L17 28M-12 20L-20 42',C,.7,extra='opacity=".8"')
+  s+=path('M-5 -45Q1 -49 6 -46M-10 -22L-6 -8',C,.7,extra='opacity=".8"')
+  s+='<path d="M-8 -25Q-2 -21 1 -10L3 9Q-5 8 -6 3L-5 -8Z" fill="#a7ebff" class="humanLight" opacity=".2"/>'
   # Joint markers remain attached to the anatomical surface.
   for px,py in [(-9,-24),(10,-23),(1,-12),(2,9)]:
    s+=circle(px,py,3.5,AMBER,extra='stroke-opacity=".25"')+circle(px,py,1.5,AMBER,extra=f'fill="{AMBER}" class="spark"')
+  s+='</g>'
   s+=path('M-42 -42V-53H-30M30 -53H42V-42M42 45V55H30M-30 55H-42V45',BLUE,.8)
  elif kind in ['vitals','models']:
   for j in range(3):
@@ -67,6 +69,9 @@ def icon(kind,x,y,scale=1):
   s+=circle(0,0,15,LIME)+path('M-6 0L-1 5L8 -6',LIME,2)
  else:s+=path('M-35 0L0 -25L35 0L0 25Z',C,2)
  base='<ellipse cy="53" rx="48" ry="8" fill="#020816" opacity=".65"/>'
+ if kind=='pose':
+  base='<ellipse cy="53" rx="37" ry="7" fill="#020816" class="gaitShadow"/>'
+  return f'<g transform="translate({x} {y}) scale({scale})">{base}<g class="humanBody">{s}</g></g>'
  return f'<g transform="translate({x} {y}) scale({scale})">{base}<g class="float">{s}</g></g>'
 
 def spatial(x,y,scale=1):
@@ -105,6 +110,22 @@ text{font-family:"Avenir Next","Segoe UI Variable Display","Segoe UI",Helvetica,
 @keyframes layer{50%{transform:translateY(-5px)}}
 @keyframes cursor{0%,100%{transform:translateX(-35px);opacity:.3}50%{transform:translateX(35px);opacity:1}}
 
+
+.humanTurn{transform-box:fill-box;transform-origin:center 85%;animation:humanTurn 8s ease-in-out infinite}
+.humanBody{animation:humanBody 1.6s ease-in-out infinite}
+.armFar{transform-origin:-9px -24px;animation:armSwing 1.6s ease-in-out infinite}
+.armNear{transform-origin:10px -23px;animation:armSwing 1.6s ease-in-out infinite;animation-delay:-.8s}
+.legFar{transform-origin:-3px 9px;animation:legSwing 1.6s ease-in-out infinite;animation-delay:-.8s}
+.legNear{transform-origin:2px 9px;animation:legSwing 1.6s ease-in-out infinite}
+.humanLight{animation:humanLight 8s ease-in-out infinite}
+.gaitShadow{transform-box:fill-box;transform-origin:center;animation:gaitShadow 1.6s ease-in-out infinite}
+@keyframes humanTurn{0%,100%{transform:perspective(450px) rotateY(-24deg) rotateZ(-2deg)}50%{transform:perspective(450px) rotateY(24deg) rotateZ(2deg)}}
+@keyframes humanBody{0%,50%,100%{transform:translateY(0)}25%,75%{transform:translateY(-2px)}}
+@keyframes armSwing{0%,100%{transform:rotate(-17deg)}50%{transform:rotate(17deg)}}
+@keyframes legSwing{0%,100%{transform:rotate(-12deg)}50%{transform:rotate(12deg)}}
+@keyframes humanLight{0%,100%{opacity:.1}50%{opacity:.45}}
+@keyframes gaitShadow{0%,50%,100%{transform:scaleX(1);opacity:.7}25%,75%{transform:scaleX(.85);opacity:.45}}
+
 @keyframes spark{50%{opacity:.25}}
 @keyframes flow{to{stroke-dashoffset:-136}}
 @keyframes breathe{50%{opacity:.4}}
@@ -116,10 +137,10 @@ text{font-family:"Avenir Next","Segoe UI Variable Display","Segoe UI",Helvetica,
 def frame(w,h,title,desc,body):
  value=_frame(w,h,title,desc,body)
  motion=MOTION
- for name in ['float','flow','breathe','trace','scan','orbit','spark','wave','sweep','limb','stride','layer','cursor']:
+ for name in ['float','flow','breathe','trace','scan','orbit','spark','wave','sweep','limb','stride','layer','cursor','humanTurn','humanBody','armFar','armNear','legFar','legNear','humanLight','gaitShadow']:
   if f'class="{name}"' not in body:
    motion=re.sub(r'\.'+name+r'\{[^}]*\}', '', motion)
- for name in ['float','flow','breathe','trace','scan','spark','wave','sweep','limb','layer','cursor']:
+ for name in ['float','flow','breathe','trace','scan','spark','wave','sweep','limb','layer','cursor','humanTurn','humanBody','armSwing','legSwing','humanLight','gaitShadow']:
   if f'animation:{name} ' not in motion:
    marker='@keyframes '+name+'{'; start=motion.find(marker)
    if start>=0:
@@ -141,7 +162,7 @@ def frame(w,h,title,desc,body):
 
 manifest=[]
 def save(name,w,h,title,desc,body,target):
- name+='-spatial-v5' if name in ['hero','feature-pose'] else '-spatial-v4'
+ name+='-spatial-v6' if name in ['hero','feature-pose'] else '-spatial-v4'
  s=frame(w,h,title,desc,body);raw=(s+'\n').encode('utf-8');parse_svg(raw);(OUT/(name+'.svg')).write_bytes(raw);manifest.append({'file':'assets/readme/'+name+'.svg','title':title,'target':target,'width':w,'height':h})
 # Cinematic RF stage: authored projected planes, not a live measurement.
 s=text(48,45,'RUVIEW  /  SPATIAL INTELLIGENCE',12,C,extra='class="mono"')
