@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "candidate": "active-evaluation-require-pass-v1",
+  "decision": "INCONCLUSIVE",
+  "decisionReason": "Frozen local acceptance passed; hosted checks at the proposed commit were not available when this receipt was created.",
+  "acceptedBaseline": {
+    "commit": "9fe3207bb7724e34ea249626c2422975f5972ae0",
+    "tree": "a83ad0be42b2bd06cf6bcd9a08516f128620ea18",
+    "hostedWorkflows": {
+      "dataPolicy": 38452296960,
+      "training": 38452297035,
+      "fixMarker": 38452296731,
+      "bench": 38452296956
+    }
+  },
+  "baselineFiles": {
+    "scripts/evaluate-active-evidence.py": "33ccee146fdb90701c16de84e367534bdd2c280bed8bc56a8e5198812949332e",
+    "scripts/csi_training/active_evaluation.py": "ddafb74b32c14ba23e9a4091329eecb3550c040c9b62879126451471a5124018",
+    "scripts/tests/test_csi_training_active_evaluation.py": "6927c7368fb23b85b80467eb7d1eecd95cb0c0beb68aa1f54aacab78a8f5bd70"
+  },
+  "candidateFiles": {
+    "scripts/evaluate-active-evidence.py": "3fc8b36ac7034ce64342014f48a0829dc0a9e1e67ac3a24e1c51ba0fc6e4ca0e",
+    "scripts/tests/test_csi_training_active_evaluation_cli.py": "79bdb7a826dd6ad3234b83b581ab2e62ab958fba0d7a74aef5fa873a9cbc5479"
+  },
+  "hypothesis": "An explicit fail-closed CLI mode prevents automation from accepting a valid fail or inconclusive overallGate while preserving report-only compatibility.",
+  "data": {
+    "evidence": "SYNTHETIC",
+    "splitPolicy": "Not applicable; deterministic CLI fixtures only. No model fitting, capture access, or final-test payload access occurred."
+  },
+  "acceptance": {
+    "overallPassExitCode": 0,
+    "overallFailOrInconclusiveExitCode": 3,
+    "invalidInputExitCode": 2,
+    "fullJsonBeforeGateExit": true,
+    "defaultRemainsReportOnly": true,
+    "promotionAuthorized": false
+  },
+  "tests": [
+    {
+      "command": "PYTHONPATH=scripts /home/ruv/projects/ruview-training-env/bin/python -m unittest scripts.tests.test_csi_training_active_evaluation scripts.tests.test_csi_training_active_evaluation_cli -v",
+      "result": "PASS",
+      "count": 17,
+      "seconds": 0.786
+    },
+    {
+      "command": "PYTHONPATH=scripts:/home/ruv/projects/zenodo-intake-deps /home/ruv/projects/ruview-training-env/bin/python -m unittest discover -s scripts/tests -p 'test_csi_training*.py'",
+      "result": "PASS",
+      "count": 91,
+      "seconds": 11.204
+    }
+  ],
+  "performance": {
+    "applicable": false,
+    "reason": "The candidate changes only explicit process-exit behavior after the unchanged evaluator returns; it is not an inference or evaluator-compute optimization."
+  },
+  "safety": {
+    "fieldAcceptance": "not_established",
+    "promotionAuthorized": false,
+    "labelProvenanceVerified": false,
+    "gateModeIsExplicit": true,
+    "defaultCompatibilityPreserved": true
+  },
+  "cost": "Existing authorized CPU only; infrastructure cost unmetered; no paid compute or training.",
+  "rollback": "Revert the candidate commit to 9fe3207; no input or output schema, data, model, or inference path changed.",
+  "missingEvidence": [
+    "Hosted checks at the exact proposed commit",
+    "Authenticated field labels and capture provenance",
+    "Fresh multi-room confirmation"
+  ],
+  "nextAction": "Publish with an expected-head lease, verify the exact published tree and hosted checks, and keep promotion disabled."
+}

@@ -132,6 +132,12 @@ or occupied truth plus empty/occupied/unknown predictions. Input is a bounded
 regular JSON file. See `test_csi_training_active_evaluation.py` for the minimal
 synthetic input generator.
 
+The default CLI remains report-only for interactive analysis. Automation can add
+`--require-pass`: a valid report still prints in full, then exits 3 when
+`overallGate` is `fail` or `inconclusive`; a passing report exits 0 and malformed
+input exits 2. This process status enforces only the frozen software gate. It does
+not change `fieldAcceptance`, authorize promotion or authenticate supplied labels.
+
 The numerical gate requires at least 20% lower false occupied duration, a 95%
 room clustered interval supporting reduction, recall delta lower bound at least
 minus one percentage point, and unknown duration delta upper bound at most one
