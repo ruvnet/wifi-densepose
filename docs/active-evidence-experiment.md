@@ -142,8 +142,14 @@ power. Pilot data must size a separate confirmation study.
 
 Labels, actual costs, fresh splits and capture completeness require independent
 verification. Consequently even a numerical pass always returns
-`fieldAcceptance: not_established` and `promotionAuthorized: false`. Event counts,
-transition delay and stationary occupant sensitivity need separate field analysis.
+`fieldAcceptance: not_established` and `promotionAuthorized: false`. The paired
+transition gate requires empty-to-occupied and occupied-to-empty events in at
+least two rooms. Room-clustered upper confidence bounds must show no increase in
+interval-aligned delay, unresolved transitions or false-occupied episodes per
+empty hour. Unknown predictions extend delay; a transition that never resolves
+within its truth run is retained with that run's full duration. `overallGate`
+passes only when both duration and transition gates pass. Stationary occupant
+sensitivity and sub-interval acquisition latency still require field analysis.
 Replay cannot compare an action for which no eligible measurement was captured.
 
 ## Receipts and rollback
