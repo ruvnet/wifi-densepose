@@ -1,6 +1,7 @@
 # RuView README visual system
 
-The README uses a Cognitum-inspired palette: midnight backgrounds, cyan gradients,
+The README matches the RuView header palette: deep navy backgrounds, electric blue
+RF fields, lime pose and signal accents, warm amber joints and soft white text,
 layered isometric geometry, moving scan planes, orbital markers and floating
 icons. It includes a hero, six feature cards, six navigation icons, an overview,
 five chapter headings and a Cognitum destination banner. Headlines use a heavier
@@ -28,6 +29,9 @@ local link targets stay inside the repository, including after symlink resolutio
 
 The committed SVGs are the deployment artifacts. The manifest in
 `assets/readme/manifest.json` lists every destination.
+Spatial artwork uses `-spatial-v3.svg` filenames so GitHub's image proxy requests
+fresh content after the visual upgrade. Previous filenames remain available for
+existing links; new README wrappers use the versioned assets.
 
 ## Links and rendering
 
