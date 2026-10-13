@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from csi_training.confirmation import evaluate, read_json, KNOWN_EXPOSED
+from csi_training.confirmation import evaluate, read_json, regular_sha256, training_gate, KNOWN_EXPOSED
 
 
 def fixture():
@@ -91,5 +91,29 @@ class ConfirmationTests(unittest.TestCase):
                 r=subprocess.run([sys.executable,'-m','csi_training.confirmation','--manifest',str(p),'--ledger',str(q)],capture_output=True,text=True)
                 self.assertEqual(r.returncode,expected,r.stderr)
                 self.assertFalse(json.loads(r.stdout)['promotionAuthorized'])
+
+    def test_training_gate_binds_frozen_protocol_and_dataset(self):
+        with tempfile.TemporaryDirectory() as d:
+            m,l=fixture();root=Path(d);dataset=root/'dataset.json'
+            p=root/'m.json';q=root/'l.json'
+            dataset.write_text('{"schema_version":1}')
+            p.write_text(json.dumps(m));q.write_text(json.dumps(l))
+            frozen=regular_sha256(dataset)
+            report=training_gate(p,q,dataset,'a'*64,frozen)
+            self.assertTrue(report['preflight_passed'])
+            self.assertFalse(report['promotionAuthorized'])
+            self.assertNotIn('records',report)
+            self.assertIn('protocol_digest_mismatch',training_gate(p,q,dataset,'b'*64,frozen)['reasons'])
+            self.assertIn('dataset_manifest_digest_mismatch',training_gate(p,q,dataset,'a'*64,'0'*64)['reasons'])
+
+    def test_regular_sha256_rejects_unsafe_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);target=root/'target';target.write_bytes(b'ok')
+            link=root/'link';link.symlink_to(target)
+            with self.assertRaises(OSError):regular_sha256(link)
+            fifo=root/'fifo';os.mkfifo(fifo)
+            with self.assertRaises(ValueError):regular_sha256(fifo)
+            oversized=root/'oversized';oversized.write_bytes(b'x'*33)
+            with self.assertRaises(ValueError):regular_sha256(oversized,32)
 
 if __name__=='__main__':unittest.main()

@@ -7,6 +7,7 @@ import re
 import stat
 
 MAX_BYTES = 2 * 1024 * 1024
+MAX_DATASET_MANIFEST_BYTES = 3_000_000
 MAX_RECORDS = 4096
 SPLITS = ('train', 'development', 'confirmation')
 AXES = ('room', 'participant', 'session')
@@ -124,6 +125,54 @@ def read_json(path):
     if len(raw) > MAX_BYTES: raise ValueError('Input too large')
     def invalid(value): raise ValueError('Nonfinite JSON constant')
     return json.loads(raw, object_pairs_hook=_pairs, parse_constant=invalid)
+
+
+def regular_sha256(path, maximum=MAX_DATASET_MANIFEST_BYTES):
+    """Hash one bounded regular file through the descriptor that was checked."""
+    if (type(maximum) is not int or not 1 <= maximum <= 16 * 1024 * 1024
+            or not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_NONBLOCK')):
+        raise ValueError('Safe file hashing unavailable')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    digest_value = hashlib.sha256()
+    with os.fdopen(fd, 'rb') as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > maximum:
+            raise ValueError('Expected bounded regular file')
+        remaining = info.st_size
+        while remaining:
+            block = handle.read(min(1024 * 1024, remaining))
+            if not block:
+                raise ValueError('File changed during hashing')
+            digest_value.update(block)
+            remaining -= len(block)
+        if handle.read(1):
+            raise ValueError('File changed during hashing')
+    return digest_value.hexdigest()
+
+
+def training_gate(manifest_path, ledger_path, dataset_manifest_path,
+                  expected_protocol_sha256, expected_dataset_manifest_sha256):
+    """Evaluate declared metadata and bind it to frozen protocol/dataset bytes.
+
+    This remains a metadata gate. It does not authenticate captures, consent,
+    licensing, source aliases, or the completeness of the exposure ledger.
+    """
+    digest(expected_protocol_sha256)
+    digest(expected_dataset_manifest_sha256)
+    report = evaluate(read_json(manifest_path), read_json(ledger_path))
+    reasons = set(report['reasons'])
+    if report['protocol_sha256'] != expected_protocol_sha256:
+        reasons.add('protocol_digest_mismatch')
+    actual = regular_sha256(dataset_manifest_path)
+    if actual != expected_dataset_manifest_sha256:
+        reasons.add('dataset_manifest_digest_mismatch')
+    result = dict(report)
+    result.update({'preflight_passed': not reasons,
+                   'reasons': sorted(reasons),
+                   'dataset_manifest_sha256': actual,
+                   'expected_dataset_manifest_sha256': expected_dataset_manifest_sha256,
+                   'scope': report['scope'] + ' Dataset bytes are hash-pinned; provenance claims remain unauthenticated.'})
+    return result
 
 
 def main():
