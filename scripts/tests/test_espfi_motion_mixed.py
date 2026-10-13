@@ -14,7 +14,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from csi_training.espfi_motion_mixed import MixedPrecisionMotionBundle, MIXED_CONTRACT
 from csi_training.espfi_motion_runtime import BufferedMotionBundle
 from csi_training.espfi_train import write_json
-from test_espfi_motion_runtime import make_models
+from test_espfi_motion_runtime import bind_status, make_models
 
 
 class MixedMotionTests(unittest.TestCase):
@@ -79,6 +79,7 @@ assert 'csi_training.espfi_motion' not in sys.modules
             for overflow in (1e100,-1e100):
                 state=load(original);state['weights'][0,0]=overflow;save_file(state,str(model))
                 meta=json.loads((path/'metadata.json').read_text());meta['model_sha256']=hashlib.sha256(model.read_bytes()).hexdigest();write_json(path/'metadata.json',meta)
+                bind_status(path)
                 # Float64 remains finite; only this optional float32 constructor rejects it.
                 BufferedMotionBundle(path)
                 with self.assertRaisesRegex(ValueError,'finite float32'):MixedPrecisionMotionBundle(path)

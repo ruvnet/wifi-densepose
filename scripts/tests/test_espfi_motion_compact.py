@@ -42,6 +42,14 @@ class CompactMotionTests(unittest.TestCase):
                 np.testing.assert_allclose(folded.predict(x),expected,rtol=0,atol=1e-10)
                 np.testing.assert_array_equal(folded.predict(x).argmax(1),expected.argmax(1))
             self.assertTrue(report['parity']['train']['runtimes']['folded']['identical_predictions'])
+            metadata=root/'compact'/'metadata.json'
+            status=json.loads((root/'compact'/'status.json').read_text())
+            original_metadata=metadata.read_bytes()
+            self.assertEqual(status['metadata_sha256'],digest(metadata))
+            metadata.write_bytes(original_metadata+b'\n')
+            with self.assertRaisesRegex(ValueError,'metadata hash mismatch'):
+                CompactMotionBundle(root/'compact')
+            metadata.write_bytes(original_metadata)
             path=root/'compact'/'model.safetensors'
             path.write_bytes(path.read_bytes()+b'corruption')
             with self.assertRaisesRegex(ValueError,'hash mismatch'):
@@ -81,12 +89,18 @@ class CompactMotionTests(unittest.TestCase):
             original=json.loads(meta_path.read_text())
             changed=dict(original,random_map_sha256={})
             write_json(meta_path,changed)
+            status_path=root/'compact'/'status.json'
+            status=json.loads(status_path.read_text())
+            status['metadata_sha256']=digest(meta_path)
+            write_json(status_path,status)
             with self.assertRaisesRegex(ValueError,'Regenerated map'):
                 CompactMotionBundle(root/'compact')
             state_path=root/'compact'/'model.safetensors'
             state=load(state_path.read_bytes());state['feature_scale'][0]=0.
             save_file(state,str(state_path))
             write_json(meta_path,dict(original,model_sha256=digest(state_path)))
+            status['metadata_sha256']=digest(meta_path)
+            write_json(status_path,status)
             with self.assertRaisesRegex(ValueError,'Invalid compact'):
                 CompactMotionBundle(root/'compact')
 

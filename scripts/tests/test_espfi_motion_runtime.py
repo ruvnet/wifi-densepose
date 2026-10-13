@@ -20,16 +20,21 @@ from test_espfi_context import make_baseline
 from test_espfi_generalize import fixture
 
 
+def bind_status(path):
+    write_json(path/'status.json',{'status':'complete','promotionAuthorized':False,
+        'metadata_sha256':hashlib.sha256((path/'metadata.json').read_bytes()).hexdigest()})
+
+
 def make_models(root):
     parts,provenance=fixture()
     make_baseline(parts,provenance,root/'baseline')
     baseline=MotionBundle(root/'baseline')
     compact=root/'compact';compact.mkdir()
     save_file({k:baseline.state[k] for k in SHAPES},str(compact/'model.safetensors'))
-    write_json(compact/'status.json',{'status':'complete','promotionAuthorized':False})
     write_json(compact/'metadata.json',{'status':'complete','promotionAuthorized':False,'spec':SPEC,
         'model_sha256':hashlib.sha256((compact/'model.safetensors').read_bytes()).hexdigest(),
         'random_map_sha256':{k:tensor_hash(v) for k,v in random_map().items()}})
+    bind_status(compact)
     return parts,baseline,compact
 
 
@@ -103,6 +108,7 @@ assert 'csi_training.espfi_motion_compact' not in sys.modules
             metadata.write_bytes(original_meta)
             state={k:np.ones(shape,dtype=np.float64) for k,shape in SHAPES.items()};state['feature_scale'][0]=0
             save_file(state,str(model));meta=json.loads(original_meta);meta['model_sha256']=hashlib.sha256(model.read_bytes()).hexdigest();write_json(metadata,meta)
+            bind_status(path)
             with self.assertRaisesRegex(ValueError,'Invalid compact'):BufferedMotionBundle(path)
             write_json(path/'status.json',{'status':'failed','promotionAuthorized':False})
             with self.assertRaisesRegex(ValueError,'Incomplete'):BufferedMotionBundle(path)
@@ -240,5 +246,25 @@ assert 'csi_training.espfi_motion_compact' not in sys.modules
             with patch.object(os, 'supports_dir_fd', set()):
                 with self.assertRaisesRegex(ValueError, 'Secure artifact intake unavailable'):
                     BufferedMotionBundle(path)
+
+    def test_generation_chain_rejects_unbound_and_mixed_complete_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp);(root/'a').mkdir();(root/'b').mkdir()
+            _,_,a = make_models(root/'a');_,_,b = make_models(root/'b')
+            metadata = json.loads((b/'metadata.json').read_text())
+            metadata['generation_test'] = 'different-valid-metadata'
+            write_json(b/'metadata.json',metadata);bind_status(b)
+
+            (a/'status.json').write_bytes((b/'status.json').read_bytes())
+            with patch('csi_training.espfi_motion_runtime.load',
+                       side_effect=AssertionError('safetensors parser reached')):
+                with self.assertRaisesRegex(ValueError, 'metadata hash mismatch'):
+                    BufferedMotionBundle(a)
+
+            write_json(a/'status.json',{'status':'complete','promotionAuthorized':False})
+            with patch('csi_training.espfi_motion_runtime.load',
+                       side_effect=AssertionError('safetensors parser reached')):
+                with self.assertRaisesRegex(ValueError, 'metadata hash mismatch'):
+                    BufferedMotionBundle(a)
 
 if __name__=='__main__':unittest.main()

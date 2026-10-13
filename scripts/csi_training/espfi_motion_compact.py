@@ -39,10 +39,14 @@ def validate(state):
 class CompactMotionBundle:
     def __init__(self, directory, folded=True):
         root = Path(directory)
-        status = json.loads(_read(root/'status.json', 65536))
+        status_bytes = _read(root/'status.json', 65536)
+        status = json.loads(status_bytes)
         if not isinstance(status, dict) or status.get('status') != 'complete' or status.get('promotionAuthorized') is not False:
             raise ValueError('Incomplete compact ACF artifact')
-        metadata = json.loads(_read(root/'metadata.json', 65536))
+        metadata_bytes = _read(root/'metadata.json', 65536)
+        if hashlib.sha256(metadata_bytes).hexdigest() != status.get('metadata_sha256'):
+            raise ValueError('Compact metadata hash mismatch')
+        metadata = json.loads(metadata_bytes)
         if (not isinstance(metadata, dict) or metadata.get('spec') != SPEC or metadata.get('status') != 'complete'
                 or metadata.get('promotionAuthorized') is not False):
             raise ValueError('Invalid compact ACF metadata')
@@ -169,7 +173,8 @@ def export(parts, provenance, baseline_directory, output, max_seconds=600):
             raise TimeoutError('Compact export budget exceeded')
         write_json(root/'metadata.json',metadata)
         write_json(root/'metrics.json',report)
-        write_json(root/'status.json',{'status':'complete','promotionAuthorized':False})
+        write_json(root/'status.json',{'status':'complete','promotionAuthorized':False,
+                                      'metadata_sha256':digest(root/'metadata.json')})
         return report
     except Exception:
         write_json(root/'status.json',{'status':'failed','promotionAuthorized':False})

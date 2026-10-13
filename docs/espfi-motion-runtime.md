@@ -174,3 +174,27 @@ ruOS CPU. Both passed the predeclared p95 `max(1.2x, +0.1 ms)` and `+4096` byte
 limits. This is load-path overhead only and makes no sensing or prediction-speed
 claim. The sanitized [receipt](validation/espfi-runtime-dirfd-20261013.json)
 records exact hashes and rollback.
+
+## Export-generation chain
+
+A completed compact export now records the SHA-256 of the exact metadata bytes
+in `status.json`; metadata already records the model SHA-256. Both the compact
+reference reader and standalone buffered runtime therefore require the chain
+`status.json -> metadata.json -> model.safetensors`. The completion marker is
+written last. Mixing a valid completion marker from another export, changing
+metadata, or supplying an older unbound artifact fails before safetensors
+parsing. Older research bundles must be re-exported with the current exporter.
+
+This protects accidental or untrusted cross-generation mixing only when the
+completion marker is trusted as part of the same local artifact set. The hashes
+are not signatures and do not authenticate their producer, source data,
+provenance or permissions. A writer that can replace and consistently rehash all
+files can create a new self-consistent bundle. The chain does not bind
+`metrics.json`, which is not consumed by inference.
+
+A frozen 500-pair load check after 20 warmups measured baseline/candidate p95
+2.473300/2.545180 ms and traced peaks 1,067,491/1,068,498 bytes on the shared
+ruOS CPU. Both passed the predeclared p95 `max(1.2x, +0.1 ms)` and `+4096` byte
+limits. The model, data, features and prediction math are unchanged. The
+sanitized [receipt](validation/espfi-runtime-generation-chain-20261013.json)
+binds the exact sources, workload, gates and rollback.

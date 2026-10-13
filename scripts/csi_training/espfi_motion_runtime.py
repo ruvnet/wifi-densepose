@@ -114,10 +114,14 @@ def load_state(directory):
     root = Path(directory)
     directory_fd = _open_directory(root)
     try:
-        status = json.loads(_read('status.json', directory_fd))
+        status_bytes = _read('status.json', directory_fd)
+        status = json.loads(status_bytes)
         if not isinstance(status,dict) or status.get('status') != 'complete' or status.get('promotionAuthorized') is not False:
             raise ValueError('Incomplete compact ACF artifact')
-        metadata = json.loads(_read('metadata.json', directory_fd))
+        metadata_bytes = _read('metadata.json', directory_fd)
+        if hashlib.sha256(metadata_bytes).hexdigest() != status.get('metadata_sha256'):
+            raise ValueError('Compact metadata hash mismatch')
+        metadata = json.loads(metadata_bytes)
         if (not isinstance(metadata,dict) or metadata.get('spec') != SPEC or metadata.get('status') != 'complete'
                 or metadata.get('promotionAuthorized') is not False):
             raise ValueError('Invalid compact ACF metadata')
