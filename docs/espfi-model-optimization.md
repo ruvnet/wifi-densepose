@@ -540,3 +540,21 @@ the separate 10% speed gate, so this is retained only as an explicit memory
 option. Float64 remains the default. All 99 relevant Python tests pass.
 The unchanged weights, reused data and scoped array counts do not establish
 new accuracy, target device speed or total process memory improvement.
+
+## Native centered reductions, 2026-10-13
+
+The [NumPy reduction experiment](espfi-motion-reduced.md) preserves all 907
+admitted classes but misses the fixed speed gate in every round. Its source
+and negative measurement remain available for reproduction.
+
+The distinct [native followup](espfi-motion-native.md) keeps amplitude floor,
+log and centering in NumPy float64, then computes only centered reductions in
+an explicit trusted C kernel. All three rounds improve median by 29.01% to
+30.57% and p95 by 25.78% to 29.81% versus buffered float64. Maximum logit error
+is 4.773960e-15 and every admitted prediction is unchanged.
+
+All 113 relevant Python tests and the ruOS ASan/UBSan probe pass. The optional
+kernel adds a 15,736-byte compiled library, requires an explicit trusted hash
+and does not change model weights, the default runtime or measured accuracy.
+Its source, compiler recipe, library hash and both experimental receipts are
+recorded. Combining native execution with mixed precision remains unmeasured.

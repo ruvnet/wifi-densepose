@@ -174,3 +174,23 @@ The [measured mixed report](../espfi-motion-mixed.md) passes the memory gate,
 with 37.2239% fewer retained array bytes, but fails the speed gate. Preserve
 the second-round median and third-round p95 regressions. No default switch,
 training, new accuracy claim, final test reopening or deployment is implied.
+
+## Explicit native reduction boundary, 2026-10-13
+
+The reduced NumPy candidate preserves numerical parity but fails all declared
+speed gates. Preserve that outcome and evaluate the native followup separately.
+Keep amplitude flooring, logs and mean centering in the original NumPy float64
+path. A fixed C ABI may compute only the remaining centered reductions.
+
+Native loading is explicit trusted code execution. Require a separately supplied
+library path and SHA-256, bounded regular-file reads, private exact-byte loading,
+strict contiguous float64 buffers and fixed dimensions. Model metadata cannot
+select code. Compile reviewed source explicitly without fast math or contraction;
+bind source, compiler, flags, build receipt and library hashes to measurements.
+Preserve the existing model loader, instance lock and owned output API.
+
+Require <=1e-10 absolute logits, exact predictions on every admitted record,
+passing sanitizer/boundary tests and >=10% median and p95 improvement in every
+paired timing round. The [native report](../espfi-motion-native.md) passes these
+research gates. Keep the NumPy default and rollback path; target hardware,
+independent accuracy, mixed precision composition and deployment remain separate.

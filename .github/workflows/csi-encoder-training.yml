@@ -51,6 +51,14 @@ jobs:
         run: python -m unittest discover -s scripts/tests -p 'test_espfi*.py' -v
       - name: Enforce capture data policy
         run: bash scripts/csi-data-policy-check.sh --tracked
+      - name: Validate native feature bounds with sanitizers
+        run: |
+          cc -std=c11 -O1 -g -fno-fast-math -ffp-contract=off \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            scripts/csi_training/espfi_motion_native.c \
+            scripts/csi_training/espfi_motion_native_probe.c \
+            -lm -o "$RUNNER_TEMP/espfi-native-probe"
+          "$RUNNER_TEMP/espfi-native-probe"
 
   field-context-contract:
     runs-on: ubuntu-latest
