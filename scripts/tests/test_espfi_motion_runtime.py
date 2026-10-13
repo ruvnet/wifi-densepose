@@ -12,7 +12,7 @@ from unittest.mock import patch
 import numpy as np
 from safetensors.numpy import save_file
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from csi_training.espfi_motion_runtime import BufferedMotionBundle, SPEC, SHAPES, _read, random_map, tensor_hash
+from csi_training.espfi_motion_runtime import BufferedMotionBundle, SPEC, SHAPES, _open_directory, _read, random_map, tensor_hash
 from csi_training.espfi_motion_compact import CompactMotionBundle
 from csi_training.espfi_motion import MotionBundle, motion_features
 from csi_training.espfi_train import write_json
@@ -125,8 +125,8 @@ assert 'csi_training.espfi_motion_compact' not in sys.modules
             replacement = root/'replacement';replacement.write_bytes(b'replaced')
             displaced = root/'displaced'
             real_open = os.open
-            def open_then_replace(path, flags):
-                descriptor = real_open(path, flags)
+            def open_then_replace(path, flags, **kwargs):
+                descriptor = real_open(path, flags, **kwargs)
                 Path(path).rename(displaced)
                 replacement.rename(path)
                 return descriptor
@@ -164,8 +164,8 @@ assert 'csi_training.espfi_motion_compact' not in sys.modules
 
             captured = []
             real_open = os.open
-            def capture_open(path, flags):
-                descriptor = real_open(path, flags);captured.append(descriptor);return descriptor
+            def capture_open(path, flags, **kwargs):
+                descriptor = real_open(path, flags, **kwargs);captured.append(descriptor);return descriptor
             with patch('csi_training.espfi_motion_runtime.os.open', side_effect=capture_open):
                 with self.assertRaisesRegex(ValueError, 'regular bounded artifact'):_read(Path(tmp))
             with self.assertRaises(OSError):real_fstat(captured[0])
@@ -194,5 +194,51 @@ assert 'csi_training.espfi_motion_compact' not in sys.modules
             after = path.stat()
             self.assertEqual(after.st_ino,before.st_ino)
             self.assertEqual(after.st_size,before.st_size)
+
+    @unittest.skipUnless(hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'),
+                         'POSIX secure directory open required')
+    def test_bundle_load_pins_one_directory_and_rejects_symlink_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base/'original').mkdir();(base/'replacement').mkdir()
+            _,_,original = make_models(base/'original')
+            _,_,replacement = make_models(base/'replacement')
+            write_json(replacement/'status.json',{'status':'failed','promotionAuthorized':False})
+            displaced = base/'displaced'
+            real_open_directory = _open_directory
+            def open_then_replace(path):
+                descriptor = real_open_directory(path)
+                Path(path).rename(displaced)
+                replacement.rename(path)
+                return descriptor
+            with patch('csi_training.espfi_motion_runtime._open_directory',
+                       side_effect=open_then_replace):
+                bundle = BufferedMotionBundle(original)
+            self.assertEqual(set(bundle.state), {'projection','phase','bias','weights'})
+            with self.assertRaisesRegex(ValueError, 'Incomplete'):
+                BufferedMotionBundle(original)
+
+            link = base/'linked';link.symlink_to(displaced, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'artifact directory'):
+                BufferedMotionBundle(link)
+
+    @unittest.skipUnless(hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'),
+                         'POSIX secure directory open required')
+    def test_bundle_load_closes_directory_descriptor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _,_,path = make_models(Path(tmp))
+            captured = []
+            real_open_directory = _open_directory
+            def capture_directory(path):
+                descriptor = real_open_directory(path);captured.append(descriptor);return descriptor
+            with patch('csi_training.espfi_motion_runtime._open_directory',
+                       side_effect=capture_directory):
+                BufferedMotionBundle(path)
+            self.assertEqual(len(captured), 1)
+            with self.assertRaises(OSError):os.fstat(captured[0])
+
+            with patch.object(os, 'supports_dir_fd', set()):
+                with self.assertRaisesRegex(ValueError, 'Secure artifact intake unavailable'):
+                    BufferedMotionBundle(path)
 
 if __name__=='__main__':unittest.main()

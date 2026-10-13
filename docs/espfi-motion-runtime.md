@@ -151,3 +151,26 @@ explicit reference fallback. Next action is the same benchmark on the intended
 target. Acceptance requires identical predictions, logit error at most 1e-10,
 and at least 10% lower median and p95 in every round. Production promotion
 remains unauthorized, and the existing zero-F1 activity class remains unresolved.
+
+## Artifact-directory pinning
+
+The runtime now opens the final artifact directory once with
+`O_DIRECTORY|O_NOFOLLOW` and resolves status, metadata and model leaves relative
+to that descriptor. A rename-and-replacement regression verifies that one load
+continues from the opened directory instead of mixing in the replacement path.
+A final-component symlink root and platforms without `dir_fd` support fail
+closed. Existing per-leaf regular-file, size, no-follow and mutation checks stay
+in force, and success/error paths close the directory descriptor.
+
+This pins only the final opened directory. It does not authenticate artifacts,
+make the three reads an atomic snapshot, prevent a writer from replacing leaves
+inside the pinned directory between opens, or protect ancestor components before
+the directory open. Model bytes remain hash-bound to the metadata read. The
+same-inode metadata-evasion residual also remains.
+
+A frozen 500-pair load check after 20 warmups measured baseline/candidate p95
+2.376450/2.451570 ms and traced peaks 1,067,282/1,067,330 bytes on the shared
+ruOS CPU. Both passed the predeclared p95 `max(1.2x, +0.1 ms)` and `+4096` byte
+limits. This is load-path overhead only and makes no sensing or prediction-speed
+claim. The sanitized [receipt](validation/espfi-runtime-dirfd-20261013.json)
+records exact hashes and rollback.
