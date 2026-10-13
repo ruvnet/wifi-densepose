@@ -1,0 +1,11 @@
+{
+  "evidence": "SYNTHETIC",
+  "samples": 1000,
+  "records": 84,
+  "p50_ms": 0.368936,
+  "p95_ms": 0.455557,
+  "scope": "In-memory schema, leakage checks and canonical hashing; excludes file IO. Local shared CPU, not production inference.",
+  "python": "3.12.14",
+  "source_sha256": "12de9b3e07138dfeb18e6089d3e84d83dd67ac67e6a16bfaa3cdae9ba1759345",
+  "promotionAuthorized": false
+}
