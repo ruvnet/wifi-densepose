@@ -13,6 +13,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
+import tempfile
 import zipfile
 import numpy as np
 
@@ -32,21 +33,45 @@ def digest(path):
         return hashlib.file_digest(f, 'sha256').hexdigest()
 
 
-def _stream_digest(stream):
-    stream.seek(0)
-    value = hashlib.file_digest(stream, 'sha256').hexdigest()
-    stream.seek(0)
-    return value
+def _copy_bundle(source, snapshot, size):
+    source.seek(0)
+    copied, value = 0, hashlib.sha256()
+    while copied < size:
+        block = source.read(min(1024 * 1024, size - copied))
+        if not block:
+            raise ValueError('dataset bundle changed during snapshot')
+        if snapshot.write(block) != len(block):
+            raise ValueError('dataset bundle snapshot write failed')
+        value.update(block)
+        copied += len(block)
+    if copied != size or source.read(1):
+        raise ValueError('dataset bundle changed during snapshot')
+    return value.hexdigest()
+
+
+@contextmanager
+def _verified_bundle_snapshot(path, expected_sha256):
+    """Copy verified bytes into a private file before parser exposure."""
+    try:
+        with tempfile.TemporaryFile(mode='w+b', prefix='ruview-npz-') as snapshot:
+            with _open_regular_bundle(path) as (source, size):
+                if _copy_bundle(source, snapshot, size) != expected_sha256:
+                    raise ValueError('unsafe or modified dataset bundle')
+            snapshot.flush()
+            snapshot.seek(0)
+            yield snapshot
+    except OSError as exc:
+        raise ValueError('dataset bundle snapshot unavailable') from exc
 
 
 @contextmanager
 def _open_regular_bundle(path):
-    """Open one bounded final-component descriptor for hash and decode.
+    """Open one bounded final-component descriptor for snapshot creation.
 
     Parent directories remain a trusted deployment boundary. O_NONBLOCK keeps a
     substituted FIFO from blocking before fstat; O_NOFOLLOW rejects a final
-    symlink. A descriptor prevents pathname replacement between digest and
-    decode, but does not prevent a writer from modifying the same inode.
+    symlink. A descriptor prevents pathname replacement while the verified
+    private snapshot is copied.
     """
     if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_NONBLOCK'):
         raise ValueError('secure dataset bundle intake unavailable')
@@ -60,13 +85,14 @@ def _open_regular_bundle(path):
     except OSError as exc:
         raise ValueError('dataset bundle unavailable or symlinked') from exc
     try:
-        info = os.fstat(fd)
+        try:
+            info = os.fstat(fd)
+        except OSError as exc:
+            raise ValueError('dataset bundle read failed') from exc
         if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= MAX_NPZ:
             raise ValueError('dataset bundle must be a bounded regular file')
         with os.fdopen(fd, 'rb', closefd=False) as stream:
-            yield stream
-    except OSError as exc:
-        raise ValueError('dataset bundle read failed') from exc
+            yield stream, info.st_size
     finally:
         os.close(fd)
 
@@ -252,12 +278,10 @@ def _load_partitions(manifest, splits, expected_manifest_sha256=None):
         raise ValueError('unsafe dataset bundle declaration')
     npz = path.parent / npz_name
     if expected_manifest_sha256 is not None:
-        with _open_regular_bundle(npz) as bundle:
-            if _stream_digest(bundle) != npz_sha256:
-                raise ValueError('unsafe or modified dataset bundle')
-            _inspect_bundle(bundle, meta, records)
+        with _verified_bundle_snapshot(npz, npz_sha256) as snapshot:
+            _inspect_bundle(snapshot, meta, records)
             parts, groups, signals, identities_seen = _decode_bundle(
-                bundle, meta, lookup, splits)
+                snapshot, meta, lookup, splits)
     else:
         resolved_npz = npz.resolve()
         if (resolved_npz.parent != path.parent or resolved_npz.stat().st_size > MAX_NPZ
