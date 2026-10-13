@@ -1,0 +1,73 @@
+name: Rust cross-target dependency check
+
+on:
+  push:
+    branches: [main, develop, 'feature/*', 'feat/*', 'hotfix/*']
+    paths:
+      - 'v2/Cargo.lock'
+      - 'v2/Cargo.toml'
+      - 'v2/rust-toolchain.toml'
+      - 'v2/crates/wifi-densepose-hardware/**'
+      - '.github/workflows/rust-cross-target.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'v2/Cargo.lock'
+      - 'v2/Cargo.toml'
+      - 'v2/rust-toolchain.toml'
+      - 'v2/crates/wifi-densepose-hardware/**'
+      - '.github/workflows/rust-cross-target.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-path:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows MSVC dependency path
+            os: windows-2025
+            target: x86_64-pc-windows-msvc
+          - name: Android ARM64 dependency path
+            os: ubuntu-24.04
+            target: aarch64-linux-android
+    steps:
+      - name: Checkout code and path dependencies
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install fixed Rust toolchain and target
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.89.0
+          targets: ${{ matrix.target }}
+
+      - name: Configure the preinstalled Android NDK linker
+        if: matrix.target == 'aarch64-linux-android'
+        shell: bash
+        run: |
+          ndk_bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          linker="$ndk_bin/aarch64-linux-android24-clang"
+          archiver="$ndk_bin/llvm-ar"
+          ranlib="$ndk_bin/llvm-ranlib"
+          test -x "$linker"
+          test -x "$archiver"
+          test -x "$ranlib"
+          echo "$ndk_bin" >> "$GITHUB_PATH"
+          echo "CC_aarch64_linux_android=$linker" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$archiver" >> "$GITHUB_ENV"
+          echo "RANLIB_aarch64_linux_android=$ranlib" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$linker" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_AR=$archiver" >> "$GITHUB_ENV"
+
+      - name: Check hardware transport dependency path
+        working-directory: v2
+        run: cargo +1.89.0 check --locked -p wifi-densepose-hardware --lib --target ${{ matrix.target }}
