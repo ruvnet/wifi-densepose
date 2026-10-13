@@ -39,6 +39,11 @@ def validate(state):
         raise ValueError('Invalid compact float64 ACF state')
 
 
+def _file_identity(details):
+    return (details.st_dev, details.st_ino, stat.S_IFMT(details.st_mode),
+            details.st_size, details.st_mtime_ns, details.st_ctime_ns)
+
+
 def _read(path):
     """Read a small bounded artifact through the descriptor that was checked."""
     if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_NONBLOCK'):
@@ -67,6 +72,9 @@ def _read(path):
             chunks.append(chunk)
             remaining -= len(chunk)
         if os.read(descriptor, 1):
+            raise ValueError('Artifact changed while reading')
+        after = os.fstat(descriptor)
+        if _file_identity(after) != _file_identity(details):
             raise ValueError('Artifact changed while reading')
         return b''.join(chunks)
     except OSError as exc:

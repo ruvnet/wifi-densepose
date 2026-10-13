@@ -137,6 +137,12 @@ assert 'csi_training.espfi_motion_compact' not in sys.modules
     @unittest.skipUnless(hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_NONBLOCK'),
                          'POSIX secure open required')
     def test_artifact_reader_detects_size_change_and_closes_descriptor(self):
+        def changed_stat(details, **changes):
+            fields = ('st_dev','st_ino','st_mode','st_size',
+                      'st_mtime_ns','st_ctime_ns')
+            values = {field:changes.get(field,getattr(details,field)) for field in fields}
+            return type('Stat', (), values)()
+
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)/'artifact';path.write_bytes(b'12345678')
             real_fstat = os.fstat
@@ -144,11 +150,17 @@ assert 'csi_training.espfi_motion_compact' not in sys.modules
                 with self.subTest(delta=delta):
                     def changed_size(descriptor, delta=delta):
                         details = real_fstat(descriptor)
-                        return type('Stat', (), {'st_mode':details.st_mode,
-                                                'st_size':details.st_size + delta})()
+                        return changed_stat(details,st_size=details.st_size + delta)
                     with patch('csi_training.espfi_motion_runtime.os.fstat', side_effect=changed_size):
                         with self.assertRaisesRegex(ValueError, 'changed while reading'):
                             _read(path)
+
+            before = os.stat(path)
+            changed = changed_stat(before,st_ctime_ns=before.st_ctime_ns + 1)
+            with patch('csi_training.espfi_motion_runtime.os.fstat',
+                       side_effect=(before,changed)):
+                with self.assertRaisesRegex(ValueError, 'changed while reading'):
+                    _read(path)
 
             captured = []
             real_open = os.open
@@ -157,5 +169,30 @@ assert 'csi_training.espfi_motion_compact' not in sys.modules
             with patch('csi_training.espfi_motion_runtime.os.open', side_effect=capture_open):
                 with self.assertRaisesRegex(ValueError, 'regular bounded artifact'):_read(Path(tmp))
             with self.assertRaises(OSError):real_fstat(captured[0])
+
+    @unittest.skipUnless(hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_NONBLOCK')
+                         and hasattr(os, 'pwrite'), 'POSIX mutation test required')
+    def test_artifact_reader_rejects_metadata_visible_same_inode_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'artifact';path.write_bytes(b'12345678')
+            before = path.stat();real_read = os.read;mutated = False
+            def read_then_mutate(descriptor, size):
+                nonlocal mutated
+                result = real_read(descriptor, size)
+                if not mutated:
+                    mutated = True
+                    writer = os.open(path, os.O_WRONLY)
+                    try:
+                        os.pwrite(writer,b'87654321',0);os.fsync(writer)
+                    finally:
+                        os.close(writer)
+                    current = path.stat()
+                    os.utime(path,ns=(current.st_atime_ns,before.st_mtime_ns + 1_000_000_000))
+                return result
+            with patch('csi_training.espfi_motion_runtime.os.read', side_effect=read_then_mutate):
+                with self.assertRaisesRegex(ValueError, 'changed while reading'):_read(path)
+            after = path.stat()
+            self.assertEqual(after.st_ino,before.st_ino)
+            self.assertEqual(after.st_size,before.st_size)
 
 if __name__=='__main__':unittest.main()
