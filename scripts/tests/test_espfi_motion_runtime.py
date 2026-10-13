@@ -2,15 +2,17 @@
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import numpy as np
 from safetensors.numpy import save_file
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from csi_training.espfi_motion_runtime import BufferedMotionBundle, SPEC, SHAPES, random_map, tensor_hash
+from csi_training.espfi_motion_runtime import BufferedMotionBundle, SPEC, SHAPES, _read, random_map, tensor_hash
 from csi_training.espfi_motion_compact import CompactMotionBundle
 from csi_training.espfi_motion import MotionBundle, motion_features
 from csi_training.espfi_train import write_json
@@ -104,5 +106,56 @@ assert 'csi_training.espfi_motion_compact' not in sys.modules
             with self.assertRaisesRegex(ValueError,'Invalid compact'):BufferedMotionBundle(path)
             write_json(path/'status.json',{'status':'failed','promotionAuthorized':False})
             with self.assertRaisesRegex(ValueError,'Incomplete'):BufferedMotionBundle(path)
+
+    @unittest.skipUnless(hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_NONBLOCK')
+                         and hasattr(os, 'mkfifo'), 'POSIX secure open required')
+    def test_artifact_reader_rejects_special_files_and_path_substitution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            regular = root/'artifact';regular.write_bytes(b'original')
+            link = root/'link';link.symlink_to(regular)
+            fifo = root/'fifo';os.mkfifo(fifo)
+            for invalid in (link, fifo, root):
+                with self.subTest(path=invalid):
+                    with self.assertRaisesRegex(ValueError, 'regular bounded artifact'):
+                        _read(invalid)
+            empty = root/'empty';empty.write_bytes(b'')
+            with self.assertRaisesRegex(ValueError, 'regular bounded artifact'):_read(empty)
+
+            replacement = root/'replacement';replacement.write_bytes(b'replaced')
+            displaced = root/'displaced'
+            real_open = os.open
+            def open_then_replace(path, flags):
+                descriptor = real_open(path, flags)
+                Path(path).rename(displaced)
+                replacement.rename(path)
+                return descriptor
+            with patch('csi_training.espfi_motion_runtime.os.open', side_effect=open_then_replace):
+                self.assertEqual(_read(regular), b'original')
+            self.assertEqual(regular.read_bytes(), b'replaced')
+
+    @unittest.skipUnless(hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_NONBLOCK'),
+                         'POSIX secure open required')
+    def test_artifact_reader_detects_size_change_and_closes_descriptor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'artifact';path.write_bytes(b'12345678')
+            real_fstat = os.fstat
+            for delta in (-1, 1):
+                with self.subTest(delta=delta):
+                    def changed_size(descriptor, delta=delta):
+                        details = real_fstat(descriptor)
+                        return type('Stat', (), {'st_mode':details.st_mode,
+                                                'st_size':details.st_size + delta})()
+                    with patch('csi_training.espfi_motion_runtime.os.fstat', side_effect=changed_size):
+                        with self.assertRaisesRegex(ValueError, 'changed while reading'):
+                            _read(path)
+
+            captured = []
+            real_open = os.open
+            def capture_open(path, flags):
+                descriptor = real_open(path, flags);captured.append(descriptor);return descriptor
+            with patch('csi_training.espfi_motion_runtime.os.open', side_effect=capture_open):
+                with self.assertRaisesRegex(ValueError, 'regular bounded artifact'):_read(Path(tmp))
+            with self.assertRaises(OSError):real_fstat(captured[0])
 
 if __name__=='__main__':unittest.main()

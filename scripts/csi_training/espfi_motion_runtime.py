@@ -6,7 +6,9 @@ Scratch retains transformed last-window values until reuse; it is not memory era
 """
 import hashlib
 import json
+import os
 from pathlib import Path
+import stat
 from threading import Lock
 import numpy as np
 from safetensors.numpy import load
@@ -38,14 +40,39 @@ def validate(state):
 
 
 def _read(path):
-    path = Path(path)
-    if path.is_symlink() or not path.is_file():
-        raise ValueError('Expected regular bounded artifact')
-    with path.open('rb') as handle:
-        data = handle.read(65537)
-    if len(data) > 65536:
-        raise ValueError('Oversized artifact')
-    return data
+    """Read a small immutable artifact through the descriptor that was checked."""
+    if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_NONBLOCK'):
+        raise ValueError('Secure artifact intake unavailable')
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    if hasattr(os, 'O_CLOEXEC'):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, 'O_BINARY'):
+        flags |= os.O_BINARY
+    try:
+        descriptor = os.open(Path(path), flags)
+    except OSError as exc:
+        raise ValueError('Expected regular bounded artifact') from exc
+    try:
+        details = os.fstat(descriptor)
+        if not stat.S_ISREG(details.st_mode) or details.st_size <= 0:
+            raise ValueError('Expected regular bounded artifact')
+        if details.st_size > 65536:
+            raise ValueError('Oversized artifact')
+        chunks = []
+        remaining = details.st_size
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                raise ValueError('Artifact changed while reading')
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(descriptor, 1):
+            raise ValueError('Artifact changed while reading')
+        return b''.join(chunks)
+    except OSError as exc:
+        raise ValueError('Unable to read bounded artifact') from exc
+    finally:
+        os.close(descriptor)
 
 
 def load_state(directory):
