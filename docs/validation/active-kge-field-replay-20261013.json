@@ -1,0 +1,160 @@
+{
+  "authority": {
+    "actuation": false,
+    "promotion": false,
+    "rankingChangesEvidence": false
+  },
+  "budgetStop": {
+    "actuated": false,
+    "reason": "budget_exhausted",
+    "remaining": {
+      "airtime_us": 1200,
+      "energy_uj": 120,
+      "packets": 0
+    },
+    "requested": false
+  },
+  "evidence": "SYNTHETIC",
+  "expiryPolicy": "Wrapper recomputes live beliefs; persisted WorldGraph history is not a current authorization or occupancy API.",
+  "ruFieldRevision": "b74bc035e4a3d4023665aa5479b41e938facd113",
+  "schemaVersion": 1,
+  "scope": "Logical wifi/radar/door sources use signed WiFi feature fixtures, not physical modality adapters. Scores and costs are authored, not calibrated or measured sensing values.",
+  "steps": [
+    {
+      "atNs": 1800000000000000000,
+      "belief": {
+        "ancestryEdges": 1,
+        "expiresNs": 1800000002000000000
+      },
+      "capacityExhausted": false,
+      "contradiction": false,
+      "expiresNs": 1800000002000000000,
+      "fusionHeuristicScore": null,
+      "liveSourceCount": 1,
+      "proposal": {
+        "actuated": false,
+        "reason": "not_needed_or_capacity",
+        "requested": false
+      },
+      "rootIds": [
+        "explicit_empty"
+      ],
+      "scenario": "explicit_empty",
+      "scoreIsProbability": false,
+      "state": "empty"
+    },
+    {
+      "atNs": 1800000000100000000,
+      "belief": {
+        "ancestryEdges": 1,
+        "expiresNs": 1800000002100000000
+      },
+      "capacityExhausted": false,
+      "contradiction": false,
+      "expiresNs": 1800000002100000000,
+      "fusionHeuristicScore": 0.8999999761581421,
+      "liveSourceCount": 1,
+      "proposal": {
+        "actuated": false,
+        "reason": "not_needed_or_capacity",
+        "requested": false
+      },
+      "rootIds": [
+        "person_observed"
+      ],
+      "scenario": "person_observed",
+      "scoreIsProbability": false,
+      "state": "occupied"
+    },
+    {
+      "atNs": 1800000000200000000,
+      "belief": {
+        "ancestryEdges": 2,
+        "expiresNs": 1800000002100000000
+      },
+      "capacityExhausted": false,
+      "contradiction": true,
+      "expiresNs": 1800000002100000000,
+      "fusionHeuristicScore": null,
+      "liveSourceCount": 2,
+      "proposal": {
+        "actuated": false,
+        "proposalOnly": true,
+        "rankingScore": 2.926807165145874,
+        "remaining": {
+          "airtime_us": 1200,
+          "energy_uj": 120,
+          "packets": 0
+        },
+        "requested": true,
+        "reservedAuthoredCost": {
+          "airtime_us": 1000,
+          "energy_uj": 100,
+          "packets": 2
+        },
+        "scoreIsProbability": false,
+        "sensorId": "wifi"
+      },
+      "rootIds": [
+        "conflicting_source",
+        "person_observed"
+      ],
+      "scenario": "conflicting_source",
+      "scoreIsProbability": false,
+      "state": "unknown"
+    },
+    {
+      "atNs": 1800000000300000000,
+      "belief": {
+        "ancestryEdges": 2,
+        "expiresNs": 1800000002100000000
+      },
+      "capacityExhausted": false,
+      "contradiction": false,
+      "expiresNs": 1800000002100000000,
+      "fusionHeuristicScore": 0.8999999761581421,
+      "liveSourceCount": 2,
+      "proposal": {
+        "actuated": false,
+        "reason": "not_needed_or_capacity",
+        "requested": false
+      },
+      "rootIds": [
+        "radar_agrees",
+        "person_observed"
+      ],
+      "scenario": "radar_agrees",
+      "scoreIsProbability": false,
+      "state": "occupied"
+    },
+    {
+      "atNs": 1800000002300000000,
+      "belief": null,
+      "capacityExhausted": false,
+      "contradiction": false,
+      "expiresNs": 1800000002300000000,
+      "fusionHeuristicScore": null,
+      "liveSourceCount": 0,
+      "proposal": {
+        "actuated": false,
+        "reason": "budget_exhausted",
+        "remaining": {
+          "airtime_us": 1200,
+          "energy_uj": 120,
+          "packets": 0
+        },
+        "requested": false
+      },
+      "rootIds": [],
+      "scenario": "motionless_or_missing_updates_expire_to_unknown",
+      "scoreIsProbability": false,
+      "state": "unknown"
+    }
+  ],
+  "worldGraph": {
+    "edges": 6,
+    "nodes": 8,
+    "roundTripPreserved": true
+  },
+  "worldGraphRevision": "9b1c79c836cdacfb7b44f058c593157bac4c1dab"
+}

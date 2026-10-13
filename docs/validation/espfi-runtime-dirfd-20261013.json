@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "measured_at_utc": "2026-10-13",
+  "baseline_commit": "2f6191bd461b5688d1221d7fcc5059f82bdc85c9",
+  "baseline_tree": "7c3c9db05ed72eeb52066493cb9bafc15a65e5a1",
+  "baseline_source_sha256": "e8bd5b68175f85d66d6a983d174ffa8f78bfb7b02c91a6f981f2ff30f951140b",
+  "candidate_source_sha256": "46ab78b34e591bab9dfe8afdb4d37d44570adb7048250661192ac3129ca87212",
+  "candidate_test_sha256": "15a2f80912611b5dce4a06a238c5ba3cd65ce97af413c2f2ec9f646e03f20fe1",
+  "data": "synthetic test fixture only; model state and prediction math unchanged",
+  "workload": {
+    "warmup_pairs": 20,
+    "measured_pairs": 500,
+    "traced_loads_per_arm": 100,
+    "order": "baseline then candidate per pair"
+  },
+  "baseline": {
+    "p50_ms": 1.929205,
+    "p95_ms": 2.376450,
+    "traced_peak_bytes": 1067282
+  },
+  "candidate": {
+    "p50_ms": 1.996310,
+    "p95_ms": 2.451570,
+    "traced_peak_bytes": 1067330
+  },
+  "frozen_gates": {
+    "p95": "candidate <= max(1.2 * baseline, baseline + 0.1 ms)",
+    "traced_peak": "candidate <= baseline + 4096 bytes",
+    "p95_pass": true,
+    "traced_peak_pass": true
+  },
+  "security_scope": "final artifact directory pinned for one load; basename-only leaves opened relative to its descriptor",
+  "not_established": [
+    "artifact authenticity",
+    "atomic cross-file snapshot",
+    "ancestor path stability before open",
+    "protection from writers inside the pinned directory",
+    "sensing accuracy or prediction latency"
+  ],
+  "cost": "existing authorized ruOS CPU; infrastructure cost unmetered",
+  "promotionAuthorized": false,
+  "rollback": "revert the candidate commit"
+}

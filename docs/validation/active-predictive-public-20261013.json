@@ -1,0 +1,110 @@
+{
+  "anti_collapse": {
+    "collapse_warning": true,
+    "recording_effective_rank": 1.405533790588379,
+    "sample_std": 0.5267161726951599
+  },
+  "configuration": {
+    "batch_size": 8,
+    "epochs": 5,
+    "max_seconds": 120
+  },
+  "elapsed_seconds": 7.3358941419999155,
+  "evidence": "PUBLIC_TRAIN_ONLY",
+  "heldout_latent_mse": {
+    "constant": 0.9412673291542547,
+    "position_constant": 1.0487403672376125,
+    "trained": 0.9740209227843251,
+    "untrained": 1.1398585417287812
+  },
+  "heldout_samples": 139,
+  "history": [
+    {
+      "epoch": 1,
+      "train_objective": 0.7868377583367484
+    },
+    {
+      "epoch": 2,
+      "train_objective": 0.519914128950664
+    },
+    {
+      "epoch": 3,
+      "train_objective": 0.44930804542132785
+    },
+    {
+      "epoch": 4,
+      "train_objective": 0.421546328493527
+    },
+    {
+      "epoch": 5,
+      "train_objective": 0.4112824141979218
+    }
+  ],
+  "inference_latency": {
+    "calls_per_round": 100,
+    "rounds": [
+      {
+        "p50_ms": 0.9265300000000001,
+        "p95_ms": 1.332325,
+        "round": 1
+      },
+      {
+        "p50_ms": 0.91916,
+        "p95_ms": 1.3263670499999998,
+        "round": 2
+      },
+      {
+        "p50_ms": 1.175335,
+        "p95_ms": 1.4781839999999997,
+        "round": 3
+      }
+    ],
+    "scope": "CPU batch1 public frozen encode including validation/log normalization/token encoder/mean pooling; excludes acquisition and file IO",
+    "warmup": 10
+  },
+  "lineage": {
+    "evidence": "PUBLIC_TRAIN_ONLY",
+    "inner_fit": "room1 subjects1..4",
+    "inner_heldout": "room2 subjects5,6",
+    "loaded_partitions": [
+      "train"
+    ],
+    "manifest_sha256": "74e0fe039acbed1b287bd11ee6b779becbb8f9b66c3c249d260ed66f5583f02a",
+    "source_revision": "c8bf6aa0d680fa02695c85a82b05e79b3ebb10c4",
+    "unused_training_rows": 418
+  },
+  "model_sha256": "be5cbf9a740fa73e46bdb4ba3cdd25e2c41b5c47d8a629d906658816f7207f7c",
+  "normalization_fit": "train_only",
+  "numpy_version": "2.4.4",
+  "promotionAuthorized": false,
+  "reload_embedding_max_error": 0,
+  "scope": "EMA stopped targets; same final teacher target and mask for all baselines. No heldout tuning, original validation/test decoding, activity-to-occupancy relabeling, or task accuracy claim.",
+  "source_sha256": "1bc9c98cba03095eb09ceda1aaca5207edf7e63603de434fdd6ca8a15871d5d4",
+  "spec": {
+    "axes": [
+      "subcarrier",
+      "sample_index"
+    ],
+    "claim": "experimental masked latent prediction, not reproduction or occupancy model",
+    "ema": 0.99,
+    "heads": 4,
+    "input": [
+      52,
+      190
+    ],
+    "latent": 32,
+    "layers": 1,
+    "mask_fraction": 0.4,
+    "normalization": "train-only per-carrier log-amplitude mean/std",
+    "patch": [
+      4,
+      19
+    ],
+    "seed": 42,
+    "variance_floor": 1,
+    "variance_weight": 0.1
+  },
+  "status": "complete",
+  "torch_version": "2.11.0+cpu",
+  "train_samples": 280
+}

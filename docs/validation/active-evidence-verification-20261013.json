@@ -1,0 +1,64 @@
+{
+  "baselineTree": "921dfa969636c2270bce02e95c6c183f6337f951",
+  "dateUTC": "2026-10-13",
+  "decisions": {
+    "activeLoop": "retain as isolated synthetic software research",
+    "cachedKgeValidation": "reject default change: repeated p95 gate failed",
+    "predictiveEncoder": "reject utility and promotion: loses to global constant; collapse warning"
+  },
+  "environment": {
+    "kge": "local Linux x64 Node24.19.0 native @ruvector/kge0.2.0",
+    "numpy": "2.4.4",
+    "ruOS": "Linux x86_64 AMD EPYC; existing CPU",
+    "rust": "1.90.0",
+    "torch": "2.11.0+cpu"
+  },
+  "fieldAcceptance": "not_established",
+  "limitations": [
+    "Software lifecycle correctness is not physical occupancy accuracy",
+    "Logical source fixtures all use signed WiFi modality, not real radar/door adapters",
+    "Durable authenticated replay protection and independent sensor enrollment remain deployment requirements",
+    "KGE synthetic known-entity relevance is not prospective sensor utility",
+    "Public latent evaluation uses reused inner development groups within original training only",
+    "No original validation/test decoding in predictive experiment",
+    "No hardware actions, paid compute or production promotion"
+  ],
+  "promotionAuthorized": false,
+  "schemaVersion": 1,
+  "security": {
+    "fullRepositoryAdvisoryAudit": false,
+    "kgeLockSHA256": "2822058884668c26b1be8cc455eafd298084d46c27ff28979f307232356d51d1",
+    "npmKgeAudit": "zero reported vulnerabilities 2026-10-13 UTC",
+    "rustPinsChanged": false
+  },
+  "sourceSHA256": {
+    ".github/workflows/csi-encoder-training.yml": "8869939e5eb57bd678593ed84c795f51cdeb31a35c555037515a178073aaa499",
+    "scripts/active-kge/.gitignore": "7bf4b7949505be7ffdfad68d17d95f47b77fd52ea42d89de6ec027ee1db15fb1",
+    "scripts/active-kge/README.md": "d0202f0297af8fba508826383a47631614ef4d07794c46c1e31add7f71336926",
+    "scripts/active-kge/cli.mjs": "8d8fb86801083b7519f1ced8a1c616e0ca5f246659e0ae197e598c1dda0ef56c",
+    "scripts/active-kge/package-lock.json": "2822058884668c26b1be8cc455eafd298084d46c27ff28979f307232356d51d1",
+    "scripts/active-kge/package.json": "aa2794d8318f73c91920499cf7504889a81d38133730ee963af772b5703ace92",
+    "scripts/active-kge/ranker.mjs": "45e70d5c59e61ba135186178385491dd128ef54947308799741ea4ddc198f0d8",
+    "scripts/active-kge/test.mjs": "cf967d40fba44d9777aa05ee9bc36d7ac7acbf88ffcb5a965cc3b837044349df",
+    "scripts/csi_training/PREDICTIVE.md": "5f0ab670045f2214ea79579595ca0678adddf84195ddae1932d18999e79597ce",
+    "scripts/csi_training/active_evaluation.py": "1f343aeec73c88c379f7225dd8ac310f8940bf5dda23ac63413f4ab475b767cf",
+    "scripts/csi_training/predictive.py": "1bc9c98cba03095eb09ceda1aaca5207edf7e63603de434fdd6ca8a15871d5d4",
+    "scripts/evaluate-active-evidence.py": "33ccee146fdb90701c16de84e367534bdd2c280bed8bc56a8e5198812949332e",
+    "scripts/field-context-probe/README.md": "eca527d2e9544667ef889e877ea70aae18ce5c0c6d91dd08f73d114503959ca5",
+    "scripts/field-context-probe/src/active.rs": "e9d6f97749324d891fdd8be3b3a9043817cc883af4802286b509e5ea68035a83",
+    "scripts/field-context-probe/src/main.rs": "0bb8790e1afa0ce6da990214d07650d2ab88dd2fc7ca2f7167b694c8361fb229",
+    "scripts/pretrain-csi-predictive.py": "61bbf0dd56beaece58df870fccab98809c31389dc78afc21e400c1962745e9bf",
+    "scripts/tests/test_csi_training_active_evaluation.py": "05d4b3b69ca0c703543ba16be385710e5c65f5790416a3f0527aad53c54cb827",
+    "scripts/tests/test_csi_training_predictive.py": "1e35229a47e74e946151b49e64fb05d6f6f3c14bc3c1c9dfac2f4882dede7d16",
+    "scripts/verify-active-replay.py": "12d2ac7914883f33fd27512d605aa55735b297043ea09f9204621402038130a8"
+  },
+  "status": "software_contracts_pass",
+  "validation": {
+    "dataPolicy": "pass",
+    "independentSourceReview": "no_block",
+    "integratedReplay": "pass",
+    "kgeTests": 5,
+    "pythonTests": 41,
+    "rustTests": 14
+  }
+}

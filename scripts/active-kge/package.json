@@ -1,0 +1,6 @@
+{
+  "name": "ruview-active-kge-experiment", "version": "0.0.0", "private": true,
+  "type": "module", "engines": {"node": ">=18"},
+  "scripts": {"test": "node --test test.mjs", "rank": "node cli.mjs"},
+  "dependencies": {"@ruvector/kge": "0.2.0"}
+}

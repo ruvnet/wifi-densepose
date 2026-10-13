@@ -55,7 +55,10 @@ hardware remain necessary for deployment claims.
 
 The compact research artifact passes the declared retention gate. Its weights
 file is 16,088 bytes versus 496,488 bytes, a 96.76% reduction. The three inference
-artifact files total 17,245 bytes: weights 16,088, metadata 1,098 and status 59.
+artifact files had a pre-generation-binding measurement of 17,245 bytes: weights
+16,088, metadata 1,098 and status 59. Current exports add `metadata_sha256` to the
+status receipt; record the exact total from each export rather than inferring it
+from this historical measurement.
 This total excludes code, dependencies and the optional measurement receipt.
 The runtime reconstructs the large projection; no proportional RAM reduction
 is claimed.

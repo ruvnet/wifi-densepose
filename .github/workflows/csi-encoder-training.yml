@@ -5,6 +5,12 @@ on:
     paths:
       - 'scripts/csi_training/**'
       - 'scripts/field-context-probe/**'
+      - 'scripts/active-kge/**'
+      - 'scripts/pretrain-csi-predictive.py'
+      - 'scripts/pretrain-csi-transfer.py'
+      - 'scripts/benchmark-csi-intake.py'
+      - 'scripts/evaluate-active-evidence.py'
+      - 'scripts/verify-active-replay.py'
       - 'scripts/train-csi-encoder.py'
       - 'scripts/train-espfi.py'
       - 'scripts/improve-espfi.py'
@@ -13,6 +19,7 @@ on:
       - 'scripts/requirements-espfi-training.txt'
       - 'scripts/requirements-espfi-inference.txt'
       - 'scripts/requirements-csi-training.txt'
+      - 'scripts/requirements-zenodo-intake.txt'
       - 'scripts/tests/test_csi_training*.py'
       - 'scripts/tests/test_espfi*.py'
       - '.github/workflows/csi-encoder-training.yml'
@@ -37,6 +44,7 @@ jobs:
           python -m pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
           python -m pip install -r scripts/requirements-csi-training.txt
           python -m pip install -r scripts/requirements-espfi-training.txt
+          python -m pip install -r scripts/requirements-zenodo-intake.txt
       - name: Validate real training code using temporary synthetic data
         env:
           PYTHONPATH: scripts
@@ -76,3 +84,30 @@ jobs:
         run: cargo +1.90.0 test --locked
       - name: Exercise synthetic evidence pipeline
         run: cargo +1.90.0 run --locked --quiet --bin ruview-field-context-probe
+      - name: Exercise active evidence lifecycle
+        run: cargo +1.90.0 run --locked --quiet --bin ruview-field-context-probe -- --active-loop
+
+  active-kge-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22'
+      - name: Install exact KGE experiment dependency
+        working-directory: scripts/active-kge
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Validate actual trained KGE and bounded artifact contract
+        working-directory: scripts/active-kge
+        run: npm test
+      - name: Install fixed Rust toolchain
+        run: rustup toolchain install 1.90.0 --profile minimal
+      - name: Feed actual KGE proposals through Rust authority boundary
+        run: |
+          node scripts/active-kge/cli.mjs --train "$RUNNER_TEMP/kge" --context context_1_8 > "$RUNNER_TEMP/ranking.json"
+          cargo +1.90.0 run --locked --quiet --manifest-path scripts/field-context-probe/Cargo.toml -- --active-loop > "$RUNNER_TEMP/reference.json"
+          cargo +1.90.0 run --locked --quiet --manifest-path scripts/field-context-probe/Cargo.toml -- --active-loop --ranking "$RUNNER_TEMP/ranking.json" > "$RUNNER_TEMP/candidate.json"
+          python scripts/verify-active-replay.py "$RUNNER_TEMP/reference.json" "$RUNNER_TEMP/candidate.json"

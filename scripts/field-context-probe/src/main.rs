@@ -1,5 +1,6 @@
 //! Synthetic reliability probe using actual pinned RuField and WorldGraph.
 //! No activity model, physical capture, confidence calibration or person track.
+mod active;
 use std::collections::{BTreeMap, BTreeSet};
 use rufield_core::{FieldEvent, FieldTensor, FieldAxis, Modality, Observation, PrivacyClass,
     ProvenanceRef, SensorDescriptor, FusionEngine, InferenceQuery, FieldInference};
@@ -279,6 +280,18 @@ fn inspect_path(path: &str) -> Result<Value, Box<dyn std::error::Error>> {
 }
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--active-loop") {
+        let ranking = if args.len() == 1 { None }
+            else if args.len() == 3 && args[1] == "--ranking" {
+                match active::read_ranking(&args[2]) { Ok(value) => Some(value), Err(reason) => {
+                    eprintln!("Active ranking rejected: {reason}"); std::process::exit(2);
+                }}
+            } else { eprintln!("Usage: --active-loop [--ranking PATH|-]"); std::process::exit(2); };
+        println!("{}", serde_json::to_string_pretty(&active::demo(ranking)).unwrap()); return;
+    }
+    if args == ["--active-benchmark"] {
+        println!("{}", serde_json::to_string_pretty(&active::benchmark_active()).unwrap()); return;
+    }
     if args.len() == 2 && args[0] == "--inspect-jsonl" {
         match inspect_path(&args[1]) {
             Ok(report) => { println!("{}", serde_json::to_string_pretty(&report).unwrap());
@@ -289,7 +302,7 @@ fn main() {
     }
     let mut report = probe();
     if args == ["--benchmark"] { report["benchmark"] = benchmark(); }
-    else if !args.is_empty() { eprintln!("Usage: ruview-field-context-probe [--benchmark | --inspect-jsonl PATH]"); std::process::exit(2); }
+    else if !args.is_empty() { eprintln!("Usage: ruview-field-context-probe [--benchmark | --inspect-jsonl PATH | --active-loop [--ranking PATH|-] | --active-benchmark]"); std::process::exit(2); }
     println!("{}", serde_json::to_string_pretty(&report).unwrap());
 }
 

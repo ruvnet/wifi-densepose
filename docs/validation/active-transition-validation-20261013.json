@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "candidate": "active-transition-metrics-v1",
+  "decision": "INCONCLUSIVE",
+  "decisionReason": "Local frozen acceptance passed; hosted checks at the proposed commit were not yet available when this receipt was created.",
+  "baseline": {
+    "commit": "56b0085b0bb21cf26fc4792e65cb3b42c16d2888",
+    "tree": "b8510c010ed1ca8100699cd6ec23d4722fed68f6",
+    "sourceSha256": "1f343aeec73c88c379f7225dd8ac310f8940bf5dda23ac63413f4ab475b767cf"
+  },
+  "candidateFiles": {
+    "scripts/csi_training/active_evaluation.py": "ddafb74b32c14ba23e9a4091329eecb3550c040c9b62879126451471a5124018",
+    "scripts/tests/test_csi_training_active_evaluation.py": "6927c7368fb23b85b80467eb7d1eecd95cb0c0beb68aa1f54aacab78a8f5bd70",
+    "docs/active-evidence-experiment.md": "23d19ac9f5332c2e0a0c11433a99009237dc7fcfcf6eb2151123e2f22136267f"
+  },
+  "hypothesis": "Room-clustered transition delay, unresolved-transition, and false-occupied-episode deltas close the duration-only evaluator gap without allowing unknown predictions to hide delayed resolution.",
+  "data": {
+    "evidence": "SYNTHETIC",
+    "frozenWorkload": {
+      "rooms": 100,
+      "intervalsPerRoom": 100,
+      "resamples": 100,
+      "timingIterationsPerArm": 30,
+      "seed": 42
+    },
+    "splitPolicy": "Not applicable to the deterministic synthetic regression and performance workload; no model fitting or final-test payload access occurred."
+  },
+  "acceptance": {
+    "transitionSemantics": "Both transition directions in at least two rooms; upper 95% room-bootstrap bounds must be no greater than zero for candidate-minus-baseline delay, unresolved fraction, and false episodes per empty hour.",
+    "runtime": "Candidate p95 must be no greater than max(1.5 times baseline, baseline plus 1 ms).",
+    "memory": "Candidate traced peak must be no greater than baseline plus 524288 bytes."
+  },
+  "tests": [
+    {
+      "command": "PYTHONPATH=scripts:/home/ruv/projects/zenodo-intake-deps /home/ruv/projects/ruview-training-env/bin/python -m unittest discover -s scripts/tests -p 'test_csi_training*.py'",
+      "result": "PASS",
+      "count": 87,
+      "seconds": 9.485
+    }
+  ],
+  "performance": {
+    "baselineP95Ms": 62.387706,
+    "candidateP95Ms": 91.731155,
+    "latencyLimitMs": 93.581559,
+    "baselinePeakBytes": 80368,
+    "candidatePeakBytes": 169488,
+    "memoryLimitBytes": 604656,
+    "result": "PASS"
+  },
+  "safety": {
+    "fieldAcceptance": "not_established",
+    "promotionAuthorized": false,
+    "labelProvenanceVerified": false,
+    "unknownPredictionsExtendDelay": true,
+    "unresolvedTransitionsRetained": true
+  },
+  "cost": "Unknown incremental infrastructure cost; existing authorized CPU only, no paid provisioning or training.",
+  "rollback": "Revert the candidate commit; the input schema and existing numericalGate field remain unchanged.",
+  "missingEvidence": [
+    "Hosted checks at the exact proposed commit",
+    "Authenticated field labels and capture provenance",
+    "Fresh multi-room confirmation",
+    "Sub-interval acquisition and actuation latency"
+  ],
+  "nextAction": "Publish to the existing draft branch with an expected-head lease, verify exact-head hosted checks, and keep promotion disabled."
+}

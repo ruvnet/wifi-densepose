@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "measured_at_utc": "2026-10-13",
+  "baseline_commit": "d3586c905176794a52db5c59eb274d955abe0ef0",
+  "baseline_tree": "2a2792b9a4abb9a96d92749c938f8f1c9d78c3cb",
+  "baseline_runtime_sha256": "46ab78b34e591bab9dfe8afdb4d37d44570adb7048250661192ac3129ca87212",
+  "baseline_exporter_sha256": "74b13890afd33fbdf40efce3e91f44ddeb505d0f6d84f2d9a0b03adcd92c6f52",
+  "candidate_runtime_sha256": "bc0e2097cf06b18fec843694d5f8fd57ca5268309229eb06a06b208cb9c3cdc3",
+  "candidate_exporter_sha256": "8da946e1c575ae20b96dc3fdb229bb85cdc5054f6c2efb774aca506773770c2e",
+  "candidate_runtime_test_sha256": "165f36b5ee8b889cdd5439dbcae3399a5e45eca44fe074e7b94de8ccf6bbcec1",
+  "data": "synthetic test fixture only; model state and prediction math unchanged",
+  "contract": "complete status metadata_sha256 binds exact metadata bytes; metadata model_sha256 binds exact model bytes",
+  "compatibility": "older unbound research bundles fail closed and require re-export",
+  "workload": {
+    "warmup_pairs": 20,
+    "measured_pairs": 500,
+    "traced_loads_per_arm": 100,
+    "order": "baseline then candidate per pair"
+  },
+  "baseline": {
+    "p50_ms": 2.035235,
+    "p95_ms": 2.473300,
+    "traced_peak_bytes": 1067491
+  },
+  "candidate": {
+    "p50_ms": 2.039215,
+    "p95_ms": 2.545180,
+    "traced_peak_bytes": 1068498
+  },
+  "frozen_gates": {
+    "p95": "candidate <= max(1.2 * baseline, baseline + 0.1 ms)",
+    "traced_peak": "candidate <= baseline + 4096 bytes",
+    "p95_pass": true,
+    "traced_peak_pass": true
+  },
+  "not_established": [
+    "artifact producer authenticity",
+    "provenance truth",
+    "protection from a writer that can consistently replace and rehash the full bundle",
+    "metrics.json binding",
+    "sensing accuracy or prediction latency"
+  ],
+  "cost": "existing authorized ruOS CPU; infrastructure cost unmetered",
+  "promotionAuthorized": false,
+  "rollback": "revert the candidate commit and re-export only if returning to the unbound research format"
+}

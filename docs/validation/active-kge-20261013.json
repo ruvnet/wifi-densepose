@@ -1,0 +1,189 @@
+{
+  "schemaVersion": 1,
+  "status": "complete",
+  "evidence": "SYNTHETIC",
+  "promotionAuthorized": false,
+  "package": {
+    "name": "@ruvector/kge",
+    "version": "0.2.0",
+    "engineVersion": "2.4.0",
+    "backend": "native",
+    "backendArtifact": "native/kge.linux-x64-gnu.node",
+    "backendArtifactSha256": "4a32175eab0256d0e48b2e619388fae21b3c25dfb0269c1988a74c48c0920463"
+  },
+  "config": {
+    "scorer": "hole",
+    "dims": 32,
+    "seed": 42
+  },
+  "training": {
+    "epochs": 100,
+    "lr": 0.05,
+    "seed": 42
+  },
+  "trainingReports": [
+    {
+      "batches": 1,
+      "entities": 36,
+      "epoch": 99,
+      "epochs": 100,
+      "loss": 2.2073171138763428,
+      "n3Penalty": 0.005866814870387316,
+      "relations": 2,
+      "triples": 54
+    },
+    {
+      "batches": 1,
+      "entities": 36,
+      "epoch": 99,
+      "epochs": 100,
+      "loss": 2.2097179889678955,
+      "n3Penalty": 0.0067641702480614185,
+      "relations": 2,
+      "triples": 54
+    }
+  ],
+  "stats": {
+    "dims": 32,
+    "entities": 36,
+    "indexed": false,
+    "relations": 2,
+    "scorer": "hole",
+    "seed": 42,
+    "splits": {
+      "test": 0,
+      "train": 54,
+      "transfer": 0,
+      "unlabelled": 0,
+      "valid": 0
+    },
+    "triples": 54
+  },
+  "fixtureSha256": "f26b7520deaf60d18734ae99534e9177605dc1d0e387b169ab86014f4d583ccb",
+  "modelSha256": "1bbd3e8189a0f9aef5aba0ff2ea8f5361b16188d29d2e03d9d5ea249b54f0de2",
+  "controlModelSha256": "822c80b28bc7c0c17fdfe61ad5b18d08b646108ca5cddac39194b007d563e6ab",
+  "sourceSha256": {
+    "ranker.mjs": "45e70d5c59e61ba135186178385491dd128ef54947308799741ea4ddc198f0d8",
+    "cli.mjs": "8d8fb86801083b7519f1ced8a1c616e0ca5f246659e0ae197e598c1dda0ef56c",
+    "package-lock.json": "2822058884668c26b1be8cc455eafd298084d46c27ff28979f307232356d51d1"
+  },
+  "quality": {
+    "kge": {
+      "queries": 6,
+      "mrr": 1,
+      "hitsAt1": 1,
+      "ranks": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "frequency": {
+      "queries": 6,
+      "mrr": 0.6111111111111112,
+      "hitsAt1": 0.3333333333333333,
+      "ranks": [
+        1,
+        1,
+        2,
+        2,
+        3,
+        3
+      ]
+    },
+    "permutedGraph": {
+      "queries": 6,
+      "mrr": 0.6666666666666666,
+      "hitsAt1": 0.3333333333333333,
+      "ranks": [
+        2,
+        2,
+        1,
+        1,
+        2,
+        2
+      ]
+    }
+  },
+  "latency": {
+    "evidence": "MEASURED",
+    "scope": "Full rank including input validation and exact entity scoring; excludes load and training",
+    "rounds": [
+      {
+        "round": 1,
+        "callsPerRuntime": 1000,
+        "warmupsPerRuntime": 100,
+        "cached": {
+          "minMs": 0.03262900000001423,
+          "p50Ms": 0.033781000000004724,
+          "p95Ms": 0.0579970000000003,
+          "derivedQueriesPerSecond": 26496.88241656002
+        },
+        "reference": {
+          "minMs": 0.033430999999978894,
+          "p50Ms": 0.03488300000000777,
+          "p95Ms": 0.05774700000000621,
+          "derivedQueriesPerSecond": 25574.565869187463
+        },
+        "bothPercentilesLower": false
+      },
+      {
+        "round": 2,
+        "callsPerRuntime": 1000,
+        "warmupsPerRuntime": 100,
+        "cached": {
+          "minMs": 0.03262900000001423,
+          "p50Ms": 0.03350100000000111,
+          "p95Ms": 0.04986500000001115,
+          "derivedQueriesPerSecond": 27541.272455811028
+        },
+        "reference": {
+          "minMs": 0.03351100000000429,
+          "p50Ms": 0.03449200000000019,
+          "p95Ms": 0.05064600000000041,
+          "derivedQueriesPerSecond": 26479.3734683672
+        },
+        "bothPercentilesLower": true
+      },
+      {
+        "round": 3,
+        "callsPerRuntime": 1000,
+        "warmupsPerRuntime": 100,
+        "cached": {
+          "minMs": 0.032619000000011056,
+          "p50Ms": 0.03368999999997868,
+          "p95Ms": 0.05342999999999165,
+          "derivedQueriesPerSecond": 27383.32928653228
+        },
+        "reference": {
+          "minMs": 0.03362099999998236,
+          "p50Ms": 0.03469200000000683,
+          "p95Ms": 0.05272000000002208,
+          "derivedQueriesPerSecond": 25894.580727767563
+        },
+        "bothPercentilesLower": false
+      }
+    ],
+    "retainedCachedValidation": false,
+    "speedGatePassed": false,
+    "decision": "Reference default retained after first frozen paired campaign failed round-one p95; later timings do not promote the candidate",
+    "gate": "Both p50 and p95 strictly lower in every round; fixed before measurement",
+    "paired": true,
+    "alternatingOrder": true,
+    "identicalModelAndInputs": true
+  },
+  "environment": {
+    "node": "v24.19.0",
+    "platform": "linux",
+    "arch": "x64"
+  },
+  "limitations": [
+    "Authored synthetic transductive link split; context feature membership is trained, target links are not.",
+    "Synthetic feature groups encode the authored task. This is not independent real occupancy or sensor utility evidence.",
+    "One frozen configuration and seed; no hyperparameter search, relation composition, model promotion or sensor action.",
+    "Scores are uncalibrated ranking scores, not probabilities. Equal-frequency baseline uses fixed wifi/radar/door tie order."
+  ]
+}

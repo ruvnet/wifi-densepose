@@ -5,15 +5,20 @@ and supplied benchmark class directories disagree about activity semantics.
 """
 from __future__ import annotations
 import argparse
+from contextlib import contextmanager
 import hashlib
 import io
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
+import tempfile
 import zipfile
 import numpy as np
 
 REVISION = 'c8bf6aa0d680fa02695c85a82b05e79b3ebb10c4'
+DATASET = 'ESP-Fi HAR'
 ARCHIVE_SHA256 = '85f3df633c5b1a48ca4b1423467fce22821b21eeb3eed085a8d9f983dc156660'
 ARCHIVE_BYTES = 644939981
 SOURCE_URL = f'https://media.githubusercontent.com/media/AutoSmartGroup/ESP-Fi-HAR/{REVISION}/ESP-Fi_dataset.rar'
@@ -21,11 +26,83 @@ CLASSES = [f'activity_{i}' for i in range(1, 8)]
 IDENTITY = re.compile(r'([1-4])-([1-8])-([1-7])-(10|[1-9])\.mat\Z')
 MAX_MEMBER = 2_000_000
 MAX_NPZ = 600_000_000
+# The largest admitted supervised payload is 193,688,352 bytes at pool=1.
+# This bound includes conservative DEFLATE, NPY and ZIP container headroom.
+MAX_CONFIRMED_NPZ = 200_000_000
 
 
 def digest(path):
     with Path(path).open('rb') as f:
         return hashlib.file_digest(f, 'sha256').hexdigest()
+
+
+def _copy_bundle(source, snapshot, size):
+    source.seek(0)
+    copied, value = 0, hashlib.sha256()
+    while copied < size:
+        block = source.read(min(1024 * 1024, size - copied))
+        if not block:
+            raise ValueError('dataset bundle changed during snapshot')
+        if snapshot.write(block) != len(block):
+            raise ValueError('dataset bundle snapshot write failed')
+        value.update(block)
+        copied += len(block)
+    if copied != size or source.read(1):
+        raise ValueError('dataset bundle changed during snapshot')
+    return value.hexdigest()
+
+
+@contextmanager
+def _verified_bundle_snapshot(path, expected_sha256):
+    """Copy verified bytes into a private file before parser exposure."""
+    snapshot = None
+    try:
+        with _open_regular_bundle(path) as (source, size):
+            snapshot = tempfile.TemporaryFile(mode='w+b', prefix='ruview-npz-')
+            if _copy_bundle(source, snapshot, size) != expected_sha256:
+                raise ValueError('unsafe or modified dataset bundle')
+        snapshot.flush()
+        snapshot.seek(0)
+        yield snapshot
+    except OSError as exc:
+        raise ValueError('dataset bundle snapshot unavailable') from exc
+    finally:
+        if snapshot is not None:
+            snapshot.close()
+
+
+@contextmanager
+def _open_regular_bundle(path):
+    """Open one bounded final-component descriptor for snapshot creation.
+
+    Parent directories remain a trusted deployment boundary. O_NONBLOCK keeps a
+    substituted FIFO from blocking before fstat; O_NOFOLLOW rejects a final
+    symlink. A descriptor prevents pathname replacement while the verified
+    private snapshot is copied.
+    """
+    if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_NONBLOCK'):
+        raise ValueError('secure dataset bundle intake unavailable')
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    if hasattr(os, 'O_CLOEXEC'):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, 'O_BINARY'):
+        flags |= os.O_BINARY
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError('dataset bundle unavailable or symlinked') from exc
+    try:
+        try:
+            info = os.fstat(fd)
+        except OSError as exc:
+            raise ValueError('dataset bundle read failed') from exc
+        if (not stat.S_ISREG(info.st_mode)
+                or not 0 < info.st_size <= MAX_CONFIRMED_NPZ):
+            raise ValueError('dataset bundle must be a bounded regular file')
+        with os.fdopen(fd, 'rb', closefd=False) as stream:
+            yield stream, info.st_size
+    finally:
+        os.close(fd)
 
 
 def parse_identity(name):
@@ -126,7 +203,7 @@ def prepare(archive, output, pool=5):
     output.mkdir(parents=True)
     target = output / 'amplitudes.npz'
     np.savez_compressed(target, **arrays)
-    manifest = {'schema_version': 1, 'dataset': 'ESP-Fi HAR', 'source_url': SOURCE_URL,
+    manifest = {'schema_version': 1, 'dataset': DATASET, 'source_url': SOURCE_URL,
                 'source_revision': REVISION, 'archive_sha256': ARCHIVE_SHA256,
                 'license': 'CC-BY-4.0', 'license_url': f'https://github.com/AutoSmartGroup/ESP-Fi-HAR/blob/{REVISION}/Model%20Code/DATA_LICENSE.txt',
                 'attribution': 'Wen et al. ESP-Fi HAR. Ad Hoc Networks 186 (2026) 104192. doi:10.1016/j.adhoc.2026.104192',
@@ -142,9 +219,10 @@ def prepare(archive, output, pool=5):
     return path
 
 
-def load_dataset(manifest):
+def load_dataset(manifest, expected_manifest_sha256=None):
     """Load all partitions for a final frozen evaluation, including test signals."""
-    return _load_partitions(manifest, ('train', 'validation', 'test'))
+    return _load_partitions(manifest, ('train', 'validation', 'test'),
+                            expected_manifest_sha256)
 
 
 def load_development(manifest):
@@ -157,14 +235,28 @@ def load_development(manifest):
     return _load_partitions(manifest, ('train', 'validation'))
 
 
-def _load_partitions(manifest, splits):
-    path = Path(manifest).resolve()
-    if path.stat().st_size > 3_000_000:
-        raise ValueError('manifest too large')
-    meta = json.loads(path.read_text())
+def _load_partitions(manifest, splits, expected_manifest_sha256=None):
+    supplied_path = Path(manifest)
+    if expected_manifest_sha256 is not None:
+        from .confirmation import (MAX_DATASET_MANIFEST_BYTES, digest as checked_digest,
+                                   read_json_and_sha256)
+        checked_digest(expected_manifest_sha256)
+        meta, manifest_sha256 = read_json_and_sha256(
+            supplied_path, MAX_DATASET_MANIFEST_BYTES)
+        if manifest_sha256 != expected_manifest_sha256:
+            raise ValueError('Dataset manifest changed after confirmation preflight')
+        # The final manifest component is not reopened. Parent directories remain
+        # a trusted deployment boundary for resolving the referenced NPZ.
+        path = supplied_path.parent.resolve() / supplied_path.name
+    else:
+        path = supplied_path.resolve()
+        if path.stat().st_size > 3_000_000:
+            raise ValueError('manifest too large')
+        meta = json.loads(path.read_text())
+        manifest_sha256 = digest(path)
     if meta.get('schema_version') != 1 or meta.get('classes') != CLASSES:
         raise ValueError('unsupported dataset contract')
-    if (meta.get('source_revision') != REVISION or meta.get('archive_sha256') != ARCHIVE_SHA256
+    if (meta.get('dataset') != DATASET or meta.get('source_revision') != REVISION or meta.get('archive_sha256') != ARCHIVE_SHA256
             or meta.get('source_url') != SOURCE_URL or meta.get('license') != 'CC-BY-4.0'
             or meta.get('split_policy') != 'joint_room_subject_intersection_v1'
             or meta.get('temporal_mean_pool') not in (1, 2, 5, 10, 19, 25, 50, 95)
@@ -186,10 +278,48 @@ def _load_partitions(manifest, splits):
         duplicate = occurrences[record['signal_sha256']] > 1
         if record['split'] != (None if duplicate else split_identity(ident)):
             raise ValueError('incorrect source split assignment')
-    npz = (path.parent / meta['npz']).resolve()
-    if npz.parent != path.parent or npz.stat().st_size > MAX_NPZ or digest(npz) != meta['npz_sha256']:
-        raise ValueError('unsafe or modified dataset bundle')
-    with zipfile.ZipFile(npz) as z:
+    npz_name, npz_sha256 = meta.get('npz'), meta.get('npz_sha256')
+    if (not isinstance(npz_name, str) or not npz_name or len(npz_name) > 255
+            or Path(npz_name).name != npz_name or '\\' in npz_name
+            or npz_name in ('.', '..') or not isinstance(npz_sha256, str)
+            or not re.fullmatch('[0-9a-f]{64}', npz_sha256)):
+        raise ValueError('unsafe dataset bundle declaration')
+    npz = path.parent / npz_name
+    if expected_manifest_sha256 is not None:
+        with _verified_bundle_snapshot(npz, npz_sha256) as snapshot:
+            _inspect_bundle(snapshot, meta, records)
+            parts, groups, signals, identities_seen = _decode_bundle(
+                snapshot, meta, lookup, splits)
+    else:
+        resolved_npz = npz.resolve()
+        if (resolved_npz.parent != path.parent or resolved_npz.stat().st_size > MAX_NPZ
+                or digest(resolved_npz) != npz_sha256):
+            raise ValueError('unsafe or modified dataset bundle')
+        _inspect_bundle(resolved_npz, meta, records)
+        parts, groups, signals, identities_seen = _decode_bundle(
+            resolved_npz, meta, lookup, splits)
+    for a, b in (('train', 'validation'), ('train', 'test'), ('validation', 'test')):
+        if a in groups and b in groups and any(groups[a][i] & groups[b][i] for i in (0, 1)):
+            raise ValueError('room or participant leakage')
+    if identities_seen != {i for i, r in lookup.items() if r['split'] in splits}:
+        raise ValueError('incomplete retained population')
+    expected_counts = {s: sum(r['split'] == s for r in records)
+                       for s in ('train', 'validation', 'test')}
+    if meta.get('counts') != expected_counts:
+        raise ValueError('split counts mismatch')
+    meta['manifest_sha256'] = manifest_sha256
+    meta['loaded_partitions'] = list(splits)
+    return parts, meta
+
+
+def _rewind(bundle):
+    if hasattr(bundle, 'seek'):
+        bundle.seek(0)
+
+
+def _inspect_bundle(bundle, meta, records):
+    _rewind(bundle)
+    with zipfile.ZipFile(bundle) as z:
         infos = z.infolist()
         expected_names = {s + suffix + '.npy' for s in ('train', 'validation', 'test')
                           for suffix in ('_x', '_y', '_identity')}
@@ -213,8 +343,13 @@ def _load_partitions(manifest, splits):
                 if (shape != expected_shape or dtype != expected_dtype or fortran
                         or f.tell() + int(np.prod(shape)) * dtype.itemsize != info.file_size):
                     raise ValueError('invalid numpy header or payload size')
+    _rewind(bundle)
+
+
+def _decode_bundle(bundle, meta, lookup, splits):
     parts, groups, signals, identities_seen = {}, {}, set(), set()
-    with np.load(npz, allow_pickle=False) as data:
+    _rewind(bundle)
+    with np.load(bundle, allow_pickle=False) as data:
         for split in splits:
             x, y, identities = (data[split + suffix] for suffix in ('_x', '_y', '_identity'))
             if (x.dtype != np.float32 or x.ndim != 3 or x.shape[1:] != (52, meta['window_samples'])
@@ -238,18 +373,7 @@ def _load_partitions(manifest, splits):
                 signals.add(h)
             groups[split] = (set(identities[:, 0]), set(identities[:, 1]))
             parts[split] = {'x': x, 'y': y, 'identity': identities}
-    for a, b in (('train', 'validation'), ('train', 'test'), ('validation', 'test')):
-        if a in groups and b in groups and any(groups[a][i] & groups[b][i] for i in (0, 1)):
-            raise ValueError('room or participant leakage')
-    if identities_seen != {i for i, r in lookup.items() if r['split'] in splits}:
-        raise ValueError('incomplete retained population')
-    expected_counts = {s: sum(r['split'] == s for r in records)
-                       for s in ('train', 'validation', 'test')}
-    if meta.get('counts') != expected_counts:
-        raise ValueError('split counts mismatch')
-    meta['manifest_sha256'] = digest(path)
-    meta['loaded_partitions'] = list(splits)
-    return parts, meta
+    return parts, groups, signals, identities_seen
 
 
 def main():

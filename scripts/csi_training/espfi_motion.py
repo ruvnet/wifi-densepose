@@ -4,6 +4,7 @@ Independent feature experiment, not a reproduction of an external model.
 Only grouped training folds select a candidate; final test arrays are absent.
 """
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import time
@@ -88,7 +89,8 @@ class MotionBundle:
     def __init__(self, directory):
         root = Path(directory)
         status = json.loads(_read(root/'status.json', 65536))
-        report = json.loads(_read(root/'metrics.json', 16*1024**2))
+        report_bytes = _read(root/'metrics.json', 16*1024**2)
+        report = json.loads(report_bytes)
         if (not isinstance(status, dict) or not isinstance(report, dict)
                 or status.get('status') != 'complete' or status.get('promotionAuthorized') is not False
                 or report.get('status') != 'complete' or report.get('promotionAuthorized') is not False
@@ -99,8 +101,8 @@ class MotionBundle:
         if self.candidate not in GRID:
             raise ValueError('Unknown candidate')
         data = _read(root/'model.safetensors', 1024**2)
-        import hashlib
-        if hashlib.sha256(data).hexdigest() != report.get('model_sha256'):
+        model_sha256 = hashlib.sha256(data).hexdigest()
+        if model_sha256 != report.get('model_sha256'):
             raise ValueError('Model hash mismatch')
         self.state = load(data)
         width = WIDTHS[self.candidate['family']]
@@ -111,6 +113,13 @@ class MotionBundle:
                 self.state[k].dtype != np.float64 or not np.isfinite(self.state[k]).all()
                 for k, shape in expected.items()) or not (self.state['feature_scale'] > 0).all()):
             raise ValueError('Invalid motion model state')
+
+        provenance = report.get('provenance', {})
+        self._verified_manifest_sha256 = (provenance.get('manifest_sha256')
+                                            if isinstance(provenance, dict) else None)
+        self._verified_model_sha256 = model_sha256
+        self._verified_model_bytes = len(data)
+        self._verified_receipt_sha256 = hashlib.sha256(report_bytes).hexdigest()
 
     def predict(self, values):
         return predict_features(self.state, motion_features(values, self.candidate['family']))

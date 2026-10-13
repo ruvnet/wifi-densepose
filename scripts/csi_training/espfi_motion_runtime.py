@@ -6,7 +6,9 @@ Scratch retains transformed last-window values until reuse; it is not memory era
 """
 import hashlib
 import json
+import os
 from pathlib import Path
+import stat
 from threading import Lock
 import numpy as np
 from safetensors.numpy import load
@@ -37,34 +39,102 @@ def validate(state):
         raise ValueError('Invalid compact float64 ACF state')
 
 
-def _read(path):
-    path = Path(path)
-    if path.is_symlink() or not path.is_file():
-        raise ValueError('Expected regular bounded artifact')
-    with path.open('rb') as handle:
-        data = handle.read(65537)
-    if len(data) > 65536:
-        raise ValueError('Oversized artifact')
-    return data
+def _file_identity(details):
+    return (details.st_dev, details.st_ino, stat.S_IFMT(details.st_mode),
+            details.st_size, details.st_mtime_ns, details.st_ctime_ns)
+
+
+def _open_directory(path):
+    """Open and pin the artifact directory used by one bundle load."""
+    if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
+        raise ValueError('Secure artifact intake unavailable')
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY
+    if hasattr(os, 'O_CLOEXEC'):
+        flags |= os.O_CLOEXEC
+    try:
+        descriptor = os.open(Path(path), flags)
+    except OSError as exc:
+        raise ValueError('Expected artifact directory') from exc
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise ValueError('Expected artifact directory')
+        return descriptor
+    except (OSError, ValueError):
+        os.close(descriptor)
+        raise
+
+
+def _read(path, directory_fd=None):
+    """Read a small bounded artifact through the descriptor that was checked."""
+    if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_NONBLOCK'):
+        raise ValueError('Secure artifact intake unavailable')
+    target = Path(path)
+    if directory_fd is not None and target != Path(target.name):
+        raise ValueError('Artifact name must be relative to its directory')
+    if (directory_fd is not None and
+            (not hasattr(os, 'supports_dir_fd') or os.open not in os.supports_dir_fd)):
+        raise ValueError('Secure artifact intake unavailable')
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    if hasattr(os, 'O_CLOEXEC'):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, 'O_BINARY'):
+        flags |= os.O_BINARY
+    try:
+        descriptor = os.open(target.name if directory_fd is not None else target,
+                             flags, dir_fd=directory_fd)
+    except OSError as exc:
+        raise ValueError('Expected regular bounded artifact') from exc
+    try:
+        details = os.fstat(descriptor)
+        if not stat.S_ISREG(details.st_mode) or details.st_size <= 0:
+            raise ValueError('Expected regular bounded artifact')
+        if details.st_size > 65536:
+            raise ValueError('Oversized artifact')
+        chunks = []
+        remaining = details.st_size
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                raise ValueError('Artifact changed while reading')
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(descriptor, 1):
+            raise ValueError('Artifact changed while reading')
+        after = os.fstat(descriptor)
+        if _file_identity(after) != _file_identity(details):
+            raise ValueError('Artifact changed while reading')
+        return b''.join(chunks)
+    except OSError as exc:
+        raise ValueError('Unable to read bounded artifact') from exc
+    finally:
+        os.close(descriptor)
 
 
 def load_state(directory):
     root = Path(directory)
-    status = json.loads(_read(root/'status.json'))
-    if not isinstance(status,dict) or status.get('status') != 'complete' or status.get('promotionAuthorized') is not False:
-        raise ValueError('Incomplete compact ACF artifact')
-    metadata = json.loads(_read(root/'metadata.json'))
-    if (not isinstance(metadata,dict) or metadata.get('spec') != SPEC or metadata.get('status') != 'complete'
-            or metadata.get('promotionAuthorized') is not False):
-        raise ValueError('Invalid compact ACF metadata')
-    data = _read(root/'model.safetensors')
-    if hashlib.sha256(data).hexdigest() != metadata.get('model_sha256'):
-        raise ValueError('Compact model hash mismatch')
-    compact = load(data)
-    validate(compact)
-    generated = random_map()
-    if {k:tensor_hash(v) for k,v in generated.items()} != metadata.get('random_map_sha256'):
-        raise ValueError('Regenerated map differs from export')
+    directory_fd = _open_directory(root)
+    try:
+        status_bytes = _read('status.json', directory_fd)
+        status = json.loads(status_bytes)
+        if not isinstance(status,dict) or status.get('status') != 'complete' or status.get('promotionAuthorized') is not False:
+            raise ValueError('Incomplete compact ACF artifact')
+        metadata_bytes = _read('metadata.json', directory_fd)
+        if hashlib.sha256(metadata_bytes).hexdigest() != status.get('metadata_sha256'):
+            raise ValueError('Compact metadata hash mismatch')
+        metadata = json.loads(metadata_bytes)
+        if (not isinstance(metadata,dict) or metadata.get('spec') != SPEC or metadata.get('status') != 'complete'
+                or metadata.get('promotionAuthorized') is not False):
+            raise ValueError('Invalid compact ACF metadata')
+        data = _read('model.safetensors', directory_fd)
+        if hashlib.sha256(data).hexdigest() != metadata.get('model_sha256'):
+            raise ValueError('Compact model hash mismatch')
+        compact = load(data)
+        validate(compact)
+        generated = random_map()
+        if {k:tensor_hash(v) for k,v in generated.items()} != metadata.get('random_map_sha256'):
+            raise ValueError('Regenerated map differs from export')
+    finally:
+        os.close(directory_fd)
     projection = np.ascontiguousarray(generated['projection']/compact['feature_scale'][:,None])
     state = {'projection':projection,
              'phase':generated['phase']-compact['feature_mean']@projection,

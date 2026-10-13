@@ -363,9 +363,42 @@ def main(argv=None):
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--max-seconds', type=int, default=600)
     parser.add_argument('--optimize-bundle', help='Existing statistics bundle; inference only, no training or test evaluation')
+    parser.add_argument('--confirmation-manifest', help='Independent-confirmation metadata plan (enables enforced gate)')
+    parser.add_argument('--exposure-ledger', help='Previously exposed dataset revisions for the confirmation gate')
+    parser.add_argument('--expected-protocol-sha256', help='Frozen protocol digest for the confirmation gate')
+    parser.add_argument('--expected-dataset-manifest-sha256', help='Frozen digest of --manifest bytes')
     args = parser.parse_args(argv)
+    gate_names = ('confirmation_manifest', 'exposure_ledger', 'expected_protocol_sha256',
+                  'expected_dataset_manifest_sha256')
+    gate_values = [getattr(args, name) for name in gate_names]
+    gate_enabled = all(gate_values)
+    if (any(gate_values) and not gate_enabled) or (gate_enabled and args.optimize_bundle):
+        print(json.dumps({'status': 'invalid_input', 'promotionAuthorized': False}))
+        raise SystemExit(1)
+    preflight = None
+    if gate_enabled:
+        from .confirmation import training_gate
+        from .espfi import DATASET, REVISION
+        try:
+            preflight = training_gate(args.confirmation_manifest, args.exposure_ledger,
+                                      args.manifest, args.expected_protocol_sha256,
+                                      args.expected_dataset_manifest_sha256,
+                                      required_source=(DATASET, REVISION))
+        except (ValueError, OSError, TypeError, RecursionError, OverflowError):
+            print(json.dumps({'status': 'invalid_input', 'promotionAuthorized': False}))
+            raise SystemExit(1)
+        if not preflight['preflight_passed']:
+            print(json.dumps(preflight, sort_keys=True))
+            raise SystemExit(2)
     from .espfi import load_dataset
-    partitions, provenance = load_dataset(args.manifest)
+    partitions, provenance = load_dataset(
+        args.manifest,
+        expected_manifest_sha256=(preflight['dataset_manifest_sha256']
+                                  if preflight else None))
+    if preflight:
+        if provenance.get('manifest_sha256') != preflight['dataset_manifest_sha256']:
+            raise ValueError('Dataset manifest changed after confirmation preflight')
+        provenance = dict(provenance, confirmation_preflight=preflight)
     if args.optimize_bundle:
         parent = json.loads((Path(args.optimize_bundle) / 'metrics.json').read_text())
         if provenance['manifest_sha256'] != parent['provenance']['manifest_sha256']:

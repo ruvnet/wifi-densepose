@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import math
+import os
+from contextlib import contextmanager
 from pathlib import Path
 import re
 import stat
@@ -85,16 +87,35 @@ def _json(text):
         raise DataError("invalid JSON input") from exc
 
 
-def _regular(path, maximum):
-    if path.is_symlink():
-        raise DataError("symlink input is not permitted")
+@contextmanager
+def _open_regular(path, maximum):
+    """Validate the same descriptor consumed by the caller, never check then reopen.
+
+    O_NONBLOCK prevents a substituted FIFO from hanging before fstat. The final
+    path component cannot be a symlink. Parent directories remain a trusted
+    caller boundary; this helper does not implement filesystem confinement.
+    """
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_NONBLOCK"):
+        raise DataError("secure regular-file intake unavailable on this platform")
     try:
-        info = path.stat()
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError as exc:
-        raise DataError("input file unavailable") from exc
-    if not stat.S_ISREG(info.st_mode) or info.st_size > maximum:
-        raise DataError("input must be a bounded regular file")
-    return info.st_size
+        raise DataError("input unavailable or symlink input is not permitted") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > maximum:
+            raise DataError("input must be a bounded regular file")
+        with os.fdopen(fd, "rb", closefd=False) as stream:
+            yield stream, info.st_size
+    except OSError as exc:
+        raise DataError("input read failed") from exc
+    finally:
+        os.close(fd)
+
+
+def _regular(path, maximum):
+    with _open_regular(path, maximum) as (_, size):
+        return size
 
 
 def _text(value, name):
@@ -105,8 +126,10 @@ def _text(value, name):
 
 def _manifest(path):
     path = Path(path).absolute()
-    _regular(path, MAX_MANIFEST_BYTES)
-    raw = path.read_bytes()
+    with _open_regular(path, MAX_MANIFEST_BYTES) as (stream, size):
+        raw = stream.read(size + 1)
+        if len(raw) != size:
+            raise DataError("manifest changed during read")
     if len(raw) > MAX_MANIFEST_BYTES:
         raise DataError("manifest exceeds limit")
     obj = _json(raw)
@@ -170,6 +193,7 @@ def load_manifest(manifest, group_by="room_id", allow_synthetic=False):
     seen_observations = set()
     frame_count = 0
     input_lines = 0
+    total_read = 0
     for entry, source, index in entries:
         split, group = entry["split"], entry[group_by]
         if entry["evidence"] == "synthetic" and not allow_synthetic:
@@ -179,7 +203,7 @@ def load_manifest(manifest, group_by="room_id", allow_synthetic=False):
                 raise DataError("group or session appears across splits")
             mapping[key] = split
         digest, last, count, size = hashlib.sha256(), {}, 0, 0
-        with source.open("rb") as stream:
+        with _open_regular(source, MAX_FILE_BYTES) as (stream, _):
             while True:
                 line = stream.readline(MAX_LINE_BYTES + 1)
                 if not line:
@@ -188,6 +212,9 @@ def load_manifest(manifest, group_by="room_id", allow_synthetic=False):
                 if input_lines > MAX_INPUT_LINES:
                     raise DataError("dataset exceeds input line limit")
                 size += len(line)
+                total_read += len(line)
+                if total_read > MAX_TOTAL_BYTES:
+                    raise DataError("total dataset exceeds byte limit during read")
                 if len(line) > MAX_LINE_BYTES or size > MAX_FILE_BYTES:
                     raise DataError("capture line or file exceeds limit")
                 digest.update(line)

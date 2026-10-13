@@ -2,20 +2,27 @@
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import numpy as np
 from safetensors.numpy import save_file
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from csi_training.espfi_motion_runtime import BufferedMotionBundle, SPEC, SHAPES, random_map, tensor_hash
+from csi_training.espfi_motion_runtime import BufferedMotionBundle, SPEC, SHAPES, _open_directory, _read, random_map, tensor_hash
 from csi_training.espfi_motion_compact import CompactMotionBundle
 from csi_training.espfi_motion import MotionBundle, motion_features
 from csi_training.espfi_train import write_json
 from test_espfi_context import make_baseline
 from test_espfi_generalize import fixture
+
+
+def bind_status(path):
+    write_json(path/'status.json',{'status':'complete','promotionAuthorized':False,
+        'metadata_sha256':hashlib.sha256((path/'metadata.json').read_bytes()).hexdigest()})
 
 
 def make_models(root):
@@ -24,10 +31,10 @@ def make_models(root):
     baseline=MotionBundle(root/'baseline')
     compact=root/'compact';compact.mkdir()
     save_file({k:baseline.state[k] for k in SHAPES},str(compact/'model.safetensors'))
-    write_json(compact/'status.json',{'status':'complete','promotionAuthorized':False})
     write_json(compact/'metadata.json',{'status':'complete','promotionAuthorized':False,'spec':SPEC,
         'model_sha256':hashlib.sha256((compact/'model.safetensors').read_bytes()).hexdigest(),
         'random_map_sha256':{k:tensor_hash(v) for k,v in random_map().items()}})
+    bind_status(compact)
     return parts,baseline,compact
 
 
@@ -101,8 +108,163 @@ assert 'csi_training.espfi_motion_compact' not in sys.modules
             metadata.write_bytes(original_meta)
             state={k:np.ones(shape,dtype=np.float64) for k,shape in SHAPES.items()};state['feature_scale'][0]=0
             save_file(state,str(model));meta=json.loads(original_meta);meta['model_sha256']=hashlib.sha256(model.read_bytes()).hexdigest();write_json(metadata,meta)
+            bind_status(path)
             with self.assertRaisesRegex(ValueError,'Invalid compact'):BufferedMotionBundle(path)
             write_json(path/'status.json',{'status':'failed','promotionAuthorized':False})
             with self.assertRaisesRegex(ValueError,'Incomplete'):BufferedMotionBundle(path)
+
+    @unittest.skipUnless(hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_NONBLOCK')
+                         and hasattr(os, 'mkfifo'), 'POSIX secure open required')
+    def test_artifact_reader_rejects_special_files_and_path_substitution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            regular = root/'artifact';regular.write_bytes(b'original')
+            link = root/'link';link.symlink_to(regular)
+            fifo = root/'fifo';os.mkfifo(fifo)
+            for invalid in (link, fifo, root):
+                with self.subTest(path=invalid):
+                    with self.assertRaisesRegex(ValueError, 'regular bounded artifact'):
+                        _read(invalid)
+            empty = root/'empty';empty.write_bytes(b'')
+            with self.assertRaisesRegex(ValueError, 'regular bounded artifact'):_read(empty)
+
+            replacement = root/'replacement';replacement.write_bytes(b'replaced')
+            displaced = root/'displaced'
+            real_open = os.open
+            def open_then_replace(path, flags, **kwargs):
+                descriptor = real_open(path, flags, **kwargs)
+                Path(path).rename(displaced)
+                replacement.rename(path)
+                return descriptor
+            with patch('csi_training.espfi_motion_runtime.os.open', side_effect=open_then_replace):
+                self.assertEqual(_read(regular), b'original')
+            self.assertEqual(regular.read_bytes(), b'replaced')
+
+    @unittest.skipUnless(hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_NONBLOCK'),
+                         'POSIX secure open required')
+    def test_artifact_reader_detects_size_change_and_closes_descriptor(self):
+        def changed_stat(details, **changes):
+            fields = ('st_dev','st_ino','st_mode','st_size',
+                      'st_mtime_ns','st_ctime_ns')
+            values = {field:changes.get(field,getattr(details,field)) for field in fields}
+            return type('Stat', (), values)()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'artifact';path.write_bytes(b'12345678')
+            real_fstat = os.fstat
+            for delta in (-1, 1):
+                with self.subTest(delta=delta):
+                    def changed_size(descriptor, delta=delta):
+                        details = real_fstat(descriptor)
+                        return changed_stat(details,st_size=details.st_size + delta)
+                    with patch('csi_training.espfi_motion_runtime.os.fstat', side_effect=changed_size):
+                        with self.assertRaisesRegex(ValueError, 'changed while reading'):
+                            _read(path)
+
+            before = os.stat(path)
+            changed = changed_stat(before,st_ctime_ns=before.st_ctime_ns + 1)
+            with patch('csi_training.espfi_motion_runtime.os.fstat',
+                       side_effect=(before,changed)):
+                with self.assertRaisesRegex(ValueError, 'changed while reading'):
+                    _read(path)
+
+            captured = []
+            real_open = os.open
+            def capture_open(path, flags, **kwargs):
+                descriptor = real_open(path, flags, **kwargs);captured.append(descriptor);return descriptor
+            with patch('csi_training.espfi_motion_runtime.os.open', side_effect=capture_open):
+                with self.assertRaisesRegex(ValueError, 'regular bounded artifact'):_read(Path(tmp))
+            with self.assertRaises(OSError):real_fstat(captured[0])
+
+    @unittest.skipUnless(hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_NONBLOCK')
+                         and hasattr(os, 'pwrite'), 'POSIX mutation test required')
+    def test_artifact_reader_rejects_metadata_visible_same_inode_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'artifact';path.write_bytes(b'12345678')
+            before = path.stat();real_read = os.read;mutated = False
+            def read_then_mutate(descriptor, size):
+                nonlocal mutated
+                result = real_read(descriptor, size)
+                if not mutated:
+                    mutated = True
+                    writer = os.open(path, os.O_WRONLY)
+                    try:
+                        os.pwrite(writer,b'87654321',0);os.fsync(writer)
+                    finally:
+                        os.close(writer)
+                    current = path.stat()
+                    os.utime(path,ns=(current.st_atime_ns,before.st_mtime_ns + 1_000_000_000))
+                return result
+            with patch('csi_training.espfi_motion_runtime.os.read', side_effect=read_then_mutate):
+                with self.assertRaisesRegex(ValueError, 'changed while reading'):_read(path)
+            after = path.stat()
+            self.assertEqual(after.st_ino,before.st_ino)
+            self.assertEqual(after.st_size,before.st_size)
+
+    @unittest.skipUnless(hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'),
+                         'POSIX secure directory open required')
+    def test_bundle_load_pins_one_directory_and_rejects_symlink_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base/'original').mkdir();(base/'replacement').mkdir()
+            _,_,original = make_models(base/'original')
+            _,_,replacement = make_models(base/'replacement')
+            write_json(replacement/'status.json',{'status':'failed','promotionAuthorized':False})
+            displaced = base/'displaced'
+            real_open_directory = _open_directory
+            def open_then_replace(path):
+                descriptor = real_open_directory(path)
+                Path(path).rename(displaced)
+                replacement.rename(path)
+                return descriptor
+            with patch('csi_training.espfi_motion_runtime._open_directory',
+                       side_effect=open_then_replace):
+                bundle = BufferedMotionBundle(original)
+            self.assertEqual(set(bundle.state), {'projection','phase','bias','weights'})
+            with self.assertRaisesRegex(ValueError, 'Incomplete'):
+                BufferedMotionBundle(original)
+
+            link = base/'linked';link.symlink_to(displaced, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'artifact directory'):
+                BufferedMotionBundle(link)
+
+    @unittest.skipUnless(hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'),
+                         'POSIX secure directory open required')
+    def test_bundle_load_closes_directory_descriptor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _,_,path = make_models(Path(tmp))
+            captured = []
+            real_open_directory = _open_directory
+            def capture_directory(path):
+                descriptor = real_open_directory(path);captured.append(descriptor);return descriptor
+            with patch('csi_training.espfi_motion_runtime._open_directory',
+                       side_effect=capture_directory):
+                BufferedMotionBundle(path)
+            self.assertEqual(len(captured), 1)
+            with self.assertRaises(OSError):os.fstat(captured[0])
+
+            with patch.object(os, 'supports_dir_fd', set()):
+                with self.assertRaisesRegex(ValueError, 'Secure artifact intake unavailable'):
+                    BufferedMotionBundle(path)
+
+    def test_generation_chain_rejects_unbound_and_mixed_complete_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp);(root/'a').mkdir();(root/'b').mkdir()
+            _,_,a = make_models(root/'a');_,_,b = make_models(root/'b')
+            metadata = json.loads((b/'metadata.json').read_text())
+            metadata['generation_test'] = 'different-valid-metadata'
+            write_json(b/'metadata.json',metadata);bind_status(b)
+
+            (a/'status.json').write_bytes((b/'status.json').read_bytes())
+            with patch('csi_training.espfi_motion_runtime.load',
+                       side_effect=AssertionError('safetensors parser reached')):
+                with self.assertRaisesRegex(ValueError, 'metadata hash mismatch'):
+                    BufferedMotionBundle(a)
+
+            write_json(a/'status.json',{'status':'complete','promotionAuthorized':False})
+            with patch('csi_training.espfi_motion_runtime.load',
+                       side_effect=AssertionError('safetensors parser reached')):
+                with self.assertRaisesRegex(ValueError, 'metadata hash mismatch'):
+                    BufferedMotionBundle(a)
 
 if __name__=='__main__':unittest.main()

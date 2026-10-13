@@ -1,0 +1,74 @@
+{
+  "evidence": "PUBLIC_SAMPLE_DIAGNOSTIC",
+  "measured_at": "2026-10-13",
+  "source": "10.5281/zenodo.18924941",
+  "samples": {
+    "empty": {
+      "sha256": "561f2dd6ac9d08597365d90b08da829bdce99cba003261986a946e41fd0ba46b",
+      "source_shape_antenna_subcarrier_frame": [
+        4,
+        256,
+        596
+      ],
+      "inspected_frames": 32,
+      "finite_fraction": 1,
+      "zero_amplitude_fraction": 0.071685791015625,
+      "amplitude_min": 0,
+      "amplitude_max": 2439.6282503693055,
+      "full_recording_validated": false,
+      "promotionAuthorized": false,
+      "occupancy_inferred": false
+    },
+    "sitting": {
+      "sha256": "4db0d302c6b63c9a1239133578de4ea5439a4b50f129c835860bfae873038761",
+      "source_shape_antenna_subcarrier_frame": [
+        4,
+        256,
+        597
+      ],
+      "inspected_frames": 32,
+      "finite_fraction": 1,
+      "zero_amplitude_fraction": 0.093505859375,
+      "amplitude_min": 0,
+      "amplitude_max": 2159.374446454343,
+      "full_recording_validated": false,
+      "promotionAuthorized": false,
+      "occupancy_inferred": false
+    },
+    "walking": {
+      "sha256": "7c1d78deb3fd586201a8472507942a5b5c7042286c051b890570cc8d592b20c9",
+      "source_shape_antenna_subcarrier_frame": [
+        4,
+        256,
+        597
+      ],
+      "inspected_frames": 32,
+      "finite_fraction": 1,
+      "zero_amplitude_fraction": 0.08697509765625,
+      "amplitude_min": 0,
+      "amplitude_max": 2268.596262008734,
+      "full_recording_validated": false,
+      "promotionAuthorized": false,
+      "occupancy_inferred": false
+    }
+  },
+  "h5py": "3.14.0",
+  "numpy": "2.4.4",
+  "elapsed_seconds": 0.029940598999985468,
+  "source_hashes": {
+    "zenodo_sample.py": "6ea89c1e1a2d254665d1d44f04270893acabba3e3ce6924745cc7c66efcf7009",
+    "zenodo_mat.py": "0fb071712ab357f08667248eaaceddb28b8c66e6da28db67231a0f87b281d52d"
+  },
+  "training_performed": false,
+  "promotionAuthorized": false,
+  "intake": {
+    "transferred_bytes": 5670108,
+    "requests": 22,
+    "elapsed_seconds": 16.843620125000005,
+    "snapshot_verified": false,
+    "full_archive_hash_verified": false,
+    "license_catalog": "CC-BY-4.0",
+    "license_readme": "CC-BY-SA-4.0",
+    "license_conflict": true
+  }
+}

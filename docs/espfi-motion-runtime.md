@@ -151,3 +151,50 @@ explicit reference fallback. Next action is the same benchmark on the intended
 target. Acceptance requires identical predictions, logit error at most 1e-10,
 and at least 10% lower median and p95 in every round. Production promotion
 remains unauthorized, and the existing zero-F1 activity class remains unresolved.
+
+## Artifact-directory pinning
+
+The runtime now opens the final artifact directory once with
+`O_DIRECTORY|O_NOFOLLOW` and resolves status, metadata and model leaves relative
+to that descriptor. A rename-and-replacement regression verifies that one load
+continues from the opened directory instead of mixing in the replacement path.
+A final-component symlink root and platforms without `dir_fd` support fail
+closed. Existing per-leaf regular-file, size, no-follow and mutation checks stay
+in force, and success/error paths close the directory descriptor.
+
+This pins only the final opened directory. It does not authenticate artifacts,
+make the three reads an atomic snapshot, prevent a writer from replacing leaves
+inside the pinned directory between opens, or protect ancestor components before
+the directory open. Model bytes remain hash-bound to the metadata read. The
+same-inode metadata-evasion residual also remains.
+
+A frozen 500-pair load check after 20 warmups measured baseline/candidate p95
+2.376450/2.451570 ms and traced peaks 1,067,282/1,067,330 bytes on the shared
+ruOS CPU. Both passed the predeclared p95 `max(1.2x, +0.1 ms)` and `+4096` byte
+limits. This is load-path overhead only and makes no sensing or prediction-speed
+claim. The sanitized [receipt](validation/espfi-runtime-dirfd-20261013.json)
+records exact hashes and rollback.
+
+## Export-generation chain
+
+A completed compact export now records the SHA-256 of the exact metadata bytes
+in `status.json`; metadata already records the model SHA-256. Both the compact
+reference reader and standalone buffered runtime therefore require the chain
+`status.json -> metadata.json -> model.safetensors`. The completion marker is
+written last. Mixing a valid completion marker from another export, changing
+metadata, or supplying an older unbound artifact fails before safetensors
+parsing. Older research bundles must be re-exported with the current exporter.
+
+This protects accidental or untrusted cross-generation mixing only when the
+completion marker is trusted as part of the same local artifact set. The hashes
+are not signatures and do not authenticate their producer, source data,
+provenance or permissions. A writer that can replace and consistently rehash all
+files can create a new self-consistent bundle. The chain does not bind
+`metrics.json`, which is not consumed by inference.
+
+A frozen 500-pair load check after 20 warmups measured baseline/candidate p95
+2.473300/2.545180 ms and traced peaks 1,067,491/1,068,498 bytes on the shared
+ruOS CPU. Both passed the predeclared p95 `max(1.2x, +0.1 ms)` and `+4096` byte
+limits. The model, data, features and prediction math are unchanged. The
+sanitized [receipt](validation/espfi-runtime-generation-chain-20261013.json)
+binds the exact sources, workload, gates and rollback.

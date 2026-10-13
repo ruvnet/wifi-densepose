@@ -1,0 +1,946 @@
+{
+  "checks": {
+    "candidate_effective_rank_at_least2": true,
+    "p95_within20percent_all_rounds": true,
+    "probe_gate": false
+  },
+  "collapse": {
+    "baseline": {
+      "collapse_warning": true,
+      "recording_effective_rank": 1.405533790588379,
+      "sample_std": 0.5267161726951599
+    },
+    "candidate": {
+      "collapse_warning": false,
+      "recording_effective_rank": 4.015519618988037,
+      "sample_std": 0.49952468276023865
+    },
+    "untrained": {
+      "collapse_warning": false,
+      "recording_effective_rank": 1.5905420780181885,
+      "sample_std": 0.45848506689071655
+    }
+  },
+  "elapsed_seconds": 20.202091322,
+  "embedding_shapes": {
+    "baseline": {
+      "dev": [
+        139,
+        32
+      ],
+      "train": [
+        280,
+        32
+      ]
+    },
+    "candidate": {
+      "dev": [
+        139,
+        32
+      ],
+      "train": [
+        280,
+        32
+      ]
+    },
+    "statistics": {
+      "dev": [
+        139,
+        156
+      ],
+      "train": [
+        280,
+        156
+      ]
+    },
+    "untrained": {
+      "dev": [
+        139,
+        32
+      ],
+      "train": [
+        280,
+        32
+      ]
+    }
+  },
+  "evidence": "PUBLIC_TRAIN_ONLY",
+  "histories": {
+    "baseline": [
+      {
+        "epoch": 1,
+        "objective": 0.7868377583367484
+      },
+      {
+        "epoch": 2,
+        "objective": 0.519914128950664
+      },
+      {
+        "epoch": 3,
+        "objective": 0.44930804542132785
+      },
+      {
+        "epoch": 4,
+        "objective": 0.421546328493527
+      },
+      {
+        "epoch": 5,
+        "objective": 0.4112824141979218
+      }
+    ],
+    "candidate": [
+      {
+        "epoch": 1,
+        "objective": 1.5465391635894776
+      },
+      {
+        "epoch": 2,
+        "objective": 1.1923631020954677
+      },
+      {
+        "epoch": 3,
+        "objective": 1.1136802298682076
+      },
+      {
+        "epoch": 4,
+        "objective": 1.1046021018709455
+      },
+      {
+        "epoch": 5,
+        "objective": 1.1007795163563319
+      }
+    ]
+  },
+  "inference_latency": {
+    "baseline": [
+      {
+        "p50_ms": 1.0815045,
+        "p95_ms": 1.7290779999999997,
+        "round": 1
+      },
+      {
+        "p50_ms": 1.035225,
+        "p95_ms": 1.6527890499999998,
+        "round": 2
+      },
+      {
+        "p50_ms": 1.0412949999999999,
+        "p95_ms": 1.4845154999999999,
+        "round": 3
+      }
+    ],
+    "candidate": [
+      {
+        "p50_ms": 1.143,
+        "p95_ms": 1.6401495,
+        "round": 1
+      },
+      {
+        "p50_ms": 1.09904,
+        "p95_ms": 1.4046714999999999,
+        "round": 2
+      },
+      {
+        "p50_ms": 1.054725,
+        "p95_ms": 1.4393695,
+        "round": 3
+      }
+    ],
+    "untrained": [
+      {
+        "p50_ms": 1.0794000000000001,
+        "p95_ms": 1.5152235,
+        "round": 1
+      },
+      {
+        "p50_ms": 1.0112,
+        "p95_ms": 1.3845589999999999,
+        "round": 2
+      },
+      {
+        "p50_ms": 1.0636649999999999,
+        "p95_ms": 1.4637734999999998,
+        "round": 3
+      }
+    ]
+  },
+  "initial_state_sha256": "5dac31762dd381f19f28e967a26c8acc93e4c6156e64a168813ba612ee787047",
+  "lineage": {
+    "evidence": "PUBLIC_TRAIN_ONLY",
+    "inner_fit": "room1subjects1..4",
+    "inner_heldout": "room2subjects5,6",
+    "loaded_partitions": [
+      "train"
+    ],
+    "manifest_sha256": "74e0fe039acbed1b287bd11ee6b779becbb8f9b66c3c249d260ed66f5583f02a",
+    "source_revision": "c8bf6aa0d680fa02695c85a82b05e79b3ebb10c4"
+  },
+  "mask_order_sha256": {
+    "baseline": "184194ee5dcdf8903b3ed6e909b2f31cf9228586e5e86fd543fded40c1c8e0ec",
+    "candidate": "184194ee5dcdf8903b3ed6e909b2f31cf9228586e5e86fd543fded40c1c8e0ec"
+  },
+  "models": {
+    "baseline": {
+      "arm": "baseline",
+      "lineage": {
+        "evidence": "PUBLIC_TRAIN_ONLY",
+        "inner_fit": "room1subjects1..4",
+        "inner_heldout": "room2subjects5,6",
+        "loaded_partitions": [
+          "train"
+        ],
+        "manifest_sha256": "74e0fe039acbed1b287bd11ee6b779becbb8f9b66c3c249d260ed66f5583f02a",
+        "source_revision": "c8bf6aa0d680fa02695c85a82b05e79b3ebb10c4"
+      },
+      "model_sha256": "be5cbf9a740fa73e46bdb4ba3cdd25e2c41b5c47d8a629d906658816f7207f7c",
+      "promotionAuthorized": false,
+      "source_sha256": {
+        "espfi.py": "1ea4f72b3bbb0fe68e9903e6f32663a887bd9c8eac3a659932ff97b7e3d87124",
+        "predictive.py": "1bc9c98cba03095eb09ceda1aaca5207edf7e63603de434fdd6ca8a15871d5d4",
+        "predictive_probe.py": "a06e25cfd3c0f8ba38a3ad8cdf810193b0b15edf6b121837dd6f574df0b43b5f",
+        "predictive_transfer.py": "febba288b2a17ad951f26607a456319bcc8c2b009b2c54c90b801cb27738199e"
+      },
+      "spec": {
+        "arms": {
+          "baseline": {
+            "record_covariance": 0.0,
+            "record_variance": 0.0
+          },
+          "candidate": {
+            "record_covariance": 0.1,
+            "record_variance": 1.0
+          }
+        },
+        "base": {
+          "axes": [
+            "subcarrier",
+            "sample_index"
+          ],
+          "claim": "experimental masked latent prediction, not reproduction or occupancy model",
+          "ema": 0.99,
+          "heads": 4,
+          "input": [
+            52,
+            190
+          ],
+          "latent": 32,
+          "layers": 1,
+          "mask_fraction": 0.4,
+          "normalization": "train-only per-carrier log-amplitude mean/std",
+          "patch": [
+            4,
+            19
+          ],
+          "seed": 42,
+          "variance_floor": 1.0,
+          "variance_weight": 0.1
+        },
+        "batch_size": 8,
+        "epochs": 5,
+        "promotionAuthorized": false,
+        "record_regularizer": "unmasked pooled32 embeddings; mean relu(1-sqrt(population_variance+1e-4)); squared offdiagonal unbiased covariance sum/32",
+        "schema": "predictive_transfer_v1",
+        "scope": "fixed research comparison inspired by VICReg, not reproduction; no confirmation or occupancy claim",
+        "seed": 42
+      },
+      "status": "complete"
+    },
+    "candidate": {
+      "arm": "candidate",
+      "lineage": {
+        "evidence": "PUBLIC_TRAIN_ONLY",
+        "inner_fit": "room1subjects1..4",
+        "inner_heldout": "room2subjects5,6",
+        "loaded_partitions": [
+          "train"
+        ],
+        "manifest_sha256": "74e0fe039acbed1b287bd11ee6b779becbb8f9b66c3c249d260ed66f5583f02a",
+        "source_revision": "c8bf6aa0d680fa02695c85a82b05e79b3ebb10c4"
+      },
+      "model_sha256": "45401aa2edd4f5ee9c866b161a35176d89feede308dc48f77d4a99a092193cb8",
+      "promotionAuthorized": false,
+      "source_sha256": {
+        "espfi.py": "1ea4f72b3bbb0fe68e9903e6f32663a887bd9c8eac3a659932ff97b7e3d87124",
+        "predictive.py": "1bc9c98cba03095eb09ceda1aaca5207edf7e63603de434fdd6ca8a15871d5d4",
+        "predictive_probe.py": "a06e25cfd3c0f8ba38a3ad8cdf810193b0b15edf6b121837dd6f574df0b43b5f",
+        "predictive_transfer.py": "febba288b2a17ad951f26607a456319bcc8c2b009b2c54c90b801cb27738199e"
+      },
+      "spec": {
+        "arms": {
+          "baseline": {
+            "record_covariance": 0.0,
+            "record_variance": 0.0
+          },
+          "candidate": {
+            "record_covariance": 0.1,
+            "record_variance": 1.0
+          }
+        },
+        "base": {
+          "axes": [
+            "subcarrier",
+            "sample_index"
+          ],
+          "claim": "experimental masked latent prediction, not reproduction or occupancy model",
+          "ema": 0.99,
+          "heads": 4,
+          "input": [
+            52,
+            190
+          ],
+          "latent": 32,
+          "layers": 1,
+          "mask_fraction": 0.4,
+          "normalization": "train-only per-carrier log-amplitude mean/std",
+          "patch": [
+            4,
+            19
+          ],
+          "seed": 42,
+          "variance_floor": 1.0,
+          "variance_weight": 0.1
+        },
+        "batch_size": 8,
+        "epochs": 5,
+        "promotionAuthorized": false,
+        "record_regularizer": "unmasked pooled32 embeddings; mean relu(1-sqrt(population_variance+1e-4)); squared offdiagonal unbiased covariance sum/32",
+        "schema": "predictive_transfer_v1",
+        "scope": "fixed research comparison inspired by VICReg, not reproduction; no confirmation or occupancy claim",
+        "seed": 42
+      },
+      "status": "complete"
+    },
+    "untrained": {
+      "arm": "untrained",
+      "lineage": {
+        "evidence": "PUBLIC_TRAIN_ONLY",
+        "inner_fit": "room1subjects1..4",
+        "inner_heldout": "room2subjects5,6",
+        "loaded_partitions": [
+          "train"
+        ],
+        "manifest_sha256": "74e0fe039acbed1b287bd11ee6b779becbb8f9b66c3c249d260ed66f5583f02a",
+        "source_revision": "c8bf6aa0d680fa02695c85a82b05e79b3ebb10c4"
+      },
+      "model_sha256": "0f3bbc4cbfd8eacf6923eb5f4f032889b5c4293fdea2f62280c5deebd7cd171d",
+      "promotionAuthorized": false,
+      "source_sha256": {
+        "espfi.py": "1ea4f72b3bbb0fe68e9903e6f32663a887bd9c8eac3a659932ff97b7e3d87124",
+        "predictive.py": "1bc9c98cba03095eb09ceda1aaca5207edf7e63603de434fdd6ca8a15871d5d4",
+        "predictive_probe.py": "a06e25cfd3c0f8ba38a3ad8cdf810193b0b15edf6b121837dd6f574df0b43b5f",
+        "predictive_transfer.py": "febba288b2a17ad951f26607a456319bcc8c2b009b2c54c90b801cb27738199e"
+      },
+      "spec": {
+        "arms": {
+          "baseline": {
+            "record_covariance": 0.0,
+            "record_variance": 0.0
+          },
+          "candidate": {
+            "record_covariance": 0.1,
+            "record_variance": 1.0
+          }
+        },
+        "base": {
+          "axes": [
+            "subcarrier",
+            "sample_index"
+          ],
+          "claim": "experimental masked latent prediction, not reproduction or occupancy model",
+          "ema": 0.99,
+          "heads": 4,
+          "input": [
+            52,
+            190
+          ],
+          "latent": 32,
+          "layers": 1,
+          "mask_fraction": 0.4,
+          "normalization": "train-only per-carrier log-amplitude mean/std",
+          "patch": [
+            4,
+            19
+          ],
+          "seed": 42,
+          "variance_floor": 1.0,
+          "variance_weight": 0.1
+        },
+        "batch_size": 8,
+        "epochs": 5,
+        "promotionAuthorized": false,
+        "record_regularizer": "unmasked pooled32 embeddings; mean relu(1-sqrt(population_variance+1e-4)); squared offdiagonal unbiased covariance sum/32",
+        "schema": "predictive_transfer_v1",
+        "scope": "fixed research comparison inspired by VICReg, not reproduction; no confirmation or occupancy claim",
+        "seed": 42
+      },
+      "status": "complete"
+    }
+  },
+  "numpy_version": "2.4.4",
+  "original_baseline_exact": true,
+  "original_baseline_sha256": "be5cbf9a740fa73e46bdb4ba3cdd25e2c41b5c47d8a629d906658816f7207f7c",
+  "probes": {
+    "classes": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "gate": {
+      "accuracy_tolerance": 0.01,
+      "best_comparator_accuracy": 0.2517985611510791,
+      "best_comparator_macro_f1": 0.19939313207078144,
+      "checks": {
+        "accuracy_within_001_of_best": false,
+        "macro_f1_at_least_best_plus_002": false,
+        "no_new_zero_f1_class": true
+      },
+      "macro_f1_margin": 0.02,
+      "passed": false
+    },
+    "majority": {
+      "accuracy": 0.1366906474820144,
+      "confusion": [
+        [
+          19,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          20,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          20,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          20,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          20,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          20,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        [
+          20,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      ],
+      "confusion_axes": "rows=true numeric activity, columns=predicted numeric activity",
+      "macro_f1": 0.034358047016274866,
+      "per_class_f1": [
+        0.24050632911392406,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "predicted_activity": 0,
+      "tie_break": "lowest numeric activity"
+    },
+    "probes": {
+      "baseline": {
+        "accuracy": 0.1366906474820144,
+        "artifact_state_sha256": "e8762a9157faa8f43cad8082485eb6cdbe91cd9f28460885589ea989c33537a5",
+        "confusion": [
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            18
+          ],
+          [
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            18
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            20
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            20
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            20
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            20
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            19
+          ]
+        ],
+        "confusion_axes": "rows=true numeric activity, columns=predicted numeric activity",
+        "feature_count": 32,
+        "fitted_scalar_count": 295,
+        "macro_f1": 0.035023041474654376,
+        "per_class_f1": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.24516129032258063
+        ],
+        "training_parameters": {
+          "alpha": 1.0,
+          "classes": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "intercept": true,
+          "macro_f1_classes": "all_seven_including_absent",
+          "scaling": "train_mean_population_std",
+          "selection": "none",
+          "zero_variance_scale": 1.0
+        },
+        "training_samples": 280
+      },
+      "candidate": {
+        "accuracy": 0.1510791366906475,
+        "artifact_state_sha256": "cabf10c9a4b3b4737e61c5d7ff52ce1d5621727dae42d0cbd517bdffa9b42f18",
+        "confusion": [
+          [
+            1,
+            2,
+            0,
+            0,
+            0,
+            2,
+            14
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            19
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            20
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            20
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            20
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            20
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            20
+          ]
+        ],
+        "confusion_axes": "rows=true numeric activity, columns=predicted numeric activity",
+        "feature_count": 32,
+        "fitted_scalar_count": 295,
+        "macro_f1": 0.05163398692810458,
+        "per_class_f1": [
+          0.1,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.26143790849673204
+        ],
+        "training_parameters": {
+          "alpha": 1.0,
+          "classes": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "intercept": true,
+          "macro_f1_classes": "all_seven_including_absent",
+          "scaling": "train_mean_population_std",
+          "selection": "none",
+          "zero_variance_scale": 1.0
+        },
+        "training_samples": 280
+      },
+      "statistics": {
+        "accuracy": 0.2517985611510791,
+        "artifact_state_sha256": "0d0ba484a12b6046475067771202403d93c44ac24b3b6371fdafb79008945463",
+        "confusion": [
+          [
+            2,
+            9,
+            0,
+            0,
+            7,
+            0,
+            1
+          ],
+          [
+            0,
+            20,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            0,
+            0,
+            4,
+            5,
+            0,
+            10
+          ],
+          [
+            0,
+            0,
+            0,
+            2,
+            8,
+            0,
+            10
+          ],
+          [
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            17
+          ],
+          [
+            0,
+            0,
+            0,
+            3,
+            2,
+            0,
+            15
+          ],
+          [
+            1,
+            0,
+            0,
+            0,
+            9,
+            0,
+            10
+          ]
+        ],
+        "confusion_axes": "rows=true numeric activity, columns=predicted numeric activity",
+        "feature_count": 156,
+        "fitted_scalar_count": 1411,
+        "macro_f1": 0.19939313207078144,
+        "per_class_f1": [
+          0.16666666666666666,
+          0.8163265306122449,
+          0.0,
+          0.13333333333333333,
+          0.038461538461538464,
+          0.0,
+          0.24096385542168675
+        ],
+        "training_parameters": {
+          "alpha": 1.0,
+          "classes": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "intercept": true,
+          "macro_f1_classes": "all_seven_including_absent",
+          "scaling": "train_mean_population_std",
+          "selection": "none",
+          "zero_variance_scale": 1.0
+        },
+        "training_samples": 280
+      },
+      "untrained": {
+        "accuracy": 0.15827338129496402,
+        "artifact_state_sha256": "1d7cd093de706424139003cf89ac7de9f81de3a3c71e056ccd4ed55d0b2a44a6",
+        "confusion": [
+          [
+            3,
+            1,
+            1,
+            1,
+            0,
+            0,
+            13
+          ],
+          [
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            17
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            20
+          ],
+          [
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            18
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            20
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            20
+          ],
+          [
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            19
+          ]
+        ],
+        "confusion_axes": "rows=true numeric activity, columns=predicted numeric activity",
+        "feature_count": 32,
+        "fitted_scalar_count": 295,
+        "macro_f1": 0.0712147716229349,
+        "per_class_f1": [
+          0.24,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.2585034013605442
+        ],
+        "training_parameters": {
+          "alpha": 1.0,
+          "classes": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "intercept": true,
+          "macro_f1_classes": "all_seven_including_absent",
+          "scaling": "train_mean_population_std",
+          "selection": "none",
+          "zero_variance_scale": 1.0
+        },
+        "training_samples": 280
+      }
+    },
+    "promotionAuthorized": false,
+    "schema_version": 1,
+    "scope": "Fixed alpha=1; train-only scaling and label fit. Development labels score only. No hyperparameter search or representation selection. Caller supplies provenance and separately evaluates representation collapse and latency.",
+    "task": "frozen_numeric_activity_linear_probe"
+  },
+  "promotionAuthorized": false,
+  "research_gate_passed": false,
+  "scope": "Fixed two-arm adaptive research on reused original training groups. No original validation/test payload, no heldout updates or selection. Encoder timings3x100 alternating paired batch1 include checks/normalization/encode, exclude acquisition/IO. No occupancy or confirmation claim.",
+  "source_sha256": {
+    "espfi.py": "1ea4f72b3bbb0fe68e9903e6f32663a887bd9c8eac3a659932ff97b7e3d87124",
+    "predictive.py": "1bc9c98cba03095eb09ceda1aaca5207edf7e63603de434fdd6ca8a15871d5d4",
+    "predictive_probe.py": "a06e25cfd3c0f8ba38a3ad8cdf810193b0b15edf6b121837dd6f574df0b43b5f",
+    "predictive_transfer.py": "febba288b2a17ad951f26607a456319bcc8c2b009b2c54c90b801cb27738199e"
+  },
+  "spec": {
+    "arms": {
+      "baseline": {
+        "record_covariance": 0.0,
+        "record_variance": 0.0
+      },
+      "candidate": {
+        "record_covariance": 0.1,
+        "record_variance": 1.0
+      }
+    },
+    "base": {
+      "axes": [
+        "subcarrier",
+        "sample_index"
+      ],
+      "claim": "experimental masked latent prediction, not reproduction or occupancy model",
+      "ema": 0.99,
+      "heads": 4,
+      "input": [
+        52,
+        190
+      ],
+      "latent": 32,
+      "layers": 1,
+      "mask_fraction": 0.4,
+      "normalization": "train-only per-carrier log-amplitude mean/std",
+      "patch": [
+        4,
+        19
+      ],
+      "seed": 42,
+      "variance_floor": 1.0,
+      "variance_weight": 0.1
+    },
+    "batch_size": 8,
+    "epochs": 5,
+    "promotionAuthorized": false,
+    "record_regularizer": "unmasked pooled32 embeddings; mean relu(1-sqrt(population_variance+1e-4)); squared offdiagonal unbiased covariance sum/32",
+    "schema": "predictive_transfer_v1",
+    "scope": "fixed research comparison inspired by VICReg, not reproduction; no confirmation or occupancy claim",
+    "seed": 42
+  },
+  "status": "complete",
+  "torch_version": "2.11.0+cpu"
+}
