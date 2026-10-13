@@ -16,6 +16,17 @@ on:
       - '.github/workflows/firmware-ci.yml'
 
 jobs:
+  provisioning-tests:
+    name: Provisioning tooling tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.11'
+      - name: Verify provisioning and secret handling without hardware
+        run: python -m unittest discover -s firmware/esp32-csi-node/tests -p 'test_provision*.py' -v
+
   version-guard:
     name: Verify version.txt matches release tag
     runs-on: ubuntu-latest
@@ -119,6 +130,10 @@ jobs:
           fi
           echo "Binary size OK: $SIZE <= $MAX"
 
+      - name: Verify built application version before packaging
+        working-directory: firmware/esp32-csi-node
+        run: python test/test_delivery_contract.py --built-app build/esp32-csi-node.bin
+
       - name: Verify flash image integrity
         working-directory: firmware/esp32-csi-node
         run: |
@@ -208,7 +223,7 @@ jobs:
   publish-release-assets:
     name: Publish firmware release assets
     if: github.ref_type == 'tag'
-    needs: [version-guard, build, build-c6-idf6]
+    needs: [version-guard, provisioning-tests, build, build-c6-idf6]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -232,7 +247,12 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           name: ESP32 firmware ${{ github.ref_name }}
+          prerelease: true
+          make_latest: false
           body: |
-            Exact-run ESP32-S3 8 MB, ESP32-S3 4 MB, and ESP32-C6 4 MB firmware bundles.
+            Exact-run ESP32-S3 display 8 MB, ESP32-S3 headless 4 MB, and ESP32-C6 4 MB firmware bundles.
             Verify each archive against `SHA256SUMS.txt` before flashing.
+            CI builds and host tests verify software behavior, not target hardware.
+            This prerelease has no new physical-board qualification or sensing-accuracy claim.
+            Select the matching board configuration using firmware/esp32-csi-node/README.md.
           files: release-assets/*

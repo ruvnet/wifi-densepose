@@ -2,6 +2,9 @@
 
 Latest proposed decisions:
 
+- [ADR-379: An OTA'd image confirms itself with a bounded health check, or rolls back](ADR-379-ota-first-boot-health-check.md)
+- [ADR-380: Loopback UDP tee for second consumers of the CSI stream](ADR-380-loopback-udp-tee.md)
+- [ADR-382: `spatial.evidence.v1` export of RF Gaussians and link observations](ADR-382-spatial-evidence-rf-export.md)
 - [ADR-378: `ruview-live` showcase views — CSI waterfall, radar fan, animated cells](ADR-378-ruview-live-showcase-views.md)
 - [ADR-377: `ruview-live` — a Claude Code mod shipped inside `@ruvnet/ruview`](ADR-377-ruview-live-claude-code-mod.md)
 - [ADR-376: `ruview` — one npm install for every RuView component](ADR-376-ruview-umbrella-npm-package.md)
@@ -74,6 +77,7 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-040](ADR-040-wasm-programmable-sensing.md) | WASM Programmable Sensing (Tier 3) | Accepted |
 | [ADR-041](ADR-041-wasm-module-collection.md) | WASM Module Collection (65 edge modules) | Accepted (hardware-validated) |
 | [ADR-044](ADR-044-provisioning-tool-enhancements.md) | Provisioning Tool Enhancements | Proposed |
+| [ADR-379](ADR-379-ota-first-boot-health-check.md) | OTA'd image confirms itself with a bounded health check (IP + CSI frame) or rolls back; OTA httpd stack sized from device data | Proposed (host-tested; hardware-verified on one S3 and one C6) |
 | [ADR-110](ADR-110-esp32-c6-firmware-extension.md) | ESP32-C6 firmware extension — Wi-Fi 6 / 802.15.4 / TWT / LP-core | Accepted, P1-P10 complete, firmware-side substrate closed at **[v0.7.0-esp32](https://github.com/ruvnet/RuView/releases/tag/v0.7.0-esp32)**. Companion docs: [`WITNESS-LOG-110`](../WITNESS-LOG-110.md) (13 §A0.x entries · 99.56 % cross-board RX · **104.1 µs smoothed sync stdev** · ≤100 µs target met), [`ADR-110-REVIEW-GUIDE`](../ADR-110-REVIEW-GUIDE.md) (one-page reviewer tour), [`ADR-110-BRANCH-STATE`](../ADR-110-BRANCH-STATE.md) (coordination map vs `feat/adr-115-ha-mqtt-matter`). Host decoders + tests: Python `SyncPacketParser` (10) + Rust `wifi_densepose_hardware::SyncPacket` (15), cross-language hex pin gates drift. |
 
 ### Signal processing and sensing
@@ -181,6 +185,7 @@ Statuses: **Proposed** (under discussion), **Accepted** (approved and/or impleme
 | [ADR-294](ADR-294-wifi-veil-integration.md) | WiFi Veil integration — emission-shaping countermeasure as advisory BFLD dependency | Accepted (initial implementation) |
 | [ADR-295](ADR-295-source-provenance-state-machine.md) | Source provenance state machine — synthetic can never present as live | Accepted (initial implementation) |
 | [ADR-296](ADR-296-sensor-data-plane-bind-hardening.md) | Sensor data-plane hardening — UDP bind control and source allowlist (step one) | Accepted (initial implementation) |
+| [ADR-380](ADR-380-loopback-udp-tee.md) | Loopback UDP tee for second consumers of the CSI stream (`--udp-tee`) | Proposed |
 | [ADR-297](ADR-297-multi-node-semantic-correctness.md) | Multi-node semantic correctness — per-node inference, node-keyed rate limiting, stale state | Accepted (initial implementation) |
 | [ADR-298](ADR-298-model-release-sanity-gates.md) | Model release sanity gates — block degenerate and mislabeled model artifacts | Accepted (initial implementation) |
 | [ADR-299](ADR-299-csi-data-incident-repo-controls.md) | Repository CSI data-incident controls — ignore rules and pre-commit/CI policy check | Accepted (controls implemented; tree remediation gated) |
