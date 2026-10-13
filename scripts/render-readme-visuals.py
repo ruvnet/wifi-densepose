@@ -24,11 +24,27 @@ def icon(kind,x,y,scale=1):
   s+='<g class="sweep">'+path('M0 0L40 -18',LIME,2)+circle(34,-15,3,LIME,extra=f'fill="{LIME}"')+'</g>'
   for px,py in [(-20,8),(12,13),(23,-8)]:s+=circle(px,py,3,AMBER,extra=f'fill="{AMBER}" class="spark"')
  elif kind=='pose':
-  s+=circle(0,-32,7,LIME)+path('M0 -25L-3 -2L5 16',LIME,2.5)
-  s+='<g class="limb">'+path('M-1 -18L-19 -5L-31 -14M-1 -18L18 -11L28 -25',LIME,2.5)+'</g>'
-  s+='<g class="stride">'+path('M5 16L-12 28L-22 47M5 16L24 28L33 44',LIME,2.5)+'</g>'
-  for px,py in [(-1,-18),(-3,-2),(5,16),(-19,-5),(18,-11)]:s+=circle(px,py,2.8,AMBER,extra=f'fill="{AMBER}"')
-  s+=path('M-42 -42V-50H-30M30 -50H42V-42M42 45V53H30M-30 53H-42V45',BLUE,1)
+  # Authored anatomical mesh silhouette; a conceptual figure, not captured pose data.
+  s+='<defs><linearGradient id="humanSurface" x1="0" y1="0" x2="1" y2=".3"><stop stop-color="#153d48"/><stop offset=".42" stop-color="#338469"/><stop offset=".7" stop-color="#83c766"/><stop offset="1" stop-color="#163c4a"/></linearGradient><linearGradient id="humanRear"><stop stop-color="#0f2d40"/><stop offset="1" stop-color="#397a68"/></linearGradient></defs>'
+  s+='<g stroke="#88d783" stroke-width=".65" stroke-linejoin="round">'
+  # Far arm and leg provide occlusion and depth.
+  s+='<g class="limb"><path d="M-9 -25C-15 -25 -18 -19 -21 -13L-29 -5C-32 -3 -33 1 -30 3L-25 2L-14 -7C-9 -12 -6 -19 -6 -23Z" fill="url(#humanRear)"/></g>'
+  s+='<g class="stride"><path d="M-6 5C-13 10 -15 18 -17 26L-25 43L-29 47C-30 49 -28 51 -24 51L-17 50L-16 46L-8 30C-4 23 2 15 3 10Z" fill="url(#humanRear)"/>'
+  s+='<path d="M3 5C10 7 14 17 19 23C24 28 23 35 24 41L29 45C32 47 32 49 28 50L20 49C17 48 17 46 17 42L14 32C8 28 2 23 -3 16L-4 10Z" fill="url(#humanSurface)"/></g>'
+  # Near arm: shoulder, upper arm, elbow, forearm and closed hand.
+  s+='<g class="limb"><path d="M7 -26C14 -25 17 -20 20 -13L24 -17L29 -24C30 -27 33 -29 35 -26L35 -22L30 -16L24 -8C22 -5 18 -5 16 -8L8 -17Z" fill="url(#humanSurface)"/></g>'
+  # Shoulder and chest taper into abdomen and pelvis.
+  s+='<path d="M-4 -32L4 -33L6 -28C11 -27 14 -24 13 -19L9 -5L10 7C10 13 2 15 -5 12L-10 7L-8 -5L-12 -20C-13 -25 -8 -28 -5 -28Z" fill="url(#humanSurface)"/>'
+  # Three-quarter head with jaw, nose and ear contour.
+  s+='<path d="M-6 -42C-6 -48 2 -51 7 -47C10 -45 10 -41 9 -39L11 -36L8 -35L7 -31L3 -29L-3 -32L-5 -37Z" fill="url(#humanSurface)"/>'
+  s+='</g>'
+  # Surface contours make volume legible at README scale.
+  s+=path('M-9 -23Q-2 -18 10 -23M-7 -15Q0 -11 9 -16M-6 -8Q1 -5 8 -9M-7 1Q1 5 9 1M0 -26L2 9M-4 -40Q0 -42 7 -40M2 -32L6 -34',LIME,.55,extra='opacity=".65"')
+  s+=path('M-5 -45Q1 -49 6 -46M-10 -22L-6 -8M9 17L17 28M-12 20L-20 42',C,.7,extra='opacity=".8"')
+  # Joint markers remain attached to the anatomical surface.
+  for px,py in [(-9,-24),(10,-23),(1,-12),(2,9)]:
+   s+=circle(px,py,3.5,AMBER,extra='stroke-opacity=".25"')+circle(px,py,1.5,AMBER,extra=f'fill="{AMBER}" class="spark"')
+  s+=path('M-42 -42V-53H-30M30 -53H42V-42M42 45V55H30M-30 55H-42V45',BLUE,.8)
  elif kind in ['vitals','models']:
   for j in range(3):
    s+=path(f'M-49 {j*12-14}C-34 {j*12-14} -30 {j*12-35} -17 {j*12-35}S0 {j*12+7} 14 {j*12+7}S34 {j*12-14} 49 {j*12-14}',C if j!=1 else LIME,1.5,extra=f'class="trace" style="animation-delay:-{j}s" opacity="{1-j*.2}"')
@@ -85,7 +101,7 @@ text{font-family:"Avenir Next","Segoe UI Variable Display","Segoe UI",Helvetica,
 .layer{animation:layer 6s ease-in-out infinite}
 .cursor{animation:cursor 5s ease-in-out infinite}
 @keyframes sweep{0%,100%{transform:rotate(-20deg)}50%{transform:rotate(155deg)}}
-@keyframes limb{0%,100%{transform:rotate(-9deg)}50%{transform:rotate(9deg)}}
+@keyframes limb{0%,100%{transform:rotate(-3deg)}50%{transform:rotate(3deg)}}
 @keyframes layer{50%{transform:translateY(-5px)}}
 @keyframes cursor{0%,100%{transform:translateX(-35px);opacity:.3}50%{transform:translateX(35px);opacity:1}}
 
@@ -125,7 +141,7 @@ def frame(w,h,title,desc,body):
 
 manifest=[]
 def save(name,w,h,title,desc,body,target):
- name+='-spatial-v4'
+ name+='-spatial-v5' if name in ['hero','feature-pose'] else '-spatial-v4'
  s=frame(w,h,title,desc,body);raw=(s+'\n').encode('utf-8');parse_svg(raw);(OUT/(name+'.svg')).write_bytes(raw);manifest.append({'file':'assets/readme/'+name+'.svg','title':title,'target':target,'width':w,'height':h})
 # Cinematic RF stage: authored projected planes, not a live measurement.
 s=text(48,45,'RUVIEW  /  SPATIAL INTELLIGENCE',12,C,extra='class="mono"')
@@ -147,7 +163,7 @@ s+=icon('pose',959,236,1.8)+icon('hardware',771,324,.72)
 for j in range(3):s+=path(f'M795 {309+j*8}Q854 {245+j*14} 939 {223+j*17}',C,1.2,extra=f'class="flow" style="animation-delay:-{j}s"')
 for px,py in [(780,153),(963,70),(1148,162),(1148,303),(960,400)]:s+=circle(px,py,3,AMBER,extra=f'fill="{AMBER}" class="spark"')
 s+=text(1148,419,'CONCEPTUAL RF FIELD',10,MUTED,'end',extra='class="mono"')
-save('hero',1200,450,'RuView: invisible signals, visible possibility','Animated conceptual RF room with an articulated pose, moving scan plane and propagating waves. Illustration only, not a sensor measurement.',s,'docs/user-guide.md')
+save('hero',1200,450,'RuView: invisible signals, visible possibility','Animated conceptual RF room with an anatomical human silhouette, moving scan plane and propagating waves. Illustration only, not a sensor measurement.',s,'docs/user-guide.md')
 # Visual navigation icons, each receives a real outer link in Markdown.
 nav=[('start','Start here','docs/user-guide.md'),('hardware','Hardware','firmware/esp32-csi-node/README.md'),('models','Models','https://huggingface.co/ruvnet/wifi-densepose-pretrained'),('agents','AI toolkit','harness/ruview/README.md'),('home','Smart home','docs/integrations/home-assistant.md'),('seed','Cognitum','https://cognitum.one/seed')]
 for k,label,target in nav:save('nav-'+k,180,116,label,'Open '+label+'. Animated navigation icon.',icon(k,90,45,.65)+text(90,98,label,16,WHITE,'middle'),target)
