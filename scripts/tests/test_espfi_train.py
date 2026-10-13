@@ -141,15 +141,18 @@ class ConfirmationGateIntegrationTests(unittest.TestCase):
     def test_invalid_partial_and_hash_mismatch_never_load(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);dataset,plan,ledger=self.gate_files(root)
-            cases=[self.argv(root,dataset,plan,ledger)[:-2],
-                   self.argv(root,dataset,plan,ledger)[:-1]+['0'*64]]
-            plan.write_text('{bad json')
-            cases.append(self.argv(root,dataset,plan,ledger))
-            for args in cases:
-                with self.subTest(args=args[-2:]), patch('csi_training.espfi.load_dataset') as load, patch('csi_training.espfi_train.optimize') as train:
-                    with self.assertRaises(SystemExit):main(args)
+            cases=[(self.argv(root,dataset,plan,ledger)[:-2],1),
+                   (self.argv(root,dataset,plan,ledger)[:-1]+['0'*64],2)]
+            for args,code in cases:
+                with self.subTest(code=code), patch('csi_training.espfi.load_dataset') as load, patch('csi_training.espfi_train.optimize') as train:
+                    with self.assertRaisesRegex(SystemExit,str(code)):main(args)
                     load.assert_not_called();train.assert_not_called()
                 self.assertFalse((root/'out').exists())
+            plan.write_text('{bad json')
+            with patch('csi_training.espfi.load_dataset') as load, patch('csi_training.espfi_train.optimize') as train:
+                with self.assertRaisesRegex(SystemExit,'1'):
+                    main(self.argv(root,dataset,plan,ledger))
+                load.assert_not_called();train.assert_not_called()
 
     def test_unsafe_gate_files_never_load(self):
         with tempfile.TemporaryDirectory() as d:
