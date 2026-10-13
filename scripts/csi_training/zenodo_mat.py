@@ -20,6 +20,9 @@ def _diagnostics(data, frames):
     amplitude_min, amplitude_max = math.inf, 0.0
     antenna_zeros = np.zeros(data.shape[0], dtype=np.uint64)
     frame_nonzero = np.empty(frames, dtype=np.float64)
+    worst_fraction = math.inf
+    worst_index = 0
+    worst_antenna_nonzero = None
     for start in range(0, frames, FRAME_CHUNK):
         stop = min(start + FRAME_CHUNK, frames)
         values = data[:, :, start:stop]
@@ -36,6 +39,14 @@ def _diagnostics(data, frames):
         total_count += count
         antenna_zeros += zeros.sum(axis=(1, 2), dtype=np.uint64)
         frame_nonzero[start:stop] = (~zeros).mean(axis=(0, 1))
+        local_index = int(np.argmin(frame_nonzero[start:stop]))
+        local_min = float(frame_nonzero[start + local_index])
+        # Strict comparison keeps the earliest frame when minima tie, including
+        # across chunk boundaries. Copy only one bounded antenna vector.
+        if local_min < worst_fraction:
+            worst_fraction = local_min
+            worst_index = start + local_index
+            worst_antenna_nonzero = (~zeros[:, :, local_index]).mean(axis=1).tolist()
         amplitude_min = min(amplitude_min, float(amplitude.min()))
         amplitude_max = max(amplitude_max, float(amplitude.max()))
         chunks_read += 1
@@ -50,6 +61,9 @@ def _diagnostics(data, frames):
         'zero_amplitude_fraction_by_antenna': [
             int(value) / per_antenna_denominator for value in antenna_zeros],
         'frame_nonzero_fraction_min': float(frame_nonzero.min()),
+        'worst_frame_index_zero_based': worst_index,
+        'worst_frame_tie_count': int((frame_nonzero == worst_fraction).sum()),
+        'worst_frame_nonzero_fraction_by_antenna': worst_antenna_nonzero,
         'frame_nonzero_fraction_p05': float(np.quantile(frame_nonzero, .05)),
         'frame_nonzero_fraction_median': float(np.median(frame_nonzero)),
         'frame_nonzero_fraction_mean': float(frame_nonzero.mean()),

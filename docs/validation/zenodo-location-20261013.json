@@ -1,0 +1,107 @@
+{
+  "decision": "ACCEPT",
+  "evidence": "EXPLORATORY_PUBLIC_CAPTURE_DIAGNOSTIC",
+  "baseline_commit": "34eb522ec81c944b12988dd7422795a45f41058c",
+  "protocol_sha256": "6677e4c07b768322c0f46adf92ffff9359f1977d18462b89e38733a795bc6c26",
+  "old_fields_exact": true,
+  "prior_full_scan_reproduced": true,
+  "independent_oracle_exact": true,
+  "samples": {
+    "empty": {
+      "window": {
+        "inspected_frames": 32,
+        "frame_nonzero_fraction_min": 0.904296875,
+        "worst_frame_index_zero_based": 9,
+        "worst_frame_tie_count": 1,
+        "worst_frame_nonzero_fraction_by_antenna": [
+          0.875,
+          0.99609375,
+          0.875,
+          0.87109375
+        ]
+      },
+      "all": {
+        "inspected_frames": 596,
+        "frame_nonzero_fraction_min": 0.251953125,
+        "worst_frame_index_zero_based": 69,
+        "worst_frame_tie_count": 1,
+        "worst_frame_nonzero_fraction_by_antenna": [
+          0.24609375,
+          0.26171875,
+          0.2578125,
+          0.2421875
+        ]
+      }
+    },
+    "sitting": {
+      "window": {
+        "inspected_frames": 32,
+        "frame_nonzero_fraction_min": 0.8857421875,
+        "worst_frame_index_zero_based": 31,
+        "worst_frame_tie_count": 1,
+        "worst_frame_nonzero_fraction_by_antenna": [
+          0.90625,
+          0.96484375,
+          0.83984375,
+          0.83203125
+        ]
+      },
+      "all": {
+        "inspected_frames": 597,
+        "frame_nonzero_fraction_min": 0.8798828125,
+        "worst_frame_index_zero_based": 350,
+        "worst_frame_tie_count": 1,
+        "worst_frame_nonzero_fraction_by_antenna": [
+          0.875,
+          0.953125,
+          0.88671875,
+          0.8046875
+        ]
+      }
+    },
+    "walking": {
+      "window": {
+        "inspected_frames": 32,
+        "frame_nonzero_fraction_min": 0.876953125,
+        "worst_frame_index_zero_based": 26,
+        "worst_frame_tie_count": 1,
+        "worst_frame_nonzero_fraction_by_antenna": [
+          0.90234375,
+          0.9921875,
+          0.89453125,
+          0.71875
+        ]
+      },
+      "all": {
+        "inspected_frames": 597,
+        "frame_nonzero_fraction_min": 0.8515625,
+        "worst_frame_index_zero_based": 396,
+        "worst_frame_tie_count": 1,
+        "worst_frame_nonzero_fraction_by_antenna": [
+          0.89453125,
+          0.9609375,
+          0.86328125,
+          0.6875
+        ]
+      }
+    }
+  },
+  "elapsed_seconds": 1.649929291000035,
+  "peak_rss_kib": 57700,
+  "training_performed": false,
+  "promotionAuthorized": false,
+  "source_hashes": {
+    "scripts/csi_training/__init__.py": "eb851eefc626c473c16bc253f724bdec9373f1a86847b897bca5a851508e5544",
+    "scripts/csi_training/data.py": "8ee3eae346f31256c88b64c45b20541686ce8b5ff74846efedab2275aed7b687",
+    "scripts/csi_training/zenodo_sample.py": "6ea89c1e1a2d254665d1d44f04270893acabba3e3ce6924745cc7c66efcf7009",
+    "scripts/csi_training/zenodo_mat.py": "9e62fbe3690bf7ab381f206ec90cffd83b04061127abbc62eddfad95c1b4b678",
+    "scripts/tests/test_csi_training_zenodo.py": "09aa7663ff62d75e2c691bf31165526747a08c67279d44142c283d1ea3e549f7",
+    "scripts/csi_training/zenodo_mat_baseline.py": "b2d53f65ac865860baf30c2ac9cb844b6f0be50346db2f9354c88754451c62f2",
+    "measure.py": "c607a0ee56630f47f8243438db84c6c0efd52c25dbebe38950af70e884c41766"
+  },
+  "data_hashes": {
+    "empty": "561f2dd6ac9d08597365d90b08da829bdce99cba003261986a946e41fd0ba46b",
+    "sitting": "4db0d302c6b63c9a1239133578de4ea5439a4b50f129c835860bfae873038761",
+    "walking": "7c1d78deb3fd586201a8472507942a5b5c7042286c051b890570cc8d592b20c9"
+  }
+}

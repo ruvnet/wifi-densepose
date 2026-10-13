@@ -143,3 +143,43 @@ latency optimization benchmark. Eight focused adversarial tests pass in 0.151
 seconds after the review fixes. Sanitized aggregates are in
 [`validation/zenodo-full-quality-20261013.json`](validation/zenodo-full-quality-20261013.json);
 raw captures and the detailed private receipt remain untracked.
+
+## Locate the worst coverage frame
+
+The diagnostic now reports `worst_frame_index_zero_based`,
+`worst_frame_tie_count`, and `worst_frame_nonzero_fraction_by_antenna`.
+Indices refer to the native CSI frame axis, not timestamps. Ties select the
+earliest frame; the antenna vector belongs to that frame and retains native
+antenna order. Both minima and tie counts cover only `inspected_frames`:
+the default still checks the first 32 frames, while `--all-frames` checks all.
+No capture-quality threshold, occupancy classification or training gate is added.
+
+Frozen baseline: `34eb522ec81c944b12988dd7422795a45f41058c`.
+Acceptance required exact preservation of every old report field in both modes,
+agreement with an independent frame-by-frame nonzero-count oracle, adversarial
+tests for chunk-boundary ties, antenna order and unread tails, and the existing
+30-second/1-GiB verification limits. Source, evaluator and input identities are
+in [the frozen protocol](validation/zenodo-location-protocol-20261013.json).
+The same three already exposed recordings were used; there is no new split,
+training, model selection or final-test access. The implementation retains
+32-frame reads and at most one eight-element antenna vector, with no extra
+dataset read. Existing file/hash/HDF validation is unchanged.
+
+ACCEPT for draft diagnostic review: ten focused tests pass. Every old field and
+the prior whole-scan receipt reproduced exactly. The independent oracle agrees
+in both modes for all three samples. The empty-sample minimum is at frame 69
+(zero-based), with native antenna nonzero fractions 0.246094, 0.261719, 0.257812
+and 0.242188. This localizes the previously reported drop across all four
+antennas; its physical cause remains unknown. The sitting and walking minima
+are at frames 350 and 396. These filenames are source labels, not predictions.
+Verification took 1.650 seconds with peak RSS 57,700 KiB on existing ruOS CPU;
+this includes baseline, candidate and oracle work and is not a speed comparison.
+See [the aggregate receipt](validation/zenodo-location-20261013.json).
+
+Reproduce using the diagnostic and test commands above. Security review confirms
+no new input, network, file or model authority; output is bounded to three extra
+fields and contains no raw signal values. Raw receipts remain private. Existing
+infrastructure cost is unmetered; no paid resource or training was started.
+Rollback restores the diagnostic and test from the baseline commit.
+Next: correlate frame 69 with acquisition metadata before assigning a cause;
+license and physical provenance still block model use.

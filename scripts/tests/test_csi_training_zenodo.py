@@ -149,6 +149,9 @@ class ZenodoTests(unittest.TestCase):
             self.assertEqual(complete['chunks_read'], 2)
             self.assertEqual(complete['decoded_complex_values'], 240)
             self.assertEqual(complete['frame_nonzero_fraction_min'], 1)
+            self.assertEqual(complete['worst_frame_index_zero_based'], 0)
+            self.assertEqual(complete['worst_frame_tie_count'], 40)
+            self.assertEqual(complete['worst_frame_nonzero_fraction_by_antenna'], [1, 1])
             self.assertEqual(complete['zero_amplitude_fraction_by_antenna'], [0, 0])
             with self.assertRaises(ValueError): inspect(path, '0' * 64)
             with self.assertRaises(ValueError): inspect(path, sha, 1)
@@ -168,6 +171,55 @@ class ZenodoTests(unittest.TestCase):
             self.assertEqual(report['frame_nonzero_fraction_min'], 0)
             self.assertEqual(report['zero_amplitude_fraction'], 1/40)
             self.assertEqual(report['zero_amplitude_fraction_by_antenna'], [1/40, 1/40])
+            self.assertEqual(report['worst_frame_index_zero_based'], 39)
+            self.assertEqual(report['worst_frame_tie_count'], 1)
+            self.assertEqual(report['worst_frame_nonzero_fraction_by_antenna'], [0, 0])
+
+    def test_worst_frame_ties_scope_and_native_antenna_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'sample.mat'; self.fixture(path)
+            with h5py.File(path, 'r+') as source:
+                values = source['csi'][:]
+                # Equal aggregate minima on either side of the chunk boundary,
+                # but different antenna coverage. Keep the earlier vector.
+                values[0, :, 31] = (0, 0)
+                values[1, :, 32] = (0, 0)
+                source['csi'][:] = values
+            sha = hashlib.sha256(path.read_bytes()).hexdigest()
+            window = inspect(path, sha)
+            complete = inspect(path, sha, True)
+            for report in (window, complete):
+                self.assertEqual(report['worst_frame_index_zero_based'], 31)
+                self.assertEqual(report['worst_frame_nonzero_fraction_by_antenna'], [0, 1])
+                self.assertEqual(report['frame_nonzero_fraction_min'], .5)
+                self.assertFalse(report['training_eligible'])
+                self.assertFalse(report['promotionAuthorized'])
+            self.assertEqual(window['worst_frame_tie_count'], 1)
+            self.assertEqual(complete['worst_frame_tie_count'], 2)
+
+    def test_worst_frame_does_not_read_beyond_bounded_chunks(self):
+        from csi_training.zenodo_mat import _diagnostics, FRAME_CHUNK
+        class BoundedDataset:
+            shape = (2, 3, 65)
+            calls = []
+            def __getitem__(self, index):
+                first, second, frames = index
+                self.calls.append((frames.start, frames.stop))
+                self.assert_bounded(frames)
+                values = np.zeros((2, 3, frames.stop - frames.start),
+                                  dtype=[('real', '<f8'), ('imag', '<f8')])
+                values['real'] = 1
+                if frames.stop == 65:
+                    values[:, :, -1] = (0, 0)
+                return values
+            def assert_bounded(self, frames):
+                assert 0 < frames.stop - frames.start <= FRAME_CHUNK
+        data = BoundedDataset()
+        report = _diagnostics(data, 65)
+        self.assertEqual(data.calls, [(0, 32), (32, 64), (64, 65)])
+        self.assertEqual(report['worst_frame_index_zero_based'], 64)
+        self.assertEqual(report['worst_frame_tie_count'], 1)
+        self.assertEqual(report['worst_frame_nonzero_fraction_by_antenna'], [0, 0])
 
     def test_mat_rejects_links_external_storage_dimensions_dtype_nan(self):
         with tempfile.TemporaryDirectory() as tmp:

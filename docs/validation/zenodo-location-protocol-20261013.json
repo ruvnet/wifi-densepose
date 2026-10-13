@@ -1,0 +1,32 @@
+{
+  "hypothesis": "Add exact earliest worst frame and its native antenna coverage without changing prior diagnostics or reading additional data",
+  "baseline_commit": "34eb522ec81c944b12988dd7422795a45f41058c",
+  "baseline_tree": "3646eb238e732767ad8baa3ad8205cd2e9cefe7b",
+  "split_policy": "No split or training; three already exposed exploratory captures only; no held final test",
+  "acceptance": [
+    "All focused adversarial tests pass",
+    "Exact equality of every old report field against baseline on both window and whole-recording modes",
+    "Exact equality of earliest minimum, ties and antenna coverage to independent per-frame oracle",
+    "No reads larger than 32 frames; no extra dataset reads in diagnostic",
+    "At most 30 seconds and 1 GiB virtual memory for verification",
+    "Promotion/training/occupancy flags remain false"
+  ],
+  "rollback": "Restore zenodo_mat.py and its tests from baseline commit; no model/runtime changes",
+  "budget_seconds": 30,
+  "virtual_memory_kib": 1048576,
+  "training_seconds": 0,
+  "data": {
+    "empty": "561f2dd6ac9d08597365d90b08da829bdce99cba003261986a946e41fd0ba46b",
+    "sitting": "4db0d302c6b63c9a1239133578de4ea5439a4b50f129c835860bfae873038761",
+    "walking": "7c1d78deb3fd586201a8472507942a5b5c7042286c051b890570cc8d592b20c9"
+  },
+  "source_hashes": {
+    "scripts/csi_training/__init__.py": "eb851eefc626c473c16bc253f724bdec9373f1a86847b897bca5a851508e5544",
+    "scripts/csi_training/data.py": "8ee3eae346f31256c88b64c45b20541686ce8b5ff74846efedab2275aed7b687",
+    "scripts/csi_training/zenodo_sample.py": "6ea89c1e1a2d254665d1d44f04270893acabba3e3ce6924745cc7c66efcf7009",
+    "scripts/csi_training/zenodo_mat.py": "9e62fbe3690bf7ab381f206ec90cffd83b04061127abbc62eddfad95c1b4b678",
+    "scripts/tests/test_csi_training_zenodo.py": "09aa7663ff62d75e2c691bf31165526747a08c67279d44142c283d1ea3e549f7",
+    "scripts/csi_training/zenodo_mat_baseline.py": "b2d53f65ac865860baf30c2ac9cb844b6f0be50346db2f9354c88754451c62f2",
+    "measure.py": "c607a0ee56630f47f8243438db84c6c0efd52c25dbebe38950af70e884c41766"
+  }
+}
