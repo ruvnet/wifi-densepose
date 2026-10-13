@@ -19,7 +19,23 @@ This firmware captures WiFi Channel State Information (CSI) from an ESP32-S3 (pr
 > | **Fall detection** | Phase acceleration threshold | Configurable sensitivity |
 > | **Programmable sensing** | WASM modules loaded over HTTP | Hot-swap, no reflash |
 
-## Firmware 0.8.12: guided Mac onboarding
+## Firmware 0.8.14 prerelease: device identity and OTA provisioning
+
+Version 0.8.14 fixes the six-byte base-MAC input used for USB onboarding on
+ESP32-C6, where the previous API wrote an eight-byte EUI-64 into that buffer.
+The PSA SHA-256 algorithm and domain remain unchanged. Affected boards now
+report a corrected `device_digest`; rediscover and reselect the physical board
+after updating rather than accepting its old saved digest.
+
+The provisioner can also write the OTA authentication key to `security/ota_psk`
+using `--ota-psk-file`. The key is never cached in host state. See
+[OTA key provisioning](#ota-key-provisioning) before reprovisioning a node.
+
+This prerelease is built from the main source line. CI builds and host tests
+do not establish physical-board qualification or sensing accuracy. The older
+0.8.13 prerelease's unmerged watchdog experiments are not included.
+
+### Guided Mac onboarding (introduced in 0.8.12)
 
 Firmware 0.8.12 adds the protocol used by the RuView macOS Add
 Sensor workflow. A directly attached S3 or C6 can identify itself through a
@@ -67,21 +83,33 @@ measured evidence and limitations.
 
 For users who want to get running fast. Detailed explanations follow in later sections.
 
-### 0. Download the 0.8.8 release
+### 0. Download a versioned firmware bundle
 
 Use the versioned source tag and binaries on the
-[v0.8.8 ESP32 release page](https://github.com/ruvnet/RuView/releases/tag/v0.8.8-esp32).
+[v0.8.14 ESP32 prerelease page](https://github.com/ruvnet/RuView/releases/tag/v0.8.14-esp32).
+For the previous stable firmware and its hardware evidence, see
+[v0.8.8](https://github.com/ruvnet/RuView/releases/tag/v0.8.8-esp32).
 Choose the package that names both your chip and flash size:
 
 | Package | Use it for |
 |---------|------------|
-| `esp32-csi-node-v0.8.8-s3-8mb-flash-bundle.zip` | Fresh ESP32-S3 installation with 8 MB flash |
-| `esp32-csi-node-v0.8.8-s3-4mb-flash-bundle.zip` | Fresh ESP32-S3 installation with 4 MB flash |
-| `esp32-csi-node-v0.8.8-c6-4mb-flash-bundle.zip` | Fresh ESP32-C6 installation using the supported 4 MB layout |
+| `esp32-csi-node-firmware-8mb.tar.gz` | ESP32-S3 display configuration, 8 MB flash |
+| `esp32-csi-node-firmware-4mb.tar.gz` | ESP32-S3 headless configuration, 4 MB layout |
+| `esp32-csi-node-firmware-c6-4mb.tar.gz` | ESP32-C6 research target, 4 MB layout |
 
 Each bundle contains the matching bootloader, partition table, OTA metadata,
-application, checksums, and a short flashing guide. Never flash an S3 bundle
+application, version and checksums. Verify the archive using the release's
+`SHA256SUMS.txt`, extract it into its own directory, then verify the enclosed
+`SHA256SUMS.txt`. Never flash an S3 bundle
 onto a C6, or a C6 bundle onto an S3.
+
+The 4 MB application/partition filenames are `esp32-csi-node-4mb.bin` and
+`partition-table-4mb.bin`; C6 uses `esp32-csi-node-c6.bin` and
+`partition-table-c6.bin`. Do not mix files from different archives.
+Bare 8 MB DevKitC boards need a source build with `sdkconfig.defaults.devkitc`
+as documented below; the 8 MB release bundle enables display support.
+The tracked `release_bins/` files are historical snapshots and must not be
+used as current firmware downloads (see issues #1899 and #2092).
 
 Example for an 8 MB ESP32-S3 after extracting its bundle:
 
@@ -98,6 +126,13 @@ For an existing provisioned node, back up its current application and inspect
 `http://DEVICE_IP:8032/ota/status` before choosing an application-only update.
 Writing only offset `0x20000` is safe only when the status endpoint reports
 `running_partition` as `ota_0` and the downloaded image matches the board.
+
+After an OTA, the same endpoint's `ota_state` must read `valid` before you
+power-cycle the node or push again. `pending_verify` means the image has not
+passed its first-boot health check yet and would revert on reset. A passed
+check means only that the node reached the network and sent CSI. See
+[RUNBOOK §2.1](RUNBOOK.md) and ADR-379.
+
 The full bundles do not include NVS, so the documented four-offset install
 preserves WiFi and node configuration while replacing the boot and application
 images.
@@ -161,15 +196,26 @@ board default and emits no antenna-path claim.
 ### 3. Provision WiFi credentials (no reflash needed)
 
 ```bash
+# Keep the WiFi password in an owner-only file, not on the command line.
+printf '%s\n' 'YourPass' > ~/.wifi-pass && chmod 600 ~/.wifi-pass
 python firmware/esp32-csi-node/provision.py --port COM7 \
-  --ssid "YourSSID" --password "YourPass" --target-ip 192.168.1.20
+  --ssid "YourSSID" --password-file ~/.wifi-pass --target-ip 192.168.1.20
 ```
+
+Leave out both `--password` and `--password-file` and the script asks for the
+password when run from a terminal. `--password` still works, but it shows up in
+`ps` and shell history.
 
 ### 4. Start the sensing server
 
 ```bash
-cargo run -p wifi-densepose-sensing-server -- --http-port 3000 --source auto
+cd v2
+cargo run -p wifi-densepose-sensing-server -- --http-port 3000 --source auto \
+  --udp-bind 0.0.0.0 --udp-allow 192.168.1.0/24
 ```
+
+Use your nodes' subnet for `--udp-allow`. The default UDP listener is loopback
+only, so LAN nodes need both the bind address and an explicit source allowlist.
 
 ### 5. Open the UI
 
@@ -261,8 +307,8 @@ Adds real-time health and safety monitoring.
   drives the on-screen skeleton from signal-based heuristics (amplitude
   variance, motion-band power), not from learned keypoint inference. The
   repository does not ship pre-trained weights — see issues
-  [#509](../../issues/509) and [#506](../../issues/506) for context, and
-  [ADR-079](../../docs/adr/ADR-079-camera-supervised-pose-finetune.md) for
+  [#509](https://github.com/ruvnet/RuView/issues/509) and [#506](https://github.com/ruvnet/RuView/issues/506) for context, and
+  [ADR-079](../../docs/adr/ADR-079-camera-ground-truth-training.md) for
   the planned training path (phases P7-P9 are `Pending`).
 - The presence indicator is a calibrated variance threshold and **will
   false-positive** under strong RF interference from non-human sources
@@ -440,9 +486,51 @@ The easiest way to write NVS settings:
 ```bash
 python firmware/esp32-csi-node/provision.py --port COM7 \
   --ssid "MyWiFi" \
-  --password "MyPassword" \
+  --password-file ~/.wifi-pass \
   --target-ip 192.168.1.20
 ```
+
+The password file must be owner-only (`chmod 600`); one trailing newline is
+dropped. Without a password flag the script prompts on a terminal; in scripts
+and CI it doesn't prompt and fails if no password was given now or saved
+earlier for that port.
+
+### OTA key provisioning
+
+Create a random 256-bit key in a private file outside the repository. For
+example, on POSIX:
+
+```bash
+(umask 077; set -C; openssl rand -hex 32 > ~/.ruview-ota-psk)
+python firmware/esp32-csi-node/provision.py --port COM7 \
+  --ssid "MyWiFi" --password-file ~/.wifi-pass --target-ip 192.168.1.20 \
+  --ota-psk-file ~/.ruview-ota-psk
+```
+
+The file must contain exactly 64 hexadecimal characters and optionally one
+trailing newline. The tool rejects symlinks and non-regular files, bounds the
+read, and checks owner-only POSIX permissions. On Windows, protect the file
+with your user ACL; POSIX mode bits cannot enforce Windows ACLs.
+`--ota-psk HEX` is also supported, but exposes the key in process arguments and
+shell history. Key values are never printed by this tool, including `--state
+--show-secrets`, and never saved in the per-board host JSON.
+
+Provisioning rewrites the **whole NVS partition**, not just the key supplied.
+Pass the key again on every later provisioning run. Once this tool records
+that OTA was configured, omission is refused unless `--clear-ota-psk` explicitly
+disables OTA. An older board with no host record cannot be detected this way;
+without a supplied key the tool warns that the rewrite disables OTA. Legacy
+cached OTA keys are hidden from inspection and never reused. A successful
+provisioning run removes them from saved state; read-only inspection leaves
+the existing file unchanged.
+Keep the key backed up securely. A dry-run binary or fallback CSV still
+contains credentials and must remain private and be deleted after use.
+
+This writes `security/ota_psk` through the USB NVS workflow; it does not flash
+application firmware. After reboot, verify the `OTA PSK loaded` log. The HTTP
+server starting alone does not mean OTA authentication is armed. Uploads
+remain fail-closed without a key; see the first-boot health check above after
+an authenticated update.
 
 ### NVS Key Reference
 
@@ -632,6 +720,7 @@ cargo build -p wifi-densepose-wasm-edge --target wasm32-unknown-unknown --releas
 | `main/nvs_config.c` / `.h` | Runtime configuration: loads Kconfig defaults, overrides from NVS |
 | `main/edge_processing.c` / `.h` | Tier 0-2 DSP pipeline: SPSC ring buffer, biquad IIR filters, Welford stats, BPM extraction, presence, fall detection |
 | `main/ota_update.c` / `.h` | HTTP OTA firmware update server on port 8032 |
+| `main/ota_health.c` / `.h` | First-boot health check that confirms an OTA'd image or rolls it back (ADR-379) |
 | `main/power_mgmt.c` / `.h` | Battery-aware light sleep duty cycling |
 | `main/wasm_runtime.c` / `.h` | WASM3 interpreter: module slots, host API bindings, budget guard, per-frame dispatch |
 | `main/wasm_upload.c` / `.h` | HTTP endpoints for WASM module upload, list, start, stop, delete |
@@ -930,12 +1019,12 @@ This firmware implements or references the following ADRs:
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| [ADR-018](../../docs/adr/ADR-018-csi-binary-frame-format.md) | CSI binary frame format | Accepted |
+| [ADR-018](../../docs/adr/ADR-018-esp32-dev-implementation.md) | CSI binary frame format | Accepted |
 | [ADR-029](../../docs/adr/ADR-029-ruvsense-multistatic-sensing-mode.md) | Channel hopping and TDM protocol | Accepted |
 | [ADR-039](../../docs/adr/ADR-039-esp32-edge-intelligence.md) | Edge intelligence tiers 0-2 | Accepted |
 | [ADR-040](../../docs/adr/) | WASM programmable sensing (Tier 3) with RVF container format | Alpha |
-| [ADR-057](../../docs/adr/ADR-057-build-time-csi-guard.md) | Build-time CSI guard (`CONFIG_ESP_WIFI_CSI_ENABLED`) | Accepted |
-| [ADR-060](../../docs/adr/ADR-060-channel-mac-filter.md) | Channel override and MAC address filter | Accepted |
+| [ADR-057](../../docs/adr/ADR-057-firmware-csi-build-guard.md) | Build-time CSI guard (`CONFIG_ESP_WIFI_CSI_ENABLED`) | Accepted |
+| [ADR-060](../../docs/adr/ADR-060-provision-channel-mac-filter.md) | Channel override and MAC address filter | Accepted |
 | [ADR-061](../../docs/adr/ADR-061-qemu-esp32s3-firmware-testing.md) | QEMU ESP32-S3 emulation for firmware testing | Proposed |
 
 ---
