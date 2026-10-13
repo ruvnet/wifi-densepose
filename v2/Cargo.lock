@@ -9560,6 +9560,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruview-spatial-evidence"
+version = "0.3.1"
+dependencies = [
+ "ruview-unified",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "ruview-spatial-memory"
 version = "0.3.1"
 dependencies = [
@@ -9571,6 +9581,15 @@ dependencies = [
  "thiserror 2.0.18",
  "wifi-densepose-ruvector",
  "zeroize",
+]
+
+[[package]]
+name = "ruview-survey"
+version = "0.3.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -13312,6 +13331,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wifi-densepose-mtk-bridge"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "wifi-densepose-hardware",
+]
+
+[[package]]
 name = "wifi-densepose-nn"
 version = "0.3.2"
 dependencies = [
@@ -13387,6 +13417,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower-http",
+ "wifi-densepose-hardware",
 ]
 
 [[package]]
