@@ -53,3 +53,9 @@ remains linked. Existing asset dimensions and README links are preserved.
 The overview and RF room are conceptual illustrations, not live measurements or benchmark evidence. Feature cards link to current source documentation. Pose research is identified as such, and the signal card directs readers to hardware validation. No new speed, accuracy, medical or device-support claims are introduced.
 
 Sources: `docs/user-guide.md`, `docs/benchmarks/pose-estimation-cog.md`, `v2/crates/wifi-densepose-signal/README.md`, `firmware/esp32-csi-node/README.md`, `docs/integrations/home-assistant.md`, and `harness/ruview/README.md`.
+
+The hero and pose card use `-spatial-v5.svg`: an original anatomical human
+silhouette with shaded torso, head, hands and feet, overlapping limbs, surface
+contours and amber joint markers. Subtle limb motion pivots behind the torso
+to preserve joint continuity. This is vector artwork, not a real body scan or
+measured pose reconstruction. Other assets retain their v4 filenames.
