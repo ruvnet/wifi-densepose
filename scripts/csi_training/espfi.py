@@ -26,6 +26,9 @@ CLASSES = [f'activity_{i}' for i in range(1, 8)]
 IDENTITY = re.compile(r'([1-4])-([1-8])-([1-7])-(10|[1-9])\.mat\Z')
 MAX_MEMBER = 2_000_000
 MAX_NPZ = 600_000_000
+# The largest admitted supervised payload is 193,688,352 bytes at pool=1.
+# This bound includes conservative DEFLATE, NPY and ZIP container headroom.
+MAX_CONFIRMED_NPZ = 200_000_000
 
 
 def digest(path):
@@ -52,16 +55,20 @@ def _copy_bundle(source, snapshot, size):
 @contextmanager
 def _verified_bundle_snapshot(path, expected_sha256):
     """Copy verified bytes into a private file before parser exposure."""
+    snapshot = None
     try:
-        with tempfile.TemporaryFile(mode='w+b', prefix='ruview-npz-') as snapshot:
-            with _open_regular_bundle(path) as (source, size):
-                if _copy_bundle(source, snapshot, size) != expected_sha256:
-                    raise ValueError('unsafe or modified dataset bundle')
-            snapshot.flush()
-            snapshot.seek(0)
-            yield snapshot
+        with _open_regular_bundle(path) as (source, size):
+            snapshot = tempfile.TemporaryFile(mode='w+b', prefix='ruview-npz-')
+            if _copy_bundle(source, snapshot, size) != expected_sha256:
+                raise ValueError('unsafe or modified dataset bundle')
+        snapshot.flush()
+        snapshot.seek(0)
+        yield snapshot
     except OSError as exc:
         raise ValueError('dataset bundle snapshot unavailable') from exc
+    finally:
+        if snapshot is not None:
+            snapshot.close()
 
 
 @contextmanager
@@ -89,7 +96,8 @@ def _open_regular_bundle(path):
             info = os.fstat(fd)
         except OSError as exc:
             raise ValueError('dataset bundle read failed') from exc
-        if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= MAX_NPZ:
+        if (not stat.S_ISREG(info.st_mode)
+                or not 0 < info.st_size <= MAX_CONFIRMED_NPZ):
             raise ValueError('dataset bundle must be a bounded regular file')
         with os.fdopen(fd, 'rb', closefd=False) as stream:
             yield stream, info.st_size

@@ -50,7 +50,10 @@ consent, licenses, aliases, stable physical identities, or exposure-ledger
 completeness. The inputs are unsigned. The manifest hash binds declarations and
 referenced payload hashes, not provenance truth. Parent directories remain a
 trusted deployment boundary. Snapshot creation requires temporary storage up to
-the compressed bundle limit and can fail closed when that storage is unavailable.
+200 MB and can fail closed when that storage is unavailable. This cap covers the
+largest fixed supervised schema at temporal pool one plus conservative DEFLATE,
+NPY and ZIP overhead; native-resolution intake retains the unchanged 600 MB
+shared bound.
 Path replacement or same-inode mutation cannot change the verified snapshot
 after it is copied; changes observed during copying fail the pinned digest or
 exact-length checks. Passing software tests makes no sensing-accuracy claim.

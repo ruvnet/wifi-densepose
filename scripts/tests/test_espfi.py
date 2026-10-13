@@ -198,6 +198,28 @@ class EspfiTests(unittest.TestCase):
                 archive.assert_not_called();load.assert_not_called()
             self.assertTrue(snapshot.closed)
 
+    def test_confirmed_snapshot_rejects_oversize_before_tempfile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest, npz, _, _ = self.fixture(tmp)
+            expected = espfi.digest(manifest)
+            npz.unlink()
+            with npz.open('wb') as bundle:
+                bundle.truncate(espfi.MAX_CONFIRMED_NPZ + 1)
+            with patch('csi_training.espfi.tempfile.TemporaryFile') as temporary, \
+                 patch('csi_training.espfi._copy_bundle') as copy, \
+                 patch('csi_training.espfi.zipfile.ZipFile') as archive, \
+                 patch('csi_training.espfi.np.load') as load:
+                with self.assertRaisesRegex(ValueError, 'bounded regular file'):
+                    espfi.load_dataset(manifest, expected_manifest_sha256=expected)
+                temporary.assert_not_called();copy.assert_not_called()
+                archive.assert_not_called();load.assert_not_called()
+
+    def test_bundle_bounds_cover_fixed_schemas(self):
+        # Worst-case DEFLATE plus NPY/ZIP structures for the fixed schemas.
+        self.assertGreaterEqual(espfi.MAX_CONFIRMED_NPZ, 193_748_724)
+        self.assertGreaterEqual(espfi.MAX_NPZ, 395_754_520)
+        self.assertLess(espfi.MAX_CONFIRMED_NPZ, espfi.MAX_NPZ)
+
     def test_confirmed_snapshot_rejects_length_change(self):
         for declared_size in (2, 4):
             with self.subTest(declared_size=declared_size):
@@ -291,6 +313,7 @@ class EspfiTests(unittest.TestCase):
                 accessed.append(key)
                 return original(data, key)
             with patch.object(npz_class, '__getitem__', guarded), \
+                 patch.object(espfi, 'MAX_CONFIRMED_NPZ', 1), \
                  patch('csi_training.espfi.tempfile.TemporaryFile') as temporary:
                 parts, meta = espfi.load_development(manifest)
             temporary.assert_not_called()
