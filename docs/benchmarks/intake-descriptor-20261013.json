@@ -1,0 +1,28 @@
+{
+  "evidence": "SYNTHETIC",
+  "baseline_commit": "721a094f09b97422e32555fc8444cdaa17c5fd3a",
+  "baseline_source_sha256": "e50e5305b8678e7dc9039d99faa8cc71c20132af786bdd1b3538def73ef49055",
+  "candidate_source_sha256": "8ee3eae346f31256c88b64c45b20541686ce8b5ff74846efedab2275aed7b687",
+  "valid_partition_parity": true,
+  "samples_per_arm": 1000,
+  "fixture_records": 9,
+  "fixture_files": 3,
+  "warmups_per_arm": 20,
+  "timing": {
+    "baseline": {
+      "p50_ms": 0.180943,
+      "p95_ms": 0.218539
+    },
+    "candidate": {
+      "p50_ms": 0.203307,
+      "p95_ms": 0.241545
+    }
+  },
+  "python_tracemalloc_peak_bytes": {
+    "baseline": 15118,
+    "candidate": 16670
+  },
+  "python": "3.12.14",
+  "scope": "Paired alternating full intake from warm filesystem cache. Shared CPU; tracemalloc excludes native allocations. No inference or accuracy claim.",
+  "promotionAuthorized": false
+}

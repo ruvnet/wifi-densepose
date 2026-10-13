@@ -8,6 +8,7 @@ on:
       - 'scripts/active-kge/**'
       - 'scripts/pretrain-csi-predictive.py'
       - 'scripts/pretrain-csi-transfer.py'
+      - 'scripts/benchmark-csi-intake.py'
       - 'scripts/evaluate-active-evidence.py'
       - 'scripts/verify-active-replay.py'
       - 'scripts/train-csi-encoder.py'
