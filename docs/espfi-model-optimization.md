@@ -526,3 +526,17 @@ The runtime requires only NumPy and safetensors. It retains 163,736 workspace
 bytes alongside 487,480 model-array bytes; no total memory reduction is claimed.
 All 93 relevant Python tests pass. No training, new accuracy evidence, final
 test reopening or deployment occurs. Target device latency remains unmeasured.
+
+## Optional mixed classifier inference, 2026-10-13
+
+The [mixed precision runtime](espfi-motion-mixed.md) preserves float64 feature
+extraction and casts only the folded classifier and its immediate workspace.
+It reduces retained model plus workspace arrays from 651,216 to 408,808 bytes,
+a 37.2239% reduction, while retaining all 907 admitted predicted classes.
+Maximum logit error is 1.015411e-6 against both retained references.
+
+All three rounds stay within the declared 5% p95 regression limit. None meets
+the separate 10% speed gate, so this is retained only as an explicit memory
+option. Float64 remains the default. All 99 relevant Python tests pass.
+The unchanged weights, reused data and scoped array counts do not establish
+new accuracy, target device speed or total process memory improvement.

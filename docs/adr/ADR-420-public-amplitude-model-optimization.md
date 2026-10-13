@@ -156,3 +156,21 @@ both preserved in [the runtime report](../espfi-motion-runtime.md).
 
 This accepts a measured shared CPU inference improvement, not a new activity
 model, field accuracy result, target hardware guarantee or production release.
+
+## Optional mixed classifier boundary, 2026-10-13
+
+Preserve all feature calculations in float64. An explicitly selected subclass
+may cast the folded classifier to float32 after validating and folding the
+unchanged artifact in float64. Reject cast overflow, retain locking and output
+ownership, and leave the existing float64 runtime unchanged.
+
+This separate precision contract requires exact admitted-record predictions
+and maximum absolute logit error 1e-4 against both retained references. Retain
+the memory option only with at most half the model-array bytes, at most 65%
+of combined model/workspace bytes and p95 no more than 5% worse in each of
+three frozen paired rounds. Keep the separate 10% speed gate unchanged.
+
+The [measured mixed report](../espfi-motion-mixed.md) passes the memory gate,
+with 37.2239% fewer retained array bytes, but fails the speed gate. Preserve
+the second-round median and third-round p95 regressions. No default switch,
+training, new accuracy claim, final test reopening or deployment is implied.
