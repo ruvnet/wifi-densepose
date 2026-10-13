@@ -98,3 +98,23 @@ The frozen temporal extension improved internal training folds but regressed
 development accuracy and macro F1. Reject it and preserve the retained motion
 ACF model. Evidence, executable commands and future field acceptance are in
 [`espfi-field-context-research.md`](../espfi-field-context-research.md).
+## Native resolution research boundary, 2026-10-13
+
+The standalone resolution intake preserves the original manifest's admitted
+training and development identities and duplicate quarantine. It skips final
+test and excluded MATLAB payloads before decoding. Native amplitudes retain
+lossless float64 values; pooled control values preserve original source dtype,
+averaging order and float32 output. Every control tensor must match the parent
+dataset exactly, and the refitted control state must match the retained ACF
+artifact exactly.
+
+The frozen 18-configuration experiment compares pooled190 with raw950 features
+at matched sample-index spans and shorter spans. Selection uses only the two
+original training folds. The original test was opened in the first pilot and
+is not reopened here. The reused development partition remains adaptive
+research evidence. No partition is relabeled as fresh confirmation.
+
+See [protocol and results](../espfi-resolution-experiment.md) and the
+[semantic label audit](../espfi-label-audit-20261013.md). Numeric label renaming
+alone cannot improve accuracy or macro F1. Deployment requires independent
+confirmation and target device measurement even if a research gate passes.

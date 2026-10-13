@@ -479,3 +479,16 @@ rejection policies. Public unlabeled replay is inspected for format only, with
 no assumed empty room, activity labels or fabricated positions. Software
 integrity and synthetic timing are not predictive accuracy evidence. The report
 and aggregate receipts preserve that distinction and the negative model result.
+## Native resolution and label audit, 2026-10-13
+
+The [frozen resolution experiment](espfi-resolution-experiment.md) compares
+950 native samples against the existing 190 pooled means. Both native ACF
+families lose to the pooled control on minimum and mean training fold macro
+F1. Selection returns the exact existing model and weight hash. Development
+remains 39/70 correct with macro F1 0.499871; no new candidate is retained.
+
+The [label audit](espfi-label-audit-20261013.md) confirms unresolved source
+naming conflicts and a separate benchmark output-index mapping. Consistent
+semantic renaming cannot improve numeric class accuracy or macro F1. The
+original final test was opened in the first pilot and is not reopened here;
+repeated development scores remain adaptive research evidence.
