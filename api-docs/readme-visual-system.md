@@ -2,10 +2,11 @@
 
 The README matches the RuView header palette: deep navy backgrounds, electric blue
 RF fields, lime pose and signal accents, warm amber joints and soft white text,
-layered isometric geometry, moving scan planes, orbital markers and floating
-icons. It includes a hero, six feature cards, six navigation icons, an overview,
+layered isometric geometry, moving scan planes, radar sweeps, articulated pose
+limbs, breathing curves and separated hardware layers. Each feature uses its own
+illustration rather than repeating the same wireframe cube. It includes a hero, six feature cards, six navigation icons, an overview,
 five chapter headings and a Cognitum destination banner. Headlines use a heavier
-Avenir Next / Segoe UI / Helvetica stack, with tighter spacing and a dedicated
+Avenir Next / Segoe UI Variable Display / Segoe UI / Helvetica stack, with tighter spacing and a dedicated
 system monospace stack for labels. Fonts remain local fallbacks so the images
 also render without a network connection.
 
@@ -29,7 +30,7 @@ local link targets stay inside the repository, including after symlink resolutio
 
 The committed SVGs are the deployment artifacts. The manifest in
 `assets/readme/manifest.json` lists every destination.
-Spatial artwork uses `-spatial-v3.svg` filenames so GitHub's image proxy requests
+Spatial artwork uses `-spatial-v4.svg` filenames so GitHub's image proxy requests
 fresh content after the visual upgrade. Previous filenames remain available for
 existing links; new README wrappers use the versioned assets.
 
@@ -39,8 +40,9 @@ GitHub renders SVGs as images, so image-internal links are not used. Each SVG ha
 
 Animation uses CSS only. Depth is projected directly into SVG geometry rather
 than relying on a WebGL canvas or CSS perspective. Translation is applied to
-inner groups so it cannot overwrite the outer icon placement. Orbital motion
-uses an explicit transform origin; scan planes sweep the wireframe volumes.
+inner groups so it cannot overwrite the outer icon placement. Projected orbit planes stay fixed while dashed signals move along them; scan
+planes sweep the wireframe volumes. Unused animation rules are removed from
+each image to keep the complete active SVG set below 100 KB.
 All copy and essential geometry are visible without animation, JavaScript,
 remote fonts or remote images. `prefers-reduced-motion` disables decorative
 movement. The original GIF remains at the top; the existing ruOS promotion
