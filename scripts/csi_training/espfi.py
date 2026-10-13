@@ -5,11 +5,14 @@ and supplied benchmark class directories disagree about activity semantics.
 """
 from __future__ import annotations
 import argparse
+from contextlib import contextmanager
 import hashlib
 import io
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import zipfile
 import numpy as np
 
@@ -27,6 +30,45 @@ MAX_NPZ = 600_000_000
 def digest(path):
     with Path(path).open('rb') as f:
         return hashlib.file_digest(f, 'sha256').hexdigest()
+
+
+def _stream_digest(stream):
+    stream.seek(0)
+    value = hashlib.file_digest(stream, 'sha256').hexdigest()
+    stream.seek(0)
+    return value
+
+
+@contextmanager
+def _open_regular_bundle(path):
+    """Open one bounded final-component descriptor for hash and decode.
+
+    Parent directories remain a trusted deployment boundary. O_NONBLOCK keeps a
+    substituted FIFO from blocking before fstat; O_NOFOLLOW rejects a final
+    symlink. A descriptor prevents pathname replacement between digest and
+    decode, but does not prevent a writer from modifying the same inode.
+    """
+    if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_NONBLOCK'):
+        raise ValueError('secure dataset bundle intake unavailable')
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    if hasattr(os, 'O_CLOEXEC'):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, 'O_BINARY'):
+        flags |= os.O_BINARY
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError('dataset bundle unavailable or symlinked') from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= MAX_NPZ:
+            raise ValueError('dataset bundle must be a bounded regular file')
+        with os.fdopen(fd, 'rb', closefd=False) as stream:
+            yield stream
+    except OSError as exc:
+        raise ValueError('dataset bundle read failed') from exc
+    finally:
+        os.close(fd)
 
 
 def parse_identity(name):
@@ -202,10 +244,50 @@ def _load_partitions(manifest, splits, expected_manifest_sha256=None):
         duplicate = occurrences[record['signal_sha256']] > 1
         if record['split'] != (None if duplicate else split_identity(ident)):
             raise ValueError('incorrect source split assignment')
-    npz = (path.parent / meta['npz']).resolve()
-    if npz.parent != path.parent or npz.stat().st_size > MAX_NPZ or digest(npz) != meta['npz_sha256']:
-        raise ValueError('unsafe or modified dataset bundle')
-    with zipfile.ZipFile(npz) as z:
+    npz_name, npz_sha256 = meta.get('npz'), meta.get('npz_sha256')
+    if (not isinstance(npz_name, str) or not npz_name or len(npz_name) > 255
+            or Path(npz_name).name != npz_name or '\\' in npz_name
+            or npz_name in ('.', '..') or not isinstance(npz_sha256, str)
+            or not re.fullmatch('[0-9a-f]{64}', npz_sha256)):
+        raise ValueError('unsafe dataset bundle declaration')
+    npz = path.parent / npz_name
+    if expected_manifest_sha256 is not None:
+        with _open_regular_bundle(npz) as bundle:
+            if _stream_digest(bundle) != npz_sha256:
+                raise ValueError('unsafe or modified dataset bundle')
+            _inspect_bundle(bundle, meta, records)
+            parts, groups, signals, identities_seen = _decode_bundle(
+                bundle, meta, lookup, splits)
+    else:
+        resolved_npz = npz.resolve()
+        if (resolved_npz.parent != path.parent or resolved_npz.stat().st_size > MAX_NPZ
+                or digest(resolved_npz) != npz_sha256):
+            raise ValueError('unsafe or modified dataset bundle')
+        _inspect_bundle(resolved_npz, meta, records)
+        parts, groups, signals, identities_seen = _decode_bundle(
+            resolved_npz, meta, lookup, splits)
+    for a, b in (('train', 'validation'), ('train', 'test'), ('validation', 'test')):
+        if a in groups and b in groups and any(groups[a][i] & groups[b][i] for i in (0, 1)):
+            raise ValueError('room or participant leakage')
+    if identities_seen != {i for i, r in lookup.items() if r['split'] in splits}:
+        raise ValueError('incomplete retained population')
+    expected_counts = {s: sum(r['split'] == s for r in records)
+                       for s in ('train', 'validation', 'test')}
+    if meta.get('counts') != expected_counts:
+        raise ValueError('split counts mismatch')
+    meta['manifest_sha256'] = manifest_sha256
+    meta['loaded_partitions'] = list(splits)
+    return parts, meta
+
+
+def _rewind(bundle):
+    if hasattr(bundle, 'seek'):
+        bundle.seek(0)
+
+
+def _inspect_bundle(bundle, meta, records):
+    _rewind(bundle)
+    with zipfile.ZipFile(bundle) as z:
         infos = z.infolist()
         expected_names = {s + suffix + '.npy' for s in ('train', 'validation', 'test')
                           for suffix in ('_x', '_y', '_identity')}
@@ -229,8 +311,13 @@ def _load_partitions(manifest, splits, expected_manifest_sha256=None):
                 if (shape != expected_shape or dtype != expected_dtype or fortran
                         or f.tell() + int(np.prod(shape)) * dtype.itemsize != info.file_size):
                     raise ValueError('invalid numpy header or payload size')
+    _rewind(bundle)
+
+
+def _decode_bundle(bundle, meta, lookup, splits):
     parts, groups, signals, identities_seen = {}, {}, set(), set()
-    with np.load(npz, allow_pickle=False) as data:
+    _rewind(bundle)
+    with np.load(bundle, allow_pickle=False) as data:
         for split in splits:
             x, y, identities = (data[split + suffix] for suffix in ('_x', '_y', '_identity'))
             if (x.dtype != np.float32 or x.ndim != 3 or x.shape[1:] != (52, meta['window_samples'])
@@ -254,18 +341,7 @@ def _load_partitions(manifest, splits, expected_manifest_sha256=None):
                 signals.add(h)
             groups[split] = (set(identities[:, 0]), set(identities[:, 1]))
             parts[split] = {'x': x, 'y': y, 'identity': identities}
-    for a, b in (('train', 'validation'), ('train', 'test'), ('validation', 'test')):
-        if a in groups and b in groups and any(groups[a][i] & groups[b][i] for i in (0, 1)):
-            raise ValueError('room or participant leakage')
-    if identities_seen != {i for i, r in lookup.items() if r['split'] in splits}:
-        raise ValueError('incomplete retained population')
-    expected_counts = {s: sum(r['split'] == s for r in records)
-                       for s in ('train', 'validation', 'test')}
-    if meta.get('counts') != expected_counts:
-        raise ValueError('split counts mismatch')
-    meta['manifest_sha256'] = manifest_sha256
-    meta['loaded_partitions'] = list(splits)
-    return parts, meta
+    return parts, groups, signals, identities_seen
 
 
 def main():

@@ -29,7 +29,9 @@ records the supervised loader will consume without assigning activity semantics.
 input exits 1; valid but blocked evidence exits 2.
 The dataset loader parses and hashes the manifest through one checked descriptor,
 then compares that digest before resolving or decoding the referenced dataset
-bundle. Its returned digest is checked again before training.
+bundle. In confirmation mode, the NPZ final component is also opened once as a
+bounded regular file without following symlinks; the same descriptor is hashed,
+inspected and decoded. Its returned digest is checked again before training.
 Confirmation mode cannot optimize an existing bundle and every receipt remains
 `promotionAuthorized: false`.
 
@@ -45,9 +47,10 @@ declared review to exact manifest bytes and retained record identities. It does 
 consent, licenses, aliases, stable physical identities, or exposure-ledger
 completeness. The inputs are unsigned. The manifest hash binds declarations and
 referenced payload hashes, not provenance truth. Parent directories remain a
-trusted deployment boundary, and the separately referenced NPZ still has its
-own digest/open race boundary. Passing software tests makes no sensing-accuracy
-claim.
+trusted deployment boundary. Descriptor reuse prevents final-component pathname
+replacement, but does not freeze bytes against a writer that can mutate the same
+inode. Such writers are outside this local-file trust boundary. Passing software
+tests makes no sensing-accuracy claim.
 
 The current ESP-Fi adapter pins the canonical dataset name and source revision,
 but its upstream records do not establish physical session or device identity.

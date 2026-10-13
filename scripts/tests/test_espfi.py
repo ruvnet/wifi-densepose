@@ -1,6 +1,7 @@
 """Synthetic intake boundary tests. No captured CSI enters the repository."""
 import io
 import hashlib
+import os
 import zipfile
 import json
 import tempfile
@@ -129,6 +130,82 @@ class EspfiTests(unittest.TestCase):
                 with self.assertRaises(OSError):
                     espfi.load_dataset(link, expected_manifest_sha256=expected)
                 load.assert_not_called()
+
+    def test_confirmed_bundle_digest_mismatch_stops_before_decode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest, _, _, meta = self.fixture(tmp)
+            meta['npz_sha256'] = '0' * 64
+            manifest.write_text(json.dumps(meta))
+            expected = espfi.digest(manifest)
+            with patch('csi_training.espfi.zipfile.ZipFile') as archive, \
+                 patch('csi_training.espfi.np.load') as load:
+                with self.assertRaisesRegex(ValueError, 'modified'):
+                    espfi.load_dataset(manifest, expected_manifest_sha256=expected)
+                archive.assert_not_called();load.assert_not_called()
+
+    def test_confirmed_bundle_reuses_descriptor_after_path_swap(self):
+        if os.name != 'posix':
+            self.skipTest('POSIX rename semantics required')
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest, npz, _, meta = self.fixture(tmp)
+            expected = espfi.digest(manifest)
+            original_npz_sha256 = meta['npz_sha256']
+            replacement = Path(tmp) / 'replacement.npz'
+            replacement.write_bytes(b'unverified replacement')
+            original_digest = espfi._stream_digest
+            def digest_then_swap(stream):
+                value = original_digest(stream)
+                replacement.replace(npz)
+                return value
+            with patch('csi_training.espfi._stream_digest', side_effect=digest_then_swap):
+                parts, provenance = espfi.load_dataset(
+                    manifest, expected_manifest_sha256=expected)
+            self.assertEqual(len(parts['train']['y']), 840)
+            self.assertEqual(provenance['npz_sha256'], original_npz_sha256)
+            self.assertEqual(npz.read_bytes(), b'unverified replacement')
+
+    def test_confirmed_bundle_uses_same_stream_for_zip_and_numpy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest, _, _, _ = self.fixture(tmp)
+            expected = espfi.digest(manifest)
+            original_zip, original_load = zipfile.ZipFile, np.load
+            consumers = []
+            def inspect(source, *args, **kwargs):
+                consumers.append(('zip', source))
+                self.assertFalse(source.closed)
+                return original_zip(source, *args, **kwargs)
+            def decode(source, *args, **kwargs):
+                consumers.append(('numpy', source))
+                self.assertFalse(source.closed)
+                return original_load(source, *args, **kwargs)
+            with patch('csi_training.espfi.zipfile.ZipFile', side_effect=inspect), \
+                 patch('csi_training.espfi.np.load', side_effect=decode):
+                espfi.load_dataset(manifest, expected_manifest_sha256=expected)
+            self.assertEqual({kind for kind, _ in consumers}, {'zip', 'numpy'})
+            self.assertTrue(all(source is consumers[0][1]
+                                for _, source in consumers))
+
+    def test_confirmed_bundle_rejects_nonregular_before_decode(self):
+        if not hasattr(os, 'mkfifo'):
+            self.skipTest('FIFO creation unavailable')
+        for kind in ('symlink', 'fifo', 'directory'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                manifest, npz, _, _ = self.fixture(tmp)
+                expected = espfi.digest(manifest)
+                target = Path(tmp) / 'original.npz'
+                npz.replace(target)
+                if kind == 'symlink':
+                    npz.symlink_to(target)
+                elif kind == 'fifo':
+                    os.mkfifo(npz)
+                else:
+                    npz.mkdir()
+                with patch('csi_training.espfi.zipfile.ZipFile') as archive, \
+                     patch('csi_training.espfi.np.load') as load:
+                    with self.assertRaisesRegex(ValueError, 'bundle'):
+                        espfi.load_dataset(
+                            manifest, expected_manifest_sha256=expected)
+                    archive.assert_not_called();load.assert_not_called()
 
     def test_development_never_deserializes_test_arrays(self):
         with tempfile.TemporaryDirectory() as tmp:
