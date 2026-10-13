@@ -11,13 +11,62 @@ import numpy as np
 from .data import _open_regular
 from .zenodo_sample import MAX_MEMBER
 
+FRAME_CHUNK = 32
 
-def inspect(path, expected_sha256):
-    """Read at most 32 frames after checking file identity and HDF metadata.
+
+def _diagnostics(data, frames):
+    """Aggregate native CSI quality without materializing the full recording."""
+    zero_count = total_count = chunks_read = 0
+    amplitude_min, amplitude_max = math.inf, 0.0
+    antenna_zeros = np.zeros(data.shape[0], dtype=np.uint64)
+    frame_nonzero = np.empty(frames, dtype=np.float64)
+    for start in range(0, frames, FRAME_CHUNK):
+        stop = min(start + FRAME_CHUNK, frames)
+        values = data[:, :, start:stop]
+        real, imag = values['real'], values['imag']
+        finite = np.isfinite(real) & np.isfinite(imag)
+        if not finite.all():
+            raise ValueError('Nonfinite CSI in inspected frames')
+        amplitude = np.hypot(real, imag)
+        if not np.isfinite(amplitude).all():
+            raise ValueError('Amplitude overflow')
+        zeros = amplitude == 0
+        count = amplitude.size
+        zero_count += int(zeros.sum(dtype=np.uint64))
+        total_count += count
+        antenna_zeros += zeros.sum(axis=(1, 2), dtype=np.uint64)
+        frame_nonzero[start:stop] = (~zeros).mean(axis=(0, 1))
+        amplitude_min = min(amplitude_min, float(amplitude.min()))
+        amplitude_max = max(amplitude_max, float(amplitude.max()))
+        chunks_read += 1
+    per_antenna_denominator = data.shape[1] * frames
+    return {
+        'inspected_frames': frames,
+        'decoded_complex_values': total_count,
+        'chunks_read': chunks_read,
+        'frame_chunk_limit': FRAME_CHUNK,
+        'finite_fraction': 1.0,
+        'zero_amplitude_fraction': zero_count / total_count,
+        'zero_amplitude_fraction_by_antenna': [
+            int(value) / per_antenna_denominator for value in antenna_zeros],
+        'frame_nonzero_fraction_min': float(frame_nonzero.min()),
+        'frame_nonzero_fraction_p05': float(np.quantile(frame_nonzero, .05)),
+        'frame_nonzero_fraction_median': float(np.median(frame_nonzero)),
+        'frame_nonzero_fraction_mean': float(frame_nonzero.mean()),
+        'all_zero_frames': int((frame_nonzero == 0).sum()),
+        'amplitude_min': amplitude_min,
+        'amplitude_max': amplitude_max,
+    }
+
+
+def inspect(path, expected_sha256, all_frames=False):
+    """Inspect the first chunk or whole recording after identity/metadata checks.
 
     Run in a resource-limited process for hostile files: these checks do not
     sandbox the native HDF5 parser. Parent directories must be trusted.
     """
+    if type(all_frames) is not bool:
+        raise ValueError('all_frames must be boolean')
     if (not isinstance(expected_sha256, str) or len(expected_sha256) != 64
             or any(c not in '0123456789abcdef' for c in expected_sha256)):
         raise ValueError('Expected SHA256 required')
@@ -45,28 +94,24 @@ def inspect(path, expected_sha256):
         if data.chunks and math.prod(data.chunks) * data.dtype.itemsize > MAX_MEMBER:
             raise ValueError('Oversized decompression chunk')
         # MATLAB v7.3 reverses dimension order: antenna, subcarrier, frame.
-        values = data[:, :, :min(32, shape[2])]
-        real, imag = values['real'], values['imag']
-        finite = np.isfinite(real) & np.isfinite(imag)
-        if not finite.all():
-            raise ValueError('Nonfinite CSI in inspected window')
-        amplitude = np.hypot(real, imag)
-        if not np.isfinite(amplitude).all():
-            raise ValueError('Amplitude overflow')
-        return {'sha256': expected_sha256, 'source_shape_antenna_subcarrier_frame': list(shape),
-                'inspected_frames': values.shape[2], 'finite_fraction': float(finite.mean()),
-                'zero_amplitude_fraction': float((amplitude == 0).mean()),
-                'amplitude_min': float(amplitude.min()), 'amplitude_max': float(amplitude.max()),
-                'full_recording_validated': False, 'promotionAuthorized': False,
-                'occupancy_inferred': False}
+        frames = shape[2] if all_frames else min(FRAME_CHUNK, shape[2])
+        report = _diagnostics(data, frames)
+        report.update({'sha256': expected_sha256,
+                       'source_shape_antenna_subcarrier_frame': list(shape),
+                       'all_csi_frames_decoded': frames == shape[2],
+                       'validation_scope': 'csi_dataset_values_only',
+                       'training_eligible': False, 'promotionAuthorized': False,
+                       'occupancy_inferred': False})
+        return report
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('path')
     parser.add_argument('--sha256', required=True)
+    parser.add_argument('--all-frames', action='store_true')
     args = parser.parse_args()
-    print(json.dumps(inspect(args.path, args.sha256), indent=2, allow_nan=False))
+    print(json.dumps(inspect(args.path, args.sha256, args.all_frames), indent=2, allow_nan=False))
 
 
 if __name__ == '__main__':

@@ -58,7 +58,8 @@ PYTHONPATH=scripts python -m unittest discover -s scripts/tests -p test_csi_trai
 PYTHONPATH=scripts timeout 150s python -m csi_training.zenodo_sample --output /private/zenodo-new
 (ulimit -v 1048576; OPENBLAS_NUM_THREADS=1 PYTHONPATH=scripts timeout 30s \
   python -m csi_training.zenodo_mat /private/zenodo-new/empty.mat \
-  --sha256 561f2dd6ac9d08597365d90b08da829bdce99cba003261986a946e41fd0ba46b)
+  --sha256 561f2dd6ac9d08597365d90b08da829bdce99cba003261986a946e41fd0ba46b \
+  --all-frames)
 ```
 
 Use a trusted private parent directory. Download failures retain a failed status
@@ -82,11 +83,12 @@ The diagnostic reads a bounded regular descriptor with nofollow/nonblock,
 checks its SHA256, and opens HDF from those bytes. It rejects soft/external links,
 virtual/external storage, unexpected axes/dtypes, oversized chunks and filters
 other than builtin deflate/shuffle/Fletcher32 before reading the selected window.
-Only the first 32 frames are inspected; a finite window does not certify the
-whole recording or establish signal usefulness. Native HDF5 parsing is not
-sandboxed by Python metadata checks. Run hostile inputs in an externally bounded
-process. No network or sensor actions occur during diagnostics. No claim of a
-complete dependency vulnerability audit is made.
+The default inspects only the first 32 frames; `--all-frames` scans every CSI
+frame in 32-frame slices. Decoding every CSI value does not validate source
+provenance, labels, other HDF objects or signal usefulness. Native HDF5 parsing
+is not sandboxed by Python metadata checks. Run hostile inputs in an externally
+bounded process. No network or sensor actions occur during diagnostics. No claim
+of a complete dependency vulnerability audit is made.
 
 ## Result
 
@@ -103,3 +105,41 @@ receipts and acquired samples remain private. Sanitized aggregates are in
 Next: resolve the license discrepancy and establish stable physical provenance
 before any training or independent evaluation. Main risk is mistaking these
 exposed, correlated office recordings for independent confirmation.
+
+## Frozen whole-recording diagnostic followup
+
+Frozen before decoding beyond the first 32 frames. Baseline is draft PR 2256
+commit `47589e00f636971ec7e0ca2483d4809f9ebcf775`, whose diagnostic reads only the
+first 32 frames. Candidate source SHA256 is
+`b2d53f65ac865860baf30c2ac9cb844b6f0be50346db2f9354c88754451c62f2`;
+synthetic evaluator SHA256 is
+`3e0e03eac570f93eb150dd8d8e51df23a68e09c43732c0608408a129d67064cb`.
+The three already exposed MAT identities remain `561f2dd6ac9d...`,
+`4db0d302c6b6...`, and `7c1d78deb3fd...`. No new split exists and no labels are
+read. This is a capture integrity and coverage diagnostic, not a model
+experiment.
+
+The single candidate scans every native frame in fixed slices of at most 32,
+reports finite complex count, zero amplitude by antenna, per-frame nonzero
+coverage and amplitude range, and never emits an occupancy decision. Acceptance
+requires exact input hashes, successful complete scans for all three recordings,
+all finite decoded values, no full decoded CSI array, synthetic tail corruption
+detection, all focused tests, at most 30 seconds and 1 GiB virtual memory per
+sample, and `training_eligible=false` plus `promotionAuthorized=false`. No
+quality threshold is selected after seeing the data. Full-scan measurements are
+descriptive and cannot authorize training. Rollback restores the first-window
+diagnostic and its prior tests.
+
+The frozen candidate was accepted for draft review. It reproduced every prior
+first-window aggregate, then decoded all 596/597/597 frames in 19 slices each:
+1,832,960 complex values were finite, with no all-zero frame. Whole-recording
+zero amplitude fractions were 0.077581 empty, 0.093155 sitting and 0.084006
+walking. Minimum per-frame nonzero coverage was 0.251953, 0.879883 and 0.851562,
+respectively. The low empty-sample minimum is a capture-quality observation to
+investigate, not evidence for or against occupancy. The three scans plus baseline
+reproduction took 0.221 seconds and process peak RSS was 56,528 KiB under the
+frozen outer limits on existing ruOS CPU infrastructure. This was one run, not a
+latency optimization benchmark. Eight focused adversarial tests pass in 0.151
+seconds after the review fixes. Sanitized aggregates are in
+[`validation/zenodo-full-quality-20261013.json`](validation/zenodo-full-quality-20261013.json);
+raw captures and the detailed private receipt remain untracked.

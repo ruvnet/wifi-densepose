@@ -124,6 +124,10 @@ class ZenodoTests(unittest.TestCase):
             if mode != 'dtype':
                 values['real'] = 3; values['imag'] = 4
                 if mode == 'nan': values['real'][0, 0, 0] = np.nan
+                if mode == 'tail_nan': values['real'][0, 0, 39] = np.nan
+                if mode == 'tail_zero':
+                    values['real'][:, :, 39] = 0
+                    values['imag'][:, :, 39] = 0
             f.create_dataset('csi', data=values, chunks=(2, 3, 4), compression='lzf' if mode == 'filter' else 'gzip')
 
     def test_mat_native_axes_bounded_window_and_no_occupancy(self):
@@ -135,10 +139,35 @@ class ZenodoTests(unittest.TestCase):
             self.assertEqual(report['inspected_frames'], 32)
             self.assertEqual(report['amplitude_min'], 5)
             self.assertFalse(report['occupancy_inferred'])
-            self.assertFalse(report['full_recording_validated'])
+            self.assertFalse(report['all_csi_frames_decoded'])
+            self.assertEqual(report['validation_scope'], 'csi_dataset_values_only')
+            self.assertFalse(report['training_eligible'])
+            self.assertEqual(report['chunks_read'], 1)
+            complete = inspect(path, sha, True)
+            self.assertTrue(complete['all_csi_frames_decoded'])
+            self.assertEqual(complete['inspected_frames'], 40)
+            self.assertEqual(complete['chunks_read'], 2)
+            self.assertEqual(complete['decoded_complex_values'], 240)
+            self.assertEqual(complete['frame_nonzero_fraction_min'], 1)
+            self.assertEqual(complete['zero_amplitude_fraction_by_antenna'], [0, 0])
             with self.assertRaises(ValueError): inspect(path, '0' * 64)
+            with self.assertRaises(ValueError): inspect(path, sha, 1)
             link = Path(tmp)/'link'; link.symlink_to(path)
             with self.assertRaises(ValueError): inspect(link, sha)
+
+    def test_full_scan_detects_unread_tail_and_reports_dropouts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = Path(tmp)/'bad'; self.fixture(bad, 'tail_nan')
+            sha = hashlib.sha256(bad.read_bytes()).hexdigest()
+            self.assertEqual(inspect(bad, sha)['inspected_frames'], 32)
+            with self.assertRaisesRegex(ValueError, 'Nonfinite'):
+                inspect(bad, sha, True)
+            zeros = Path(tmp)/'zeros'; self.fixture(zeros, 'tail_zero')
+            report = inspect(zeros, hashlib.sha256(zeros.read_bytes()).hexdigest(), True)
+            self.assertEqual(report['all_zero_frames'], 1)
+            self.assertEqual(report['frame_nonzero_fraction_min'], 0)
+            self.assertEqual(report['zero_amplitude_fraction'], 1/40)
+            self.assertEqual(report['zero_amplitude_fraction_by_antenna'], [1/40, 1/40])
 
     def test_mat_rejects_links_external_storage_dimensions_dtype_nan(self):
         with tempfile.TemporaryDirectory() as tmp:
