@@ -60,3 +60,94 @@ development data establishes numerical parity, not new accuracy evidence.
 The biggest remaining deployment uncertainty is latency on the intended device.
 Acceptance there requires the same prediction checks and measured device p50/p95;
 shared x86 timings cannot establish ESP32, ARM or sensor-to-decision latency.
+
+## Initial buffered result and causal followup
+
+The first implementation preserves feature reduction order but fails the speed
+gate in all three rounds. Median latency is 0.427865, 0.421035 and 0.439405 ms,
+versus reference 0.434730, 0.417775 and 0.440610 ms. All 907 predictions match;
+maximum logit error against either reference is 3.165e-15. Buffer reuse alone
+does not establish a speed benefit. The [initial receipt](validation/espfi-motion-runtime-initial-20261013.json)
+and source commit `46895cc603d500ba510356565338420159c2b2e6` preserve this result.
+
+A subsequent isolated diagnostic compares one autocorrelation reduction over
+5,000 calls on an admitted window. Multiplication followed by sum takes
+0.021726 ms per call; direct `einsum` contraction takes 0.008122 ms. The raw
+dot-product maximum difference is 1.11e-16. This is a kernel diagnostic on one
+window, not a complete runtime claim.
+
+The second implementation changes only the six autocorrelation reductions to
+direct contractions. Feature reduction order can differ, so synthetic feature
+parity uses absolute tolerance 1e-12. The original logit tolerance 1e-10, exact
+predicted classes, and every-round 10% speed gates remain unchanged. Global RMS,
+energy normalization, floors, differences, weights and model artifacts stay
+fixed. This is a documented causal followup, not an unchanged timing retry.
+
+## Measured retained result
+
+The direct-contraction implementation passes all three frozen speed gates.
+All 907 admitted recordings have identical class predictions against both the
+compact folded and original explicit reference, tested at batch sizes one and
+32. Maximum absolute logit error is 3.442e-15, below the fixed 1e-10 limit.
+Weights remain byte unchanged at 16,088 bytes. No retraining or accuracy gain
+is involved; development remains 39/70 correct with macro F1 0.499871.
+
+| Round | Reference median, ms | Buffered median, ms | Median reduction | Reference p95, ms | Buffered p95, ms | p95 reduction |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.552715 | 0.475830 | 13.91% | 0.734181 | 0.638555 | 13.02% |
+| 2 | 0.496870 | 0.427045 | 14.05% | 0.707697 | 0.603767 | 14.69% |
+| 3 | 0.483825 | 0.414530 | 14.32% | 0.684120 | 0.607423 | 11.21% |
+
+These are paired full prediction API measurements on a shared x86 CPU with
+NumPy 2.4.4 and one configured BLAS thread. Absolute host latency varies between
+experiments, so compare the paired columns within each round, not an older
+unpaired baseline. No separate build or benchmark was launched concurrently
+by this experiment.
+
+Both runtimes retain 487,480 bytes of folded model arrays. The buffered runtime
+adds 163,736 bytes of fixed workspace, totaling 651,216 bytes of those retained
+arrays. This excludes caller input, owned output, transient allocations,
+interpreter and dependency memory. Buffer reuse trades retained workspace for
+reduced temporary work; no total RAM reduction is claimed.
+
+All 65 public pipeline and 28 original encoder tests pass on ruOS. The six
+new tests cover feature and logit parity, mixed float32 floor neighbors,
+extreme and nearly constant signals, strides, ownership, concurrent calls,
+invalid inputs, bounded corrupt artifacts, dependency isolation, provenance,
+exclusive receipts and an intentionally failing third timing round.
+The independent source review found no blocking issue.
+
+The [final aggregate receipt](validation/espfi-motion-runtime-20261013.json)
+binds input and implementation digests to all measured rounds. The benchmark
+verifies source and input hashes before and after execution. It creates a new
+receipt exclusively and records failure without overwriting prior results.
+
+## Use and reproduce
+
+The inference module uses the existing compact artifact and the pinned
+`requirements-espfi-inference.txt` dependencies. No Torch, SciPy or training
+module is imported by this path, as verified in a fresh subprocess.
+
+```python
+from csi_training.espfi_motion_runtime import BufferedMotionBundle
+
+model = BufferedMotionBundle("/private/espfi/motion-compact-001")
+# amplitudes has shape (batch, 52, 190), finite and nonnegative.
+scores = model.predict(amplitudes)
+predicted_numeric_activity = scores.argmax(axis=1) + 1
+```
+
+```sh
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 PYTHONPATH=scripts \
+python -m csi_training.espfi_motion_runtime_benchmark \
+  --manifest /private/espfi/prepared/manifest.json \
+  --model /private/espfi/motion-compact-001 \
+  --baseline /private/espfi/motion-002-worst \
+  --output /private/espfi/motion-runtime-verification.json
+```
+
+Decision: retain the faster research runtime with the unchanged model and
+explicit reference fallback. Next action is the same benchmark on the intended
+target. Acceptance requires identical predictions, logit error at most 1e-10,
+and at least 10% lower median and p95 in every round. Production promotion
+remains unauthorized, and the existing zero-F1 activity class remains unresolved.

@@ -38,14 +38,20 @@ class BufferedMotionTests(unittest.TestCase):
             bundle=BufferedMotionBundle(path);compact=CompactMotionBundle(path)
             rng=np.random.default_rng(44)
             near=np.full((2,52,190),np.float32(1e-6));near[...,::2]=np.nextafter(near[...,::2],np.float32(0))
-            inputs=[parts['validation']['x'],near,np.zeros((2,52,190)),np.ones((2,52,190)),
+            mixed=np.zeros((2,52,190),dtype=np.float32)
+            mixed[...,::2]=np.nextafter(np.float32(1e-6),np.float32(np.inf))
+            inputs=[parts['validation']['x'],near,mixed,np.zeros((2,52,190)),np.ones((2,52,190)),
                     np.full((2,52,190),1e100),1e50*np.exp(rng.normal(0,1e-9,(2,52,190))),
                     np.exp(rng.normal(size=(2,52,380)))[...,::2],parts['validation']['x'][...,::-1],
                     np.ones((1,52,190),dtype=np.int64)]
             for x in inputs:
                 reference=motion_features(x,'motion_acf')
                 for i,sample in enumerate(x):
-                    np.testing.assert_array_equal(bundle._extract(sample),reference[i:i+1])
+                    actual_features=bundle._extract(sample).reshape(52,9)
+                    expected_features=reference[i].reshape(52,9)
+                    # Only the six ACF sums change reduction order with einsum.
+                    np.testing.assert_allclose(actual_features[:,:6],expected_features[:,:6],atol=1e-12,rtol=0)
+                    np.testing.assert_array_equal(actual_features[:,6:],expected_features[:,6:])
                 actual=bundle.predict(x)
                 np.testing.assert_allclose(actual,compact.predict(x),atol=1e-10,rtol=0)
                 np.testing.assert_allclose(actual,old.predict(x),atol=1e-10,rtol=0)

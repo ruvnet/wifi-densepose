@@ -512,3 +512,17 @@ The [independent dataset audit](espfi-independent-data-20261013.md) verifies
 corrected CSI-Bench metadata and distinguishes restrictive data terms from
 repository licenses. Neither CSI-Bench nor WiFiTAD has been ingested or scored
 as new confirmation evidence in this round.
+
+## Buffered ACF inference, 2026-10-13
+
+The [standalone buffered runtime](espfi-motion-runtime.md) retains the compact
+16,088-byte artifact and all 907 admitted predictions. Initial buffer reuse
+alone fails the frozen speed gate. A documented followup replaces six ACF
+multiply-and-sum reductions with direct contractions while preserving float64
+features and the original logit tolerance. All three paired rounds pass:
+median latency falls 13.91% to 14.32%, and p95 falls 11.21% to 14.69%.
+
+The runtime requires only NumPy and safetensors. It retains 163,736 workspace
+bytes alongside 487,480 model-array bytes; no total memory reduction is claimed.
+All 93 relevant Python tests pass. No training, new accuracy evidence, final
+test reopening or deployment occurs. Target device latency remains unmeasured.

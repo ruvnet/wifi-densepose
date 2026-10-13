@@ -111,9 +111,10 @@ class BufferedMotionBundle:
         self._scratch.sum(axis=-1,out=self._energy)
         np.maximum(self._energy,190e-12,out=self._energy)
         for i,lag in enumerate((1,2,4,8,16,32)):
-            scratch = self._scratch[:,:190-lag]
-            np.multiply(self._centered[:,lag:],self._centered[:,:-lag],out=scratch)
-            scratch.sum(axis=-1,out=self._per_channel[:,i])
+            # Direct dot reduction removes a product temporary. Reduction order
+            # differs from the reference; parity is measured at <=1e-10 logits.
+            np.einsum('ij,ij->i',self._centered[:,lag:],self._centered[:,:-lag],
+                      out=self._per_channel[:,i],optimize=False)
             self._per_channel[:,i] /= self._energy
         self._centered /= scale
         for i,lag in enumerate((1,4,16),6):

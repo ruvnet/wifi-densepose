@@ -138,3 +138,21 @@ The [independent data audit](../espfi-independent-data-20261013.md) distinguishe
 dataset terms from code licenses, anonymous metadata access from signal intake,
 and compatible labels from similar activity names. No external dataset is
 silently admitted as independent confirmation for this seven-class model.
+
+## Buffered inference boundary, 2026-10-13
+
+The retained compact ACF artifact can be executed by a standalone NumPy and
+safetensors runtime. Its loader validates bounded hashed bytes and the exact
+seed recipe. A lock protects fixed workspace, returned outputs own their
+storage, and the import path excludes training dependencies.
+
+Preserve float64 floor, centering, normalization and difference arithmetic.
+Direct contraction of the six autocorrelation products changes reduction order
+only; require absolute logit error at most 1e-10 and identical predictions on
+all admitted recordings. Keep the original artifact and reference runtime as
+rollback. Three paired timing rounds must each improve median and p95 by at
+least 10% before retention. Initial failure and final passing measurements are
+both preserved in [the runtime report](../espfi-motion-runtime.md).
+
+This accepts a measured shared CPU inference improvement, not a new activity
+model, field accuracy result, target hardware guarantee or production release.
