@@ -1,6 +1,12 @@
 # RuView README visual system
 
-The README uses a Cognitum-inspired palette: midnight backgrounds, cyan gradients, wireframe geometry and restrained signal motion. It includes a hero, six feature cards, six navigation icons, an overview, five chapter headings and a Cognitum destination banner.
+The README uses a Cognitum-inspired palette: midnight backgrounds, cyan gradients,
+layered isometric geometry, moving scan planes, orbital markers and floating
+icons. It includes a hero, six feature cards, six navigation icons, an overview,
+five chapter headings and a Cognitum destination banner. Headlines use a heavier
+Avenir Next / Segoe UI / Helvetica stack, with tighter spacing and a dedicated
+system monospace stack for labels. Fonts remain local fallbacks so the images
+also render without a network connection.
 
 ## Rebuild and check
 
@@ -27,7 +33,14 @@ The committed SVGs are the deployment artifacts. The manifest in
 
 GitHub renders SVGs as images, so image-internal links are not used. Each SVG has an outer Markdown or HTML link in the README. Each card and navigation icon also has a plain text link for narrow screens and assistive technology. Source headings remain intact so existing README anchors still work.
 
-Animation uses CSS only. All copy and essential geometry are visible without animation, JavaScript, remote fonts or remote images. `prefers-reduced-motion` disables decorative movement. The original GIF remains available in an expandable demo section; the existing ruOS promotion remains linked.
+Animation uses CSS only. Depth is projected directly into SVG geometry rather
+than relying on a WebGL canvas or CSS perspective. Translation is applied to
+inner groups so it cannot overwrite the outer icon placement. Orbital motion
+uses an explicit transform origin; scan planes sweep the wireframe volumes.
+All copy and essential geometry are visible without animation, JavaScript,
+remote fonts or remote images. `prefers-reduced-motion` disables decorative
+movement. The original GIF remains at the top; the existing ruOS promotion
+remains linked. Existing asset dimensions and README links are preserved.
 
 ## Content boundaries
 
