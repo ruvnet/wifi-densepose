@@ -40,7 +40,7 @@ def validate(state):
 
 
 def _read(path):
-    """Read a small immutable artifact through the descriptor that was checked."""
+    """Read a small bounded artifact through the descriptor that was checked."""
     if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_NONBLOCK'):
         raise ValueError('Secure artifact intake unavailable')
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
