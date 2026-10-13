@@ -1,0 +1,55 @@
+{
+  "evidence": "MEASURED software timing on SYNTHETIC fixture",
+  "iterationsPerRound": 1000,
+  "profile": "release required",
+  "rounds": [
+    {
+      "active_ms": {
+        "p50": 0.07778,
+        "p95": 0.13768999999999998
+      },
+      "baseline_ms": {
+        "p50": 0.06514,
+        "p95": 0.10477
+      },
+      "paired_extra_ms": {
+        "p50": 0.012310000000000001,
+        "p95": 0.05581
+      },
+      "round": 1
+    },
+    {
+      "active_ms": {
+        "p50": 0.08532000000000001,
+        "p95": 0.13663
+      },
+      "baseline_ms": {
+        "p50": 0.06869,
+        "p95": 0.10629
+      },
+      "paired_extra_ms": {
+        "p50": 0.012830000000000008,
+        "p95": 0.05764000000000001
+      },
+      "round": 2
+    },
+    {
+      "active_ms": {
+        "p50": 0.077139,
+        "p95": 0.1187
+      },
+      "baseline_ms": {
+        "p50": 0.06509,
+        "p95": 0.09707
+      },
+      "paired_extra_ms": {
+        "p50": 0.012399999999999994,
+        "p95": 0.04122000000000001
+      },
+      "round": 3
+    }
+  ],
+  "scope": "Fresh engines per iteration; baseline verifies, ingests and fuses one signed root. Active adds bounded root intake, latest-source selection, refusion, WorldGraph evidence/belief ancestry and receipt. Excludes signing, sensing, ranking I/O and hardware. One logical WiFi source, not persistent-stream throughput.",
+  "scoreIsProbability": false,
+  "warmupsPerRound": 100
+}
