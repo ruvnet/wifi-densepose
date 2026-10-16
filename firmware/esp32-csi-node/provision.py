@@ -68,6 +68,8 @@ NVS_PARTITION_SIZE = 0x6000  # 24 KiB
 CONFIG_VALUE_CHECKS = [
     ("ssid", bool),
     ("password", lambda value: value is not None),
+    ("ota_psk", lambda value: value is not None),
+    ("clear_ota_psk", bool),
     ("target_ip", bool),
     ("target_port", lambda value: value is not None),
     ("node_id", lambda value: value is not None),
@@ -123,6 +125,9 @@ MERGEABLE_ATTRS = [
     "hop_channels", "hop_dwell",
     "seed_url", "zone", "swarm_hb", "swarm_ingest",
 ]
+
+# Cache only whether this tool armed OTA, never the firmware-upload credential.
+OTA_PSK_STATE_KEY = "_ota_psk_configured"
 
 
 def _default_state_dir() -> str:
@@ -266,6 +271,43 @@ def read_password_file(path: str, allow_insecure: bool = False) -> str:
     return text
 
 
+def validate_ota_psk(value: str) -> str:
+    """A 256-bit hex token matching the firmware's 65-byte NVS buffer."""
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-fA-F]{64}", value) is None:
+        raise ValueError("OTA PSK must contain exactly 64 hexadecimal characters")
+    return value
+
+
+def read_ota_psk_file(path: str) -> str:
+    """Read a bounded regular file; enforce POSIX privacy and refuse symlinks."""
+    try:
+        before = os.lstat(path)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("--ota-psk-file must be a regular file, not a symlink")
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        flags |= getattr(os, "O_BINARY", 0)
+        with os.fdopen(os.open(path, flags), "rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(opened.st_mode)
+                    or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)):
+                raise ValueError("--ota-psk-file changed while opening")
+            if sys.platform != "win32" and stat.S_IMODE(opened.st_mode) & 0o077:
+                raise ValueError("--ota-psk-file must be owner-only; run chmod 600 on it")
+            # 64 hex bytes plus an optional LF/CRLF; one extra byte detects overflow.
+            data = stream.read(67)
+    except OSError:
+        raise ValueError("could not open --ota-psk-file as a regular file") from None
+    try:
+        value = data.decode("ascii")
+    except UnicodeDecodeError:
+        raise ValueError("OTA PSK file must contain ASCII hexadecimal text") from None
+    if value.endswith("\r\n"):
+        value = value[:-2]
+    elif value.endswith("\n"):
+        value = value[:-1]
+    return validate_ota_psk(value)
+
+
 def load_state(port: str, state_dir: str) -> dict:
     """Return the merged-state dict for `port`, or `{}` if absent / unreadable."""
     path = _state_path_for(port, state_dir)
@@ -275,6 +317,11 @@ def load_state(port: str, state_dir: str) -> dict:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict):
+            if "ota_psk" in data:
+                # Some earlier external provisioners cached this credential.
+                # Drop it from inspection/merge without mutating a read-only
+                # request. The next successful state write scrubs the file.
+                data[OTA_PSK_STATE_KEY] = bool(data.pop("ota_psk"))
             stale = [k for k in SECRET_ATTRS if k in data]
             if stale:
                 # Written by an older version. Scrub it now rather than wait
@@ -300,6 +347,9 @@ def save_state(port: str, state_dir: str, state: dict) -> str:
     Secrets (SECRET_ATTRS) are stripped before writing; the file is still
     written 0600 inside a 0700 dir (#1754).
     """
+    state = dict(state)
+    if "ota_psk" in state:
+        state[OTA_PSK_STATE_KEY] = bool(state.pop("ota_psk"))
     os.makedirs(state_dir, mode=STATE_DIR_MODE, exist_ok=True)
     harden_state_dir(state_dir)
     path = _state_path_for(port, state_dir)
@@ -443,6 +493,8 @@ def merge_state_into_args(args, prior: dict) -> dict:
     in place so downstream `build_nvs_csv` sees the merged values.
     """
     merged = dict(prior)
+    if "ota_psk" in merged:
+        merged[OTA_PSK_STATE_KEY] = bool(merged.pop("ota_psk"))
     for name in MERGEABLE_ATTRS:
         cli_val = getattr(args, name, None)
         if cli_val is not None:
@@ -453,7 +505,7 @@ def merge_state_into_args(args, prior: dict) -> dict:
 
 
 def build_nvs_csv(args):
-    """Build an NVS CSV string for the csi_cfg namespace."""
+    """Build csi_cfg and the optional security/ota_psk namespace."""
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["key", "type", "encoding", "value"])
@@ -516,9 +568,9 @@ def build_nvs_csv(args):
     # is what ota_update.c's ota_load_psk_from_nvs() opens. Must come after
     # every csi_cfg row: a `namespace` row starts a section. Never persisted in
     # the state file (SECRET_ATTRS), so it must be supplied on every run.
-    if getattr(args, "ota_psk", None):
+    if getattr(args, "ota_psk", None) is not None:
         writer.writerow(["security", "namespace", "", ""])
-        writer.writerow(["ota_psk", "data", "string", args.ota_psk])
+        writer.writerow(["ota_psk", "data", "string", validate_ota_psk(args.ota_psk)])
     return buf.getvalue()
 
 
@@ -555,7 +607,7 @@ def generate_nvs_binary(csv_content, size):
             subprocess.check_call([  # nosemgrep: dangerous-subprocess-use-tainted-env-args
                 sys.executable, gen_script, "generate",
                 csv_path, bin_path, hex(size)
-            ])
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             with open(bin_path, "rb") as f:
                 return f.read()
 
@@ -624,6 +676,16 @@ def main():
     parser.add_argument("--allow-insecure-password-file", action="store_true",
                         help="Accept a --password-file that group or others can read, with a "
                         "warning (e.g. a read-only 0444 secrets mount).")
+    ota_source = parser.add_mutually_exclusive_group()
+    ota_source.add_argument("--ota-psk", metavar="HEX",
+                            help="OTA key: exactly 64 hex characters. Visible in process "
+                            "arguments/history; prefer --ota-psk-file. Never cached in state.")
+    ota_source.add_argument("--ota-psk-file", metavar="PATH",
+                            help="Read the 64-hex OTA key from a regular file. Requires "
+                            "owner-only POSIX permissions; protect Windows files with ACLs.")
+    ota_source.add_argument("--clear-ota-psk", action="store_true",
+                            help="Explicitly remove the OTA key during this NVS rewrite; "
+                            "firmware updates will be refused until a key is provisioned.")
     parser.add_argument("--target-ip", help="Aggregator host IP (e.g. 192.0.2.20)")
     parser.add_argument("--target-port", type=int, help="Aggregator UDP port (default: 5005)")
     parser.add_argument("--node-id", type=int, help="Node ID 0-255 (default: 1)")
@@ -653,11 +715,6 @@ def main():
     parser.add_argument("--zone", type=str, help="Zone name for this node (e.g. lobby, hallway)")
     parser.add_argument("--swarm-hb", type=int, help="Swarm heartbeat interval in seconds (default 30)")
     parser.add_argument("--swarm-ingest", type=int, help="Swarm vector ingest interval in seconds (default 5)")
-    parser.add_argument("--ota-psk", type=str,
-                        help="OTA pre-shared key (hex). Without it the node's "
-                             "OTA upload endpoint rejects everything, so the "
-                             "board can only be updated over USB. Prefer "
-                             "provision_node.py, which reads this from a file.")
     parser.add_argument("--dry-run", action="store_true", help="Generate NVS binary but don't flash")
     parser.add_argument("--force-partial", action="store_true",
                         help="[deprecated since #391/#574] Suppress the missing-WiFi-trio "
@@ -686,6 +743,16 @@ def main():
     # State written by older versions may be 0644. Tighten it before any read
     # or early exit (#1754).
     harden_state_dir(args.state_dir)
+
+    try:
+        if args.ota_psk_file is not None:
+            args.ota_psk = read_ota_psk_file(args.ota_psk_file)
+        elif args.ota_psk is not None:
+            args.ota_psk = validate_ota_psk(args.ota_psk)
+            print("WARNING: --ota-psk is visible in process arguments and shell history; "
+                  "use --ota-psk-file instead.", file=sys.stderr)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     if args.password_file is not None:
         try:
@@ -742,6 +809,10 @@ def main():
                   f"board last provisioned on {args.port}, rerun with --reset.",
                   file=sys.stderr)
     merged = merge_state_into_args(args, prior)
+    if args.ota_psk is not None:
+        merged[OTA_PSK_STATE_KEY] = True
+    elif args.clear_ota_psk:
+        merged[OTA_PSK_STATE_KEY] = False
 
     # No password on the CLI or in a file: ask for it on a terminal. Passwords
     # are never stored in the state file, so this applies whenever an SSID is
@@ -757,6 +828,14 @@ def main():
         if shown != merged:
             print("Secrets hidden; pass --show-secrets to print them.", file=sys.stderr)
         return
+
+    if args.ota_psk is None:
+        if merged.get(OTA_PSK_STATE_KEY) and not args.clear_ota_psk:
+            parser.error("OTA was previously configured. Resupply --ota-psk-file (keys "
+                         "are not cached), or pass --clear-ota-psk to disable OTA.")
+        print("WARNING: this rewrites the whole NVS partition without an OTA key. "
+              "OTA uploads will be disabled; supply --ota-psk-file to keep them enabled.",
+              file=sys.stderr)
 
     if not has_config_value(args):
         parser.error(
@@ -869,7 +948,8 @@ def main():
     try:
         nvs_bin = generate_nvs_binary(csv_content, NVS_PARTITION_SIZE)
     except Exception as e:
-        print(f"\nError generating NVS binary: {e}", file=sys.stderr)
+        detail = str(e).replace(args.ota_psk, "(redacted)") if args.ota_psk else str(e)
+        print(f"\nError generating NVS binary: {detail}", file=sys.stderr)
         print("\nFallback: save CSV and flash manually with ESP-IDF tools.", file=sys.stderr)
         fallback_path = "nvs_config.csv"
         _write_private(fallback_path, csv_content.encode("utf-8"))

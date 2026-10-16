@@ -57,7 +57,8 @@ class TestStateFile(unittest.TestCase):
             "seed_token": "tok",
             "ota_psk": "deadbeef",
         })
-        self.assertEqual(provision.load_state("COM7", self.dir), {"ssid": "x"})
+        # only whether OTA was armed survives, never the key (upstream OTA_PSK_STATE_KEY)
+        self.assertEqual(provision.load_state("COM7", self.dir), {"ssid": "x", provision.OTA_PSK_STATE_KEY: True})
         with open(path, encoding="utf-8") as fh:
             raw = fh.read()
         for secret in ("hunter2", "tok", "deadbeef"):

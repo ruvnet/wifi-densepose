@@ -27,6 +27,7 @@ SPEC.loader.exec_module(provision)
 
 FAKE_PASSWORD = "fake-pass-not-real"
 FAKE_TOKEN = "fake-token-not-real"
+FAKE_OTA_PSK = "de" * 32  # upstream validates: exactly 64 hex characters
 POSIX_ONLY = unittest.skipIf(sys.platform == "win32", "POSIX permission model only")
 
 
@@ -364,7 +365,7 @@ class TestPasswordInput(_TempDirCase):
         code, _, _ = self.provision(
             "--ssid", "test-ssid", "--password", FAKE_PASSWORD,
             "--seed-url", "http://192.0.2.10:8080", "--seed-token", FAKE_TOKEN,
-            "--ota-psk", "deadbeef")
+            "--ota-psk", FAKE_OTA_PSK)
 
         self.assertEqual(code, 0)
         self.assertEqual(self.flashed_password(), FAKE_PASSWORD)  # it did reach the NVS image
@@ -376,7 +377,7 @@ class TestPasswordInput(_TempDirCase):
             data = json.loads(raw)
             for key in ("password", "seed_token", "ota_psk"):
                 self.assertNotIn(key, data)
-            for secret in (FAKE_PASSWORD, FAKE_TOKEN, "deadbeef"):
+            for secret in (FAKE_PASSWORD, FAKE_TOKEN, FAKE_OTA_PSK):
                 self.assertNotIn(secret, raw)
 
     def test_no_prompt_without_a_terminal(self):
