@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   pr_agent_job:
-    if: ${{ (github.event_name == 'pull_request') || (github.event_name == 'issue_comment' && github.event.issue.pull_request) }}
+    if: ${{ (github.event_name == 'pull_request') || (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.sender.type != 'Bot' && !startsWith(github.event.comment.body, '/autofix')) }}
     runs-on: ubuntu-latest
     name: Run PR-Agent on PR or comment
     steps:
@@ -22,19 +22,25 @@ jobs:
         id: pragent
         uses: the-pr-agent/pr-agent@main
         env:
-          OPENAI_KEY: ${{ secrets.GEMINI_API_KEY }}
           GOOGLE_AI_STUDIO.GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CONFIG.MODEL: "gemini/gemini-3.8-flash"
-          CONFIG.FALLBACK_MODELS: '["gemini/gemini-2.5-flash", "gemini/gemini-2.5-flash-lite"]'
-          PR_REVIEWER.REQUIRE_ALL_TESTS_PASS: "false"
-          PR_CODE_SUGGESTIONS.NUM_CODE_SUGGESTIONS_PER_CHUNK: 4
+          config.model: "gemini/gemini-3.8-flash"
+          config.fallback_models: '["gemini/gemini-3.5-flash", "gemini/gemini-2.5-flash", "gemini/gemini-3.5-flash-lite", "gemini/gemini-3.1-flash"]'
+          config.ai_timeout: "90"
+          config.retry_same_model_on_timeout: "false"
+          github.ignore_bot_pr: "false"
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "true"
           github_action_config.auto_improve: "true"
           github_action_config.handle_push_trigger: "true"
-          github_action_config.push_commands: '["/review", "/improve", "/autofix"]'
-          pr_code_suggestions.commitable_code_suggestions: "true"
+          github_action_config.push_commands: '["/review", "/improve"]'
+          pr_code_suggestions.commitable_code_suggestions: "false"
+          pr_code_suggestions.dual_publishing_score_threshold: "6"
+          pr_code_suggestions.num_code_suggestions_per_chunk: "4"
           pr_reviewer.require_security_review: "true"
           pr_reviewer.require_tests_review: "true"
+          pr_reviewer.require_risk_assessment: "true"
+          pr_reviewer.require_merge_recommendation: "true"
+          pr_reviewer.require_priority_files: "true"
+          pr_reviewer.inline_key_issues: "true"

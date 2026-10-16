@@ -9,14 +9,25 @@ on:
         description: "PR number to repair"
         required: true
         type: string
+  workflow_run:
+    workflows: ["PR-Agent AI Review & Fix"]
+    types: [completed]
+  check_suite:
+    types: [completed]
 
 jobs:
   autofix:
     if: |
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '/autofix')) ||
-      github.event_name == 'workflow_dispatch'
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'check_suite' && github.event.check_suite.conclusion == 'failure')
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
     uses: JWEB0689/pr-agent-settings/.github/workflows/reusable_autofix.yml@main
     with:
-      pr_number: ${{ inputs.pr_number }}
+      pr_number: ${{ inputs.pr_number || github.event.issue.number || '' }}
     secrets:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
