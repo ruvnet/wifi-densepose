@@ -13,10 +13,17 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "esp_wifi.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 
 static const char *TAG = "config_api";
+
+/* POST /link/reassoc state (handler near config_api_register). */
+#define REASSOC_MIN_INTERVAL_US (60LL * 1000 * 1000)
+static uint32_t s_reassoc_count;
+static int64_t  s_reassoc_last_us;
+static esp_timer_handle_t s_reassoc_timer;
 
 #define CFG_NS        "csi_cfg"     /* the live config nvs_config.c reads */
 #define TRIAL_NS      "cfg_trial"   /* trial state, separate so a wipe is easy */
@@ -341,6 +348,9 @@ static esp_err_t config_get_handler(httpd_req_t *req)
         if (KEYS[i].assoc) cJSON_AddItemToArray(risky, cJSON_CreateString(KEYS[i].json));
     }
     cJSON_AddBoolToObject(root, "trial_pending", s_trial_armed);
+    cJSON_AddNumberToObject(root, "reassoc_count", s_reassoc_count);
+    cJSON_AddNumberToObject(root, "reassoc_last_s_ago",
+        s_reassoc_last_us ? (double)((esp_timer_get_time() - s_reassoc_last_us) / 1000000) : -1);
 
     char *out = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -553,6 +563,50 @@ static esp_err_t config_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* POST /link/reassoc: drop and re-join the AP so rate control starts fresh.
+ * Measured on a 9-node ESP32-C6 fleet: a node whose uplink PHY rate falls to
+ * 1-2 Mbps stays there for 24-425 min without help, and that one slow node
+ * fills the channel for everyone. A fresh association restored the rate every
+ * time (15 of 15 requests that reached the node, 10-09..10-16). Detection is
+ * left to the caller (e.g. a service watching the AP's per-client rx rate);
+ * the 60 s floor here only stops a runaway caller. The reconnect is the
+ * normal STA_DISCONNECTED path in main.c, with its usual backoff. */
+static void reassoc_timer_cb(void *arg)
+{
+    (void)arg;
+    esp_err_t r = esp_wifi_disconnect();
+    ESP_LOGW(TAG, "link reassoc #%lu: esp_wifi_disconnect -> %s",
+             (unsigned long)s_reassoc_count, esp_err_to_name(r));
+}
+
+static esp_err_t link_reassoc_handler(httpd_req_t *req)
+{
+    if (!ota_auth_check(req)) {
+        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN,
+                            "Authentication required. Use: Authorization: Bearer <psk>");
+        return ESP_FAIL;
+    }
+    int64_t now = esp_timer_get_time();
+    httpd_resp_set_type(req, "application/json");
+    if (s_reassoc_last_us != 0 && now - s_reassoc_last_us < REASSOC_MIN_INTERVAL_US) {
+        httpd_resp_set_status(req, "429 Too Many Requests");
+        return httpd_resp_sendstr(req, "{\"error\":\"reassoc requested < 60 s ago\"}");
+    }
+    if (s_reassoc_timer == NULL) {
+        const esp_timer_create_args_t args = { .callback = reassoc_timer_cb, .name = "reassoc" };
+        if (esp_timer_create(&args, &s_reassoc_timer) != ESP_OK) {
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "timer create failed");
+        }
+    }
+    s_reassoc_count++;
+    s_reassoc_last_us = now;
+    /* Reply first; drop the link 200 ms later so the response gets out. */
+    esp_err_t sent = httpd_resp_sendstr(req, "{\"status\":\"reassociating\"}");
+    esp_timer_stop(s_reassoc_timer);
+    esp_timer_start_once(s_reassoc_timer, 200 * 1000);
+    return sent;
+}
+
 esp_err_t config_api_register(httpd_handle_t server)
 {
     static const httpd_uri_t get_uri = {
@@ -561,7 +615,12 @@ esp_err_t config_api_register(httpd_handle_t server)
     static const httpd_uri_t post_uri = {
         .uri = "/config", .method = HTTP_POST, .handler = config_post_handler,
     };
+    static const httpd_uri_t reassoc_uri = {
+        .uri = "/link/reassoc", .method = HTTP_POST, .handler = link_reassoc_handler,
+    };
     esp_err_t e = httpd_register_uri_handler(server, &get_uri);
     if (e != ESP_OK) return e;
-    return httpd_register_uri_handler(server, &post_uri);
+    e = httpd_register_uri_handler(server, &post_uri);
+    if (e != ESP_OK) return e;
+    return httpd_register_uri_handler(server, &reassoc_uri);
 }
