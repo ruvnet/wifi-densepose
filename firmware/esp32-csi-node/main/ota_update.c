@@ -41,7 +41,7 @@ static char s_ota_psk[OTA_PSK_MAX_LEN] = {0};
  * Returns true only when a PSK is provisioned AND the Bearer token
  * matches it. An unprovisioned node refuses all OTA requests
  * (fail-closed, see RuView#596 audit). The OTA server still starts so
- * the operator can `provision.py --ota-psk <hex>` over USB-CDC without
+ * the operator can `provision.py --ota-psk-file <path>` over USB without
  * a reflash, but the upload endpoint will reject every request until
  * the PSK is set.
  */
@@ -54,7 +54,7 @@ static bool ota_check_auth(httpd_req_t *req)
          * Plain HTTP transport + no Secure Boot V2 + no signed-image
          * verification meant a single LAN call could brick or back-
          * door a node. Reject until provisioned. */
-        ESP_LOGW(TAG, "OTA rejected: no PSK in NVS (run provision.py --ota-psk <hex>)");
+        ESP_LOGW(TAG, "OTA rejected: no PSK in NVS (run provision.py --ota-psk-file <path>)");
         return false;
     }
 
@@ -331,7 +331,7 @@ static void ota_load_psk_from_nvs(void)
             ESP_LOGI(TAG, "OTA PSK loaded from NVS (%d chars) — authentication enabled", (int)len - 1);
         } else {
             ESP_LOGW(TAG, "No OTA PSK in NVS — OTA upload endpoint will REJECT all requests until "
-                          "provisioned (provision.py --ota-psk <hex>). Fail-closed per RuView#596.");
+                          "provisioned (provision.py --ota-psk-file <path>). Fail-closed per RuView#596.");
         }
         nvs_close(nvs);
     } else {
