@@ -475,6 +475,14 @@ I (1025) main: CSI streaming active -> 192.168.1.100:5005 (edge_tier=2, OTA=read
 
 ---
 
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Raw CSI stays at ~2–9 frames/s although self-ping replies arrive at ~50/s with <1% timeouts; adaptive controller stuck in `ADAPT_STATE_DEGRADED` | The AP answers ICMP at 802.11b DSSS/CCK rates, which produce no CSI (#2287; measured on a MediaTek-based router) | Check `rx_ctrl.sig_mode`/`rate` of the replies in the promiscuous callback (`sig_mode==0 && rate<8` = 11b, never CSI-eligible). Workarounds: send unicast UDP from a LAN host to the node at ~50 Hz (goes out as HT on the same AP), or disable the 11b basic rates on the AP if it offers the option |
+
+---
+
 ## Runtime Configuration (NVS)
 
 All settings can be changed at runtime via Non-Volatile Storage (NVS) without reflashing the firmware. NVS values override Kconfig defaults.
