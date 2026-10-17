@@ -483,12 +483,22 @@ static void wifi_promiscuous_cb(void *buf, wifi_promiscuous_pkt_type_t type)
  * are sparse beacons (often non-OFDM DSSS), so wifi_csi_callback can starve to
  * yield=0pps -> DEGRADED -> motion/presence=0 (#521, #954).
  *
- * This guarantees a ~50 Hz OFDM unicast floor by pinging the STA's own gateway:
- * the router's ICMP echo replies are OFDM frames destined to this station, which
- * drive the CSI engine regardless of promiscuous filter state or ambient traffic.
- * It is ADDITIVE — promiscuous capture (#396/#893) is left fully intact so
- * multistatic/multi-node sensing still hears other stations' frames. Mirrors
- * Espressif's esp-csi csi_recv_router reference.
+ * This aims for a ~50 Hz OFDM unicast floor by pinging the STA's own gateway:
+ * most routers answer ICMP echo replies as OFDM frames destined to this
+ * station, which drive the CSI engine regardless of promiscuous filter state
+ * or ambient traffic. It is ADDITIVE — promiscuous capture (#396/#893) is left
+ * fully intact so multistatic/multi-node sensing still hears other stations'
+ * frames. Mirrors Espressif's esp-csi csi_recv_router reference.
+ *
+ * AP-DEPENDENT (#2287): some APs answer small ICMP frames at 802.11b DSSS/CCK
+ * rates (measured on a MediaTek-based router), which produce NO CSI. Symptom:
+ * ping replies arrive at the expected rate (~50/s, <1% timeouts) but raw CSI
+ * stays at ~2-9 frames/s and the adaptive controller sits in
+ * ADAPT_STATE_DEGRADED. Diagnose by checking rx_ctrl.sig_mode/rate of the
+ * replies in the promiscuous callback (sig_mode==0 && rate<8 means 11b —
+ * never CSI-eligible). Workaround: unicast UDP from a LAN host to the node at
+ * ~50 Hz instead (goes out as HT on the same AP), or a host-side "poke"
+ * service the sensing server drives per node.
  */
 static esp_ping_handle_t s_self_ping = NULL;
 static void csi_ping_cb_noop(esp_ping_handle_t hdl, void *args) { (void)hdl; (void)args; }
@@ -517,6 +527,7 @@ static void csi_start_self_ping(void)
     cfg.target_addr     = target;
     cfg.count           = ESP_PING_COUNT_INFINITE;
     cfg.interval_ms     = CSI_SELF_PING_INTERVAL_MS;
+    cfg.timeout_ms      = CSI_SELF_PING_INTERVAL_MS; /* #2287: one lost reply must not stall the 50 Hz loop for the 1000 ms IDF default */
     cfg.data_size       = 1;
     cfg.task_stack_size = 4096;
 
