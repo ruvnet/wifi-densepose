@@ -141,6 +141,12 @@ _RESERVED_DEVICE_RE = re.compile(
 )
 
 
+def _unprefixed_state_name(port: str) -> str:
+    """Pre-reserved-name-fix state filename for `port` (no leading underscore)."""
+    safe = port.replace("/", "_").replace(":", "_").replace("\\", "_")
+    return f"{safe}.json"
+
+
 def _state_path_for(port: str, state_dir: str) -> str:
     """File path for a given serial port. Sanitize the port for filesystem use."""
     safe = port.replace("/", "_").replace(":", "_").replace("\\", "_")
@@ -314,7 +320,7 @@ def load_state(port: str, state_dir: str) -> dict:
     path = _state_path_for(port, state_dir)
     if not os.path.isfile(path):
         legacy = os.path.join(
-            state_dir, f"{port.replace('/', '_').replace(':', '_').replace('\\', '_')}.json"
+            state_dir, _unprefixed_state_name(port)
         )
         if legacy != path and os.path.isfile(legacy):
             path = legacy
@@ -457,7 +463,7 @@ def load_board_state(port: str, mac, state_dir: str):
     if os.path.isfile(legacy):
         return load_state(port, state_dir), legacy
     unprefixed = os.path.join(
-        state_dir, f"{port.replace('/', '_').replace(':', '_').replace('\\', '_')}.json"
+        state_dir, _unprefixed_state_name(port)
     )
     if unprefixed != legacy and os.path.isfile(unprefixed):
         return load_state(port, state_dir), unprefixed
