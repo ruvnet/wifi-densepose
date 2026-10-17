@@ -1,46 +1,48 @@
-name: PR-Agent AI Review & Fix
+name: PR-Agent + Sign-off
+
+# Copy this file into each repo's .github/workflows/ directory.
+# It wires Gemini Muse Qodo-style auto-review on PR events and a 1-click
+# Sign-Off checkbox (or /sign-off comment) that applies & commits all fixes.
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review, synchronize]
+    types: [opened, reopened, synchronize, ready_for_review]
   issue_comment:
-    types: [created]
+    types: [created, edited]
 
 permissions:
   contents: write
   pull-requests: write
   issues: write
-  checks: write
 
 jobs:
-  pr_agent_job:
-    if: ${{ (github.event_name == 'pull_request') || (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.sender.type != 'Bot' && !startsWith(github.event.comment.body, '/autofix')) }}
-    runs-on: ubuntu-latest
-    name: Run PR-Agent on PR or comment
-    steps:
-      - name: PR Agent action step
-        id: pragent
-        uses: the-pr-agent/pr-agent@main
-        env:
-          GOOGLE_AI_STUDIO.GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          config.model: "gemini/gemini-3.8-flash"
-          config.fallback_models: '["gemini/gemini-3.5-flash", "gemini/gemini-2.5-flash", "gemini/gemini-3.5-flash-lite", "gemini/gemini-3.1-flash"]'
-          config.ai_timeout: "90"
-          config.retry_same_model_on_timeout: "false"
-          github.ignore_bot_pr: "false"
-          github_action_config.auto_review: "true"
-          github_action_config.auto_describe: "true"
-          github_action_config.auto_improve: "true"
-          github_action_config.handle_push_trigger: "true"
-          github_action_config.push_commands: '["/review", "/improve"]'
-          pr_code_suggestions.commitable_code_suggestions: "false"
-          pr_code_suggestions.dual_publishing_score_threshold: "6"
-          pr_code_suggestions.num_code_suggestions_per_chunk: "4"
-          pr_reviewer.require_security_review: "true"
-          pr_reviewer.require_tests_review: "true"
-          pr_reviewer.require_risk_assessment: "true"
-          pr_reviewer.require_merge_recommendation: "true"
-          pr_reviewer.require_priority_files: "true"
-          pr_reviewer.inline_key_issues: "true"
+  # Auto-review on PR events and /review or /describe comments
+  pr_agent:
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.action == 'created' &&
+       github.event.issue.pull_request &&
+       github.event.sender.type != 'Bot' &&
+       !contains(github.event.comment.body, '/sign-off') &&
+       !contains(github.event.comment.body, '/autofix'))
+    uses: JWEB0689/pr-agent-settings/.github/workflows/pr_agent.yml@main
+    secrets:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+  # Sign-Off — triggered by ticking the [x] Sign-Off checkbox or commenting /sign-off or /autofix
+  sign-off:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      github.event.sender.type != 'Bot' &&
+      (contains(github.event.comment.body, '/sign-off') ||
+       contains(github.event.comment.body, '/autofix') ||
+       contains(github.event.comment.body, '- [x] <!-- muse-sign-off -->') ||
+       contains(github.event.comment.body, '- [X] <!-- muse-sign-off -->'))
+    uses: JWEB0689/pr-agent-settings/.github/workflows/reusable_autofix.yml@main
+    with:
+      mode: pr
+      pr_number: ${{ github.event.issue.number }}
+    secrets:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
