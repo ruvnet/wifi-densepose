@@ -90,13 +90,13 @@ jobs:
     runs-on: macos-14
     steps:
       - name: Download Intel artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ruview-macos-x64
           path: artifacts/x64
 
       - name: Download Apple Silicon artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ruview-macos-arm64
           path: artifacts/arm64
@@ -129,7 +129,7 @@ jobs:
           lipo -info "RuView Desktop.app/Contents/MacOS/wifi-densepose-desktop"
 
       - name: Upload universal artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ruview-macos-universal
           path: |
