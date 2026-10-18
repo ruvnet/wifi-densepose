@@ -58,7 +58,10 @@ jobs:
         run: |
           BRANCH="chore/update-submodules"
           git checkout -B "$BRANCH"
-          git add vendor/
+          # Submodules live under both vendor/ and v2/crates/ (see .gitmodules);
+          # `git add vendor/` alone misses the v2/crates ones and makes the
+          # commit below fail with "nothing to commit".
+          git add vendor/ v2/
           git commit -m "chore: update vendor submodules to latest upstream"
           git push --force origin "$BRANCH"
           OPEN=$(gh pr list --base main --head "$BRANCH" --state open --json number --jq '.[0].number')
