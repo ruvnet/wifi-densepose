@@ -11,8 +11,31 @@ use wifi_densepose_sensing_server::{
     companion_tls,
 };
 
+// Share the QR authority with Host validation; DNS-SD names retain their terminal dot.
+fn companion_authority(identity: &companion_tls::Identity, port: u16) -> String {
+    let hostname =
+        wifi_densepose_sensing_server::discovery::discovery_hostname(&identity.installation_id);
+    format!("{}:{port}", hostname.trim_end_matches('.'))
+}
+
+pub fn host_allowlist(
+    args: &Args,
+    companion_authority: Option<&str>,
+) -> wifi_densepose_sensing_server::host_validation::HostAllowlist {
+    let discovery_label = args.installation_id.as_deref().unwrap_or("installation");
+    let discovery_host =
+        wifi_densepose_sensing_server::discovery::discovery_hostname(discovery_label);
+    wifi_densepose_sensing_server::host_validation::HostAllowlist::from_cli_and_env(
+        args.allowed_hosts
+            .iter()
+            .map(String::as_str)
+            .chain(std::iter::once(discovery_host.as_str()))
+            .chain(companion_authority),
+    )
+}
 pub struct Integration {
     service: Arc<Companion>,
+    authority: String,
     auth: AuthState,
     listener: tokio::net::TcpListener,
     tls: Arc<rustls::ServerConfig>,
@@ -43,7 +66,8 @@ impl Integration {
             companion_tls::Identity::load_or_create(&dir, args.installation_id.as_deref())?;
         let hostname =
             wifi_densepose_sensing_server::discovery::discovery_hostname(&identity.installation_id);
-        let origin = format!("https://{}:{port}", hostname.trim_end_matches('.'));
+        let authority = companion_authority(&identity, port);
+        let origin = format!("https://{authority}");
         let service = Companion::load(
             &dir,
             identity.installation_id.clone(),
@@ -73,6 +97,7 @@ impl Integration {
         };
         Ok(Some(Self {
             service,
+            authority,
             auth,
             listener,
             tls: identity.config,
@@ -80,6 +105,9 @@ impl Integration {
             room,
             control,
         }))
+    }
+    pub fn authority(&self) -> &str {
+        &self.authority
     }
     pub fn owner_router(&self) -> Router {
         companion::owner_router(self.service.clone())
@@ -267,6 +295,37 @@ pub async fn guard_stream(grant: Grant, stream: impl std::future::Future<Output 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn qr_authority_is_allowed_for_explicit_and_persisted_generated_identity() {
+        for preferred in [Some("standalone-installation"), None] {
+            let dir = tempfile::tempdir().unwrap();
+            let identity = companion_tls::Identity::load_or_create(dir.path(), preferred).unwrap();
+            let reloaded = companion_tls::Identity::load_or_create(dir.path(), preferred).unwrap();
+            let mut argv = vec!["sensing-server"];
+            if let Some(id) = preferred {
+                argv.extend(["--installation-id", id]);
+            }
+            let args = Args::try_parse_from(argv).unwrap();
+            assert!(args.allowed_hosts.is_empty());
+            for prepared in [&identity, &reloaded] {
+                let authority = companion_authority(prepared, 3443);
+                let origin = format!("https://{authority}");
+                let parsed: axum::http::Uri = origin.parse().unwrap();
+                let allowlist = host_allowlist(&args, Some(&authority));
+                assert!(allowlist.is_enabled());
+                assert!(allowlist.is_allowed(parsed.authority().unwrap().as_str()));
+                assert!(!allowlist.is_allowed("untrusted.example:3443"));
+                assert!(!allowlist.is_allowed(&format!("{authority}.untrusted.example")));
+                // Only the exact QR authority is added, without allowing arbitrary ports.
+                assert!(!allowlist.is_allowed(&authority.replace(":3443", ":3444")));
+            }
+            assert_eq!(
+                companion_authority(&identity, 3443),
+                companion_authority(&reloaded, 3443)
+            );
+        }
+    }
+
     #[test]
     fn device_policy_is_not_the_legacy_read_policy() {
         use axum::http::Method;

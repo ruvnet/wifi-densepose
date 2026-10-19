@@ -385,6 +385,11 @@ async fn approve(
     if p.expires <= now() || p.code != r.comparison_code {
         return Err(StatusCode::FORBIDDEN);
     }
+    // Pending requests can queue while a slot is available. Recheck under the
+    // approval lock so another approval cannot exceed the persisted load limit.
+    if i.devices.len() >= 16 {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
     let mut devices = i.devices.clone();
     devices.insert(p.device.device_id.clone(), p.device.clone());
     s.persist(&devices, &i)?;
@@ -491,6 +496,9 @@ mod tests {
         (d, s)
     }
     async fn pending(s: &Shared) -> (String, String, String) {
+        pending_device(s, "phone").await
+    }
+    async fn pending_device(s: &Shared, device_id: &str) -> (String, String, String) {
         let v = invite(State(s.clone())).await.unwrap().0;
         let proof = secret();
         let v = enroll(
@@ -499,7 +507,7 @@ mod tests {
                 installation_id: s.installation_id.clone(),
                 invite_id: v["invite_id"].as_str().unwrap().into(),
                 invite_secret: v["invite_secret"].as_str().unwrap().into(),
-                device_id: "phone".into(),
+                device_id: device_id.into(),
                 device_name: "Phone".into(),
                 pairing_secret: proof.clone(),
             }),
@@ -524,6 +532,84 @@ mod tests {
         )
         .await
     }
+    #[tokio::test]
+    async fn queued_approvals_cannot_exceed_durable_device_capacity() {
+        let (dir, s) = setup();
+        for index in 0..15 {
+            let (id, code, _) = pending_device(&s, &format!("phone-{index}")).await;
+            let _ = approve(
+                State(s.clone()),
+                RoutePath(id),
+                Json(Approve {
+                    comparison_code: code,
+                }),
+            )
+            .await
+            .unwrap();
+        }
+        let (first_id, first_code, _) = pending_device(&s, "last-slot").await;
+        let (waiting_id, waiting_code, _) = pending_device(&s, "waiting").await;
+        let _ = approve(
+            State(s.clone()),
+            RoutePath(first_id),
+            Json(Approve {
+                comparison_code: first_code,
+            }),
+        )
+        .await
+        .unwrap();
+        let persisted = std::fs::read(&s.path).unwrap();
+        assert_eq!(
+            approve(
+                State(s.clone()),
+                RoutePath(waiting_id.clone()),
+                Json(Approve {
+                    comparison_code: waiting_code.clone(),
+                })
+            )
+            .await
+            .unwrap_err(),
+            StatusCode::TOO_MANY_REQUESTS,
+        );
+        assert_eq!(std::fs::read(&s.path).unwrap(), persisted);
+        {
+            let inner = s.inner.lock().unwrap();
+            assert_eq!(inner.devices.len(), 16);
+            assert!(inner.pending.contains_key(&waiting_id));
+        }
+        let reloaded = Companion::load(
+            dir.path(),
+            s.installation_id.clone(),
+            s.cert_sha256.clone(),
+            s.origin.clone(),
+        )
+        .unwrap();
+        assert_eq!(reloaded.inner.lock().unwrap().devices.len(), 16);
+        let _ = revoke(State(s.clone()), RoutePath("last-slot".into()))
+            .await
+            .unwrap();
+        let _ = approve(
+            State(s.clone()),
+            RoutePath(waiting_id.clone()),
+            Json(Approve {
+                comparison_code: waiting_code,
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(!s.inner.lock().unwrap().pending.contains_key(&waiting_id));
+        let reloaded = Companion::load(
+            dir.path(),
+            s.installation_id.clone(),
+            s.cert_sha256.clone(),
+            s.origin.clone(),
+        )
+        .unwrap();
+        let inner = reloaded.inner.lock().unwrap();
+        assert_eq!(inner.devices.len(), 16);
+        assert!(inner.devices.contains_key("waiting"));
+    }
+
     #[tokio::test]
     async fn approval_read_scope_calibration_revocation() {
         let (_d, s) = setup();

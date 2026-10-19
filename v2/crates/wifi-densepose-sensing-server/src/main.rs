@@ -15286,16 +15286,10 @@ async fn main() {
         );
         wifi_densepose_sensing_server::host_validation::HostAllowlist::disabled()
     } else {
-        let discovery_label = args.installation_id.as_deref().unwrap_or("installation");
-        let discovery_host =
-            wifi_densepose_sensing_server::discovery::discovery_hostname(discovery_label);
-        let allowlist =
-            wifi_densepose_sensing_server::host_validation::HostAllowlist::from_cli_and_env(
-                args.allowed_hosts
-                    .iter()
-                    .cloned()
-                    .chain(std::iter::once(discovery_host)),
-            );
+        let allowlist = companion_integration::host_allowlist(
+            &args,
+            companion.as_ref().map(companion_integration::Integration::authority),
+        );
         info!(
             "Host-header validation ON ({} entries; loopback names always included)",
             allowlist.entries_for_test().len()
