@@ -1,0 +1,12 @@
+version: 2.1
+jobs:
+  build:
+    docker:
+      - image: cimg/base:current
+    resource_class: jweb0689/resource-labels
+    steps:
+      - run: echo "Hi I'm on a Container Runner!"
+workflows:
+  build-workflow:
+    jobs:
+      - build
