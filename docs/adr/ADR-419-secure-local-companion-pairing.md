@@ -1,4 +1,4 @@
-# ADR-383: Secure local Mac–iPhone companion pairing
+# ADR-419: Secure local Mac–iPhone companion pairing
 
 - Status: Accepted decision (2026-10-12); implemented; software verified, physical qualification pending
 - Decision owner: product owner, approved in the implementation session
