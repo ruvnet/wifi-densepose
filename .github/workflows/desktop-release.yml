@@ -27,7 +27,7 @@ jobs:
         include:
           # Build natively on each runner. This avoids cross-compilation
           # failures from native dependencies used by the desktop crate.
-          - runner: macos-13
+          - runner: macos-14
             target: x86_64-apple-darwin
             arch: x64
           - runner: macos-14
@@ -48,6 +48,12 @@ jobs:
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           targets: ${{ matrix.target }}
+
+      - name: Install Rust target
+        # dtolnay's `targets` input passes --target to `rustup toolchain install`
+        # (host triple), which does NOT add a cross-compilation target to the
+        # default toolchain. Add it explicitly so --target <matrix.target> works.
+        run: rustup target add ${{ matrix.target }}
 
       - name: Install frontend dependencies
         working-directory: v2/crates/wifi-densepose-desktop/ui
@@ -84,13 +90,13 @@ jobs:
     runs-on: macos-14
     steps:
       - name: Download Intel artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ruview-macos-x64
           path: artifacts/x64
 
       - name: Download Apple Silicon artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ruview-macos-arm64
           path: artifacts/arm64
@@ -123,7 +129,7 @@ jobs:
           lipo -info "RuView Desktop.app/Contents/MacOS/wifi-densepose-desktop"
 
       - name: Upload universal artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ruview-macos-universal
           path: |

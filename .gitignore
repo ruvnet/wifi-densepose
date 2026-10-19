@@ -322,3 +322,6 @@ v2/crates/ruview-offaxis/pkg/
 scripts/fal-visual-teacher/training-data/
 scripts/fal-visual-teacher/training-data.zip
 scripts/fal-visual-teacher/output/
+
+# Trained adaptive classifier (auto-created at runtime; #2135)
+/v2/data/adaptive_model.json

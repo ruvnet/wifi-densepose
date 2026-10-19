@@ -30,7 +30,7 @@
     "react-native-web": "^0.21.0",
     "react-native-webview": "13.16.0",
     "react-native-wifi-reborn": "^4.13.6",
-    "three": "^0.183.2",
+    "three": "^0.186.1",
     "victory-native": "^41.20.2",
     "zustand": "^5.0.12"
   },

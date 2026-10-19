@@ -1,0 +1,34 @@
+name: PR-Agent + Sign-off
+
+# Copy this file into each repo's .github/workflows/ directory.
+# It wires PR-Agent auto-review on PR events and a /sign-off comment
+# command that applies all PR-Agent review suggestions and commits them.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  # Auto-review on PR events — runs PR-Agent with your global .pr_agent.toml
+  pr_agent:
+    if: ${{ github.event_name == 'pull_request' || (github.event.issue.pull_request && github.event.sender.type != 'Bot') }}
+    uses: JWEB0689/pr-agent-settings/.github/workflows/pr_agent.yml@main
+    secrets:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+  # /sign-off — apply every PR-Agent code suggestion and commit in one shot
+  sign-off:
+    if: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '/sign-off') && github.event.sender.type != 'Bot' }}
+    uses: JWEB0689/pr-agent-settings/.github/workflows/reusable_autofix.yml@main
+    with:
+      mode: pr
+      pr_number: ${{ github.event.issue.number }}
+    secrets:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
