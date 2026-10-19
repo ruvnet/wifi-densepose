@@ -21,6 +21,8 @@ members = [
     "crates/wifi-densepose-mat",
     "crates/wifi-densepose-train",
     "crates/wifi-densepose-sensing-server",
+    # ADR-266/267: MT7981 vendor CSI (mt76) -> MTC1 bridge.
+    "crates/wifi-densepose-mtk-bridge",
     "crates/wifi-densepose-aether",    # ADR-185 §13 — AETHER pure-compute leaf (std-only)
     "crates/wifi-densepose-privshield", # ADR-291 — VEIL privacy shield (compliant-waveform anti-sensing; std-only leaf)
     "crates/wifi-densepose-wifiscan",
@@ -120,9 +122,16 @@ members = [
     "crates/ruview-counterfactual",# ADR-313 counterfactual spatial inference
     "crates/ruview-infogain",      # ADR-314 information-gain scheduler
     "crates/ruview-active",        # ADR-309 active sensing control
+    "crates/ruview-survey",        # ADR-381 node self-survey (check mode)
     # ADR-324 — clean-room Kooima off-axis (head-coupled perspective) projection.
     # Dependency-free native core; wasm-bindgen surface only on wasm32.
     "crates/ruview-offaxis",
+    # ADR-368 — portable compute kernel for the `@ruvnet/ruview-kernel` npm
+    # package: one bounded JSON ABI, wasm32 (zero-import) + napi-rs transports.
+    "crates/ruview-kernel",
+    # spatial.evidence.v1 emitter (WeftOS ADR-107 wire contract): RF Gaussians
+    # and link measurements as JSONL evidence. Leaf over ruview-unified.
+    "crates/ruview-spatial-evidence",
     # ADR-348 — RuForecast extracted to the ruvnet/RuForecast submodule
     # (see crates/ruforecast in the exclude list below); path-deps only.
 ]
@@ -136,6 +145,9 @@ members = [
 exclude = [
     "crates/wifi-densepose-wasm-edge",
     "crates/homecore-plugin-example",
+    # ADR-368: napi-rs transport for ruview-kernel. Own workspace so napi never
+    # enters `cargo test --workspace`. Built by harness/ruview-kernel scripts.
+    "crates/ruview-kernel-napi",
     "crates/worldgraph",   # ruvnet/worldgraph submodule — its own workspace (geo/worldgraph/worldmodel)
     "crates/ruforecast",   # ruvnet/RuForecast submodule — its own workspace (ruforecast-core/model/train)
     # LOCAL-DEV-ONLY: path-depends on an absolute, unpublished ruvnet/autogenous
