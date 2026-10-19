@@ -57,7 +57,7 @@ jobs:
       # linux/arm64 layer below (Dockerfile.rust is arch-agnostic — no `--target`
       # flag — so buildx + QEMU is all that's needed; arm64 builds are emulated
       # by the runner, not built on a separate arm64 host).
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
 
