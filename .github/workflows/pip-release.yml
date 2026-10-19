@@ -97,7 +97,7 @@ jobs:
       # Linux aarch64 needs QEMU for cross-build on x86_64 runners.
       - name: Set up QEMU
         if: matrix.os == 'ubuntu-latest' && matrix.arch == 'aarch64'
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
 
       # ADR-117 §5.4: abi3-py310 — one binary per OS/arch covers all
       # Python minor versions ≥ 3.10. Build only cp310 wheels.

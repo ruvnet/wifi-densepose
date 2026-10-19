@@ -157,7 +157,7 @@ gpu = [
 monitoring = [
     "grafana-api>=1.0.3",
     "influxdb-client>=1.38.0",
-    "elasticsearch>=8.10.0",
+    "elasticsearch>=9.5.1",
 ]
 
 deployment = [
