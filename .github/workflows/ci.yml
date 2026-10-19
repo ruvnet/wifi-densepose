@@ -511,7 +511,7 @@ jobs:
   notify:
     name: Notify
     runs-on: ubuntu-latest
-    needs: [code-quality, test, rust-tests, performance-test, docker-build, docs]
+    needs: [code-quality, test, rust-tests, ui-tests, performance-test, docker-build, docs]
     if: always()
     permissions:
       contents: write   # required by softprops/action-gh-release
@@ -538,18 +538,22 @@ jobs:
         text: '❌ CI pipeline failed for ${{ github.ref }}'
 
     - name: Create GitHub Release
-      if: github.ref == 'refs/heads/main' && needs.docker-build.result == 'success'
+      if: github.ref == 'refs/heads/main' && needs.rust-tests.result == 'success' && needs.ui-tests.result == 'success' && needs.docker-build.result == 'success'
       uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
       with:
         tag_name: v${{ github.run_number }}
-        name: Release v${{ github.run_number }}
+        name: CI snapshot v${{ github.run_number }}
+        # CI snapshots must not replace a curated product release as Latest.
+        make_latest: false
         body: |
-          Automated release from CI pipeline
+          Source snapshot validated by the CI pipeline. This entry does not contain firmware bundles.
 
           **Changes:**
           ${{ github.event.head_commit.message }}
 
-          **Docker Image:**
-          `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}`
+          **Source commit:** `${{ github.sha }}`
+
+          Container images publish separately through the [sensing-server release workflow](https://github.com/ruvnet/RuView/actions/workflows/sensing-server-docker.yml).
+          Firmware downloads are attached to the dedicated `vX.Y.Z-esp32` releases.
         draft: false
         prerelease: false
