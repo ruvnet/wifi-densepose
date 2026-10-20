@@ -517,7 +517,7 @@ esp_err_t mmwave_sensor_init(int uart_tx_pin, int uart_rx_pin)
     if (uart_rx_pin < 0) uart_rx_pin = 18;
 #endif
 #if defined(CONFIG_IDF_TARGET_ESP32C5)
-    /* ADR-383: on the ESP32-C5, GPIO15-22 are the flash/PSRAM MSPI bus
+    /* ADR-428: on the ESP32-C5, GPIO15-22 are the flash/PSRAM MSPI bus
      * (CS1=15, CS0=16, MISO=17, WP=18, HD=20, CLK=21, MOSI=22). The legacy
      * 17/18 default routed UART1 onto flash MISO/WP, locking the CPU
      * (rst 0x1a) and leaving the flash mid-transaction so the ROM then

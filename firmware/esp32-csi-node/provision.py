@@ -613,7 +613,7 @@ def flash_nvs(port, baud, nvs_bin, chip):
             "--port", port,
             "--baud", str(baud),
         ]
-        # ADR-383: esp32c5 is an IDF preview target with no flasher stub yet, so
+        # ADR-428: esp32c5 is an IDF preview target with no flasher stub yet, so
         # esptool must talk to the ROM loader directly. Without --no-stub the
         # write silently fails its MD5 verify (flash reads back 0xFF).
         if chip == "esp32c5":

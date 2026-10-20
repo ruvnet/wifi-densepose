@@ -4,7 +4,7 @@ Status: **bring-up record** — device-side rate + stability qualified on 2.4 GH
 the full 300 s controlled run, the end-to-end WebSocket table, and the 5 GHz HE
 pass are PENDING. Mirrors the C6 record
 [`2026-08-31-esp32-c6-rate-aware-sensing.md`](2026-08-31-esp32-c6-rate-aware-sensing.md).
-See [ADR-383](../adr/ADR-383-esp32-c5-firmware-extension.md).
+See [ADR-428](../adr/ADR-428-esp32-c5-firmware-extension.md).
 
 ## Scope
 
@@ -13,7 +13,7 @@ associates to WiFi, captures CSI, and sustains a raw CSI callback rate above the
 hardware acceptance floor without errors or reboots. Does **not** yet qualify
 heartbeat, respiration, gesture, pose, identity or person-count accuracy against
 labelled ground truth, the 5 GHz HE path, or the end-to-end fused WebSocket
-coverage (those are P4/P5 in ADR-383).
+coverage (those are P4/P5 in ADR-428).
 
 ## Hardware and firmware
 

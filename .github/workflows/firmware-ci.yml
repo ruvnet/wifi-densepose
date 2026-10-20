@@ -87,7 +87,7 @@ jobs:
             size_limit_kb: 1152
             artifact_app: esp32-csi-node-c6.bin
             artifact_pt: partition-table-c6.bin
-          # ADR-383: ESP32-C5 dual-band (2.4 + 5 GHz) target. Preview target that
+          # ADR-428: ESP32-C5 dual-band (2.4 + 5 GHz) target. Preview target that
           # needs IDF >= 5.5.2 (HE-LTF CSI, C5 PSRAM reset fix). The app is
           # ~1123 KiB in a 4096 KiB OTA slot (16 MB layout); the gate is a growth
           # budget, not the slot size.

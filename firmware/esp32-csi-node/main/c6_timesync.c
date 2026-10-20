@@ -143,7 +143,7 @@ static void send_beacon(void)
     }
 }
 
-/* 802.15.4 time-sync (ADR-383, 2026-10-05). The esp_ieee802154 callbacks
+/* 802.15.4 time-sync (ADR-428, 2026-10-05). The esp_ieee802154 callbacks
  * below run in ISR context. Four bugs made this path look dead on C6 (#762)
  * and C5; all fixed here, verified on two ESP32-C5 boards (IDF 5.5.2):
  *  1. RX was armed once at init and rx_when_idle was never set, so after

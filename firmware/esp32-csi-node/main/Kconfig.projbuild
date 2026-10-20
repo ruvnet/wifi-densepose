@@ -352,7 +352,7 @@ config OTA_HTTPD_STACK_SIZE
 
 endmenu
 
-menu "ESP32-C6/C5 (HE-class) capabilities (ADR-110, ADR-383)"
+menu "ESP32-C6/C5 (HE-class) capabilities (ADR-110, ADR-428)"
     depends on IDF_TARGET_ESP32C6 || IDF_TARGET_ESP32C5
 
     choice CSI_WIFI_BAND_MODE
@@ -360,7 +360,7 @@ menu "ESP32-C6/C5 (HE-class) capabilities (ADR-110, ADR-383)"
         default CSI_WIFI_BAND_AUTO
         depends on SOC_WIFI_SUPPORT_5G
         help
-            ADR-383: which band the STA may join on a dual-band chip
+            ADR-428: which band the STA may join on a dual-band chip
             (ESP32-C5). AUTO lets the driver pick, so a dual-band AP may
             steer the node to 5 GHz. 2G_ONLY / 5G_ONLY pin the band, e.g.
             to qualify CSI on one band or keep 2.4 GHz free for 802.15.4.

@@ -48,7 +48,7 @@ set(REQUIRES
     led_strip
 )
 
-# ADR-110 / ADR-383: HE-class (C6/C5) components — 802.15.4, LP-core (ulp) and
+# ADR-110 / ADR-428: HE-class (C6/C5) components — 802.15.4, LP-core (ulp) and
 # esp_hw_support are shared by both chips. Note: CONFIG_* symbols are not
 # available in main CMakeLists.txt evaluation — we use the IDF_TARGET variable
 # that idf.py sets from sdkconfig.defaults / set-target.

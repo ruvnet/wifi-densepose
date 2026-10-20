@@ -1,4 +1,4 @@
-# ADR-383: ESP32-C5 firmware extension — dual-band (2.4 + 5 GHz) Wi-Fi 6 CSI
+# ADR-428: ESP32-C5 firmware extension — dual-band (2.4 + 5 GHz) Wi-Fi 6 CSI
 
 | Field | Value |
 |-------|-------|
@@ -133,7 +133,7 @@ to exercise the band that is its reason for being.
 Provisioning note: `provision.py flash_nvs` needs `--no-stub` for the C5 preview
 target (the flasher stub isn't available; without it the NVS write silently
 fails MD5 verify and leaves the partition at 0xFF, which then ROM-loops). Fixed
-in `provision.py` (ADR-383). Flash/reset state on the preview silicon is
+in `provision.py` (ADR-428). Flash/reset state on the preview silicon is
 fragile — a clean power-cycle recovers a wedged board.
 
 ## 4. Implementation phases

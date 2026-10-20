@@ -116,7 +116,7 @@ static void event_handler(void *arg, esp_event_base_t event_base,
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
 #if CONFIG_SOC_WIFI_SUPPORT_5G
-        /* ADR-383: set the band on dual-band chips (C5). The driver rejects
+        /* ADR-428: set the band on dual-band chips (C5). The driver rejects
          * this before esp_wifi_start() (ESP_ERR_WIFI_NOT_STARTED), so apply
          * it here, after start and before the first connect. Always set it,
          * AUTO included: the driver keeps the band in its own NVS, so a band
@@ -393,7 +393,7 @@ void app_main(void)
 #if defined(CONFIG_IDF_TARGET_ESP32C6)
     const int led_gpio = 8;
 #elif defined(CONFIG_IDF_TARGET_ESP32C5)
-    /* TODO ADR-383: verify C5-DevKitC-1 onboard WS2812 GPIO (schematic indicates 27).
+    /* TODO ADR-428: verify C5-DevKitC-1 onboard WS2812 GPIO (schematic indicates 27).
      * Wrong value only means the status LED stays dark — not fatal to CSI. */
     const int led_gpio = 27;
 #else

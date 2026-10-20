@@ -1,4 +1,4 @@
-# ESP32-C5 CSI Node — Target overlay (ADR-383, extends ADR-110)
+# ESP32-C5 CSI Node — Target overlay (ADR-428, extends ADR-110)
 #
 # Auto-applied by ESP-IDF when CONFIG_IDF_TARGET=esp32c5.
 # Layered on top of sdkconfig.defaults — only the differences live here.
@@ -13,7 +13,7 @@
 # BT 5 LE, IEEE 802.15.4, single HP RISC-V core (240 MHz) + LP core, 48 MHz
 # crystal, 16 MB flash, no PSRAM, native USB-Serial/JTAG.
 #
-# WHY C5 over C6 (ADR-383 §1): the C5 is the first in-house chip that can
+# WHY C5 over C6 (ADR-428 §1): the C5 is the first in-house chip that can
 # actually SOURCE 5 GHz CSI. The host/provisioning side already understands
 # 5 GHz channels (36/40/44 UNII-1, non-DFS); the C6 could not transmit there.
 # Provision this node onto a 5 GHz non-DFS channel to exercise dual-band CSI.
@@ -51,7 +51,7 @@ CONFIG_ESP_WIFI_CSI_ENABLED=y
 # on C5 as on C6. On C5 HE spans BOTH bands. WPA3 is opt-in:
 CONFIG_ESP_WIFI_ENABLE_WPA3_SAE=y
 
-# ADR-383 P2 finding (2026-10-04): TWT negotiation locks up the C5 *preview*
+# ADR-428 P2 finding (2026-10-04): TWT negotiation locks up the C5 *preview*
 # WiFi driver when the associated AP does not support iTWT — observed a hard
 # CPU_LOCKUP immediately after the "Connected AP does not support setup
 # individual TWT agreement" error, right after the first CSI callback. TWT is a
@@ -64,7 +64,7 @@ CONFIG_C6_TWT_ENABLE=n
 # the raw 15.4 RX path never delivered a frame on our C6 (ruvnet/RuView#762),
 # ESP-NOW is the working time-sync transport, and on a single shared 2.4 GHz
 # transceiver the 15.4 stack only costs coexistence time against CSI capture.
-# Fixed on C5 (2026-10-05, ADR-383): 15.4 sync now works next to Wi-Fi, but
+# Fixed on C5 (2026-10-05, ADR-428): 15.4 sync now works next to Wi-Fi, but
 # sharing the radio drops CSI yield from ~40 to ~27 pps, so it stays opt-in.
 # ESP-NOW is the default time-sync transport.
 CONFIG_IEEE802154_ENABLED=y
@@ -73,13 +73,13 @@ CONFIG_C6_TIMESYNC_CHANNEL=26
 CONFIG_C6_TIMESYNC_ENABLE=n
 
 # ── LP-core (deep-sleep coprocessor, ADR-110 P5) ──
-# C5 carries an LP RISC-V core like the C6; c6_lp_core.c (ADR-383: HE-class
+# C5 carries an LP RISC-V core like the C6; c6_lp_core.c (ADR-428: HE-class
 # shared module) ships the wake-on-motion stub.
 CONFIG_ULP_COPROC_ENABLED=y
 CONFIG_ULP_COPROC_TYPE_LP_CORE=y
 CONFIG_ULP_COPROC_RESERVE_MEM=8192
 
-# ── PSRAM: optional (ADR-383) ──
+# ── PSRAM: optional (ADR-428) ──
 # Retail C5-WROOM-1 variants (N8R8, N16R8, ...) carry in-package PSRAM on the
 # shared MSPI bus. Initialise it when present; boards without it boot as before.
 # Needs ESP-IDF >= 5.5.2 (the C5 PSRAM reset-hang fix).
