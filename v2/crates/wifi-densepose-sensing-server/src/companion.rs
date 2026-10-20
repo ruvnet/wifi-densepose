@@ -204,6 +204,19 @@ impl Companion {
             StatusCode::SERVICE_UNAVAILABLE
         })
     }
+    /// Metadata only; sharing never receives durable pairing credentials.
+    pub fn paired_device(&self, id: &str) -> Option<(String, u64)> {
+        if self.fault.load(Ordering::SeqCst) { return None; }
+        let inner = self.inner.lock().ok()?;
+        let device = inner.devices.get(id)?;
+        (device.expires_at > now()).then(|| (device.device_name.clone(), device.expires_at))
+    }
+    pub fn device_revocation(&self, id: &str) -> Option<watch::Receiver<bool>> {
+        if self.fault.load(Ordering::SeqCst) { return None; }
+        let mut inner = self.inner.lock().ok()?;
+        if !inner.devices.get(id).is_some_and(|d| d.expires_at > now()) { return None; }
+        Some(inner.revocations.entry(id.into()).or_insert_with(|| watch::channel(false).0).subscribe())
+    }
     pub fn authorize(
         &self,
         installation: &str,

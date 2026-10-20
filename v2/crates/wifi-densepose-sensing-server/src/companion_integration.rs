@@ -8,7 +8,7 @@ use axum::{
 use wifi_densepose_sensing_server::{
     bearer_auth::AuthState,
     companion::{self, Companion, Grant},
-    companion_tls,
+    companion_tls, companion_sensors,
 };
 
 // Share the QR authority with Host validation; DNS-SD names retain their terminal dot.
@@ -41,6 +41,7 @@ pub struct Integration {
     tls: Arc<rustls::ServerConfig>,
     room: Arc<companion_room::SharedRoomStore>,
     control: Control,
+    sensors: companion_sensors::Shared,
     advertiser: Option<wifi_densepose_sensing_server::discovery::DiscoveryAdvertiser>,
 }
 impl Integration {
@@ -95,6 +96,7 @@ impl Integration {
             state: state.clone(),
             serial: Arc::new(tokio::sync::Mutex::new(())),
         };
+        let sensors = companion_sensors::SensorStore::new(service.clone());
         Ok(Some(Self {
             service,
             authority,
@@ -104,6 +106,7 @@ impl Integration {
             advertiser,
             room,
             control,
+            sensors,
         }))
     }
     pub fn authority(&self) -> &str {
@@ -111,6 +114,7 @@ impl Integration {
     }
     pub fn owner_router(&self) -> Router {
         companion::owner_router(self.service.clone())
+            .merge(companion_sensors::owner_router(self.sensors.clone()))
             .merge(companion_room::owner_router(self.room.clone()))
             .layer(axum::middleware::from_fn_with_state(
                 self.control.clone(),
@@ -130,6 +134,7 @@ impl Integration {
     }
     pub async fn start(self, app: Router) {
         let app = app
+            .merge(companion_sensors::companion_router(self.sensors.clone()))
             .merge(companion_room::read_router(self.room.clone()))
             .layer(axum::middleware::from_fn_with_state(
                 self.service.clone(),
@@ -228,6 +233,7 @@ fn policy(method: &axum::http::Method, path: &str) -> Option<bool> {
                 | "/api/v1/pose/calibration/status"
                 | "/ws/sensing"
                 | "/companion/v1/room"
+                | "/companion/v1/sensors"
         ) {
             return Some(false);
         }
@@ -345,4 +351,26 @@ mod tests {
         }
         assert_eq!(policy(&Method::GET, "/ws/train/progress"), None);
     }
+    #[tokio::test]
+    async fn sensor_routes_preserve_owner_peer_and_companion_isolation() {
+        use tower::ServiceExt;
+        use axum::{body::Body, http::{Request, Method}};
+        let dir = tempfile::tempdir().unwrap();
+        let service = Companion::load(dir.path(), "test".into(), "a".repeat(64), "https://test.local:3443".into()).unwrap();
+        let sensors = companion_sensors::SensorStore::new(service.clone());
+        let owner = companion_sensors::owner_router(sensors).layer(axum::middleware::from_fn_with_state(AuthState::from_token("owner"), require_owner));
+        for (peer, credential, expected) in [("127.0.0.1:1", "owner", 200), ("127.0.0.1:1", "phone", 403), ("10.0.0.1:1", "owner", 403)] {
+            let mut req=Request::builder().uri("/api/v1/companion/sensors").header("authorization",format!("Bearer {credential}")).body(Body::empty()).unwrap();
+            req.extensions_mut().insert(ConnectInfo(peer.parse::<SocketAddr>().unwrap()));
+            assert_eq!(owner.clone().oneshot(req).await.unwrap().status().as_u16(), expected);
+        }
+        assert_eq!(policy(&Method::GET,"/companion/v1/sensors"),Some(false));
+        for path in ["/api/v1/companion/sensors", "/api/v1/companion/devices/phone/sensors"] {
+            assert_eq!(policy(&Method::GET,path),None); assert_eq!(policy(&Method::POST,path),None); assert_eq!(policy(&Method::DELETE,path),None);
+        }
+        let denied=Router::new().route("/companion/v1/sensors",get(||async {StatusCode::OK})).layer(axum::middleware::from_fn_with_state(service,require_companion));
+        let response=denied.oneshot(Request::builder().uri("/companion/v1/sensors").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(),StatusCode::UNAUTHORIZED);
+    }
+
 }

@@ -3,6 +3,7 @@
 - Status: Accepted decision (2026-10-12); implemented; software verified, physical qualification pending
 - Decision owner: product owner, approved in the implementation session
 - Related: ADR-271 (OAuth), ADR-272 (WebSocket tickets); ruview-mobile ADR-046
+- Updated: 2026-10-20 — bounded transient sensor preview; physical qualification pending.
 
 ## Context
 
@@ -87,3 +88,31 @@ The consumer passed 1,547 Jest tests, iOS/Mac builds and production Swift TLS,
 path, recovery and disconnect-race checks. Adversarial review has no remaining
 evidence-backed blocker for PR review. These results do not establish physical
 QR scanning, room controls or distribution acceptance.
+
+## Sensor preview amendment (2026-10-20)
+
+Sensor sharing is a separate transient owner-granted capability, lasting fifteen
+minutes and never implied by read or calibration authority. Owner grant/revoke
+routes are `/api/v1/companion/devices/:id/sensors`; snapshot readback is
+`/api/v1/companion/sensors`. Existing actual-loopback plus exact-owner-token
+protection applies to all three. No companion may call owner routes.
+
+The dedicated pinned TLS `/companion/v1/sensors` WebSocket authenticates the
+existing pairing/access proof plus current sharing permission and immediately
+sends `sensor_ready`. Each exact-schema geometry frame is bounded to 64 KiB,
+1–512 integer-millimetre points, a rigid finite camera transform, explicit capture
+lineage, monotonic sequence and bounded source age. Unknown fields, images,
+empty/malformed geometry, replay, lineage substitution and excess rate fail
+closed. Device identity comes from the authenticated grant, never packet data.
+
+Only the latest frame exists in transient memory. Pairing revocation, access or
+sharing expiry, owner revocation, supersession and socket closure suppress it;
+owner readback marks frames stale after three seconds. A superseded socket cannot
+clear its replacement's preview. The receiver additionally checks both source
+and receive age before drawing geometry. No storage, camera feed, legacy relay
+admin token, calibration promotion or ARKit-to-room alignment is added.
+
+The consumer independently opts in to foreground sharing and renders remote
+geometry separately from local sensing/calibration authority. Software protocol,
+real socket and owner/companion middleware checks do not establish physical
+phone-to-Mac capture accuracy or calibration acceptance.

@@ -72,3 +72,5 @@ pub use wifi_densepose_aether::{embedding, graph_transformer, sona, sparse_infer
 
 pub mod companion;
 pub mod companion_tls;
+
+pub mod companion_sensors;
