@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Proposed — P1-P4 done on real C5 silicon (2026-10-05): builds on IDF 5.5.2+, boots on PSRAM and non-PSRAM modules, 5-minute qualification PASS on 2 nodes at 5 GHz and 2.4 GHz with 245-bin HE-SU CSI, band option, CI build job; 802.15.4 time-sync fixed but opt-in (follow-ups in #2162). Pending: calibrated empty-room occupancy (P5; device-side bar met, uncalibrated server fails) and C6 hardware run of the 15.4 fixes |
+| **Status** | Proposed — P1-P4 done on real C5 silicon (2026-10-05): builds on IDF 5.5.2+, boots on PSRAM and non-PSRAM modules, 5-minute qualification PASS on 2 nodes at 5 GHz and 2.4 GHz with 245-bin HE-SU CSI, band option, CI build job; 802.15.4 time-sync fixed but opt-in (follow-ups in #2162). P5 calibrated empty-room occupancy FAILED on C5 (2026-10-08: 0/12 bootstrap promote on both nodes, while the C6 reference passed 12/12); C6 hardware run of the 15.4 fixes pending |
 | **Date** | 2026-10-04 (created) |
 | **Deciders** | Mathew Beane (WeaveLogic) |
 | **Codename** | **C5-DUALBAND** |
@@ -127,7 +127,7 @@ to exercise the band that is its reason for being.
 | 5 GHz CSI on silicon | **PASS (partial)** | 2026-10-05, IDF 5.5.2: joined the AP on ch 40 (5200 MHz, 11ax), 861 CSI frames in 30 s at the server (about 29 fps), 81 % PPDU 0x01 (HE-SU), 19 % 0x00 |
 | 5 GHz HE CSI frame | **PASS (2026-10-05)** | Root cause of the 53-bin frames: `acquire_csi_force_lltf = 1` (C5-only field, MAC v3) forced every PPDU to report the L-LTF. Set to 0 (as in espressif/esp-csi). MEASURED on 2 nodes, ch 40: 97-98 % of frames are HE-SU **245 bins** (490 B, the IDF esp32c5 table value; not 256), rest legacy 53 / HT 57. Server parses all of them and the #2157 majority grid gate locks on 245. |
 | 2.4 GHz CSI on silicon | **PASS (2026-10-05)** | New Kconfig `CSI_WIFI_BAND_MODE` (auto / 2.4 only / 5 only, default auto) pins the band with `esp_wifi_set_band_mode()` in the STA_START handler. Pinned to 2.4 GHz, both nodes joined ch 5 and ran the 5-minute qualification: 41.7 / 41.6 pps raw, DSP 8.0-8.2 Hz, about 98 % HE-SU 245-bin frames, 0 server parse failures. Each node logged a startup ENOMEM burst (6 events, recovered in about 300 ms, right after Got IP), none in steady state. Note: the driver persists the band in its own NVS, so the firmware sets it on every boot, AUTO included |
-| Empty-room occupancy | **Device PASS; server FAIL uncalibrated; calibrated pending (2026-10-05)** | Edge vitals on an empty room: 440/448 and 405/452 absent, with 0 absent-with-persons contradictions, which meets the C6 record's bar. Node 7 flagged presence on 10.4 % of packets. Server heuristic (`main` and #2132) reported 1 person in 478/480 samples, uncalibrated. A calibrated run needs a 600 s calibration window plus a hold-out (see the validation record) |
+| Empty-room occupancy | **Device PASS; server FAIL uncalibrated (2026-10-05); calibrated FAIL (2026-10-08)** | Edge vitals on an empty room: 440/448 and 405/452 absent, with 0 absent-with-persons contradictions, which meets the C6 record's bar. Node 7 flagged presence on 10.4 % of packets. Server heuristic (`main` and #2132) reported 1 person in 478/480 samples, uncalibrated. Calibrated (2026-10-08, single-node 600 s calibrations, empty room confirmed by camera): both C5s failed the 12-sample bootstrap promote (0/12 empty), the C6 reference passed 12/12 (3/3 across the session). See the validation record |
 | 802.15.4 time-sync on C5 | **Fixed; off by default (2026-10-05)** | It never received a peer beacon on C6 (#762) or C5. Four bugs in `c6_timesync.c`: (1) RX armed once and `rx_when_idle` never set, so the radio went idle after the first beacon TX; `rx_when_idle` is now set, plus a defensive task-context re-arm after every TX (one minimal-app run saw RX not resume after TX despite `rx_when_idle`; three reruns without the re-arm on IDF 5.5.2 and 5.5.4 did not reproduce it); (2) `ESP_LOGI` in the ISR RX callback aborted (`lock_acquire_generic`); (3) beacons were built in a stack buffer the async transmit read after it was reused, so peers got a valid header plus RAM/register addresses; (4) Wi-Fi + 15.4 coex was never enabled (`esp_coex_wifi_i154_enable()`), so with 15.4 in RX the STA couldn't authenticate or find the AP. Isolated with a minimal two-board reproducer, then fixed. MEASURED with all four fixes, both nodes: STA joins in ~6 s, the follower received 708/708 beacons intact, no aborts, ESP-NOW unaffected. Cost: CSI callback yield drops from ~40 to ~27 pps while 15.4 shares the radio, so `C6_TIMESYNC_ENABLE` stays off by default and ESP-NOW remains the default time-sync transport |
 
 Provisioning note: `provision.py flash_nvs` needs `--no-stub` for the C5 preview
@@ -151,8 +151,8 @@ fragile — a clean power-cycle recovers a wedged board.
 - **P4 — 5 GHz dual-band CSI (DONE, 2026-10-05):** 5-minute run on 2 nodes on
   ch 40: ~40 pps raw, about 98 % HE-SU frames at **245 bins** (not 256) after
   `force_lltf=0`. It wasn't the IDF version; 5.5.2+ is still required for PSRAM.
-- **P5 — Validation record + evidence gate (validation record written; occupancy
-  qualification pending):** emit
+- **P5 — Validation record + evidence gate (validation record written; calibrated
+  occupancy FAILED on C5, 2026-10-08):** emit
   `docs/validation/<date>-esp32-c5-*.md` in the ADR-110 format (5-min dual-table
   physical result against the pass bar), run `ruview_claim_check` / `ruview_verify`,
   write the ADR-304 EvidenceRecord. Only then does this ADR move to **Accepted**.

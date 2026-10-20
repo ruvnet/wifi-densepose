@@ -1,8 +1,8 @@
 # ESP32 C5 rate aware sensing qualification (bring-up)
 
-Status: **bring-up record** — device-side rate + stability qualified on 2.4 GHz;
-the full 300 s controlled run, the end-to-end WebSocket table, and the 5 GHz HE
-pass are PENDING. Mirrors the C6 record
+Status: **bring-up record** — device-side rate + stability qualified on 2.4 GHz
+and 5 GHz (2026-10-05); calibrated empty-room occupancy (P5) **FAILED** on C5
+(2026-10-08, see the last section). Mirrors the C6 record
 [`2026-08-31-esp32-c6-rate-aware-sensing.md`](2026-08-31-esp32-c6-rate-aware-sensing.md).
 See [ADR-428](../adr/ADR-428-esp32-c5-firmware-extension.md).
 
@@ -214,4 +214,31 @@ This **passes** the bar used in the C6 occupancy record. Node 7 still shows a re
 - **#2132 changed nothing here.** Its threshold fix acts near the absent/present boundary, and this signal (`motion_band_power` median about 25) sits far above it. The most likely cause is that the server's heuristic motion features don't fit C5 frames (mixed 245- and 53-bin shapes, a different amplitude scale) without calibration. That isn't proven.
 - **Status: FAIL (uncalibrated).**
 
-**Calibrated occupancy is still pending.** The server requires at least 600 s of empty-room calibration (`CALIBRATION_DURATION_S`, #1756) before its hold-out and calibrated presence evidence apply. That's longer than this capture. It needs a new empty-room session of about 20-25 min: 600 s to calibrate, then a held-out window.
+The server requires at least 600 s of empty-room calibration (`CALIBRATION_DURATION_S`, #1756) before its hold-out and calibrated presence evidence apply. That's longer than this capture, so the calibrated runs below were taken separately.
+
+### Empty-room occupancy (calibrated, P5) — FAIL on C5
+
+MEASURED 2026-10-07 and 2026-10-08, one site. Two C5 nodes (A, B) on the 2026-10-05 CSI image, with an ESP32-C6 node on the same server as the reference. Server: sensing-server built from #2171's head (e50548a1) with the `wifi-densepose-signal/eigenvalue` feature, `--installation-id` set. The room was confirmed empty from an overhead camera with a person detector, starting after 120 s with nobody in view. Raw recordings, network identifiers and site layout are not published here.
+
+**Single-node calibration and bootstrap promote (2026-10-08).** Each node calibrated alone for 600 s on 2.4 GHz HE20, then `POST /calibration/bootstrap/promote` ran its 12-sample live empty-room check.
+
+| Node | Frames (rate) | Eigenvalues | Calibrated evidence, empty room | Promote (12-sample empty check) |
+|---|---|---|---|---|
+| C5 A | 11,471 (~17 fps) | n/a | 22/79 empty, 57/79 present | **FAIL** 0/12 empty |
+| C5 B | 9,321 (~14 fps) | 30 | not logged | **FAIL** 0/12 empty, 9/12 with vital signs |
+| C6 (reference) | 14,627 (~22 fps) | 35 | 79/79 empty | **PASS** 12/12, and 3 of 3 passes across the session |
+
+**Calibration + hold-out windows (2026-10-07).** Both C5 nodes, 600 s calibration followed by a 25 min hold-out, on each band:
+
+| Band | Run | Node A | Node B | Usable? |
+|---|---|---|---|---|
+| 2.4 GHz (ch 6, HE20, channel 34 % busy, ~23 % foreign BSS) | 602 s calibration | ~11 fps falling to 7-8 fps by minute 3 | ~11 rising to 23-25 fps | yes |
+| 2.4 GHz | 25 min hold-out | 3-5 fps most of the run, frequent per-second dropouts | 25-29 fps, `motion_band_power` 152-162 flat | yes; calibrated replay not run |
+| 5 GHz (ch 40, channel 8 % busy) | 602 s calibration | ~10-11 fps | ~30 fps falling to ~5 fps after minute 5 | **no**: a client shared the sensing channel and a door moved mid-run |
+| 5 GHz | 25 min hold-out | 16-19 fps; `motion_band_power` stepped from ~17 to ~35-56 at minute 5 with no room change | 4-15 fps with recurring stale samples | partly; the step is unexplained (a per-node feature swap is suspected, not verified) |
+
+On 5 GHz, node A's own sequence counters showed ~24 frames/s sent while the server received ~8/s, with no UDP drops on the host. The loss is in the air or at the AP, not in the server. Node B reaches the AP at -74 dBm (SNR 18), which likely explains its 5 GHz starvation; node A's 2.4 GHz rate deficit with a strong signal is unexplained.
+
+**Server room verdict.** With or without calibration, the published room `presence` stayed true (`estimated_persons=1`) in the empty room. That value comes from the fused per-node heuristic vote (ADR-297); a full calibration doesn't gate it, and only a promoted bootstrap baseline can force absent. The calibrated model's own output is `calibrated_presence_evidence`, reported above.
+
+**Status: FAIL for C5 (P5 not met).** In this setup the C6 calibrates to an empty room reproducibly and both C5s do not. Likely contributors, none proven: lower and uneven C5 frame rates (14-17 fps against ~22 fps on the C6), and the mixed 245/53-bin frame shapes. ADR-428 stays **Proposed**.
