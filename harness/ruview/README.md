@@ -309,7 +309,8 @@ Clients that can send headers use `Authorization: Bearer <token>` on
 `http://127.0.0.1:8790/mcp`. ChatGPT connectors cannot, so expose the port over
 HTTPS (a tunnel or reverse proxy) and add `https://<host>/mcp/<token>` as the
 connector URL. Write grants (`hardware-write`, `workspace-write`) are never
-honoured over HTTP: flashing and calibration stay on the CLI and stdio.
+honoured over HTTP: flashing and calibration stay on the CLI and stdio. Malformed request targets return HTTP 400
+with `invalid_request_target`; the transport continues serving subsequent requests.
 
 In a terminal, commands print a formatted view; pipes and `--json` print JSON.
 `ruview esp32 --watch` redraws live capture windows with per-node trends.

@@ -21,9 +21,9 @@ export const FIRMWARE_VARIANTS = Object.freeze({
 /** Image layout shared by the S3 and C6 partition tables (README §2). */
 const IMAGES = Object.freeze([
   { role: 'bootloader', offset: '0x0', names: ['bootloader.bin', 'bootloader/bootloader.bin'], required: true },
-  { role: 'partition-table', offset: '0x8000', names: ['partition-table.bin', 'partition_table/partition-table.bin'], names4mb: ['partition-table-4mb.bin'], required: true },
+  { role: 'partition-table', offset: '0x8000', names: ['partition-table.bin', 'partition_table/partition-table.bin'], names4mb: ['partition-table-4mb.bin'], namesC6: ['partition-table-c6.bin'], required: true },
   { role: 'otadata', offset: '0xf000', names: ['ota_data_initial.bin'], required: false },
-  { role: 'app', offset: '0x20000', names: ['esp32-csi-node.bin'], names4mb: ['esp32-csi-node-4mb.bin'], required: true },
+  { role: 'app', offset: '0x20000', names: ['esp32-csi-node.bin'], names4mb: ['esp32-csi-node-4mb.bin'], namesC6: ['esp32-csi-node-c6.bin'], required: true },
 ]);
 
 const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -88,7 +88,8 @@ export function resolveBundle(bundleDir, variant, { requireChecksums = true } = 
   }
   const images = [];
   for (const image of IMAGES) {
-    const candidates = [...(variant === 's3-4mb' && image.names4mb ? image.names4mb : []), ...image.names];
+    const variantNames = variant === 'c6' ? image.namesC6 : variant === 's3-4mb' ? image.names4mb : [];
+    const candidates = [...(variantNames ?? []), ...image.names];
     const found = candidates.map((n) => join(root, n)).find((p) => existsSync(p));
     if (!found) {
       if (image.required) throw new FirmwareError('image_missing', `bundle is missing ${image.role} (${candidates.join(' | ')})`);

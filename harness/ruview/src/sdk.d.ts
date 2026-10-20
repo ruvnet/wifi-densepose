@@ -105,9 +105,11 @@ export interface RuView {
       udp_port?: number; bind?: '0.0.0.0' | '127.0.0.1' | '::' | '::1'; seconds?: number; max_packets?: number;
       /** Run live single-antenna CSI through @ruvnet/ruview-kernel (optional package). */
       analyze?: boolean; node_id?: number; backend?: 'wasm' | 'napi' | 'auto'; analyze_max_frames?: number;
+      /** Return recent binned amplitude frames for the waterfall view. */
+      spectrum?: boolean; spectrum_bins?: number; spectrum_frames?: number;
     }): Promise<ToolResult>;
-    mmwave(args: { port: string; model?: 'auto' | 'mr60bha2' | 'ld2410'; seconds?: number }): Promise<ToolResult>;
-    lidar(args: { source: 'rplidar'; port: string; baud?: 115200 | 256000 | 460800 | 921600; seconds?: number } | { source: 'iphone'; url: string; seconds?: number }): Promise<ToolResult>;
+    mmwave(args: { source?: 'serial'; port: string; model?: 'auto' | 'mr60bha2' | 'ld2410'; seconds?: number } | { source: 'esphome'; host: string; api_port?: number; seconds?: number }): Promise<ToolResult>;
+    lidar(args: { source: 'rplidar'; port: string; baud?: 115200 | 256000 | 460800 | 921600; seconds?: number } | { source: 'iphone'; url: string; seconds?: number; max_frames?: number }): Promise<ToolResult>;
   };
   hosts: {
     list(): Promise<ToolResult>;
