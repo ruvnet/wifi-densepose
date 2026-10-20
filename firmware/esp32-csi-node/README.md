@@ -54,6 +54,41 @@ On ESP32 C6, the default optional mmWave UART uses GPIO 4 and GPIO 5. Firmware
 refuses any mmWave configuration that overlaps the active console pins. This
 prevents a sensor probe from taking over UART0 RX and disabling Mac onboarding.
 
+## Low CSI yield despite self-ping (#2287)
+
+Gateway ICMP replies do not guarantee CSI: some access points transmit replies
+using 802.11b DSSS/CCK rates, which provide no CSI. Successful pings alone do
+not establish a healthy sensing stream. The ping timeout is bounded to one
+probe interval so a lost reply cannot stall probing for a full second.
+
+When raw CSI stays low, run the bounded UDP traffic helper from a LAN host,
+preferably wired to the router. Substitute the sensing node's private IPv4
+address and use an unused UDP port on that node:
+
+```bash
+python scripts/csi-udp-poke.py 192.168.1.100 --hz 50 --seconds 60
+```
+
+No UDP service on the node is required. This does not query gateway DNS or
+assume a gateway echo service. AP transmit-rate selection still determines
+CSI cadence; compare actual received frames before and during the helper
+run. The helper stops after the requested duration and caps its requested
+rate at 50 Hz.
+
+On S3, STBC frames can carry 192 I/Q entries. Edge processing uses the first
+128 entries rather than dropping the entire frame (#2286), while raw CSI
+preserves the full payload. This restores DSP input availability; it does
+not establish vital-sign accuracy. Production-code host regressions run via
+`make host_tests` in `firmware/esp32-csi-node/test`.
+
+## Onboarding console transport
+
+The standard C6 configuration uses native USB serial/JTAG for the interactive
+onboarding console. A separate CP210x UART bridge can flash the same chip but
+does not carry that native USB console. Use the board's native USB connector
+for runtime logs and onboarding, or explicitly build a UART-console variant.
+Do not interpret a silent UART bridge as proof of a failed boot.
+
 ## Firmware 0.8.8 in plain language
 
 Release 0.8.8 makes the sensing stream more internally consistent and easier

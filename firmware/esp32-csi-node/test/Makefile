@@ -56,7 +56,7 @@ FUZZ_JOBS     ?= 1
         test_vitals run_vitals test_mmwave_detect run_mmwave_detect host_tests \
         test_thermal run_thermal test_csi_sanitize run_csi_sanitize \
         test_c6_antenna run_c6_antenna test_serial_onboarding run_serial_onboarding \
-        run_delivery_contract test_ota_health run_ota_health run_onboarding_identity
+        run_delivery_contract test_ota_health run_ota_health run_onboarding_identity run_onboarding_console
 
 all: fuzz_serialize fuzz_edge fuzz_nvs test_adr110 test_vitals test_mmwave_detect \
      test_thermal test_csi_sanitize test_c6_antenna test_serial_onboarding \
@@ -140,6 +140,9 @@ test_onboarding_identity: test_onboarding_identity.c $(MAIN_DIR)/onboarding_iden
 run_onboarding_identity: test_onboarding_identity
 	./test_onboarding_identity
 
+run_onboarding_console:
+	python3 test_onboarding_console.py
+
 # --- OTA first-boot health check (ADR-379) ---
 # Host-side. Exercises ota_health_step() from ../main/ota_health.h directly --
 # the decision the device runs to confirm or roll back an OTA'd image.
@@ -152,8 +155,21 @@ run_ota_health: test_ota_health
 run_delivery_contract:
 	python3 test_delivery_contract.py
 
-host_tests: run_adr110 run_vitals run_mmwave_detect run_thermal run_csi_sanitize \
-            run_c6_antenna run_serial_onboarding run_onboarding_identity run_delivery_contract run_ota_health
+test_edge_stbc: test_edge_stbc.c $(MAIN_DIR)/edge_processing.c $(MAIN_DIR)/edge_processing.h $(STUBS_SRC)
+	cc -std=c99 -Wall -Wextra -Istubs -I$(MAIN_DIR) test_edge_stbc.c $(STUBS_SRC) -o $@ -lm
+
+.PHONY: run_edge_stbc run_self_ping
+run_edge_stbc: test_edge_stbc
+	./test_edge_stbc
+
+test_self_ping: test_self_ping.c $(MAIN_DIR)/csi_collector.c $(STUBS_SRC)
+	cc -std=c99 -Wall -Wextra -Istubs -I$(MAIN_DIR) -ffunction-sections test_self_ping.c $(STUBS_SRC) $(DEAD_STRIP_LDFLAGS) -o $@ -lm
+
+run_self_ping: test_self_ping
+	./test_self_ping
+
+host_tests: run_self_ping run_edge_stbc run_adr110 run_vitals run_mmwave_detect run_thermal run_csi_sanitize \
+            run_c6_antenna run_serial_onboarding run_onboarding_identity run_onboarding_console run_delivery_contract run_ota_health
 	@echo "Host tests passed (ADR-110 + CSI sanitation + vitals + mmwave + thermal + C6 antenna + USB onboarding + delivery contract + OTA health)"
 
 # --- Serialize fuzzer ---
@@ -193,4 +209,5 @@ clean:
 	rm -f fuzz_serialize fuzz_edge fuzz_nvs test_adr110 test_vitals test_mmwave_detect \
 		test_thermal test_csi_sanitize test_c6_antenna test_serial_onboarding \
 		test_ota_health test_onboarding_identity
+	rm -f test_edge_stbc test_self_ping
 	rm -rf corpus_serialize/ corpus_edge/ corpus_nvs/
