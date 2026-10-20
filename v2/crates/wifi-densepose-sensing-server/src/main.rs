@@ -2409,6 +2409,21 @@ mod privacy_mode_surface_tests {
                 inference_method: "field_model".into(),
                 presence: true,
                 person_count: 1,
+                diagnostics: None,
+            }),
+            detector_diagnostics: Some(DetectorDiagnostics {
+                schema: field_bridge::DETECTOR_DIAGNOSTICS_SCHEMA,
+                scored_node_id: 1,
+                source_age_ms: 10,
+                source_sequence: 9,
+                required_window_frames: 50,
+                runtime: field_bridge::OccupancyDiagnostics {
+                    residual_energy: Some(0.4),
+                    decision_threshold: Some(0.3),
+                    signed_margin: Some(0.1),
+                    window_frames: 50,
+                    fallback_reason: Some("eigenvalue_estimator_unavailable"),
+                },
             }),
             // The four `Value` fields mirror the objects their producers build
             // (the multi-BSSID pipeline, model loader and MediaTek activity index).

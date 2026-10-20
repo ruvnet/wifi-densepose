@@ -126,6 +126,19 @@ pub const FIELD_CLASSES: &[(&str, FieldClass)] = &[
     ("observed_at_unix_ms", Public),
     ("inference_method", Public),
     ("person_count", Public),
+    // detector_diagnostics: how the field model reached the calibrated
+    // occupancy decision (residual against threshold); no vital-sign content.
+    ("detector_diagnostics", Public),
+    ("scored_node_id", Public),
+    ("source_age_ms", Public),
+    ("source_sequence", Public),
+    ("required_window_frames", Public),
+    ("runtime", Public),
+    ("residual_energy", Public),
+    ("decision_threshold", Public),
+    ("signed_margin", Public),
+    ("window_frames", Public),
+    ("fallback_reason", Public),
     // enhanced_motion, model_status
     ("score", Public),
     ("level", Public),
