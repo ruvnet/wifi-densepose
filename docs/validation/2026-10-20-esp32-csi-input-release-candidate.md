@@ -48,6 +48,14 @@ was flashed. No boot log, sustained CSI capture, packet cadence, OTA recovery,
 or sensing-accuracy validation has been obtained. The C6 cannot independently
 qualify the S3-specific STBC correction on S3 hardware.
 
+A private read-only backup of the first 128 KiB (bootloader, partition map,
+NVS, and OTA selection data) succeeded at 115200 baud. Full 8 MiB reads at
+921600 and 460800 baud failed with corrupt serial data. This is not a complete
+recovery backup. The existing map has two application slots at `0x20000` and
+`0x1f0000`, each `0x1d0000` bytes. Any future flash must preserve this map or
+explicitly migrate it after a complete verified backup. No private backup is
+included in this repository.
+
 ## Remaining release gates
 
 - Finish the target build matrix and inspect binary size and configuration.
