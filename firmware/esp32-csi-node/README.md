@@ -27,11 +27,12 @@ before onboarding. The authenticated remote configuration endpoint validates
 whole requests before writing and retains a durable rollback bank if a write
 or recovery step fails.
 
-The attached ESP32-C6 supplied live CSI transport evidence while running
-0.8.14. It was not flashed with 0.8.15 because a complete flash backup could
-not be obtained. CI builds and host fault-injection tests verify software
-behavior; they do not establish 0.8.15 physical-board qualification or sensing
-accuracy.
+The attached ESP32-C6 booted 0.8.15 from its existing OTA slot after a complete
+read-only flash backup. A 30-second runtime sample received raw CSI, vitals,
+and feature packets with no malformed packets or presence/count contradictions.
+This short transport check does not establish sensing accuracy, long-run
+stability, or the S3-specific STBC behavior. See the
+[candidate validation record](../../docs/validation/2026-10-20-esp32-csi-input-release-candidate.md).
 
 ### Firmware 0.8.14 prerelease: device identity and OTA provisioning
 

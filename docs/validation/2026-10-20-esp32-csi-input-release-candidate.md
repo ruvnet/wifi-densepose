@@ -1,77 +1,64 @@
-# ESP32 CSI input release candidate, 2026-10-20
+# ESP32 CSI input release candidate, updated 2026-10-21
 
-Status: INCOMPLETE. No hardware qualification or release acceptance is claimed.
-Base source: `a1ca023ee` on `origin/main`. Changes cover #2286, the bounded
-timeout and host-traffic mitigation for #2287, and onboarding fix #2302.
+Status: software checks and a short ESP32-C6 boot/transport check passed.
+Full release acceptance remains gated on the latest hosted checks. No sensing
+accuracy or ESP32-S3 physical qualification is claimed.
+
+Candidate source: `f03d5ac06` on `integrate/release-20261017`. Changes cover
+#2286, #2287, #2302, configuration validation and rollback recovery (#2289),
+and the Rust audit/dependency fixes (#2315).
 
 ## Software evidence
 
-MEASURED host-test outcomes with SYNTHETIC RF/device inputs:
+- Firmware `make host_tests` passed under `espressif/idf:v5.4`, including
+  production-code STBC, self-ping, configuration rules, write-through NVS
+  rollback fault injection, onboarding, and OTA-health checks.
+- The rollback regression executes the production HTTP handler with real
+  cJSON and deterministic write-through NVS failure injection. It covers
+  partial writes, failed restore/erase/commit, retained recovery state, write
+  locking, and boot-time rollback.
+- ESP32-C6 built with ESP-IDF 6.0.2. Image size is 1,123,408 bytes
+  (`0x112450`), within the 1,900,544-byte app slot (`0x1d0000`).
+- Local `cargo audit` from `v2/` found zero unignored vulnerabilities. The
+  hosted Rust dependency audit passed on the preceding release head; the
+  corrected current head is running fresh checks.
+- The focused BFLD changelog test passed 5/5 after keeping the existing
+  unreleased BFLD entry ahead of the 0.8.15 release heading.
 
-- The complete firmware `make host_tests` suite passed under
-  `espressif/idf:v5.4`, including the onboarding console regression.
-- `test_edge_stbc.c` includes the production DSP implementation. Ordinary
-  HT20, STBC, and maximum-size payloads advance the processing state; empty
-  input does not. The test passes for both pre-HE and HE budgets.
-- The DSP regression passes address and undefined-behavior sanitizers.
-- `test_self_ping.c` executes the production setup against a synthetic AP and
-  verifies that timeout equals interval and repeated setup is idempotent.
-- Both new regressions fail against the original `origin/main` C sources:
-  STBC does not advance the frame count; ping timeout exceeds its interval.
-- A helper-only UDP test delivered 49 datagrams to an owned local socket at
-  a requested 50 Hz for one second. Public/broadcast destinations and invalid
-  rate, duration, and port inputs were rejected before traffic. This is not
-  an ESP32 CSI measurement.
+## Attached hardware
 
-Reproduce the host checks from `firmware/esp32-csi-node/test`:
+The attached ESP32-C6 revision 0.2 has 8 MB flash. A read-only full flash
+backup of 8,388,608 bytes completed at 115200 baud and is stored outside the
+repository under the user's local qualification directory. No backup or raw
+device data is included in this repository.
 
-```sh
-make host_tests
-cc -std=c99 -fsanitize=address,undefined -g -Istubs -I../main \
-  test_edge_stbc.c stubs/esp_stubs.c -o /tmp/edge-stbc-sanitized -lm
-/tmp/edge-stbc-sanitized
-cc -std=c99 -DCONFIG_SOC_WIFI_HE_SUPPORT=1 -Istubs -I../main \
-  test_edge_stbc.c stubs/esp_stubs.c -o /tmp/edge-stbc-he -lm
-/tmp/edge-stbc-he
-```
+The 0.8.15 application was written to the existing `ota_0` app slot at
+`0x20000`; the partition table and NVS were not changed. esptool verified the
+write. `/ota/status` reported version `0.8.15`, `running_partition=ota_0`, and
+`ota_state=valid` after reboot.
 
-## Hardware boundary
+A 30-second in-memory UDP sample after the update counted 441 raw CSI packets,
+26 vitals packets, and 30 feature packets. Raw packet subcarrier counts were
+256: 199, 64: 237, and 128: 5. The sample had zero short packets, zero
+presence/count contradictions, and zero vitals timestamp reversals. Raw CSI
+and vitals values were not persisted.
 
-MEASURED identification only: the attached UART bridge enumerated as COM11;
-esptool identified an ESP32-C6 revision 0.2 with 8 MB flash. Passive UART
-monitoring and a non-writing onboarding identity request returned no runtime
-lines. The standard C6 build selects native USB serial/JTAG, so an independent
-CP210x UART bridge is not sufficient evidence of console availability.
+An earlier paired 30-second transport check on 0.8.14 recorded 28.97 raw
+packets/s at baseline and 29.60 packets/s while a bounded host UDP traffic
+source ran. This is AP-specific transport evidence, not proof of sensing
+accuracy or a universal minimum rate.
 
-Board form factor and flash-target confirmation remain pending. No candidate
-was flashed. No boot log, sustained CSI capture, packet cadence, OTA recovery,
-or sensing-accuracy validation has been obtained. The C6 cannot independently
-qualify the S3-specific STBC correction on S3 hardware.
+The C6 check does not qualify the S3-specific STBC correction. It was a short
+boot/stream check, not a five-minute stability run or an accuracy test. The
+CP210x UART bridge did not provide the native USB serial/JTAG boot log, so
+physical IDF 6 USB onboarding receive behavior remains unverified.
 
-A private read-only backup of the first 128 KiB (bootloader, partition map,
-NVS, and OTA selection data) succeeded at 115200 baud. Full 8 MiB reads at
-921600 and 460800 baud failed with corrupt serial data. This is not a complete
-recovery backup. The existing map has two application slots at `0x20000` and
-`0x1f0000`, each `0x1d0000` bytes. Any future flash must preserve this map or
-explicitly migrate it after a complete verified backup. No private backup is
-included in this repository.
+## Release boundary
 
-## Remaining release gates
-
-- Finish the target build matrix and inspect binary size and configuration.
-- Preserve the attached board's existing firmware, partition map, and NVS
-  privately before any authorized flash; never commit those backups.
-- Capture a candidate boot/runtime log and at least five minutes of actual
-  CSI delivery. Verify callback yield, DSP cadence, edge packets, reset/panic
-  absence, and fail-closed absent-person count behavior.
-- Compare raw and edge delivery with and without bounded LAN UDP traffic.
-- Qualify native USB onboarding on an IDF 6 device; host stubs alone cannot
-  demonstrate that the physical USB RX ring is functioning.
-- Resolve required CI failures. PR #2302's Rust audit artifact reports
-  advisories affecting quinn-proto, rustls, wasmtime, and zip. Do not suppress
-  the audit to make a release green.
-- Review the exact release diff, bump firmware version, and publish only
-  after terminal successful required checks and physical evidence review.
-
-The firmware release workflow currently marks tag builds as prereleases.
-There is no authorization implied here to relabel unqualified targets stable.
+The firmware workflow publishes ESP32 tags as prereleases and states that CI
+and host tests do not establish physical-board qualification or sensing
+accuracy. The release remains a prerelease. The latest hosted run on the
+previous candidate passed firmware matrices, security checks, and audit; one
+workspace test failed because the 0.8.15 changelog heading interrupted an
+existing BFLD unreleased section. That layout is corrected, and current-head
+checks must finish green before merge and publication.
