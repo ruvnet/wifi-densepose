@@ -15307,6 +15307,9 @@ async fn main() {
         // so a client on :8765 can stream signed RuField FieldEvents alongside
         // `/ws/sensing`. Merged with its own FieldState (different state type).
         .merge(rufield_surface::router(field_surface.clone()))
+        // The mobile app's available MAT workspace uses the existing incident
+        // API. Keep it inside the same privacy/auth/host and companion layers.
+        .merge(wifi_densepose_sensing_server::mat_surface::router())
         .layer(axum::middleware::from_fn_with_state(
             privacy_filter::PrivacyFilter::new(args.privacy_mode),
             privacy_filter::redact_json_responses,

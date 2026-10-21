@@ -24,6 +24,8 @@ pub mod http_bind;
 pub mod inference;
 pub mod introspection;
 pub mod matter;
+/// Existing MAT incident API, hosted under the sensing server's security layers.
+pub mod mat_surface;
 pub mod model_format;
 pub mod mqtt;
 pub mod path_safety;
