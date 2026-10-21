@@ -1,0 +1,23 @@
+# cargo-audit configuration, read by `cargo audit --file v2/Cargo.lock` (run from the repo root).
+#
+# The zip crate advisories below are patched in zip >= 9.0.0, but every crates.io
+# release of the dependent crates currently in v2/Cargo.lock caps zip below 9:
+#   - candle-core 0.9.2 (latest 0.11.0) requires zip ^7.2.0 (latest: ^8.6.0)
+#   - candle-core 0.4.1 requires zip ^0.6
+#   - tch 0.24.0 (latest 0.26.0) requires zip ^0.6
+#   - ndarray-npy 0.10.0 (latest) requires zip ^6
+# Since no compatible dependent release allows zip >= 9.0.0 yet, these are
+# ignored until upstream releases dependents compatible with zip 9. Re-visit
+# when candle-core/tch/ndarray-npy publish releases requiring zip >= 9.0.0.
+#
+# RUSTSEC-2026-0367: SUID/SGID bit preservation on extract — only matters when
+#   extracting untrusted archives with elevated privileges.
+# RUSTSEC-2026-0368: symlink target escape on extract of untrusted archives.
+# RUSTSEC-2026-0369: permissions applied through symlinks on extract.
+
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+]
