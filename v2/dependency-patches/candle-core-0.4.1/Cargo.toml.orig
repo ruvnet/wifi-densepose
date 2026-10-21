@@ -1,0 +1,50 @@
+[package]
+name = "candle-core"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+readme = "README.md"
+
+[dependencies]
+accelerate-src = { workspace = true, optional = true }
+byteorder = { workspace = true }
+candle-kernels = { workspace = true, optional = true }
+candle-metal-kernels = { workspace = true, optional = true }
+metal = { workspace = true, optional = true}
+cudarc = { workspace = true, optional = true }
+gemm = { workspace = true }
+half = { workspace = true }
+intel-mkl-src = { workspace = true, optional = true }
+libc = { workspace = true, optional = true }
+memmap2 = { workspace = true }
+num-traits = { workspace = true }
+num_cpus = { workspace = true }
+rand = { workspace = true }
+rand_distr = { workspace = true }
+rayon = { workspace = true }
+safetensors = { workspace = true }
+thiserror = { workspace = true }
+yoke = { workspace = true }
+zip = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+criterion = { workspace = true }
+
+
+[features]
+default = []
+cuda = ["cudarc", "dep:candle-kernels"]
+cudnn = ["cuda", "cudarc/cudnn"]
+mkl = ["dep:libc", "dep:intel-mkl-src"]
+accelerate = ["dep:libc", "dep:accelerate-src"]
+metal = ["dep:metal", "dep:candle-metal-kernels"]
+
+[[bench]]
+name = "bench_main"
+harness = false

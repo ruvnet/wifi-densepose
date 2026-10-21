@@ -1,0 +1,13 @@
+[package]
+name = "ruview-candle04-zip9-compat-test"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Isolated because the legacy optional backend predates half's rand0.9
+# migration; the main workspace's burn backend requires half2.7.
+[workspace]
+[dependencies]
+candle-core = { path = "../candle-core-0.4.1", default-features = false }
+half = "=2.3.1"
+tempfile = "3"
