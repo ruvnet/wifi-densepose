@@ -15307,9 +15307,6 @@ async fn main() {
         // so a client on :8765 can stream signed RuField FieldEvents alongside
         // `/ws/sensing`. Merged with its own FieldState (different state type).
         .merge(rufield_surface::router(field_surface.clone()))
-        // The mobile app's available MAT workspace uses the existing incident
-        // API. Keep it inside the same privacy/auth/host and companion layers.
-        .merge(wifi_densepose_sensing_server::mat_surface::router())
         .layer(axum::middleware::from_fn_with_state(
             privacy_filter::PrivacyFilter::new(args.privacy_mode),
             privacy_filter::redact_json_responses,
@@ -15503,6 +15500,9 @@ async fn main() {
         // Merged AFTER `.with_state` (so http_app is already `Router<()>` and
         // can absorb the field router's own `FieldState`).
         .merge(rufield_surface::router(field_surface.clone()))
+        // MAT REST and WebSocket share one incident state on the HTTP origin
+        // used by the app, inside privacy/auth/host and companion protection.
+        .merge(wifi_densepose_sensing_server::mat_surface::router())
         // #2094: strip biometrics from every JSON response in privacy mode
         // (no-op otherwise). Applied after the merge so it covers every route.
         .layer(axum::middleware::from_fn_with_state(
