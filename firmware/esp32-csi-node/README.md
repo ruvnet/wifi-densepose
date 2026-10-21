@@ -19,7 +19,21 @@ This firmware captures WiFi Channel State Information (CSI) from an ESP32-S3 (pr
 > | **Fall detection** | Phase acceleration threshold | Configurable sensitivity |
 > | **Programmable sensing** | WASM modules loaded over HTTP | Hot-swap, no reflash |
 
-## Firmware 0.8.14 prerelease: device identity and OTA provisioning
+## Firmware 0.8.15 prerelease: CSI reliability and recoverable configuration
+
+Version 0.8.15 preserves bounded CSI input for ESP32-S3 STBC frames, caps
+gateway ping waits to one probe interval, and prepares IDF 6 USB serial/JTAG
+before onboarding. The authenticated remote configuration endpoint validates
+whole requests before writing and retains a durable rollback bank if a write
+or recovery step fails.
+
+The attached ESP32-C6 supplied live CSI transport evidence while running
+0.8.14. It was not flashed with 0.8.15 because a complete flash backup could
+not be obtained. CI builds and host fault-injection tests verify software
+behavior; they do not establish 0.8.15 physical-board qualification or sensing
+accuracy.
+
+### Firmware 0.8.14 prerelease: device identity and OTA provisioning
 
 Version 0.8.14 fixes the six-byte base-MAC input used for USB onboarding on
 ESP32-C6, where the previous API wrote an eight-byte EUI-64 into that buffer.

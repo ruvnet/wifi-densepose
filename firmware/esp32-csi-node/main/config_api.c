@@ -70,12 +70,16 @@ static volatile bool s_pending_reboot = false;
  * literal string "(set)" and lock the node off the network permanently -- the
  * exact failure the trial exists to prevent.
  */
-static cJSON *read_key(nvs_handle_t h, const cfg_key_t *k, bool redact)
+static cJSON *read_key(nvs_handle_t h, const cfg_key_t *k, bool redact,
+                       esp_err_t *read_status)
 {
+    if (read_status) *read_status = ESP_OK;
     if (k->type == T_STR) {
         char buf[96];
         size_t len = sizeof(buf);
-        if (nvs_get_str(h, k->nvs, buf, &len) != ESP_OK) return cJSON_CreateNull();
+        esp_err_t e = nvs_get_str(h, k->nvs, buf, &len);
+        if (read_status) *read_status = e;
+        if (e != ESP_OK) return cJSON_CreateNull();
         /* Never hand back key material, even to an authenticated caller: it
          * would end up in logs and terminal scrollback. Presence only. */
         if (redact && strcmp(k->json, "wifi_password") == 0) {
@@ -86,12 +90,13 @@ static cJSON *read_key(nvs_handle_t h, const cfg_key_t *k, bool redact)
     uint32_t v = 0;
     esp_err_t e;
     if (k->type == T_U8) {
-        uint8_t x; e = nvs_get_u8(h, k->nvs, &x); v = x;
+        uint8_t x = 0; e = nvs_get_u8(h, k->nvs, &x); v = x;
     } else if (k->type == T_U16) {
-        uint16_t x; e = nvs_get_u16(h, k->nvs, &x); v = x;
+        uint16_t x = 0; e = nvs_get_u16(h, k->nvs, &x); v = x;
     } else {
         e = nvs_get_u32(h, k->nvs, &v);
     }
+    if (read_status) *read_status = e;
     if (e != ESP_OK) return cJSON_CreateNull();
     if (k->scale > 0) return cJSON_CreateNumber((double)v / k->scale);
     return cJSON_CreateNumber((double)v);
@@ -192,8 +197,8 @@ static uint32_t banked_number(const cfg_key_t *k, const cJSON *v)
 static bool restore_key(nvs_handle_t h, const cfg_key_t *k, const cJSON *v)
 {
     if (cJSON_IsNull(v)) {
-        nvs_erase_key(h, k->nvs);       /* absence is a state worth restoring */
-        return true;
+        esp_err_t e = nvs_erase_key(h, k->nvs);
+        return e == ESP_OK || e == ESP_ERR_NVS_NOT_FOUND;
     }
     char err[64];
     return store_key(h, k, v, banked_number(k, v), err, sizeof(err));
@@ -212,11 +217,31 @@ static bool restore_bank(nvs_handle_t h, const cJSON *bank)
     cJSON *it = NULL;
     cJSON_ArrayForEach(it, bank) {
         const cfg_key_t *k = config_find_key(it->string);
-        if (k && !restore_key(h, k, it)) {
-            ESP_LOGE(TAG, "could not restore %s", k->json);
+        if (!k || !restore_key(h, k, it)) {
+            ESP_LOGE(TAG, "could not restore banked key");
             ok = false;
         }
     }
+    return ok;
+}
+
+/* Recovery metadata is discarded only after the previous state is durable. */
+static bool clear_recovery_bank(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(TRIAL_NS, NVS_READWRITE, &h) != ESP_OK) return false;
+    bool ok = nvs_erase_all(h) == ESP_OK && nvs_commit(h) == ESP_OK;
+    nvs_close(h);
+    return ok;
+}
+
+static bool finish_recovery_bank(bool needs_trial)
+{
+    if (!needs_trial) return clear_recovery_bank();
+    nvs_handle_t h;
+    if (nvs_open(TRIAL_NS, NVS_READWRITE, &h) != ESP_OK) return false;
+    bool ok = nvs_set_u8(h, "rollback", 0) == ESP_OK && nvs_commit(h) == ESP_OK;
+    nvs_close(h);
     return ok;
 }
 
@@ -226,49 +251,32 @@ static bool restore_bank(nvs_handle_t h, const cJSON *bank)
 static void trial_revert(void *arg)
 {
     (void)arg;
-    ESP_LOGE(TAG, "config trial FAILED to associate -- reverting");
-
-    nvs_handle_t t, c;
-    if (nvs_open(TRIAL_NS, NVS_READWRITE, &t) != ESP_OK) {
-        /* Cannot read the bank, so cannot revert. Rebooting would spin
-         * forever; stay up so the node is at least diagnosable if it is
-         * somehow still reachable. */
-        ESP_LOGE(TAG, "trial namespace unreadable; cannot revert");
+    s_pending_reboot = true;
+    nvs_handle_t t;
+    if (nvs_open(TRIAL_NS, NVS_READONLY, &t) != ESP_OK) {
+        ESP_LOGE(TAG, "recovery bank unreadable; retaining write lock");
         return;
     }
-
     size_t len = 0;
     char *json = NULL;
-    if (nvs_get_str(t, "bank", NULL, &len) == ESP_OK && len > 1 &&
-        (json = malloc(len)) != NULL &&
-        nvs_get_str(t, "bank", json, &len) == ESP_OK &&
-        nvs_open(CFG_NS, NVS_READWRITE, &c) == ESP_OK) {
-
-        cJSON *root = cJSON_Parse(json);
-        if (root) {
-            cJSON *it = NULL;
-            cJSON_ArrayForEach(it, root) {
-                const cfg_key_t *k = config_find_key(it->string);
-                if (k) {
-                    restore_key(c, k, it);
-                    ESP_LOGW(TAG, "reverted %s", k->json);
-                }
-            }
-            cJSON_Delete(root);
-        }
-        nvs_commit(c);
+    bool loaded = nvs_get_str(t, "bank", NULL, &len) == ESP_OK && len > 1 &&
+                  len <= BODY_MAX * 2 && (json = malloc(len)) != NULL &&
+                  nvs_get_str(t, "bank", json, &len) == ESP_OK;
+    nvs_close(t);
+    cJSON *bank = loaded ? cJSON_Parse(json) : NULL;
+    free(json);
+    bool restored = false;
+    nvs_handle_t c;
+    if (cJSON_IsObject(bank) && nvs_open(CFG_NS, NVS_READWRITE, &c) == ESP_OK) {
+        restored = restore_bank(c, bank) && nvs_commit(c) == ESP_OK;
         nvs_close(c);
     }
-    free(json);
-
-    /* Clear the trial BEFORE rebooting: if the restored config is itself
-     * broken we must not loop reverting forever. One attempt, then the node
-     * comes up on the old values and stays there. */
-    nvs_erase_all(t);
-    nvs_commit(t);
-    nvs_close(t);
-
-    ESP_LOGE(TAG, "rebooting onto the previous configuration");
+    cJSON_Delete(bank);
+    if (!restored || !clear_recovery_bank()) {
+        ESP_LOGE(TAG, "recovery failed; keeping bank and write lock for retry");
+        return;
+    }
+    ESP_LOGW(TAG, "previous configuration restored; rebooting");
     esp_restart();
 }
 
@@ -278,10 +286,16 @@ void config_trial_boot_check(void)
     if (nvs_open(TRIAL_NS, NVS_READONLY, &t) != ESP_OK) return;
 
     uint8_t armed = 0;
+    uint8_t rollback = 0;
     uint32_t deadline = TRIAL_DEFAULT;
     nvs_get_u8(t, "armed", &armed);
+    nvs_get_u8(t, "rollback", &rollback);
     nvs_get_u32(t, "deadline", &deadline);
     nvs_close(t);
+    if (rollback) {
+        trial_revert(NULL);
+        return;
+    }
     if (!armed) return;
 
     s_trial_armed = true;
@@ -302,7 +316,11 @@ void config_trial_boot_check(void)
 
 void config_trial_notify_connected(void)
 {
-    if (!s_trial_armed) return;
+    if (!s_trial_armed || s_pending_reboot) return;
+    if (!clear_recovery_bank()) {
+        ESP_LOGE(TAG, "could not commit trial; preserving recovery state");
+        return;
+    }
     s_trial_armed = false;
 
     if (s_revert_timer) {
@@ -311,12 +329,6 @@ void config_trial_notify_connected(void)
         s_revert_timer = NULL;
     }
 
-    nvs_handle_t t;
-    if (nvs_open(TRIAL_NS, NVS_READWRITE, &t) == ESP_OK) {
-        nvs_erase_all(t);
-        nvs_commit(t);
-        nvs_close(t);
-    }
     ESP_LOGI(TAG, "config trial COMMITTED -- association proved on new settings");
 }
 
@@ -351,7 +363,7 @@ static esp_err_t config_get_handler(httpd_req_t *req)
     cJSON *vals = cJSON_AddObjectToObject(root, "config");
     if (nvs_open(CFG_NS, NVS_READONLY, &h) == ESP_OK) {
         for (size_t i = 0; i < CONFIG_KEY_COUNT; i++) {
-            cJSON_AddItemToObject(vals, CONFIG_KEYS[i].json, read_key(h, &CONFIG_KEYS[i], true));
+            cJSON_AddItemToObject(vals, CONFIG_KEYS[i].json, read_key(h, &CONFIG_KEYS[i], true, NULL));
         }
         nvs_close(h);
     }
@@ -503,7 +515,18 @@ static esp_err_t config_post_handler(httpd_req_t *req)
         cJSON_ArrayForEach(it, root) {
             if (config_is_meta(it->string)) continue;
             const cfg_key_t *k = config_find_key(it->string);
-            cJSON_AddItemToObject(bank, k->json, read_key(ro, k, false));
+            esp_err_t read_status;
+            cJSON *value = read_key(ro, k, false, &read_status);
+            if (!value || (read_status != ESP_OK && read_status != ESP_ERR_NVS_NOT_FOUND) ||
+                !cJSON_AddItemToObject(bank, k->json, value)) {
+                cJSON_Delete(value);
+                nvs_close(ro);
+                cJSON_Delete(root);
+                cJSON_Delete(bank);
+                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                    "Could not snapshot the complete current config");
+                return ESP_FAIL;
+            }
         }
         nvs_close(ro);
     }
@@ -514,14 +537,15 @@ static esp_err_t config_post_handler(httpd_req_t *req)
      * leave the node on unproven settings with nothing to fall back to. Once
      * the bank IS on flash the node can get back to the previous
      * configuration even if everything after this point fails. */
-    if (needs_trial) {
+    {
         char *bj = cJSON_PrintUnformatted(bank);
         nvs_handle_t t;
         bool ok = bj && nvs_open(TRIAL_NS, NVS_READWRITE, &t) == ESP_OK;
         if (ok) {
             ok = nvs_set_str(t, "bank", bj) == ESP_OK &&
                  nvs_set_u32(t, "deadline", deadline) == ESP_OK &&
-                 nvs_set_u8(t, "armed", 1) == ESP_OK &&
+                 nvs_set_u8(t, "rollback", 1) == ESP_OK &&
+                 nvs_set_u8(t, "armed", needs_trial ? 1 : 0) == ESP_OK &&
                  nvs_commit(t) == ESP_OK;
             nvs_close(t);
         }
@@ -545,7 +569,7 @@ static esp_err_t config_post_handler(httpd_req_t *req)
      * 2, and the recovery bank is already on flash. */
     nvs_handle_t rw;
     if (nvs_open(CFG_NS, NVS_READWRITE, &rw) != ESP_OK) {
-        s_pending_reboot = false;
+        s_pending_reboot = !clear_recovery_bank();
         cJSON_Delete(root);
         cJSON_Delete(bank);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "NVS unavailable");
@@ -568,6 +592,7 @@ static esp_err_t config_post_handler(httpd_req_t *req)
     }
     esp_err_t ce = err[0] ? ESP_FAIL : nvs_commit(rw);
     nvs_close(rw);
+    if (ce == ESP_OK && !finish_recovery_bank(needs_trial)) ce = ESP_FAIL;
 
     if (err[0] || ce != ESP_OK) {
         /* A write failed part way through: the node is holding a mix of old
@@ -577,17 +602,14 @@ static esp_err_t config_post_handler(httpd_req_t *req)
         nvs_handle_t r;
         bool restored = false;
         if (nvs_open(CFG_NS, NVS_READWRITE, &r) == ESP_OK) {
-            restored = restore_bank(r, bank);
+            restored = restore_bank(r, bank) && nvs_commit(r) == ESP_OK;
             nvs_close(r);
         }
-        if (needs_trial) {
-            nvs_handle_t t;
-            if (nvs_open(TRIAL_NS, NVS_READWRITE, &t) == ESP_OK) {
-                nvs_erase_all(t);
-                nvs_close(t);
-            }
-        }
-        s_pending_reboot = false;
+        if (restored) restored = clear_recovery_bank();
+        /* A failed restore must retain the persisted bank and write lock.
+         * The rollback marker makes the next boot retry recovery BEFORE WiFi,
+         * instead of promoting a partially written config on association. */
+        s_pending_reboot = !restored;
         cJSON_Delete(root);
         cJSON_Delete(bank);
         if (!restored) {
@@ -655,12 +677,15 @@ static esp_err_t config_post_handler(httpd_req_t *req)
         const esp_timer_create_args_t a = { .callback = reboot_soon, .name = "cfg_boot" };
         esp_timer_handle_t th;
         if (esp_timer_create(&a, &th) == ESP_OK) {
-            esp_timer_start_once(th, 3000000ULL);
+            if (esp_timer_start_once(th, 3000000ULL) != ESP_OK) {
+                esp_timer_delete(th);
+                ESP_LOGE(TAG, "reboot timer failed; retaining write lock until reset");
+            }
         } else {
             /* No reboot means no pending window. Leaving the lock set would
              * refuse every later write for the life of the process. */
             ESP_LOGE(TAG, "could not schedule the reboot; clearing the pending lock");
-            s_pending_reboot = false;
+            /* Keep the bank protected from a second request until reset. */
         }
     } else {
         /* Applied immediately, nothing in flight. */

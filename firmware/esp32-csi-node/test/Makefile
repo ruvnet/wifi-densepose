@@ -38,6 +38,7 @@ CFLAGS   = -fsanitize=fuzzer,address,undefined -g -O1 \
 
 STUBS_SRC = stubs/esp_stubs.c
 MAIN_DIR  = ../main
+CJSON_DIR ?= $(if $(wildcard $(IDF_PATH)/components/json/cJSON/cJSON.h),$(IDF_PATH)/components/json/cJSON,$(MAIN_DIR)/../managed_components/espressif__cjson/cJSON)
 
 # GNU ld and Apple's ld spell dead section elimination differently.
 # Keep the host sanitation test portable across the Linux CI runner and macOS.
@@ -165,6 +166,17 @@ test_config_rules: test_config_rules.c $(MAIN_DIR)/config_rules.c $(MAIN_DIR)/co
 run_config_rules: test_config_rules
 	./test_config_rules
 
+# --- Configuration API write-through rollback and boot recovery ---
+# Compiles the production handler against deterministic, write-through NVS
+# stubs and injects each failure between partial writes and restoration.
+test_config_recovery: test_config_recovery.c $(MAIN_DIR)/config_api.c $(MAIN_DIR)/config_rules.c $(MAIN_DIR)/config_limits.h $(CJSON_DIR)/cJSON.h $(CJSON_DIR)/cJSON.c $(wildcard config_stubs/*)
+	cc -std=c99 -Wall -Wextra -Wno-unused-variable -Wno-unused-parameter -Werror \
+		-Iconfig_stubs -Istubs -I$(MAIN_DIR) -I$(CJSON_DIR) \
+		test_config_recovery.c $(MAIN_DIR)/config_rules.c $(CJSON_DIR)/cJSON.c -lm -o $@
+
+run_config_recovery: test_config_recovery
+	./test_config_recovery
+
 run_delivery_contract:
 	python3 test_delivery_contract.py
 
@@ -183,8 +195,8 @@ run_self_ping: test_self_ping
 
 host_tests: run_self_ping run_edge_stbc run_adr110 run_vitals run_mmwave_detect run_thermal run_csi_sanitize \
             run_c6_antenna run_serial_onboarding run_onboarding_identity run_onboarding_console run_delivery_contract run_ota_health \
-            run_config_rules
-	@echo "Host tests passed (firmware contracts, DSP, configuration, onboarding and OTA health)"
+            run_config_rules run_config_recovery
+	@echo "Host tests passed (firmware contracts, DSP, configuration recovery, onboarding and OTA health)"
 
 # --- Serialize fuzzer ---
 # Tests csi_serialize_frame() with random wifi_csi_info_t inputs.
@@ -222,7 +234,5 @@ run_all: run_serialize run_edge run_nvs
 clean:
 	rm -f fuzz_serialize fuzz_edge fuzz_nvs test_adr110 test_vitals test_mmwave_detect \
 		test_thermal test_csi_sanitize test_c6_antenna test_serial_onboarding \
-		test_ota_health test_onboarding_identity
-	rm -f test_edge_stbc test_self_ping
-		test_ota_health test_onboarding_identity test_config_rules
+		test_ota_health test_onboarding_identity test_config_rules test_edge_stbc test_self_ping test_config_recovery
 	rm -rf corpus_serialize/ corpus_edge/ corpus_nvs/

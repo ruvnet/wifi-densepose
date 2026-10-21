@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.15-esp32] - 2026-10-21
+
 ### ESP32 CSI input and onboarding corrections
 
 - Process the bounded prefix of S3 STBC CSI frames instead of discarding the
