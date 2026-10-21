@@ -13,13 +13,17 @@
 
 #include <stdint.h>
 
+#include "config_limits.h"
+
 /** Maximum lengths for NVS string fields. */
 #define NVS_CFG_SSID_MAX     33
 #define NVS_CFG_PASS_MAX     65
 #define NVS_CFG_IP_MAX       16
 
-/** Maximum channels in the hop list (must match CSI_HOP_CHANNELS_MAX). */
-#define NVS_CFG_HOP_MAX      6
+/** Maximum channels in the hop list (must match CSI_HOP_CHANNELS_MAX).
+ *  Derived from the shared limit so the loader and the configuration API can
+ *  never disagree about how many channels the node may hop over. */
+#define NVS_CFG_HOP_MAX      CFG_LIMIT_HOP_COUNT_MAX
 
 /** Runtime configuration loaded from NVS or Kconfig defaults. */
 typedef struct {
