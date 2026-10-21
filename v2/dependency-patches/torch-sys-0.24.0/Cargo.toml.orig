@@ -1,0 +1,32 @@
+[package]
+name = "torch-sys"
+version = "0.24.0"
+authors = ["Laurent Mazare <lmazare@gmail.com>"]
+edition = "2021"
+build = "build.rs"
+links = "tch"
+
+description = "Low-level FFI bindings for the PyTorch C++ api (libtorch)."
+repository = "https://github.com/LaurentMazare/tch-rs"
+keywords = ["pytorch", "ffi", "deep-learning", "machine-learning"]
+categories = ["external-ffi-bindings", "science"]
+license = "MIT/Apache-2.0"
+
+[dependencies]
+libc = "0.2.0"
+
+[build-dependencies]
+anyhow = "^1.0.60"
+cc = "1.2"
+ureq = { version = "2.6", optional = true, features = ["json"] }
+serde_json = { version = "1.0", optional = true }
+serde = { version = "1.0", optional = true, features = ["derive"] }
+zip = "0.6"
+
+[features]
+download-libtorch = ["ureq", "serde", "serde_json"]
+doc-only = []
+python-extension = []
+
+[package.metadata.docs.rs]
+features = [ "doc-only" ]
