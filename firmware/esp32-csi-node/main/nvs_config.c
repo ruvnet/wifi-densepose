@@ -9,10 +9,18 @@
 #include "nvs_config.h"
 
 #include <string.h>
+#include "csi_collector.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "sdkconfig.h"
+
+/* The hop list holds CSI_HOP_CHANNELS_MAX channels, so the loader cannot
+ * accept a hop count the list cannot hold -- and the configuration API must
+ * not accept one either. The header used to say "must match"; now it is
+ * enforced at compile time. */
+_Static_assert(CSI_HOP_CHANNELS_MAX == CFG_LIMIT_HOP_COUNT_MAX,
+               "the hop limit must match the channel list size");
 
 static const char *TAG = "nvs_config";
 
@@ -220,7 +228,8 @@ void nvs_config_load(nvs_config_t *cfg)
 
     uint16_t vital_win_val;
     if (nvs_get_u16(handle, "vital_win", &vital_win_val) == ESP_OK) {
-        if (vital_win_val >= 32 && vital_win_val <= 256) {
+        if (vital_win_val >= CFG_LIMIT_VITAL_WINDOW_MIN &&
+            vital_win_val <= CFG_LIMIT_VITAL_WINDOW_MAX) {
             cfg->vital_window = vital_win_val;
             ESP_LOGI(TAG, "NVS override: vital_window=%u", cfg->vital_window);
         }
@@ -236,7 +245,7 @@ void nvs_config_load(nvs_config_t *cfg)
 
     uint8_t topk_val;
     if (nvs_get_u8(handle, "subk_count", &topk_val) == ESP_OK) {
-        if (topk_val >= 1 && topk_val <= 32) {
+        if (topk_val >= CFG_LIMIT_TOP_K_MIN && topk_val <= CFG_LIMIT_TOP_K_MAX) {
             cfg->top_k_count = topk_val;
             ESP_LOGI(TAG, "NVS override: top_k_count=%u", (unsigned)cfg->top_k_count);
         }

@@ -10,6 +10,7 @@
 #include "cJSON.h"
 #include "ota_update.h"
 #include "nvs_config.h"
+#include "config_rules.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -31,90 +32,33 @@ static esp_timer_handle_t s_reassoc_timer;
 #define TRIAL_MAX     900
 #define BODY_MAX      2048
 
-typedef enum { T_STR, T_U8, T_U16, T_U32 } cfg_type_t;
-
-/**
- * The writable surface.
- *
- * `nvs` MUST match the key nvs_config_load() reads, and nothing enforces that
- * -- a typo here writes a key nobody loads. The GET handler exists partly as
- * the check: it reads back through the same keys, so a setting that did not
- * take is visible immediately rather than silently ignored.
- *
- * `scale` handles the thresholds nvs_config.c stores as fixed point (u16 of
- * value*1000) while exposing a float; 0 means the value passes through.
- *
- * `assoc` marks the keys that can orphan a node, and is the ONLY thing that
- * decides whether a change goes through the trial path.
- */
-typedef struct {
-    const char *json;
-    const char *nvs;
-    cfg_type_t  type;
-    uint32_t    lo, hi;
-    size_t      maxlen;
-    float       scale;
-    bool        assoc;
-} cfg_key_t;
-
-static const cfg_key_t KEYS[] = {
-    /* json                 nvs             type    lo    hi     len  scale  assoc */
-    { "wifi_ssid",          "ssid",         T_STR,   0,     0,    32,   0,   true  },
-    { "wifi_password",      "password",     T_STR,   0,     0,    64,   0,   true  },
-    { "channel_hop_count",  "hop_count",    T_U8,    1,    14,     0,   0,   true  },
-    { "dwell_ms",           "dwell_ms",     T_U32,  10, 60000,     0,   0,   true  },
-    { "csi_channel",        "csi_channel",  T_U8,    0,    14,     0,   0,   true  },
-
-    { "target_ip",          "target_ip",    T_STR,   0,     0,    16,   0,   false },
-    { "target_port",        "target_port",  T_U16,   1, 65535,     0,   0,   false },
-    { "node_id",            "node_id",      T_U8,    0,   254,     0,   0,   false },
-    { "tdm_slot_index",     "tdm_slot",     T_U8,    0,    63,     0,   0,   false },
-    { "tdm_node_count",     "tdm_nodes",    T_U8,    1,    64,     0,   0,   false },
-    { "beacon_period_ms",   "beacon_ms",    T_U16,   0, 10000,     0,   0,   false },
-    { "edge_tier",          "edge_tier",    T_U8,    0,     2,     0,   0,   false },
-    { "presence_thresh",    "pres_thresh",  T_U16,   0, 65535,     0, 1000,  false },
-    { "fall_thresh",        "fall_thresh",  T_U16,   0, 65535,     0, 1000,  false },
-    { "vital_window",       "vital_win",    T_U16,   8,  4096,     0,   0,   false },
-    { "vital_interval_ms",  "vital_int",    T_U16, 100, 60000,     0,   0,   false },
-    { "top_k_count",        "subk_count",   T_U8,    1,    64,     0,   0,   false },
-    { "power_duty",         "power_duty",   T_U8,   10,   100,     0,   0,   false },
-    { "zone_name",          "zone_name",    T_STR,   0,     0,    16,   0,   false },
-    { "swarm_heartbeat_sec","swarm_hb",     T_U16,   1, 65535,     0,   0,   false },
-    { "swarm_ingest_sec",   "swarm_ingest", T_U16,   1, 65535,     0,   0,   false },
-    { "led_mode",           "led_mode",     T_U8,    0,     2,     0,   0,   false },
-    { "led_brightness",     "led_bright",   T_U8,    0,   100,     0,   0,   false },
-};
-#define NKEYS (sizeof(KEYS) / sizeof(KEYS[0]))
-
-/* Body fields that control the request rather than naming a stored parameter.
- * They are not in KEYS, so every pass over the body must skip them. */
-/**
- * Parameters the running firmware re-reads every cycle, so a change takes
- * effect with no restart. Everything else is consumed once during init, which
- * is why a plain config push reboots by default.
- */
-static bool is_live(const char *name)
-{
-    return strcmp(name, "led_mode") == 0 ||
-           strcmp(name, "led_brightness") == 0;
-}
-
-static bool is_meta(const char *name)
-{
-    return strcmp(name, "trial_seconds") == 0 ||
-           strcmp(name, "reboot") == 0;
-}
+/* The writable surface, the value rules and the "is this field live" test
+ * live in config_rules.c, so the host test can pin them without a device. */
 
 static esp_timer_handle_t s_revert_timer = NULL;
+
+/**
+ * A boot trial is pending: the node came up on settings nobody has proved and
+ * will revert them unless it associates. Set by config_trial_boot_check() and
+ * cleared by config_trial_notify_connected() when the association proves the
+ * new settings.
+ */
 static bool s_trial_armed = false;
 
-static const cfg_key_t *find_key(const char *json)
-{
-    for (size_t i = 0; i < NKEYS; i++) {
-        if (strcmp(KEYS[i].json, json) == 0) return &KEYS[i];
-    }
-    return NULL;
-}
+/**
+ * A change has been accepted and the node is about to reboot onto it.
+ *
+ * This is deliberately NOT s_trial_armed. The boot trial is about settings
+ * that are already stored; this is about a request that was just accepted and
+ * has not been rebooted into yet. They must stay separate because an
+ * association event on the OLD running configuration calls
+ * config_trial_notify_connected(), which clears s_trial_armed and erases the
+ * trial bank. If the pending state rode on s_trial_armed, that event would
+ * unlock the API during the three seconds before the reboot, and the second
+ * request would bank the FIRST request's unproven settings as the fallback --
+ * so a revert would restore settings never shown to work.
+ */
+static volatile bool s_pending_reboot = false;
 
 /* ---------------------------------------------------------------- reads --- */
 
@@ -156,53 +100,124 @@ static cJSON *read_key(nvs_handle_t h, const cfg_key_t *k, bool redact)
 /* --------------------------------------------------------------- writes --- */
 
 /**
- * Validate and stage one value. Returns false with `err` set on a bad value.
- * Nothing is committed here; the caller commits once the whole body validates,
- * so a body with one bad field changes nothing at all.
+ * Stage one value.
+ *
+ * The value MUST already have been accepted by config_validate_value(): this
+ * function only stores. Splitting the two is the whole point -- see the
+ * handler below, where every field is validated before any field is written.
+ *
+ * `num` is the integer to store, already scaled and rounded. It is ignored
+ * for T_STR, whose text comes from `v`.
  */
-static bool write_key(nvs_handle_t h, const cfg_key_t *k, const cJSON *v,
-                      char *err, size_t errlen)
+static bool store_key(nvs_handle_t h, const cfg_key_t *k, const cJSON *v,
+                      uint32_t num, char *err, size_t errlen)
 {
     if (k->type == T_STR) {
         if (!cJSON_IsString(v)) {
             snprintf(err, errlen, "%s must be a string", k->json);
             return false;
         }
-        if (strlen(v->valuestring) >= k->maxlen) {
-            snprintf(err, errlen, "%s exceeds %u chars", k->json,
-                     (unsigned)(k->maxlen - 1));
+        if (nvs_set_str(h, k->nvs, v->valuestring) != ESP_OK) {
+            snprintf(err, errlen, "could not write %s", k->json);
             return false;
         }
-        return nvs_set_str(h, k->nvs, v->valuestring) == ESP_OK;
+        return true;
     }
 
-    if (!cJSON_IsNumber(v)) {
-        snprintf(err, errlen, "%s must be a number", k->json);
+    esp_err_t e;
+    if (k->type == T_U8)       e = nvs_set_u8(h, k->nvs, (uint8_t)num);
+    else if (k->type == T_U16) e = nvs_set_u16(h, k->nvs, (uint16_t)num);
+    else                       e = nvs_set_u32(h, k->nvs, num);
+    if (e != ESP_OK) {
+        snprintf(err, errlen, "could not write %s", k->json);
         return false;
     }
+    return true;
+}
+
+/**
+ * Decode a cJSON value into the shape the rules work with.
+ *
+ * A field the body carries as JSON null is treated as absent: the rules
+ * reject it, because "unset" is expressed by omitting the key.
+ */
+static void decode_value(const cJSON *v, cfg_value_t *out)
+{
+    out->kind = CFG_VAL_NONE;
+    out->str = NULL;
+    out->num = 0.0;
+    if (!v) return;
+    if (cJSON_IsString(v)) {
+        out->kind = CFG_VAL_STR;
+        out->str = v->valuestring;
+    } else if (cJSON_IsNumber(v)) {
+        out->kind = CFG_VAL_NUM;
+        out->num = v->valuedouble;
+    }
+}
+
+/**
+ * Validate one field of a request without storing anything.
+ *
+ * Returns false with `err` set on a bad value. `scaled` receives the integer
+ * that would be stored.
+ */
+static bool validate_field(const cfg_key_t *k, const cJSON *v, uint32_t *scaled,
+                            char *err, size_t errlen)
+{
+    cfg_value_t val;
+    decode_value(v, &val);
+    return config_validate_value(k, &val, scaled, err, errlen);
+}
+
+/**
+ * The integer to store for a banked value.
+ *
+ * The bank holds a value exactly as it was read from NVS, so it is in range
+ * for the key's type -- but it may be OUTSIDE the range the API accepts
+ * today (an older firmware wrote vital_window=4096, which the loader
+ * ignores). A revert has to put back exactly what was there, so it stores the
+ * value as read and never re-validates it against the current limits.
+ */
+static uint32_t banked_number(const cfg_key_t *k, const cJSON *v)
+{
     double d = v->valuedouble;
     if (k->scale > 0) d *= k->scale;
-    if (d < 0) d = 0;
-    uint32_t val = (uint32_t)(d + 0.5);
-    if (val < k->lo || val > k->hi) {
-        snprintf(err, errlen, "%s out of range %lu..%lu", k->json,
-                 (unsigned long)k->lo, (unsigned long)k->hi);
-        return false;
-    }
-    if (k->type == T_U8)  return nvs_set_u8(h, k->nvs, (uint8_t)val) == ESP_OK;
-    if (k->type == T_U16) return nvs_set_u16(h, k->nvs, (uint16_t)val) == ESP_OK;
-    return nvs_set_u32(h, k->nvs, val) == ESP_OK;
+    if (!(d >= 0.0)) return 0;                 /* NaN or negative */
+    if (d > 4294967295.0) return 4294967295u;  /* unreachable for a banked value */
+    return (uint32_t)(d + 0.5);
 }
 
 /** Restore one banked value; JSON null means the key was previously unset. */
-static void restore_key(nvs_handle_t h, const cfg_key_t *k, const cJSON *v)
+static bool restore_key(nvs_handle_t h, const cfg_key_t *k, const cJSON *v)
 {
     if (cJSON_IsNull(v)) {
         nvs_erase_key(h, k->nvs);       /* absence is a state worth restoring */
-        return;
+        return true;
     }
     char err[64];
-    write_key(h, k, v, err, sizeof(err));
+    return store_key(h, k, v, banked_number(k, v), err, sizeof(err));
+}
+
+/**
+ * Put every banked value back.
+ *
+ * Used when a write failed part way through: the node is left holding a mix
+ * of old and new values, and the only honest way out is to restore the whole
+ * bank rather than leave it half applied.
+ */
+static bool restore_bank(nvs_handle_t h, const cJSON *bank)
+{
+    bool ok = true;
+    cJSON *it = NULL;
+    cJSON_ArrayForEach(it, bank) {
+        const cfg_key_t *k = config_find_key(it->string);
+        if (k && !restore_key(h, k, it)) {
+            ESP_LOGE(TAG, "could not restore %s", k->json);
+            ok = false;
+        }
+    }
+    return ok;
 }
 
 /* ---------------------------------------------------------------- trial --- */
@@ -233,7 +248,7 @@ static void trial_revert(void *arg)
         if (root) {
             cJSON *it = NULL;
             cJSON_ArrayForEach(it, root) {
-                const cfg_key_t *k = find_key(it->string);
+                const cfg_key_t *k = config_find_key(it->string);
                 if (k) {
                     restore_key(c, k, it);
                     ESP_LOGW(TAG, "reverted %s", k->json);
@@ -335,8 +350,8 @@ static esp_err_t config_get_handler(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     cJSON *vals = cJSON_AddObjectToObject(root, "config");
     if (nvs_open(CFG_NS, NVS_READONLY, &h) == ESP_OK) {
-        for (size_t i = 0; i < NKEYS; i++) {
-            cJSON_AddItemToObject(vals, KEYS[i].json, read_key(h, &KEYS[i], true));
+        for (size_t i = 0; i < CONFIG_KEY_COUNT; i++) {
+            cJSON_AddItemToObject(vals, CONFIG_KEYS[i].json, read_key(h, &CONFIG_KEYS[i], true));
         }
         nvs_close(h);
     }
@@ -344,10 +359,12 @@ static esp_err_t config_get_handler(httpd_req_t *req)
     /* Tell the caller which fields will force a reboot-and-prove cycle, so a
      * tool can warn before sending rather than discovering it afterwards. */
     cJSON *risky = cJSON_AddArrayToObject(root, "requires_trial");
-    for (size_t i = 0; i < NKEYS; i++) {
-        if (KEYS[i].assoc) cJSON_AddItemToArray(risky, cJSON_CreateString(KEYS[i].json));
+    for (size_t i = 0; i < CONFIG_KEY_COUNT; i++) {
+        if (CONFIG_KEYS[i].assoc) cJSON_AddItemToArray(risky, cJSON_CreateString(CONFIG_KEYS[i].json));
     }
     cJSON_AddBoolToObject(root, "trial_pending", s_trial_armed);
+    cJSON_AddBoolToObject(root, "write_blocked",
+                          !config_write_allowed(s_trial_armed, s_pending_reboot));
     cJSON_AddNumberToObject(root, "reassoc_count", s_reassoc_count);
     cJSON_AddNumberToObject(root, "reassoc_last_s_ago",
         s_reassoc_last_us ? (double)((esp_timer_get_time() - s_reassoc_last_us) / 1000000) : -1);
@@ -374,7 +391,7 @@ static esp_err_t config_post_handler(httpd_req_t *req)
                             "Authentication required. Use: Authorization: Bearer <psk>");
         return ESP_FAIL;
     }
-    if (s_trial_armed) {
+    if (!config_write_allowed(s_trial_armed, s_pending_reboot)) {
         /* A second change stacked on an unproven one would bank the UNPROVEN
          * values as the fallback, so a revert would restore settings never
          * shown to work. Refuse until the pending trial resolves. */
@@ -407,14 +424,14 @@ static esp_err_t config_post_handler(httpd_req_t *req)
     char err[96] = {0};
     cJSON *it = NULL;
     cJSON_ArrayForEach(it, root) {
-        if (is_meta(it->string)) continue;
-        const cfg_key_t *k = find_key(it->string);
+        if (config_is_meta(it->string)) continue;
+        const cfg_key_t *k = config_find_key(it->string);
         if (!k) {
             snprintf(err, sizeof(err), "unknown parameter '%s'", it->string);
             break;
         }
         if (k->assoc) needs_trial = true;
-        if (!is_live(k->json)) all_live = false;
+        if (!config_is_live(k->json)) all_live = false;
     }
     if (err[0]) {
         cJSON_Delete(root);
@@ -422,61 +439,82 @@ static esp_err_t config_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    /* Pass 2: bank the CURRENT values before anything is written, reading
-     * through a separate read-only handle so pending writes cannot leak in. */
-    cJSON *bank = NULL;
-    if (needs_trial) {
-        nvs_handle_t ro;
-        bank = cJSON_CreateObject();
-        if (nvs_open(CFG_NS, NVS_READONLY, &ro) == ESP_OK) {
-            cJSON_ArrayForEach(it, root) {
-                if (is_meta(it->string)) continue;
-                const cfg_key_t *k = find_key(it->string);
-                cJSON_AddItemToObject(bank, k->json, read_key(ro, k, false));
-            }
-            nvs_close(ro);
-        }
-    }
-
-    /* Pass 3: stage every write. Nothing is committed yet, so a single bad
-     * value leaves the node exactly as it was. */
-    nvs_handle_t rw;
-    if (nvs_open(CFG_NS, NVS_READWRITE, &rw) != ESP_OK) {
-        cJSON_Delete(root);
-        cJSON_Delete(bank);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "NVS unavailable");
-        return ESP_FAIL;
-    }
-    int changed = 0;
+    /* Pass 2: validate EVERY value before touching storage.
+     *
+     * nvs_set_* writes through to flash in the setter itself. In ESP-IDF 5.4
+     * nvs_open() hands back an NVSHandleSimple, whose setters call
+     * Storage::writeItem() straight away and whose commit() only returns
+     * ESP_OK -- closing the handle does NOT discard what was written. A
+     * request that validated and wrote in the same pass could therefore leave
+     * a REJECTED request half applied: {"wifi_ssid":"wrong-network",
+     * "edge_tier":"invalid"} would answer 400 with the SSID already changed
+     * and no recovery bank armed, so the next reboot could leave the node
+     * unreachable with no way back.
+     *
+     * Validating the whole body first makes that impossible: a body with one
+     * bad field changes nothing at all. */
     cJSON_ArrayForEach(it, root) {
-        if (is_meta(it->string)) continue;
-        const cfg_key_t *k = find_key(it->string);
-        if (!write_key(rw, k, it, err, sizeof(err))) {
-            if (!err[0]) snprintf(err, sizeof(err), "could not write %s", k->json);
+        if (config_is_meta(it->string)) continue;
+        const cfg_key_t *k = config_find_key(it->string);
+        uint32_t num = 0;
+        if (!validate_field(k, it, &num, err, sizeof(err))) {
+            if (!err[0]) snprintf(err, sizeof(err), "invalid value for %s", k->json);
             break;
         }
-        changed++;
     }
     if (err[0]) {
-        nvs_close(rw);                      /* uncommitted writes are discarded */
         cJSON_Delete(root);
-        cJSON_Delete(bank);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, err);
         return ESP_FAIL;
     }
 
     cJSON *rb = cJSON_GetObjectItem(root, "reboot");
     bool reboot = cJSON_IsBool(rb) ? cJSON_IsTrue(rb) : !all_live;
-
-    /* Pass 4: arm the trial BEFORE committing the new config. If the bank
-     * cannot be stored we must not proceed -- committing first would reboot
-     * the node onto unproven settings with nothing to fall back to. */
     uint32_t deadline = TRIAL_DEFAULT;
     if (needs_trial) {
         cJSON *d = cJSON_GetObjectItem(root, "trial_seconds");
         if (cJSON_IsNumber(d) && d->valuedouble >= 30 && d->valuedouble <= TRIAL_MAX) {
             deadline = (uint32_t)d->valuedouble;
         }
+    }
+
+    /* Pass 3: bank the CURRENT values before anything is written, reading
+     * through a separate read-only handle so pending writes cannot leak in.
+     * The bank is always built, not only for a trial: a write that fails part
+     * way through has to be undone, and the bank is what it is undone from. */
+    cJSON *bank = cJSON_CreateObject();
+    if (!bank) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_FAIL;
+    }
+    {
+        nvs_handle_t ro;
+        if (nvs_open(CFG_NS, NVS_READONLY, &ro) != ESP_OK) {
+            /* Without a bank there is nothing to revert to, and a write that
+             * failed half way through could not be undone. Refuse the change
+             * rather than apply one the node could not back out of. */
+            cJSON_Delete(root);
+            cJSON_Delete(bank);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                "Could not read the current config");
+            return ESP_FAIL;
+        }
+        cJSON_ArrayForEach(it, root) {
+            if (config_is_meta(it->string)) continue;
+            const cfg_key_t *k = config_find_key(it->string);
+            cJSON_AddItemToObject(bank, k->json, read_key(ro, k, false));
+        }
+        nvs_close(ro);
+    }
+
+    /* Pass 4: persist the recovery state BEFORE the first live write.
+     *
+     * If the bank cannot be stored we must not proceed: writing first would
+     * leave the node on unproven settings with nothing to fall back to. Once
+     * the bank IS on flash the node can get back to the previous
+     * configuration even if everything after this point fails. */
+    if (needs_trial) {
         char *bj = cJSON_PrintUnformatted(bank);
         nvs_handle_t t;
         bool ok = bj && nvs_open(TRIAL_NS, NVS_READWRITE, &t) == ESP_OK;
@@ -489,7 +527,6 @@ static esp_err_t config_post_handler(httpd_req_t *req)
         }
         free(bj);
         if (!ok) {
-            nvs_close(rw);
             cJSON_Delete(root);
             cJSON_Delete(bank);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
@@ -498,24 +535,83 @@ static esp_err_t config_post_handler(httpd_req_t *req)
         }
     }
 
-    esp_err_t ce = nvs_commit(rw);
+    /* From here the node has a way back, and a change is in flight. Lock the
+     * API for the rest of this request: a second request would bank the
+     * UNPROVEN settings over the good ones, so a revert would restore
+     * settings never shown to work. */
+    s_pending_reboot = true;
+
+    /* Pass 5: write the live values. Every one of them was accepted in pass
+     * 2, and the recovery bank is already on flash. */
+    nvs_handle_t rw;
+    if (nvs_open(CFG_NS, NVS_READWRITE, &rw) != ESP_OK) {
+        s_pending_reboot = false;
+        cJSON_Delete(root);
+        cJSON_Delete(bank);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "NVS unavailable");
+        return ESP_FAIL;
+    }
+    int changed = 0;
+    cJSON_ArrayForEach(it, root) {
+        if (config_is_meta(it->string)) continue;
+        const cfg_key_t *k = config_find_key(it->string);
+        /* Re-validate instead of carrying the value from pass 2: the rules
+         * are cheap and deterministic, and this way the integer that reaches
+         * the flash is the one the rules accepted at write time. */
+        uint32_t num = 0;
+        if (!validate_field(k, it, &num, err, sizeof(err)) ||
+            !store_key(rw, k, it, num, err, sizeof(err))) {
+            if (!err[0]) snprintf(err, sizeof(err), "could not write %s", k->json);
+            break;
+        }
+        changed++;
+    }
+    esp_err_t ce = err[0] ? ESP_FAIL : nvs_commit(rw);
     nvs_close(rw);
 
-    if (ce == ESP_OK) {
-        /* Push live parameters into the running config so they apply now.
-         * Values were range-checked in pass 3, so these are already valid. */
-        cJSON *lm = cJSON_GetObjectItem(root, "led_mode");
-        if (cJSON_IsNumber(lm)) g_nvs_config.led_mode = (uint8_t)lm->valuedouble;
-        cJSON *lb = cJSON_GetObjectItem(root, "led_brightness");
-        if (cJSON_IsNumber(lb)) g_nvs_config.led_brightness = (uint8_t)lb->valuedouble;
+    if (err[0] || ce != ESP_OK) {
+        /* A write failed part way through: the node is holding a mix of old
+         * and new values. Put the whole bank back rather than leave it half
+         * applied, and disarm the trial armed a moment ago. */
+        ESP_LOGE(TAG, "config write failed (%s); restoring the previous config", err);
+        nvs_handle_t r;
+        bool restored = false;
+        if (nvs_open(CFG_NS, NVS_READWRITE, &r) == ESP_OK) {
+            restored = restore_bank(r, bank);
+            nvs_close(r);
+        }
+        if (needs_trial) {
+            nvs_handle_t t;
+            if (nvs_open(TRIAL_NS, NVS_READWRITE, &t) == ESP_OK) {
+                nvs_erase_all(t);
+                nvs_close(t);
+            }
+        }
+        s_pending_reboot = false;
+        cJSON_Delete(root);
+        cJSON_Delete(bank);
+        if (!restored) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                "Write failed and the previous config could not be restored");
+            return ESP_FAIL;
+        }
+        if (ce != ESP_OK && !err[0]) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Commit failed");
+            return ESP_FAIL;
+        }
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, err);
+        return ESP_FAIL;
     }
+
+    /* Push live parameters into the running config so they apply now.
+     * Values were range-checked in pass 2, so these are already valid. */
+    cJSON *lm = cJSON_GetObjectItem(root, "led_mode");
+    if (cJSON_IsNumber(lm)) g_nvs_config.led_mode = (uint8_t)lm->valuedouble;
+    cJSON *lb = cJSON_GetObjectItem(root, "led_brightness");
+    if (cJSON_IsNumber(lb)) g_nvs_config.led_brightness = (uint8_t)lb->valuedouble;
 
     cJSON_Delete(root);
     cJSON_Delete(bank);
-    if (ce != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Commit failed");
-        return ESP_FAIL;
-    }
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddNumberToObject(resp, "changed", changed);
@@ -558,7 +654,17 @@ static esp_err_t config_post_handler(httpd_req_t *req)
          * that is mid-trial. */
         const esp_timer_create_args_t a = { .callback = reboot_soon, .name = "cfg_boot" };
         esp_timer_handle_t th;
-        if (esp_timer_create(&a, &th) == ESP_OK) esp_timer_start_once(th, 3000000ULL);
+        if (esp_timer_create(&a, &th) == ESP_OK) {
+            esp_timer_start_once(th, 3000000ULL);
+        } else {
+            /* No reboot means no pending window. Leaving the lock set would
+             * refuse every later write for the life of the process. */
+            ESP_LOGE(TAG, "could not schedule the reboot; clearing the pending lock");
+            s_pending_reboot = false;
+        }
+    } else {
+        /* Applied immediately, nothing in flight. */
+        s_pending_reboot = false;
     }
     return ESP_OK;
 }
