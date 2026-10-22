@@ -181,7 +181,10 @@ jobs:
       - name: Publish (with provenance)
         run: |
           printf '%s  %s\n' "$PACKAGE_TARBALL_SHA512" "$PACKAGE_TARBALL" | sha512sum --check -
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            export NODE_AUTH_TOKEN="$NPM_TOKEN"
+          fi
           npm publish "$PACKAGE_TARBALL" --provenance --access public --tag "$NPM_DIST_TAG"
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_DIST_TAG: ${{ inputs.dist_tag }}

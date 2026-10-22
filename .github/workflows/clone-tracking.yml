@@ -39,18 +39,27 @@ jobs:
           submodules: recursive
 
       - name: Fetch /traffic/clones + /traffic/views from GitHub
+        id: traffic
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           mkdir -p data
-          gh api repos/${{ github.repository }}/traffic/clones > /tmp/clones.json
-          gh api repos/${{ github.repository }}/traffic/views > /tmp/views.json
-          echo "--- clones rollup ---"
-          jq '{count, uniques, days: (.clones | length)}' /tmp/clones.json
-          echo "--- views rollup ---"
-          jq '{count, uniques, days: (.views | length)}' /tmp/views.json
+
+          if gh api repos/${{ github.repository }}/traffic/clones > /tmp/clones.json &&
+             gh api repos/${{ github.repository }}/traffic/views > /tmp/views.json; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "--- clones rollup ---"
+            jq '{count, uniques, days: (.clones | length)}' /tmp/clones.json
+            echo "--- views rollup ---"
+            jq '{count, uniques, days: (.views | length)}' /tmp/views.json
+          else
+            echo "::warning::GitHub Traffic API is not accessible with the current token; skipping snapshot update."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Append snapshot to data/clone-data.rvf
+        if: steps.traffic.outputs.available == 'true'
         env:
           REPO: ${{ github.repository }}
         run: |
@@ -103,6 +112,7 @@ jobs:
           wc -l "$RVF"
 
       - name: Compute aggregates for the commit summary
+        if: steps.traffic.outputs.available == 'true'
         id: agg
         run: |
           # Count distinct per-day entries across all snapshots so we can
@@ -139,6 +149,7 @@ jobs:
           PY
 
       - name: Commit + push if changed
+        if: steps.traffic.outputs.available == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -149,3 +160,9 @@ jobs:
           git add data/clone-data.rvf
           git commit -m "chore(traffic): clone snapshot — ${{ steps.agg.outputs.clone_days }} days observed → ${{ steps.agg.outputs.clones }} clones, ${{ steps.agg.outputs.view_days }} view-days → ${{ steps.agg.outputs.views }} views"
           git push
+
+      - name: Explain skipped snapshot
+        if: steps.traffic.outputs.available != 'true'
+        run: |
+          echo "Traffic API access is unavailable to this workflow token."
+          echo "No snapshot was appended, and the job exits successfully."

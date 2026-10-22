@@ -292,7 +292,7 @@ jobs:
 
     - name: Upload coverage reports
       continue-on-error: true
-      uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f
+      uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5
       with:
         files: ./coverage.xml
         flags: unittests

@@ -355,7 +355,7 @@ jobs:
             ## Deployment Failure Report
             
             **Environment:** Production
-            **Image Tag:** ${{ needs.pre-deployment.outputs.image_tag }}
+            **Image Tag:** ${process.env.IMAGE_TAG}
             **Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
             
             **Action Required:**

@@ -38,7 +38,7 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "typescript": "^5.4.0",
-    "vitest": "^3.0.0",
+    "vitest": "^5.0.1",
     "@metaharness/darwin": "^0.2.2"
   },
   "engines": {
