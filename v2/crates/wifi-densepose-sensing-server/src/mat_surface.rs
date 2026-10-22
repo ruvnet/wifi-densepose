@@ -186,6 +186,41 @@ mod tests {
                 })
                 .unwrap();
             let domain_survivor = state.get_event(event_id).unwrap().survivors()[0].clone();
+            state
+                .event_store()
+                .append(events::DomainEvent::Detection(
+                    events::DetectionEvent::SurvivorDetected {
+                        survivor_id: domain_survivor.id().clone(),
+                        zone_id: zone_id.clone(),
+                        vital_signs: domain_survivor.vital_signs().latest().unwrap().clone(),
+                        location: None,
+                        timestamp: chrono::Utc::now(),
+                    },
+                ))
+                .unwrap();
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/v1/mat/events/domain")
+                        .header("authorization", "Bearer mat-test-fixture-token")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = to_bytes(response.into_body(), 128 * 1024).await.unwrap();
+            let domain_events: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(domain_events["total"], 1);
+            assert_eq!(domain_events["events"][0]["event_type"], "SurvivorDetected");
+            assert_eq!(domain_events["events"][0].get("details").is_none(), privacy);
+            if !privacy {
+                assert!(domain_events["events"][0]["details"]
+                    .as_str()
+                    .unwrap()
+                    .contains("rate_bpm: 16.0"));
+            }
             let alert = wifi_densepose_mat::alerting::AlertGenerator::new()
                 .generate(&domain_survivor)
                 .unwrap();

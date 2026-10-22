@@ -16,7 +16,8 @@
 //! removed, not nulled, so a client can't tell a suppressed value from one
 //! the server never had. MAT alert messages are also removed because their
 //! generated prose embeds literal breathing and heart rates. Structured alert
-//! identity, status, triage and recommended action remain available.
+//! identity, status, triage and recommended action remain available. MAT
+//! domain-event Debug details are withheld for the same reason; type/time stay.
 //!
 //! The filter fails closed: a frame or JSON body that can't be parsed is
 //! dropped (WebSocket, recording) or replaced with a 500 (REST) rather than
@@ -82,6 +83,11 @@ pub fn redact_value(value: &mut serde_json::Value) {
                 && map.contains_key("triage_status")
             {
                 map.remove("message");
+            }
+            // MAT's domain-event DTO is a Debug snapshot, including the full
+            // vital reading as text. Keep its event type/time, withhold prose.
+            if map.contains_key("event_type") && map.contains_key("timestamp") {
+                map.remove("details");
             }
             map.retain(|key, _| !BIOMETRIC_KEYS.contains(&key.as_str()));
             for child in map.values_mut() {
