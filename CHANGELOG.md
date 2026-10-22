@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
 ### Community batch (PRs #2100-#2157 by aepod, reviewed and integrated)
 
 Integrated as one set: conflicts resolved, review findings fixed, validated on the integrated branch. Hardware figures cited by the PRs are the author's own live runs on ESP32-S3 nodes and were not independently reproduced here.
@@ -725,6 +726,20 @@ Model release (no new firmware binary). Firmware remains at v0.6.0-esp32.
 
 ### Verified
 - Real hardware: ESP32-S3 (COM7) WiFi CSI + ESP32-C6/MR60BHA2 (COM4) 60 GHz mmWave running concurrently. HR=75 bpm, BR=25/min at 52 cm range. All 11 QEMU CI jobs green.
+
+## [0.8.15-esp32] - 2026-10-21
+
+### ESP32 CSI input and onboarding corrections
+
+- Process the bounded prefix of S3 STBC CSI frames instead of discarding the
+  entire frame and starving edge vitals/features (#2286). Raw CSI is unchanged.
+- Bound gateway ping timeouts to one probe interval and document that APs
+  transmitting ICMP at 802.11b rates require a separate CSI traffic source
+  (#2287). Add a duration/rate-bounded LAN UDP traffic helper.
+- Prepare the USB serial/JTAG driver before starting IDF 6 onboarding, reuse
+  an installed driver, and propagate initialization failures (#2302).
+- Add production-code host regressions. These software checks do not establish
+  physical-board qualification, sensing accuracy, or medical validity.
 
 ## [v0.4.3-esp32] — 2026-03-15
 
