@@ -18,6 +18,31 @@ static const char *TAG = "stream_sender";
 
 static int s_sock = -1;
 static struct sockaddr_in s_dest_addr;
+static char s_dest_ip[16] = "";
+static uint16_t s_dest_port = 0;
+
+/**
+ * How long the bulk path has to go without accepting anything before an
+ * ENOMEM is read as "the aggregator is not answering".
+ *
+ * A UDP datagram to an address whose ARP entry is unresolved is accepted by
+ * the stack and parked in the ARP queue; the queue holds a handful of
+ * packets, and once it is full every further sendto fails with ENOMEM
+ * because lwIP cannot allocate for a neighbour it does not know. The errno
+ * is indistinguishable from an exhausted pbuf pool, but the two have opposite
+ * remedies, and the first is much the more common: the aggregator is on
+ * another host and its address changed.
+ *
+ * A single accepted send proves nothing -- the packet may only be queued --
+ * and the queue is drained and refilled by lwIP's own ARP retry, so the
+ * number of accepted sends says nothing about reachability either: with an
+ * unreachable destination the send still succeeds every few seconds, because
+ * the stack keeps a slot free in the ARP queue. The sender therefore does not
+ * try to tell the two causes apart: it reports the destination and how many
+ * sends have failed, which is what the reader can act on.
+ */
+static uint32_t s_enomem_total = 0;    /* ENOMEM failures since boot */
+static bool s_dest_silent_logged = false;
 
 /**
  * ENOMEM backoff state.
@@ -63,6 +88,9 @@ static int sender_init_internal(const char *ip, uint16_t port)
     }
 
     ESP_LOGI(TAG, "UDP sender initialized: %s:%d", ip, port);
+    strlcpy(s_dest_ip, ip, sizeof(s_dest_ip));
+    s_dest_port = port;
+    s_dest_silent_logged = false;
     return 0;
 }
 
@@ -114,8 +142,28 @@ int stream_sender_send(const uint8_t *data, size_t len)
             if (cooldown > ENOMEM_COOLDOWN_MAX_MS) cooldown = ENOMEM_COOLDOWN_MAX_MS;
             s_enomem_streak++;
             s_backoff_until_us = esp_timer_get_time() + (int64_t)cooldown * 1000;
-            ESP_LOGW(TAG, "sendto ENOMEM — backing off for %lu ms (streak %lu)",
-                     (unsigned long)cooldown, (unsigned long)s_enomem_streak);
+            {
+                int64_t now = esp_timer_get_time();
+                s_enomem_total++;
+                ESP_LOGW(TAG, "sendto ENOMEM to %s:%u - the aggregator may not be answering "
+                              "on that address (ARP unresolved) or lwIP is out of packet "
+                              "buffers; backing off for %lu ms (streak %lu)",
+                         s_dest_ip, (unsigned int)s_dest_port,
+                         (unsigned long)cooldown, (unsigned long)s_enomem_streak);
+                if (!s_dest_silent_logged && s_enomem_total >= 20) {
+                    /* One-shot: the repeated warning above says "ENOMEM", which
+                     * reads as an out-of-memory condition. The node captures CSI
+                     * normally; the frames have nowhere to go. */
+                    s_dest_silent_logged = true;
+                    ESP_LOGE(TAG, "%lu sends to %s:%u have failed since boot: check that "
+                                  "the aggregator is still at that address. CSI capture is "
+                                  "unaffected. If it moved, POST /config "
+                                  "{\"target_ip\":\"<new address>\"} to change it.",
+                             (unsigned long)s_enomem_total, s_dest_ip,
+                             (unsigned int)s_dest_port);
+                }
+                (void)now;
+            }
         } else {
             ESP_LOGW(TAG, "sendto failed: errno %d", errno);
         }
@@ -123,7 +171,12 @@ int stream_sender_send(const uint8_t *data, size_t len)
     }
 
     /* A send got through — buffer pressure cleared; reset the backoff streak. */
+    if (s_enomem_streak > 0) {
+        ESP_LOGI(TAG, "sendto to %s:%u succeeded after %lu failed attempts",
+                 s_dest_ip, (unsigned int)s_dest_port, (unsigned long)s_enomem_streak);
+    }
     s_enomem_streak = 0;
+    s_dest_silent_logged = false;
     s_last_success_us = esp_timer_get_time();
     return sent;
 }
