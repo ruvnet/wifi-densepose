@@ -15502,7 +15502,7 @@ async fn main() {
         .merge(rufield_surface::router(field_surface.clone()))
         // MAT REST and WebSocket share one incident state on the HTTP origin
         // used by the app, inside privacy/auth/host and companion protection.
-        .merge(wifi_densepose_sensing_server::mat_surface::router())
+        .merge(wifi_densepose_sensing_server::mat_surface::router(args.privacy_mode))
         // #2094: strip biometrics from every JSON response in privacy mode
         // (no-op otherwise). Applied after the merge so it covers every route.
         .layer(axum::middleware::from_fn_with_state(
