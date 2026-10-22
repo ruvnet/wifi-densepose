@@ -235,7 +235,8 @@ pcap = "1.1"
 petgraph = "0.6"
 
 # Data loading
-ndarray-npy = "0.10"
+# Training uses NPY only; retain complex arrays without the unused NPZ/ZIP backend.
+ndarray-npy = { version = "0.10", default-features = false, features = ["num-complex-0_4"] }
 walkdir = "2.4"
 
 # Hashing (for proof)
