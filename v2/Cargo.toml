@@ -235,8 +235,7 @@ pcap = "1.1"
 petgraph = "0.6"
 
 # Data loading
-# Training uses NPY only; keep complex arrays without the unused NPZ/ZIP backend.
-ndarray-npy = { version = "0.10", default-features = false, features = ["num-complex-0_4"] }
+ndarray-npy = "0.10"
 walkdir = "2.4"
 
 # Hashing (for proof)
@@ -319,11 +318,3 @@ strip = false
 [profile.bench]
 inherits = "release"
 debug = true
-
-# Narrow ZIP9 compatibility patches retain existing model/framework versions.
-# Provenance and review scope: dependency-patches/README.md.
-[patch.crates-io]
-candle-core-04 = { package = "candle-core", path = "dependency-patches/candle-core-0.4.1" }
-candle-core-09 = { package = "candle-core", path = "dependency-patches/candle-core-0.9.2" }
-tch = { path = "dependency-patches/tch-0.24.0" }
-torch-sys = { path = "dependency-patches/torch-sys-0.24.0" }
