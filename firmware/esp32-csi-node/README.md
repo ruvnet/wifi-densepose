@@ -632,6 +632,16 @@ than a silently ignored setting.
 
 Control fields, which are not stored: `trial_seconds`, `reboot`.
 
+#### Acceptance checks
+
+The host-side unit test covers the validation rules
+([`test/test_config_rules.c`](test/test_config_rules.c)). The property that
+a refused request leaves the node untouched is checked against a real node
+by [`test/acceptance/`](test/acceptance/): one script for the request
+behaviour, one that injects a failure in the recovery bank write. Both need
+the node's OTA PSK and are documented in
+[`test/acceptance/README.md`](test/acceptance/README.md).
+
 ### OTA key provisioning
 
 Create a random 256-bit key in a private file outside the repository. For
