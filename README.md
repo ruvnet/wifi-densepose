@@ -1,4 +1,4 @@
-# π RuView
+docs/integrations/home-assistant.md# π RuView
 
 > **W1700K RF diagnostics:** [receiver bridge](tools/w1700k/README.md) · [browser viewer](https://ruvnet.github.io/RuView/rf-diagnostics/) · [integration design](docs/adr/ADR-419-w1700k-rf-diagnostics.md).
 > Reads IQ locally and exports bounded quality summaries to RuField. Synthetic contract tests are separate from hardware validation. RF diagnostics only; no CSI extraction or presence detection.
