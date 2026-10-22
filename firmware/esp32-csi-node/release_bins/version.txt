@@ -1,4 +1,10 @@
-0.6.7
+0.7.0
 git-sha: 8703ade9b
 built: 2026-06-02
-note: RuView#893 — display-less boards capture DATA frames (CSI yield 0pps fix); hardware-verified on ESP32-C6 (0->27 pps)
+note: historical snapshot of firmware v0.7.0. It does NOT contain the
+      display-less DATA-capture fix: the guard that stops the false display
+      detection on a bare DevKit landed in 65e29ef4 (2026-06-17), fifteen
+      days after this image was built, and first shipped in v0.8.1.
+      Flashed on a board with no AMOLED panel this bundle stays on the
+      MGMT-only filter and yields 0 pps. Use the versioned release bundles
+      linked in README.md for a new installation.
