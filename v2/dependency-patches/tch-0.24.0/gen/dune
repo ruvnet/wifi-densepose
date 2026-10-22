@@ -1,3 +1,0 @@
-(executables
-  (names gen)
-  (libraries base stdio yaml))

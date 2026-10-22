@@ -1,9 +1,0 @@
-[project]
-name = "tch-rs"
-version = "0.1.0"
-description = "Rust bindings for PyTorch"
-readme = "README.md"
-requires-python = ">=3.12"
-dependencies = [
-    "torch==2.11.0",
-]
