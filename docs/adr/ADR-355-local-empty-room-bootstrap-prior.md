@@ -140,6 +140,19 @@ This is measured negative evidence for one installation. No occupied positive
 holdout was recorded, so it does not prove person recall, person counting, or
 cross home accuracy improvement.
 
+## Full room receipt versus restart prior (2026-10-22)
+
+An explicit room calibration can name multiple contributing radios, but this
+persisted field model remains bound to exactly one model-writing radio and its
+CSI grid. On helper restart, the full explicit session, room binding and receipt
+are not restored. Client history cannot recreate that live server authority.
+
+Verify all three radios' fresh reception independently of the restored prior's
+single source. A one-radio `bootstrap_only` source set is neither proof that
+other radios stopped receiving nor proof of a restored three-radio calibration.
+Original expiry and negative-only authority remain unchanged. Retaining a room
+or scan on an app is a separate lifecycle from restarting its paired helper.
+
 ## Acceptance test
 
 With a physically empty room, complete calibration on stable nodes, promote

@@ -116,3 +116,24 @@ The consumer independently opts in to foreground sharing and renders remote
 geometry separately from local sensing/calibration authority. Software protocol,
 real socket and owner/companion middleware checks do not establish physical
 phone-to-Mac capture accuracy or calibration acceptance.
+
+## Retained replica boundaries (2026-10-22)
+
+The helper's durable `companion-room.json` is one canonical geometry envelope,
+not a replica of either app's scan, models or local evidence history. The app
+containers own those records separately; Cognitum sign-in and local pairing do
+not synchronize them. Expiry or revocation withdraws transport access and does
+not establish deletion of already retained client data.
+
+Every accepted room PUT increments the server revision. A client may avoid an
+unnecessary new binding by validating and reusing the exact unchanged published
+configuration instead of issuing another PUT. Importing that identical envelope
+must preserve legitimate local evidence; a deliberate changed binding withdraws
+current authority while local records remain historical. The client retention
+repair is proposed in ruview-mobile ADR-047; it is not present in TestFlight
+build 2026102213 and requires a subsequent delivered-build restart check.
+
+The sensor preview remains transient and currently carries no room-binding
+digest. A displayed phone mesh is not a saved canonical room, durable draft,
+live AR alignment or RF calibration receipt. MAT HTTP composition likewise does
+not expand native companion WebSocket paths; see ADR-001's privacy amendment.
