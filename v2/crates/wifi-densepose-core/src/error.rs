@@ -23,6 +23,13 @@
 
 use thiserror::Error;
 
+// `no_std` support: the crate keeps `extern crate alloc;` at the root, so the
+// allocating types come from `alloc` whether or not the `std` feature is on.
+// `alloc::string::String` and `std::string::String` are the same type, so
+// these imports are correct in both configurations.
+use alloc::string::String;
+use alloc::vec::Vec;
+
 /// A specialized `Result` type for core operations.
 pub type CoreResult<T> = Result<T, CoreError>;
 

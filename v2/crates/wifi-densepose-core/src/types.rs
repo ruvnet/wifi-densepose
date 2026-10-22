@@ -16,6 +16,13 @@ use ndarray::{Array1, Array2, Array3};
 use num_complex::Complex64;
 use uuid::Uuid;
 
+// `no_std` support: `alloc` is available with or without the `std` feature,
+// and the types it provides are the same ones the std prelude would bring.
+use alloc::format;
+use alloc::string::ToString;
+use alloc::string::String;
+use alloc::vec::Vec;
+
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
@@ -157,8 +164,8 @@ impl Default for FrameId {
     }
 }
 
-impl std::fmt::Display for FrameId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for FrameId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
@@ -182,8 +189,8 @@ impl DeviceId {
     }
 }
 
-impl std::fmt::Display for DeviceId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for DeviceId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
@@ -1423,7 +1430,7 @@ impl PoseEstimate {
             a.confidence
                 .value()
                 .partial_cmp(&b.confidence.value())
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .unwrap_or(core::cmp::Ordering::Equal)
         })
     }
 }
