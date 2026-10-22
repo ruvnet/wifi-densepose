@@ -139,6 +139,23 @@ jobs:
         CARGO_PROFILE_TEST_DEBUG: "0"
       run: cargo test --workspace --no-default-features
 
+    # A workspace build unifies features across the members, and several of
+    # them depend on `wifi-densepose-core` with its default features, so the
+    # crate's `std` feature stays on even under `--no-default-features` and its
+    # `no_std` configuration is never compiled. Issue #2009: the crate declared
+    # `#![cfg_attr(not(feature = "std"), no_std)]` and still used `std::` paths
+    # and the std prelude, so that configuration did not build at all. Checking
+    # the crate on its own is the only way to exercise it.
+    - name: Check the no_std build of the crates that promise it
+      working-directory: v2
+      env:
+        CARGO_PROFILE_DEV_DEBUG: "0"
+      run: >-
+        cargo check
+        -p wifi-densepose-core
+        -p wifi-densepose-bfld
+        --no-default-features
+
     - name: Run ADR-147 worldmodel tests
       working-directory: v2
       env:

@@ -43,7 +43,10 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
 
-#[cfg(not(feature = "std"))]
+// `alloc` is always available, with or without the `std` feature, and the
+// types it provides are the same ones the std prelude would bring. Declaring
+// it unconditionally lets the modules import `String`, `Vec` and `format!`
+// from one place in both configurations.
 extern crate alloc;
 
 pub mod error;

@@ -5,7 +5,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 #[cfg(feature = "std")]
-use std::string::String;
+use alloc::string::String;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

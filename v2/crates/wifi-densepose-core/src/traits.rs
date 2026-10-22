@@ -18,6 +18,8 @@
 //! 3. **Async-Ready**: Async versions available with the `async` feature
 //! 4. **Error Handling**: Consistent use of `Result` types with domain errors
 
+use alloc::string::String;
+use alloc::vec::Vec;
 use crate::error::{CoreResult, InferenceError, SignalError, StorageError};
 use crate::types::{CsiFrame, FrameId, PoseEstimate, ProcessedSignal, Timestamp};
 
@@ -41,7 +43,7 @@ pub trait CanonicalFrame {
     /// Rules (ADR-136 §2.5): fixed-width little-endian fields in declared order;
     /// complex payload as `ComplexSample::to_le_bytes()` in stream-major order;
     /// raw IEEE-754 LE only (no text formatting of floats).
-    fn to_canonical_bytes(&self) -> alloc_vec::Vec<u8>;
+    fn to_canonical_bytes(&self) -> Vec<u8>;
 
     /// BLAKE3-256 of [`Self::to_canonical_bytes`] — the witness hash (ADR-028).
     fn witness_hash(&self) -> [u8; 32] {
@@ -49,17 +51,10 @@ pub trait CanonicalFrame {
     }
 }
 
-// `Vec` alias that works under both `std` and `no_std + alloc` (core is
-// `#![cfg_attr(not(feature = "std"), no_std)]`). Keeps `CanonicalFrame` usable
-// on the Xtensa/ESP32 target referenced by ADR-136 §2.3.
-#[cfg(feature = "std")]
-mod alloc_vec {
-    pub use std::vec::Vec;
-}
-#[cfg(not(feature = "std"))]
-mod alloc_vec {
-    pub use alloc::vec::Vec;
-}
+// `Vec` and `String` come from `alloc`, which is available with or without the
+// `std` feature: `alloc::vec::Vec` and `std::vec::Vec` are the same type, so
+// one import covers both. Keeps `CanonicalFrame` usable on the Xtensa/ESP32
+// target referenced by ADR-136 §2.3.
 
 /// Configuration for signal processing.
 #[derive(Debug, Clone)]
