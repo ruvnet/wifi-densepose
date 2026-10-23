@@ -26,11 +26,32 @@ def _load_module():
     spec = importlib.util.spec_from_file_location("publish_huggingface", SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # The module has to be in `sys.modules` before it is executed. The script
+    # uses `from __future__ import annotations`, so `dataclasses` resolves its
+    # field annotations as strings and then looks the defining module up
+    # through `sys.modules[cls.__module__]` (Python 3.10-3.13). Without this
+    # entry that lookup returns None and the import dies with
+    # `AttributeError: 'NoneType' object has no attribute '__dict__'`.
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        del sys.modules[spec.name]
+        raise
     return module
 
 
 publish_huggingface = _load_module()
+
+
+class ModuleLoadingTests(unittest.TestCase):
+    def test_the_script_module_is_registered_in_sys_modules(self):
+        # Python 3.10-3.13 resolve `from __future__ import annotations` string
+        # annotations through `sys.modules[cls.__module__]`. A module loaded
+        # without that entry cannot define its dataclasses, so the entry is
+        # part of the contract, not a convenience.
+        self.assertIn(publish_huggingface.__name__, sys.modules)
+        self.assertIs(sys.modules[publish_huggingface.__name__], publish_huggingface)
 
 
 def _completed(returncode: int, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
