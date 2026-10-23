@@ -1920,13 +1920,15 @@ A 3-6 node ESP32-S3 mesh provides full CSI at 20 Hz. Total cost: ~$54 for a 3-no
 
 Use versioned bundles from [Releases](https://github.com/ruvnet/RuView/releases),
 not the historical binaries in `firmware/esp32-csi-node/release_bins/`.
-The 0.8.14 prerelease fixes USB device identity and adds OTA key provisioning.
-It has CI build/host-test coverage; new physical-board qualification remains
-pending. The previous stable firmware is 0.8.8.
+The 0.8.15 prerelease keeps bounded CSI input for ESP32-S3 STBC frames, caps
+gateway ping waits to one probe interval, and makes the remote configuration
+endpoint validate whole requests before writing, retaining a durable rollback
+bank. It has CI build/host-test coverage; new physical-board qualification
+remains pending. The previous stable firmware is 0.8.8.
 
 | Release | What It Includes | Tag |
 |---------|-----------------|-----|
-| [v0.8.14](https://github.com/ruvnet/RuView/releases/tag/v0.8.14-esp32) | **Prerelease:** corrected C6 base-MAC identity, OTA key provisioning without a host key cache; physical qualification pending | `v0.8.14-esp32` |
+| [v0.8.15](https://github.com/ruvnet/RuView/releases/tag/v0.8.15-esp32) | **Prerelease:** bounded S3 STBC CSI input kept in the edge pipeline, capped gateway ping waits, write-validated configuration with a durable rollback bank; physical qualification pending | `v0.8.15-esp32` |
 | [v0.8.8](https://github.com/ruvnet/RuView/releases/tag/v0.8.8-esp32) | Previous stable firmware: consistent occupancy and rate-aware C6 processing; see [release evidence](releases/v0.8.8-esp32.md) | `v0.8.8-esp32` |
 | [v0.7.0](https://github.com/ruvnet/RuView/releases/tag/v0.7.0-esp32) | Historical ADR-110 firmware-side substrate: ESP-NOW synchronization and sync-packet UDP emission ([WITNESS-LOG-110 §A0.7-§A0.13](WITNESS-LOG-110.md)) | `v0.7.0-esp32` |
 | [v0.6.9](https://github.com/ruvnet/RuView/releases/tag/v0.6.9-esp32) | Sync-packet UDP emission, `CONFIG_C6_SYNC_EVERY_N_FRAMES` tunable cadence | `v0.6.9-esp32` |
@@ -1938,7 +1940,7 @@ pending. The previous stable firmware is 0.8.8.
 | [v0.3.0-alpha](https://github.com/ruvnet/RuView/releases/tag/v0.3.0-alpha-esp32) | Alpha — adds on-device edge intelligence (ADR-039) | `v0.3.0-alpha-esp32` |
 | [v0.2.0](https://github.com/ruvnet/RuView/releases/tag/v0.2.0-esp32) | Raw CSI streaming, TDM, channel hopping, QUIC mesh | `v0.2.0-esp32` |
 
-For 0.8.14, select the correct archive, verify its release `SHA256SUMS.txt`,
+For 0.8.15, select the correct archive, verify its release `SHA256SUMS.txt`,
 extract into a separate directory, then verify the enclosed checksums:
 
 | Archive | Board configuration |
@@ -1961,7 +1963,7 @@ python -m esptool --chip esp32s3 --port COM7 --baud 460800 \
 
 **4 MB headless S3 boards:** use the matching application and partition table
 from `esp32-csi-node-firmware-4mb.tar.gz` on the
-[0.8.14 prerelease](https://github.com/ruvnet/RuView/releases/tag/v0.8.14-esp32)
+[0.8.15 prerelease](https://github.com/ruvnet/RuView/releases/tag/v0.8.15-esp32)
 and select `--flash-size 4MB`:
 
 ```bash
