@@ -136,7 +136,7 @@ For users who want to get running fast. Detailed explanations follow in later se
 ### 0. Download a versioned firmware bundle
 
 Use the versioned source tag and binaries on the
-[v0.8.14 ESP32 prerelease page](https://github.com/ruvnet/RuView/releases/tag/v0.8.14-esp32).
+[v0.8.15 ESP32 prerelease page](https://github.com/ruvnet/RuView/releases/tag/v0.8.15-esp32).
 For the previous stable firmware and its hardware evidence, see
 [v0.8.8](https://github.com/ruvnet/RuView/releases/tag/v0.8.8-esp32).
 Choose the package that names both your chip and flash size:
