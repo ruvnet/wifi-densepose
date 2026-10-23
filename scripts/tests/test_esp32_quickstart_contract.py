@@ -168,6 +168,37 @@ class Contract(unittest.TestCase):
         failures = verify(ROOT, changed)
         self.assertTrue(any("path " in name for name, _, _ in failures))
 
+    def test_the_onboarding_commands_are_not_environment_variables(self):
+        # The node's serial onboarding commands share the RUVIEW_ prefix and
+        # are firmware protocol names, not variables the repository reads.
+        failures = verify(ROOT, self.guide)
+        self.assertFalse(
+            any("RUVIEW_HELLO_V1" in name for name, _, _ in failures),
+            failures,
+        )
+        self.assertFalse(
+            any("RUVIEW_CONFIG_V1" in name for name, _, _ in failures),
+            failures,
+        )
+
+    def test_the_evidence_carries_no_raw_identifier(self):
+        failures = verify(ROOT, self.guide)
+        self.assertFalse(
+            any("raw MAC" in name for name, _, _ in failures), failures
+        )
+        self.assertFalse(
+            any("unmasked password" in name for name, _, _ in failures), failures
+        )
+
+    def test_the_evidence_carries_no_person_data(self):
+        # Real CSI is person data (ADR-299): presence, motion level, the
+        # person count, the band powers, the subcarrier amplitude vector and
+        # the 17-keypoint pose must not survive into the published capture.
+        failures = verify(ROOT, self.guide)
+        self.assertFalse(
+            any("person data" in name for name, _, _ in failures), failures
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

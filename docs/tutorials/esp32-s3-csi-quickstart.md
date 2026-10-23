@@ -154,6 +154,40 @@ The node reads its configuration at boot, so it restarts to apply the change.
 The push is authenticated with the node's OTA PSK, read from a file with
 `--psk-file`.
 
+## How do I change the node's target address?
+
+Firmware 0.8.15 exposes a bounded onboarding console on the node's serial
+line. It needs no PSK, no reflash and no USB rewriting of the NVS partition,
+and it leaves the WiFi credentials and the OTA key untouched.
+
+Ask the node what it is sending to:
+
+```
+RUVIEW_HELLO_V1 4f2c9a1b7e0d4c6f8a3b5d1e9c7f0a2b
+RUVIEW_HELLO_OK_V1 nonce=4f2c9a1b7e0d4c6f8a3b5d1e9c7f0a2b chip=esp32s3 version=0.8.15 node_id=1 target_ip=192.168.0.57 target_port=5005 configured=1 device_digest=0123456789abcdef
+```
+
+The nonce is 32 hexadecimal characters of your choosing and the reply must
+arrive within 60 seconds. The `device_digest` is the first eight bytes of a
+hash of the node's base MAC address: it identifies the board, so treat it as
+an identifier and do not publish it. Then write the new configuration with that nonce:
+
+```
+RUVIEW_CONFIG_V1 4f2c9a1b7e0d4c6f8a3b5d1e9c7f0a2b 1 192.168.0.45 5005 KEEP KEEP
+RUVIEW_CONFIG_OK_V1 nonce=4f2c9a1b7e0d4c6f8a3b5d1e9c7f0a2b node_id=1 rebooting=1
+```
+
+`KEEP KEEP` keeps the WiFi credentials. Give the SSID and the password
+instead, base64 encoded, to change them at the same time. The node restarts
+and comes back on the new address.
+
+The target address must be a private IPv4 address, and the node id must be
+between 1 and 255. Both are checked before anything is written.
+
+This console is the node's own UART line. The README notes that a plain
+UART bridge does not carry the ESP32-C6's native USB serial console; on the
+ESP32-S3 board measured here, the CH343 bridge does carry it.
+
 ## How do I start a server that can accept the node's frames?
 
 Two things must be true, and both are refused by default.
@@ -229,12 +263,17 @@ host WiFi source is detected. There is no silent fallback to synthetic data.
 Ask the server, not the dashboard. The dashboard shows a client-side state
 that can be one step behind the server.
 
-| Question | Endpoint | Accepted | Not accepted |
+| Question | Endpoint | Live | Not live |
 |---|---|---|---|
-| Are frames arriving? | `GET /api/v1/status` | `"source_state":"connected"` | `"source_state":"disconnected"` |
+| Are frames arriving? | `GET /api/v1/status` | `"source_state":"live_unverified"` | `"source_state":"disconnected"` |
 | Is the source live? | `GET /api/v1/status` | `"waiting_for_frames":false` | `"waiting_for_frames":true` |
 | How old is the last frame? | `GET /api/v1/status` | `"last_frame_age_ms"` is a small number | `"last_frame_age_ms":null` |
 | Is the node registered? | `GET /api/v1/nodes` | `"total":1` | `"nodes":[]` |
+
+The state names come from ADR-295 and are not negotiable: a synthetic source
+is `synthetic`, a live source with no frame yet is `disconnected`, one whose
+frames stopped is `stale`, and a fresh hardware feed is `live_unverified`.
+There is no `live_verified`, because this path carries no attestation.
 
 The dashboard reports the same state in its banner:
 
@@ -278,7 +317,9 @@ One line in the log can look like success while nothing is delivered:
 I (10209) stream_sender: sendto to 192.168.0.57:5005 succeeded after 6 failed attempts
 ```
 
-Fix: push the current host address to the node, or re-provision it.
+Fix: ask the node where it is sending with the onboarding hello, then write
+the current host address to it. See
+[How do I change the node's target address?](#how-do-i-change-the-nodes-target-address).
 
 **2. The server's UDP receiver is bound to loopback.** The server log says
 `loopback-only (not reachable off-host)`. A native run needs
@@ -309,13 +350,25 @@ MEASURED on an ESP32-S3 (QFN56 rev 0.2, 16 MB flash, CH343 USB bridge,
 built from this repository at `main` (`fcf3e93f`).
 
 Reproducer: capture the node's boot log over the serial port, and query the
-server's REST API. Both captures are committed with this guide:
+server's REST API. All four captures are committed with this guide:
 
 - [`evidence/esp32-s3-quickstart-2026-10-22/boot-log.txt`](evidence/esp32-s3-quickstart-2026-10-22/boot-log.txt)
-  — the node's boot and runtime log, with the SSID, BSSID and node MAC
-  redacted.
+  — the node's boot and runtime log while it was sending to an address that
+  does not exist, with the SSID, BSSID and node MAC redacted.
 - [`evidence/esp32-s3-quickstart-2026-10-22/server-log.txt`](evidence/esp32-s3-quickstart-2026-10-22/server-log.txt)
   — the two server runs and the host's network state at the time.
+- [`evidence/esp32-s3-quickstart-2026-10-22/boot-log-live.txt`](evidence/esp32-s3-quickstart-2026-10-22/boot-log-live.txt)
+  — the same node booting with the server already listening.
+- [`evidence/esp32-s3-quickstart-2026-10-22/server-log-live.txt`](evidence/esp32-s3-quickstart-2026-10-22/server-log-live.txt)
+  — the server registering that node.
+
+Real CSI is person data: it encodes breathing, movement, presence and body
+geometry. The published captures therefore keep the transport and
+registration evidence and drop the occupancy-derived fields — the presence
+classification, the person count, the band powers, the subcarrier amplitude
+vector and the 17-keypoint pose. `scripts/verify-esp32-quickstart.py` fails
+the build if any of them, a raw MAC address or an unmasked password reappears
+in the evidence.
 
 | Fact | Value | Where it came from |
 |---|---|---|
@@ -331,6 +384,10 @@ server's REST API. Both captures are committed with this guide:
 | Server UDP receiver with an allowlist | `0.0.0.0:5005`, allowlist enforced | server log: `UDP data plane security: bind 0.0.0.0:5005 — ROUTABLE` |
 | Server state with no frames | `"source_state":"disconnected"`, `"waiting_for_frames":true` | `GET /api/v1/status` |
 | Server node list with no frames | `{"nodes":[],"total":0}` | `GET /api/v1/nodes` |
+| Node repointed at this host | `target_ip=192.168.0.45`, streaming active | boot log: `NVS override: target_ip=192.168.0.45` |
+| Server state with live frames | `"source_state":"live_unverified"`, `"waiting_for_frames":false` | `GET /api/v1/status` |
+| Age of the last live frame | `"last_frame_age_ms":9` | `GET /api/v1/status` |
+| Registered node | `"csi_status":"active"`, `"rssi_dbm":-52.0`, `"total":1` | `GET /api/v1/nodes` |
 
 The ARP state of the node's configured target was also checked from the host:
 `192.168.0.57` resolved to `00-00-00-00-00-00` with neighbour state

@@ -187,9 +187,10 @@ def verify(root, guide=None):
     if guide is None:
         guide = read(root / GUIDE)
     corpus = norm(
-        read(root / EVIDENCE / "boot-log.txt")
-        + "\n"
-        + read(root / EVIDENCE / "server-log.txt")
+        "\n".join(
+            path.read_text(encoding="utf-8", errors="replace")
+            for path in sorted((root / EVIDENCE).glob("*.txt"))
+        )
     )
     failures = []
 
@@ -272,11 +273,20 @@ def verify(root, guide=None):
         check("container port %s" % port, port in compose, True)
 
     # 6. Every environment variable the guide names is read by the repository.
+    # A name counts as a variable when the guide presents it as one: it is
+    # quoted inline or it is assigned somewhere. The node's serial onboarding
+    # commands share the RUVIEW_ prefix and are not variables.
     sources = [read(root / SERVER / "cli.rs"),
                read(root / "docker/docker-entrypoint.sh"), compose]
     sources += [read(path) for path in (root / SERVER).glob("*.rs")]
     known = "\n".join(sources)
-    for variable in sorted(set(re.findall(r"\b(?:RUVIEW|CSI_SOURCE)[A-Z0-9_]*", guide))):
+    quoted = set(inline_code(guide))
+    assigned = set(re.findall(r"\b(RUVIEW_[A-Z0-9_]+|CSI_SOURCE)\s*=", guide))
+    for variable in sorted(
+        set(re.findall(r"\b(?:RUVIEW|CSI_SOURCE)[A-Z0-9_]*\b", guide))
+    ):
+        if variable not in quoted and variable not in assigned:
+            continue
         check("environment variable %s" % variable, variable in known, True)
 
     # 7. The dashboard banners the guide names are the ones the dashboard uses.
@@ -293,12 +303,34 @@ def verify(root, guide=None):
         target = root / (path.rstrip("/") if path.endswith("/") else path)
         check("path %s" % path, target.exists(), True)
 
-    # 9. Every quoted log line is in the captured evidence.
+    # 9. The captured evidence carries no raw identifier and no person data.
+    person_keys = (
+        "presence", "motion_level", "person_count", "person_count_valid",
+        "estimated_persons", "breathing_band_power", "motion_band_power",
+        "spectral_power", "amplitude", "persons", "keypoints", "bbox",
+        "room_inference", "signal_field", "node_inference", "classification",
+    )
+    person_field = re.compile(
+        r'"(?:%s)":\s*(?!\[?"<redacted>")' % "|".join(person_keys)
+    )
+    for path in sorted((root / EVIDENCE).glob("*.txt")):
+        evidence = read(path)
+        raw_mac = re.search(r"\b(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b", evidence)
+        check("no raw MAC address in %s" % path.name,
+              raw_mac.group(0) if raw_mac else None, None)
+        raw_password = re.search(r"(?i)\bpassword\s*=\s*(?!\*\*\*)\S", evidence)
+        check("no unmasked password in %s" % path.name,
+              raw_password.group(0) if raw_password else None, None)
+        person = person_field.search(evidence)
+        check("no person data in %s" % path.name,
+              person.group(0) if person else None, None)
+
+    # 10. Every quoted log line is in the captured evidence.
     for record in log_records(guide):
         text = re.sub(r"^(?:ERROR|WARN|INFO):\s*", "", record)
         check("quoted log line", norm(text) in corpus, True)
 
-    # 10. Every inline quote taken from a log or from the API is in the evidence.
+    # 11. Every inline quote taken from a log or from the API is in the evidence.
     # Only the provenance column of the measurement table and the "not accepted"
     # column of the acceptance table claim what a capture actually showed.
     provenance = []
