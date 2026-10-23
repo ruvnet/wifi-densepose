@@ -1347,6 +1347,34 @@ mod oauth_tests {
     }
 
     #[tokio::test]
+    async fn companion_owner_http_guard_matches_the_native_namespace_without_a_billing_id() {
+        let mut auth = oauth_only();
+        Arc::get_mut(auth.oauth.as_mut().unwrap()).unwrap().issuer = "https://auth.cognitum.one".into();
+        auth.token = Some(Arc::new("synthetic-local-owner-capability".into()));
+        // Same fixed user/tenant/workspace vector as the JS and Swift checks.
+        auth.owner_account_scope = Some("40b085eb7fdbb89941aa63cd909813c2b9a718e1b5b2b052f17a600d7bb372b4".into());
+        let now = chrono::Utc::now().timestamp();
+        let make_token = |subject: &str, workspace: &str| {
+            let claims = serde_json::json!({"typ":"access", "iss":"https://auth.cognitum.one", "aud":"ruview", "client_id":"ruview",
+                "sub":subject, "org_id":"20000000-0000-4000-8000-000000000001", "workspace_id":workspace,
+                "scope":"sensing:read spaces:read", "iat":now, "exp":now+300, "setup":false, "workload":false});
+            let mut header = Header::new(jsonwebtoken::Algorithm::ES256); header.kid = Some(KID.into());
+            encode(&header, &claims, &EncodingKey::from_ec_pem(key().pem.as_bytes()).unwrap()).unwrap()
+        };
+        let a = make_token("10000000-0000-4000-8000-000000000001", "30000000-0000-4000-8000-000000000001");
+        let b = make_token("10000000-0000-4000-8000-000000000002", "30000000-0000-4000-8000-000000000001");
+        let workspace = make_token("10000000-0000-4000-8000-000000000001", "30000000-0000-4000-8000-000000000002");
+        for (credential, expected) in [(None, StatusCode::UNAUTHORIZED), (Some(b), StatusCode::FORBIDDEN),
+            (Some(workspace), StatusCode::FORBIDDEN), (Some(a.clone()), StatusCode::OK), (Some(format!("{a}x")), StatusCode::UNAUTHORIZED)] {
+            let router = Router::new().route("/companion/v1/enroll", post(|| async { "accepted" }))
+                .layer(axum::middleware::from_fn_with_state(auth.clone(), crate::companion::require_account_ownership));
+            let mut request = Request::builder().method("POST").uri("/companion/v1/enroll");
+            if let Some(value) = credential { request = request.header("X-RuView-Account-Authorization", value); }
+            assert_eq!(router.oneshot(request.body(Body::empty()).unwrap()).await.unwrap().status(), expected);
+        }
+    }
+
+    #[tokio::test]
     async fn owned_helper_cookie_path_rejects_legacy_and_other_owner_but_accepts_its_owner() {
         let owner = "a".repeat(64);
         for candidate in [None, Some("b".repeat(64)), Some(owner.clone())] {
